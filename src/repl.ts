@@ -1,17 +1,41 @@
 import * as readline from 'node:readline';
 import { Agent } from './agent.js';
 import { MemoryStore } from './memory.js';
+import { MCPManager } from './mcp.js';
 import { printHelp, printInfo, printError } from './output.js';
 import type { ToolOptions } from './tools/index.js';
 import type { BernardConfig } from './config.js';
 
-export function startRepl(config: BernardConfig): void {
+export async function startRepl(config: BernardConfig): Promise<void> {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   });
 
   const memoryStore = new MemoryStore();
+  const mcpManager = new MCPManager();
+
+  try {
+    await mcpManager.connect();
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    printError(`MCP initialization failed: ${message}`);
+  }
+
+  const statuses = mcpManager.getServerStatuses();
+  if (statuses.length > 0) {
+    printInfo('  MCP servers:');
+    for (const s of statuses) {
+      if (s.connected) {
+        printInfo(`    ✓ ${s.name} (${s.toolCount} tools)`);
+      } else {
+        printError(`    ✗ ${s.name}: ${s.error}`);
+      }
+    }
+  }
+
+  const mcpTools = mcpManager.getTools();
+  const mcpServerNames = mcpManager.getConnectedServerNames();
 
   const confirmFn = (command: string): Promise<boolean> => {
     return new Promise((resolve) => {
@@ -26,7 +50,11 @@ export function startRepl(config: BernardConfig): void {
     confirmDangerous: confirmFn,
   };
 
-  const agent = new Agent(config, toolOptions, memoryStore);
+  const agent = new Agent(config, toolOptions, memoryStore, mcpTools, mcpServerNames);
+
+  const cleanup = async () => {
+    await mcpManager.close();
+  };
 
   const prompt = () => {
     rl.question('\x1b[36mbernard>\x1b[0m ', async (input) => {
@@ -39,6 +67,7 @@ export function startRepl(config: BernardConfig): void {
 
       if (trimmed === 'exit' || trimmed === 'quit' || trimmed === '/exit') {
         printInfo('Goodbye!');
+        await cleanup();
         rl.close();
         process.exit(0);
       }
@@ -84,6 +113,28 @@ export function startRepl(config: BernardConfig): void {
         return;
       }
 
+      if (trimmed === '/mcp') {
+        const statuses = mcpManager.getServerStatuses();
+        if (statuses.length === 0) {
+          printInfo('No MCP servers configured. Add servers to ~/.bernard/mcp.json');
+        } else {
+          printInfo('MCP servers:');
+          for (const s of statuses) {
+            if (s.connected) {
+              printInfo(`  ✓ ${s.name} (${s.toolCount} tools)`);
+            } else {
+              printInfo(`  ✗ ${s.name} — ${s.error}`);
+            }
+          }
+          const toolNames = Object.keys(mcpManager.getTools());
+          if (toolNames.length > 0) {
+            printInfo(`\nMCP tools: ${toolNames.join(', ')}`);
+          }
+        }
+        prompt();
+        return;
+      }
+
       try {
         await agent.processInput(trimmed);
       } catch (err: unknown) {
@@ -97,8 +148,9 @@ export function startRepl(config: BernardConfig): void {
   };
 
   // Handle Ctrl+C gracefully
-  rl.on('close', () => {
+  rl.on('close', async () => {
     printInfo('\nGoodbye!');
+    await cleanup();
     process.exit(0);
   });
 
