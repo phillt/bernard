@@ -49,8 +49,10 @@ export function printInfo(message: string): void {
 
 export function printHelp(): void {
   console.log(chalk.cyan('\nCommands:'));
-  console.log(chalk.white('  /help') + chalk.gray('   — Show this help'));
-  console.log(chalk.white('  /clear') + chalk.gray('  — Clear conversation history'));
-  console.log(chalk.white('  exit') + chalk.gray('    — Quit Bernard'));
+  console.log(chalk.white('  /help') + chalk.gray('    — Show this help'));
+  console.log(chalk.white('  /clear') + chalk.gray('   — Clear conversation history and scratch notes'));
+  console.log(chalk.white('  /memory') + chalk.gray('  — List persistent memories'));
+  console.log(chalk.white('  /scratch') + chalk.gray(' — List session scratch notes'));
+  console.log(chalk.white('  exit') + chalk.gray('     — Quit Bernard'));
   console.log();
 }
