@@ -1,0 +1,29 @@
+{
+  "name": "bernard",
+  "version": "0.1.0",
+  "description": "Local CLI AI agent with multi-provider support",
+  "main": "dist/index.js",
+  "bin": {
+    "bernard": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "ai": "^4.1.0",
+    "@ai-sdk/anthropic": "^1.1.0",
+    "@ai-sdk/openai": "^1.1.0",
+    "@ai-sdk/xai": "^1.1.0",
+    "zod": "^3.23.0",
+    "commander": "^12.1.0",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "tsx": "^4.19.0",
+    "@types/node": "^22.10.0"
+  }
+}
