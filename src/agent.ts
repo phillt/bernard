@@ -17,7 +17,7 @@ Guidelines:
 - Use the memory tool to persist important facts about the user or project that should be recalled in future sessions (e.g. preferences, project conventions, key decisions).
 - Use the scratch tool to track progress on complex multi-step tasks within the current session. Scratch notes survive context compression but are discarded when the session ends.`;
 
-function buildSystemPrompt(memoryStore: MemoryStore): string {
+function buildSystemPrompt(memoryStore: MemoryStore, mcpServerNames?: string[]): string {
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   });
@@ -39,6 +39,31 @@ function buildSystemPrompt(memoryStore: MemoryStore): string {
     }
   }
 
+  prompt += `\n\n## MCP Servers
+
+MCP (Model Context Protocol) servers provide additional tools. Configuration file: ~/.bernard/mcp.json
+
+Format:
+\`\`\`json
+{
+  "mcpServers": {
+    "server-name": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-name", "/path"],
+      "env": {}
+    }
+  }
+}
+\`\`\`
+
+You can add or edit MCP servers by modifying this file with the shell tool. Changes take effect after restarting Bernard.`;
+
+  if (mcpServerNames && mcpServerNames.length > 0) {
+    prompt += `\n\nCurrently connected MCP servers: ${mcpServerNames.join(', ')}`;
+  } else {
+    prompt += '\n\nNo MCP servers are currently connected.';
+  }
+
   return prompt;
 }
 
@@ -47,11 +72,15 @@ export class Agent {
   private config: BernardConfig;
   private toolOptions: ToolOptions;
   private memoryStore: MemoryStore;
+  private mcpTools?: Record<string, any>;
+  private mcpServerNames?: string[];
 
-  constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore) {
+  constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>, mcpServerNames?: string[]) {
     this.config = config;
     this.toolOptions = toolOptions;
     this.memoryStore = memoryStore;
+    this.mcpTools = mcpTools;
+    this.mcpServerNames = mcpServerNames;
   }
 
   async processInput(userInput: string): Promise<void> {
@@ -60,10 +89,10 @@ export class Agent {
     try {
       const result = await generateText({
         model: getModel(this.config.provider, this.config.model),
-        tools: createTools(this.toolOptions, this.memoryStore),
+        tools: createTools(this.toolOptions, this.memoryStore, this.mcpTools),
         maxSteps: 20,
         maxTokens: this.config.maxTokens,
-        system: buildSystemPrompt(this.memoryStore),
+        system: buildSystemPrompt(this.memoryStore, this.mcpServerNames),
         messages: this.history,
         onStepFinish: ({ text, toolCalls, toolResults }) => {
           for (const tc of toolCalls) {
