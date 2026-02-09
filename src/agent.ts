@@ -17,11 +17,12 @@ Guidelines:
 - Use the memory tool to persist important facts about the user or project that should be recalled in future sessions (e.g. preferences, project conventions, key decisions).
 - Use the scratch tool to track progress on complex multi-step tasks within the current session. Scratch notes survive context compression but are discarded when the session ends.`;
 
-function buildSystemPrompt(memoryStore: MemoryStore, mcpServerNames?: string[]): string {
+function buildSystemPrompt(config: BernardConfig, memoryStore: MemoryStore, mcpServerNames?: string[]): string {
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   });
   let prompt = BASE_SYSTEM_PROMPT + `\n\nToday's date is ${today}.`;
+  prompt += `\nYou are running as provider: ${config.provider}, model: ${config.model}. The user can switch with /provider and /model.`;
 
   const memories = memoryStore.getAllMemoryContents();
   if (memories.size > 0) {
@@ -92,7 +93,7 @@ export class Agent {
         tools: createTools(this.toolOptions, this.memoryStore, this.mcpTools),
         maxSteps: 20,
         maxTokens: this.config.maxTokens,
-        system: buildSystemPrompt(this.memoryStore, this.mcpServerNames),
+        system: buildSystemPrompt(this.config, this.memoryStore, this.mcpServerNames),
         messages: this.history,
         onStepFinish: ({ text, toolCalls, toolResults }) => {
           for (const tc of toolCalls) {
