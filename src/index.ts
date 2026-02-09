@@ -21,7 +21,7 @@ program
       });
 
       printWelcome(config.provider, config.model);
-      startRepl(config);
+      await startRepl(config);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);
