@@ -1,5 +1,6 @@
 import * as readline from 'node:readline';
 import { Agent } from './agent.js';
+import { MemoryStore } from './memory.js';
 import { printHelp, printInfo, printError } from './output.js';
 import type { ToolOptions } from './tools/index.js';
 import type { BernardConfig } from './config.js';
@@ -9,6 +10,8 @@ export function startRepl(config: BernardConfig): void {
     input: process.stdin,
     output: process.stdout,
   });
+
+  const memoryStore = new MemoryStore();
 
   const confirmFn = (command: string): Promise<boolean> => {
     return new Promise((resolve) => {
@@ -23,7 +26,7 @@ export function startRepl(config: BernardConfig): void {
     confirmDangerous: confirmFn,
   };
 
-  const agent = new Agent(config, toolOptions);
+  const agent = new Agent(config, toolOptions, memoryStore);
 
   const prompt = () => {
     rl.question('\x1b[36mbernard>\x1b[0m ', async (input) => {
@@ -48,7 +51,35 @@ export function startRepl(config: BernardConfig): void {
 
       if (trimmed === '/clear') {
         agent.clearHistory();
-        printInfo('Conversation history cleared.');
+        printInfo('Conversation history and scratch notes cleared.');
+        prompt();
+        return;
+      }
+
+      if (trimmed === '/memory') {
+        const keys = memoryStore.listMemory();
+        if (keys.length === 0) {
+          printInfo('No persistent memories stored.');
+        } else {
+          printInfo('Persistent memories:');
+          for (const key of keys) {
+            printInfo(`  - ${key}`);
+          }
+        }
+        prompt();
+        return;
+      }
+
+      if (trimmed === '/scratch') {
+        const keys = memoryStore.listScratch();
+        if (keys.length === 0) {
+          printInfo('No scratch notes in this session.');
+        } else {
+          printInfo('Scratch notes:');
+          for (const key of keys) {
+            printInfo(`  - ${key}`);
+          }
+        }
         prompt();
         return;
       }
