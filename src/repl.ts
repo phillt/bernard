@@ -4,7 +4,7 @@ import { MemoryStore } from './memory.js';
 import { MCPManager } from './mcp.js';
 import { printHelp, printInfo, printError } from './output.js';
 import type { ToolOptions } from './tools/index.js';
-import type { BernardConfig } from './config.js';
+import { PROVIDER_MODELS, getAvailableProviders, getDefaultModel, type BernardConfig } from './config.js';
 
 export async function startRepl(config: BernardConfig): Promise<void> {
   const rl = readline.createInterface({
@@ -132,6 +132,61 @@ export async function startRepl(config: BernardConfig): Promise<void> {
           }
         }
         prompt();
+        return;
+      }
+
+      if (trimmed === '/provider') {
+        const available = getAvailableProviders(config);
+        if (available.length === 0) {
+          printError('No providers have API keys configured.');
+          prompt();
+          return;
+        }
+        printInfo(`\n  Current: ${config.provider} (${config.model})\n`);
+        printInfo('  Available providers:');
+        for (let i = 0; i < available.length; i++) {
+          printInfo(`    ${i + 1}. ${available[i]}`);
+        }
+        console.log();
+        rl.question(`  Select [1-${available.length}]: `, (answer) => {
+          const num = parseInt(answer.trim(), 10);
+          if (num >= 1 && num <= available.length) {
+            config.provider = available[num - 1];
+            config.model = getDefaultModel(config.provider);
+            printInfo(`  Switched to ${config.provider} (${config.model})`);
+          } else {
+            printInfo('  Cancelled.');
+          }
+          console.log();
+          prompt();
+        });
+        return;
+      }
+
+      if (trimmed === '/model') {
+        const models = PROVIDER_MODELS[config.provider];
+        if (!models || models.length === 0) {
+          printError(`No models listed for provider "${config.provider}".`);
+          prompt();
+          return;
+        }
+        printInfo(`\n  Current: ${config.provider} / ${config.model}\n`);
+        printInfo('  Available models:');
+        for (let i = 0; i < models.length; i++) {
+          printInfo(`    ${i + 1}. ${models[i]}`);
+        }
+        console.log();
+        rl.question(`  Select [1-${models.length}]: `, (answer) => {
+          const num = parseInt(answer.trim(), 10);
+          if (num >= 1 && num <= models.length) {
+            config.model = models[num - 1];
+            printInfo(`  Switched to ${config.model}`);
+          } else {
+            printInfo('  Cancelled.');
+          }
+          console.log();
+          prompt();
+        });
         return;
       }
 

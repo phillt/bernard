@@ -53,7 +53,9 @@ export function printHelp(): void {
   console.log(chalk.white('  /clear') + chalk.gray('   — Clear conversation history and scratch notes'));
   console.log(chalk.white('  /memory') + chalk.gray('  — List persistent memories'));
   console.log(chalk.white('  /scratch') + chalk.gray(' — List session scratch notes'));
-  console.log(chalk.white('  /mcp') + chalk.gray('     — List MCP servers and tools'));
-  console.log(chalk.white('  exit') + chalk.gray('     — Quit Bernard'));
+  console.log(chalk.white('  /mcp') + chalk.gray('      — List MCP servers and tools'));
+  console.log(chalk.white('  /provider') + chalk.gray(' — Switch LLM provider'));
+  console.log(chalk.white('  /model') + chalk.gray('    — Switch model for current provider'));
+  console.log(chalk.white('  exit') + chalk.gray('      — Quit Bernard'));
   console.log();
 }
