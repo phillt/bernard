@@ -12,18 +12,19 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "ai": "^4.1.0",
     "@ai-sdk/anthropic": "^1.1.0",
+    "@ai-sdk/mcp": "^1.0.19",
     "@ai-sdk/openai": "^1.1.0",
     "@ai-sdk/xai": "^1.1.0",
-    "zod": "^3.23.0",
-    "commander": "^12.1.0",
+    "ai": "^4.1.0",
     "chalk": "^4.1.2",
-    "dotenv": "^16.4.0"
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.0",
+    "zod": "^3.23.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
+    "@types/node": "^22.10.0",
     "tsx": "^4.19.0",
-    "@types/node": "^22.10.0"
+    "typescript": "^5.7.0"
   }
 }
