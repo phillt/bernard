@@ -16,6 +16,28 @@ export interface BernardConfig {
 const DEFAULT_PROVIDER = 'anthropic';
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_SHELL_TIMEOUT = 30000;
+const PREFS_PATH = path.join(os.homedir(), '.bernard', 'preferences.json');
+
+export function savePreferences(prefs: { provider: string; model: string }): void {
+  const dir = path.dirname(PREFS_PATH);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(PREFS_PATH, JSON.stringify(prefs, null, 2) + '\n');
+}
+
+export function loadPreferences(): { provider?: string; model?: string } {
+  try {
+    const data = fs.readFileSync(PREFS_PATH, 'utf-8');
+    const parsed = JSON.parse(data);
+    return {
+      provider: typeof parsed.provider === 'string' ? parsed.provider : undefined,
+      model: typeof parsed.model === 'string' ? parsed.model : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
 
 export const PROVIDER_MODELS: Record<string, string[]> = {
   anthropic: [
@@ -66,8 +88,9 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     dotenv.config({ path: homeEnv });
   }
 
-  const provider = overrides?.provider || process.env.BERNARD_PROVIDER || DEFAULT_PROVIDER;
-  const model = overrides?.model || process.env.BERNARD_MODEL || getDefaultModel(provider);
+  const prefs = loadPreferences();
+  const provider = overrides?.provider || prefs.provider || process.env.BERNARD_PROVIDER || DEFAULT_PROVIDER;
+  const model = overrides?.model || prefs.model || process.env.BERNARD_MODEL || getDefaultModel(provider);
   const maxTokens = parseInt(process.env.BERNARD_MAX_TOKENS || '', 10) || DEFAULT_MAX_TOKENS;
   const shellTimeout = parseInt(process.env.BERNARD_SHELL_TIMEOUT || '', 10) || DEFAULT_SHELL_TIMEOUT;
 
