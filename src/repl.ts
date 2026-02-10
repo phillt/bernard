@@ -187,6 +187,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
           if (num >= 1 && num <= available.length) {
             config.provider = available[num - 1];
             config.model = getDefaultModel(config.provider);
+            savePreferences({ provider: config.provider, model: config.model });
             printInfo(`  Switched to ${config.provider} (${config.model})`);
           } else {
             printInfo('  Cancelled.');
@@ -214,6 +215,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
           const num = parseInt(answer.trim(), 10);
           if (num >= 1 && num <= models.length) {
             config.model = models[num - 1];
+            savePreferences({ provider: config.provider, model: config.model });
             printInfo(`  Switched to ${config.model}`);
           } else {
             printInfo('  Cancelled.');
