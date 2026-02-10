@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { loadConfig } from './config.js';
+import * as readline from 'node:readline';
+import { loadConfig, saveProviderKey, getProviderKeyStatus, PROVIDER_ENV_VARS, OPTIONS_REGISTRY, resetOption, resetAllOptions } from './config.js';
 import { startRepl } from './repl.js';
 import { printWelcome, printError, printInfo } from './output.js';
 import { CronStore } from './cron/store.js';
+import { listMCPServers, removeMCPServer } from './mcp.js';
 
 const program = new Command();
 
@@ -51,6 +53,137 @@ The user has been notified and this session is open for them to review and act o
 
       printWelcome(config.provider, config.model);
       await startRepl(config, alertContext);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('add-key <provider> <key>')
+  .description('Store an API key for a provider')
+  .action((provider: string, key: string) => {
+    try {
+      saveProviderKey(provider, key);
+      printInfo(`API key for "${provider}" saved successfully.`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('providers')
+  .description('List supported providers and their API key status')
+  .action(() => {
+    const statuses = getProviderKeyStatus();
+    printInfo('Providers:');
+    for (const { provider, hasKey } of statuses) {
+      const envVar = PROVIDER_ENV_VARS[provider];
+      const status = hasKey ? '\u2713' : '\u2717';
+      printInfo(`  ${status} ${provider} (${envVar})`);
+    }
+    if (statuses.some((s) => !s.hasKey)) {
+      printInfo('\nTo add a key: bernard add-key <provider> <key>');
+    }
+  });
+
+program
+  .command('list-options')
+  .description('List configurable options and their current values')
+  .action(() => {
+    try {
+      const config = loadConfig();
+      printInfo('Options:');
+      for (const [name, opt] of Object.entries(OPTIONS_REGISTRY)) {
+        const current = config[opt.configKey];
+        const isDefault = current === opt.default;
+        const label = isDefault ? '(default)' : '(custom)';
+        printInfo(`  ${name} = ${current} ${label}`);
+        printInfo(`    ${opt.description}`);
+        printInfo(`    Env var: ${opt.envVar}`);
+      }
+      printInfo('\nTo set options from chat: start bernard and use /options');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('reset-option <option>')
+  .description('Reset a single option to its default value')
+  .action((option: string) => {
+    try {
+      if (!OPTIONS_REGISTRY[option]) {
+        printError(`Unknown option "${option}". Valid options: ${Object.keys(OPTIONS_REGISTRY).join(', ')}`);
+        process.exit(1);
+      }
+      resetOption(option);
+      printInfo(`Option "${option}" reset to default (${OPTIONS_REGISTRY[option].default}).`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('reset-options')
+  .description('Reset all options to their default values')
+  .action(() => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    printInfo('This will reset all options to their default values.');
+    rl.question('Are you sure? (y/N): ', (answer) => {
+      if (answer.trim().toLowerCase() === 'y') {
+        resetAllOptions();
+        printInfo('All options reset to defaults:');
+        for (const [name, opt] of Object.entries(OPTIONS_REGISTRY)) {
+          printInfo(`  ${name} = ${opt.default}`);
+        }
+      } else {
+        printInfo('Cancelled.');
+      }
+      rl.close();
+    });
+  });
+
+program
+  .command('mcp-list')
+  .description('List configured MCP servers')
+  .action(() => {
+    try {
+      const servers = listMCPServers();
+      if (servers.length === 0) {
+        printInfo('No MCP servers configured.');
+        printInfo('Add servers to ~/.bernard/mcp.json');
+        return;
+      }
+      printInfo('MCP Servers:');
+      for (const server of servers) {
+        const args = server.args.length > 0 ? ` ${server.args.join(' ')}` : '';
+        printInfo(`  ${server.key} — ${server.command}${args}`);
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('remove-mcp <key>')
+  .description('Remove a configured MCP server')
+  .action((key: string) => {
+    try {
+      removeMCPServer(key);
+      printInfo(`MCP server "${key}" removed.`);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);

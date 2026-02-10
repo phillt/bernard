@@ -77,8 +77,103 @@ describe('getAvailableProviders', () => {
   });
 });
 
+describe('saveProviderKey', () => {
+  beforeEach(() => {
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.readFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
+    fsMock.writeFileSync.mockReturnValue(undefined);
+    fsMock.chmodSync.mockReturnValue(undefined);
+    fsMock.mkdirSync.mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('throws for unknown provider', () => {
+    expect(() => saveProviderKey('unknown', 'key-123')).toThrow(/Unknown provider "unknown"/);
+  });
+
+  it('writes key to keys.json and calls chmodSync', () => {
+    fsMock.existsSync.mockReturnValue(true);
+
+    saveProviderKey('anthropic', 'sk-ant-test');
+
+    expect(fsMock.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('keys.json'),
+      expect.stringContaining('"anthropic": "sk-ant-test"')
+    );
+    expect(fsMock.chmodSync).toHaveBeenCalledWith(
+      expect.stringContaining('keys.json'),
+      0o600
+    );
+  });
+
+  it('creates directory if it does not exist', () => {
+    fsMock.existsSync.mockReturnValue(false);
+
+    saveProviderKey('openai', 'sk-openai-test');
+
+    expect(fsMock.mkdirSync).toHaveBeenCalledWith(
+      expect.any(String),
+      { recursive: true }
+    );
+  });
+
+  it('merges with existing keys', () => {
+    fsMock.existsSync.mockReturnValue(true);
+    fsMock.readFileSync.mockReturnValue(JSON.stringify({ anthropic: 'existing-key' }));
+
+    saveProviderKey('openai', 'sk-openai-test');
+
+    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
+    expect(writtenData.anthropic).toBe('existing-key');
+    expect(writtenData.openai).toBe('sk-openai-test');
+  });
+});
+
+describe('getProviderKeyStatus', () => {
+  beforeEach(() => {
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.readFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
+    vi.stubEnv('OPENAI_API_KEY', '');
+    vi.stubEnv('XAI_API_KEY', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('returns all providers with hasKey false when no keys exist', () => {
+    const statuses = getProviderKeyStatus();
+    expect(statuses).toEqual([
+      { provider: 'anthropic', hasKey: false },
+      { provider: 'openai', hasKey: false },
+      { provider: 'xai', hasKey: false },
+    ]);
+  });
+
+  it('reflects env vars', () => {
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    const statuses = getProviderKeyStatus();
+    const anthropic = statuses.find((s) => s.provider === 'anthropic');
+    expect(anthropic?.hasKey).toBe(true);
+  });
+
+  it('reflects stored keys', () => {
+    fsMock.readFileSync.mockReturnValue(JSON.stringify({ openai: 'sk-openai-test' }));
+    const statuses = getProviderKeyStatus();
+    const openai = statuses.find((s) => s.provider === 'openai');
+    expect(openai?.hasKey).toBe(true);
+  });
+});
+
 describe('loadConfig', () => {
   beforeEach(() => {
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.readFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
     vi.stubEnv('OPENAI_API_KEY', '');
     vi.stubEnv('XAI_API_KEY', '');
