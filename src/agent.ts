@@ -44,22 +44,7 @@ export function buildSystemPrompt(config: BernardConfig, memoryStore: MemoryStor
 
   prompt += `\n\n## MCP Servers
 
-MCP (Model Context Protocol) servers provide additional tools. Configuration file: ~/.bernard/mcp.json
-
-Format:
-\`\`\`json
-{
-  "mcpServers": {
-    "server-name": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-name", "/path"],
-      "env": {}
-    }
-  }
-}
-\`\`\`
-
-You can add or edit MCP servers by modifying this file with the shell tool. Changes take effect after restarting Bernard.`;
+MCP (Model Context Protocol) servers provide additional tools. Use the mcp_config tool to manage MCP servers (add, remove, list, get). Changes take effect after restarting Bernard.`;
 
   if (mcpServerNames && mcpServerNames.length > 0) {
     prompt += `\n\nCurrently connected MCP servers: ${mcpServerNames.join(', ')}`;

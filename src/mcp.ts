@@ -159,3 +159,104 @@ export class MCPManager {
     this.clients.clear();
   }
 }
+
+export function listMCPServers(): { key: string; command: string; args: string[] }[] {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    return [];
+  }
+
+  const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+  let config: MCPConfig;
+  try {
+    config = JSON.parse(raw) as MCPConfig;
+  } catch {
+    throw new Error(`Invalid JSON in ${CONFIG_PATH}`);
+  }
+
+  return Object.entries(config.mcpServers).map(([key, server]) => ({
+    key,
+    command: server.command,
+    args: server.args ?? [],
+  }));
+}
+
+export function getMCPServer(key: string): MCPServerConfig | undefined {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    return undefined;
+  }
+
+  const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+  let config: MCPConfig;
+  try {
+    config = JSON.parse(raw) as MCPConfig;
+  } catch {
+    throw new Error(`Invalid JSON in ${CONFIG_PATH}`);
+  }
+
+  return config.mcpServers[key];
+}
+
+export function addMCPServer(
+  key: string,
+  command: string,
+  args?: string[],
+  env?: Record<string, string>
+): void {
+  if (!key || /\s/.test(key)) {
+    throw new Error('Server key must be non-empty and contain no whitespace.');
+  }
+  if (!command) {
+    throw new Error('Command must be non-empty.');
+  }
+
+  const configDir = path.dirname(CONFIG_PATH);
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
+
+  let config: MCPConfig = { mcpServers: {} };
+  if (fs.existsSync(CONFIG_PATH)) {
+    const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+    try {
+      config = JSON.parse(raw) as MCPConfig;
+    } catch {
+      throw new Error(`Invalid JSON in ${CONFIG_PATH}`);
+    }
+  }
+
+  if (key in config.mcpServers) {
+    throw new Error(`MCP server "${key}" already exists. Remove it first, then add again.`);
+  }
+
+  const entry: MCPServerConfig = { command };
+  if (args && args.length > 0) entry.args = args;
+  if (env && Object.keys(env).length > 0) entry.env = env;
+
+  config.mcpServers[key] = entry;
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+}
+
+export function removeMCPServer(key: string): void {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    throw new Error(`No MCP config file found. No servers configured.`);
+  }
+
+  const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+  let config: MCPConfig;
+  try {
+    config = JSON.parse(raw) as MCPConfig;
+  } catch {
+    throw new Error(`Invalid JSON in ${CONFIG_PATH}`);
+  }
+
+  if (!(key in config.mcpServers)) {
+    const validKeys = Object.keys(config.mcpServers);
+    const hint = validKeys.length > 0
+      ? ` Valid keys: ${validKeys.join(', ')}`
+      : ' No servers configured.';
+    throw new Error(`MCP server "${key}" not found.${hint}`);
+  }
+
+  delete config.mcpServers[key];
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+}
