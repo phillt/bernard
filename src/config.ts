@@ -17,26 +17,153 @@ const DEFAULT_PROVIDER = 'anthropic';
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_SHELL_TIMEOUT = 30000;
 const PREFS_PATH = path.join(os.homedir(), '.bernard', 'preferences.json');
+const KEYS_PATH = path.join(os.homedir(), '.bernard', 'keys.json');
 
-export function savePreferences(prefs: { provider: string; model: string }): void {
+export const PROVIDER_ENV_VARS: Record<string, string> = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+  xai: 'XAI_API_KEY',
+};
+
+export const OPTIONS_REGISTRY: Record<string, {
+  configKey: 'maxTokens' | 'shellTimeout';
+  default: number;
+  description: string;
+  envVar: string;
+}> = {
+  'max-tokens': {
+    configKey: 'maxTokens',
+    default: DEFAULT_MAX_TOKENS,
+    description: 'Maximum tokens per AI response (controls response length)',
+    envVar: 'BERNARD_MAX_TOKENS',
+  },
+  'shell-timeout': {
+    configKey: 'shellTimeout',
+    default: DEFAULT_SHELL_TIMEOUT,
+    description: 'Shell command timeout in milliseconds (how long commands can run)',
+    envVar: 'BERNARD_SHELL_TIMEOUT',
+  },
+};
+
+export function savePreferences(prefs: {
+  provider: string;
+  model: string;
+  maxTokens?: number;
+  shellTimeout?: number;
+}): void {
   const dir = path.dirname(PREFS_PATH);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(PREFS_PATH, JSON.stringify(prefs, null, 2) + '\n');
+  const data: Record<string, unknown> = { provider: prefs.provider, model: prefs.model };
+  if (prefs.maxTokens !== undefined) data.maxTokens = prefs.maxTokens;
+  if (prefs.shellTimeout !== undefined) data.shellTimeout = prefs.shellTimeout;
+  fs.writeFileSync(PREFS_PATH, JSON.stringify(data, null, 2) + '\n');
 }
 
-export function loadPreferences(): { provider?: string; model?: string } {
+export function loadPreferences(): { provider?: string; model?: string; maxTokens?: number; shellTimeout?: number } {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
     const parsed = JSON.parse(data);
     return {
       provider: typeof parsed.provider === 'string' ? parsed.provider : undefined,
       model: typeof parsed.model === 'string' ? parsed.model : undefined,
+      maxTokens: typeof parsed.maxTokens === 'number' ? parsed.maxTokens : undefined,
+      shellTimeout: typeof parsed.shellTimeout === 'number' ? parsed.shellTimeout : undefined,
     };
   } catch {
     return {};
   }
+}
+
+function loadStoredKeys(): Record<string, string> {
+  try {
+    const data = fs.readFileSync(KEYS_PATH, 'utf-8');
+    const parsed = JSON.parse(data);
+    if (typeof parsed === 'object' && parsed !== null) {
+      return parsed as Record<string, string>;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+export function saveProviderKey(provider: string, key: string): void {
+  if (!PROVIDER_ENV_VARS[provider]) {
+    throw new Error(
+      `Unknown provider "${provider}". Supported: ${Object.keys(PROVIDER_ENV_VARS).join(', ')}`
+    );
+  }
+  const dir = path.dirname(KEYS_PATH);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const existing = loadStoredKeys();
+  existing[provider] = key;
+  fs.writeFileSync(KEYS_PATH, JSON.stringify(existing, null, 2) + '\n');
+  fs.chmodSync(KEYS_PATH, 0o600);
+}
+
+export function saveOption(name: string, value: number): void {
+  const entry = OPTIONS_REGISTRY[name];
+  if (!entry) {
+    throw new Error(
+      `Unknown option "${name}". Valid options: ${Object.keys(OPTIONS_REGISTRY).join(', ')}`
+    );
+  }
+  const prefs = loadPreferences();
+  (prefs as Record<string, unknown>)[entry.configKey] = value;
+  savePreferences({
+    provider: prefs.provider || 'anthropic',
+    model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
+    maxTokens: prefs.maxTokens,
+    shellTimeout: prefs.shellTimeout,
+  });
+}
+
+export function resetOption(name: string): void {
+  const entry = OPTIONS_REGISTRY[name];
+  if (!entry) {
+    throw new Error(
+      `Unknown option "${name}". Valid options: ${Object.keys(OPTIONS_REGISTRY).join(', ')}`
+    );
+  }
+  const prefs = loadPreferences();
+  delete (prefs as Record<string, unknown>)[entry.configKey];
+  savePreferences({
+    provider: prefs.provider || 'anthropic',
+    model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
+    maxTokens: prefs.maxTokens,
+    shellTimeout: prefs.shellTimeout,
+  });
+}
+
+export function resetAllOptions(): void {
+  const prefs = loadPreferences();
+  delete (prefs as Record<string, unknown>).maxTokens;
+  delete (prefs as Record<string, unknown>).shellTimeout;
+  savePreferences({
+    provider: prefs.provider || 'anthropic',
+    model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
+  });
+}
+
+export function getProviderKeyStatus(): Array<{ provider: string; hasKey: boolean }> {
+  const cwdEnv = path.join(process.cwd(), '.env');
+  const homeEnv = path.join(os.homedir(), '.bernard', '.env');
+  if (fs.existsSync(cwdEnv)) {
+    dotenv.config({ path: cwdEnv });
+  } else if (fs.existsSync(homeEnv)) {
+    dotenv.config({ path: homeEnv });
+  }
+
+  const storedKeys = loadStoredKeys();
+
+  return Object.entries(PROVIDER_ENV_VARS).map(([provider, envVar]) => ({
+    provider,
+    hasKey: !!(storedKeys[provider] || process.env[envVar]),
+  }));
 }
 
 export const PROVIDER_MODELS: Record<string, string[]> = {
@@ -88,11 +215,20 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     dotenv.config({ path: homeEnv });
   }
 
+  // Stored keys override .env — user explicitly ran `add-key`
+  const storedKeys = loadStoredKeys();
+  for (const [provider, key] of Object.entries(storedKeys)) {
+    const envVar = PROVIDER_ENV_VARS[provider];
+    if (envVar && key) process.env[envVar] = key;
+  }
+
   const prefs = loadPreferences();
   const provider = overrides?.provider || prefs.provider || process.env.BERNARD_PROVIDER || DEFAULT_PROVIDER;
   const model = overrides?.model || prefs.model || process.env.BERNARD_MODEL || getDefaultModel(provider);
-  const maxTokens = parseInt(process.env.BERNARD_MAX_TOKENS || '', 10) || DEFAULT_MAX_TOKENS;
-  const shellTimeout = parseInt(process.env.BERNARD_SHELL_TIMEOUT || '', 10) || DEFAULT_SHELL_TIMEOUT;
+  const maxTokens = prefs.maxTokens
+    ?? (parseInt(process.env.BERNARD_MAX_TOKENS || '', 10) || DEFAULT_MAX_TOKENS);
+  const shellTimeout = prefs.shellTimeout
+    ?? (parseInt(process.env.BERNARD_SHELL_TIMEOUT || '', 10) || DEFAULT_SHELL_TIMEOUT);
 
   const config: BernardConfig = {
     provider,
@@ -117,15 +253,11 @@ function validateConfig(config: BernardConfig): void {
 
   const key = keyMap[config.provider];
   if (!key) {
-    const envVar = {
-      anthropic: 'ANTHROPIC_API_KEY',
-      openai: 'OPENAI_API_KEY',
-      xai: 'XAI_API_KEY',
-    }[config.provider];
-
+    const envVar = PROVIDER_ENV_VARS[config.provider];
     throw new Error(
       `No API key found for provider "${config.provider}". ` +
-      `Set ${envVar} in your .env file or environment.`
+      `Run: bernard add-key ${config.provider} <your-api-key>\n` +
+      `Or set ${envVar} in your .env file or environment.`
     );
   }
 }
