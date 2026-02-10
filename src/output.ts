@@ -2,6 +2,30 @@ import chalk from 'chalk';
 
 const MAX_TOOL_OUTPUT_LENGTH = 2000;
 
+// Spinner state
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+let spinnerTimer: ReturnType<typeof setInterval> | null = null;
+let spinnerFrameIndex = 0;
+
+export function startSpinner(message = 'Thinking'): void {
+  if (spinnerTimer) return; // already running
+  spinnerFrameIndex = 0;
+  process.stdout.write('\x1B[?25l'); // hide cursor
+  spinnerTimer = setInterval(() => {
+    const frame = SPINNER_FRAMES[spinnerFrameIndex % SPINNER_FRAMES.length];
+    process.stdout.write(`\r${chalk.cyan(frame)} ${chalk.gray(message)}`);
+    spinnerFrameIndex++;
+  }, 80);
+}
+
+export function stopSpinner(): void {
+  if (!spinnerTimer) return;
+  clearInterval(spinnerTimer);
+  spinnerTimer = null;
+  process.stdout.write('\r\x1B[2K'); // clear line
+  process.stdout.write('\x1B[?25h'); // show cursor
+}
+
 export function printWelcome(provider: string, model: string): void {
   console.log(chalk.bold.cyan('\n  Bernard') + chalk.gray(' — AI CLI Assistant'));
   console.log(chalk.gray(`  Provider: ${provider} | Model: ${model}`));
@@ -9,12 +33,14 @@ export function printWelcome(provider: string, model: string): void {
 }
 
 export function printAssistantText(text: string): void {
+  stopSpinner();
   if (text.trim()) {
     console.log(chalk.white(text));
   }
 }
 
 export function printToolCall(toolName: string, args: Record<string, unknown>): void {
+  stopSpinner();
   const argsStr = toolName === 'shell'
     ? String(args.command || '')
     : JSON.stringify(args);
@@ -22,6 +48,7 @@ export function printToolCall(toolName: string, args: Record<string, unknown>): 
 }
 
 export function printToolResult(toolName: string, result: unknown): void {
+  stopSpinner();
   let output: string;
   if (typeof result === 'string') {
     output = result;
@@ -40,6 +67,7 @@ export function printToolResult(toolName: string, result: unknown): void {
 }
 
 export function printError(message: string): void {
+  stopSpinner();
   console.error(chalk.red(`Error: ${message}`));
 }
 

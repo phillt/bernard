@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   printAssistantText,
   printToolCall,
@@ -7,15 +7,21 @@ import {
   printInfo,
   printWelcome,
   printHelp,
+  startSpinner,
+  stopSpinner,
 } from './output.js';
 
 describe('output', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
+  let stdoutWriteSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    stdoutWriteSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    stopSpinner(); // ensure clean state
+    stdoutWriteSpy.mockClear();
   });
 
   describe('printAssistantText', () => {
@@ -107,6 +113,105 @@ describe('output', () => {
     it('writes to console.log', () => {
       printHelp();
       expect(logSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe('startSpinner', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      stopSpinner();
+      vi.useRealTimers();
+    });
+
+    it('writes spinner frames after interval', () => {
+      startSpinner();
+      vi.advanceTimersByTime(80);
+      expect(stdoutWriteSpy).toHaveBeenCalled();
+      const writes = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
+      const hasFrame = writes.some(w => w.includes('⠋') || w.includes('⠙'));
+      expect(hasFrame).toBe(true);
+    });
+
+    it('is idempotent (double start is a no-op)', () => {
+      startSpinner();
+      startSpinner();
+      vi.advanceTimersByTime(160);
+      stopSpinner();
+      // Should not throw and should clean up fine
+    });
+  });
+
+  describe('stopSpinner', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('clears line and shows cursor', () => {
+      startSpinner();
+      vi.advanceTimersByTime(80);
+      stdoutWriteSpy.mockClear();
+      stopSpinner();
+      const writes = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
+      expect(writes.some(w => w.includes('\x1B[2K'))).toBe(true); // clear line
+      expect(writes.some(w => w.includes('\x1B[?25h'))).toBe(true); // show cursor
+    });
+
+    it('is idempotent (double stop is a no-op)', () => {
+      stopSpinner();
+      stopSpinner();
+      // Should not throw
+    });
+  });
+
+  describe('spinner auto-stop', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      stopSpinner();
+      vi.useRealTimers();
+    });
+
+    it('printAssistantText stops the spinner', () => {
+      startSpinner();
+      vi.advanceTimersByTime(80);
+      printAssistantText('Hello');
+      // Spinner should be stopped — further advances should not write more frames
+      stdoutWriteSpy.mockClear();
+      vi.advanceTimersByTime(160);
+      const writes = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
+      const hasFrame = writes.some(w => w.includes('⠋') || w.includes('⠙'));
+      expect(hasFrame).toBe(false);
+    });
+
+    it('printToolCall stops the spinner', () => {
+      startSpinner();
+      vi.advanceTimersByTime(80);
+      printToolCall('shell', { command: 'ls' });
+      stdoutWriteSpy.mockClear();
+      vi.advanceTimersByTime(160);
+      const writes = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
+      const hasFrame = writes.some(w => w.includes('⠋') || w.includes('⠙'));
+      expect(hasFrame).toBe(false);
+    });
+
+    it('printError stops the spinner', () => {
+      startSpinner();
+      vi.advanceTimersByTime(80);
+      printError('something broke');
+      stdoutWriteSpy.mockClear();
+      vi.advanceTimersByTime(160);
+      const writes = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
+      const hasFrame = writes.some(w => w.includes('⠋') || w.includes('⠙'));
+      expect(hasFrame).toBe(false);
     });
   });
 });

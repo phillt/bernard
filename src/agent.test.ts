@@ -23,6 +23,8 @@ vi.mock('./output.js', () => ({
   printAssistantText: vi.fn(),
   printToolCall: vi.fn(),
   printToolResult: vi.fn(),
+  startSpinner: vi.fn(),
+  stopSpinner: vi.fn(),
 }));
 
 const mockGenerateText = vi.fn();

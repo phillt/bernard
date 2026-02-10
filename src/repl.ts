@@ -2,7 +2,7 @@ import * as readline from 'node:readline';
 import { Agent } from './agent.js';
 import { MemoryStore } from './memory.js';
 import { MCPManager } from './mcp.js';
-import { printHelp, printInfo, printError } from './output.js';
+import { printHelp, printInfo, printError, startSpinner, stopSpinner } from './output.js';
 import type { ToolOptions } from './tools/index.js';
 import { PROVIDER_MODELS, getAvailableProviders, getDefaultModel, savePreferences, type BernardConfig } from './config.js';
 import { CronStore } from './cron/store.js';
@@ -227,10 +227,13 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
       }
 
       try {
+        startSpinner();
         await agent.processInput(trimmed);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         printError(message);
+      } finally {
+        stopSpinner();
       }
 
       console.log(); // blank line between turns
