@@ -85,6 +85,7 @@ export function printHelp(): void {
   console.log(chalk.white('  /cron') + chalk.gray('     — Show cron jobs and daemon status'));
   console.log(chalk.white('  /provider') + chalk.gray(' — Switch LLM provider'));
   console.log(chalk.white('  /model') + chalk.gray('    — Switch model for current provider'));
+  console.log(chalk.white('  /options') + chalk.gray('  — View and set options (max-tokens, shell-timeout)'));
   console.log(chalk.white('  exit') + chalk.gray('      — Quit Bernard'));
   console.log();
 }
