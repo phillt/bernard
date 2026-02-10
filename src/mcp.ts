@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { createMCPClient, type MCPClient } from '@ai-sdk/mcp';
 import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
+import { jsonSchema } from 'ai';
 import { printInfo, printError } from './output.js';
 
 const CONFIG_PATH = path.join(os.homedir(), '.bernard', 'mcp.json');
@@ -120,7 +121,24 @@ export class MCPManager {
   }
 
   getTools(): Record<string, any> {
-    return this.tools;
+    // Convert dynamic MCP tools to function tools compatible with AI SDK v4.
+    // @ai-sdk/mcp@1.x returns tools with type:'dynamic' and inputSchema from
+    // @ai-sdk/provider-utils@4.x, but ai@4.x expects type:undefined and
+    // parameters wrapped with @ai-sdk/ui-utils's jsonSchema (which includes
+    // the validatorSymbol needed for argument validation).
+    const converted: Record<string, any> = {};
+    for (const [name, tool] of Object.entries(this.tools)) {
+      if (tool.type === 'dynamic') {
+        const { type, inputSchema, ...rest } = tool;
+        converted[name] = {
+          ...rest,
+          parameters: jsonSchema(inputSchema.jsonSchema),
+        };
+      } else {
+        converted[name] = tool;
+      }
+    }
+    return converted;
   }
 
   getServerStatuses(): ServerStatus[] {
