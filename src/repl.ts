@@ -4,9 +4,11 @@ import { MemoryStore } from './memory.js';
 import { MCPManager } from './mcp.js';
 import { printHelp, printInfo, printError } from './output.js';
 import type { ToolOptions } from './tools/index.js';
-import { PROVIDER_MODELS, getAvailableProviders, getDefaultModel, type BernardConfig } from './config.js';
+import { PROVIDER_MODELS, getAvailableProviders, getDefaultModel, savePreferences, type BernardConfig } from './config.js';
+import { CronStore } from './cron/store.js';
+import { isDaemonRunning } from './cron/client.js';
 
-export async function startRepl(config: BernardConfig): Promise<void> {
+export async function startRepl(config: BernardConfig, alertContext?: string): Promise<void> {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -50,7 +52,7 @@ export async function startRepl(config: BernardConfig): Promise<void> {
     confirmDangerous: confirmFn,
   };
 
-  const agent = new Agent(config, toolOptions, memoryStore, mcpTools, mcpServerNames);
+  const agent = new Agent(config, toolOptions, memoryStore, mcpTools, mcpServerNames, alertContext);
 
   const cleanup = async () => {
     await mcpManager.close();
@@ -130,6 +132,38 @@ export async function startRepl(config: BernardConfig): Promise<void> {
           if (toolNames.length > 0) {
             printInfo(`\nMCP tools: ${toolNames.join(', ')}`);
           }
+        }
+        prompt();
+        return;
+      }
+
+      if (trimmed === '/cron') {
+        const store = new CronStore();
+        const jobs = store.loadJobs();
+        const running = isDaemonRunning();
+
+        printInfo(`\n  Daemon: ${running ? 'running' : 'stopped'}`);
+        if (jobs.length === 0) {
+          printInfo('  No cron jobs configured.\n');
+        } else {
+          printInfo(`  Jobs (${jobs.length}):`);
+          for (const job of jobs) {
+            const status = job.enabled ? 'enabled' : 'disabled';
+            const lastRun = job.lastRun
+              ? `last: ${new Date(job.lastRun).toLocaleString()} (${job.lastRunStatus || 'unknown'})`
+              : 'never run';
+            printInfo(`    ${job.name} [${status}] — ${job.schedule} — ${lastRun}`);
+            printInfo(`      ID: ${job.id}`);
+          }
+
+          const alerts = store.listAlerts().filter(a => !a.acknowledged);
+          if (alerts.length > 0) {
+            printInfo(`\n  Unacknowledged alerts (${alerts.length}):`);
+            for (const alert of alerts.slice(0, 5)) {
+              printInfo(`    [${new Date(alert.timestamp).toLocaleString()}] ${alert.jobName}: ${alert.message}`);
+            }
+          }
+          console.log();
         }
         prompt();
         return;
