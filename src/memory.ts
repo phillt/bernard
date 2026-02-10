@@ -4,7 +4,8 @@ import * as os from 'node:os';
 
 const MEMORY_DIR = path.join(os.homedir(), '.bernard', 'memory');
 
-function sanitizeKey(key: string): string {
+/** @internal */
+export function sanitizeKey(key: string): string {
   return key.replace(/[^a-zA-Z0-9_-]/g, '');
 }
 

@@ -20,7 +20,8 @@ const DANGEROUS_PATTERNS = [
   /\bkillall\b/,
 ];
 
-function isDangerous(command: string): boolean {
+/** @internal */
+export function isDangerous(command: string): boolean {
   return DANGEROUS_PATTERNS.some(pattern => pattern.test(command));
 }
 

@@ -75,25 +75,32 @@ export class Agent {
   private memoryStore: MemoryStore;
   private mcpTools?: Record<string, any>;
   private mcpServerNames?: string[];
+  private alertContext?: string;
 
-  constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>, mcpServerNames?: string[]) {
+  constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>, mcpServerNames?: string[], alertContext?: string) {
     this.config = config;
     this.toolOptions = toolOptions;
     this.memoryStore = memoryStore;
     this.mcpTools = mcpTools;
     this.mcpServerNames = mcpServerNames;
+    this.alertContext = alertContext;
   }
 
   async processInput(userInput: string): Promise<void> {
     this.history.push({ role: 'user', content: userInput });
 
     try {
+      let systemPrompt = buildSystemPrompt(this.config, this.memoryStore, this.mcpServerNames);
+      if (this.alertContext) {
+        systemPrompt += '\n\n' + this.alertContext;
+      }
+
       const result = await generateText({
         model: getModel(this.config.provider, this.config.model),
         tools: createTools(this.toolOptions, this.memoryStore, this.mcpTools),
         maxSteps: 20,
         maxTokens: this.config.maxTokens,
-        system: buildSystemPrompt(this.config, this.memoryStore, this.mcpServerNames),
+        system: systemPrompt,
         messages: this.history,
         onStepFinish: ({ text, toolCalls, toolResults }) => {
           for (const tc of toolCalls) {
