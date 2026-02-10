@@ -5,3 +5,5 @@ dist/
 *.d.ts
 !src/**/*.d.ts
 .idea/
+
+$HOME/
