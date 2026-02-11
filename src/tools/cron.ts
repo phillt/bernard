@@ -3,6 +3,7 @@ import { z } from 'zod';
 import cron from 'node-cron';
 import { CronStore } from '../cron/store.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from '../cron/client.js';
+import { debugLog } from '../logger.js';
 
 export function createCronTool() {
   const store = new CronStore();
@@ -18,6 +19,7 @@ export function createCronTool() {
       id: z.string().optional().describe('Job ID (required for get/update/delete/enable/disable)'),
     }),
     execute: async ({ action, name, schedule, prompt, id }): Promise<string> => {
+      debugLog('cron:execute', { action, name, schedule, prompt, id });
       switch (action) {
         case 'create': {
           if (!name) return 'Error: name is required for create action.';
