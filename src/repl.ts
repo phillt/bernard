@@ -78,8 +78,18 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
     process.stdout.write(PROMPT_STR + line);
   }
 
+  let processing = false;
+  let interrupted = false;
+
   process.stdin.on('keypress', (_str: string, key: any) => {
     if (!key) return;
+
+    if (key.name === 'escape' && processing) {
+      agent.abort();
+      interrupted = true;
+      return;
+    }
+
     if (key.name === 'paste-start') {
       isPasting = true;
       rl.setPrompt(''); // suppress prompt on continuation lines
@@ -408,14 +418,24 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
 
     } // end slash command handling
 
+    processing = true;
+    interrupted = false;
     try {
       startSpinner();
       await agent.processInput(trimmed);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      printError(message);
+      if (!interrupted) {
+        const message = err instanceof Error ? err.message : String(err);
+        printError(message);
+      }
     } finally {
+      processing = false;
       stopSpinner();
+    }
+
+    if (interrupted) {
+      printInfo('Interrupted.');
+      interrupted = false;
     }
 
     console.log(); // blank line between turns
