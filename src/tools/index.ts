@@ -1,7 +1,7 @@
 import { createShellTool } from './shell.js';
 import { createMemoryTool, createScratchTool } from './memory.js';
 import { createDateTimeTool } from './datetime.js';
-import { createCronTool } from './cron.js';
+import { createCronTools } from './cron.js';
 import { createMCPConfigTool } from './mcp.js';
 import type { ToolOptions } from './types.js';
 import type { MemoryStore } from '../memory.js';
@@ -14,7 +14,7 @@ export function createTools(options: ToolOptions, memoryStore: MemoryStore, mcpT
     memory: createMemoryTool(memoryStore),
     scratch: createScratchTool(memoryStore),
     datetime: createDateTimeTool(),
-    cron: createCronTool(),
+    ...createCronTools(),
     mcp_config: createMCPConfigTool(),
     ...mcpTools,
   };
