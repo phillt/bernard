@@ -3,7 +3,7 @@ import { Agent } from './agent.js';
 import { MemoryStore } from './memory.js';
 import { MCPManager } from './mcp.js';
 import { printHelp, printInfo, printError, startSpinner, stopSpinner } from './output.js';
-import type { ToolOptions } from './tools/index.js';
+import type { ToolOptions } from './tools';
 import { PROVIDER_MODELS, getAvailableProviders, getDefaultModel, savePreferences, OPTIONS_REGISTRY, saveOption, type BernardConfig } from './config.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
@@ -45,7 +45,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
   }
 
   // Strip ANSI escapes to calculate visible prompt width
-  const promptVisibleLen = PROMPT_STR.replace(/\x1b\[[^m]*m/g, '').length;
+  PROMPT_STR.replace(/\x1b\[[^m]*m/g, '').length;
   let hintLineCount = 0;
 
   function redrawWithHints(line: string): void {
