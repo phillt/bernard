@@ -49,16 +49,19 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
   let hintLineCount = 0;
 
   function redrawWithHints(line: string): void {
+    const matches = (!isPasting && line.startsWith('/'))
+      ? SLASH_COMMANDS.filter(c => c.command.startsWith(line))
+      : [];
+
+    // Nothing to show and nothing to clean up — let readline handle display
+    if (matches.length === 0 && hintLineCount === 0) return;
+
     // Move up past any old hint lines to the prompt line
     if (hintLineCount > 0) {
       process.stdout.write(`\x1b[${hintLineCount}A`);
     }
     // Clear from prompt line downward
     process.stdout.write(`\r\x1b[J`);
-
-    const matches = (!isPasting && line.startsWith('/'))
-      ? SLASH_COMMANDS.filter(c => c.command.startsWith(line))
-      : [];
 
     if (matches.length > 0) {
       const maxLen = Math.max(...matches.map(c => c.command.length));
