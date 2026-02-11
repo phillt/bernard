@@ -9,9 +9,31 @@ import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 
 export async function startRepl(config: BernardConfig, alertContext?: string): Promise<void> {
+  const SLASH_COMMANDS = [
+    { command: '/help',     description: 'Show this help' },
+    { command: '/clear',    description: 'Clear conversation history and scratch notes' },
+    { command: '/memory',   description: 'List persistent memories' },
+    { command: '/scratch',  description: 'List session scratch notes' },
+    { command: '/mcp',      description: 'List MCP servers and tools' },
+    { command: '/cron',     description: 'Show cron jobs and daemon status' },
+    { command: '/provider', description: 'Switch LLM provider' },
+    { command: '/model',    description: 'Switch model for current provider' },
+    { command: '/options',  description: 'View and set options (max-tokens, shell-timeout)' },
+    { command: '/exit',     description: 'Quit Bernard' },
+  ];
+
+  function completer(line: string): [string[], string] {
+    if (line.startsWith('/')) {
+      const hits = SLASH_COMMANDS.filter(c => c.command.startsWith(line)).map(c => c.command);
+      return [hits.length ? hits : SLASH_COMMANDS.map(c => c.command), line];
+    }
+    return [[], line];
+  }
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
+    completer,
   });
 
   // Bracket paste mode: track whether we're inside a terminal paste
@@ -20,6 +42,37 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
 
   if (process.stdin.isTTY) {
     process.stdout.write('\x1b[?2004h'); // enable bracket paste mode
+  }
+
+  // Strip ANSI escapes to calculate visible prompt width
+  const promptVisibleLen = PROMPT_STR.replace(/\x1b\[[^m]*m/g, '').length;
+  let hintLineCount = 0;
+
+  function redrawWithHints(line: string): void {
+    // Move up past any old hint lines to the prompt line
+    if (hintLineCount > 0) {
+      process.stdout.write(`\x1b[${hintLineCount}A`);
+    }
+    // Clear from prompt line downward
+    process.stdout.write(`\r\x1b[J`);
+
+    const matches = (!isPasting && line.startsWith('/'))
+      ? SLASH_COMMANDS.filter(c => c.command.startsWith(line))
+      : [];
+
+    if (matches.length > 0) {
+      const maxLen = Math.max(...matches.map(c => c.command.length));
+      for (const c of matches) {
+        const pad = ' '.repeat(maxLen - c.command.length + 2);
+        process.stdout.write(`  \x1b[37m${c.command}\x1b[0m${pad}\x1b[90m— ${c.description}\x1b[0m\n`);
+      }
+      hintLineCount = matches.length;
+    } else {
+      hintLineCount = 0;
+    }
+
+    // Reprint prompt + current input
+    process.stdout.write(PROMPT_STR + line);
   }
 
   process.stdin.on('keypress', (_str: string, key: any) => {
@@ -32,10 +85,31 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
       isPasting = false;
       rl.setPrompt(PROMPT_STR); // restore prompt
     }
+
+    // On Enter, clear hints before readline processes the line
+    if (key.name === 'return' && hintLineCount > 0) {
+      // Move up past hints, clear everything, reprint prompt+line so
+      // readline's own newline lands cleanly
+      const line = (rl as any).line as string || '';
+      process.stdout.write(`\x1b[${hintLineCount}A\r\x1b[J`);
+      process.stdout.write(PROMPT_STR + line);
+      hintLineCount = 0;
+      return;
+    }
+
+    // Show/update slash command hints on next tick (after readline updates rl.line)
+    if (!isPasting && key.name !== 'paste-start' && key.name !== 'paste-end' && key.name !== 'return') {
+      process.nextTick(() => {
+        const line = (rl as any).line as string;
+        if (line !== undefined) {
+          redrawWithHints(line);
+        }
+      });
+    }
   });
 
   /** Read a single input (possibly multi-line via paste) from the REPL. */
-  function readInput(): Promise<string> {
+  function readInput(): Promise<{ text: string; pasted: boolean }> {
     return new Promise((resolve) => {
       const pasteLines: string[] = [];
 
@@ -46,11 +120,11 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
           // Paste ended; this Enter press finalises the input
           pasteLines.push(line);
           rl.removeListener('line', onLine);
-          resolve(pasteLines.join('\n'));
+          resolve({ text: pasteLines.join('\n'), pasted: true });
         } else {
           // Normal single-line input
           rl.removeListener('line', onLine);
-          resolve(line);
+          resolve({ text: line, pasted: false });
         }
       };
 
@@ -108,10 +182,22 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
   };
 
   const prompt = async () => {
-    const input = await readInput();
-    const trimmed = input.trim();
+    const { text, pasted } = await readInput();
+    let trimmed = text.trim();
 
     if (!trimmed) {
+      prompt();
+      return;
+    }
+
+    // Escaped forward slash: unescape and send to agent as regular text
+    const isEscapedSlash = trimmed.startsWith('\\/');
+    if (isEscapedSlash) {
+      trimmed = trimmed.slice(1);
+    }
+
+    // Bare "/" was handled by live keypress hints; just re-prompt
+    if (!pasted && !isEscapedSlash && trimmed === '/') {
       prompt();
       return;
     }
@@ -122,6 +208,9 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
       rl.close();
       process.exit(0);
     }
+
+    // Slash commands are only handled for typed (non-pasted, non-escaped) input
+    if (!pasted && !isEscapedSlash && trimmed.startsWith('/')) {
 
     if (trimmed === '/help') {
       printHelp();
@@ -313,6 +402,8 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
       });
       return;
     }
+
+    } // end slash command handling
 
     try {
       startSpinner();
