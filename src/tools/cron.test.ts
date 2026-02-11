@@ -123,11 +123,10 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       };
       mockStore.updateJob.mockReturnValue(updatedJob);
 
-      const result = await cronTool.execute!({
-        action: 'update',
-        id: 'test-id-123',
-        prompt: 'Updated prompt',
-      }, {} as any);
+      const result = await tools.cron_update.execute!(
+        { id: 'test-id-123', prompt: 'Updated prompt' },
+        {} as any,
+      );
 
       expect(result).toContain('Job updated');
       expect(result).not.toContain('Error');
