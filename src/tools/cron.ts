@@ -9,13 +9,13 @@ export function createCronTool() {
 
   return tool({
     description:
-      'Manage scheduled background tasks (cron jobs). Jobs run periodically in a background daemon, executing AI prompts with tool access. Use the notify tool in job prompts when user attention is needed.',
+      'Manage scheduled background tasks (cron jobs). Jobs run periodically in a background daemon, executing AI prompts with tool access. Use "get" to read full job details including prompt text and last result. Use "update" to modify a job\'s name, schedule, or prompt. Use the notify tool in job prompts when user attention is needed.',
     parameters: z.object({
-      action: z.enum(['create', 'list', 'delete', 'enable', 'disable', 'status']).describe('The action to perform'),
-      name: z.string().optional().describe('Job name (required for create)'),
-      schedule: z.string().optional().describe('Cron expression, e.g. "0 * * * *" for hourly (required for create)'),
-      prompt: z.string().optional().describe('The AI prompt to execute on schedule (required for create)'),
-      id: z.string().optional().describe('Job ID (required for delete/enable/disable)'),
+      action: z.enum(['create', 'list', 'get', 'update', 'delete', 'enable', 'disable', 'status']).describe('The action to perform'),
+      name: z.string().optional().describe('Job name (required for create). For update, include the new name here.'),
+      schedule: z.string().optional().describe('Cron expression, e.g. "0 * * * *" for hourly (required for create). For update, include the new schedule here.'),
+      prompt: z.string().optional().describe('The AI prompt to execute on schedule (required for create). For update, include the full new prompt text here.'),
+      id: z.string().optional().describe('Job ID (required for get/update/delete/enable/disable)'),
     }),
     execute: async ({ action, name, schedule, prompt, id }): Promise<string> => {
       switch (action) {
@@ -61,6 +61,57 @@ export function createCronTool() {
           });
 
           return `Cron jobs (${jobs.length}):\n${lines.join('\n')}`;
+        }
+
+        case 'get': {
+          if (!id) return 'Error: id is required for get action.';
+
+          const job = store.getJob(id);
+          if (!job) return `Error: No job found with ID "${id}".`;
+
+          let result = `Job details:\n`;
+          result += `  ID: ${job.id}\n`;
+          result += `  Name: ${job.name}\n`;
+          result += `  Schedule: ${job.schedule}\n`;
+          result += `  Enabled: ${job.enabled}\n`;
+          result += `  Created: ${job.createdAt}\n`;
+          result += `  Prompt: ${job.prompt}`;
+          if (job.lastRun) {
+            result += `\n  Last run: ${job.lastRun}`;
+            result += `\n  Last status: ${job.lastRunStatus || 'unknown'}`;
+            if (job.lastResult) {
+              result += `\n  Last result: ${job.lastResult}`;
+            }
+          }
+
+          return result;
+        }
+
+        case 'update': {
+          if (!id) return 'Error: id is required for update action.';
+          if (!name && !schedule && !prompt) {
+            const received = Object.entries({ action, name, schedule, prompt, id })
+              .filter(([, v]) => v !== undefined)
+              .map(([k]) => k)
+              .join(', ');
+            return 'Error: update requires at least one field to change (name, schedule, prompt) as a parameter in this tool call. '
+              + 'Example: {"action":"update","id":"...","prompt":"new prompt text"}. '
+              + `Received parameters: ${received}.`;
+          }
+
+          if (schedule && !cron.validate(schedule)) {
+            return `Error: Invalid cron expression "${schedule}". Use standard cron format (e.g. "0 * * * *" for hourly, "*/5 * * * *" for every 5 minutes).`;
+          }
+
+          const updates: Record<string, string> = {};
+          if (name) updates.name = name;
+          if (schedule) updates.schedule = schedule;
+          if (prompt) updates.prompt = prompt;
+
+          const job = store.updateJob(id, updates);
+          if (!job) return `Error: No job found with ID "${id}".`;
+
+          return `Job updated:\n  ID: ${job.id}\n  Name: ${job.name}\n  Schedule: ${job.schedule}\n  Enabled: ${job.enabled}`;
         }
 
         case 'delete': {
