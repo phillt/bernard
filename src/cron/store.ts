@@ -68,7 +68,7 @@ export class CronStore {
     return job;
   }
 
-  updateJob(id: string, updates: Partial<Pick<CronJob, 'enabled' | 'lastRun' | 'lastRunStatus' | 'lastResult'>>): CronJob | undefined {
+  updateJob(id: string, updates: Partial<Pick<CronJob, 'name' | 'schedule' | 'prompt' | 'enabled' | 'lastRun' | 'lastRunStatus' | 'lastResult'>>): CronJob | undefined {
     const jobs = this.loadJobs();
     const idx = jobs.findIndex(j => j.id === id);
     if (idx === -1) return undefined;
