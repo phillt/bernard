@@ -2,6 +2,7 @@ import { generateText, type CoreMessage } from 'ai';
 import { getModel } from './providers/index.js';
 import { createTools, type ToolOptions } from './tools/index.js';
 import { printAssistantText, printToolCall, printToolResult } from './output.js';
+import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
 
@@ -91,9 +92,11 @@ export class Agent {
         messages: this.history,
         onStepFinish: ({ text, toolCalls, toolResults }) => {
           for (const tc of toolCalls) {
+            debugLog(`onStepFinish:toolCall:${tc.toolName}`, tc.args);
             printToolCall(tc.toolName, tc.args as Record<string, unknown>);
           }
           for (const tr of toolResults) {
+            debugLog(`onStepFinish:toolResult:${tr.toolName}`, tr.result);
             printToolResult(tr.toolName, tr.result);
           }
           if (text) {
