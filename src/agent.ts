@@ -64,6 +64,7 @@ export class Agent {
   private mcpTools?: Record<string, any>;
   private mcpServerNames?: string[];
   private alertContext?: string;
+  private abortController: AbortController | null = null;
 
   constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>, mcpServerNames?: string[], alertContext?: string) {
     this.config = config;
@@ -74,8 +75,14 @@ export class Agent {
     this.alertContext = alertContext;
   }
 
+  abort(): void {
+    this.abortController?.abort();
+  }
+
   async processInput(userInput: string): Promise<void> {
     this.history.push({ role: 'user', content: userInput });
+
+    this.abortController = new AbortController();
 
     try {
       let systemPrompt = buildSystemPrompt(this.config, this.memoryStore, this.mcpServerNames);
@@ -90,6 +97,7 @@ export class Agent {
         maxTokens: this.config.maxTokens,
         system: systemPrompt,
         messages: this.history,
+        abortSignal: this.abortController.signal,
         onStepFinish: ({ text, toolCalls, toolResults }) => {
           for (const tc of toolCalls) {
             debugLog(`onStepFinish:toolCall:${tc.toolName}`, tc.args);
@@ -108,8 +116,13 @@ export class Agent {
       // Append all response messages to history for continuity
       this.history.push(...result.response.messages as CoreMessage[]);
     } catch (err: unknown) {
+      // If aborted by user, return silently — user message stays in history
+      if (this.abortController?.signal.aborted) return;
+
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`Agent error: ${message}`);
+    } finally {
+      this.abortController = null;
     }
   }
 
