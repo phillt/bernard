@@ -1,0 +1,10 @@
+src/
+*.test.ts
+.env
+.claude/
+.logs/
+tsconfig.json
+vitest.config.ts
+.idea/
+.git/
+node_modules/

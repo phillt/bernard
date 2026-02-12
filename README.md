@@ -51,13 +51,19 @@ A local CLI AI agent that executes terminal commands, manages scheduled tasks, r
 ## Installation
 
 ```bash
-git clone <repo-url> && cd bernard
+npm install -g bernard-agent
+```
+
+This installs `bernard` as a global command available from any directory.
+
+### From Source
+
+```bash
+git clone https://github.com/phillt/bernard.git && cd bernard
 npm install
 npm run build
 npm link
 ```
-
-This installs `bernard` as a global command available from any directory.
 
 ## Quick Start
 

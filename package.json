@@ -1,5 +1,5 @@
 {
-  "name": "bernard",
+  "name": "bernard-agent",
   "version": "0.1.0",
   "description": "Local CLI AI agent with multi-provider support",
   "main": "dist/index.js",
@@ -11,8 +11,40 @@
     "dev": "BERNARD_DEBUG=1 tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/phillt/bernard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/phillt/bernard/issues"
+  },
+  "homepage": "https://github.com/phillt/bernard#readme",
+  "author": "phillt",
+  "license": "MIT",
+  "keywords": [
+    "cli",
+    "ai",
+    "agent",
+    "llm",
+    "anthropic",
+    "openai",
+    "xai",
+    "terminal",
+    "mcp",
+    "ai-sdk"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
   "dependencies": {
     "@ai-sdk/anthropic": "^1.1.0",
     "@ai-sdk/mcp": "^1.0.19",
