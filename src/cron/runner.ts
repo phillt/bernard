@@ -1,3 +1,4 @@
+import * as crypto from 'node:crypto';
 import { generateText } from 'ai';
 import { tool } from 'ai';
 import { z } from 'zod';
@@ -9,6 +10,7 @@ import { createMemoryTool, createScratchTool } from '../tools/memory.js';
 import { createDateTimeTool } from '../tools/datetime.js';
 import { MCPManager } from '../mcp.js';
 import { CronStore } from './store.js';
+import { CronLogStore, type CronLogStep } from './log-store.js';
 import { sendNotification, openAlertTerminal } from './notify.js';
 import type { CronJob } from './types.js';
 
@@ -47,6 +49,13 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     const message = err instanceof Error ? err.message : String(err);
     log(`MCP initialization failed, continuing without MCP tools: ${message}`);
   }
+
+  const logStore = new CronLogStore();
+  const runId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
+  const startMs = Date.now();
+  const steps: CronLogStep[] = [];
+  let stepIndex = 0;
 
   try {
     const notifyTool = tool({
@@ -92,14 +101,101 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       maxTokens: config.maxTokens,
       system: DAEMON_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: job.prompt }],
+      onStepFinish: ({ text, toolCalls, toolResults, usage, finishReason }) => {
+        const truncatedResults = (toolResults || []).map(tr => ({
+          toolName: tr.toolName,
+          toolCallId: tr.toolCallId,
+          result: truncateResult(tr.result, 10240),
+        }));
+        steps.push({
+          stepIndex: stepIndex++,
+          timestamp: new Date().toISOString(),
+          text: text || '',
+          toolCalls: (toolCalls || []).map(tc => ({
+            toolName: tc.toolName,
+            toolCallId: tc.toolCallId,
+            args: tc.args as Record<string, unknown>,
+          })),
+          toolResults: truncatedResults,
+          usage: {
+            promptTokens: usage?.promptTokens ?? 0,
+            completionTokens: usage?.completionTokens ?? 0,
+            totalTokens: (usage?.promptTokens ?? 0) + (usage?.completionTokens ?? 0),
+          },
+          finishReason: finishReason || 'unknown',
+        });
+      },
     });
 
     const output = result.text || '(no text output)';
+
+    try {
+      const totalUsage = steps.reduce(
+        (acc, s) => ({
+          promptTokens: acc.promptTokens + s.usage.promptTokens,
+          completionTokens: acc.completionTokens + s.usage.completionTokens,
+          totalTokens: acc.totalTokens + s.usage.totalTokens,
+        }),
+        { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      );
+      logStore.appendEntry({
+        runId,
+        jobId: job.id,
+        jobName: job.name,
+        prompt: job.prompt,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - startMs,
+        success: true,
+        finalOutput: output,
+        steps,
+        totalUsage,
+      });
+    } catch (logErr: unknown) {
+      const logMsg = logErr instanceof Error ? logErr.message : String(logErr);
+      log(`Warning: failed to write execution log: ${logMsg}`);
+    }
+
     return { success: true, output };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
+
+    try {
+      const totalUsage = steps.reduce(
+        (acc, s) => ({
+          promptTokens: acc.promptTokens + s.usage.promptTokens,
+          completionTokens: acc.completionTokens + s.usage.completionTokens,
+          totalTokens: acc.totalTokens + s.usage.totalTokens,
+        }),
+        { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      );
+      logStore.appendEntry({
+        runId,
+        jobId: job.id,
+        jobName: job.name,
+        prompt: job.prompt,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - startMs,
+        success: false,
+        error: message,
+        finalOutput: '',
+        steps,
+        totalUsage,
+      });
+    } catch {
+      // best-effort logging
+    }
+
     return { success: false, output: `Error: ${message}` };
   } finally {
     await mcpManager.close();
   }
+}
+
+function truncateResult(result: unknown, maxLen: number): unknown {
+  if (typeof result === 'string' && result.length > maxLen) {
+    return result.slice(0, maxLen) + `... (truncated, ${result.length} chars total)`;
+  }
+  return result;
 }
