@@ -2,6 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import cron from 'node-cron';
 import { CronStore } from '../cron/store.js';
+import { CronLogStore } from '../cron/log-store.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from '../cron/client.js';
 import { debugLog } from '../logger.js';
 
@@ -28,6 +29,7 @@ function stopIfNoEnabledJobs(store: CronStore): string {
 
 export function createCronTools() {
   const store = new CronStore();
+  const logStore = new CronLogStore();
 
   return {
     cron_create: tool({
@@ -163,6 +165,8 @@ Examples:
         const deleted = store.deleteJob(id);
         if (!deleted) return `Error: No job found with ID "${id}".`;
 
+        logStore.deleteJobLogs(id);
+
         const suffix = stopIfNoEnabledJobs(store);
         if (suffix) return `Job deleted.${suffix}`;
 
@@ -231,6 +235,37 @@ Examples:
         }
 
         return result;
+      },
+    }),
+
+    cron_bounce: tool({
+      description: 'Restart the cron daemon. Useful after code updates or if the daemon is misbehaving.',
+      parameters: z.object({}),
+      execute: async (): Promise<string> => {
+        debugLog('cron_bounce:execute', {});
+
+        const wasRunning = isDaemonRunning();
+        if (wasRunning) {
+          stopDaemon();
+          // Brief delay for process cleanup
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        const enabled = store.loadJobs().filter(j => j.enabled);
+        if (enabled.length === 0) {
+          return wasRunning
+            ? 'Daemon stopped. No enabled jobs — not restarting.'
+            : 'Daemon was not running. No enabled jobs — nothing to do.';
+        }
+
+        try {
+          startDaemon();
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return `Daemon ${wasRunning ? 'stopped but' : 'was not running and'} failed to restart: ${msg}`;
+        }
+
+        return `Daemon restarted. ${enabled.length} enabled job${enabled.length === 1 ? '' : 's'}.`;
       },
     }),
   };
