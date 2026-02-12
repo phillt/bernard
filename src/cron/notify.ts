@@ -1,6 +1,8 @@
 import { execSync, spawn } from 'node:child_process';
+import { platform as osPlatform } from 'node:os';
+import notifier from 'node-notifier';
 
-const TERMINALS = [
+const LINUX_TERMINALS = [
   'x-terminal-emulator',
   'gnome-terminal',
   'konsole',
@@ -10,8 +12,8 @@ const TERMINALS = [
   'xterm',
 ];
 
-function findTerminal(): string | null {
-  for (const term of TERMINALS) {
+function findLinuxTerminal(): string | null {
+  for (const term of LINUX_TERMINALS) {
     try {
       execSync(`which ${term}`, { stdio: 'pipe' });
       return term;
@@ -22,7 +24,7 @@ function findTerminal(): string | null {
   return null;
 }
 
-function getTerminalArgs(terminal: string, command: string): string[] {
+function getLinuxTerminalArgs(terminal: string, command: string): string[] {
   switch (terminal) {
     case 'gnome-terminal':
       return ['--', 'bash', '-c', command];
@@ -40,37 +42,55 @@ function getTerminalArgs(terminal: string, command: string): string[] {
   }
 }
 
-export function sendNotification(
-  title: string,
-  message: string,
-  severity: 'low' | 'normal' | 'critical' = 'normal',
-  log?: (msg: string) => void,
-): void {
-  const urgencyMap = { low: 'low', normal: 'normal', critical: 'critical' } as const;
-  const urgency = urgencyMap[severity];
+function openAlertInTerminal(alertId: string, log?: (msg: string) => void, platform?: string): void {
+  const plat = platform ?? osPlatform();
+  const command = `bernard --alert ${alertId}`;
 
-  try {
-    execSync(
-      `notify-send -u ${urgency} ${JSON.stringify(title)} ${JSON.stringify(message)}`,
-      { stdio: 'pipe', timeout: 5000 },
-    );
-  } catch (err) {
-    const msg = `Warning: notify-send failed: ${err instanceof Error ? err.message : String(err)}`;
-    if (log) log(msg);
-  }
-}
-
-export function openAlertTerminal(alertId: string, log?: (msg: string) => void): void {
-  const terminal = findTerminal();
-  if (!terminal) {
-    const msg = 'Warning: No supported terminal emulator found for alert display.';
-    if (log) log(msg);
+  if (plat === 'darwin') {
+    try {
+      const child = spawn('osascript', ['-e', `tell application "Terminal" to do script "${command}"`], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+    } catch (err) {
+      if (log) log(`Warning: Failed to open macOS Terminal: ${err instanceof Error ? err.message : String(err)}`);
+    }
     return;
   }
 
-  const command = `bernard --alert ${alertId}`;
-  const args = getTerminalArgs(terminal, command);
+  if (plat === 'win32') {
+    // Try Windows Terminal first, fall back to cmd
+    try {
+      const child = spawn('wt', ['--', 'cmd', '/k', command], {
+        detached: true,
+        stdio: 'ignore',
+        shell: true,
+      });
+      child.unref();
+    } catch {
+      try {
+        const child = spawn('cmd', ['/c', 'start', 'cmd', '/k', command], {
+          detached: true,
+          stdio: 'ignore',
+          shell: true,
+        });
+        child.unref();
+      } catch (err) {
+        if (log) log(`Warning: Failed to open Windows terminal: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return;
+  }
 
+  // Linux
+  const terminal = findLinuxTerminal();
+  if (!terminal) {
+    if (log) log('Warning: No supported terminal emulator found for alert display.');
+    return;
+  }
+
+  const args = getLinuxTerminalArgs(terminal, command);
   try {
     const child = spawn(terminal, args, {
       detached: true,
@@ -78,7 +98,43 @@ export function openAlertTerminal(alertId: string, log?: (msg: string) => void):
     });
     child.unref();
   } catch (err) {
-    const msg = `Warning: Failed to open terminal: ${err instanceof Error ? err.message : String(err)}`;
-    if (log) log(msg);
+    if (log) log(`Warning: Failed to open terminal: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+let pendingAlertId: string | null = null;
+let clickListenerRegistered = false;
+
+export function sendNotification(options: {
+  title: string;
+  message: string;
+  severity: 'low' | 'normal' | 'critical';
+  alertId: string;
+  log?: (msg: string) => void;
+}): void {
+  const { title, message, severity, alertId, log } = options;
+
+  pendingAlertId = alertId;
+
+  if (!clickListenerRegistered) {
+    clickListenerRegistered = true;
+    notifier.on('click', () => {
+      if (pendingAlertId) {
+        openAlertInTerminal(pendingAlertId, log);
+        pendingAlertId = null;
+      }
+    });
+  }
+
+  const plat = osPlatform();
+
+  // sound is macOS-only (NotificationCenter), urgency is Linux-only (NotifySend).
+  // node-notifier ignores unknown fields per-platform, so we merge them.
+  notifier.notify({
+    title,
+    message,
+    sound: severity === 'critical',
+    wait: plat !== 'linux',
+    urgency: severity,
+  } as import('node-notifier').Notification);
 }

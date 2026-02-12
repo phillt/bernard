@@ -11,7 +11,7 @@ import { createDateTimeTool } from '../tools/datetime.js';
 import { MCPManager } from '../mcp.js';
 import { CronStore } from './store.js';
 import { CronLogStore, type CronLogStep } from './log-store.js';
-import { sendNotification, openAlertTerminal } from './notify.js';
+import { sendNotification } from './notify.js';
 import type { CronJob } from './types.js';
 
 const DAEMON_SYSTEM_PROMPT = `You are Bernard, running in background daemon mode as a scheduled cron job.
@@ -20,7 +20,7 @@ Guidelines:
 - Execute the task described in the user prompt.
 - You have access to shell, memory, scratch, and datetime tools.
 - IMPORTANT: Dangerous shell commands are automatically denied in daemon mode. There is no user present to confirm them.
-- If you discover something that requires user attention, use the \`notify\` tool to send a desktop notification and open an alert terminal.
+- If you discover something that requires user attention, use the \`notify\` tool to send a desktop notification. Clicking the notification will open a terminal with the alert context.
 - You may also have access to MCP tools such as email, calendar, and others depending on configuration.
 - Be concise in your analysis. Focus on actionable findings.
 - If everything looks normal and no action is needed, simply report the results without notifying.`;
@@ -59,7 +59,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
 
   try {
     const notifyTool = tool({
-      description: 'Send a desktop notification to alert the user. Use this when you find something that requires user attention. This will also open a new terminal session with the alert context.',
+      description: 'Send a desktop notification to alert the user. Use this when you find something that requires user attention. Clicking the notification will open a terminal with the alert context.',
       parameters: z.object({
         message: z.string().describe('The alert message to show the user'),
         severity: z.enum(['low', 'normal', 'critical']).describe('Urgency level of the notification'),
@@ -73,10 +73,15 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
           response: '', // Will be updated after generation completes
         });
 
-        sendNotification(`Bernard: ${job.name}`, message, severity, log);
-        openAlertTerminal(alert.id, log);
+        sendNotification({
+          title: `Bernard: ${job.name}`,
+          message,
+          severity,
+          alertId: alert.id,
+          log,
+        });
 
-        return `Notification sent and terminal opened for alert ${alert.id}.`;
+        return `Notification sent for alert ${alert.id}. Terminal will open when the user clicks the notification.`;
       },
     });
 

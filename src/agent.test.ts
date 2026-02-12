@@ -23,8 +23,14 @@ vi.mock('./output.js', () => ({
   printAssistantText: vi.fn(),
   printToolCall: vi.fn(),
   printToolResult: vi.fn(),
+  printInfo: vi.fn(),
   startSpinner: vi.fn(),
   stopSpinner: vi.fn(),
+}));
+
+vi.mock('./context.js', () => ({
+  shouldCompress: vi.fn(() => false),
+  compressHistory: vi.fn((history: any) => Promise.resolve(history)),
 }));
 
 const mockGenerateText = vi.fn();
@@ -131,6 +137,7 @@ describe('Agent', () => {
   it('processInput calls generateText', async () => {
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
     });
     const agent = new Agent(makeConfig(), toolOptions, store);
     await agent.processInput('Hello');
@@ -140,6 +147,7 @@ describe('Agent', () => {
   it('processInput passes user message in history', async () => {
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
     });
     const agent = new Agent(makeConfig(), toolOptions, store);
     await agent.processInput('Hello');
@@ -153,6 +161,7 @@ describe('Agent', () => {
     const responseMsg = { role: 'assistant', content: 'First response' };
     mockGenerateText.mockResolvedValue({
       response: { messages: [responseMsg] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
     });
     const agent = new Agent(makeConfig(), toolOptions, store);
     await agent.processInput('Hello');
@@ -160,6 +169,7 @@ describe('Agent', () => {
     // Second call should have both the user message, response, and new user message
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Second response' }] },
+      usage: { promptTokens: 200, completionTokens: 60, totalTokens: 260 },
     });
     await agent.processInput('Follow up');
     const call = mockGenerateText.mock.calls[1][0];

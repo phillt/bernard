@@ -1,8 +1,9 @@
 import { generateText, type CoreMessage } from 'ai';
 import { getModel } from './providers/index.js';
 import { createTools, type ToolOptions } from './tools/index.js';
-import { printAssistantText, printToolCall, printToolResult } from './output.js';
+import { printAssistantText, printToolCall, printToolResult, printInfo } from './output.js';
 import { debugLog } from './logger.js';
+import { shouldCompress, compressHistory } from './context.js';
 import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
 
@@ -66,6 +67,7 @@ export class Agent {
   private mcpServerNames?: string[];
   private alertContext?: string;
   private abortController: AbortController | null = null;
+  private lastPromptTokens: number = 0;
 
   constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>, mcpServerNames?: string[], alertContext?: string, initialHistory?: CoreMessage[]) {
     this.config = config;
@@ -76,6 +78,7 @@ export class Agent {
     this.alertContext = alertContext;
     if (initialHistory) {
       this.history = [...initialHistory];
+      this.lastPromptTokens = Math.ceil(JSON.stringify(initialHistory).length / 4);
     }
   }
 
@@ -93,6 +96,13 @@ export class Agent {
     this.abortController = new AbortController();
 
     try {
+      // Check if context compression is needed
+      const newMessageEstimate = Math.ceil(userInput.length / 4);
+      if (shouldCompress(this.lastPromptTokens, newMessageEstimate, this.config.model)) {
+        printInfo('Compressing conversation context...');
+        this.history = await compressHistory(this.history, this.config);
+      }
+
       let systemPrompt = buildSystemPrompt(this.config, this.memoryStore, this.mcpServerNames);
       if (this.alertContext) {
         systemPrompt += '\n\n' + this.alertContext;
@@ -120,6 +130,11 @@ export class Agent {
           }
         },
       });
+
+      // Track token usage for compression decisions
+      if (result.usage?.promptTokens) {
+        this.lastPromptTokens = result.usage.promptTokens;
+      }
 
       // Append all response messages to history for continuity
       this.history.push(...result.response.messages as CoreMessage[]);
