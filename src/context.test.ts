@@ -6,11 +6,13 @@ import {
   serializeMessages,
   countRecentMessages,
   compressHistory,
+  extractFacts,
   MODEL_CONTEXT_WINDOWS,
   DEFAULT_CONTEXT_WINDOW,
   COMPRESSION_THRESHOLD,
 } from './context.js';
 import type { BernardConfig } from './config.js';
+import type { RAGStore } from './rag.js';
 
 vi.mock('./providers/index.js', () => ({
   getModel: vi.fn(() => ({ modelId: 'mock' })),
@@ -35,6 +37,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     model: 'claude-sonnet-4-5-20250929',
     maxTokens: 4096,
     shellTimeout: 30000,
+    ragEnabled: true,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };
@@ -294,5 +297,124 @@ describe('compressHistory', () => {
 
     const result = await compressHistory(history, makeConfig());
     expect(result).toEqual(history);
+  });
+
+  it('runs fact extraction in parallel when ragStore is provided', async () => {
+    // First call = summarization, second call = extraction
+    let callCount = 0;
+    mockGenerateText.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        // Summarization call
+        return { text: '- Summary of conversation' };
+      }
+      // Extraction call
+      return { text: '["User prefers dark mode"]' };
+    });
+
+    const mockRagStore = {
+      addFacts: vi.fn().mockResolvedValue(1),
+    } as unknown as RAGStore;
+
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      history.push({ role: 'user', content: `msg${i}` });
+      history.push({ role: 'assistant', content: `resp${i}` });
+    }
+
+    const result = await compressHistory(history, makeConfig(), mockRagStore);
+    // Both summarization and extraction should have been called
+    expect(mockGenerateText).toHaveBeenCalledTimes(2);
+    // ragStore.addFacts should have been called with extracted facts
+    expect(mockRagStore.addFacts).toHaveBeenCalledWith(['User prefers dark mode'], 'compression');
+    // Result should still be compressed
+    expect(result[0].content).toContain('[Context Summary');
+  });
+
+  it('works without ragStore (backward compatible)', async () => {
+    mockGenerateText.mockResolvedValue({
+      text: '- Summary',
+    });
+
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      history.push({ role: 'user', content: `msg${i}` });
+      history.push({ role: 'assistant', content: `resp${i}` });
+    }
+
+    const result = await compressHistory(history, makeConfig());
+    // Only summarization call, no extraction
+    expect(mockGenerateText).toHaveBeenCalledTimes(1);
+    expect(result[0].content).toContain('[Context Summary');
+  });
+});
+
+describe('extractFacts', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('extracts facts from conversation text', async () => {
+    mockGenerateText.mockResolvedValue({
+      text: '["User prefers dark mode", "Project uses TypeScript"]',
+    });
+
+    const facts = await extractFacts('User: I prefer dark mode\nAssistant: Noted!', makeConfig());
+    expect(facts).toEqual(['User prefers dark mode', 'Project uses TypeScript']);
+  });
+
+  it('returns empty array on LLM error', async () => {
+    mockGenerateText.mockRejectedValue(new Error('API error'));
+    const facts = await extractFacts('some text', makeConfig());
+    expect(facts).toEqual([]);
+  });
+
+  it('returns empty array for empty input', async () => {
+    const facts = await extractFacts('', makeConfig());
+    expect(facts).toEqual([]);
+    expect(mockGenerateText).not.toHaveBeenCalled();
+  });
+
+  it('filters non-string items from response', async () => {
+    mockGenerateText.mockResolvedValue({
+      text: '["valid fact", 42, null, "another fact"]',
+    });
+
+    const facts = await extractFacts('some conversation', makeConfig());
+    expect(facts).toEqual(['valid fact', 'another fact']);
+  });
+
+  it('filters facts exceeding max length', async () => {
+    const longFact = 'x'.repeat(501);
+    mockGenerateText.mockResolvedValue({
+      text: JSON.stringify(['short fact', longFact]),
+    });
+
+    const facts = await extractFacts('some conversation', makeConfig());
+    expect(facts).toEqual(['short fact']);
+  });
+
+  it('handles markdown code fence in response', async () => {
+    mockGenerateText.mockResolvedValue({
+      text: '```json\n["fact one", "fact two"]\n```',
+    });
+
+    const facts = await extractFacts('some conversation', makeConfig());
+    expect(facts).toEqual(['fact one', 'fact two']);
+  });
+
+  it('returns empty array when response is not valid JSON', async () => {
+    mockGenerateText.mockResolvedValue({
+      text: 'not json at all',
+    });
+
+    const facts = await extractFacts('some conversation', makeConfig());
+    expect(facts).toEqual([]);
+  });
+
+  it('returns empty array when response is empty', async () => {
+    mockGenerateText.mockResolvedValue({ text: '' });
+    const facts = await extractFacts('some conversation', makeConfig());
+    expect(facts).toEqual([]);
   });
 });

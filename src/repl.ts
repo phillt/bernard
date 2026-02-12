@@ -1,6 +1,12 @@
 import * as readline from 'node:readline';
+import * as childProcess from 'node:child_process';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import * as fs from 'node:fs';
+import * as crypto from 'node:crypto';
 import { Agent } from './agent.js';
 import { MemoryStore } from './memory.js';
+import { RAGStore } from './rag.js';
 import { MCPManager } from './mcp.js';
 import { printHelp, printInfo, printError, printConversationReplay, startSpinner, stopSpinner } from './output.js';
 import type { ToolOptions } from './tools';
@@ -8,6 +14,7 @@ import { PROVIDER_MODELS, getAvailableProviders, getDefaultModel, savePreference
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
+import { serializeMessages } from './context.js';
 
 export async function startRepl(config: BernardConfig, alertContext?: string, resume?: boolean): Promise<void> {
   const SLASH_COMMANDS = [
@@ -17,6 +24,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     { command: '/scratch',  description: 'List session scratch notes' },
     { command: '/mcp',      description: 'List MCP servers and tools' },
     { command: '/cron',     description: 'Show cron jobs and daemon status' },
+    { command: '/rag',      description: 'Show RAG memory stats and recent facts' },
     { command: '/provider', description: 'Switch LLM provider' },
     { command: '/model',    description: 'Switch model for current provider' },
     { command: '/options',  description: 'View and set options (max-tokens, shell-timeout)' },
@@ -149,6 +157,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
   }
 
   const memoryStore = new MemoryStore();
+  const ragStore = config.ragEnabled ? new RAGStore() : undefined;
   const mcpManager = new MCPManager();
 
   try {
@@ -198,12 +207,41 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     }
   }
 
-  const agent = new Agent(config, toolOptions, memoryStore, mcpTools, mcpServerNames, alertContext, initialHistory);
+  const agent = new Agent(config, toolOptions, memoryStore, mcpTools, mcpServerNames, alertContext, initialHistory, ragStore);
 
   const cleanup = async () => {
     if (process.stdin.isTTY) {
       process.stdout.write('\x1b[?2004l'); // disable bracket paste mode
     }
+
+    // Spawn background RAG extraction worker if applicable
+    try {
+      const history = agent.getHistory();
+      if (ragStore && history.length >= 4) {
+        const serialized = serializeMessages(history);
+        if (serialized.trim()) {
+          const ragDir = path.join(os.homedir(), '.bernard', 'rag');
+          fs.mkdirSync(ragDir, { recursive: true });
+          const tempFile = path.join(ragDir, `.pending-${crypto.randomBytes(8).toString('hex')}.json`);
+          fs.writeFileSync(tempFile, JSON.stringify({
+            serialized,
+            provider: config.provider,
+            model: config.model,
+          }));
+
+          const workerPath = path.join(__dirname, 'rag-worker.js');
+          const child = childProcess.spawn(process.execPath, [workerPath, tempFile], {
+            detached: true,
+            stdio: 'ignore',
+            env: process.env,
+          });
+          child.unref();
+        }
+      }
+    } catch {
+      // Silent failure — don't block exit
+    }
+
     await mcpManager.close();
   };
 
@@ -330,6 +368,29 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
         }
         console.log();
       }
+      prompt();
+      return;
+    }
+
+    if (trimmed === '/rag') {
+      if (!ragStore) {
+        printInfo('RAG is disabled. Set BERNARD_RAG_ENABLED=true (default) to enable.');
+        prompt();
+        return;
+      }
+      const count = ragStore.count();
+      printInfo(`\n  RAG memories: ${count}`);
+      if (count === 0) {
+        printInfo('  No RAG memories yet. Memories are extracted automatically during context compression.');
+      } else {
+        const facts = ragStore.listFacts();
+        const recent = facts.slice(-10);
+        printInfo(`\n  Most recent (up to 10):`);
+        for (const f of recent) {
+          printInfo(`    ${f}`);
+        }
+      }
+      console.log();
       prompt();
       return;
     }

@@ -47,6 +47,7 @@ describe('getAvailableProviders', () => {
       model: 'test',
       maxTokens: 4096,
       shellTimeout: 30000,
+      ragEnabled: true,
     };
     expect(getAvailableProviders(config)).toEqual([]);
   });
@@ -57,6 +58,7 @@ describe('getAvailableProviders', () => {
       model: 'test',
       maxTokens: 4096,
       shellTimeout: 30000,
+      ragEnabled: true,
       anthropicApiKey: 'sk-ant-test',
       openaiApiKey: 'sk-openai-test',
     };
@@ -69,6 +71,7 @@ describe('getAvailableProviders', () => {
       model: 'test',
       maxTokens: 4096,
       shellTimeout: 30000,
+      ragEnabled: true,
       anthropicApiKey: 'sk-ant-test',
       openaiApiKey: 'sk-openai-test',
       xaiApiKey: 'xai-test',

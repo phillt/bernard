@@ -49,6 +49,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     model: 'claude-sonnet-4-5-20250929',
     maxTokens: 4096,
     shellTimeout: 30000,
+    ragEnabled: true,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };

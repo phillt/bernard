@@ -53,6 +53,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     model: 'claude-sonnet-4-5-20250929',
     maxTokens: 4096,
     shellTimeout: 30000,
+    ragEnabled: true,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };
@@ -228,5 +229,67 @@ describe('Agent', () => {
     const call = mockGenerateText.mock.calls[0][0];
     expect(call.system).toContain('web_read');
     expect(call.system).toContain('web pages');
+  });
+
+  it('system prompt contains Recalled Context when ragResults provided', () => {
+    const ragResults = [
+      { fact: 'User prefers dark mode', similarity: 0.85 },
+      { fact: 'Project uses TypeScript', similarity: 0.72 },
+    ];
+    const prompt = buildSystemPrompt(makeConfig(), store, undefined, ragResults);
+    expect(prompt).toContain('Recalled Context');
+    expect(prompt).toContain('User prefers dark mode');
+    expect(prompt).toContain('Project uses TypeScript');
+  });
+
+  it('system prompt omits Recalled Context section when ragResults is empty', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store, undefined, []);
+    expect(prompt).not.toContain('## Recalled Context');
+  });
+
+  it('system prompt omits Recalled Context section when ragResults is undefined', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).not.toContain('## Recalled Context');
+  });
+
+  it('RAG search failure does not break processInput', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockRejectedValue(new Error('RAG failure')),
+      addFacts: vi.fn(),
+    };
+
+    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    // Should not throw
+    await agent.processInput('Hello');
+    expect(mockGenerateText).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes ragStore to compressHistory when compression triggers', async () => {
+    const { shouldCompress, compressHistory } = await import('./context.js');
+    vi.mocked(shouldCompress).mockReturnValueOnce(true);
+
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([]),
+      addFacts: vi.fn(),
+    };
+
+    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    await agent.processInput('Hello');
+
+    expect(compressHistory).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.any(Object),
+      mockRagStore,
+    );
   });
 });

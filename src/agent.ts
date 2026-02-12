@@ -7,6 +7,7 @@ import { debugLog } from './logger.js';
 import { shouldCompress, compressHistory } from './context.js';
 import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
+import type { RAGStore, RAGSearchResult } from './rag.js';
 
 const BASE_SYSTEM_PROMPT = `You are Bernard, a helpful AI assistant with shell access. You can execute terminal commands to help users with their tasks.
 
@@ -22,15 +23,23 @@ Guidelines:
 - Use the cron_* tools (cron_create, cron_list, cron_get, cron_update, cron_delete, cron_enable, cron_disable, cron_status) to manage scheduled background tasks for recurring checks, monitoring, or periodic tasks. Jobs run in a background daemon and can use the notify tool to alert the user when attention is needed.
 - Use the cron_logs_* tools (cron_logs_list, cron_logs_get, cron_logs_summary, cron_logs_cleanup) to review execution logs from cron job runs.
 - Use the web_read tool to fetch and read web pages. Give it a URL and it returns the page content as markdown. Useful for reading documentation, articles, Stack Overflow answers, GitHub pages, or any URL the user shares or that appears in error messages.
-- Use the agent tool to delegate independent subtasks to parallel sub-agents. Each sub-agent gets its own tool set and works independently. Call the agent tool multiple times in a single response to run tasks in parallel. Good use cases: researching multiple topics simultaneously, running independent shell commands in parallel, analyzing different files at the same time. Do NOT use sub-agents for sequential tasks that depend on each other's results — just do those yourself step by step.`;
+- Use the agent tool to delegate independent subtasks to parallel sub-agents. Each sub-agent gets its own tool set and works independently. Call the agent tool multiple times in a single response to run tasks in parallel. Good use cases: researching multiple topics simultaneously, running independent shell commands in parallel, analyzing different files at the same time. Do NOT use sub-agents for sequential tasks that depend on each other's results — just do those yourself step by step.
+- Your context may include a "Recalled Context" section with observations from past sessions. These are automatically retrieved — only reference them if directly relevant to what the user is asking.`;
 
 /** @internal */
-export function buildSystemPrompt(config: BernardConfig, memoryStore: MemoryStore, mcpServerNames?: string[]): string {
+export function buildSystemPrompt(config: BernardConfig, memoryStore: MemoryStore, mcpServerNames?: string[], ragResults?: RAGSearchResult[]): string {
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
   });
   let prompt = BASE_SYSTEM_PROMPT + `\n\nToday's date is ${today}.`;
   prompt += `\nYou are running as provider: ${config.provider}, model: ${config.model}. The user can switch with /provider and /model.`;
+
+  if (ragResults && ragResults.length > 0) {
+    prompt += '\n\n## Recalled Context\nThe following are automatically recalled observations from previous conversations.\nReference them only if directly relevant to the current discussion.';
+    for (const r of ragResults) {
+      prompt += `\n- ${r.fact}`;
+    }
+  }
 
   const memories = memoryStore.getAllMemoryContents();
   if (memories.size > 0) {
@@ -69,16 +78,18 @@ export class Agent {
   private mcpTools?: Record<string, any>;
   private mcpServerNames?: string[];
   private alertContext?: string;
+  private ragStore?: RAGStore;
   private abortController: AbortController | null = null;
   private lastPromptTokens: number = 0;
 
-  constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>, mcpServerNames?: string[], alertContext?: string, initialHistory?: CoreMessage[]) {
+  constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>, mcpServerNames?: string[], alertContext?: string, initialHistory?: CoreMessage[], ragStore?: RAGStore) {
     this.config = config;
     this.toolOptions = toolOptions;
     this.memoryStore = memoryStore;
     this.mcpTools = mcpTools;
     this.mcpServerNames = mcpServerNames;
     this.alertContext = alertContext;
+    this.ragStore = ragStore;
     if (initialHistory) {
       this.history = [...initialHistory];
       this.lastPromptTokens = Math.ceil(JSON.stringify(initialHistory).length / 4);
@@ -103,10 +114,23 @@ export class Agent {
       const newMessageEstimate = Math.ceil(userInput.length / 4);
       if (shouldCompress(this.lastPromptTokens, newMessageEstimate, this.config.model)) {
         printInfo('Compressing conversation context...');
-        this.history = await compressHistory(this.history, this.config);
+        this.history = await compressHistory(this.history, this.config, this.ragStore);
       }
 
-      let systemPrompt = buildSystemPrompt(this.config, this.memoryStore, this.mcpServerNames);
+      // RAG search for relevant memories
+      let ragResults: RAGSearchResult[] | undefined;
+      if (this.ragStore) {
+        try {
+          ragResults = await this.ragStore.search(userInput);
+          if (ragResults.length > 0) {
+            debugLog('agent:rag', { query: userInput.slice(0, 100), results: ragResults.length });
+          }
+        } catch (err) {
+          debugLog('agent:rag:error', err instanceof Error ? err.message : String(err));
+        }
+      }
+
+      let systemPrompt = buildSystemPrompt(this.config, this.memoryStore, this.mcpServerNames, ragResults);
       if (this.alertContext) {
         systemPrompt += '\n\n' + this.alertContext;
       }

@@ -2,6 +2,7 @@ import { generateText, type CoreMessage } from 'ai';
 import { getModel } from './providers/index.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
+import type { RAGStore } from './rag.js';
 
 /** Model name → context window size in tokens */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
@@ -111,6 +112,61 @@ export function countRecentMessages(history: CoreMessage[], turnsToKeep: number)
   return 0;
 }
 
+const FACT_EXTRACTION_PROMPT = `You are a fact extraction system. Extract notable, self-contained facts from the conversation below that would be useful to recall in future sessions.
+
+Extract:
+- User preferences and habits
+- Project details, structure, and conventions
+- Technical environment info (OS, languages, tools, versions)
+- Decisions made and their reasoning
+- Recurring patterns or workflows
+- Names, roles, and relationships mentioned
+
+Do NOT extract:
+- Task-specific transient details (e.g., "the user asked to fix a typo on line 42")
+- Generic knowledge that any AI would know
+- Greetings, filler, or conversational noise
+
+Return a JSON array of strings. Each string should be a self-contained fact (understandable without the original conversation). Maximum 500 characters per fact. If there are no notable facts, return an empty array [].`;
+
+const FACT_EXTRACTION_MAX = 500;
+
+/**
+ * Extract notable facts from serialized conversation text via LLM.
+ * Returns an empty array on any failure.
+ * @internal
+ */
+export async function extractFacts(serializedText: string, config: BernardConfig): Promise<string[]> {
+  if (!serializedText.trim()) return [];
+
+  try {
+    const result = await generateText({
+      model: getModel(config.provider, config.model),
+      maxTokens: 2048,
+      system: FACT_EXTRACTION_PROMPT,
+      messages: [
+        { role: 'user', content: `Extract facts from this conversation:\n\n${serializedText}` },
+      ],
+    });
+
+    const text = result.text?.trim();
+    if (!text) return [];
+
+    // Parse JSON array from response — handle markdown code fences
+    const jsonStr = text.replace(/^```(?:json)?\s*/m, '').replace(/\s*```$/m, '');
+    const parsed = JSON.parse(jsonStr);
+
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .filter((item): item is string => typeof item === 'string' && item.length > 0)
+      .filter((item) => item.length <= FACT_EXTRACTION_MAX);
+  } catch (err) {
+    debugLog('context:extractFacts', `Failed: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
+}
+
 const SUMMARIZATION_PROMPT = `You are a conversation summarizer. Produce a concise summary of the conversation below, preserving:
 - Key facts, decisions, and outcomes
 - Important tool results and command outputs
@@ -127,6 +183,7 @@ Be concise but complete. Use bullet points. Do not include greetings or filler.`
 export async function compressHistory(
   history: CoreMessage[],
   config: BernardConfig,
+  ragStore?: RAGStore,
 ): Promise<CoreMessage[]> {
   const splitIndex = countRecentMessages(history, RECENT_TURNS_TO_KEEP);
 
@@ -144,7 +201,8 @@ export async function compressHistory(
   }
 
   try {
-    const result = await generateText({
+    // Run summarization and fact extraction in parallel
+    const summarizePromise = generateText({
       model: getModel(config.provider, config.model),
       maxTokens: 2048,
       system: SUMMARIZATION_PROMPT,
@@ -152,6 +210,19 @@ export async function compressHistory(
         { role: 'user', content: `Summarize this conversation:\n\n${serialized}` },
       ],
     });
+
+    const extractPromise = ragStore
+      ? extractFacts(serialized, config)
+      : Promise.resolve([]);
+
+    const [result, facts] = await Promise.all([summarizePromise, extractPromise]);
+
+    // Store extracted facts fire-and-forget
+    if (ragStore && facts.length > 0) {
+      ragStore.addFacts(facts, 'compression').catch((err) => {
+        debugLog('context:compress:rag', `Failed to store facts: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
 
     const summary = result.text?.trim();
     if (!summary) {
@@ -173,6 +244,7 @@ export async function compressHistory(
       oldMessageCount: oldMessages.length,
       recentMessageCount: recentMessages.length,
       summaryLength: summary.length,
+      factsExtracted: facts.length,
     });
 
     return [summaryMessage, ackMessage, ...recentMessages];

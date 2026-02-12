@@ -8,6 +8,7 @@ export interface BernardConfig {
   model: string;
   maxTokens: number;
   shellTimeout: number;
+  ragEnabled: boolean;
   anthropicApiKey?: string;
   openaiApiKey?: string;
   xaiApiKey?: string;
@@ -230,11 +231,14 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
   const shellTimeout = prefs.shellTimeout
     ?? (parseInt(process.env.BERNARD_SHELL_TIMEOUT || '', 10) || DEFAULT_SHELL_TIMEOUT);
 
+  const ragEnabled = process.env.BERNARD_RAG_ENABLED !== 'false';
+
   const config: BernardConfig = {
     provider,
     model,
     maxTokens,
     shellTimeout,
+    ragEnabled,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     xaiApiKey: process.env.XAI_API_KEY,
