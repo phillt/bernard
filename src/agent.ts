@@ -66,13 +66,20 @@ export class Agent {
   private alertContext?: string;
   private abortController: AbortController | null = null;
 
-  constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>, mcpServerNames?: string[], alertContext?: string) {
+  constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>, mcpServerNames?: string[], alertContext?: string, initialHistory?: CoreMessage[]) {
     this.config = config;
     this.toolOptions = toolOptions;
     this.memoryStore = memoryStore;
     this.mcpTools = mcpTools;
     this.mcpServerNames = mcpServerNames;
     this.alertContext = alertContext;
+    if (initialHistory) {
+      this.history = [...initialHistory];
+    }
+  }
+
+  getHistory(): CoreMessage[] {
+    return this.history;
   }
 
   abort(): void {
