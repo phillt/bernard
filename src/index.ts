@@ -16,6 +16,7 @@ program
   .version('0.1.0')
   .option('-p, --provider <provider>', 'LLM provider (anthropic, openai, xai)')
   .option('-m, --model <model>', 'Model name')
+  .option('-r, --resume', 'Resume the previous conversation')
   .option('--alert <id>', 'Open with cron alert context')
   .action(async (opts) => {
     try {
@@ -52,7 +53,7 @@ The user has been notified and this session is open for them to review and act o
       }
 
       printWelcome(config.provider, config.model);
-      await startRepl(config, alertContext);
+      await startRepl(config, alertContext, !!opts.resume);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);

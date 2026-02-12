@@ -2,13 +2,14 @@ import * as readline from 'node:readline';
 import { Agent } from './agent.js';
 import { MemoryStore } from './memory.js';
 import { MCPManager } from './mcp.js';
-import { printHelp, printInfo, printError, startSpinner, stopSpinner } from './output.js';
+import { printHelp, printInfo, printError, printConversationReplay, startSpinner, stopSpinner } from './output.js';
 import type { ToolOptions } from './tools';
 import { PROVIDER_MODELS, getAvailableProviders, getDefaultModel, savePreferences, OPTIONS_REGISTRY, saveOption, type BernardConfig } from './config.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
+import { HistoryStore } from './history.js';
 
-export async function startRepl(config: BernardConfig, alertContext?: string): Promise<void> {
+export async function startRepl(config: BernardConfig, alertContext?: string, resume?: boolean): Promise<void> {
   const SLASH_COMMANDS = [
     { command: '/help',     description: 'Show this help' },
     { command: '/clear',    description: 'Clear conversation history and scratch notes' },
@@ -185,7 +186,19 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
     confirmDangerous: confirmFn,
   };
 
-  const agent = new Agent(config, toolOptions, memoryStore, mcpTools, mcpServerNames, alertContext);
+  const historyStore = new HistoryStore();
+  let initialHistory: import('ai').CoreMessage[] | undefined;
+  if (resume) {
+    const loaded = historyStore.load();
+    if (loaded.length > 0) {
+      initialHistory = loaded;
+      printConversationReplay(loaded);
+    } else {
+      printInfo('No previous conversation found — starting fresh.');
+    }
+  }
+
+  const agent = new Agent(config, toolOptions, memoryStore, mcpTools, mcpServerNames, alertContext, initialHistory);
 
   const cleanup = async () => {
     if (process.stdin.isTTY) {
@@ -233,6 +246,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
 
     if (trimmed === '/clear') {
       agent.clearHistory();
+      historyStore.clear();
       printInfo('Conversation history and scratch notes cleared.');
       prompt();
       return;
@@ -423,6 +437,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string): P
     try {
       startSpinner();
       await agent.processInput(trimmed);
+      historyStore.save(agent.getHistory());
     } catch (err: unknown) {
       if (!interrupted) {
         const message = err instanceof Error ? err.message : String(err);
