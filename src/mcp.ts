@@ -8,11 +8,19 @@ import { printInfo, printError } from './output.js';
 
 const CONFIG_PATH = path.join(os.homedir(), '.bernard', 'mcp.json');
 
-interface MCPServerConfig {
+interface MCPStdioConfig {
   command: string;
   args?: string[];
   env?: Record<string, string>;
 }
+
+interface MCPUrlConfig {
+  url: string;
+  type?: 'sse' | 'http';
+  headers?: Record<string, string>;
+}
+
+type MCPServerConfig = MCPStdioConfig | MCPUrlConfig;
 
 interface MCPConfig {
   mcpServers: Record<string, MCPServerConfig>;
@@ -58,15 +66,27 @@ export class MCPManager {
 
     const results = await Promise.allSettled(
       serverEntries.map(async ([name, serverConfig]) => {
-        const transport = new Experimental_StdioMCPTransport({
-          command: serverConfig.command,
-          args: serverConfig.args,
-          env: serverConfig.env
-            ? { ...process.env as Record<string, string>, ...serverConfig.env }
-            : undefined,
-        });
+        let client: MCPClient;
 
-        const client = await createMCPClient({ transport });
+        if ('url' in serverConfig) {
+          client = await createMCPClient({
+            transport: {
+              type: serverConfig.type ?? 'sse',
+              url: serverConfig.url,
+              headers: serverConfig.headers,
+            },
+          });
+        } else {
+          const transport = new Experimental_StdioMCPTransport({
+            command: serverConfig.command,
+            args: serverConfig.args,
+            env: serverConfig.env
+              ? { ...process.env as Record<string, string>, ...serverConfig.env }
+              : undefined,
+          });
+          client = await createMCPClient({ transport });
+        }
+
         return { name, client };
       })
     );
@@ -160,7 +180,7 @@ export class MCPManager {
   }
 }
 
-export function listMCPServers(): { key: string; command: string; args: string[] }[] {
+export function listMCPServers(): { key: string; command?: string; args?: string[]; url?: string; type?: 'sse' | 'http' }[] {
   if (!fs.existsSync(CONFIG_PATH)) {
     return [];
   }
@@ -173,11 +193,12 @@ export function listMCPServers(): { key: string; command: string; args: string[]
     throw new Error(`Invalid JSON in ${CONFIG_PATH}`);
   }
 
-  return Object.entries(config.mcpServers).map(([key, server]) => ({
-    key,
-    command: server.command,
-    args: server.args ?? [],
-  }));
+  return Object.entries(config.mcpServers).map(([key, server]) => {
+    if ('url' in server) {
+      return { key, url: server.url, type: server.type };
+    }
+    return { key, command: server.command, args: server.args ?? [] };
+  });
 }
 
 export function getMCPServer(key: string): MCPServerConfig | undefined {
@@ -231,6 +252,46 @@ export function addMCPServer(
   const entry: MCPServerConfig = { command };
   if (args && args.length > 0) entry.args = args;
   if (env && Object.keys(env).length > 0) entry.env = env;
+
+  config.mcpServers[key] = entry;
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+}
+
+export function addMCPUrlServer(
+  key: string,
+  url: string,
+  type?: 'sse' | 'http',
+  headers?: Record<string, string>
+): void {
+  if (!key || /\s/.test(key)) {
+    throw new Error('Server key must be non-empty and contain no whitespace.');
+  }
+  if (!url) {
+    throw new Error('URL must be non-empty.');
+  }
+
+  const configDir = path.dirname(CONFIG_PATH);
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
+
+  let config: MCPConfig = { mcpServers: {} };
+  if (fs.existsSync(CONFIG_PATH)) {
+    const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+    try {
+      config = JSON.parse(raw) as MCPConfig;
+    } catch {
+      throw new Error(`Invalid JSON in ${CONFIG_PATH}`);
+    }
+  }
+
+  if (key in config.mcpServers) {
+    throw new Error(`MCP server "${key}" already exists. Remove it first, then add again.`);
+  }
+
+  const entry: MCPUrlConfig = { url };
+  if (type) entry.type = type;
+  if (headers && Object.keys(headers).length > 0) entry.headers = headers;
 
   config.mcpServers[key] = entry;
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');

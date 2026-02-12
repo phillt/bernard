@@ -21,7 +21,11 @@ export function createMCPConfigTool() {
             if (servers.length === 0) return 'No MCP servers configured.';
 
             const lines = servers.map(s => {
-              const argsStr = s.args.length > 0 ? `\n    Args: ${s.args.join(' ')}` : '';
+              if (s.url) {
+                const typeStr = s.type ? ` (${s.type})` : ' (sse)';
+                return `  - ${s.key}\n    URL: ${s.url}${typeStr}`;
+              }
+              const argsStr = s.args && s.args.length > 0 ? `\n    Args: ${s.args.join(' ')}` : '';
               return `  - ${s.key}\n    Command: ${s.command}${argsStr}`;
             });
 
@@ -72,6 +76,14 @@ export function createMCPConfigTool() {
                 ? ` Available servers: ${servers.map(s => s.key).join(', ')}`
                 : ' No servers configured.';
               return `MCP server "${key}" not found.${hint}`;
+            }
+
+            if ('url' in server) {
+              const typeStr = server.type ?? 'sse';
+              const headersStr = server.headers && Object.keys(server.headers).length > 0
+                ? `\n  Headers: ${Object.keys(server.headers).join(', ')}`
+                : '';
+              return `MCP server "${key}":\n  URL: ${server.url}\n  Transport: ${typeStr}${headersStr}`;
             }
 
             const argsStr = server.args && server.args.length > 0

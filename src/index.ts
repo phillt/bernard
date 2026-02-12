@@ -168,8 +168,13 @@ program
       }
       printInfo('MCP Servers:');
       for (const server of servers) {
-        const args = server.args.length > 0 ? ` ${server.args.join(' ')}` : '';
-        printInfo(`  ${server.key} — ${server.command}${args}`);
+        if (server.url) {
+          const type = server.type ?? 'sse';
+          printInfo(`  ${server.key} — ${server.url} (${type})`);
+        } else {
+          const args = server.args && server.args.length > 0 ? ` ${server.args.join(' ')}` : '';
+          printInfo(`  ${server.key} — ${server.command}${args}`);
+        }
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
