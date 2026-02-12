@@ -62,10 +62,12 @@ function main() {
   scheduler.reconcile();
   log(`Initial reconcile done. ${scheduler.activeCount} tasks scheduled.`);
 
-  // Watch jobs.json for changes
+  // Watch cron directory for changes (watching the file directly breaks
+  // on Linux after atomic writes replace the inode via rename)
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   try {
-    fs.watch(CronStore.jobsFile, () => {
+    fs.watch(CronStore.cronDir, (eventType, filename) => {
+      if (filename !== 'jobs.json' && filename !== 'jobs.json.tmp') return;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         log('jobs.json changed, reconciling');
@@ -75,7 +77,7 @@ function main() {
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    log(`Warning: Could not watch jobs.json: ${message}. Changes won't be detected until restart.`);
+    log(`Warning: Could not watch cron directory: ${message}. Changes won't be detected until restart.`);
   }
 
   // Graceful shutdown
