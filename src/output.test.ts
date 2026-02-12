@@ -9,6 +9,8 @@ import {
   printWelcome,
   printHelp,
   printConversationReplay,
+  printSubAgentStart,
+  printSubAgentEnd,
   startSpinner,
   stopSpinner,
 } from './output.js';
@@ -245,6 +247,66 @@ describe('output', () => {
       const output = logSpy.mock.calls.map(c => String(c[0]));
       expect(output[0]).toContain('Previous conversation');
       expect(output.some(l => l.includes('———'))).toBe(true);
+    });
+  });
+
+  describe('prefix support', () => {
+    it('printToolCall with prefix includes [sub:N] label', () => {
+      printToolCall('shell', { command: 'ls' }, 'sub:1');
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('[sub:1]');
+      expect(output).toContain('shell');
+    });
+
+    it('printToolCall without prefix works unchanged', () => {
+      printToolCall('shell', { command: 'ls' });
+      const output = logSpy.mock.calls[0][0];
+      expect(output).not.toContain('[sub:');
+      expect(output).toContain('shell');
+    });
+
+    it('printAssistantText with prefix includes label', () => {
+      printAssistantText('Hello', 'sub:2');
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('[sub:2]');
+      expect(output).toContain('Hello');
+    });
+
+    it('printToolResult with prefix includes label on each line', () => {
+      printToolResult('shell', 'line1\nline2', 'sub:1');
+      const output = logSpy.mock.calls[0][0];
+      // Both lines should have the prefix
+      const lines = output.split('\n');
+      expect(lines[0]).toContain('[sub:1]');
+      expect(lines[1]).toContain('[sub:1]');
+    });
+  });
+
+  describe('printSubAgentStart', () => {
+    it('prints id and task', () => {
+      printSubAgentStart(1, 'List all files');
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('sub:1');
+      expect(output).toContain('List all files');
+      expect(output).toContain('┌─');
+    });
+
+    it('truncates long tasks at 80 chars', () => {
+      const longTask = 'a'.repeat(100);
+      printSubAgentStart(1, longTask);
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('…');
+      expect(output).not.toContain(longTask);
+    });
+  });
+
+  describe('printSubAgentEnd', () => {
+    it('prints id with done', () => {
+      printSubAgentEnd(1);
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('sub:1');
+      expect(output).toContain('done');
+      expect(output).toContain('└─');
     });
   });
 

@@ -4,6 +4,18 @@ import type { CoreMessage } from 'ai';
 const MAX_TOOL_OUTPUT_LENGTH = 2000;
 const MAX_REPLAY_LENGTH = 200;
 
+// Rotating colors for sub-agent prefixes
+const PREFIX_COLORS = [chalk.magenta, chalk.blue, chalk.green, chalk.yellow] as const;
+
+function formatPrefix(prefix?: string): string {
+  if (!prefix) return '';
+  // Extract numeric id from "sub:N"
+  const match = prefix.match(/^sub:(\d+)$/);
+  const colorIndex = match ? (parseInt(match[1], 10) - 1) % PREFIX_COLORS.length : 0;
+  const colorFn = PREFIX_COLORS[colorIndex];
+  return colorFn(`[${prefix}] `);
+}
+
 // Spinner state
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 let spinnerTimer: ReturnType<typeof setInterval> | null = null;
@@ -34,23 +46,26 @@ export function printWelcome(provider: string, model: string): void {
   console.log(chalk.gray('  Type /help for commands, exit to quit\n'));
 }
 
-export function printAssistantText(text: string): void {
+export function printAssistantText(text: string, prefix?: string): void {
   stopSpinner();
   if (text.trim()) {
-    console.log(chalk.white(text));
+    const label = formatPrefix(prefix);
+    console.log(label + chalk.white(text));
   }
 }
 
-export function printToolCall(toolName: string, args: Record<string, unknown>): void {
+export function printToolCall(toolName: string, args: Record<string, unknown>, prefix?: string): void {
   stopSpinner();
+  const label = formatPrefix(prefix);
   const argsStr = toolName === 'shell'
     ? String(args.command || '')
     : JSON.stringify(args);
-  console.log(chalk.yellow(`  ▶ ${toolName}`) + chalk.gray(`: ${argsStr}`));
+  console.log(label + chalk.yellow(`  ▶ ${toolName}`) + chalk.gray(`: ${argsStr}`));
 }
 
-export function printToolResult(toolName: string, result: unknown): void {
+export function printToolResult(toolName: string, result: unknown, prefix?: string): void {
   stopSpinner();
+  const label = formatPrefix(prefix);
   let output: string;
   if (typeof result === 'string') {
     output = result;
@@ -64,7 +79,7 @@ export function printToolResult(toolName: string, result: unknown): void {
     output = output.slice(0, MAX_TOOL_OUTPUT_LENGTH) + chalk.gray('\n  ... (truncated)');
   }
 
-  const lines = output.split('\n').map(line => chalk.gray(`  ${line}`)).join('\n');
+  const lines = output.split('\n').map(line => label + chalk.gray(`  ${line}`)).join('\n');
   console.log(lines);
 }
 
@@ -107,6 +122,17 @@ function extractText(msg: CoreMessage): string | null {
     .map(p => p.text);
 
   return textParts.length > 0 ? textParts.join(' ') : null;
+}
+
+export function printSubAgentStart(id: number, task: string): void {
+  const colorFn = PREFIX_COLORS[(id - 1) % PREFIX_COLORS.length];
+  const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
+  console.log(colorFn(`┌─ sub:${id} — ${displayTask}`));
+}
+
+export function printSubAgentEnd(id: number): void {
+  const colorFn = PREFIX_COLORS[(id - 1) % PREFIX_COLORS.length];
+  console.log(colorFn(`└─ sub:${id} done`));
 }
 
 export function printHelp(): void {

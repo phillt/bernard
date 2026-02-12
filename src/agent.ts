@@ -1,6 +1,7 @@
 import { generateText, type CoreMessage } from 'ai';
 import { getModel } from './providers/index.js';
 import { createTools, type ToolOptions } from './tools/index.js';
+import { createSubAgentTool } from './tools/subagent.js';
 import { printAssistantText, printToolCall, printToolResult, printInfo } from './output.js';
 import { debugLog } from './logger.js';
 import { shouldCompress, compressHistory } from './context.js';
@@ -19,7 +20,8 @@ Guidelines:
 - Use the memory tool to persist important facts about the user or project that should be recalled in future sessions (e.g. preferences, project conventions, key decisions).
 - Use the scratch tool to track progress on complex multi-step tasks within the current session. Scratch notes survive context compression but are discarded when the session ends.
 - Use the cron_* tools (cron_create, cron_list, cron_get, cron_update, cron_delete, cron_enable, cron_disable, cron_status) to manage scheduled background tasks for recurring checks, monitoring, or periodic tasks. Jobs run in a background daemon and can use the notify tool to alert the user when attention is needed.
-- Use the cron_logs_* tools (cron_logs_list, cron_logs_get, cron_logs_summary, cron_logs_cleanup) to review execution logs from cron job runs.`;
+- Use the cron_logs_* tools (cron_logs_list, cron_logs_get, cron_logs_summary, cron_logs_cleanup) to review execution logs from cron job runs.
+- Use the agent tool to delegate independent subtasks to parallel sub-agents. Each sub-agent gets its own tool set and works independently. Call the agent tool multiple times in a single response to run tasks in parallel. Good use cases: researching multiple topics simultaneously, running independent shell commands in parallel, analyzing different files at the same time. Do NOT use sub-agents for sequential tasks that depend on each other's results — just do those yourself step by step.`;
 
 /** @internal */
 export function buildSystemPrompt(config: BernardConfig, memoryStore: MemoryStore, mcpServerNames?: string[]): string {
@@ -108,9 +110,15 @@ export class Agent {
         systemPrompt += '\n\n' + this.alertContext;
       }
 
+      const baseTools = createTools(this.toolOptions, this.memoryStore, this.mcpTools);
+      const tools = {
+        ...baseTools,
+        agent: createSubAgentTool(this.config, this.toolOptions, this.memoryStore, this.mcpTools),
+      };
+
       const result = await generateText({
         model: getModel(this.config.provider, this.config.model),
-        tools: createTools(this.toolOptions, this.memoryStore, this.mcpTools),
+        tools,
         maxSteps: 20,
         maxTokens: this.config.maxTokens,
         system: systemPrompt,

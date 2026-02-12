@@ -33,6 +33,11 @@ vi.mock('./context.js', () => ({
   compressHistory: vi.fn((history: any) => Promise.resolve(history)),
 }));
 
+const mockSubAgentTool = { description: 'mock sub-agent', execute: vi.fn() };
+vi.mock('./tools/subagent.js', () => ({
+  createSubAgentTool: vi.fn(() => mockSubAgentTool),
+}));
+
 const mockGenerateText = vi.fn();
 vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal() as any;
@@ -187,5 +192,29 @@ describe('Agent', () => {
     mockGenerateText.mockRejectedValue(new Error('API rate limit'));
     const agent = new Agent(makeConfig(), toolOptions, store);
     await expect(agent.processInput('Hello')).rejects.toThrow('Agent error: API rate limit');
+  });
+
+  it('tools passed to generateText include agent property', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.tools).toHaveProperty('agent');
+    expect(call.tools.agent).toBe(mockSubAgentTool);
+  });
+
+  it('system prompt contains sub-agent guidance text', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('agent tool');
+    expect(call.system).toContain('parallel');
   });
 });
