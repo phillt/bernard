@@ -7,6 +7,7 @@ import { startRepl } from './repl.js';
 import { printWelcome, printError, printInfo } from './output.js';
 import { CronStore } from './cron/store.js';
 import { listMCPServers, removeMCPServer } from './mcp.js';
+import { runFirstTimeSetup } from './setup.js';
 
 const program = new Command();
 
@@ -20,6 +21,8 @@ program
   .option('--alert <id>', 'Open with cron alert context')
   .action(async (opts) => {
     try {
+      await runFirstTimeSetup();
+
       const config = loadConfig({
         provider: opts.provider,
         model: opts.model,
