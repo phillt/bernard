@@ -1,6 +1,8 @@
 import chalk from 'chalk';
+import type { CoreMessage } from 'ai';
 
 const MAX_TOOL_OUTPUT_LENGTH = 2000;
+const MAX_REPLAY_LENGTH = 200;
 
 // Spinner state
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -73,6 +75,38 @@ export function printError(message: string): void {
 
 export function printInfo(message: string): void {
   console.log(chalk.gray(message));
+}
+
+export function printConversationReplay(messages: CoreMessage[]): void {
+  console.log(chalk.dim('  Previous conversation:'));
+
+  for (const msg of messages) {
+    if (msg.role === 'tool') continue;
+
+    const text = extractText(msg);
+    if (!text) continue;
+
+    const truncated = text.length > MAX_REPLAY_LENGTH
+      ? text.slice(0, MAX_REPLAY_LENGTH) + '…'
+      : text;
+
+    const prefix = msg.role === 'user' ? '  you> ' : '  assistant> ';
+    console.log(chalk.dim(prefix + truncated));
+  }
+
+  console.log(chalk.dim('  ———'));
+  console.log();
+}
+
+function extractText(msg: CoreMessage): string | null {
+  if (typeof msg.content === 'string') return msg.content;
+  if (!Array.isArray(msg.content)) return null;
+
+  const textParts = msg.content
+    .filter((p): p is { type: 'text'; text: string } => typeof p === 'object' && p !== null && 'type' in p && p.type === 'text')
+    .map(p => p.text);
+
+  return textParts.length > 0 ? textParts.join(' ') : null;
 }
 
 export function printHelp(): void {
