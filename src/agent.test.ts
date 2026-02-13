@@ -126,6 +126,12 @@ describe('buildSystemPrompt', () => {
     const prompt = buildSystemPrompt(makeConfig(), store);
     expect(prompt).toContain('No MCP servers are currently connected');
   });
+
+  it('includes execution model constraints', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).toContain('Execution Model');
+    expect(prompt).toContain('cease execution until the next message');
+  });
 });
 
 describe('Agent', () => {
