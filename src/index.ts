@@ -2,7 +2,7 @@
 
 import { Command } from 'commander';
 import * as readline from 'node:readline';
-import { loadConfig, saveProviderKey, getProviderKeyStatus, PROVIDER_ENV_VARS, OPTIONS_REGISTRY, resetOption, resetAllOptions } from './config.js';
+import { loadConfig, saveProviderKey, removeProviderKey, getProviderKeyStatus, PROVIDER_ENV_VARS, OPTIONS_REGISTRY, resetOption, resetAllOptions } from './config.js';
 import { startRepl } from './repl.js';
 import { printWelcome, printError, printInfo } from './output.js';
 import { CronStore } from './cron/store.js';
@@ -71,6 +71,20 @@ program
     try {
       saveProviderKey(provider, key);
       printInfo(`API key for "${provider}" saved successfully.`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('remove-key <provider>')
+  .description('Remove a stored API key for a provider')
+  .action((provider: string) => {
+    try {
+      removeProviderKey(provider);
+      printInfo(`API key for "${provider}" removed.`);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);
