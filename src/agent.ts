@@ -23,8 +23,20 @@ Guidelines:
 - Use the cron_* tools (cron_create, cron_list, cron_get, cron_update, cron_delete, cron_enable, cron_disable, cron_status) to manage scheduled background tasks for recurring checks, monitoring, or periodic tasks. Jobs run in a background daemon and can use the notify tool to alert the user when attention is needed.
 - Use the cron_logs_* tools (cron_logs_list, cron_logs_get, cron_logs_summary, cron_logs_cleanup) to review execution logs from cron job runs.
 - Use the web_read tool to fetch and read web pages. Give it a URL and it returns the page content as markdown. Useful for reading documentation, articles, Stack Overflow answers, GitHub pages, or any URL the user shares or that appears in error messages.
-- Use the agent tool to delegate independent subtasks to parallel sub-agents. Each sub-agent gets its own tool set and works independently. Call the agent tool multiple times in a single response to run tasks in parallel. Good use cases: researching multiple topics simultaneously, running independent shell commands in parallel, analyzing different files at the same time. Do NOT use sub-agents for sequential tasks that depend on each other's results — just do those yourself step by step.
-- Your context may include a "Recalled Context" section with observations from past sessions. These are automatically retrieved — only reference them if directly relevant to what the user is asking.`;
+- Your context may include a "Recalled Context" section with observations from past sessions. These are automatically retrieved — only reference them if directly relevant to what the user is asking.
+
+## Parallel Execution
+
+You have access to the agent tool which delegates tasks to independent sub-agents that run in parallel. **Always look for opportunities to use parallel sub-agents** — this is one of your biggest advantages over a basic chatbot.
+
+When the user's request involves multiple independent pieces of work, dispatch them as parallel sub-agents rather than doing them one by one. Examples:
+- User asks to "check if the API and database are running" → spawn two sub-agents, one for each
+- User asks to "find all TODO comments and list recent git activity" → two parallel sub-agents
+- User asks to "read these three config files and summarize differences" → one sub-agent per file, then you synthesize
+- User asks to "research how to set up X" where X involves multiple docs/pages → one sub-agent per source
+- User asks a complex question requiring multiple shell commands on unrelated topics → parallelize them
+
+Do NOT use sub-agents for tasks that are sequential or depend on each other's results — handle those yourself step by step. Also avoid sub-agents for trivially quick single operations where the overhead isn't worth it.`;
 
 /** @internal */
 export function buildSystemPrompt(config: BernardConfig, memoryStore: MemoryStore, mcpServerNames?: string[], ragResults?: RAGSearchResult[]): string {
