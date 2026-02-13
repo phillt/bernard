@@ -106,6 +106,27 @@ export function saveProviderKey(provider: string, key: string): void {
   fs.chmodSync(KEYS_PATH, 0o600);
 }
 
+export function removeProviderKey(provider: string): void {
+  if (!PROVIDER_ENV_VARS[provider]) {
+    throw new Error(
+      `Unknown provider "${provider}". Supported: ${Object.keys(PROVIDER_ENV_VARS).join(', ')}`
+    );
+  }
+  const existing = loadStoredKeys();
+  if (!existing[provider]) {
+    throw new Error(`No stored API key found for "${provider}".`);
+  }
+  delete existing[provider];
+  if (Object.keys(existing).length === 0) {
+    if (fs.existsSync(KEYS_PATH)) {
+      fs.unlinkSync(KEYS_PATH);
+    }
+  } else {
+    fs.writeFileSync(KEYS_PATH, JSON.stringify(existing, null, 2) + '\n');
+    fs.chmodSync(KEYS_PATH, 0o600);
+  }
+}
+
 export function saveOption(name: string, value: number): void {
   const entry = OPTIONS_REGISTRY[name];
   if (!entry) {
