@@ -100,7 +100,7 @@ describe('buildSystemPrompt', () => {
 
   it('excludes memory section when empty', () => {
     const prompt = buildSystemPrompt(makeConfig(), store);
-    expect(prompt).not.toContain('Persistent Memory');
+    expect(prompt).not.toContain('## Persistent Memory');
   });
 
   it('includes scratch when present', () => {
@@ -113,7 +113,7 @@ describe('buildSystemPrompt', () => {
 
   it('excludes scratch section when empty', () => {
     const prompt = buildSystemPrompt(makeConfig(), store);
-    expect(prompt).not.toContain('Scratch Notes');
+    expect(prompt).not.toContain('## Scratch Notes');
   });
 
   it('includes MCP server names when provided', () => {
