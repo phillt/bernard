@@ -58,8 +58,6 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     process.stdout.write('\x1b[?2004h'); // enable bracket paste mode
   }
 
-  // Strip ANSI escapes to calculate visible prompt width
-  getPromptStr().replace(/\x1b\[[^m]*m/g, '').length;
   let hintLineCount = 0;
 
   function redrawWithHints(line: string): void {
@@ -79,9 +77,9 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
 
     if (matches.length > 0) {
       const maxLen = Math.max(...matches.map(c => c.command.length));
+      const { ansi } = getTheme();
       for (const c of matches) {
         const pad = ' '.repeat(maxLen - c.command.length + 2);
-        const { ansi } = getTheme();
         process.stdout.write(`  ${ansi.hintCmd}${c.command}${ansi.reset}${pad}${ansi.hintDesc}— ${c.description}${ansi.reset}\n`);
       }
       hintLineCount = matches.length;
