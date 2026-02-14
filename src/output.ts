@@ -1,6 +1,6 @@
-import chalk from 'chalk';
 import type { CoreMessage } from 'ai';
 import { getContextWindow, COMPRESSION_THRESHOLD } from './context.js';
+import { getTheme } from './theme.js';
 
 const MAX_TOOL_OUTPUT_LENGTH = 2000;
 const MAX_REPLAY_LENGTH = 200;
@@ -43,15 +43,12 @@ export function buildSpinnerMessage(stats: SpinnerStats): string {
   return `Thinking (${elapsed} | ${up}\u2191 ${down}\u2193 | ${remainingPct}% until compression)`;
 }
 
-// Rotating colors for sub-agent prefixes
-const PREFIX_COLORS = [chalk.magenta, chalk.blue, chalk.green, chalk.yellow] as const;
-
 function formatPrefix(prefix?: string): string {
   if (!prefix) return '';
-  // Extract numeric id from "sub:N"
+  const prefixColors = getTheme().prefixColors;
   const match = prefix.match(/^sub:(\d+)$/);
-  const colorIndex = match ? (parseInt(match[1], 10) - 1) % PREFIX_COLORS.length : 0;
-  const colorFn = PREFIX_COLORS[colorIndex];
+  const colorIndex = match ? (parseInt(match[1], 10) - 1) % prefixColors.length : 0;
+  const colorFn = prefixColors[colorIndex];
   return colorFn(`[${prefix}] `);
 }
 
@@ -67,7 +64,7 @@ export function startSpinner(message: string | (() => string) = 'Thinking'): voi
   process.stdout.write('\x1B[?25l'); // hide cursor
   spinnerTimer = setInterval(() => {
     const frame = SPINNER_FRAMES[spinnerFrameIndex % SPINNER_FRAMES.length];
-    process.stdout.write(`\r\x1B[2K${chalk.cyan(frame)} ${chalk.gray(getMessage())}`);
+    process.stdout.write(`\r\x1B[2K${getTheme().accent(frame)} ${getTheme().muted(getMessage())}`);
     spinnerFrameIndex++;
   }, 80);
 }
@@ -81,16 +78,16 @@ export function stopSpinner(): void {
 }
 
 export function printWelcome(provider: string, model: string): void {
-  console.log(chalk.bold.cyan('\n  Bernard') + chalk.gray(' — AI CLI Assistant'));
-  console.log(chalk.gray(`  Provider: ${provider} | Model: ${model}`));
-  console.log(chalk.gray('  Type /help for commands, exit to quit\n'));
+  console.log(getTheme().accentBold('\n  Bernard') + getTheme().muted(' — AI CLI Assistant'));
+  console.log(getTheme().muted(`  Provider: ${provider} | Model: ${model}`));
+  console.log(getTheme().muted('  Type /help for commands, exit to quit\n'));
 }
 
 export function printAssistantText(text: string, prefix?: string): void {
   stopSpinner();
   if (text.trim()) {
     const label = formatPrefix(prefix);
-    console.log(label + chalk.white(text));
+    console.log(label + getTheme().text(text));
   }
 }
 
@@ -100,7 +97,7 @@ export function printToolCall(toolName: string, args: Record<string, unknown>, p
   const argsStr = toolName === 'shell'
     ? String(args.command || '')
     : JSON.stringify(args);
-  console.log(label + chalk.yellow(`  ▶ ${toolName}`) + chalk.gray(`: ${argsStr}`));
+  console.log(label + getTheme().toolCall(`  ▶ ${toolName}`) + getTheme().muted(`: ${argsStr}`));
 }
 
 export function printToolResult(toolName: string, result: unknown, prefix?: string): void {
@@ -116,24 +113,24 @@ export function printToolResult(toolName: string, result: unknown, prefix?: stri
   }
 
   if (output.length > MAX_TOOL_OUTPUT_LENGTH) {
-    output = output.slice(0, MAX_TOOL_OUTPUT_LENGTH) + chalk.gray('\n  ... (truncated)');
+    output = output.slice(0, MAX_TOOL_OUTPUT_LENGTH) + getTheme().muted('\n  ... (truncated)');
   }
 
-  const lines = output.split('\n').map(line => label + chalk.gray(`  ${line}`)).join('\n');
+  const lines = output.split('\n').map(line => label + getTheme().muted(`  ${line}`)).join('\n');
   console.log(lines);
 }
 
 export function printError(message: string): void {
   stopSpinner();
-  console.error(chalk.red(`Error: ${message}`));
+  console.error(getTheme().error(`Error: ${message}`));
 }
 
 export function printInfo(message: string): void {
-  console.log(chalk.gray(message));
+  console.log(getTheme().muted(message));
 }
 
 export function printConversationReplay(messages: CoreMessage[]): void {
-  console.log(chalk.dim('  Previous conversation:'));
+  console.log(getTheme().dim('  Previous conversation:'));
 
   for (const msg of messages) {
     if (msg.role === 'tool') continue;
@@ -146,10 +143,10 @@ export function printConversationReplay(messages: CoreMessage[]): void {
       : text;
 
     const prefix = msg.role === 'user' ? '  you> ' : '  assistant> ';
-    console.log(chalk.dim(prefix + truncated));
+    console.log(getTheme().dim(prefix + truncated));
   }
 
-  console.log(chalk.dim('  ———'));
+  console.log(getTheme().dim('  ———'));
   console.log();
 }
 
@@ -165,27 +162,31 @@ function extractText(msg: CoreMessage): string | null {
 }
 
 export function printSubAgentStart(id: number, task: string): void {
-  const colorFn = PREFIX_COLORS[(id - 1) % PREFIX_COLORS.length];
+  const prefixColors = getTheme().prefixColors;
+  const colorFn = prefixColors[(id - 1) % prefixColors.length];
   const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
   console.log(colorFn(`┌─ sub:${id} — ${displayTask}`));
 }
 
 export function printSubAgentEnd(id: number): void {
-  const colorFn = PREFIX_COLORS[(id - 1) % PREFIX_COLORS.length];
+  const prefixColors = getTheme().prefixColors;
+  const colorFn = prefixColors[(id - 1) % prefixColors.length];
   console.log(colorFn(`└─ sub:${id} done`));
 }
 
 export function printHelp(): void {
-  console.log(chalk.cyan('\nCommands:'));
-  console.log(chalk.white('  /help') + chalk.gray('    — Show this help'));
-  console.log(chalk.white('  /clear') + chalk.gray('   — Clear conversation history and scratch notes'));
-  console.log(chalk.white('  /memory') + chalk.gray('  — List persistent memories'));
-  console.log(chalk.white('  /scratch') + chalk.gray(' — List session scratch notes'));
-  console.log(chalk.white('  /mcp') + chalk.gray('      — List MCP servers and tools'));
-  console.log(chalk.white('  /cron') + chalk.gray('     — Show cron jobs and daemon status'));
-  console.log(chalk.white('  /provider') + chalk.gray(' — Switch LLM provider'));
-  console.log(chalk.white('  /model') + chalk.gray('    — Switch model for current provider'));
-  console.log(chalk.white('  /options') + chalk.gray('  — View and set options (max-tokens, shell-timeout)'));
-  console.log(chalk.white('  exit') + chalk.gray('      — Quit Bernard'));
+  const t = getTheme();
+  console.log(t.accent('\nCommands:'));
+  console.log(t.text('  /help') + t.muted('    — Show this help'));
+  console.log(t.text('  /clear') + t.muted('   — Clear conversation history and scratch notes'));
+  console.log(t.text('  /memory') + t.muted('  — List persistent memories'));
+  console.log(t.text('  /scratch') + t.muted(' — List session scratch notes'));
+  console.log(t.text('  /mcp') + t.muted('      — List MCP servers and tools'));
+  console.log(t.text('  /cron') + t.muted('     — Show cron jobs and daemon status'));
+  console.log(t.text('  /provider') + t.muted(' — Switch LLM provider'));
+  console.log(t.text('  /model') + t.muted('    — Switch model for current provider'));
+  console.log(t.text('  /theme') + t.muted('    — Switch color theme'));
+  console.log(t.text('  /options') + t.muted('  — View and set options (max-tokens, shell-timeout)'));
+  console.log(t.text('  exit') + t.muted('      — Quit Bernard'));
   console.log();
 }
