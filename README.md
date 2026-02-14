@@ -44,6 +44,8 @@ A local CLI AI agent that executes terminal commands, manages scheduled tasks, r
   - [Debug Logging](#debug-logging)
   - [Adding a New Provider](#adding-a-new-provider)
   - [Adding a New Tool](#adding-a-new-tool)
+- [Contributing](#contributing)
+- [Bug Reports](#bug-reports)
 - [License](#license)
 
 ---
@@ -623,6 +625,27 @@ src/
     ├── log-store.ts      # Execution log storage
     └── notify.ts         # Desktop notifications
 ```
+
+## Contributing
+
+Contributions are welcome! Here's the general workflow:
+
+1. Fork the repository and create a feature branch from `master`
+2. Install dependencies: `npm install`
+3. Make your changes
+4. Run the build and tests: `npm run build && npm test`
+5. Open a pull request against `master`
+
+Looking for something to work on? Check the [open issues](https://github.com/phillt/bernard/issues) for bugs and feature requests.
+
+## Bug Reports
+
+Found a bug? Please [open an issue](https://github.com/phillt/bernard/issues/new?template=bug_report.yml) with:
+
+- Steps to reproduce the problem
+- Expected vs. actual behavior
+- Your environment (OS, Node version, Bernard version, provider/model)
+- Any relevant logs (run with `BERNARD_DEBUG=1` for verbose output)
 
 ## License
 
