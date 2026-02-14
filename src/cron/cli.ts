@@ -178,6 +178,7 @@ export async function cronBounce(ids?: string[]): Promise<void> {
       stopDaemon();
     }
 
+    // Brief delay to let the daemon process fully shut down before restarting
     await new Promise(resolve => setTimeout(resolve, 500));
 
     startDaemon();
@@ -209,6 +210,7 @@ export async function cronBounce(ids?: string[]): Promise<void> {
     printInfo(`Disabled: ${job.name}`);
   }
 
+  // Brief delay to let the daemon pick up the disabled state before re-enabling
   await new Promise(resolve => setTimeout(resolve, 500));
 
   // Re-enable
