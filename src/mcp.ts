@@ -39,6 +39,8 @@ export class MCPManager {
   private tools: Record<string, any> = {};
   private serverConfigs: Map<string, MCPServerConfig> = new Map();
   private toolServerMap: Map<string, string> = new Map();
+  // Per-server reconnection lock to coalesce concurrent reconnect attempts
+  private reconnectPromises: Map<string, Promise<boolean>> = new Map();
 
   loadConfig(): MCPConfig {
     if (!fs.existsSync(CONFIG_PATH)) {
@@ -146,6 +148,22 @@ export class MCPManager {
   }
 
   async reconnectServer(name: string): Promise<boolean> {
+    // Coalesce concurrent reconnect attempts for the same server —
+    // if a reconnect is already in progress, return its promise instead
+    // of starting a second one (which would close the first's new client).
+    const existing = this.reconnectPromises.get(name);
+    if (existing) return existing;
+
+    const promise = this.doReconnectServer(name);
+    this.reconnectPromises.set(name, promise);
+    try {
+      return await promise;
+    } finally {
+      this.reconnectPromises.delete(name);
+    }
+  }
+
+  private async doReconnectServer(name: string): Promise<boolean> {
     const config = this.serverConfigs.get(name);
     if (!config) return false;
 
