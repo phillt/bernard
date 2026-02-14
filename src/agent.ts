@@ -2,7 +2,7 @@ import { generateText, type CoreMessage } from 'ai';
 import { getModel } from './providers/index.js';
 import { createTools, type ToolOptions } from './tools/index.js';
 import { createSubAgentTool } from './tools/subagent.js';
-import { printAssistantText, printToolCall, printToolResult, printInfo } from './output.js';
+import { printAssistantText, printToolCall, printToolResult, printInfo, startSpinner, buildSpinnerMessage, type SpinnerStats } from './output.js';
 import { debugLog } from './logger.js';
 import { shouldCompress, compressHistory } from './context.js';
 import type { BernardConfig } from './config.js';
@@ -132,6 +132,7 @@ export class Agent {
   private ragStore?: RAGStore;
   private abortController: AbortController | null = null;
   private lastPromptTokens: number = 0;
+  private spinnerStats: SpinnerStats | null = null;
 
   constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>, mcpServerNames?: string[], alertContext?: string, initialHistory?: CoreMessage[], ragStore?: RAGStore) {
     this.config = config;
@@ -153,6 +154,10 @@ export class Agent {
 
   abort(): void {
     this.abortController?.abort();
+  }
+
+  setSpinnerStats(stats: SpinnerStats): void {
+    this.spinnerStats = stats;
   }
 
   async processInput(userInput: string): Promise<void> {
@@ -200,7 +205,12 @@ export class Agent {
         system: systemPrompt,
         messages: this.history,
         abortSignal: this.abortController.signal,
-        onStepFinish: ({ text, toolCalls, toolResults }) => {
+        onStepFinish: ({ text, toolCalls, toolResults, usage }) => {
+          if (usage && this.spinnerStats) {
+            this.spinnerStats.totalPromptTokens += usage.promptTokens;
+            this.spinnerStats.totalCompletionTokens += usage.completionTokens;
+            this.spinnerStats.latestPromptTokens = usage.promptTokens;
+          }
           for (const tc of toolCalls) {
             debugLog(`onStepFinish:toolCall:${tc.toolName}`, tc.args);
             printToolCall(tc.toolName, tc.args as Record<string, unknown>);
@@ -211,6 +221,10 @@ export class Agent {
           }
           if (text) {
             printAssistantText(text);
+          }
+          // Restart spinner between tool-call steps (another LLM call is coming)
+          if (toolCalls.length > 0 && this.spinnerStats) {
+            startSpinner(() => buildSpinnerMessage(this.spinnerStats!));
           }
         },
       });
@@ -230,6 +244,7 @@ export class Agent {
       throw new Error(`Agent error: ${message}`);
     } finally {
       this.abortController = null;
+      this.spinnerStats = null;
     }
   }
 
