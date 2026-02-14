@@ -19,9 +19,8 @@ export function createWaitTool() {
         .describe('Number of seconds to wait (0.1–300)'),
     }),
     execute: async ({ seconds }): Promise<string> => {
-      const clamped = Math.min(Math.max(seconds, MIN_WAIT_SECONDS), MAX_WAIT_SECONDS);
-      await new Promise((resolve) => setTimeout(resolve, clamped * 1000));
-      return `Waited ${clamped} second${clamped === 1 ? '' : 's'}.`;
+      await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+      return `Waited ${seconds} second${seconds === 1 ? '' : 's'}.`;
     },
   });
 }

@@ -34,22 +34,6 @@ describe('wait tool', () => {
     expect(result).toBe('Waited 0.5 seconds.');
   });
 
-  it('clamps values above max', async () => {
-    const tool = createWaitTool();
-    const promise = tool.execute!({ seconds: 999 }, {} as any);
-    await vi.advanceTimersByTimeAsync(MAX_WAIT_SECONDS * 1000);
-    const result = await promise;
-    expect(result).toBe(`Waited ${MAX_WAIT_SECONDS} seconds.`);
-  });
-
-  it('clamps values below min', async () => {
-    const tool = createWaitTool();
-    const promise = tool.execute!({ seconds: 0.01 }, {} as any);
-    await vi.advanceTimersByTimeAsync(MIN_WAIT_SECONDS * 1000);
-    const result = await promise;
-    expect(result).toBe(`Waited ${MIN_WAIT_SECONDS} seconds.`);
-  });
-
   describe('schema validation', () => {
     it('accepts a valid number', () => {
       const tool = createWaitTool();
