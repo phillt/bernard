@@ -1,12 +1,13 @@
 import * as readline from 'node:readline';
-import chalk from 'chalk';
 import {
   getProviderKeyStatus,
   saveProviderKey,
   savePreferences,
+  loadPreferences,
   PROVIDER_ENV_VARS,
   getDefaultModel,
 } from './config.js';
+import { getTheme } from './theme.js';
 
 const PROVIDERS = Object.keys(PROVIDER_ENV_VARS);
 
@@ -28,14 +29,15 @@ export async function runFirstTimeSetup(): Promise<boolean> {
   });
 
   try {
-    console.log(chalk.bold.cyan('\n  Welcome to Bernard'));
-    console.log(chalk.gray('  Local CLI AI Agent with multi-provider support\n'));
-    console.log(chalk.white('  It looks like this is your first time running Bernard.'));
-    console.log(chalk.white('  Let\'s get you set up with an AI provider.\n'));
+    const t = getTheme();
+    console.log(t.accentBold('\n  Welcome to Bernard'));
+    console.log(t.muted('  Local CLI AI Agent with multi-provider support\n'));
+    console.log(t.text('  It looks like this is your first time running Bernard.'));
+    console.log(t.text('  Let\'s get you set up with an AI provider.\n'));
 
-    console.log(chalk.white('  Available providers:'));
+    console.log(t.text('  Available providers:'));
     for (let i = 0; i < PROVIDERS.length; i++) {
-      console.log(chalk.white(`    ${i + 1}. ${PROVIDERS[i]}`));
+      console.log(t.text(`    ${i + 1}. ${PROVIDERS[i]}`));
     }
     console.log();
 
@@ -46,13 +48,13 @@ export async function runFirstTimeSetup(): Promise<boolean> {
       if (num >= 1 && num <= PROVIDERS.length) {
         provider = PROVIDERS[num - 1];
       } else {
-        console.log(chalk.red(`  Please enter a number between 1 and ${PROVIDERS.length}.`));
+        console.log(t.error(`  Please enter a number between 1 and ${PROVIDERS.length}.`));
       }
     }
 
     const envVar = PROVIDER_ENV_VARS[provider];
-    console.log(chalk.gray(`\n  You'll need an API key for ${provider}.`));
-    console.log(chalk.gray('  (This will be saved securely to ~/.bernard/keys.json)\n'));
+    console.log(t.muted(`\n  You'll need an API key for ${provider}.`));
+    console.log(t.muted('  (This will be saved securely to ~/.bernard/keys.json)\n'));
 
     let key: string | undefined;
     while (!key) {
@@ -60,17 +62,18 @@ export async function runFirstTimeSetup(): Promise<boolean> {
       if (answer.length > 0) {
         key = answer;
       } else {
-        console.log(chalk.red('  API key cannot be empty.'));
+        console.log(t.error('  API key cannot be empty.'));
       }
     }
 
     saveProviderKey(provider, key);
     const model = getDefaultModel(provider);
-    savePreferences({ provider, model });
+    const existingPrefs = loadPreferences();
+    savePreferences({ provider, model, theme: existingPrefs.theme });
 
-    console.log(chalk.green('\n  Setup complete!'));
-    console.log(chalk.gray(`  Provider: ${provider} | Model: ${model}`));
-    console.log(chalk.gray('  You can change these later with /provider and /model\n'));
+    console.log(t.success('\n  Setup complete!'));
+    console.log(t.muted(`  Provider: ${provider} | Model: ${model}`));
+    console.log(t.muted('  You can change these later with /provider and /model\n'));
 
     return true;
   } finally {

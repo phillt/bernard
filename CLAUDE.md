@@ -17,6 +17,7 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - **src/agent.ts** — Agent loop using AI SDK `generateText` + `maxSteps`
 - **src/config.ts** — .env loading, defaults, validation
 - **src/output.ts** — Chalk-based terminal formatting
+- **src/theme.ts** — Color theme definitions (bernard, ocean, forest, synthwave, high-contrast, colorblind)
 - **src/providers/** — `getModel()` factory returning AI SDK `LanguageModel`
 - **src/tools/** — Tool registry; each tool is a separate file using `tool()` from `ai`
 

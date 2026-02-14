@@ -5,6 +5,7 @@ import * as readline from 'node:readline';
 import { loadConfig, saveProviderKey, removeProviderKey, getProviderKeyStatus, PROVIDER_ENV_VARS, OPTIONS_REGISTRY, resetOption, resetAllOptions } from './config.js';
 import { startRepl } from './repl.js';
 import { printWelcome, printError, printInfo } from './output.js';
+import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { cronList, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
 import { listMCPServers, removeMCPServer } from './mcp.js';
@@ -28,6 +29,11 @@ program
         provider: opts.provider,
         model: opts.model,
       });
+
+      if (!setTheme(config.theme)) {
+        config.theme = DEFAULT_THEME;
+        setTheme(config.theme);
+      }
 
       let alertContext: string | undefined;
 

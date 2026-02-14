@@ -9,6 +9,7 @@ export interface BernardConfig {
   maxTokens: number;
   shellTimeout: number;
   ragEnabled: boolean;
+  theme: string;
   anthropicApiKey?: string;
   openaiApiKey?: string;
   xaiApiKey?: string;
@@ -51,6 +52,7 @@ export function savePreferences(prefs: {
   model: string;
   maxTokens?: number;
   shellTimeout?: number;
+  theme?: string;
 }): void {
   const dir = path.dirname(PREFS_PATH);
   if (!fs.existsSync(dir)) {
@@ -59,10 +61,11 @@ export function savePreferences(prefs: {
   const data: Record<string, unknown> = { provider: prefs.provider, model: prefs.model };
   if (prefs.maxTokens !== undefined) data.maxTokens = prefs.maxTokens;
   if (prefs.shellTimeout !== undefined) data.shellTimeout = prefs.shellTimeout;
+  if (prefs.theme !== undefined) data.theme = prefs.theme;
   fs.writeFileSync(PREFS_PATH, JSON.stringify(data, null, 2) + '\n');
 }
 
-export function loadPreferences(): { provider?: string; model?: string; maxTokens?: number; shellTimeout?: number } {
+export function loadPreferences(): { provider?: string; model?: string; maxTokens?: number; shellTimeout?: number; theme?: string } {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
     const parsed = JSON.parse(data);
@@ -71,6 +74,7 @@ export function loadPreferences(): { provider?: string; model?: string; maxToken
       model: typeof parsed.model === 'string' ? parsed.model : undefined,
       maxTokens: typeof parsed.maxTokens === 'number' ? parsed.maxTokens : undefined,
       shellTimeout: typeof parsed.shellTimeout === 'number' ? parsed.shellTimeout : undefined,
+      theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
     };
   } catch {
     return {};
@@ -141,6 +145,7 @@ export function saveOption(name: string, value: number): void {
     model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
     maxTokens: prefs.maxTokens,
     shellTimeout: prefs.shellTimeout,
+    theme: prefs.theme,
   });
 }
 
@@ -158,6 +163,7 @@ export function resetOption(name: string): void {
     model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
     maxTokens: prefs.maxTokens,
     shellTimeout: prefs.shellTimeout,
+    theme: prefs.theme,
   });
 }
 
@@ -168,6 +174,7 @@ export function resetAllOptions(): void {
   savePreferences({
     provider: prefs.provider || 'anthropic',
     model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
+    theme: prefs.theme,
   });
 }
 
@@ -253,6 +260,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     ?? (parseInt(process.env.BERNARD_SHELL_TIMEOUT || '', 10) || DEFAULT_SHELL_TIMEOUT);
 
   const ragEnabled = process.env.BERNARD_RAG_ENABLED !== 'false';
+  const theme = prefs.theme || 'bernard';
 
   const config: BernardConfig = {
     provider,
@@ -260,6 +268,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     maxTokens,
     shellTimeout,
     ragEnabled,
+    theme,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     xaiApiKey: process.env.XAI_API_KEY,
