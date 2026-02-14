@@ -19,6 +19,37 @@
   <meta name="twitter:description" content="A multi-provider CLI AI agent with tools, memory, sub-agents, and MCP support.">
   <meta name="twitter:image" content="https://phillt.github.io/bernard/img.png">
 
+  <!-- SEO -->
+  <link rel="canonical" href="https://phillt.github.io/bernard/">
+  <meta name="robots" content="index, follow">
+  <meta name="keywords" content="CLI AI agent, AI terminal, LLM CLI, Anthropic, OpenAI, xAI, MCP, Model Context Protocol, AI tools, persistent memory, sub-agents, bernard">
+  <meta name="author" content="phillt">
+  <meta name="theme-color" content="#f97316">
+
+  <!-- Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Bernard",
+    "description": "A local CLI AI agent with multi-provider support, persistent memory, and autonomous tool use. Works with Anthropic, OpenAI, and xAI.",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Linux, macOS, Windows",
+    "url": "https://phillt.github.io/bernard/",
+    "downloadUrl": "https://www.npmjs.com/package/bernard-agent",
+    "softwareVersion": "0.2.3",
+    "license": "https://opensource.org/licenses/MIT",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "codeRepository": "https://github.com/phillt/bernard",
+    "programmingLanguage": "TypeScript",
+    "runtimePlatform": "Node.js"
+  }
+  </script>
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@700;800&display=swap" rel="stylesheet">
@@ -85,13 +116,35 @@
       color: var(--accent);
     }
 
-    nav .links { display: flex; gap: 24px; }
+    nav .logo span { color: var(--text); }
+
+    nav .links { display: flex; align-items: center; gap: 24px; }
     nav .links a {
       color: var(--text-secondary);
       font-size: 14px;
       transition: color 0.2s;
     }
     nav .links a:hover { color: var(--text); text-decoration: none; }
+    nav .links a.active { color: var(--accent); }
+
+    nav .links .nav-sep {
+      width: 1px;
+      height: 20px;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+
+    nav .links .nav-ext {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    nav .links .nav-ext svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
 
     /* ── Hamburger Toggle ── */
     .menu-toggle {
@@ -128,9 +181,41 @@
 
     /* ── Hero ── */
     .hero {
+      position: relative;
+      overflow: hidden;
       padding-top: 140px;
       padding-bottom: 80px;
       text-align: center;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: -20%;
+      z-index: 0;
+      background:
+        radial-gradient(ellipse 60% 50% at 30% 40%, rgba(249, 115, 22, 0.18), transparent 70%),
+        radial-gradient(ellipse 50% 60% at 70% 60%, rgba(249, 115, 22, 0.12), transparent 70%),
+        radial-gradient(ellipse 40% 40% at 50% 30%, rgba(249, 115, 22, 0.08), transparent 60%);
+      filter: blur(80px);
+      animation: heroMist 12s ease-in-out infinite alternate;
+      pointer-events: none;
+    }
+
+    .hero > .container {
+      position: relative;
+      z-index: 1;
+    }
+
+    @keyframes heroMist {
+      0% {
+        transform: translate(0, 0) scale(1);
+        opacity: 0.7;
+      }
+      100% {
+        transform: translate(30px, -20px) scale(1.05);
+        opacity: 1;
+      }
     }
 
     .hero h1 {
@@ -533,12 +618,21 @@
     }
 
     footer .footer-links a {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
       font-size: 13px;
       color: var(--text-secondary);
       transition: color 0.2s;
     }
 
     footer .footer-links a:hover { color: var(--accent); }
+
+    footer .footer-links a svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+    }
 
     /* ── Workflows ── */
     .workflow {
@@ -661,6 +755,8 @@
         padding: 12px 24px;
       }
       nav .links a:hover { background: rgba(255, 255, 255, 0.03); }
+      nav .links .nav-sep { width: auto; height: 1px; margin: 4px 24px; }
+      nav .links .nav-ext { padding: 12px 24px; }
       nav.open .links { display: flex; }
     }
   </style>
@@ -678,7 +774,9 @@
         <a href="#memory">Memory</a>
         <a href="#providers">Providers</a>
         <a href="#community">Community</a>
-        <a href="https://github.com/phillt/bernard">GitHub</a>
+        <span class="nav-sep"></span>
+        <a class="nav-ext" href="https://github.com/phillt/bernard" target="_blank" rel="noopener noreferrer"><svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>GitHub</a>
+        <a class="nav-ext" href="https://www.npmjs.com/package/bernard-agent" target="_blank" rel="noopener noreferrer"><svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"/></svg>npm</a>
       </div>
       <button class="menu-toggle" aria-label="Toggle menu">
         <span></span><span></span><span></span>
@@ -938,9 +1036,9 @@
     <div class="container">
       <div class="footer-left">bernard-agent &copy; <span id="year">2025</span> &middot; MIT License</div>
       <div class="footer-links">
-        <a href="https://github.com/phillt/bernard">GitHub</a>
-        <a href="https://www.npmjs.com/package/bernard-agent">npm</a>
-        <a href="https://github.com/phillt/bernard/issues">Issues</a>
+        <a href="https://github.com/phillt/bernard" target="_blank" rel="noopener noreferrer"><svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>GitHub</a>
+        <a href="https://www.npmjs.com/package/bernard-agent" target="_blank" rel="noopener noreferrer"><svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"/></svg>npm</a>
+        <a href="https://github.com/phillt/bernard/issues" target="_blank" rel="noopener noreferrer">Issues</a>
       </div>
     </div>
   </footer>
@@ -960,6 +1058,24 @@
 
     // ── Dynamic year ──
     document.getElementById('year').textContent = new Date().getFullYear();
+
+    // ── Scroll Spy ──
+    const navLinks = document.querySelectorAll('nav .links a[href^="#"]');
+    const sections = Array.from(navLinks).map(a => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+
+    function updateActiveLink() {
+      const scrollY = window.scrollY + 100;
+      let currentId = '';
+      for (const section of sections) {
+        if (section.offsetTop <= scrollY) currentId = section.id;
+      }
+      navLinks.forEach(a => {
+        a.classList.toggle('active', a.getAttribute('href') === '#' + currentId);
+      });
+    }
+
+    window.addEventListener('scroll', updateActiveLink, { passive: true });
+    updateActiveLink();
 
     // ── Animation Engine ──
     function sleep(ms, signal) {
