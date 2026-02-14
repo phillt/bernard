@@ -38,7 +38,7 @@ export function buildSpinnerMessage(stats: SpinnerStats): string {
   const down = formatTokenCount(stats.totalCompletionTokens);
   const contextWindow = getContextWindow(stats.model);
   const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;
-  const remainingPct = Math.max(0, Math.round((thresholdTokens - stats.latestPromptTokens) / contextWindow * 100));
+  const remainingPct = Math.max(0, Math.round((thresholdTokens - stats.latestPromptTokens) / thresholdTokens * 100));
 
   return `Thinking (${elapsed} | ${up}\u2191 ${down}\u2193 | ${remainingPct}% until compression)`;
 }
