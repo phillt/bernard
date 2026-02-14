@@ -3,6 +3,7 @@ import {
   getProviderKeyStatus,
   saveProviderKey,
   savePreferences,
+  loadPreferences,
   PROVIDER_ENV_VARS,
   getDefaultModel,
 } from './config.js';
@@ -67,7 +68,8 @@ export async function runFirstTimeSetup(): Promise<boolean> {
 
     saveProviderKey(provider, key);
     const model = getDefaultModel(provider);
-    savePreferences({ provider, model });
+    const existingPrefs = loadPreferences();
+    savePreferences({ provider, model, theme: existingPrefs.theme });
 
     console.log(t.success('\n  Setup complete!'));
     console.log(t.muted(`  Provider: ${provider} | Model: ${model}`));
