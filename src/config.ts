@@ -145,6 +145,7 @@ export function saveOption(name: string, value: number): void {
     model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
     maxTokens: prefs.maxTokens,
     shellTimeout: prefs.shellTimeout,
+    theme: prefs.theme,
   });
 }
 
@@ -162,6 +163,7 @@ export function resetOption(name: string): void {
     model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
     maxTokens: prefs.maxTokens,
     shellTimeout: prefs.shellTimeout,
+    theme: prefs.theme,
   });
 }
 
@@ -172,6 +174,7 @@ export function resetAllOptions(): void {
   savePreferences({
     provider: prefs.provider || 'anthropic',
     model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
+    theme: prefs.theme,
   });
 }
 

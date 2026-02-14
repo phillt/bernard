@@ -418,7 +418,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
         if (num >= 1 && num <= available.length) {
           config.provider = available[num - 1];
           config.model = getDefaultModel(config.provider);
-          savePreferences({ provider: config.provider, model: config.model, maxTokens: config.maxTokens, shellTimeout: config.shellTimeout });
+          savePreferences({ provider: config.provider, model: config.model, maxTokens: config.maxTokens, shellTimeout: config.shellTimeout, theme: config.theme });
           printInfo(`  Switched to ${config.provider} (${config.model})`);
         } else {
           printInfo('  Cancelled.');
@@ -446,7 +446,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
         const num = parseInt(answer.trim(), 10);
         if (num >= 1 && num <= models.length) {
           config.model = models[num - 1];
-          savePreferences({ provider: config.provider, model: config.model, maxTokens: config.maxTokens, shellTimeout: config.shellTimeout });
+          savePreferences({ provider: config.provider, model: config.model, maxTokens: config.maxTokens, shellTimeout: config.shellTimeout, theme: config.theme });
           printInfo(`  Switched to ${config.model}`);
         } else {
           printInfo('  Cancelled.');
