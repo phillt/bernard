@@ -181,7 +181,8 @@ export class MCPManager {
       const serverTools = await client.tools();
       const toolNames = Object.keys(serverTools);
 
-      // Remove old tools from this server
+      // Remove old tools from this server.
+      // Deleting Map entries during iteration is safe per the JS Map spec.
       for (const [toolName, serverName] of this.toolServerMap.entries()) {
         if (serverName === name) {
           delete this.tools[toolName];
@@ -246,6 +247,9 @@ export class MCPManager {
 
       converted[name] = {
         ...baseTool,
+        // Retry wrapper: on failure, reconnect the server and retry once.
+        // If the retry also fails, the *retry* error is thrown (not the original)
+        // so the caller sees the most recent failure reason.
         execute: async (args: unknown) => {
           try {
             return await originalExecute(args);
