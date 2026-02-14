@@ -1,0 +1,1208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bernard — Local CLI AI Agent</title>
+  <meta name="description" content="A multi-provider CLI AI agent with tools, memory, sub-agents, and MCP support. Works with Anthropic, OpenAI, and xAI.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --text-secondary: #8b949e;
+      --accent: #f97316;
+      --accent-dim: rgba(249, 115, 22, 0.15);
+      --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Layout ── */
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    section { padding: 80px 0; }
+
+    /* ── Nav ── */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: rgba(13, 17, 23, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    nav .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 56px;
+    }
+
+    nav .logo {
+      font-family: 'JetBrains Mono', var(--mono);
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    nav .links { display: flex; gap: 24px; }
+    nav .links a {
+      color: var(--text-secondary);
+      font-size: 14px;
+      transition: color 0.2s;
+    }
+    nav .links a:hover { color: var(--text); text-decoration: none; }
+
+    /* ── Hero ── */
+    .hero {
+      padding-top: 140px;
+      padding-bottom: 80px;
+      text-align: center;
+    }
+
+    .hero h1 {
+      font-family: 'JetBrains Mono', var(--mono);
+      font-size: clamp(36px, 6vw, 56px);
+      font-weight: 800;
+      color: var(--text);
+      margin-bottom: 12px;
+    }
+
+    .hero h1 span { color: var(--accent); }
+
+    .hero .tagline {
+      font-size: clamp(16px, 2.5vw, 20px);
+      color: var(--text-secondary);
+      max-width: 520px;
+      margin: 0 auto 40px;
+    }
+
+    .hero .badges {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 10px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      font-family: var(--mono);
+      opacity: 0.7;
+    }
+
+    .badge .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    /* ── Install Snippet ── */
+    .install-snippet {
+      font: inherit;
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 20px;
+      margin-bottom: 48px;
+      font-family: var(--mono);
+      font-size: 15px;
+      color: var(--text);
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+
+    .install-snippet:hover { border-color: var(--accent); }
+
+    .install-snippet .prefix {
+      color: var(--accent);
+      user-select: none;
+    }
+
+    .install-snippet .copy-hint {
+      font-size: 12px;
+      color: var(--text-secondary);
+      user-select: none;
+      transition: color 0.2s;
+    }
+
+    .install-snippet:hover .copy-hint { color: var(--text); }
+
+    /* ── Terminal ── */
+    .terminal {
+      max-width: 680px;
+      margin: 0 auto;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 0 40px rgba(249, 115, 22, 0.08), 0 8px 32px rgba(0, 0, 0, 0.4);
+      text-align: left;
+    }
+
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .terminal-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .terminal-dot:nth-child(1) { background: #f85149; }
+    .terminal-dot:nth-child(2) { background: #d29922; }
+    .terminal-dot:nth-child(3) { background: #3fb950; }
+
+    .terminal-title {
+      flex: 1;
+      text-align: center;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .terminal-body {
+      padding: 20px;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.7;
+      min-height: 260px;
+      color: var(--text);
+    }
+
+    .terminal-body .prompt { color: var(--accent); }
+    .terminal-body .cmd { color: var(--text); }
+    .terminal-body .tool { color: #58a6ff; }
+    .terminal-body .output { color: var(--text-secondary); }
+    .terminal-body .sub { color: #d2a8ff; }
+
+    .cursor {
+      display: inline-block;
+      width: 8px;
+      height: 16px;
+      background: var(--accent);
+      vertical-align: text-bottom;
+      animation: blink 1s step-end infinite;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
+    /* ── Feature Tabs ── */
+    .feature-tabs {
+      display: flex;
+      gap: 8px;
+      margin-top: 40px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+
+    .feature-tab {
+      padding: 8px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+
+    .feature-tab:hover { color: var(--text); border-color: var(--text-secondary); }
+
+    .feature-tab.active {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: var(--accent-dim);
+    }
+
+    .feature-desc {
+      color: var(--text-secondary);
+      font-size: 14px;
+      margin-bottom: 20px;
+      min-height: 21px;
+    }
+
+    /* ── Section Headers ── */
+    .section-label {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 8px;
+    }
+
+    .section-title {
+      font-size: clamp(24px, 4vw, 32px);
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .section-desc {
+      color: var(--text-secondary);
+      font-size: 16px;
+      max-width: 560px;
+    }
+
+    /* ── Quick Start ── */
+    .code-block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin-top: 32px;
+      font-family: var(--mono);
+      font-size: 14px;
+      line-height: 1.8;
+      overflow-x: auto;
+    }
+
+    .code-block .comment { color: var(--text-secondary); }
+    .code-block .cmd-prefix { color: var(--accent); user-select: none; }
+
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+      margin-top: 40px;
+    }
+
+    .step {
+      padding: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+
+    .step-num {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--accent);
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .step h3 { font-size: 15px; margin-bottom: 6px; }
+    .step p { font-size: 13px; color: var(--text-secondary); }
+
+    /* ── Providers ── */
+    .providers-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+      margin-top: 40px;
+    }
+
+    .provider-card {
+      padding: 28px 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      text-align: center;
+      transition: border-color 0.2s;
+    }
+
+    .provider-card:hover { border-color: var(--accent); }
+
+    a.provider-link {
+      text-decoration: none;
+      color: inherit;
+    }
+
+    a.provider-link:hover { text-decoration: none; }
+
+    .provider-logo {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 16px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .provider-logo svg {
+      width: 28px;
+      height: 28px;
+    }
+
+    .provider-logo.anthropic { background: #d4a27440; }
+    .provider-logo.anthropic svg { fill: #d4a274; }
+    .provider-logo.openai { background: #74aa9c40; }
+    .provider-logo.openai svg { fill: #74aa9c; }
+    .provider-logo.xai { background: #e0e0e040; }
+    .provider-logo.xai svg { fill: #e0e0e0; }
+
+    .provider-card h3 { font-size: 16px; margin-bottom: 4px; }
+    .provider-card .model {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+    }
+
+    footer .container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    footer .footer-left {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    footer .footer-links {
+      display: flex;
+      gap: 20px;
+    }
+
+    footer .footer-links a {
+      font-size: 13px;
+      color: var(--text-secondary);
+      transition: color 0.2s;
+    }
+
+    footer .footer-links a:hover { color: var(--accent); }
+
+    /* ── Workflows ── */
+    .workflow {
+      margin-top: 40px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .workflow + .workflow { margin-top: 20px; }
+
+    .workflow-header {
+      padding: 20px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transition: background 0.2s;
+    }
+
+    .workflow-header:hover { background: rgba(255, 255, 255, 0.02); }
+
+    .workflow-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: var(--accent-dim);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .workflow-header h3 { font-size: 15px; font-weight: 600; }
+    .workflow-header p { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+
+    .workflow-mcp {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--accent);
+      background: var(--accent-dim);
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-top: 4px;
+    }
+
+    .workflow-terminal {
+      border-top: 1px solid var(--border);
+    }
+
+    .workflow-terminal .terminal-body {
+      min-height: 180px;
+    }
+
+    /* ── Community ── */
+    .community-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      margin-top: 40px;
+    }
+
+    .community-card {
+      padding: 28px 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+
+    .community-card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+
+    .community-card ol,
+    .community-card ul {
+      padding-left: 20px;
+      margin-bottom: 16px;
+    }
+
+    .community-card li {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+      line-height: 1.5;
+    }
+
+    .community-card .card-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 640px) {
+      section { padding: 60px 0; }
+      .hero { padding-top: 120px; }
+      .terminal-body { font-size: 11px; padding: 16px; min-height: 220px; }
+      nav .links { gap: 16px; }
+      nav .links a { font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav>
+    <div class="container">
+      <div class="logo"><span>&gt;</span> bernard</div>
+      <div class="links">
+        <a href="#features">Features</a>
+        <a href="#quickstart">Quick Start</a>
+        <a href="#workflows">Workflows</a>
+        <a href="#providers">Providers</a>
+        <a href="#community">Community</a>
+        <a href="https://github.com/phillt/bernard">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <h1><span>&gt;</span> bernard</h1>
+      <p class="tagline">A local CLI AI agent with multi-provider support, persistent memory, and autonomous tool use.</p>
+      <button type="button" class="install-snippet" onclick="navigator.clipboard.writeText('npm install -g bernard-agent').then(() => { this.querySelector('.copy-hint').textContent = 'Copied!'; setTimeout(() => this.querySelector('.copy-hint').textContent = 'Click to copy', 2000); }).catch(() => {})">
+        <span class="prefix">$</span> npm install -g bernard-agent
+        <span class="copy-hint">Click to copy</span>
+      </button>
+      <div class="badges">
+        <span class="badge"><span class="dot"></span>v0.2.3</span>
+        <span class="badge">MIT</span>
+        <span class="badge">Node &ge; 20</span>
+      </div>
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="terminal-dot"></div>
+          <div class="terminal-dot"></div>
+          <div class="terminal-dot"></div>
+          <span class="terminal-title">bernard</span>
+        </div>
+        <div class="terminal-body" id="terminal"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features">
+    <div class="container">
+      <div class="section-label">Features</div>
+      <h2 class="section-title">Everything you need in a CLI agent</h2>
+      <p class="section-desc">Bernard runs locally, talks to any major LLM provider, and comes with tools out of the box.</p>
+      <div class="feature-tabs" id="feature-tabs">
+        <button class="feature-tab active" data-feature="0">Multi-Provider</button>
+        <button class="feature-tab" data-feature="1">Shell Tools</button>
+        <button class="feature-tab" data-feature="2">Persistent Memory</button>
+        <button class="feature-tab" data-feature="3">Cron Jobs</button>
+        <button class="feature-tab" data-feature="4">MCP Support</button>
+        <button class="feature-tab" data-feature="5">Sub-Agents</button>
+      </div>
+      <div class="feature-desc" id="feature-desc">Switch between Anthropic, OpenAI, and xAI with a flag. One interface, any model.</div>
+      <div class="terminal">
+        <div class="terminal-bar">
+          <div class="terminal-dot"></div>
+          <div class="terminal-dot"></div>
+          <div class="terminal-dot"></div>
+          <span class="terminal-title">bernard</span>
+        </div>
+        <div class="terminal-body" id="feature-terminal"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Quick Start -->
+  <section id="quickstart">
+    <div class="container">
+      <div class="section-label">Quick Start</div>
+      <h2 class="section-title">Up and running in two minutes</h2>
+      <p class="section-desc">Install globally from npm, set an API key, and start the REPL.</p>
+      <div class="code-block">
+        <span class="comment"># Install globally</span><br>
+        <span class="cmd-prefix">$ </span>npm install -g bernard-agent<br>
+        <br>
+        <span class="comment"># Store your API key securely</span><br>
+        <span class="cmd-prefix">$ </span>bernard add-key anthropic sk-ant-...<br>
+        <br>
+        <span class="comment"># Start the REPL</span><br>
+        <span class="cmd-prefix">$ </span>bernard<br>
+        <br>
+        <span class="comment"># Ask anything</span><br>
+        bernard&gt; what git branch am I on?<br>
+        &nbsp;&nbsp;&#x25B6; shell: git branch --show-current<br>
+        &nbsp;&nbsp;You're on the main branch.
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">01</div>
+          <h3>Install</h3>
+          <p>One command with npm. Requires Node.js 20 or later.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">02</div>
+          <h3>Configure</h3>
+          <p>Set an API key for your preferred provider via environment variable or .env file.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">03</div>
+          <h3>Run</h3>
+          <p>Launch the interactive REPL and start asking questions, running commands, and building.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Workflows -->
+  <section id="workflows">
+    <div class="container">
+      <div class="section-label">Workflows</div>
+      <h2 class="section-title">What you can build with MCP</h2>
+      <p class="section-desc">Connect MCP servers to give Bernard access to external services. Combine tools, cron jobs, and memory to build autonomous workflows.</p>
+
+      <div class="workflow">
+        <div class="workflow-header">
+          <div class="workflow-icon">@</div>
+          <div>
+            <h3>Schedule a meeting end-to-end</h3>
+            <p>Email a contact, check your calendar for availability, coordinate a time, create the event, and send the invite&mdash;all autonomously.</p>
+            <span class="workflow-mcp">requires: google-gmail MCP + google-calendar MCP</span>
+          </div>
+        </div>
+        <div class="workflow-terminal">
+          <div class="terminal-body" id="workflow-schedule"></div>
+        </div>
+      </div>
+
+      <div class="workflow">
+        <div class="workflow-header">
+          <div class="workflow-icon">&#x1F527;</div>
+          <div>
+            <h3>Deploy monitoring with alerts</h3>
+            <p>Watch a deploy pipeline, notify you on failure via Slack, and roll back if needed.</p>
+            <span class="workflow-mcp">requires: slack MCP + github MCP</span>
+          </div>
+        </div>
+        <div class="workflow-terminal">
+          <div class="terminal-body" id="workflow-deploy"></div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Providers -->
+  <section id="providers">
+    <div class="container">
+      <div class="section-label">Providers</div>
+      <h2 class="section-title">Your models, your choice</h2>
+      <p class="section-desc">Bernard uses the Vercel AI SDK for unified access across providers. Switch with a single flag.</p>
+      <div class="providers-grid">
+        <a class="provider-link" href="https://console.anthropic.com/" target="_blank" rel="noopener noreferrer">
+          <div class="provider-card">
+            <div class="provider-logo anthropic">
+              <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M9.218 2h2.402L16 12.987h-2.402zM4.379 2h2.512l4.38 10.987H8.82l-.895-2.307h-4.58l-.896 2.307H0L4.38 2.001zm2.755 6.64L5.635 4.777 4.137 8.64z"/></svg>
+            </div>
+            <h3>Anthropic</h3>
+            <div class="model">claude-sonnet-4-5-20250929</div>
+          </div>
+        </a>
+        <a class="provider-link" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">
+          <div class="provider-card">
+            <div class="provider-logo openai">
+              <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M14.949 6.547a3.94 3.94 0 0 0-.348-3.273 4.11 4.11 0 0 0-4.4-1.934A4.1 4.1 0 0 0 8.423.2 4.15 4.15 0 0 0 6.305.086a4.1 4.1 0 0 0-1.891.948 4.04 4.04 0 0 0-1.158 1.753 4.1 4.1 0 0 0-1.563.679A4 4 0 0 0 .554 4.72a3.99 3.99 0 0 0 .502 4.731 3.94 3.94 0 0 0 .346 3.274 4.11 4.11 0 0 0 4.402 1.933c.382.425.852.764 1.377.995.526.231 1.095.35 1.67.346 1.78.002 3.358-1.132 3.901-2.804a4.1 4.1 0 0 0 1.563-.68 4 4 0 0 0 1.14-1.253 3.99 3.99 0 0 0-.506-4.716m-6.097 8.406a3.05 3.05 0 0 1-1.945-.694l.096-.054 3.23-1.838a.53.53 0 0 0 .265-.455v-4.49l1.366.778q.02.011.025.035v3.722c-.003 1.653-1.361 2.992-3.037 2.996m-6.53-2.75a2.95 2.95 0 0 1-.36-2.01l.095.057L5.29 12.09a.53.53 0 0 0 .527 0l3.949-2.246v1.555a.05.05 0 0 1-.022.041L6.473 13.3c-1.454.826-3.311.335-4.15-1.098m-.85-6.94A3.02 3.02 0 0 1 3.07 3.949v3.785a.51.51 0 0 0 .262.451l3.93 2.237-1.366.779a.05.05 0 0 1-.048 0L2.585 9.342a2.98 2.98 0 0 1-1.113-4.094zm11.216 2.571L8.747 5.576l1.362-.776a.05.05 0 0 1 .048 0l3.265 1.86a3 3 0 0 1 1.173 1.207 2.96 2.96 0 0 1-.27 3.2 3.05 3.05 0 0 1-1.36.997V8.279a.52.52 0 0 0-.276-.445zm1.36-2.015-.097-.057-3.226-1.855a.53.53 0 0 0-.53 0L6.249 6.153V4.598a.04.04 0 0 1 .019-.04L9.533 2.7a3.07 3.07 0 0 1 3.257.139c.474.325.843.778 1.066 1.303.223.526.289 1.103.191 1.664zM5.503 8.575L4.139 7.8a.05.05 0 0 1-.026-.037V4.049c0-.57.166-1.127.476-1.607s.752-.864 1.275-1.105a3.08 3.08 0 0 1 3.234.41l-.096.054-3.23 1.838a.53.53 0 0 0-.265.455zm.742-1.577 1.758-1 1.762 1v2l-1.755 1-1.762-1z"/></svg>
+            </div>
+            <h3>OpenAI</h3>
+            <div class="model">gpt-4o</div>
+          </div>
+        </a>
+        <a class="provider-link" href="https://console.x.ai" target="_blank" rel="noopener noreferrer">
+          <div class="provider-card">
+            <div class="provider-logo xai">
+              <svg viewBox="0 0 841.89 595.28" xmlns="http://www.w3.org/2000/svg"><path d="m557.09 211.99 8.31 326.37h66.56l8.32-445.18zM640.28 56.91H538.72L379.35 284.53l50.78 72.52zM201.61 538.36h101.56l50.79-72.52-50.79-72.53zM201.61 211.99l228.52 326.37h101.56L303.17 211.99z"/></svg>
+            </div>
+            <h3>xAI</h3>
+            <div class="model">grok-3</div>
+          </div>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Community -->
+  <section id="community">
+    <div class="container">
+      <div class="section-label">Community</div>
+      <h2 class="section-title">Help make Bernard better</h2>
+      <div class="community-grid">
+        <div class="community-card">
+          <h3>Contributing</h3>
+          <ol>
+            <li>Fork the repository</li>
+            <li>Create a feature branch</li>
+            <li>Run <code>npm run build</code> to verify</li>
+            <li>Run <code>npm test</code> to check tests</li>
+            <li>Submit a pull request</li>
+          </ol>
+          <a class="card-link" href="https://github.com/phillt/bernard/issues">Browse open issues &rarr;</a>
+        </div>
+        <div class="community-card">
+          <h3>Bug Reports</h3>
+          <ul>
+            <li>Steps to reproduce the issue</li>
+            <li>Expected vs actual behavior</li>
+            <li>Environment info (OS, Node version, provider)</li>
+            <li>Relevant error messages or logs</li>
+          </ul>
+          <a class="card-link" href="https://github.com/phillt/bernard/issues/new">File a new issue &rarr;</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <div class="footer-left">bernard-agent &copy; <span id="year">2025</span> &middot; MIT License</div>
+      <div class="footer-links">
+        <a href="https://github.com/phillt/bernard">GitHub</a>
+        <a href="https://www.npmjs.com/package/bernard-agent">npm</a>
+        <a href="https://github.com/phillt/bernard/issues">Issues</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // ── Dynamic year ──
+    document.getElementById('year').textContent = new Date().getFullYear();
+
+    // ── Animation Engine ──
+    function sleep(ms, signal) {
+      return new Promise((resolve, reject) => {
+        const id = setTimeout(resolve, ms);
+        if (signal) signal.addEventListener('abort', () => { clearTimeout(id); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+      });
+    }
+
+    function addCursor(container) {
+      const cur = document.createElement('span');
+      cur.className = 'cursor';
+      cur.innerHTML = '&nbsp;';
+      container.appendChild(cur);
+      return cur;
+    }
+
+    function removeCursor(cur) {
+      if (cur && cur.parentNode) cur.parentNode.removeChild(cur);
+    }
+
+    async function typeText(el, container, text, cls, speed, signal) {
+      const span = document.createElement('span');
+      if (cls) span.className = cls;
+      container.appendChild(span);
+      for (let i = 0; i < text.length; i++) {
+        span.textContent += text[i];
+        el.scrollTop = el.scrollHeight;
+        await sleep(speed, signal);
+      }
+    }
+
+    async function playSequence(el, steps, signal) {
+      let line = document.createElement('div');
+      el.appendChild(line);
+      let cursor = null;
+
+      for (const step of steps) {
+        signal?.throwIfAborted();
+        switch (step.type) {
+          case 'prompt': {
+            // Start a new line for each prompt
+            line = document.createElement('div');
+            el.appendChild(line);
+            const s = document.createElement('span');
+            s.className = 'prompt';
+            s.textContent = step.text;
+            line.appendChild(s);
+            cursor = addCursor(line);
+            await sleep(400, signal);
+            break;
+          }
+          case 'type': {
+            removeCursor(cursor);
+            await typeText(el, line, step.text, step.cls, 35, signal);
+            cursor = addCursor(line);
+            await sleep(200, signal);
+            break;
+          }
+          case 'pause': {
+            await sleep(step.ms, signal);
+            break;
+          }
+          case 'line': {
+            removeCursor(cursor);
+            cursor = null;
+            const nl = document.createElement('div');
+            el.appendChild(nl);
+            break;
+          }
+          case 'instant': {
+            removeCursor(cursor);
+            cursor = null;
+            const div = document.createElement('div');
+            const s = document.createElement('span');
+            if (step.cls) s.className = step.cls;
+            s.textContent = step.text;
+            div.appendChild(s);
+            el.appendChild(div);
+            el.scrollTop = el.scrollHeight;
+            await sleep(150, signal);
+            break;
+          }
+        }
+      }
+      removeCursor(cursor);
+    }
+
+    // ── Hero Terminal (loops) ──
+    const heroSequences = [
+      [
+        { type: 'prompt', text: 'bernard> ' },
+        { type: 'type', text: "what's in this directory?", cls: 'cmd' },
+        { type: 'pause', ms: 400 },
+        { type: 'line' },
+        { type: 'instant', text: '  \u25B6 shell: ls -la', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  Found 12 files including package.json, src/, and tests/', cls: 'output' },
+      ],
+      [
+        { type: 'prompt', text: 'bernard> ' },
+        { type: 'type', text: 'remember that this project uses pnpm', cls: 'cmd' },
+        { type: 'pause', ms: 400 },
+        { type: 'line' },
+        { type: 'instant', text: '  \u25B6 memory: write "project-conventions"', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: "  Got it \u2014 I'll remember that for future sessions.", cls: 'output' },
+      ],
+      [
+        { type: 'prompt', text: 'bernard> ' },
+        { type: 'type', text: 'check disk usage and count lines of code in parallel', cls: 'cmd' },
+        { type: 'pause', ms: 400 },
+        { type: 'line' },
+        { type: 'instant', text: '  \u25B6 agent: "Check disk usage"', cls: 'tool' },
+        { type: 'instant', text: '  \u25B6 agent: "Count lines of code"', cls: 'tool' },
+        { type: 'pause', ms: 500 },
+        { type: 'instant', text: '  [sub:1] \u25B6 shell: df -h /', cls: 'sub' },
+        { type: 'instant', text: '  [sub:2] \u25B6 shell: find . -name "*.ts" | xargs wc -l', cls: 'sub' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  Disk: 42G used of 256G (16%). Code: 2,847 lines across 23 files.', cls: 'output' },
+      ],
+    ];
+
+    // ── Visibility helper ──
+    function observeVisibility(element, onChange) {
+      let visible = false;
+      new IntersectionObserver(([entry]) => {
+        const was = visible;
+        visible = entry.isIntersecting;
+        if (was !== visible) onChange(visible);
+      }, { threshold: 0.1 }).observe(element);
+      return { get visible() { return visible; } };
+    }
+
+    function waitUntilVisible(state) {
+      return new Promise(resolve => {
+        if (state.visible) return resolve();
+        const check = () => { if (state.visible) resolve(); else requestAnimationFrame(check); };
+        check();
+      });
+    }
+
+    // ── Hero Terminal (loops) ──
+    const heroTerminal = document.getElementById('terminal');
+    let heroAbort = null;
+    const heroVis = observeVisibility(heroTerminal.closest('.terminal'), (vis) => {
+      if (!vis && heroAbort) heroAbort.abort();
+    });
+
+    (async function heroLoop() {
+      while (true) {
+        await waitUntilVisible(heroVis);
+        heroAbort = new AbortController();
+        const signal = heroAbort.signal;
+        try {
+          heroTerminal.innerHTML = '';
+          for (const seq of heroSequences) {
+            await playSequence(heroTerminal, seq, signal);
+            await sleep(1800, signal);
+            const spacer = document.createElement('div');
+            spacer.innerHTML = '&nbsp;';
+            heroTerminal.appendChild(spacer);
+          }
+          await sleep(3000, signal);
+        } catch (e) {
+          if (e.name !== 'AbortError') return;
+        }
+      }
+    })();
+
+    // ── Feature Tabs ──
+    const featureData = [
+      {
+        desc: 'Switch between Anthropic, OpenAI, and xAI with a flag. One interface, any model.',
+        seq: [
+          { type: 'prompt', text: 'bernard> ' },
+          { type: 'type', text: '/provider', cls: 'cmd' },
+          { type: 'pause', ms: 400 },
+          { type: 'line' },
+          { type: 'instant', text: '  Current: anthropic (claude-sonnet-4-5-20250929)', cls: 'output' },
+          { type: 'instant', text: '  1. anthropic  2. openai  3. xai', cls: 'output' },
+          { type: 'pause', ms: 600 },
+          { type: 'line' },
+          { type: 'prompt', text: 'bernard> ' },
+          { type: 'type', text: '2', cls: 'cmd' },
+          { type: 'pause', ms: 300 },
+          { type: 'line' },
+          { type: 'instant', text: '  Switching to openai...', cls: 'tool' },
+          { type: 'pause', ms: 400 },
+          { type: 'instant', text: '  \u2713 Now using openai (gpt-4o)', cls: 'output' },
+        ],
+      },
+      {
+        desc: 'Execute commands, read and write files, and browse the web\u2014with safety checks for dangerous operations.',
+        seq: [
+          { type: 'prompt', text: 'bernard> ' },
+          { type: 'type', text: 'delete the temp files in ./tmp', cls: 'cmd' },
+          { type: 'pause', ms: 400 },
+          { type: 'line' },
+          { type: 'instant', text: '  \u26A0 Dangerous command detected: rm -rf ./tmp/*', cls: 'sub' },
+          { type: 'instant', text: '  Proceed? (y/n)', cls: 'sub' },
+          { type: 'pause', ms: 800 },
+          { type: 'instant', text: '  y', cls: 'cmd' },
+          { type: 'pause', ms: 300 },
+          { type: 'instant', text: '  \u25B6 shell: rm -rf ./tmp/*', cls: 'tool' },
+          { type: 'pause', ms: 300 },
+          { type: 'instant', text: '  Removed 23 temporary files from ./tmp/', cls: 'output' },
+        ],
+      },
+      {
+        desc: 'Disk-backed memory that survives between sessions. The agent remembers what you tell it to.',
+        seq: [
+          { type: 'prompt', text: 'bernard> ' },
+          { type: 'type', text: 'remember that the staging server is at 10.0.1.50', cls: 'cmd' },
+          { type: 'pause', ms: 400 },
+          { type: 'line' },
+          { type: 'instant', text: '  \u25B6 memory: write "staging-server"', cls: 'tool' },
+          { type: 'pause', ms: 300 },
+          { type: 'instant', text: '  Saved to persistent memory.', cls: 'output' },
+          { type: 'pause', ms: 800 },
+          { type: 'line' },
+          { type: 'prompt', text: 'bernard> ' },
+          { type: 'type', text: "what's the staging IP?", cls: 'cmd' },
+          { type: 'pause', ms: 400 },
+          { type: 'line' },
+          { type: 'instant', text: '  (recalled from memory)', cls: 'tool' },
+          { type: 'instant', text: '  The staging server is at 10.0.1.50.', cls: 'output' },
+        ],
+      },
+      {
+        desc: 'Schedule recurring tasks with natural language. Bernard runs them in the background on a timer.',
+        seq: [
+          { type: 'prompt', text: 'bernard> ' },
+          { type: 'type', text: 'every hour, check if the API is healthy and notify me if not', cls: 'cmd' },
+          { type: 'pause', ms: 400 },
+          { type: 'line' },
+          { type: 'instant', text: '  \u25B6 cron_create: "api-health-check"', cls: 'tool' },
+          { type: 'instant', text: '  Schedule: 0 * * * * (every hour)', cls: 'tool' },
+          { type: 'pause', ms: 400 },
+          { type: 'instant', text: '  \u2713 Created cron job \u2014 runs every hour.', cls: 'output' },
+          { type: 'instant', text: '  Will check https://api.example.com/health', cls: 'output' },
+          { type: 'instant', text: '  and send a desktop notification on failure.', cls: 'output' },
+        ],
+      },
+      {
+        desc: 'Connect to Model Context Protocol servers for extended tool capabilities and integrations.',
+        seq: [
+          { type: 'prompt', text: 'bernard> ' },
+          { type: 'type', text: 'add an MCP server for filesystem access', cls: 'cmd' },
+          { type: 'pause', ms: 400 },
+          { type: 'line' },
+          { type: 'instant', text: '  \u25B6 mcp_config: add "filesystem"', cls: 'tool' },
+          { type: 'instant', text: '  command: npx @modelcontextprotocol/server-filesystem', cls: 'tool' },
+          { type: 'pause', ms: 400 },
+          { type: 'instant', text: '  \u2713 Added MCP server: filesystem', cls: 'output' },
+          { type: 'instant', text: '  3 new tools available:', cls: 'output' },
+          { type: 'instant', text: '    read_file, write_file, list_directory', cls: 'output' },
+        ],
+      },
+      {
+        desc: 'Spawn parallel sub-agents for concurrent tasks. Divide and conquer complex problems.',
+        seq: [
+          { type: 'prompt', text: 'bernard> ' },
+          { type: 'type', text: 'check disk usage and count lines of code in parallel', cls: 'cmd' },
+          { type: 'pause', ms: 400 },
+          { type: 'line' },
+          { type: 'instant', text: '  \u25B6 agent: "Check disk usage"', cls: 'tool' },
+          { type: 'instant', text: '  \u25B6 agent: "Count lines of code"', cls: 'tool' },
+          { type: 'pause', ms: 500 },
+          { type: 'instant', text: '  [sub:1] \u25B6 shell: df -h /', cls: 'sub' },
+          { type: 'instant', text: '  [sub:2] \u25B6 shell: find . -name "*.ts" | xargs wc -l', cls: 'sub' },
+          { type: 'pause', ms: 300 },
+          { type: 'instant', text: '  Disk: 42G used of 256G (16%). Code: 2,847 lines across 23 files.', cls: 'output' },
+        ],
+      },
+    ];
+
+    const featureEl = document.getElementById('feature-terminal');
+    const featureDescEl = document.getElementById('feature-desc');
+    let featureAbort = null;
+    let activeFeature = 0;
+    let featureStarted = false;
+    let autoAdvance = true;
+
+    const featureVis = observeVisibility(featureEl.closest('.terminal'), (vis) => {
+      if (!vis && featureAbort) featureAbort.abort();
+      if (vis && featureStarted) playFeature(activeFeature);
+    });
+
+    async function playFeature(index) {
+      // Cancel any running animation
+      if (featureAbort) featureAbort.abort();
+      activeFeature = index;
+
+      // Don't start if not visible — will replay when scrolled into view
+      if (!featureVis.visible) return;
+
+      featureAbort = new AbortController();
+      const signal = featureAbort.signal;
+
+      // Update tabs
+      document.querySelectorAll('.feature-tab').forEach((t, i) => {
+        t.classList.toggle('active', i === index);
+      });
+
+      // Update description
+      featureDescEl.textContent = featureData[index].desc;
+
+      // Clear and play
+      featureEl.innerHTML = '';
+      try {
+        await playSequence(featureEl, featureData[index].seq, signal);
+        // Auto-advance to next tab after a pause
+        if (autoAdvance) {
+          await sleep(2000, signal);
+          const next = (index + 1) % featureData.length;
+          playFeature(next);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+      }
+    }
+
+    // Tab click handlers — stop carousel on manual interaction
+    document.getElementById('feature-tabs').addEventListener('click', (e) => {
+      const tab = e.target.closest('.feature-tab');
+      if (!tab) return;
+      autoAdvance = false;
+      playFeature(parseInt(tab.dataset.feature, 10));
+    });
+
+    // Auto-play first tab
+    featureStarted = true;
+    playFeature(0);
+
+    // ── Workflow Terminals ──
+    const workflowSequences = {
+      'workflow-schedule': [
+        { type: 'prompt', text: 'bernard> ' },
+        { type: 'type', text: 'schedule a zoom with sarah@acme.co to discuss the Q3 proposal', cls: 'cmd' },
+        { type: 'pause', ms: 400 },
+        { type: 'line' },
+        { type: 'instant', text: '  \u25B6 calendar: get availability (next 5 days)', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  You\u2019re free: Tue 10\u201312, Wed 2\u20134, Thu 10\u201312, Fri 1\u20133', cls: 'output' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u25B6 gmail: send to sarah@acme.co', cls: 'tool' },
+        { type: 'instant', text: '  Subject: "Zoom \u2014 Q3 Proposal"', cls: 'tool' },
+        { type: 'instant', text: '  "Hi Sarah, would any of these work? Tue 10\u201312, Wed 2\u20134,', cls: 'tool' },
+        { type: 'instant', text: '   Thu 10\u201312, or Fri 1\u20133"', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u2713 Email sent.', cls: 'output' },
+        { type: 'instant', text: '  \u25B6 cron_create: "sarah-zoom-reply" (0 */2 * * *)', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u2713 Checking for her reply every 2 hours.', cls: 'output' },
+        { type: 'pause', ms: 800 },
+        { type: 'line' },
+        { type: 'instant', text: '  \u2500\u2500 3 hours later \u2500\u2500', cls: 'sub' },
+        { type: 'pause', ms: 600 },
+        { type: 'line' },
+        { type: 'instant', text: '  [cron] \u25B6 gmail: search inbox from:sarah@acme.co', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u2713 Reply: "None of those work \u2014 how about Thursday at 3pm?"', cls: 'output' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u25B6 calendar: check Thu 3:00\u20134:00 PM', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u2717 Conflict: "Sprint Retro" Thu 3:00\u20133:30 PM', cls: 'sub' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u25B6 gmail: reply to sarah@acme.co', cls: 'tool' },
+        { type: 'instant', text: '  "I have a conflict at 3 \u2014 could we do Thursday at 3:30 instead?"', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u2713 Counter-proposal sent.', cls: 'output' },
+        { type: 'pause', ms: 800 },
+        { type: 'line' },
+        { type: 'instant', text: '  \u2500\u2500 2 hours later \u2500\u2500', cls: 'sub' },
+        { type: 'pause', ms: 600 },
+        { type: 'line' },
+        { type: 'instant', text: '  [cron] \u25B6 gmail: search inbox from:sarah@acme.co', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u2713 Reply: "3:30 works, see you then!"', cls: 'output' },
+        { type: 'pause', ms: 400 },
+        { type: 'instant', text: '  \u25B6 calendar: create event', cls: 'tool' },
+        { type: 'instant', text: '  Title: "Zoom \u2014 Q3 Proposal w/ Sarah"', cls: 'tool' },
+        { type: 'instant', text: '  When: Thu, 3:30 PM \u2013 4:30 PM', cls: 'tool' },
+        { type: 'instant', text: '  Attendees: sarah@acme.co', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u2713 Calendar event created.', cls: 'output' },
+        { type: 'instant', text: '  \u25B6 gmail: reply "Thu 3:30 is locked in \u2014 invite sent!"', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u2713 Confirmation sent. Cron job auto-disabled.', cls: 'output' },
+      ],
+      'workflow-deploy': [
+        { type: 'prompt', text: 'bernard> ' },
+        { type: 'type', text: 'watch the deploy on PR #247 and ping me on slack if it fails', cls: 'cmd' },
+        { type: 'pause', ms: 400 },
+        { type: 'line' },
+        { type: 'instant', text: '  \u25B6 github: get checks for PR #247', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  CI running... setting up a watcher.', cls: 'output' },
+        { type: 'instant', text: '  \u25B6 cron_create: "watch-pr-247" (*/2 * * * *)', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u2713 Checking every 2 minutes.', cls: 'output' },
+        { type: 'pause', ms: 800 },
+        { type: 'line' },
+        { type: 'instant', text: '  \u2500\u2500 6 minutes later \u2500\u2500', cls: 'sub' },
+        { type: 'pause', ms: 600 },
+        { type: 'line' },
+        { type: 'instant', text: '  [cron] \u25B6 github: check status PR #247', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u2717 CI failed: test suite "integration" (exit code 1)', cls: 'sub' },
+        { type: 'instant', text: '  \u25B6 slack: message #deployments', cls: 'tool' },
+        { type: 'instant', text: '  "PR #247 CI failed on integration tests. Logs attached."', cls: 'tool' },
+        { type: 'pause', ms: 300 },
+        { type: 'instant', text: '  \u2713 Slack notification sent. Cron job auto-disabled.', cls: 'output' },
+      ],
+    };
+
+    // Set up each workflow terminal with visibility-gated playback
+    Object.entries(workflowSequences).forEach(([id, seq]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      let abort = null;
+      let hasPlayed = false;
+
+      observeVisibility(el, (vis) => {
+        if (vis && !hasPlayed) {
+          hasPlayed = true;
+          abort = new AbortController();
+          el.innerHTML = '';
+          playSequence(el, seq, abort.signal).catch(() => {});
+        }
+        if (!vis && abort) {
+          abort.abort();
+          abort = null;
+          hasPlayed = false;
+        }
+      });
+    });
+  </script>
+
+</body>
+</html>
