@@ -134,6 +134,7 @@
 
     /* ── Install Snippet ── */
     .install-snippet {
+      font: inherit;
       display: inline-flex;
       align-items: center;
       gap: 12px;
@@ -552,10 +553,10 @@
     <div class="container">
       <h1><span>&gt;</span> bernard</h1>
       <p class="tagline">A local CLI AI agent with multi-provider support, persistent memory, and autonomous tool use.</p>
-      <div class="install-snippet" onclick="navigator.clipboard.writeText('npm install -g bernard-agent').then(() => { this.querySelector('.copy-hint').textContent = 'Copied!'; setTimeout(() => this.querySelector('.copy-hint').textContent = 'Click to copy', 2000); }).catch(() => {})">
+      <button type="button" class="install-snippet" onclick="navigator.clipboard.writeText('npm install -g bernard-agent').then(() => { this.querySelector('.copy-hint').textContent = 'Copied!'; setTimeout(() => this.querySelector('.copy-hint').textContent = 'Click to copy', 2000); }).catch(() => {})">
         <span class="prefix">$</span> npm install -g bernard-agent
         <span class="copy-hint">Click to copy</span>
-      </div>
+      </button>
       <div class="badges">
         <span class="badge"><span class="dot"></span>v0.2.3</span>
         <span class="badge">MIT</span>
