@@ -79,6 +79,39 @@
     }
     nav .links a:hover { color: var(--text); text-decoration: none; }
 
+    /* ── Hamburger Toggle ── */
+    .menu-toggle {
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      gap: 6px;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 8px;
+    }
+
+    .menu-toggle span {
+      display: block;
+      width: 24px;
+      height: 2px;
+      background: var(--text);
+      border-radius: 1px;
+      transition: transform 0.3s, opacity 0.3s;
+    }
+
+    nav.open .menu-toggle span:nth-child(1) {
+      transform: translateY(8px) rotate(45deg);
+    }
+
+    nav.open .menu-toggle span:nth-child(2) {
+      opacity: 0;
+    }
+
+    nav.open .menu-toggle span:nth-child(3) {
+      transform: translateY(-8px) rotate(-45deg);
+    }
+
     /* ── Hero ── */
     .hero {
       padding-top: 140px;
@@ -526,8 +559,24 @@
       section { padding: 60px 0; }
       .hero { padding-top: 120px; }
       .terminal-body { font-size: 11px; padding: 16px; min-height: 220px; }
-      nav .links { gap: 16px; }
-      nav .links a { font-size: 13px; }
+      .menu-toggle { display: flex; }
+      nav .links {
+        display: none;
+        flex-direction: column;
+        position: absolute;
+        top: 56px;
+        left: 0;
+        right: 0;
+        background: rgba(13, 17, 23, 0.95);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid var(--border);
+      }
+      nav .links a {
+        font-size: 14px;
+        padding: 12px 24px;
+      }
+      nav .links a:hover { background: rgba(255, 255, 255, 0.03); }
+      nav.open .links { display: flex; }
     }
   </style>
 </head>
@@ -545,6 +594,9 @@
         <a href="#community">Community</a>
         <a href="https://github.com/phillt/bernard">GitHub</a>
       </div>
+      <button class="menu-toggle" aria-label="Toggle menu">
+        <span></span><span></span><span></span>
+      </button>
     </div>
   </nav>
 
@@ -762,6 +814,18 @@
   </footer>
 
   <script>
+    // ── Mobile Menu Toggle ──
+    const navEl = document.querySelector('nav');
+    document.querySelector('.menu-toggle').addEventListener('click', () => {
+      navEl.classList.toggle('open');
+    });
+    document.querySelectorAll('nav .links a').forEach(a => {
+      a.addEventListener('click', () => navEl.classList.remove('open'));
+    });
+    document.addEventListener('click', (e) => {
+      if (!navEl.contains(e.target)) navEl.classList.remove('open');
+    });
+
     // ── Dynamic year ──
     document.getElementById('year').textContent = new Date().getFullYear();
 
