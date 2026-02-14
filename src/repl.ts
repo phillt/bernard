@@ -11,6 +11,7 @@ import { MCPManager } from './mcp.js';
 import { printHelp, printInfo, printError, printConversationReplay, startSpinner, stopSpinner, buildSpinnerMessage, type SpinnerStats } from './output.js';
 import type { ToolOptions } from './tools';
 import { PROVIDER_MODELS, getAvailableProviders, getDefaultModel, savePreferences, OPTIONS_REGISTRY, saveOption, type BernardConfig } from './config.js';
+import { getTheme, setTheme, getThemeKeys, getActiveThemeKey, THEMES } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
@@ -27,6 +28,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     { command: '/rag',      description: 'Show RAG memory stats and recent facts' },
     { command: '/provider', description: 'Switch LLM provider' },
     { command: '/model',    description: 'Switch model for current provider' },
+    { command: '/theme',    description: 'Switch color theme' },
     { command: '/options',  description: 'View and set options (max-tokens, shell-timeout)' },
     { command: '/exit',     description: 'Quit Bernard' },
   ];
@@ -47,14 +49,17 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
 
   // Bracket paste mode: track whether we're inside a terminal paste
   let isPasting = false;
-  const PROMPT_STR = '\x1b[36mbernard>\x1b[0m ';
+  function getPromptStr(): string {
+    const { ansi } = getTheme();
+    return `${ansi.prompt}bernard>${ansi.reset} `;
+  }
 
   if (process.stdin.isTTY) {
     process.stdout.write('\x1b[?2004h'); // enable bracket paste mode
   }
 
   // Strip ANSI escapes to calculate visible prompt width
-  PROMPT_STR.replace(/\x1b\[[^m]*m/g, '').length;
+  getPromptStr().replace(/\x1b\[[^m]*m/g, '').length;
   let hintLineCount = 0;
 
   function redrawWithHints(line: string): void {
@@ -76,7 +81,8 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
       const maxLen = Math.max(...matches.map(c => c.command.length));
       for (const c of matches) {
         const pad = ' '.repeat(maxLen - c.command.length + 2);
-        process.stdout.write(`  \x1b[37m${c.command}\x1b[0m${pad}\x1b[90m— ${c.description}\x1b[0m\n`);
+        const { ansi } = getTheme();
+        process.stdout.write(`  ${ansi.hintCmd}${c.command}${ansi.reset}${pad}${ansi.hintDesc}— ${c.description}${ansi.reset}\n`);
       }
       hintLineCount = matches.length;
     } else {
@@ -84,7 +90,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     }
 
     // Reprint prompt + current input
-    process.stdout.write(PROMPT_STR + line);
+    process.stdout.write(getPromptStr() + line);
   }
 
   let processing = false;
@@ -105,7 +111,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     }
     if (key.name === 'paste-end') {
       isPasting = false;
-      rl.setPrompt(PROMPT_STR); // restore prompt
+      rl.setPrompt(getPromptStr()); // restore prompt
     }
 
     // On Enter, clear hints before readline processes the line
@@ -114,7 +120,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
       // readline's own newline lands cleanly
       const line = (rl as any).line as string || '';
       process.stdout.write(`\x1b[${hintLineCount}A\r\x1b[J`);
-      process.stdout.write(PROMPT_STR + line);
+      process.stdout.write(getPromptStr() + line);
       hintLineCount = 0;
       return;
     }
@@ -150,7 +156,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
         }
       };
 
-      rl.setPrompt(PROMPT_STR);
+      rl.setPrompt(getPromptStr());
       rl.prompt();
       rl.on('line', onLine);
     });
@@ -184,7 +190,8 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
 
   const confirmFn = (command: string): Promise<boolean> => {
     return new Promise((resolve) => {
-      rl.question(`\x1b[33m  ⚠ Dangerous command: ${command}\n  Allow? (y/N): \x1b[0m`, (answer) => {
+      const { ansi } = getTheme();
+      rl.question(`${ansi.warning}  ⚠ Dangerous command: ${command}\n  Allow? (y/N): ${ansi.reset}`, (answer) => {
         resolve(answer.trim().toLowerCase() === 'y');
       });
     });
@@ -443,6 +450,46 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
           config.model = models[num - 1];
           savePreferences({ provider: config.provider, model: config.model, maxTokens: config.maxTokens, shellTimeout: config.shellTimeout });
           printInfo(`  Switched to ${config.model}`);
+        } else {
+          printInfo('  Cancelled.');
+        }
+        console.log();
+        prompt();
+      });
+      return;
+    }
+
+    if (trimmed === '/theme') {
+      const allKeys = getThemeKeys();
+      const currentKey = getActiveThemeKey();
+      const regularKeys = allKeys.filter(k => k !== 'high-contrast' && k !== 'colorblind');
+      const a11yKeys = allKeys.filter(k => k === 'high-contrast' || k === 'colorblind');
+
+      printInfo(`\n  Current theme: ${THEMES[currentKey].name}\n`);
+      printInfo('  Themes:');
+      let idx = 1;
+      for (const k of regularKeys) {
+        const marker = k === currentKey ? ' (active)' : '';
+        printInfo(`    ${idx}. ${THEMES[k].name}${marker}`);
+        idx++;
+      }
+      printInfo('\n  Accessibility:');
+      for (const k of a11yKeys) {
+        const marker = k === currentKey ? ' (active)' : '';
+        printInfo(`    ${idx}. ${THEMES[k].name}${marker}`);
+        idx++;
+      }
+      console.log();
+
+      const ordered = [...regularKeys, ...a11yKeys];
+      rl.question(`  Select [1-${ordered.length}]: `, (answer) => {
+        const num = parseInt(answer.trim(), 10);
+        if (num >= 1 && num <= ordered.length) {
+          const chosen = ordered[num - 1];
+          setTheme(chosen);
+          config.theme = chosen;
+          savePreferences({ provider: config.provider, model: config.model, maxTokens: config.maxTokens, shellTimeout: config.shellTimeout, theme: chosen });
+          printInfo(`  Switched to ${THEMES[chosen].name} theme.`);
         } else {
           printInfo('  Cancelled.');
         }
