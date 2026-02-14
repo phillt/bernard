@@ -107,7 +107,7 @@
       display: flex;
       gap: 8px;
       justify-content: center;
-      margin-bottom: 48px;
+      margin-bottom: 16px;
       flex-wrap: wrap;
     }
 
@@ -306,7 +306,7 @@
 
     .code-block .comment { color: var(--text-secondary); }
     .code-block .cmd-prefix { color: var(--accent); user-select: none; }
-    .code-block .env-var { color: #7ee787; }
+
 
     .steps {
       display: grid;
@@ -437,7 +437,6 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      cursor: pointer;
       transition: background 0.2s;
     }
 
@@ -553,7 +552,7 @@
     <div class="container">
       <h1><span>&gt;</span> bernard</h1>
       <p class="tagline">A local CLI AI agent with multi-provider support, persistent memory, and autonomous tool use.</p>
-      <div class="install-snippet" onclick="navigator.clipboard.writeText('npm install -g bernard-agent').then(() => { this.querySelector('.copy-hint').textContent = 'Copied!'; setTimeout(() => this.querySelector('.copy-hint').textContent = 'Click to copy', 2000); })">
+      <div class="install-snippet" onclick="navigator.clipboard.writeText('npm install -g bernard-agent').then(() => { this.querySelector('.copy-hint').textContent = 'Copied!'; setTimeout(() => this.querySelector('.copy-hint').textContent = 'Click to copy', 2000); }).catch(() => {})">
         <span class="prefix">$</span> npm install -g bernard-agent
         <span class="copy-hint">Click to copy</span>
       </div>
@@ -752,7 +751,7 @@
   <!-- Footer -->
   <footer>
     <div class="container">
-      <div class="footer-left">bernard-agent &copy; 2025 &middot; MIT License</div>
+      <div class="footer-left">bernard-agent &copy; <span id="year">2025</span> &middot; MIT License</div>
       <div class="footer-links">
         <a href="https://github.com/phillt/bernard">GitHub</a>
         <a href="https://www.npmjs.com/package/bernard-agent">npm</a>
@@ -762,6 +761,9 @@
   </footer>
 
   <script>
+    // ── Dynamic year ──
+    document.getElementById('year').textContent = new Date().getFullYear();
+
     // ── Animation Engine ──
     function sleep(ms, signal) {
       return new Promise((resolve, reject) => {
@@ -855,7 +857,7 @@
         { type: 'prompt', text: 'bernard> ' },
         { type: 'type', text: "what's in this directory?", cls: 'cmd' },
         { type: 'pause', ms: 400 },
-        { type: 'line', text: '' },
+        { type: 'line' },
         { type: 'instant', text: '  \u25B6 shell: ls -la', cls: 'tool' },
         { type: 'pause', ms: 300 },
         { type: 'instant', text: '  Found 12 files including package.json, src/, and tests/', cls: 'output' },
@@ -864,7 +866,7 @@
         { type: 'prompt', text: 'bernard> ' },
         { type: 'type', text: 'remember that this project uses pnpm', cls: 'cmd' },
         { type: 'pause', ms: 400 },
-        { type: 'line', text: '' },
+        { type: 'line' },
         { type: 'instant', text: '  \u25B6 memory: write "project-conventions"', cls: 'tool' },
         { type: 'pause', ms: 300 },
         { type: 'instant', text: "  Got it \u2014 I'll remember that for future sessions.", cls: 'output' },
@@ -873,7 +875,7 @@
         { type: 'prompt', text: 'bernard> ' },
         { type: 'type', text: 'check disk usage and count lines of code in parallel', cls: 'cmd' },
         { type: 'pause', ms: 400 },
-        { type: 'line', text: '' },
+        { type: 'line' },
         { type: 'instant', text: '  \u25B6 agent: "Check disk usage"', cls: 'tool' },
         { type: 'instant', text: '  \u25B6 agent: "Count lines of code"', cls: 'tool' },
         { type: 'pause', ms: 500 },
@@ -939,15 +941,15 @@
           { type: 'prompt', text: 'bernard> ' },
           { type: 'type', text: '/provider', cls: 'cmd' },
           { type: 'pause', ms: 400 },
-          { type: 'line', text: '' },
+          { type: 'line' },
           { type: 'instant', text: '  Current: anthropic (claude-sonnet-4-5-20250929)', cls: 'output' },
           { type: 'instant', text: '  1. anthropic  2. openai  3. xai', cls: 'output' },
           { type: 'pause', ms: 600 },
-          { type: 'line', text: '' },
+          { type: 'line' },
           { type: 'prompt', text: 'bernard> ' },
           { type: 'type', text: '2', cls: 'cmd' },
           { type: 'pause', ms: 300 },
-          { type: 'line', text: '' },
+          { type: 'line' },
           { type: 'instant', text: '  Switching to openai...', cls: 'tool' },
           { type: 'pause', ms: 400 },
           { type: 'instant', text: '  \u2713 Now using openai (gpt-4o)', cls: 'output' },
@@ -959,7 +961,7 @@
           { type: 'prompt', text: 'bernard> ' },
           { type: 'type', text: 'delete the temp files in ./tmp', cls: 'cmd' },
           { type: 'pause', ms: 400 },
-          { type: 'line', text: '' },
+          { type: 'line' },
           { type: 'instant', text: '  \u26A0 Dangerous command detected: rm -rf ./tmp/*', cls: 'sub' },
           { type: 'instant', text: '  Proceed? (y/n)', cls: 'sub' },
           { type: 'pause', ms: 800 },
@@ -976,16 +978,16 @@
           { type: 'prompt', text: 'bernard> ' },
           { type: 'type', text: 'remember that the staging server is at 10.0.1.50', cls: 'cmd' },
           { type: 'pause', ms: 400 },
-          { type: 'line', text: '' },
+          { type: 'line' },
           { type: 'instant', text: '  \u25B6 memory: write "staging-server"', cls: 'tool' },
           { type: 'pause', ms: 300 },
           { type: 'instant', text: '  Saved to persistent memory.', cls: 'output' },
           { type: 'pause', ms: 800 },
-          { type: 'line', text: '' },
+          { type: 'line' },
           { type: 'prompt', text: 'bernard> ' },
           { type: 'type', text: "what's the staging IP?", cls: 'cmd' },
           { type: 'pause', ms: 400 },
-          { type: 'line', text: '' },
+          { type: 'line' },
           { type: 'instant', text: '  (recalled from memory)', cls: 'tool' },
           { type: 'instant', text: '  The staging server is at 10.0.1.50.', cls: 'output' },
         ],
@@ -996,7 +998,7 @@
           { type: 'prompt', text: 'bernard> ' },
           { type: 'type', text: 'every hour, check if the API is healthy and notify me if not', cls: 'cmd' },
           { type: 'pause', ms: 400 },
-          { type: 'line', text: '' },
+          { type: 'line' },
           { type: 'instant', text: '  \u25B6 cron_create: "api-health-check"', cls: 'tool' },
           { type: 'instant', text: '  Schedule: 0 * * * * (every hour)', cls: 'tool' },
           { type: 'pause', ms: 400 },
@@ -1011,7 +1013,7 @@
           { type: 'prompt', text: 'bernard> ' },
           { type: 'type', text: 'add an MCP server for filesystem access', cls: 'cmd' },
           { type: 'pause', ms: 400 },
-          { type: 'line', text: '' },
+          { type: 'line' },
           { type: 'instant', text: '  \u25B6 mcp_config: add "filesystem"', cls: 'tool' },
           { type: 'instant', text: '  command: npx @modelcontextprotocol/server-filesystem', cls: 'tool' },
           { type: 'pause', ms: 400 },
@@ -1026,7 +1028,7 @@
           { type: 'prompt', text: 'bernard> ' },
           { type: 'type', text: 'check disk usage and count lines of code in parallel', cls: 'cmd' },
           { type: 'pause', ms: 400 },
-          { type: 'line', text: '' },
+          { type: 'line' },
           { type: 'instant', text: '  \u25B6 agent: "Check disk usage"', cls: 'tool' },
           { type: 'instant', text: '  \u25B6 agent: "Count lines of code"', cls: 'tool' },
           { type: 'pause', ms: 500 },
@@ -1102,7 +1104,7 @@
         { type: 'prompt', text: 'bernard> ' },
         { type: 'type', text: 'schedule a zoom with sarah@acme.co to discuss the Q3 proposal', cls: 'cmd' },
         { type: 'pause', ms: 400 },
-        { type: 'line', text: '' },
+        { type: 'line' },
         { type: 'instant', text: '  \u25B6 calendar: get availability (next 5 days)', cls: 'tool' },
         { type: 'pause', ms: 300 },
         { type: 'instant', text: '  You\u2019re free: Tue 10\u201312, Wed 2\u20134, Thu 10\u201312, Fri 1\u20133', cls: 'output' },
@@ -1117,10 +1119,10 @@
         { type: 'pause', ms: 300 },
         { type: 'instant', text: '  \u2713 Checking for her reply every 2 hours.', cls: 'output' },
         { type: 'pause', ms: 800 },
-        { type: 'line', text: '' },
+        { type: 'line' },
         { type: 'instant', text: '  \u2500\u2500 3 hours later \u2500\u2500', cls: 'sub' },
         { type: 'pause', ms: 600 },
-        { type: 'line', text: '' },
+        { type: 'line' },
         { type: 'instant', text: '  [cron] \u25B6 gmail: search inbox from:sarah@acme.co', cls: 'tool' },
         { type: 'pause', ms: 300 },
         { type: 'instant', text: '  \u2713 Reply: "None of those work \u2014 how about Thursday at 3pm?"', cls: 'output' },
@@ -1134,10 +1136,10 @@
         { type: 'pause', ms: 300 },
         { type: 'instant', text: '  \u2713 Counter-proposal sent.', cls: 'output' },
         { type: 'pause', ms: 800 },
-        { type: 'line', text: '' },
+        { type: 'line' },
         { type: 'instant', text: '  \u2500\u2500 2 hours later \u2500\u2500', cls: 'sub' },
         { type: 'pause', ms: 600 },
-        { type: 'line', text: '' },
+        { type: 'line' },
         { type: 'instant', text: '  [cron] \u25B6 gmail: search inbox from:sarah@acme.co', cls: 'tool' },
         { type: 'pause', ms: 300 },
         { type: 'instant', text: '  \u2713 Reply: "3:30 works, see you then!"', cls: 'output' },
@@ -1156,7 +1158,7 @@
         { type: 'prompt', text: 'bernard> ' },
         { type: 'type', text: 'watch the deploy on PR #247 and ping me on slack if it fails', cls: 'cmd' },
         { type: 'pause', ms: 400 },
-        { type: 'line', text: '' },
+        { type: 'line' },
         { type: 'instant', text: '  \u25B6 github: get checks for PR #247', cls: 'tool' },
         { type: 'pause', ms: 300 },
         { type: 'instant', text: '  CI running... setting up a watcher.', cls: 'output' },
@@ -1164,10 +1166,10 @@
         { type: 'pause', ms: 300 },
         { type: 'instant', text: '  \u2713 Checking every 2 minutes.', cls: 'output' },
         { type: 'pause', ms: 800 },
-        { type: 'line', text: '' },
+        { type: 'line' },
         { type: 'instant', text: '  \u2500\u2500 6 minutes later \u2500\u2500', cls: 'sub' },
         { type: 'pause', ms: 600 },
-        { type: 'line', text: '' },
+        { type: 'line' },
         { type: 'instant', text: '  [cron] \u25B6 github: check status PR #247', cls: 'tool' },
         { type: 'pause', ms: 300 },
         { type: 'instant', text: '  \u2717 CI failed: test suite "integration" (exit code 1)', cls: 'sub' },
