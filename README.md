@@ -185,12 +185,20 @@ bernard --alert <id>             # Open with cron alert context
 
 ```bash
 bernard add-key <provider> <key>   # Store an API key securely
+bernard remove-key <provider>      # Remove a stored API key
 bernard providers                  # List providers and key status
 bernard list-options               # Show configurable options
 bernard reset-option <option>      # Reset one option to default
 bernard reset-options              # Reset all options (with confirmation)
 bernard mcp-list                   # List configured MCP servers
 bernard remove-mcp <key>           # Remove an MCP server
+
+# Cron management
+bernard cron-list                  # List all cron jobs with status
+bernard cron-delete <ids...>       # Delete specific cron jobs by ID
+bernard cron-delete-all            # Delete all cron jobs
+bernard cron-stop [ids...]         # Stop the daemon (no args) or disable specific jobs
+bernard cron-bounce [ids...]       # Restart the daemon (no args) or bounce specific jobs
 ```
 
 ### Interactive REPL
@@ -361,7 +369,7 @@ bernard> what's the cron daemon status?
 
 Use `/cron` in the REPL for a quick status overview.
 
-Available cron tools: `cron_create`, `cron_list`, `cron_get`, `cron_update`, `cron_delete`, `cron_enable`, `cron_disable`, `cron_status`, `cron_bounce`.
+Available cron tools: `cron_create`, `cron_list`, `cron_get`, `cron_update`, `cron_delete`, `cron_enable`, `cron_disable`, `cron_status`, `cron_bounce`, `cron_logs_list`, `cron_logs_get`, `cron_logs_summary`, `cron_logs_cleanup`.
 
 ### Execution Logs
 
@@ -381,6 +389,8 @@ bernard> give me a summary of the api health check job performance
 Logs include: step-by-step traces, tool calls and results, token usage, durations, success/error status.
 
 Log management: `cron_logs_cleanup` supports `rotate` (keep N recent entries) and `delete` (remove all logs for a job).
+
+Cron jobs can self-disable when they determine their one-time task is complete, using `cron_self_disable` available in the runner context.
 
 ### Notifications
 
@@ -472,6 +482,8 @@ bernard remove-mcp <key>  # Remove a server
 ```
 
 Use `/mcp` in the REPL to see connected servers and their available tools.
+
+Bernard automatically attempts to reconnect and retry if an MCP server tool call fails due to a connection issue, so transient network interruptions are handled without manual intervention.
 
 **Note:** MCP server changes take effect after restarting Bernard. Servers are connected at startup.
 
@@ -600,12 +612,16 @@ src/
 ├── rag.ts                # RAG store (embeddings + search)
 ├── embeddings.ts         # FastEmbed wrapper
 ├── mcp.ts                # MCP server manager
+├── rag-worker.ts         # Background RAG fact extraction worker
+├── setup.ts              # First-time setup wizard
 ├── history.ts            # Conversation save/load
 ├── logger.ts             # Debug file logger
 ├── providers/
-│   └── index.ts          # getModel() factory
+│   ├── index.ts          # getModel() factory
+│   └── types.ts          # Provider type definitions
 ├── tools/
 │   ├── index.ts          # Tool registry
+│   ├── types.ts          # Tool option type definitions
 │   ├── shell.ts          # Shell execution
 │   ├── memory.ts         # Memory + scratch tools
 │   ├── web.ts            # Web page fetching
@@ -617,6 +633,8 @@ src/
 │   ├── mcp-url.ts        # MCP config (URL-based)
 │   └── subagent.ts       # Parallel sub-agents
 └── cron/
+    ├── cli.ts            # Cron CLI subcommands
+    ├── types.ts          # Cron type definitions
     ├── store.ts          # Job + alert persistence
     ├── daemon.ts         # Background daemon process
     ├── runner.ts         # Job execution
