@@ -317,6 +317,77 @@
       min-height: 21px;
     }
 
+    /* ── Memory Section ── */
+    .memory-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 20px;
+      margin-top: 40px;
+    }
+
+    .memory-card {
+      padding: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+
+    .memory-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--accent-dim);
+      color: var(--accent);
+      font-family: var(--mono);
+      font-size: 14px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 12px;
+    }
+
+    .memory-card h3 { font-size: 15px; margin-bottom: 6px; }
+    .memory-card p { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+
+    .memory-details {
+      margin-top: 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .memory-detail {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      padding: 12px 20px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .memory-detail + .memory-detail {
+      border-top: 1px solid var(--border);
+    }
+
+    .memory-detail code {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--accent-dim);
+      color: var(--accent);
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .memory-detail-label {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--accent);
+      min-width: 110px;
+      flex-shrink: 0;
+    }
+
     /* ── Section Headers ── */
     .section-label {
       font-family: var(--mono);
@@ -604,6 +675,7 @@
         <a href="#features">Features</a>
         <a href="#quickstart">Quick Start</a>
         <a href="#workflows">Workflows</a>
+        <a href="#memory">Memory</a>
         <a href="#providers">Providers</a>
         <a href="#community">Community</a>
         <a href="https://github.com/phillt/bernard">GitHub</a>
@@ -743,6 +815,52 @@
         </div>
       </div>
 
+    </div>
+  </section>
+
+  <!-- Learns Over Time -->
+  <section id="memory">
+    <div class="container">
+      <div class="section-label">Long-Term Memory</div>
+      <h2 class="section-title">Gets smarter the more you use it</h2>
+      <p class="section-desc">Bernard automatically builds a knowledge base from your conversations using local embeddings and RAG. No cloud storage, no data leaving your machine.</p>
+
+      <div class="memory-grid">
+        <div class="memory-card">
+          <div class="memory-icon">1</div>
+          <h3>You work normally</h3>
+          <p>Ask questions, run commands, solve problems. Bernard observes what matters&mdash;your preferences, project conventions, key decisions.</p>
+        </div>
+        <div class="memory-card">
+          <div class="memory-icon">2</div>
+          <h3>Facts are extracted and embedded</h3>
+          <p>When conversations get long, Bernard compresses history and extracts important facts into vector embeddings stored on disk.</p>
+        </div>
+        <div class="memory-card">
+          <div class="memory-icon">3</div>
+          <h3>Context is recalled automatically</h3>
+          <p>Each new message is matched against past observations. Relevant facts surface in context without you having to repeat yourself.</p>
+        </div>
+      </div>
+
+      <div class="memory-details">
+        <div class="memory-detail">
+          <span class="memory-detail-label">Storage</span>
+          <span>Local only &mdash; <code>~/.bernard/rag/</code></span>
+        </div>
+        <div class="memory-detail">
+          <span class="memory-detail-label">Embeddings</span>
+          <span>Runs locally via fastembed, no API calls</span>
+        </div>
+        <div class="memory-detail">
+          <span class="memory-detail-label">Deduplication</span>
+          <span>Automatic &mdash; near-duplicate facts are merged</span>
+        </div>
+        <div class="memory-detail">
+          <span class="memory-detail-label">Pruning</span>
+          <span>Old, unused memories decay over time to keep context sharp</span>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -1035,7 +1153,7 @@
         ],
       },
       {
-        desc: 'Execute commands, read and write files, and browse the web\u2014with safety checks for dangerous operations.',
+        desc: 'Execute shell commands and read and write files\u2014with safety checks for dangerous operations.',
         seq: [
           { type: 'prompt', text: 'bernard> ' },
           { type: 'type', text: 'delete the temp files in ./tmp', cls: 'cmd' },
@@ -1087,18 +1205,19 @@
         ],
       },
       {
-        desc: 'Connect to Model Context Protocol servers for extended tool capabilities and integrations.',
+        desc: 'Connect MCP servers for extended capabilities. Configure the server details and restart to connect.',
         seq: [
           { type: 'prompt', text: 'bernard> ' },
-          { type: 'type', text: 'add an MCP server for filesystem access', cls: 'cmd' },
+          { type: 'type', text: 'add an MCP server called "filesystem" that runs npx -y @modelcontextprotocol/server-filesystem /home/user', cls: 'cmd' },
           { type: 'pause', ms: 400 },
           { type: 'line' },
-          { type: 'instant', text: '  \u25B6 mcp_config: add "filesystem"', cls: 'tool' },
-          { type: 'instant', text: '  command: npx @modelcontextprotocol/server-filesystem', cls: 'tool' },
+          { type: 'instant', text: '  \u25B6 mcp_config: add', cls: 'tool' },
+          { type: 'instant', text: '  Key: filesystem', cls: 'tool' },
+          { type: 'instant', text: '  Command: npx', cls: 'tool' },
+          { type: 'instant', text: '  Args: -y @modelcontextprotocol/server-filesystem /home/user', cls: 'tool' },
           { type: 'pause', ms: 400 },
-          { type: 'instant', text: '  \u2713 Added MCP server: filesystem', cls: 'output' },
-          { type: 'instant', text: '  3 new tools available:', cls: 'output' },
-          { type: 'instant', text: '    read_file, write_file, list_directory', cls: 'output' },
+          { type: 'instant', text: '  \u2713 MCP server added: filesystem', cls: 'output' },
+          { type: 'instant', text: '  Restart Bernard for the server to connect.', cls: 'sub' },
         ],
       },
       {
