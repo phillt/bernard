@@ -2,10 +2,11 @@
 
 import { Command } from 'commander';
 import * as readline from 'node:readline';
-import { loadConfig, saveProviderKey, getProviderKeyStatus, PROVIDER_ENV_VARS, OPTIONS_REGISTRY, resetOption, resetAllOptions } from './config.js';
+import { loadConfig, saveProviderKey, removeProviderKey, getProviderKeyStatus, PROVIDER_ENV_VARS, OPTIONS_REGISTRY, resetOption, resetAllOptions } from './config.js';
 import { startRepl } from './repl.js';
 import { printWelcome, printError, printInfo } from './output.js';
 import { CronStore } from './cron/store.js';
+import { cronList, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
 import { listMCPServers, removeMCPServer } from './mcp.js';
 import { runFirstTimeSetup } from './setup.js';
 
@@ -71,6 +72,20 @@ program
     try {
       saveProviderKey(provider, key);
       printInfo(`API key for "${provider}" saved successfully.`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('remove-key <provider>')
+  .description('Remove a stored API key for a provider')
+  .action((provider: string) => {
+    try {
+      removeProviderKey(provider);
+      printInfo(`API key for "${provider}" removed.`);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);
@@ -193,6 +208,71 @@ program
     try {
       removeMCPServer(key);
       printInfo(`MCP server "${key}" removed.`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('cron-list')
+  .description('List all cron jobs with status')
+  .action(async () => {
+    try {
+      await cronList();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('cron-delete <ids...>')
+  .description('Delete specific cron jobs by ID')
+  .action(async (ids: string[]) => {
+    try {
+      await cronDelete(ids);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('cron-delete-all')
+  .description('Delete all cron jobs')
+  .action(async () => {
+    try {
+      await cronDeleteAll();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('cron-stop [ids...]')
+  .description('Stop the daemon (no args) or disable specific jobs')
+  .action(async (ids: string[]) => {
+    try {
+      await cronStop(ids.length > 0 ? ids : undefined);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('cron-bounce [ids...]')
+  .description('Restart the daemon (no args) or bounce specific jobs')
+  .action(async (ids: string[]) => {
+    try {
+      await cronBounce(ids.length > 0 ? ids : undefined);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);

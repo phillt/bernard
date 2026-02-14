@@ -23,7 +23,8 @@ Guidelines:
 - If you discover something that requires user attention, use the \`notify\` tool to send a desktop notification. Clicking the notification will open a terminal with the alert context.
 - You may also have access to MCP tools such as email, calendar, and others depending on configuration.
 - Be concise in your analysis. Focus on actionable findings.
-- If everything looks normal and no action is needed, simply report the results without notifying.`;
+- If everything looks normal and no action is needed, simply report the results without notifying.
+- If the task is a one-time action and you have completed it successfully, use the cron_self_disable tool to prevent further executions.`;
 
 export interface RunJobResult {
   success: boolean;
@@ -85,6 +86,18 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       },
     });
 
+    const selfDisableTool = tool({
+      description: 'Disable this cron job so it will not run again. Use when the job\'s task is complete and no further executions are needed.',
+      parameters: z.object({
+        reason: z.string().describe('Brief reason for disabling (logged for the user)'),
+      }),
+      execute: async ({ reason }): Promise<string> => {
+        const updated = store.updateJob(job.id, { enabled: false });
+        if (!updated) return `Error: could not disable job ${job.id}.`;
+        return `Job "${job.name}" disabled. Reason: ${reason}`;
+      },
+    });
+
     const shellTool = createShellTool({
       shellTimeout: config.shellTimeout,
       confirmDangerous: async () => false, // Auto-deny in daemon mode
@@ -96,6 +109,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       scratch: createScratchTool(memoryStore),
       datetime: createDateTimeTool(),
       notify: notifyTool,
+      cron_self_disable: selfDisableTool,
       ...mcpTools,
     };
 

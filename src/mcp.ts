@@ -37,6 +37,10 @@ export class MCPManager {
   private clients: Map<string, MCPClient> = new Map();
   private serverStatuses: ServerStatus[] = [];
   private tools: Record<string, any> = {};
+  private serverConfigs: Map<string, MCPServerConfig> = new Map();
+  private toolServerMap: Map<string, string> = new Map();
+  // Per-server reconnection lock to coalesce concurrent reconnect attempts
+  private reconnectPromises: Map<string, Promise<boolean>> = new Map();
 
   loadConfig(): MCPConfig {
     if (!fs.existsSync(CONFIG_PATH)) {
@@ -48,6 +52,27 @@ export class MCPManager {
       return JSON.parse(raw) as MCPConfig;
     } catch {
       throw new Error(`Invalid JSON in ${CONFIG_PATH}`);
+    }
+  }
+
+  private async createClientForConfig(serverConfig: MCPServerConfig): Promise<MCPClient> {
+    if ('url' in serverConfig) {
+      return createMCPClient({
+        transport: {
+          type: serverConfig.type ?? 'sse',
+          url: serverConfig.url,
+          headers: serverConfig.headers,
+        },
+      });
+    } else {
+      const transport = new Experimental_StdioMCPTransport({
+        command: serverConfig.command,
+        args: serverConfig.args,
+        env: serverConfig.env
+          ? { ...process.env as Record<string, string>, ...serverConfig.env }
+          : undefined,
+      });
+      return createMCPClient({ transport });
     }
   }
 
@@ -66,27 +91,8 @@ export class MCPManager {
 
     const results = await Promise.allSettled(
       serverEntries.map(async ([name, serverConfig]) => {
-        let client: MCPClient;
-
-        if ('url' in serverConfig) {
-          client = await createMCPClient({
-            transport: {
-              type: serverConfig.type ?? 'sse',
-              url: serverConfig.url,
-              headers: serverConfig.headers,
-            },
-          });
-        } else {
-          const transport = new Experimental_StdioMCPTransport({
-            command: serverConfig.command,
-            args: serverConfig.args,
-            env: serverConfig.env
-              ? { ...process.env as Record<string, string>, ...serverConfig.env }
-              : undefined,
-          });
-          client = await createMCPClient({ transport });
-        }
-
+        this.serverConfigs.set(name, serverConfig);
+        const client = await this.createClientForConfig(serverConfig);
         return { name, client };
       })
     );
@@ -108,6 +114,7 @@ export class MCPManager {
               printInfo(`  Warning: MCP tool "${toolName}" from "${name}" overrides existing tool`);
             }
             this.tools[toolName] = serverTools[toolName];
+            this.toolServerMap.set(toolName, name);
           }
 
           this.serverStatuses.push({
@@ -140,6 +147,92 @@ export class MCPManager {
     }
   }
 
+  async reconnectServer(name: string): Promise<boolean> {
+    // Coalesce concurrent reconnect attempts for the same server —
+    // if a reconnect is already in progress, return its promise instead
+    // of starting a second one (which would close the first's new client).
+    const existing = this.reconnectPromises.get(name);
+    if (existing) return existing;
+
+    const promise = this.doReconnectServer(name);
+    this.reconnectPromises.set(name, promise);
+    try {
+      return await promise;
+    } finally {
+      this.reconnectPromises.delete(name);
+    }
+  }
+
+  private async doReconnectServer(name: string): Promise<boolean> {
+    const config = this.serverConfigs.get(name);
+    if (!config) return false;
+
+    // Close the existing client
+    const existingClient = this.clients.get(name);
+    if (existingClient) {
+      try { await existingClient.close(); } catch { /* ignore */ }
+      this.clients.delete(name);
+    }
+
+    try {
+      const client = await this.createClientForConfig(config);
+      this.clients.set(name, client);
+
+      const serverTools = await client.tools();
+      const toolNames = Object.keys(serverTools);
+
+      // Remove old tools from this server.
+      // Deleting Map entries during iteration is safe per the JS Map spec.
+      for (const [toolName, serverName] of this.toolServerMap.entries()) {
+        if (serverName === name) {
+          delete this.tools[toolName];
+          this.toolServerMap.delete(toolName);
+        }
+      }
+
+      // Register fresh tools
+      for (const toolName of toolNames) {
+        this.tools[toolName] = serverTools[toolName];
+        this.toolServerMap.set(toolName, name);
+      }
+
+      // Update server status
+      const statusIndex = this.serverStatuses.findIndex(s => s.name === name);
+      const newStatus: ServerStatus = { name, connected: true, toolCount: toolNames.length };
+      if (statusIndex >= 0) {
+        this.serverStatuses[statusIndex] = newStatus;
+      } else {
+        this.serverStatuses.push(newStatus);
+      }
+
+      return true;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(`MCP reconnection to "${name}" failed: ${message}`);
+
+      const statusIndex = this.serverStatuses.findIndex(s => s.name === name);
+      const newStatus: ServerStatus = { name, connected: false, toolCount: 0, error: message };
+      if (statusIndex >= 0) {
+        this.serverStatuses[statusIndex] = newStatus;
+      } else {
+        this.serverStatuses.push(newStatus);
+      }
+
+      return false;
+    }
+  }
+
+  private convertTool(name: string, tool: any): any {
+    if (tool.type === 'dynamic') {
+      const { type, inputSchema, ...rest } = tool;
+      return {
+        ...rest,
+        parameters: jsonSchema(inputSchema.jsonSchema),
+      };
+    }
+    return tool;
+  }
+
   getTools(): Record<string, any> {
     // Convert dynamic MCP tools to function tools compatible with AI SDK v4.
     // @ai-sdk/mcp@1.x returns tools with type:'dynamic' and inputSchema from
@@ -148,15 +241,31 @@ export class MCPManager {
     // the validatorSymbol needed for argument validation).
     const converted: Record<string, any> = {};
     for (const [name, tool] of Object.entries(this.tools)) {
-      if (tool.type === 'dynamic') {
-        const { type, inputSchema, ...rest } = tool;
-        converted[name] = {
-          ...rest,
-          parameters: jsonSchema(inputSchema.jsonSchema),
-        };
-      } else {
-        converted[name] = tool;
-      }
+      const baseTool = this.convertTool(name, tool);
+      const originalExecute = baseTool.execute;
+      const serverName = this.toolServerMap.get(name);
+
+      converted[name] = {
+        ...baseTool,
+        // Retry wrapper: on failure, reconnect the server and retry once.
+        // If the retry also fails, the *retry* error is thrown (not the original)
+        // so the caller sees the most recent failure reason.
+        execute: async (args: unknown) => {
+          try {
+            return await originalExecute(args);
+          } catch (error) {
+            if (serverName) {
+              printInfo(`MCP tool "${name}" failed, reconnecting to "${serverName}"...`);
+              const reconnected = await this.reconnectServer(serverName);
+              if (reconnected && this.tools[name]) {
+                const freshTool = this.convertTool(name, this.tools[name]);
+                return await freshTool.execute(args);
+              }
+            }
+            throw error;
+          }
+        },
+      };
     }
     return converted;
   }

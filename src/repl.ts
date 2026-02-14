@@ -8,7 +8,7 @@ import { Agent } from './agent.js';
 import { MemoryStore } from './memory.js';
 import { RAGStore } from './rag.js';
 import { MCPManager } from './mcp.js';
-import { printHelp, printInfo, printError, printConversationReplay, startSpinner, stopSpinner } from './output.js';
+import { printHelp, printInfo, printError, printConversationReplay, startSpinner, stopSpinner, buildSpinnerMessage, type SpinnerStats } from './output.js';
 import type { ToolOptions } from './tools';
 import { PROVIDER_MODELS, getAvailableProviders, getDefaultModel, savePreferences, OPTIONS_REGISTRY, saveOption, type BernardConfig } from './config.js';
 import { CronStore } from './cron/store.js';
@@ -496,7 +496,15 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     processing = true;
     interrupted = false;
     try {
-      startSpinner();
+      const spinnerStats: SpinnerStats = {
+        startTime: Date.now(),
+        totalPromptTokens: 0,
+        totalCompletionTokens: 0,
+        latestPromptTokens: 0,
+        model: config.model,
+      };
+      agent.setSpinnerStats(spinnerStats);
+      startSpinner(() => buildSpinnerMessage(spinnerStats));
       await agent.processInput(trimmed);
       historyStore.save(agent.getHistory());
     } catch (err: unknown) {

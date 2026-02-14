@@ -100,7 +100,7 @@ describe('buildSystemPrompt', () => {
 
   it('excludes memory section when empty', () => {
     const prompt = buildSystemPrompt(makeConfig(), store);
-    expect(prompt).not.toContain('Persistent Memory');
+    expect(prompt).not.toContain('## Persistent Memory');
   });
 
   it('includes scratch when present', () => {
@@ -113,7 +113,7 @@ describe('buildSystemPrompt', () => {
 
   it('excludes scratch section when empty', () => {
     const prompt = buildSystemPrompt(makeConfig(), store);
-    expect(prompt).not.toContain('Scratch Notes');
+    expect(prompt).not.toContain('## Scratch Notes');
   });
 
   it('includes MCP server names when provided', () => {
@@ -125,6 +125,12 @@ describe('buildSystemPrompt', () => {
   it('shows "No MCP servers" when none connected', () => {
     const prompt = buildSystemPrompt(makeConfig(), store);
     expect(prompt).toContain('No MCP servers are currently connected');
+  });
+
+  it('includes execution model constraints', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).toContain('Execution Model');
+    expect(prompt).toContain('cease execution until the next message');
   });
 });
 

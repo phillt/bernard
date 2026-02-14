@@ -13,6 +13,8 @@ import {
   printSubAgentEnd,
   startSpinner,
   stopSpinner,
+  buildSpinnerMessage,
+  type SpinnerStats,
 } from './output.js';
 
 describe('output', () => {
@@ -307,6 +309,117 @@ describe('output', () => {
       expect(output).toContain('sub:1');
       expect(output).toContain('done');
       expect(output).toContain('└─');
+    });
+  });
+
+  describe('buildSpinnerMessage', () => {
+    it('shows only elapsed time when no tokens yet', () => {
+      const stats: SpinnerStats = {
+        startTime: Date.now() - 5000,
+        totalPromptTokens: 0,
+        totalCompletionTokens: 0,
+        latestPromptTokens: 0,
+        model: 'gpt-4o',
+      };
+      const msg = buildSpinnerMessage(stats);
+      expect(msg).toBe('Thinking (5s)');
+    });
+
+    it('shows token counts with arrows when data available', () => {
+      const stats: SpinnerStats = {
+        startTime: Date.now() - 12000,
+        totalPromptTokens: 1500,
+        totalCompletionTokens: 200,
+        latestPromptTokens: 1500,
+        model: 'gpt-4o', // 128k context
+      };
+      const msg = buildSpinnerMessage(stats);
+      expect(msg).toContain('12s');
+      expect(msg).toContain('1.5k\u2191');
+      expect(msg).toContain('200\u2193');
+      expect(msg).toContain('% until compression');
+    });
+
+    it('formats large token counts with k suffix', () => {
+      const stats: SpinnerStats = {
+        startTime: Date.now() - 1000,
+        totalPromptTokens: 20000,
+        totalCompletionTokens: 15000,
+        latestPromptTokens: 20000,
+        model: 'gpt-4o',
+      };
+      const msg = buildSpinnerMessage(stats);
+      expect(msg).toContain('20k\u2191');
+      expect(msg).toContain('15k\u2193');
+    });
+
+    it('shows 0% when at or beyond compression threshold', () => {
+      // gpt-4o = 128k, threshold = 75% = 96k
+      const stats: SpinnerStats = {
+        startTime: Date.now() - 1000,
+        totalPromptTokens: 100000,
+        totalCompletionTokens: 5000,
+        latestPromptTokens: 100000,
+        model: 'gpt-4o',
+      };
+      const msg = buildSpinnerMessage(stats);
+      expect(msg).toContain('0% until compression');
+    });
+
+    it('formats minutes for long durations', () => {
+      const stats: SpinnerStats = {
+        startTime: Date.now() - 125000, // 2m5s
+        totalPromptTokens: 0,
+        totalCompletionTokens: 0,
+        latestPromptTokens: 0,
+        model: 'gpt-4o',
+      };
+      const msg = buildSpinnerMessage(stats);
+      expect(msg).toBe('Thinking (2m5s)');
+    });
+
+    it('shows small token counts without k suffix', () => {
+      const stats: SpinnerStats = {
+        startTime: Date.now() - 3000,
+        totalPromptTokens: 850,
+        totalCompletionTokens: 42,
+        latestPromptTokens: 850,
+        model: 'gpt-4o',
+      };
+      const msg = buildSpinnerMessage(stats);
+      expect(msg).toContain('850\u2191');
+      expect(msg).toContain('42\u2193');
+    });
+  });
+
+  describe('dynamic spinner message', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      stopSpinner();
+      vi.useRealTimers();
+    });
+
+    it('calls message function each frame', () => {
+      let callCount = 0;
+      const getter = () => { callCount++; return `msg ${callCount}`; };
+      startSpinner(getter);
+      vi.advanceTimersByTime(80 * 3);
+      stopSpinner();
+      expect(callCount).toBeGreaterThanOrEqual(3);
+    });
+
+    it('renders updated message text', () => {
+      let counter = 0;
+      startSpinner(() => `Step ${++counter}`);
+      vi.advanceTimersByTime(80);
+      const writes = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
+      expect(writes.some(w => w.includes('Step 1'))).toBe(true);
+      vi.advanceTimersByTime(80);
+      const writes2 = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
+      expect(writes2.some(w => w.includes('Step 2'))).toBe(true);
     });
   });
 

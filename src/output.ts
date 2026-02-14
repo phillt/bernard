@@ -1,8 +1,47 @@
 import chalk from 'chalk';
 import type { CoreMessage } from 'ai';
+import { getContextWindow, COMPRESSION_THRESHOLD } from './context.js';
 
 const MAX_TOOL_OUTPUT_LENGTH = 2000;
 const MAX_REPLAY_LENGTH = 200;
+
+export interface SpinnerStats {
+  startTime: number;
+  totalPromptTokens: number;
+  totalCompletionTokens: number;
+  latestPromptTokens: number;
+  model: string;
+}
+
+function formatTokenCount(n: number): string {
+  if (n < 1000) return String(n);
+  const k = n / 1000;
+  return k >= 10 ? `${Math.round(k)}k` : `${k.toFixed(1)}k`;
+}
+
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m${seconds}s`;
+}
+
+export function buildSpinnerMessage(stats: SpinnerStats): string {
+  const elapsed = formatElapsed(Date.now() - stats.startTime);
+
+  if (stats.totalPromptTokens === 0 && stats.totalCompletionTokens === 0) {
+    return `Thinking (${elapsed})`;
+  }
+
+  const up = formatTokenCount(stats.totalPromptTokens);
+  const down = formatTokenCount(stats.totalCompletionTokens);
+  const contextWindow = getContextWindow(stats.model);
+  const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;
+  const remainingPct = Math.max(0, Math.round((thresholdTokens - stats.latestPromptTokens) / thresholdTokens * 100));
+
+  return `Thinking (${elapsed} | ${up}\u2191 ${down}\u2193 | ${remainingPct}% until compression)`;
+}
 
 // Rotating colors for sub-agent prefixes
 const PREFIX_COLORS = [chalk.magenta, chalk.blue, chalk.green, chalk.yellow] as const;
@@ -21,13 +60,14 @@ const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', 
 let spinnerTimer: ReturnType<typeof setInterval> | null = null;
 let spinnerFrameIndex = 0;
 
-export function startSpinner(message = 'Thinking'): void {
+export function startSpinner(message: string | (() => string) = 'Thinking'): void {
   if (spinnerTimer) return; // already running
   spinnerFrameIndex = 0;
+  const getMessage = typeof message === 'function' ? message : () => message;
   process.stdout.write('\x1B[?25l'); // hide cursor
   spinnerTimer = setInterval(() => {
     const frame = SPINNER_FRAMES[spinnerFrameIndex % SPINNER_FRAMES.length];
-    process.stdout.write(`\r${chalk.cyan(frame)} ${chalk.gray(message)}`);
+    process.stdout.write(`\r\x1B[2K${chalk.cyan(frame)} ${chalk.gray(getMessage())}`);
     spinnerFrameIndex++;
   }, 80);
 }
