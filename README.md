@@ -224,6 +224,7 @@ Features:
 | `/rag` | Show RAG memory stats and recent facts |
 | `/provider` | Switch LLM provider interactively |
 | `/model` | Switch model for the current provider |
+| `/theme` | Switch color theme |
 | `/options` | View and modify runtime options |
 | `/exit` | Quit Bernard (also: `exit`, `quit`) |
 
@@ -607,6 +608,7 @@ src/
 ├── agent.ts              # Agent class (generateText loop)
 ├── config.ts             # Config loading and validation
 ├── output.ts             # Terminal formatting (Chalk)
+├── theme.ts              # Color theme definitions and switching
 ├── memory.ts             # MemoryStore (persistent + scratch)
 ├── context.ts            # Context compression
 ├── rag.ts                # RAG store (embeddings + search)
