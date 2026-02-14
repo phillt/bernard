@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 
 // --- Hoisted mocks ---
 
@@ -55,6 +55,10 @@ vi.mock('node:readline', () => ({
 const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
 
 import { cronList, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cli.js';
+
+afterAll(() => {
+  vi.restoreAllMocks();
+});
 
 // --- Helpers ---
 
