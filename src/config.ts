@@ -53,6 +53,7 @@ export function savePreferences(prefs: {
   maxTokens?: number;
   shellTimeout?: number;
   theme?: string;
+  autoUpdate?: boolean;
 }): void {
   const dir = path.dirname(PREFS_PATH);
   if (!fs.existsSync(dir)) {
@@ -62,10 +63,19 @@ export function savePreferences(prefs: {
   if (prefs.maxTokens !== undefined) data.maxTokens = prefs.maxTokens;
   if (prefs.shellTimeout !== undefined) data.shellTimeout = prefs.shellTimeout;
   if (prefs.theme !== undefined) data.theme = prefs.theme;
+  if (prefs.autoUpdate !== undefined) {
+    data.autoUpdate = prefs.autoUpdate;
+  } else {
+    // Preserve autoUpdate from existing prefs when callers don't pass it
+    try {
+      const existing = JSON.parse(fs.readFileSync(PREFS_PATH, 'utf-8'));
+      if (typeof existing.autoUpdate === 'boolean') data.autoUpdate = existing.autoUpdate;
+    } catch { /* ignore */ }
+  }
   fs.writeFileSync(PREFS_PATH, JSON.stringify(data, null, 2) + '\n');
 }
 
-export function loadPreferences(): { provider?: string; model?: string; maxTokens?: number; shellTimeout?: number; theme?: string } {
+export function loadPreferences(): { provider?: string; model?: string; maxTokens?: number; shellTimeout?: number; theme?: string; autoUpdate?: boolean } {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
     const parsed = JSON.parse(data);
@@ -75,6 +85,7 @@ export function loadPreferences(): { provider?: string; model?: string; maxToken
       maxTokens: typeof parsed.maxTokens === 'number' ? parsed.maxTokens : undefined,
       shellTimeout: typeof parsed.shellTimeout === 'number' ? parsed.shellTimeout : undefined,
       theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
+      autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
     };
   } catch {
     return {};
