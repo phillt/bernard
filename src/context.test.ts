@@ -697,6 +697,26 @@ describe('emergencyTruncate', () => {
     }
   });
 
+  it('includes task hint when currentUserMessage is provided', () => {
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 10; i++) {
+      history.push({ role: 'user', content: `msg ${i} ${'x'.repeat(1000)}` });
+      history.push({ role: 'assistant', content: `resp ${i}` });
+    }
+    const result = emergencyTruncate(history, 2000, 'system', 'please fix the login bug');
+    expect(result[0].content).toContain('please fix the login bug');
+  });
+
+  it('omits task hint when currentUserMessage is not provided', () => {
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 10; i++) {
+      history.push({ role: 'user', content: `msg ${i} ${'x'.repeat(1000)}` });
+      history.push({ role: 'assistant', content: `resp ${i}` });
+    }
+    const result = emergencyTruncate(history, 2000, 'system');
+    expect(result[0].content).not.toContain('most recent request');
+  });
+
   it('aligns backward to user boundary instead of forward, preserving min-keep', () => {
     // History ending with assistant+tool, then assistant — no trailing user message.
     // A forward scan would skip past the last 2 messages, violating min-keep.
