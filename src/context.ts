@@ -351,7 +351,7 @@ export function emergencyTruncate(
   const historyBudget = tokenBudget - systemTokens;
 
   const taskHint = currentUserMessage
-    ? `\n\nThe user's most recent request was: "${currentUserMessage.slice(0, 500)}"`
+    ? `\n\nThe user's most recent request was: ${JSON.stringify(currentUserMessage.slice(0, 500))}`
     : '';
 
   if (historyBudget <= 0) {
