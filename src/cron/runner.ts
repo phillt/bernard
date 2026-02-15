@@ -5,6 +5,9 @@ import { z } from 'zod';
 import { getModel } from '../providers/index.js';
 import { loadConfig } from '../config.js';
 import { MemoryStore } from '../memory.js';
+import { RAGStore } from '../rag.js';
+import { buildMemoryContext } from '../memory-context.js';
+import { debugLog } from '../logger.js';
 import { createShellTool } from '../tools/shell.js';
 import { createMemoryTool, createScratchTool } from '../tools/memory.js';
 import { createDateTimeTool } from '../tools/datetime.js';
@@ -35,6 +38,17 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
   const config = loadConfig();
   const memoryStore = new MemoryStore();
   const store = new CronStore();
+
+  // Conditionally create RAGStore for memory context enrichment
+  let ragStore: RAGStore | undefined;
+  if (config.ragEnabled) {
+    try {
+      ragStore = new RAGStore();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`RAG initialization failed, continuing without RAG: ${msg}`);
+    }
+  }
 
   const mcpManager = new MCPManager();
   let mcpTools: Record<string, any> = {};
@@ -113,12 +127,31 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       ...mcpTools,
     };
 
+    // RAG search using job prompt as query
+    let ragResults;
+    if (ragStore) {
+      try {
+        ragResults = await ragStore.search(job.prompt);
+        if (ragResults.length > 0) {
+          debugLog('cron:rag', { jobId: job.id, query: job.prompt.slice(0, 100), results: ragResults.length });
+        }
+      } catch (err) {
+        debugLog('cron:rag:error', err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    const enrichedPrompt = DAEMON_SYSTEM_PROMPT + buildMemoryContext({
+      memoryStore,
+      ragResults,
+      includeScratch: false,
+    });
+
     const result = await generateText({
       model: getModel(config.provider, config.model),
       tools,
       maxSteps: 20,
       maxTokens: config.maxTokens,
-      system: DAEMON_SYSTEM_PROMPT,
+      system: enrichedPrompt,
       messages: [{ role: 'user', content: job.prompt }],
       onStepFinish: ({ text, toolCalls, toolResults, usage, finishReason }) => {
         const truncatedResults = (toolResults || []).map(tr => ({
