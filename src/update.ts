@@ -3,7 +3,9 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import { execSync } from 'node:child_process';
+import { printInfo, printError } from './output.js';
 
+const SEMVER_RE = /^\d+\.\d+\.\d+$/;
 const CACHE_PATH = path.join(os.homedir(), '.bernard', 'update-check.json');
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PACKAGE_NAME = 'bernard-agent';
@@ -53,15 +55,19 @@ export function getLocalVersion(): string {
 export function fetchLatestVersion(): Promise<string> {
   return new Promise((resolve, reject) => {
     const req = https.get(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`, { timeout: 5000 }, (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`Registry returned status ${res.statusCode}`));
+        return;
+      }
       let data = '';
       res.on('data', (chunk: Buffer) => { data += chunk; });
       res.on('end', () => {
         try {
           const parsed = JSON.parse(data);
-          if (parsed.version) {
+          if (parsed.version && SEMVER_RE.test(parsed.version)) {
             resolve(parsed.version);
           } else {
-            reject(new Error('No version field in registry response'));
+            reject(new Error('No valid version field in registry response'));
           }
         } catch (err) {
           reject(err);
@@ -136,6 +142,9 @@ export async function checkForUpdate(forceCheck = false): Promise<UpdateCheckRes
  * Install a specific version globally via npm.
  */
 export function applyUpdate(version: string): void {
+  if (!SEMVER_RE.test(version)) {
+    throw new Error(`Invalid version format: ${version}`);
+  }
   execSync(`npm install -g ${PACKAGE_NAME}@${version}`, { stdio: 'inherit' });
 }
 
