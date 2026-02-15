@@ -5,13 +5,13 @@
  * Invoked as: node dist/rag-worker.js <tempfile>
  *
  * Reads a JSON temp file containing { serialized, provider, model },
- * extracts facts via LLM, stores them in RAGStore, then cleans up.
+ * extracts facts via LLM (domain-specific), stores them in RAGStore, then cleans up.
  * Runs detached from the parent process — silent failure is fine.
  */
 
 import * as fs from 'node:fs';
 import { loadConfig } from './config.js';
-import { extractFacts } from './context.js';
+import { extractDomainFacts } from './context.js';
 import { RAGStore } from './rag.js';
 
 interface TempPayload {
@@ -41,13 +41,16 @@ async function main(): Promise<void> {
   // Load config (reads .env + stored keys), override provider/model from temp file
   const config = loadConfig({ provider: payload.provider, model: payload.model });
 
-  // Extract facts via LLM
-  const facts = await extractFacts(payload.serialized, config);
+  // Extract facts via LLM (domain-specific)
+  const domainFacts = await extractDomainFacts(payload.serialized, config);
 
-  // Store facts if any were extracted
-  if (facts.length > 0) {
+  // Store facts per domain if any were extracted
+  const totalFacts = domainFacts.reduce((sum, df) => sum + df.facts.length, 0);
+  if (totalFacts > 0) {
     const ragStore = new RAGStore();
-    await ragStore.addFacts(facts, 'exit');
+    for (const df of domainFacts) {
+      await ragStore.addFacts(df.facts, 'exit', df.domain);
+    }
   }
 
   // Clean up temp file
