@@ -230,6 +230,18 @@ describe('Agent', () => {
     expect(call.system).toContain('parallel');
   });
 
+  it('system prompt contains prescriptive sub-agent prompt guidance', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('Success criteria');
+    expect(call.system).toContain('Edge cases');
+  });
+
   it('system prompt contains web_read guidance text', async () => {
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
@@ -392,6 +404,31 @@ describe('Agent', () => {
     // generateText called twice (first fails, second succeeds)
     expect(mockGenerateText).toHaveBeenCalledTimes(2);
     expect(emergencyTruncate).toHaveBeenCalled();
+  });
+
+  it('passes ragStore to createSubAgentTool', async () => {
+    const { createSubAgentTool } = await import('./tools/subagent.js');
+
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([]),
+      addFacts: vi.fn(),
+    };
+
+    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    await agent.processInput('Hello');
+
+    expect(createSubAgentTool).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.any(Object),
+      expect.any(Object),
+      undefined,
+      mockRagStore,
+    );
   });
 
   it('non-token errors still throw normally', async () => {
