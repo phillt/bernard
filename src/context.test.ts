@@ -627,7 +627,7 @@ describe('emergencyTruncate', () => {
     expect(result[1].content).toContain('Understood');
   });
 
-  it('preserves at least 2 messages', () => {
+  it('preserves at least 6 messages', () => {
     const history: CoreMessage[] = [];
     for (let i = 0; i < 10; i++) {
       history.push({ role: 'user', content: `msg ${i} ${'x'.repeat(5000)}` });
@@ -635,8 +635,8 @@ describe('emergencyTruncate', () => {
     }
     // Very small budget
     const result = emergencyTruncate(history, 100, 'system');
-    // notice + ack + at least 2 original messages
-    expect(result.length).toBeGreaterThanOrEqual(4);
+    // notice + ack + at least 6 original messages
+    expect(result.length).toBeGreaterThanOrEqual(8);
     // Last two messages from original should be present
     expect(result[result.length - 1].content).toContain('resp 9');
     expect(result[result.length - 2].content).toContain('msg 9');

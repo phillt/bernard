@@ -338,7 +338,7 @@ export function estimateHistoryTokens(history: CoreMessage[]): number {
 
 /**
  * Progressively drop oldest messages until estimated tokens fit within budget.
- * Always keeps at least the last 2 messages so the model has some context.
+ * Always keeps at least the last 6 messages so the model has some context.
  * Prepends a synthetic truncation notice.
  */
 export function emergencyTruncate(
