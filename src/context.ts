@@ -370,6 +370,13 @@ export function emergencyTruncate(
   const minKeep = Math.max(0, history.length - 2);
   if (cutoff > minKeep) cutoff = minKeep;
 
+  // Advance cutoff forward to a 'user' message boundary so the kept
+  // slice never starts with an orphaned 'tool' or 'assistant' message
+  // (which would violate provider role-ordering requirements).
+  while (cutoff < history.length && history[cutoff].role !== 'user') {
+    cutoff++;
+  }
+
   const kept = history.slice(cutoff);
 
   if (cutoff === 0) {

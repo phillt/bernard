@@ -663,6 +663,39 @@ describe('emergencyTruncate', () => {
     const result = emergencyTruncate(history, 100_000, 'system');
     expect(result).toEqual(history);
   });
+
+  it('never starts kept messages with a tool or assistant message', () => {
+    // Build history where the natural cutoff would land on assistant/tool pair
+    const history: CoreMessage[] = [
+      { role: 'user', content: `old msg ${'x'.repeat(2000)}` },
+      { role: 'assistant', content: `old resp ${'y'.repeat(2000)}` },
+      // This assistant+tool pair could be orphaned if cutoff lands here
+      { role: 'assistant', content: [
+        { type: 'tool-call', toolCallId: 'tc1', toolName: 'shell', args: { command: 'ls' } },
+      ] as any },
+      { role: 'tool', content: [
+        { type: 'tool-result', toolCallId: 'tc1', result: 'file1.ts' },
+      ] as any },
+      { role: 'user', content: 'recent msg' },
+      { role: 'assistant', content: 'recent resp' },
+    ];
+
+    // Budget that can't fit everything but can fit the last few messages
+    const result = emergencyTruncate(history, 3000, 'system prompt');
+
+    // Filter out the synthetic notice/ack pair
+    const keptOriginal = result.filter(
+      m => !(typeof m.content === 'string' && (
+        m.content.includes('truncated to fit context window') ||
+        m.content.includes('Continuing with limited context')
+      )),
+    );
+
+    // The first kept original message must be a user message
+    if (keptOriginal.length > 0) {
+      expect(keptOriginal[0].role).toBe('user');
+    }
+  });
 });
 
 describe('isTokenOverflowError', () => {
