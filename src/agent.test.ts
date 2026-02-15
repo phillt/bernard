@@ -31,6 +31,11 @@ vi.mock('./output.js', () => ({
 vi.mock('./context.js', () => ({
   shouldCompress: vi.fn(() => false),
   compressHistory: vi.fn((history: any) => Promise.resolve(history)),
+  truncateToolResults: vi.fn((messages: any) => messages),
+  estimateHistoryTokens: vi.fn(() => 1000),
+  emergencyTruncate: vi.fn((history: any) => history),
+  isTokenOverflowError: vi.fn(() => false),
+  getContextWindow: vi.fn(() => 200_000),
 }));
 
 const mockSubAgentTool = { description: 'mock sub-agent', execute: vi.fn() };
@@ -239,13 +244,41 @@ describe('Agent', () => {
 
   it('system prompt contains Recalled Context when ragResults provided', () => {
     const ragResults = [
-      { fact: 'User prefers dark mode', similarity: 0.85 },
-      { fact: 'Project uses TypeScript', similarity: 0.72 },
+      { fact: 'User prefers dark mode', similarity: 0.85, domain: 'user-preferences' },
+      { fact: 'Project uses TypeScript', similarity: 0.72, domain: 'general' },
     ];
     const prompt = buildSystemPrompt(makeConfig(), store, undefined, ragResults);
     expect(prompt).toContain('Recalled Context');
     expect(prompt).toContain('User prefers dark mode');
     expect(prompt).toContain('Project uses TypeScript');
+  });
+
+  it('system prompt groups recalled context by domain with ### headings', () => {
+    const ragResults = [
+      { fact: 'npm run build compiles project', similarity: 0.9, domain: 'tool-usage' },
+      { fact: 'User prefers dark mode', similarity: 0.85, domain: 'user-preferences' },
+      { fact: 'Project uses TypeScript', similarity: 0.72, domain: 'general' },
+    ];
+    const prompt = buildSystemPrompt(makeConfig(), store, undefined, ragResults);
+    expect(prompt).toContain('### Tool Usage Patterns');
+    expect(prompt).toContain('### User Preferences');
+    expect(prompt).toContain('### General Knowledge');
+  });
+
+  it('system prompt handles mixed-domain results correctly', () => {
+    const ragResults = [
+      { fact: 'git commit -m works', similarity: 0.9, domain: 'tool-usage' },
+      { fact: 'npm test runs vitest', similarity: 0.85, domain: 'tool-usage' },
+      { fact: 'User prefers concise responses', similarity: 0.8, domain: 'user-preferences' },
+    ];
+    const prompt = buildSystemPrompt(makeConfig(), store, undefined, ragResults);
+    expect(prompt).toContain('### Tool Usage Patterns');
+    expect(prompt).toContain('### User Preferences');
+    // General should not appear if no general facts
+    expect(prompt).not.toContain('### General Knowledge');
+    // Both tool facts under same heading
+    expect(prompt).toContain('git commit -m works');
+    expect(prompt).toContain('npm test runs vitest');
   });
 
   it('system prompt omits Recalled Context section when ragResults is empty', () => {
@@ -297,5 +330,76 @@ describe('Agent', () => {
       expect.any(Object),
       mockRagStore,
     );
+  });
+
+  it('truncates tool results before adding to history', async () => {
+    const { truncateToolResults } = await import('./context.js');
+    const responseMessages = [
+      { role: 'assistant', content: 'Here is the result' },
+      {
+        role: 'tool',
+        content: [{ type: 'tool-result', toolCallId: 'tc1', result: 'x'.repeat(50_000) }],
+      },
+    ];
+
+    mockGenerateText.mockResolvedValue({
+      response: { messages: responseMessages },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+
+    expect(truncateToolResults).toHaveBeenCalledWith(responseMessages);
+  });
+
+  it('pre-flight guard triggers emergency truncation when estimated tokens exceed limit', async () => {
+    const { estimateHistoryTokens, emergencyTruncate, getContextWindow } = await import('./context.js');
+    // Simulate high token estimate: 190k estimated vs 200k * 0.9 = 180k limit
+    vi.mocked(estimateHistoryTokens).mockReturnValue(185_000);
+    vi.mocked(getContextWindow).mockReturnValue(200_000);
+
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+
+    expect(emergencyTruncate).toHaveBeenCalled();
+  });
+
+  it('catch-and-retry triggers on token overflow error', async () => {
+    const { isTokenOverflowError, emergencyTruncate } = await import('./context.js');
+    vi.mocked(isTokenOverflowError).mockReturnValue(true);
+
+    let callCount = 0;
+    mockGenerateText.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        throw new Error("This model's maximum prompt length is 131072 but the request contains 134090 tokens");
+      }
+      return {
+        response: { messages: [{ role: 'assistant', content: 'Recovered!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      };
+    });
+
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+
+    // generateText called twice (first fails, second succeeds)
+    expect(mockGenerateText).toHaveBeenCalledTimes(2);
+    expect(emergencyTruncate).toHaveBeenCalled();
+  });
+
+  it('non-token errors still throw normally', async () => {
+    const { isTokenOverflowError } = await import('./context.js');
+    vi.mocked(isTokenOverflowError).mockReturnValue(false);
+
+    mockGenerateText.mockRejectedValue(new Error('API rate limit'));
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await expect(agent.processInput('Hello')).rejects.toThrow('Agent error: API rate limit');
   });
 });

@@ -4,10 +4,11 @@ import { createTools, type ToolOptions } from './tools/index.js';
 import { createSubAgentTool } from './tools/subagent.js';
 import { printAssistantText, printToolCall, printToolResult, printInfo, startSpinner, buildSpinnerMessage, type SpinnerStats } from './output.js';
 import { debugLog } from './logger.js';
-import { shouldCompress, compressHistory } from './context.js';
+import { shouldCompress, compressHistory, truncateToolResults, estimateHistoryTokens, emergencyTruncate, isTokenOverflowError, getContextWindow } from './context.js';
 import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
+import { getDomain } from './domains.js';
 
 const BASE_SYSTEM_PROMPT = `# Identity
 
@@ -87,9 +88,22 @@ export function buildSystemPrompt(config: BernardConfig, memoryStore: MemoryStor
   prompt += `\nYou are running as provider: ${config.provider}, model: ${config.model}. The user can switch with /provider and /model.`;
 
   if (ragResults && ragResults.length > 0) {
-    prompt += '\n\n## Recalled Context\nThe following are automatically recalled observations from previous conversations.\nReference them only if directly relevant to the current discussion.';
+    prompt += '\n\n## Recalled Context\nReference only if directly relevant to the current discussion.';
+
+    // Group results by domain
+    const byDomain = new Map<string, RAGSearchResult[]>();
     for (const r of ragResults) {
-      prompt += `\n- ${r.fact}`;
+      const d = r.domain;
+      if (!byDomain.has(d)) byDomain.set(d, []);
+      byDomain.get(d)!.push(r);
+    }
+
+    for (const [domainId, results] of byDomain) {
+      const domain = getDomain(domainId);
+      prompt += `\n\n### ${domain.name}`;
+      for (const r of results) {
+        prompt += `\n- ${r.fact}`;
+      }
     }
   }
 
@@ -133,6 +147,7 @@ export class Agent {
   private ragStore?: RAGStore;
   private abortController: AbortController | null = null;
   private lastPromptTokens: number = 0;
+  private lastStepPromptTokens: number = 0;
   private spinnerStats: SpinnerStats | null = null;
 
   constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>, mcpServerNames?: string[], alertContext?: string, initialHistory?: CoreMessage[], ragStore?: RAGStore) {
@@ -165,6 +180,7 @@ export class Agent {
     this.history.push({ role: 'user', content: userInput });
 
     this.abortController = new AbortController();
+    this.lastStepPromptTokens = 0;
 
     try {
       // Check if context compression is needed
@@ -192,25 +208,39 @@ export class Agent {
         systemPrompt += '\n\n' + this.alertContext;
       }
 
+      // Pre-flight token guard: emergency truncate if estimated tokens exceed 90% of context window
+      const HARD_LIMIT_RATIO = 0.9;
+      const contextWindow = getContextWindow(this.config.model);
+      const estimatedTokens = estimateHistoryTokens(this.history) + Math.ceil(systemPrompt.length / 4);
+      const hardLimit = contextWindow * HARD_LIMIT_RATIO;
+
+      if (estimatedTokens > hardLimit) {
+        printInfo('Context approaching limit, emergency truncating...');
+        this.history = emergencyTruncate(this.history, hardLimit, systemPrompt);
+      }
+
       const baseTools = createTools(this.toolOptions, this.memoryStore, this.mcpTools);
       const tools = {
         ...baseTools,
         agent: createSubAgentTool(this.config, this.toolOptions, this.memoryStore, this.mcpTools),
       };
 
-      const result = await generateText({
+      const callGenerateText = () => generateText({
         model: getModel(this.config.provider, this.config.model),
         tools,
         maxSteps: 20,
         maxTokens: this.config.maxTokens,
         system: systemPrompt,
         messages: this.history,
-        abortSignal: this.abortController.signal,
+        abortSignal: this.abortController!.signal,
         onStepFinish: ({ text, toolCalls, toolResults, usage }) => {
-          if (usage && this.spinnerStats) {
-            this.spinnerStats.totalPromptTokens += usage.promptTokens;
-            this.spinnerStats.totalCompletionTokens += usage.completionTokens;
-            this.spinnerStats.latestPromptTokens = usage.promptTokens;
+          if (usage) {
+            this.lastStepPromptTokens = usage.promptTokens;
+            if (this.spinnerStats) {
+              this.spinnerStats.totalPromptTokens += usage.promptTokens;
+              this.spinnerStats.totalCompletionTokens += usage.completionTokens;
+              this.spinnerStats.latestPromptTokens = usage.promptTokens;
+            }
           }
           for (const tc of toolCalls) {
             debugLog(`onStepFinish:toolCall:${tc.toolName}`, tc.args);
@@ -230,13 +260,35 @@ export class Agent {
         },
       });
 
-      // Track token usage for compression decisions
-      if (result.usage?.promptTokens) {
-        this.lastPromptTokens = result.usage.promptTokens;
+      let result;
+      try {
+        result = await callGenerateText();
+      } catch (apiErr: unknown) {
+        if (this.abortController?.signal.aborted) return;
+
+        const apiMessage = apiErr instanceof Error ? apiErr.message : String(apiErr);
+
+        // Token overflow — emergency truncate and retry once
+        if (isTokenOverflowError(apiMessage)) {
+          printInfo('Context too large, truncating and retrying...');
+          this.history = emergencyTruncate(
+            this.history,
+            contextWindow * 0.8,  // aggressive 80% target on retry
+            systemPrompt,
+          );
+          result = await callGenerateText();
+        } else {
+          throw apiErr;
+        }
       }
 
-      // Append all response messages to history for continuity
-      this.history.push(...result.response.messages as CoreMessage[]);
+      // Track token usage for compression decisions — use last step's prompt tokens
+      // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)
+      this.lastPromptTokens = this.lastStepPromptTokens ?? result.usage?.promptTokens ?? 0;
+
+      // Truncate large tool results before adding to history
+      const truncatedMessages = truncateToolResults(result.response.messages as CoreMessage[]);
+      this.history.push(...truncatedMessages);
     } catch (err: unknown) {
       // If aborted by user, return silently — user message stays in history
       if (this.abortController?.signal.aborted) return;

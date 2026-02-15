@@ -71,9 +71,9 @@ describe('RAGStore', () => {
     mockProvider = createFakeProvider();
   });
 
-  async function createStore() {
+  async function createStore(config?: import('./rag.js').RAGStoreConfig) {
     const { RAGStore } = await import('./rag.js');
-    return new RAGStore({ maxMemories: 100 });
+    return new RAGStore({ maxMemories: 100, ...config });
   }
 
   describe('addFacts', () => {
@@ -82,6 +82,20 @@ describe('RAGStore', () => {
       const added = await store.addFacts(['User prefers dark mode', 'Project uses TypeScript'], 'compression');
       expect(added).toBe(2);
       expect(store.count()).toBe(2);
+    });
+
+    it('defaults domain to general when not specified', async () => {
+      const store = await createStore();
+      await store.addFacts(['some fact'], 'test');
+      const facts = store.listFacts();
+      expect(facts[0]).toContain('[general]');
+    });
+
+    it('stores facts with specified domain', async () => {
+      const store = await createStore();
+      await store.addFacts(['npm run build compiles TypeScript'], 'test', 'tool-usage');
+      const facts = store.listFacts();
+      expect(facts[0]).toContain('[tool-usage]');
     });
 
     it('returns 0 when provider is unavailable', async () => {
@@ -155,6 +169,48 @@ describe('RAGStore', () => {
       }
     });
 
+    it('returns domain field in results', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode'], 'test', 'user-preferences');
+      const results = await store.search('User prefers dark mode');
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].domain).toBe('user-preferences');
+    });
+
+    it('respects topKPerDomain limit', async () => {
+      const store = await createStore({ topKPerDomain: 2, maxResults: 10 });
+
+      // Add 5 facts to the same domain
+      const facts = [
+        'Build step one for project alpha',
+        'Build step two for project alpha',
+        'Build step three for project alpha',
+        'Build step four for project alpha',
+        'Build step five for project alpha',
+      ];
+      await store.addFacts(facts, 'test', 'tool-usage');
+
+      const results = await store.search('Build step for project alpha');
+      // Should be capped at 2 per domain
+      const toolUsageResults = results.filter(r => r.domain === 'tool-usage');
+      expect(toolUsageResults.length).toBeLessThanOrEqual(2);
+    });
+
+    it('caps total results at maxResults', async () => {
+      const store = await createStore({ topKPerDomain: 5, maxResults: 3 });
+
+      await store.addFacts([
+        'Fact A about building software',
+        'Fact B about building software',
+        'Fact C about building software',
+        'Fact D about building software',
+        'Fact E about building software',
+      ], 'test', 'general');
+
+      const results = await store.search('building software');
+      expect(results.length).toBeLessThanOrEqual(3);
+    });
+
     it('updates access count on search hit', async () => {
       const store = await createStore();
       await store.addFacts(['User prefers dark mode'], 'test');
@@ -168,13 +224,25 @@ describe('RAGStore', () => {
   describe('persistence', () => {
     it('loads memories on construction', async () => {
       const memories = [
-        { id: '1', fact: 'test fact', embedding: Array(16).fill(0).map((_, i) => i === 0 ? 1 : 0), source: 'test', createdAt: new Date().toISOString(), accessCount: 0 },
+        { id: '1', fact: 'test fact', embedding: Array(16).fill(0).map((_, i) => i === 0 ? 1 : 0), source: 'test', domain: 'general', createdAt: new Date().toISOString(), accessCount: 0 },
       ];
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
 
       const store = await createStore();
       expect(store.count()).toBe(1);
+    });
+
+    it('backfills general domain for legacy entries without domain', async () => {
+      const memories = [
+        { id: '1', fact: 'legacy fact', embedding: Array(16).fill(0).map((_, i) => i === 0 ? 1 : 0), source: 'test', createdAt: new Date().toISOString(), accessCount: 0 },
+      ];
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
+
+      const store = await createStore();
+      const facts = store.listFacts();
+      expect(facts[0]).toContain('[general]');
     });
 
     it('handles missing file gracefully', async () => {
@@ -193,9 +261,9 @@ describe('RAGStore', () => {
   });
 
   describe('listFacts', () => {
-    it('returns formatted fact list', async () => {
+    it('returns formatted fact list with domain', async () => {
       const memories = [
-        { id: '1', fact: 'test fact', embedding: Array(16).fill(0).map((_, i) => i === 0 ? 1 : 0), source: 'test', createdAt: '2025-01-15T00:00:00.000Z', accessCount: 3 },
+        { id: '1', fact: 'test fact', embedding: Array(16).fill(0).map((_, i) => i === 0 ? 1 : 0), source: 'test', domain: 'tool-usage', createdAt: '2025-01-15T00:00:00.000Z', accessCount: 3 },
       ];
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
@@ -204,8 +272,27 @@ describe('RAGStore', () => {
       const facts = store.listFacts();
       expect(facts).toHaveLength(1);
       expect(facts[0]).toContain('2025-01-15');
+      expect(facts[0]).toContain('[tool-usage]');
       expect(facts[0]).toContain('3x');
       expect(facts[0]).toContain('test fact');
+    });
+  });
+
+  describe('countByDomain', () => {
+    it('returns correct counts per domain', async () => {
+      const store = await createStore();
+      await store.addFacts(['fact A', 'fact B'], 'test', 'general');
+      await store.addFacts(['tool fact'], 'test', 'tool-usage');
+
+      const counts = store.countByDomain();
+      expect(counts['general']).toBe(2);
+      expect(counts['tool-usage']).toBe(1);
+    });
+
+    it('returns empty object when no memories', async () => {
+      const store = await createStore();
+      const counts = store.countByDomain();
+      expect(counts).toEqual({});
     });
   });
 

@@ -3,6 +3,7 @@ import { getModel } from './providers/index.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 import type { RAGStore } from './rag.js';
+import { DOMAIN_REGISTRY, getDomainIds } from './domains.js';
 
 /** Model name → context window size in tokens */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
@@ -112,59 +113,76 @@ export function countRecentMessages(history: CoreMessage[], turnsToKeep: number)
   return 0;
 }
 
-const FACT_EXTRACTION_PROMPT = `You are a fact extraction system. Extract notable, self-contained facts from the conversation below that would be useful to recall in future sessions.
-
-Extract:
-- User preferences and habits
-- Project details, structure, and conventions
-- Technical environment info (OS, languages, tools, versions)
-- Decisions made and their reasoning
-- Recurring patterns or workflows
-- Names, roles, and relationships mentioned
-
-Do NOT extract:
-- Task-specific transient details (e.g., "the user asked to fix a typo on line 42")
-- Generic knowledge that any AI would know
-- Greetings, filler, or conversational noise
-
-Return a JSON array of strings. Each string should be a self-contained fact (understandable without the original conversation). Maximum 500 characters per fact. If there are no notable facts, return an empty array [].`;
-
 const FACT_EXTRACTION_MAX = 500;
+
+export interface DomainFacts {
+  domain: string;
+  facts: string[];
+}
+
+/**
+ * Extract facts from serialized conversation text using domain-specific prompts.
+ * Runs all domain extractors in parallel via Promise.allSettled.
+ * Partial failures (one domain errors) don't block others.
+ */
+export async function extractDomainFacts(
+  serializedText: string,
+  config: BernardConfig,
+): Promise<DomainFacts[]> {
+  if (!serializedText.trim()) return [];
+
+  const domainIds = getDomainIds();
+
+  const results = await Promise.allSettled(
+    domainIds.map(async (domainId) => {
+      const domain = DOMAIN_REGISTRY[domainId];
+
+      const result = await generateText({
+        model: getModel(config.provider, config.model),
+        maxTokens: 2048,
+        system: domain.extractionPrompt,
+        messages: [
+          { role: 'user', content: `Extract facts from this conversation:\n\n${serializedText}` },
+        ],
+      });
+
+      const text = result.text?.trim();
+      if (!text) return { domain: domainId, facts: [] };
+
+      // Parse JSON array from response — handle markdown code fences
+      const jsonStr = text.replace(/^```(?:json)?\s*/m, '').replace(/\s*```$/m, '');
+      const parsed = JSON.parse(jsonStr);
+
+      if (!Array.isArray(parsed)) return { domain: domainId, facts: [] };
+
+      const facts = parsed
+        .filter((item): item is string => typeof item === 'string' && item.length > 0)
+        .filter((item) => item.length <= FACT_EXTRACTION_MAX);
+
+      return { domain: domainId, facts };
+    }),
+  );
+
+  const domainFacts: DomainFacts[] = [];
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled' && result.value.facts.length > 0) {
+      domainFacts.push(result.value);
+    } else if (result.status === 'rejected') {
+      debugLog('context:extractDomainFacts', `Domain "${domainIds[index]}" extraction failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+    }
+  });
+
+  return domainFacts;
+}
 
 /**
  * Extract notable facts from serialized conversation text via LLM.
- * Returns an empty array on any failure.
+ * Returns a flat array of facts (backward-compatible wrapper around extractDomainFacts).
  * @internal
  */
 export async function extractFacts(serializedText: string, config: BernardConfig): Promise<string[]> {
-  if (!serializedText.trim()) return [];
-
-  try {
-    const result = await generateText({
-      model: getModel(config.provider, config.model),
-      maxTokens: 2048,
-      system: FACT_EXTRACTION_PROMPT,
-      messages: [
-        { role: 'user', content: `Extract facts from this conversation:\n\n${serializedText}` },
-      ],
-    });
-
-    const text = result.text?.trim();
-    if (!text) return [];
-
-    // Parse JSON array from response — handle markdown code fences
-    const jsonStr = text.replace(/^```(?:json)?\s*/m, '').replace(/\s*```$/m, '');
-    const parsed = JSON.parse(jsonStr);
-
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed
-      .filter((item): item is string => typeof item === 'string' && item.length > 0)
-      .filter((item) => item.length <= FACT_EXTRACTION_MAX);
-  } catch (err) {
-    debugLog('context:extractFacts', `Failed: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
-  }
+  const domainFacts = await extractDomainFacts(serializedText, config);
+  return domainFacts.flatMap((df) => df.facts);
 }
 
 const SUMMARIZATION_PROMPT = `You are a conversation summarizer. Produce a concise summary of the conversation below, preserving:
@@ -201,7 +219,7 @@ export async function compressHistory(
   }
 
   try {
-    // Run summarization and fact extraction in parallel
+    // Run summarization and domain-specific fact extraction in parallel
     const summarizePromise = generateText({
       model: getModel(config.provider, config.model),
       maxTokens: 2048,
@@ -212,16 +230,20 @@ export async function compressHistory(
     });
 
     const extractPromise = ragStore
-      ? extractFacts(serialized, config)
+      ? extractDomainFacts(serialized, config)
       : Promise.resolve([]);
 
-    const [result, facts] = await Promise.all([summarizePromise, extractPromise]);
+    const [result, domainFacts] = await Promise.all([summarizePromise, extractPromise]);
 
-    // Store extracted facts fire-and-forget
-    if (ragStore && facts.length > 0) {
-      ragStore.addFacts(facts, 'compression').catch((err) => {
-        debugLog('context:compress:rag', `Failed to store facts: ${err instanceof Error ? err.message : String(err)}`);
-      });
+    // Store extracted facts per domain — await to prevent races on persist()
+    if (ragStore && domainFacts.length > 0) {
+      await Promise.all(
+        domainFacts.map((df) =>
+          ragStore.addFacts(df.facts, 'compression', df.domain).catch((err) => {
+            debugLog('context:compress:rag', `Failed to store facts for domain ${df.domain}: ${err instanceof Error ? err.message : String(err)}`);
+          }),
+        ),
+      );
     }
 
     const summary = result.text?.trim();
@@ -244,7 +266,7 @@ export async function compressHistory(
       oldMessageCount: oldMessages.length,
       recentMessageCount: recentMessages.length,
       summaryLength: summary.length,
-      factsExtracted: facts.length,
+      domainFactsCount: domainFacts.reduce((sum, df) => sum + df.facts.length, 0),
     });
 
     return [summaryMessage, ackMessage, ...recentMessages];
@@ -252,6 +274,141 @@ export async function compressHistory(
     debugLog('context:compress:error', err instanceof Error ? err.message : String(err));
     return history;
   }
+}
+
+/** Max characters to keep per tool-result content part in history. */
+export const MAX_TOOL_RESULT_CHARS = 10_000;
+
+/**
+ * Truncate large tool-result content parts in response messages before adding to history.
+ * The user already sees the full result via onStepFinish; the history copy just needs
+ * enough for the LLM to understand what happened on subsequent turns.
+ * Returns a new array — does not mutate the input.
+ */
+export function truncateToolResults(
+  messages: CoreMessage[],
+  maxChars: number = MAX_TOOL_RESULT_CHARS,
+): CoreMessage[] {
+  return messages.map((msg) => {
+    if (msg.role !== 'tool' || !Array.isArray(msg.content)) return msg;
+
+    let changed = false;
+    const newContent = msg.content.map((part: any) => {
+      if (
+        typeof part === 'object' &&
+        part !== null &&
+        'type' in part &&
+        part.type === 'tool-result'
+      ) {
+        const resultStr = typeof part.result === 'string'
+          ? part.result
+          : JSON.stringify(part.result);
+        if (resultStr.length > maxChars) {
+          changed = true;
+          return {
+            ...part,
+            result: resultStr.slice(0, maxChars) +
+              `\n...[truncated from ${resultStr.length} to ${maxChars} chars]`,
+          };
+        }
+      }
+      return part;
+    });
+
+    return changed ? { ...msg, content: newContent } : msg;
+  });
+}
+
+/**
+ * Rough-but-safe token estimator for pre-flight checks.
+ * Uses 3.6 chars/token (instead of 4) for a ~10% safety margin,
+ * since tool-result tokens can be denser than natural language.
+ */
+export function estimateHistoryTokens(history: CoreMessage[]): number {
+  let chars = 0;
+  for (const msg of history) {
+    chars += JSON.stringify(msg.content).length;
+  }
+  return Math.ceil(chars / 3.6);
+}
+
+/**
+ * Progressively drop oldest messages until estimated tokens fit within budget.
+ * Always keeps at least the last 2 messages so the model has some context.
+ * Prepends a synthetic truncation notice.
+ */
+export function emergencyTruncate(
+  history: CoreMessage[],
+  tokenBudget: number,
+  systemPrompt: string,
+): CoreMessage[] {
+  const systemTokens = Math.ceil(systemPrompt.length / 4);
+  const historyBudget = tokenBudget - systemTokens;
+
+  if (historyBudget <= 0) {
+    // System prompt alone exceeds budget — keep last 2 messages anyway
+    const kept = history.slice(-2);
+    return [
+      { role: 'user', content: '[Earlier conversation was truncated to fit context window]' },
+      { role: 'assistant', content: 'Understood. Continuing with limited context.' },
+      ...kept,
+    ];
+  }
+
+  // Walk backward, accumulating estimated tokens
+  let accumulated = 0;
+  let cutoff = history.length;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msgTokens = Math.ceil(JSON.stringify(history[i].content).length / 3.6);
+    if (accumulated + msgTokens > historyBudget) {
+      cutoff = i + 1;
+      break;
+    }
+    accumulated += msgTokens;
+    if (i === 0) cutoff = 0;
+  }
+
+  // Always keep at least 2 messages
+  const minKeep = Math.max(0, history.length - 2);
+  if (cutoff > minKeep) cutoff = minKeep;
+
+  // Align cutoff backward to a 'user' message boundary so the kept
+  // slice never starts with an orphaned 'tool' or 'assistant' message
+  // (which would violate provider role-ordering requirements).
+  // Searching backward (instead of forward) preserves the min-keep guarantee.
+  if (cutoff > 0 && cutoff < history.length && history[cutoff].role !== 'user') {
+    let aligned = cutoff;
+    while (aligned > 0 && history[aligned].role !== 'user') {
+      aligned--;
+    }
+    cutoff = aligned;
+  }
+
+  const kept = history.slice(cutoff);
+
+  if (cutoff === 0) {
+    // Nothing was dropped
+    return history;
+  }
+
+  const notice: CoreMessage = {
+    role: 'user',
+    content: '[Earlier conversation was truncated to fit context window]',
+  };
+  const ack: CoreMessage = {
+    role: 'assistant',
+    content: 'Understood. Continuing with limited context.',
+  };
+
+  return [notice, ack, ...kept];
+}
+
+/**
+ * Detect token overflow errors from various providers.
+ * Covers Anthropic, OpenAI, and xAI error message patterns.
+ */
+export function isTokenOverflowError(message: string): boolean {
+  return /maximum.*prompt.*length|prompt.*too.*long|context.*length.*exceeded|maximum.*context.*length|token.*limit/i.test(message);
 }
 
 function extractText(msg: CoreMessage): string | null {
