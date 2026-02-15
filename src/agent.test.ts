@@ -239,13 +239,41 @@ describe('Agent', () => {
 
   it('system prompt contains Recalled Context when ragResults provided', () => {
     const ragResults = [
-      { fact: 'User prefers dark mode', similarity: 0.85 },
-      { fact: 'Project uses TypeScript', similarity: 0.72 },
+      { fact: 'User prefers dark mode', similarity: 0.85, domain: 'user-preferences' },
+      { fact: 'Project uses TypeScript', similarity: 0.72, domain: 'general' },
     ];
     const prompt = buildSystemPrompt(makeConfig(), store, undefined, ragResults);
     expect(prompt).toContain('Recalled Context');
     expect(prompt).toContain('User prefers dark mode');
     expect(prompt).toContain('Project uses TypeScript');
+  });
+
+  it('system prompt groups recalled context by domain with ### headings', () => {
+    const ragResults = [
+      { fact: 'npm run build compiles project', similarity: 0.9, domain: 'tool-usage' },
+      { fact: 'User prefers dark mode', similarity: 0.85, domain: 'user-preferences' },
+      { fact: 'Project uses TypeScript', similarity: 0.72, domain: 'general' },
+    ];
+    const prompt = buildSystemPrompt(makeConfig(), store, undefined, ragResults);
+    expect(prompt).toContain('### Tool Usage Patterns');
+    expect(prompt).toContain('### User Preferences');
+    expect(prompt).toContain('### General Knowledge');
+  });
+
+  it('system prompt handles mixed-domain results correctly', () => {
+    const ragResults = [
+      { fact: 'git commit -m works', similarity: 0.9, domain: 'tool-usage' },
+      { fact: 'npm test runs vitest', similarity: 0.85, domain: 'tool-usage' },
+      { fact: 'User prefers concise responses', similarity: 0.8, domain: 'user-preferences' },
+    ];
+    const prompt = buildSystemPrompt(makeConfig(), store, undefined, ragResults);
+    expect(prompt).toContain('### Tool Usage Patterns');
+    expect(prompt).toContain('### User Preferences');
+    // General should not appear if no general facts
+    expect(prompt).not.toContain('### General Knowledge');
+    // Both tool facts under same heading
+    expect(prompt).toContain('git commit -m works');
+    expect(prompt).toContain('npm test runs vitest');
   });
 
   it('system prompt omits Recalled Context section when ragResults is empty', () => {

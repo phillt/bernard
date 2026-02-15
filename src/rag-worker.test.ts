@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 
 // Mock dependencies before importing anything that uses them
-const mockExtractFacts = vi.fn();
+const mockExtractDomainFacts = vi.fn();
 const mockLoadConfig = vi.fn();
 const mockAddFacts = vi.fn();
 
@@ -13,7 +13,7 @@ vi.mock('./config.js', () => ({
 }));
 
 vi.mock('./context.js', () => ({
-  extractFacts: (...args: any[]) => mockExtractFacts(...args),
+  extractDomainFacts: (...args: any[]) => mockExtractDomainFacts(...args),
 }));
 
 vi.mock('./rag.js', () => ({
@@ -44,8 +44,12 @@ describe('rag-worker', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rag-worker-test-'));
     tempFile = path.join(tempDir, '.pending-test.json');
     mockLoadConfig.mockReturnValue(fakeConfig);
-    mockExtractFacts.mockResolvedValue(['User prefers dark mode', 'Project uses TypeScript']);
-    mockAddFacts.mockResolvedValue(2);
+    mockExtractDomainFacts.mockResolvedValue([
+      { domain: 'tool-usage', facts: ['npm run build compiles project'] },
+      { domain: 'user-preferences', facts: ['User prefers dark mode'] },
+      { domain: 'general', facts: ['Project uses TypeScript'] },
+    ]);
+    mockAddFacts.mockResolvedValue(1);
   });
 
   afterEach(() => {
@@ -61,24 +65,27 @@ describe('rag-worker', () => {
     // Simulate what the worker does (we can't easily exec the script in tests,
     // so we replicate its logic using our mocked dependencies)
     const { loadConfig } = await import('./config.js');
-    const { extractFacts } = await import('./context.js');
+    const { extractDomainFacts } = await import('./context.js');
     const { RAGStore } = await import('./rag.js');
 
     const raw = fs.readFileSync(filePath, 'utf-8');
     const payload = JSON.parse(raw);
 
     const config = loadConfig({ provider: payload.provider, model: payload.model });
-    const facts = await extractFacts(payload.serialized, config);
+    const domainFacts = await extractDomainFacts(payload.serialized, config);
 
-    if (facts.length > 0) {
+    const totalFacts = domainFacts.reduce((sum: number, df: any) => sum + df.facts.length, 0);
+    if (totalFacts > 0) {
       const ragStore = new RAGStore();
-      await ragStore.addFacts(facts, 'exit');
+      for (const df of domainFacts) {
+        await ragStore.addFacts(df.facts, 'exit', df.domain);
+      }
     }
 
     fs.unlinkSync(filePath);
   }
 
-  it('reads temp file, extracts facts, stores them, and deletes temp file', async () => {
+  it('reads temp file, extracts domain facts, stores per-domain, and deletes temp file', async () => {
     const payload = {
       serialized: 'User: I prefer dark mode\nAssistant: Noted!',
       provider: 'anthropic',
@@ -89,13 +96,19 @@ describe('rag-worker', () => {
     await runWorker(tempFile);
 
     expect(mockLoadConfig).toHaveBeenCalledWith({ provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' });
-    expect(mockExtractFacts).toHaveBeenCalledWith(payload.serialized, fakeConfig);
-    expect(mockAddFacts).toHaveBeenCalledWith(['User prefers dark mode', 'Project uses TypeScript'], 'exit');
+    expect(mockExtractDomainFacts).toHaveBeenCalledWith(payload.serialized, fakeConfig);
+
+    // Should store facts per domain
+    expect(mockAddFacts).toHaveBeenCalledWith(['npm run build compiles project'], 'exit', 'tool-usage');
+    expect(mockAddFacts).toHaveBeenCalledWith(['User prefers dark mode'], 'exit', 'user-preferences');
+    expect(mockAddFacts).toHaveBeenCalledWith(['Project uses TypeScript'], 'exit', 'general');
+    expect(mockAddFacts).toHaveBeenCalledTimes(3);
+
     expect(fs.existsSync(tempFile)).toBe(false);
   });
 
   it('does not create RAGStore when no facts are extracted', async () => {
-    mockExtractFacts.mockResolvedValue([]);
+    mockExtractDomainFacts.mockResolvedValue([]);
     const { RAGStore } = await import('./rag.js');
 
     const payload = {
@@ -107,7 +120,7 @@ describe('rag-worker', () => {
 
     await runWorker(tempFile);
 
-    expect(mockExtractFacts).toHaveBeenCalled();
+    expect(mockExtractDomainFacts).toHaveBeenCalled();
     expect(RAGStore).not.toHaveBeenCalled();
     expect(fs.existsSync(tempFile)).toBe(false);
   });
@@ -123,5 +136,23 @@ describe('rag-worker', () => {
     await runWorker(tempFile);
 
     expect(mockLoadConfig).toHaveBeenCalledWith({ provider: 'openai', model: 'gpt-4o' });
+  });
+
+  it('handles partial domain extraction (only some domains have facts)', async () => {
+    mockExtractDomainFacts.mockResolvedValue([
+      { domain: 'general', facts: ['Project uses TypeScript'] },
+    ]);
+
+    const payload = {
+      serialized: 'User: test\nAssistant: ok',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5-20250929',
+    };
+    fs.writeFileSync(tempFile, JSON.stringify(payload));
+
+    await runWorker(tempFile);
+
+    expect(mockAddFacts).toHaveBeenCalledTimes(1);
+    expect(mockAddFacts).toHaveBeenCalledWith(['Project uses TypeScript'], 'exit', 'general');
   });
 });

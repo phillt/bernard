@@ -7,6 +7,7 @@ import {
   countRecentMessages,
   compressHistory,
   extractFacts,
+  extractDomainFacts,
   MODEL_CONTEXT_WINDOWS,
   DEFAULT_CONTEXT_WINDOW,
   COMPRESSION_THRESHOLD,
@@ -217,6 +218,138 @@ describe('countRecentMessages', () => {
   });
 });
 
+describe('extractDomainFacts', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('calls LLM once per domain (3 calls for 3 domains)', async () => {
+    mockGenerateText.mockResolvedValue({
+      text: '["some fact"]',
+    });
+
+    await extractDomainFacts('User: test\nAssistant: ok', makeConfig());
+    expect(mockGenerateText).toHaveBeenCalledTimes(3);
+  });
+
+  it('returns domain-tagged facts', async () => {
+    let callIndex = 0;
+    mockGenerateText.mockImplementation(async (opts: any) => {
+      callIndex++;
+      // Each domain produces a different fact
+      if (opts.system.includes('tool-usage pattern')) {
+        return { text: '["npm run build compiles project"]' };
+      }
+      if (opts.system.includes('user preference')) {
+        return { text: '["User prefers dark mode"]' };
+      }
+      return { text: '["Project uses TypeScript"]' };
+    });
+
+    const results = await extractDomainFacts('User: test\nAssistant: ok', makeConfig());
+    expect(results.length).toBe(3);
+
+    const domains = results.map(r => r.domain).sort();
+    expect(domains).toEqual(['general', 'tool-usage', 'user-preferences']);
+
+    const toolFacts = results.find(r => r.domain === 'tool-usage');
+    expect(toolFacts?.facts).toEqual(['npm run build compiles project']);
+  });
+
+  it('handles partial failures (one domain errors, others succeed)', async () => {
+    let callCount = 0;
+    mockGenerateText.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 2) {
+        throw new Error('API rate limit');
+      }
+      return { text: '["a fact"]' };
+    });
+
+    const results = await extractDomainFacts('User: test\nAssistant: ok', makeConfig());
+    // 2 of 3 domains should succeed
+    expect(results.length).toBe(2);
+  });
+
+  it('returns empty for empty input', async () => {
+    const results = await extractDomainFacts('', makeConfig());
+    expect(results).toEqual([]);
+    expect(mockGenerateText).not.toHaveBeenCalled();
+  });
+
+  it('returns empty for whitespace-only input', async () => {
+    const results = await extractDomainFacts('   ', makeConfig());
+    expect(results).toEqual([]);
+    expect(mockGenerateText).not.toHaveBeenCalled();
+  });
+
+  it('filters out domains with no facts', async () => {
+    mockGenerateText.mockImplementation(async (opts: any) => {
+      if (opts.system.includes('tool-usage pattern')) {
+        return { text: '[]' };
+      }
+      return { text: '["a fact"]' };
+    });
+
+    const results = await extractDomainFacts('User: test\nAssistant: ok', makeConfig());
+    const domains = results.map(r => r.domain);
+    expect(domains).not.toContain('tool-usage');
+  });
+
+  it('filters facts exceeding max length', async () => {
+    const longFact = 'x'.repeat(501);
+    mockGenerateText.mockResolvedValue({
+      text: JSON.stringify(['short fact', longFact]),
+    });
+
+    const results = await extractDomainFacts('User: test', makeConfig());
+    for (const r of results) {
+      for (const fact of r.facts) {
+        expect(fact.length).toBeLessThanOrEqual(500);
+      }
+    }
+  });
+});
+
+describe('extractFacts', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns flat array from all domains (backward compat)', async () => {
+    mockGenerateText.mockResolvedValue({
+      text: '["fact from this domain"]',
+    });
+
+    const facts = await extractFacts('User: test\nAssistant: ok', makeConfig());
+    // 3 domains, each producing 1 fact = 3 total
+    expect(facts).toHaveLength(3);
+    expect(facts.every(f => f === 'fact from this domain')).toBe(true);
+  });
+
+  it('returns empty array for empty input', async () => {
+    const facts = await extractFacts('', makeConfig());
+    expect(facts).toEqual([]);
+    expect(mockGenerateText).not.toHaveBeenCalled();
+  });
+
+  it('returns empty array when all domains fail', async () => {
+    mockGenerateText.mockRejectedValue(new Error('API error'));
+    const facts = await extractFacts('some text', makeConfig());
+    expect(facts).toEqual([]);
+  });
+
+  it('handles markdown code fence in response', async () => {
+    mockGenerateText.mockResolvedValue({
+      text: '```json\n["fact one", "fact two"]\n```',
+    });
+
+    const facts = await extractFacts('some conversation', makeConfig());
+    expect(facts).toContain('fact one');
+    expect(facts).toContain('fact two');
+  });
+});
+
 describe('compressHistory', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -299,17 +432,20 @@ describe('compressHistory', () => {
     expect(result).toEqual(history);
   });
 
-  it('runs fact extraction in parallel when ragStore is provided', async () => {
-    // First call = summarization, second call = extraction
-    let callCount = 0;
-    mockGenerateText.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) {
-        // Summarization call
+  it('stores facts with domain tags when ragStore is provided', async () => {
+    mockGenerateText.mockImplementation(async (opts: any) => {
+      // Summarization call has SUMMARIZATION_PROMPT
+      if (opts.system.includes('conversation summarizer')) {
         return { text: '- Summary of conversation' };
       }
-      // Extraction call
-      return { text: '["User prefers dark mode"]' };
+      // Domain extraction calls
+      if (opts.system.includes('tool-usage pattern')) {
+        return { text: '["npm run build worked"]' };
+      }
+      if (opts.system.includes('user preference')) {
+        return { text: '["User likes dark mode"]' };
+      }
+      return { text: '["Project uses TypeScript"]' };
     });
 
     const mockRagStore = {
@@ -323,10 +459,23 @@ describe('compressHistory', () => {
     }
 
     const result = await compressHistory(history, makeConfig(), mockRagStore);
-    // Both summarization and extraction should have been called
-    expect(mockGenerateText).toHaveBeenCalledTimes(2);
-    // ragStore.addFacts should have been called with extracted facts
-    expect(mockRagStore.addFacts).toHaveBeenCalledWith(['User prefers dark mode'], 'compression');
+
+    // Should call addFacts with domain tags
+    expect(mockRagStore.addFacts).toHaveBeenCalledWith(
+      expect.any(Array),
+      'compression',
+      'tool-usage',
+    );
+    expect(mockRagStore.addFacts).toHaveBeenCalledWith(
+      expect.any(Array),
+      'compression',
+      'user-preferences',
+    );
+    expect(mockRagStore.addFacts).toHaveBeenCalledWith(
+      expect.any(Array),
+      'compression',
+      'general',
+    );
     // Result should still be compressed
     expect(result[0].content).toContain('[Context Summary');
   });
@@ -346,75 +495,5 @@ describe('compressHistory', () => {
     // Only summarization call, no extraction
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
     expect(result[0].content).toContain('[Context Summary');
-  });
-});
-
-describe('extractFacts', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('extracts facts from conversation text', async () => {
-    mockGenerateText.mockResolvedValue({
-      text: '["User prefers dark mode", "Project uses TypeScript"]',
-    });
-
-    const facts = await extractFacts('User: I prefer dark mode\nAssistant: Noted!', makeConfig());
-    expect(facts).toEqual(['User prefers dark mode', 'Project uses TypeScript']);
-  });
-
-  it('returns empty array on LLM error', async () => {
-    mockGenerateText.mockRejectedValue(new Error('API error'));
-    const facts = await extractFacts('some text', makeConfig());
-    expect(facts).toEqual([]);
-  });
-
-  it('returns empty array for empty input', async () => {
-    const facts = await extractFacts('', makeConfig());
-    expect(facts).toEqual([]);
-    expect(mockGenerateText).not.toHaveBeenCalled();
-  });
-
-  it('filters non-string items from response', async () => {
-    mockGenerateText.mockResolvedValue({
-      text: '["valid fact", 42, null, "another fact"]',
-    });
-
-    const facts = await extractFacts('some conversation', makeConfig());
-    expect(facts).toEqual(['valid fact', 'another fact']);
-  });
-
-  it('filters facts exceeding max length', async () => {
-    const longFact = 'x'.repeat(501);
-    mockGenerateText.mockResolvedValue({
-      text: JSON.stringify(['short fact', longFact]),
-    });
-
-    const facts = await extractFacts('some conversation', makeConfig());
-    expect(facts).toEqual(['short fact']);
-  });
-
-  it('handles markdown code fence in response', async () => {
-    mockGenerateText.mockResolvedValue({
-      text: '```json\n["fact one", "fact two"]\n```',
-    });
-
-    const facts = await extractFacts('some conversation', makeConfig());
-    expect(facts).toEqual(['fact one', 'fact two']);
-  });
-
-  it('returns empty array when response is not valid JSON', async () => {
-    mockGenerateText.mockResolvedValue({
-      text: 'not json at all',
-    });
-
-    const facts = await extractFacts('some conversation', makeConfig());
-    expect(facts).toEqual([]);
-  });
-
-  it('returns empty array when response is empty', async () => {
-    mockGenerateText.mockResolvedValue({ text: '' });
-    const facts = await extractFacts('some conversation', makeConfig());
-    expect(facts).toEqual([]);
   });
 });
