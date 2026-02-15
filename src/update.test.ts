@@ -15,6 +15,11 @@ vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
 }));
 
+vi.mock('./output.js', () => ({
+  printInfo: vi.fn(),
+  printError: vi.fn(),
+}));
+
 const fsMock = await import('node:fs') as unknown as {
   existsSync: ReturnType<typeof vi.fn>;
   readFileSync: ReturnType<typeof vi.fn>;
@@ -30,7 +35,12 @@ const cpMock = await import('node:child_process') as unknown as {
   execSync: ReturnType<typeof vi.fn>;
 };
 
-import { compareSemver, getLocalVersion, checkForUpdate, applyUpdate, interactiveUpdate, startupUpdateCheck } from './update.js';
+const outputMock = await import('./output.js') as unknown as {
+  printInfo: ReturnType<typeof vi.fn>;
+  printError: ReturnType<typeof vi.fn>;
+};
+
+import { compareSemver, getLocalVersion, fetchLatestVersion, checkForUpdate, applyUpdate, interactiveUpdate, startupUpdateCheck } from './update.js';
 
 describe('compareSemver', () => {
   it('detects newer version', () => {
@@ -166,6 +176,22 @@ describe('checkForUpdate', () => {
   });
 });
 
+describe('fetchLatestVersion', () => {
+  beforeEach(() => {
+    httpsMock.get.mockReset();
+  });
+
+  it('rejects on non-200 status code', async () => {
+    mockHttpsGet('Not Found', 404);
+    await expect(fetchLatestVersion()).rejects.toThrow('Registry returned status 404');
+  });
+
+  it('rejects on invalid version format from registry', async () => {
+    mockHttpsGet(JSON.stringify({ version: 'not-semver' }));
+    await expect(fetchLatestVersion()).rejects.toThrow('No valid version field');
+  });
+});
+
 describe('applyUpdate', () => {
   beforeEach(() => {
     cpMock.execSync.mockReset();
@@ -184,6 +210,12 @@ describe('applyUpdate', () => {
     cpMock.execSync.mockImplementation(() => { throw new Error('npm failed'); });
     expect(() => applyUpdate('2.0.0')).toThrow('npm failed');
   });
+
+  it('rejects invalid version format', () => {
+    expect(() => applyUpdate('2.0.0; rm -rf /')).toThrow('Invalid version format');
+    expect(() => applyUpdate('not-a-version')).toThrow('Invalid version format');
+    expect(cpMock.execSync).not.toHaveBeenCalled();
+  });
 });
 
 describe('interactiveUpdate', () => {
@@ -194,12 +226,8 @@ describe('interactiveUpdate', () => {
     fsMock.mkdirSync.mockReturnValue(undefined);
     httpsMock.get.mockReset();
     cpMock.execSync.mockReset();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
+    outputMock.printInfo.mockReset();
+    outputMock.printError.mockReset();
   });
 
   it('prints already-latest message and auto-update tip', async () => {
@@ -208,8 +236,8 @@ describe('interactiveUpdate', () => {
 
     await interactiveUpdate();
 
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('latest version'));
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('auto-update'));
+    expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('latest version'));
+    expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('auto-update'));
   });
 
   it('applies update when available', async () => {
@@ -223,7 +251,7 @@ describe('interactiveUpdate', () => {
       'npm install -g bernard-agent@2.0.0',
       { stdio: 'inherit' }
     );
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Updated to v2.0.0'));
+    expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('Updated to v2.0.0'));
   });
 });
 
@@ -235,11 +263,7 @@ describe('startupUpdateCheck', () => {
     fsMock.mkdirSync.mockReturnValue(undefined);
     httpsMock.get.mockReset();
     cpMock.execSync.mockReset();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
+    outputMock.printInfo.mockReset();
   });
 
   it('is silent when no update available', async () => {
@@ -250,7 +274,7 @@ describe('startupUpdateCheck', () => {
     // Wait for the promise chain to resolve
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(console.log).not.toHaveBeenCalled();
+    expect(outputMock.printInfo).not.toHaveBeenCalled();
   });
 
   it('prints notification when update available and autoUpdate off', async () => {
@@ -260,8 +284,8 @@ describe('startupUpdateCheck', () => {
     startupUpdateCheck(false);
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Update available'));
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('bernard update'));
+    expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('Update available'));
+    expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('bernard update'));
   });
 
   it('applies update when autoUpdate is on', async () => {
@@ -276,6 +300,6 @@ describe('startupUpdateCheck', () => {
       'npm install -g bernard-agent@2.0.0',
       { stdio: 'inherit' }
     );
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Updated bernard'));
+    expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('Updated bernard'));
   });
 });
