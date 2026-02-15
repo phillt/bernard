@@ -345,15 +345,20 @@ export function emergencyTruncate(
   history: CoreMessage[],
   tokenBudget: number,
   systemPrompt: string,
+  currentUserMessage?: string,
 ): CoreMessage[] {
   const systemTokens = Math.ceil(systemPrompt.length / 4);
   const historyBudget = tokenBudget - systemTokens;
 
+  const taskHint = currentUserMessage
+    ? `\n\nThe user's most recent request was: "${currentUserMessage.slice(0, 500)}"`
+    : '';
+
   if (historyBudget <= 0) {
-    // System prompt alone exceeds budget — keep last 2 messages anyway
-    const kept = history.slice(-2);
+    // System prompt alone exceeds budget — keep last 6 messages anyway
+    const kept = history.slice(-6);
     return [
-      { role: 'user', content: '[Earlier conversation was truncated to fit context window]' },
+      { role: 'user', content: `[Earlier conversation was truncated to fit context window. Focus on the most recent messages below.]${taskHint}` },
       { role: 'assistant', content: 'Understood. Continuing with limited context.' },
       ...kept,
     ];
@@ -372,8 +377,8 @@ export function emergencyTruncate(
     if (i === 0) cutoff = 0;
   }
 
-  // Always keep at least 2 messages
-  const minKeep = Math.max(0, history.length - 2);
+  // Always keep at least 6 messages (covers 1-2 complete user turns with tool calls)
+  const minKeep = Math.max(0, history.length - 6);
   if (cutoff > minKeep) cutoff = minKeep;
 
   // Align cutoff backward to a 'user' message boundary so the kept
@@ -397,7 +402,7 @@ export function emergencyTruncate(
 
   const notice: CoreMessage = {
     role: 'user',
-    content: '[Earlier conversation was truncated to fit context window]',
+    content: `[Earlier conversation was truncated to fit context window. Focus on the most recent messages below.]${taskHint}`,
   };
   const ack: CoreMessage = {
     role: 'assistant',
