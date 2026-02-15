@@ -8,6 +8,10 @@ import {
   compressHistory,
   extractFacts,
   extractDomainFacts,
+  truncateToolResults,
+  estimateHistoryTokens,
+  emergencyTruncate,
+  isTokenOverflowError,
   MODEL_CONTEXT_WINDOWS,
   DEFAULT_CONTEXT_WINDOW,
   COMPRESSION_THRESHOLD,
@@ -495,5 +499,199 @@ describe('compressHistory', () => {
     // Only summarization call, no extraction
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
     expect(result[0].content).toContain('[Context Summary');
+  });
+});
+
+describe('truncateToolResults', () => {
+  it('truncates large tool-result content to maxChars', () => {
+    const bigResult = 'x'.repeat(20_000);
+    const messages: CoreMessage[] = [
+      {
+        role: 'tool',
+        content: [
+          { type: 'tool-result', toolCallId: 'tc1', result: bigResult },
+        ],
+      },
+    ];
+    const result = truncateToolResults(messages, 10_000);
+    const part = (result[0].content as any[])[0];
+    expect(part.result.length).toBeLessThan(bigResult.length);
+    expect(part.result).toContain('...[truncated from 20000 to 10000 chars]');
+  });
+
+  it('preserves small tool results unchanged', () => {
+    const smallResult = 'hello world';
+    const messages: CoreMessage[] = [
+      {
+        role: 'tool',
+        content: [
+          { type: 'tool-result', toolCallId: 'tc1', result: smallResult },
+        ],
+      },
+    ];
+    const result = truncateToolResults(messages, 10_000);
+    const part = (result[0].content as any[])[0];
+    expect(part.result).toBe(smallResult);
+  });
+
+  it('passes non-tool messages through unchanged', () => {
+    const messages: CoreMessage[] = [
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'Hi there!' },
+    ];
+    const result = truncateToolResults(messages, 100);
+    expect(result).toEqual(messages);
+  });
+
+  it('appends truncation notice with original size', () => {
+    const messages: CoreMessage[] = [
+      {
+        role: 'tool',
+        content: [
+          { type: 'tool-result', toolCallId: 'tc1', result: 'a'.repeat(500) },
+        ],
+      },
+    ];
+    const result = truncateToolResults(messages, 100);
+    const part = (result[0].content as any[])[0];
+    expect(part.result).toContain('truncated from 500 to 100 chars');
+  });
+
+  it('does not mutate original messages', () => {
+    const original = 'x'.repeat(500);
+    const messages: CoreMessage[] = [
+      {
+        role: 'tool',
+        content: [
+          { type: 'tool-result', toolCallId: 'tc1', result: original },
+        ],
+      },
+    ];
+    truncateToolResults(messages, 100);
+    const part = (messages[0].content as any[])[0];
+    expect(part.result).toBe(original);
+  });
+});
+
+describe('estimateHistoryTokens', () => {
+  it('returns reasonable estimates for string content', () => {
+    const messages: CoreMessage[] = [
+      { role: 'user', content: 'Hello world' },
+    ];
+    const tokens = estimateHistoryTokens(messages);
+    // "Hello world" is 11 chars + JSON quotes = 13 chars. 13 / 3.6 ≈ 4
+    expect(tokens).toBeGreaterThan(0);
+    expect(tokens).toBeLessThan(100);
+  });
+
+  it('handles tool-call and tool-result messages', () => {
+    const messages: CoreMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'tc1', toolName: 'shell', args: { command: 'ls -la' } },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          { type: 'tool-result', toolCallId: 'tc1', result: 'file1.ts\nfile2.ts' },
+        ],
+      },
+    ];
+    const tokens = estimateHistoryTokens(messages);
+    expect(tokens).toBeGreaterThan(0);
+  });
+
+  it('scales roughly with content size', () => {
+    const small: CoreMessage[] = [{ role: 'user', content: 'hi' }];
+    const large: CoreMessage[] = [{ role: 'user', content: 'x'.repeat(10_000) }];
+    const smallTokens = estimateHistoryTokens(small);
+    const largeTokens = estimateHistoryTokens(large);
+    expect(largeTokens).toBeGreaterThan(smallTokens * 100);
+  });
+});
+
+describe('emergencyTruncate', () => {
+  it('drops oldest messages until under budget', () => {
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      history.push({ role: 'user', content: `message ${i} ${'x'.repeat(1000)}` });
+      history.push({ role: 'assistant', content: `response ${i} ${'y'.repeat(1000)}` });
+    }
+    // Small budget that can't fit everything
+    const result = emergencyTruncate(history, 5000, 'system prompt');
+    expect(result.length).toBeLessThan(history.length);
+    // Should have truncation notice
+    expect(result[0].content).toContain('truncated to fit context window');
+    expect(result[1].content).toContain('Understood');
+  });
+
+  it('preserves at least 2 messages', () => {
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 10; i++) {
+      history.push({ role: 'user', content: `msg ${i} ${'x'.repeat(5000)}` });
+      history.push({ role: 'assistant', content: `resp ${i} ${'y'.repeat(5000)}` });
+    }
+    // Very small budget
+    const result = emergencyTruncate(history, 100, 'system');
+    // notice + ack + at least 2 original messages
+    expect(result.length).toBeGreaterThanOrEqual(4);
+    // Last two messages from original should be present
+    expect(result[result.length - 1].content).toContain('resp 9');
+    expect(result[result.length - 2].content).toContain('msg 9');
+  });
+
+  it('prepends truncation notice', () => {
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 10; i++) {
+      history.push({ role: 'user', content: `msg ${i} ${'x'.repeat(1000)}` });
+      history.push({ role: 'assistant', content: `resp ${i}` });
+    }
+    const result = emergencyTruncate(history, 2000, 'system');
+    expect(result[0].role).toBe('user');
+    expect(result[0].content).toContain('truncated to fit context window');
+    expect(result[1].role).toBe('assistant');
+    expect(result[1].content).toContain('Understood');
+  });
+
+  it('returns original history when everything fits', () => {
+    const history: CoreMessage[] = [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+    ];
+    const result = emergencyTruncate(history, 100_000, 'system');
+    expect(result).toEqual(history);
+  });
+});
+
+describe('isTokenOverflowError', () => {
+  it('matches Anthropic-style error', () => {
+    expect(isTokenOverflowError(
+      "This model's maximum prompt length is 131072 but the request contains 134090 tokens"
+    )).toBe(true);
+  });
+
+  it('matches OpenAI-style error', () => {
+    expect(isTokenOverflowError(
+      "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens."
+    )).toBe(false); // "context length" without "exceeded"
+    expect(isTokenOverflowError(
+      "context length exceeded"
+    )).toBe(true);
+  });
+
+  it('matches prompt too long error', () => {
+    expect(isTokenOverflowError('prompt too long')).toBe(true);
+  });
+
+  it('matches token limit error', () => {
+    expect(isTokenOverflowError('Request exceeds token limit')).toBe(true);
+  });
+
+  it('does not match unrelated errors', () => {
+    expect(isTokenOverflowError('API rate limit exceeded')).toBe(false);
+    expect(isTokenOverflowError('Network timeout')).toBe(false);
+    expect(isTokenOverflowError('Invalid API key')).toBe(false);
   });
 });
