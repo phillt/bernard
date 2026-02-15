@@ -306,11 +306,12 @@ program
   .command('auto-update <state>')
   .description('Enable or disable automatic updates (on/off)')
   .action((state: string) => {
-    const enabled = state.toLowerCase() === 'on';
-    if (state.toLowerCase() !== 'on' && state.toLowerCase() !== 'off') {
+    const lower = state.toLowerCase();
+    if (lower !== 'on' && lower !== 'off') {
       printError('Usage: bernard auto-update <on|off>');
       process.exit(1);
     }
+    const enabled = lower === 'on';
     const prefs = loadPreferences();
     savePreferences({
       provider: prefs.provider || 'anthropic',
