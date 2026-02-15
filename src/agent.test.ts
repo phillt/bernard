@@ -31,6 +31,11 @@ vi.mock('./output.js', () => ({
 vi.mock('./context.js', () => ({
   shouldCompress: vi.fn(() => false),
   compressHistory: vi.fn((history: any) => Promise.resolve(history)),
+  truncateToolResults: vi.fn((messages: any) => messages),
+  estimateHistoryTokens: vi.fn(() => 1000),
+  emergencyTruncate: vi.fn((history: any) => history),
+  isTokenOverflowError: vi.fn(() => false),
+  getContextWindow: vi.fn(() => 200_000),
 }));
 
 const mockSubAgentTool = { description: 'mock sub-agent', execute: vi.fn() };
@@ -325,5 +330,76 @@ describe('Agent', () => {
       expect.any(Object),
       mockRagStore,
     );
+  });
+
+  it('truncates tool results before adding to history', async () => {
+    const { truncateToolResults } = await import('./context.js');
+    const responseMessages = [
+      { role: 'assistant', content: 'Here is the result' },
+      {
+        role: 'tool',
+        content: [{ type: 'tool-result', toolCallId: 'tc1', result: 'x'.repeat(50_000) }],
+      },
+    ];
+
+    mockGenerateText.mockResolvedValue({
+      response: { messages: responseMessages },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+
+    expect(truncateToolResults).toHaveBeenCalledWith(responseMessages);
+  });
+
+  it('pre-flight guard triggers emergency truncation when estimated tokens exceed limit', async () => {
+    const { estimateHistoryTokens, emergencyTruncate, getContextWindow } = await import('./context.js');
+    // Simulate high token estimate: 190k estimated vs 200k * 0.9 = 180k limit
+    vi.mocked(estimateHistoryTokens).mockReturnValue(185_000);
+    vi.mocked(getContextWindow).mockReturnValue(200_000);
+
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+
+    expect(emergencyTruncate).toHaveBeenCalled();
+  });
+
+  it('catch-and-retry triggers on token overflow error', async () => {
+    const { isTokenOverflowError, emergencyTruncate } = await import('./context.js');
+    vi.mocked(isTokenOverflowError).mockReturnValue(true);
+
+    let callCount = 0;
+    mockGenerateText.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        throw new Error("This model's maximum prompt length is 131072 but the request contains 134090 tokens");
+      }
+      return {
+        response: { messages: [{ role: 'assistant', content: 'Recovered!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      };
+    });
+
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+
+    // generateText called twice (first fails, second succeeds)
+    expect(mockGenerateText).toHaveBeenCalledTimes(2);
+    expect(emergencyTruncate).toHaveBeenCalled();
+  });
+
+  it('non-token errors still throw normally', async () => {
+    const { isTokenOverflowError } = await import('./context.js');
+    vi.mocked(isTokenOverflowError).mockReturnValue(false);
+
+    mockGenerateText.mockRejectedValue(new Error('API rate limit'));
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await expect(agent.processInput('Hello')).rejects.toThrow('Agent error: API rate limit');
   });
 });
