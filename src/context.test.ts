@@ -627,7 +627,7 @@ describe('emergencyTruncate', () => {
     expect(result[1].content).toContain('Understood');
   });
 
-  it('preserves at least 2 messages', () => {
+  it('preserves at least 6 messages', () => {
     const history: CoreMessage[] = [];
     for (let i = 0; i < 10; i++) {
       history.push({ role: 'user', content: `msg ${i} ${'x'.repeat(5000)}` });
@@ -635,8 +635,8 @@ describe('emergencyTruncate', () => {
     }
     // Very small budget
     const result = emergencyTruncate(history, 100, 'system');
-    // notice + ack + at least 2 original messages
-    expect(result.length).toBeGreaterThanOrEqual(4);
+    // notice + ack + at least 6 original messages
+    expect(result.length).toBeGreaterThanOrEqual(8);
     // Last two messages from original should be present
     expect(result[result.length - 1].content).toContain('resp 9');
     expect(result[result.length - 2].content).toContain('msg 9');
@@ -695,6 +695,26 @@ describe('emergencyTruncate', () => {
     if (keptOriginal.length > 0) {
       expect(keptOriginal[0].role).toBe('user');
     }
+  });
+
+  it('includes task hint when currentUserMessage is provided', () => {
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 10; i++) {
+      history.push({ role: 'user', content: `msg ${i} ${'x'.repeat(1000)}` });
+      history.push({ role: 'assistant', content: `resp ${i}` });
+    }
+    const result = emergencyTruncate(history, 2000, 'system', 'please fix the login bug');
+    expect(result[0].content).toContain('please fix the login bug');
+  });
+
+  it('omits task hint when currentUserMessage is not provided', () => {
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 10; i++) {
+      history.push({ role: 'user', content: `msg ${i} ${'x'.repeat(1000)}` });
+      history.push({ role: 'assistant', content: `resp ${i}` });
+    }
+    const result = emergencyTruncate(history, 2000, 'system');
+    expect(result[0].content).not.toContain('most recent request');
   });
 
   it('aligns backward to user boundary instead of forward, preserving min-keep', () => {

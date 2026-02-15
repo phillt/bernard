@@ -191,6 +191,10 @@ const SUMMARIZATION_PROMPT = `You are a conversation summarizer. Produce a conci
 - Any user preferences or requirements mentioned
 - The overall arc of what was discussed and accomplished
 
+For each task or goal mentioned, clearly mark its status:
+- COMPLETED — if the task was finished or resolved
+- IN PROGRESS — if the task is still ongoing and unfinished
+
 Be concise but complete. Use bullet points. Do not include greetings or filler.`;
 
 /**
@@ -254,7 +258,7 @@ export async function compressHistory(
 
     const summaryMessage: CoreMessage = {
       role: 'user',
-      content: `[Context Summary — earlier conversation was compressed]\n\n${summary}`,
+      content: `[Context Summary — earlier conversation was compressed. This is background context only. Focus on the messages that follow for the current task.]\n\n${summary}`,
     };
 
     const ackMessage: CoreMessage = {
@@ -334,22 +338,27 @@ export function estimateHistoryTokens(history: CoreMessage[]): number {
 
 /**
  * Progressively drop oldest messages until estimated tokens fit within budget.
- * Always keeps at least the last 2 messages so the model has some context.
+ * Always keeps at least the last 6 messages so the model has some context.
  * Prepends a synthetic truncation notice.
  */
 export function emergencyTruncate(
   history: CoreMessage[],
   tokenBudget: number,
   systemPrompt: string,
+  currentUserMessage?: string,
 ): CoreMessage[] {
   const systemTokens = Math.ceil(systemPrompt.length / 4);
   const historyBudget = tokenBudget - systemTokens;
 
+  const taskHint = currentUserMessage
+    ? `\n\nThe user's most recent request was: ${currentUserMessage.slice(0, 500)}`
+    : '';
+
   if (historyBudget <= 0) {
-    // System prompt alone exceeds budget — keep last 2 messages anyway
-    const kept = history.slice(-2);
+    // System prompt alone exceeds budget — keep last 6 messages anyway
+    const kept = history.slice(-6);
     return [
-      { role: 'user', content: '[Earlier conversation was truncated to fit context window]' },
+      { role: 'user', content: `[Earlier conversation was truncated to fit context window. Focus on the most recent messages below.]${taskHint}` },
       { role: 'assistant', content: 'Understood. Continuing with limited context.' },
       ...kept,
     ];
@@ -368,8 +377,8 @@ export function emergencyTruncate(
     if (i === 0) cutoff = 0;
   }
 
-  // Always keep at least 2 messages
-  const minKeep = Math.max(0, history.length - 2);
+  // Always keep at least 6 messages (covers 1-2 complete user turns with tool calls)
+  const minKeep = Math.max(0, history.length - 6);
   if (cutoff > minKeep) cutoff = minKeep;
 
   // Align cutoff backward to a 'user' message boundary so the kept
@@ -393,7 +402,7 @@ export function emergencyTruncate(
 
   const notice: CoreMessage = {
     role: 'user',
-    content: '[Earlier conversation was truncated to fit context window]',
+    content: `[Earlier conversation was truncated to fit context window. Focus on the most recent messages below.]${taskHint}`,
   };
   const ack: CoreMessage = {
     role: 'assistant',
