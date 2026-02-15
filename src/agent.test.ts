@@ -431,6 +431,37 @@ describe('Agent', () => {
     );
   });
 
+  it('retry uses 0.6 ratio when pre-flight already truncated', async () => {
+    const { isTokenOverflowError, emergencyTruncate, estimateHistoryTokens, getContextWindow } = await import('./context.js');
+
+    // Make pre-flight trigger by reporting high token estimate
+    vi.mocked(estimateHistoryTokens).mockReturnValue(185_000);
+    vi.mocked(getContextWindow).mockReturnValue(200_000);
+    vi.mocked(isTokenOverflowError).mockReturnValue(true);
+
+    let callCount = 0;
+    mockGenerateText.mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        throw new Error("This model's maximum prompt length exceeded");
+      }
+      return {
+        response: { messages: [{ role: 'assistant', content: 'Recovered!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      };
+    });
+
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+
+    // emergencyTruncate called twice: pre-flight + retry
+    expect(emergencyTruncate).toHaveBeenCalledTimes(2);
+
+    // Second call (retry) should use contextWindow * 0.6 = 120_000
+    const retryCall = vi.mocked(emergencyTruncate).mock.calls[1];
+    expect(retryCall[1]).toBe(200_000 * 0.6);
+  });
+
   it('non-token errors still throw normally', async () => {
     const { isTokenOverflowError } = await import('./context.js');
     vi.mocked(isTokenOverflowError).mockReturnValue(false);
