@@ -12,6 +12,7 @@ import { printHelp, printInfo, printError, printConversationReplay, startSpinner
 import type { ToolOptions } from './tools';
 import { PROVIDER_MODELS, getAvailableProviders, getDefaultModel, savePreferences, OPTIONS_REGISTRY, saveOption, type BernardConfig } from './config.js';
 import { getTheme, setTheme, getThemeKeys, getActiveThemeKey, THEMES } from './theme.js';
+import { interactiveUpdate } from './update.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
@@ -31,6 +32,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     { command: '/model',    description: 'Switch model for current provider' },
     { command: '/theme',    description: 'Switch color theme' },
     { command: '/options',  description: 'View and set options (max-tokens, shell-timeout)' },
+    { command: '/update',   description: 'Check for and install updates' },
     { command: '/exit',     description: 'Quit Bernard' },
   ];
 
@@ -567,6 +569,12 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
           prompt();
         }
       });
+      return;
+    }
+
+    if (trimmed === '/update') {
+      await interactiveUpdate();
+      prompt();
       return;
     }
 
