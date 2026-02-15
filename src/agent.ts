@@ -188,7 +188,7 @@ export class Agent {
       const baseTools = createTools(this.toolOptions, this.memoryStore, this.mcpTools);
       const tools = {
         ...baseTools,
-        agent: createSubAgentTool(this.config, this.toolOptions, this.memoryStore, this.mcpTools),
+        agent: createSubAgentTool(this.config, this.toolOptions, this.memoryStore, this.mcpTools, this.ragStore),
       };
 
       const callGenerateText = () => generateText({

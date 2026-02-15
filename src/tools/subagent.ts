@@ -3,8 +3,11 @@ import { z } from 'zod';
 import { getModel } from '../providers/index.js';
 import { createTools, type ToolOptions } from './index.js';
 import { printSubAgentStart, printSubAgentEnd, printToolCall, printToolResult, printAssistantText } from '../output.js';
+import { debugLog } from '../logger.js';
+import { buildMemoryContext } from '../memory-context.js';
 import type { BernardConfig } from '../config.js';
 import type { MemoryStore } from '../memory.js';
+import type { RAGStore } from '../rag.js';
 
 const MAX_CONCURRENT_AGENTS = 4;
 
@@ -32,6 +35,7 @@ export function createSubAgentTool(
   options: ToolOptions,
   memoryStore: MemoryStore,
   mcpTools?: Record<string, any>,
+  ragStore?: RAGStore,
 ) {
   return tool({
     description: 'Delegate a task to an independent sub-agent that runs in parallel. Each sub-agent gets its own tool set and works independently. Call this tool multiple times in a single response to run tasks in parallel.',
@@ -58,12 +62,31 @@ export function createSubAgentTool(
           userMessage += `\n\nContext: ${context}`;
         }
 
+        // RAG search using task text as query
+        let ragResults;
+        if (ragStore) {
+          try {
+            ragResults = await ragStore.search(task);
+            if (ragResults.length > 0) {
+              debugLog('subagent:rag', { query: task.slice(0, 100), results: ragResults.length });
+            }
+          } catch (err) {
+            debugLog('subagent:rag:error', err instanceof Error ? err.message : String(err));
+          }
+        }
+
+        const enrichedPrompt = SUB_AGENT_SYSTEM_PROMPT + buildMemoryContext({
+          memoryStore,
+          ragResults,
+          includeScratch: true,
+        });
+
         const result = await generateText({
           model: getModel(config.provider, config.model),
           tools: baseTools,
           maxSteps: 10,
           maxTokens: config.maxTokens,
-          system: SUB_AGENT_SYSTEM_PROMPT,
+          system: enrichedPrompt,
           messages: [{ role: 'user', content: userMessage }],
           abortSignal: execOptions.abortSignal,
           onStepFinish: ({ text, toolCalls, toolResults }) => {

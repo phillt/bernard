@@ -12,8 +12,14 @@ vi.mock('node:fs', () => ({
   renameSync: vi.fn(),
 }));
 
+const fs = await import('node:fs');
+
 vi.mock('../providers/index.js', () => ({
   getModel: vi.fn(() => ({ modelId: 'mock' })),
+}));
+
+vi.mock('../logger.js', () => ({
+  debugLog: vi.fn(),
 }));
 
 const mockPrintSubAgentStart = vi.fn();
@@ -65,6 +71,9 @@ describe('subagent tool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     _resetSubAgentState();
+    vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readFileSync).mockReturnValue('');
     memoryStore = new MemoryStore();
   });
 
@@ -176,5 +185,86 @@ describe('subagent tool', () => {
 
     expect(mockPrintSubAgentStart).toHaveBeenNthCalledWith(1, 1, 'first');
     expect(mockPrintSubAgentStart).toHaveBeenNthCalledWith(2, 2, 'second');
+  });
+
+  // --- Memory/RAG injection tests ---
+
+  it('includes RAG context in system prompt when ragStore is provided', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([
+        { fact: 'User prefers dark mode', similarity: 0.85, domain: 'user-preferences' },
+      ]),
+    };
+
+    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore, undefined, mockRagStore as any);
+    await agentTool.execute!({ task: 'check preferences' }, { toolCallId: '1', messages: [], abortSignal: undefined as any });
+
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('Recalled Context');
+    expect(call.system).toContain('User prefers dark mode');
+  });
+
+  it('includes persistent memory in system prompt', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    vi.mocked(fs.readdirSync).mockReturnValue(['prefs.md'] as any);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue('dark mode enabled');
+    memoryStore = new MemoryStore();
+
+    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    await agentTool.execute!({ task: 'test' }, { toolCallId: '1', messages: [], abortSignal: undefined as any });
+
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('Persistent Memory');
+    expect(call.system).toContain('dark mode enabled');
+  });
+
+  it('includes scratch notes in system prompt', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    memoryStore.writeScratch('plan', 'step 1 done');
+
+    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    await agentTool.execute!({ task: 'test' }, { toolCallId: '1', messages: [], abortSignal: undefined as any });
+
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('Scratch Notes');
+    expect(call.system).toContain('step 1 done');
+  });
+
+  it('works without ragStore (graceful degradation)', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    await agentTool.execute!({ task: 'test' }, { toolCallId: '1', messages: [], abortSignal: undefined as any });
+
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('sub-agent of Bernard');
+    expect(call.system).not.toContain('Recalled Context');
+  });
+
+  it('gracefully degrades when RAG search throws', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    const mockRagStore = {
+      search: vi.fn().mockRejectedValue(new Error('embedding failed')),
+    };
+
+    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore, undefined, mockRagStore as any);
+    const result = await agentTool.execute!({ task: 'test' }, { toolCallId: '1', messages: [], abortSignal: undefined as any });
+
+    expect(result).toBe('Done');
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).not.toContain('Recalled Context');
+  });
+
+  it('uses task text as RAG search query', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([]),
+    };
+
+    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore, undefined, mockRagStore as any);
+    await agentTool.execute!({ task: 'check disk usage' }, { toolCallId: '1', messages: [], abortSignal: undefined as any });
+
+    expect(mockRagStore.search).toHaveBeenCalledWith('check disk usage');
   });
 });
