@@ -696,6 +696,37 @@ describe('emergencyTruncate', () => {
       expect(keptOriginal[0].role).toBe('user');
     }
   });
+
+  it('aligns backward to user boundary instead of forward, preserving min-keep', () => {
+    // History ending with assistant+tool, then assistant — no trailing user message.
+    // A forward scan would skip past the last 2 messages, violating min-keep.
+    const history: CoreMessage[] = [
+      { role: 'user', content: `u1 ${'x'.repeat(2000)}` },
+      { role: 'assistant', content: `a1 ${'y'.repeat(2000)}` },
+      { role: 'user', content: `u2 ${'x'.repeat(2000)}` },
+      { role: 'assistant', content: [
+        { type: 'tool-call', toolCallId: 'tc1', toolName: 'shell', args: { command: 'ls' } },
+      ] as any },
+      { role: 'tool', content: [
+        { type: 'tool-result', toolCallId: 'tc1', result: 'output' },
+      ] as any },
+      { role: 'assistant', content: 'final response' },
+    ];
+
+    // Tiny budget forces min-keep (last 2 messages)
+    const result = emergencyTruncate(history, 100, 'system');
+    // Should include at least the truncation notice pair + kept messages
+    expect(result.length).toBeGreaterThanOrEqual(4);
+    // The first kept original message should be a user, found by backward scan
+    const keptOriginal = result.filter(
+      m => !(typeof m.content === 'string' && (
+        m.content.includes('truncated to fit context window') ||
+        m.content.includes('Continuing with limited context')
+      )),
+    );
+    expect(keptOriginal.length).toBeGreaterThanOrEqual(2);
+    expect(keptOriginal[0].role).toBe('user');
+  });
 });
 
 describe('isTokenOverflowError', () => {
