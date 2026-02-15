@@ -498,22 +498,29 @@ Bernard automatically compresses conversation history when it approaches 75% of 
 
 1. Recent messages (last 4 turns) are preserved in full
 2. Older messages are summarized by the LLM into a concise recap
-3. Key facts are extracted and stored in the RAG memory system
+3. Key facts are extracted per domain (tool usage, user preferences, general knowledge) and stored in the RAG memory system
 4. The conversation continues seamlessly with the compressed context
 
-Scratch notes survive compression, so multi-step task progress is never lost.
+Summarization and domain-specific fact extraction run in parallel. Scratch notes survive compression, so multi-step task progress is never lost.
 
 ### RAG Memory
 
 Bernard has a Retrieval-Augmented Generation (RAG) system that provides long-term memory beyond the current session:
 
-- **Automatic fact extraction** — when context is compressed, key facts are extracted and stored with embeddings
+- **Domain-specific extraction** — facts are extracted into three specialized domains, each with its own LLM prompt:
+  - **Tool Usage Patterns** — command sequences, error resolutions, build/deploy workflows
+  - **User Preferences** — communication style, workflow conventions, repeated instructions
+  - **General Knowledge** — project structure, architecture decisions, environment info
+- **Parallel extraction** — all three domain extractors run concurrently via `Promise.allSettled`, so wall-clock latency is roughly the same as a single extraction
+- **Per-domain retrieval** — search returns up to 3 results per domain (9 total max), preventing any single domain from crowding out others
+- **Domain-grouped context** — recalled facts are organized by domain with headings in the system prompt, giving the LLM clear signal about what kind of knowledge each fact represents
 - **Semantic search** — on each new user message, relevant facts are retrieved and injected into the system prompt as "Recalled Context"
 - **Local embeddings** — uses FastEmbed (`AllMiniLML6V2`, 384 dimensions) for fully local embedding computation
 - **Deduplication** — facts too similar to existing ones (>92% cosine similarity) are skipped
 - **Pruning** — older, less-accessed facts decay over time (90-day half-life); the store caps at 5000 facts
+- **Backward compatible** — existing memories without a domain are automatically assigned to "general" on load
 
-Use `/rag` in the REPL to see RAG stats and recent facts.
+Use `/rag` in the REPL to see RAG stats, per-domain breakdown, and recent facts.
 
 Storage: `~/.bernard/rag/memories.json`
 
@@ -610,8 +617,9 @@ src/
 ├── output.ts             # Terminal formatting (Chalk)
 ├── theme.ts              # Color theme definitions and switching
 ├── memory.ts             # MemoryStore (persistent + scratch)
-├── context.ts            # Context compression
-├── rag.ts                # RAG store (embeddings + search)
+├── context.ts            # Context compression + domain fact extraction
+├── domains.ts            # Memory domain registry + extraction prompts
+├── rag.ts                # RAG store (domain-tagged embeddings + per-domain search)
 ├── embeddings.ts         # FastEmbed wrapper
 ├── mcp.ts                # MCP server manager
 ├── rag-worker.ts         # Background RAG fact extraction worker

@@ -931,13 +931,13 @@
         </div>
         <div class="memory-card">
           <div class="memory-icon">2</div>
-          <h3>Facts are extracted and embedded</h3>
-          <p>When conversations get long, Bernard compresses history and extracts important facts into vector embeddings stored on disk.</p>
+          <h3>Facts are extracted by domain</h3>
+          <p>When conversations get long, Bernard compresses history and extracts facts into three domains&mdash;tool usage patterns, user preferences, and general knowledge&mdash;each with a specialized prompt.</p>
         </div>
         <div class="memory-card">
           <div class="memory-icon">3</div>
           <h3>Context is recalled automatically</h3>
-          <p>Each new message is matched against past observations. Relevant facts surface in context without you having to repeat yourself.</p>
+          <p>Each new message retrieves relevant facts per domain. Results are organized by category so Bernard knows whether it's recalling a command pattern, your preference, or a project detail.</p>
         </div>
       </div>
 
@@ -949,6 +949,10 @@
         <div class="memory-detail">
           <span class="memory-detail-label">Embeddings</span>
           <span>Runs locally via fastembed, no API calls</span>
+        </div>
+        <div class="memory-detail">
+          <span class="memory-detail-label">Domains</span>
+          <span>Three specialized extractors: <code>tool-usage</code>, <code>user-preferences</code>, <code>general</code></span>
         </div>
         <div class="memory-detail">
           <span class="memory-detail-label">Deduplication</span>
