@@ -206,7 +206,15 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
   if (resume) {
     const loaded = historyStore.load();
     if (loaded.length > 0) {
-      initialHistory = loaded;
+      const boundary: import('ai').CoreMessage = {
+        role: 'user',
+        content: '[Previous session ended. New session starting. Treat tasks from prior session as completed unless the user explicitly continues them.]',
+      };
+      const boundaryAck: import('ai').CoreMessage = {
+        role: 'assistant',
+        content: 'Understood. Starting a new session. I\'ll only reference prior context if relevant to your current request.',
+      };
+      initialHistory = [...loaded, boundary, boundaryAck];
       printConversationReplay(loaded);
     } else {
       printInfo('No previous conversation found — starting fresh.');
