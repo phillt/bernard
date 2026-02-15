@@ -158,14 +158,15 @@ export function startupUpdateCheck(autoUpdate: boolean): void {
 
       if (autoUpdate) {
         try {
+          printInfo(`\n  Applying update to v${result.latestVersion}...`);
           applyUpdate(result.latestVersion);
-          console.log(`\n  Updated bernard to v${result.latestVersion}. Restart to use the new version.\n`);
+          printInfo(`  Updated bernard to v${result.latestVersion}. Restart to use the new version.\n`);
         } catch {
-          console.log(`\n  Update to v${result.latestVersion} failed. Run: bernard update\n`);
+          printInfo(`\n  Update to v${result.latestVersion} failed. Run: bernard update\n`);
         }
       } else {
-        console.log(`\n  Update available: v${result.currentVersion} → v${result.latestVersion}`);
-        console.log(`  Run: bernard update\n`);
+        printInfo(`\n  Update available: v${result.currentVersion} → v${result.latestVersion}`);
+        printInfo(`  Run: bernard update\n`);
       }
     })
     .catch(() => {
@@ -177,25 +178,25 @@ export function startupUpdateCheck(autoUpdate: boolean): void {
  * Interactive update flow for /update and `bernard update`.
  */
 export async function interactiveUpdate(): Promise<void> {
-  console.log('\n  Checking for updates...');
+  printInfo('\n  Checking for updates...');
 
   try {
     const result = await checkForUpdate(true);
 
     if (!result.updateAvailable) {
-      console.log(`  You're on the latest version (v${result.currentVersion}).`);
-      console.log(`  Tip: Run "bernard auto-update on" to enable automatic updates.\n`);
+      printInfo(`  You're on the latest version (v${result.currentVersion}).`);
+      printInfo(`  Tip: Run "bernard auto-update on" to enable automatic updates.\n`);
       return;
     }
 
-    console.log(`  Update available: v${result.currentVersion} → v${result.latestVersion}`);
-    console.log(`  Installing...\n`);
+    printInfo(`  Update available: v${result.currentVersion} → v${result.latestVersion}`);
+    printInfo(`  Installing...\n`);
 
     applyUpdate(result.latestVersion);
 
-    console.log(`\n  Updated to v${result.latestVersion}. Restart bernard to use the new version.\n`);
+    printInfo(`\n  Updated to v${result.latestVersion}. Restart bernard to use the new version.\n`);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`  Update failed: ${message}\n`);
+    printError(`  Update failed: ${message}\n`);
   }
 }
