@@ -3,11 +3,13 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { getEmbeddingProvider, cosineSimilarity } from './embeddings.js';
 import { debugLog } from './logger.js';
+import { DEFAULT_DOMAIN } from './domains.js';
 
 const RAG_DIR = path.join(os.homedir(), '.bernard', 'rag');
 const MEMORIES_FILE = path.join(RAG_DIR, 'memories.json');
 
-const DEFAULT_TOP_K = 5;
+const DEFAULT_TOP_K_PER_DOMAIN = 3;
+const DEFAULT_MAX_RESULTS = 9;
 const DEFAULT_SIMILARITY_THRESHOLD = 0.35;
 const DEFAULT_MAX_MEMORIES = 5000;
 const DEDUP_THRESHOLD = 0.92;
@@ -19,6 +21,7 @@ export interface RAGMemory {
   fact: string;
   embedding: number[];
   source: string;
+  domain: string;
   createdAt: string;
   accessCount: number;
   lastAccessed?: string;
@@ -27,22 +30,26 @@ export interface RAGMemory {
 export interface RAGSearchResult {
   fact: string;
   similarity: number;
+  domain: string;
 }
 
 export interface RAGStoreConfig {
-  topK?: number;
+  topKPerDomain?: number;
+  maxResults?: number;
   similarityThreshold?: number;
   maxMemories?: number;
 }
 
 export class RAGStore {
   private memories: RAGMemory[] = [];
-  private topK: number;
+  private topKPerDomain: number;
+  private maxResults: number;
   private similarityThreshold: number;
   private maxMemories: number;
 
   constructor(config?: RAGStoreConfig) {
-    this.topK = config?.topK ?? DEFAULT_TOP_K;
+    this.topKPerDomain = config?.topKPerDomain ?? DEFAULT_TOP_K_PER_DOMAIN;
+    this.maxResults = config?.maxResults ?? DEFAULT_MAX_RESULTS;
     this.similarityThreshold = config?.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD;
     this.maxMemories = config?.maxMemories ?? DEFAULT_MAX_MEMORIES;
 
@@ -78,7 +85,7 @@ export class RAGStore {
    * Embed and store new facts. Deduplicates against existing memories.
    * Returns the number of facts actually added.
    */
-  async addFacts(facts: string[], source: string): Promise<number> {
+  async addFacts(facts: string[], source: string, domain: string = DEFAULT_DOMAIN): Promise<number> {
     if (facts.length === 0) return 0;
 
     const provider = await getEmbeddingProvider();
@@ -116,6 +123,7 @@ export class RAGStore {
         fact,
         embedding,
         source,
+        domain,
         createdAt: now,
         accessCount: 0,
       });
@@ -127,13 +135,14 @@ export class RAGStore {
       this.persist();
     }
 
-    debugLog('rag:addFacts', { added, total: this.memories.length });
+    debugLog('rag:addFacts', { added, total: this.memories.length, domain });
     return added;
   }
 
   /**
    * Search for memories relevant to the query.
-   * Returns top-k results above the similarity threshold, sorted by similarity.
+   * Per-domain top-k: takes up to topKPerDomain results per domain,
+   * then merges and caps at maxResults total.
    */
   async search(query: string): Promise<RAGSearchResult[]> {
     if (this.memories.length === 0) return [];
@@ -150,28 +159,45 @@ export class RAGStore {
       return [];
     }
 
+    // Score all memories
     const scored = this.memories
       .map((m) => ({
         memory: m,
         similarity: cosineSimilarity(queryEmbedding, m.embedding),
       }))
       .filter((s) => s.similarity >= this.similarityThreshold)
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, this.topK);
+      .sort((a, b) => b.similarity - a.similarity);
+
+    // Group by domain, take top-k per domain
+    const byDomain = new Map<string, typeof scored>();
+    for (const entry of scored) {
+      const d = entry.memory.domain;
+      if (!byDomain.has(d)) byDomain.set(d, []);
+      const group = byDomain.get(d)!;
+      if (group.length < this.topKPerDomain) {
+        group.push(entry);
+      }
+    }
+
+    // Merge all domain groups, sort by similarity, cap at maxResults
+    const merged = Array.from(byDomain.values()).flat();
+    merged.sort((a, b) => b.similarity - a.similarity);
+    const capped = merged.slice(0, this.maxResults);
 
     // Update access metadata
     const now = new Date().toISOString();
-    for (const { memory } of scored) {
+    for (const { memory } of capped) {
       memory.accessCount++;
       memory.lastAccessed = now;
     }
-    if (scored.length > 0) {
+    if (capped.length > 0) {
       this.persist();
     }
 
-    return scored.map((s) => ({
+    return capped.map((s) => ({
       fact: s.memory.fact,
       similarity: s.similarity,
+      domain: s.memory.domain,
     }));
   }
 
@@ -179,7 +205,7 @@ export class RAGStore {
   listFacts(): string[] {
     return this.memories.map((m) => {
       const date = m.createdAt.slice(0, 10);
-      return `[${date}] (accessed ${m.accessCount}x) ${m.fact}`;
+      return `[${date}] [${m.domain}] (accessed ${m.accessCount}x) ${m.fact}`;
     });
   }
 
@@ -192,6 +218,15 @@ export class RAGStore {
   /** Total number of stored memories. */
   count(): number {
     return this.memories.length;
+  }
+
+  /** Count memories grouped by domain. */
+  countByDomain(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const m of this.memories) {
+      counts[m.domain] = (counts[m.domain] ?? 0) + 1;
+    }
+    return counts;
   }
 
   /**
@@ -218,14 +253,17 @@ export class RAGStore {
     debugLog('rag:prune', { kept: this.memories.length });
   }
 
-  /** Load memories from disk. */
+  /** Load memories from disk. Backfills 'general' domain for legacy entries. */
   private load(): void {
     try {
       if (!fs.existsSync(MEMORIES_FILE)) return;
       const data = fs.readFileSync(MEMORIES_FILE, 'utf-8');
       const parsed = JSON.parse(data);
       if (Array.isArray(parsed)) {
-        this.memories = parsed;
+        this.memories = parsed.map((m: any) => ({
+          ...m,
+          domain: m.domain ?? DEFAULT_DOMAIN,
+        }));
       }
     } catch (err) {
       debugLog('rag:load', `Failed to load memories: ${err instanceof Error ? err.message : String(err)}`);
