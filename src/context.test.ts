@@ -708,7 +708,7 @@ describe('isTokenOverflowError', () => {
   it('matches OpenAI-style error', () => {
     expect(isTokenOverflowError(
       "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens."
-    )).toBe(false); // "context length" without "exceeded"
+    )).toBe(true);
     expect(isTokenOverflowError(
       "context length exceeded"
     )).toBe(true);

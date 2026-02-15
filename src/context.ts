@@ -372,11 +372,16 @@ export function emergencyTruncate(
   const minKeep = Math.max(0, history.length - 2);
   if (cutoff > minKeep) cutoff = minKeep;
 
-  // Advance cutoff forward to a 'user' message boundary so the kept
+  // Align cutoff backward to a 'user' message boundary so the kept
   // slice never starts with an orphaned 'tool' or 'assistant' message
   // (which would violate provider role-ordering requirements).
-  while (cutoff < history.length && history[cutoff].role !== 'user') {
-    cutoff++;
+  // Searching backward (instead of forward) preserves the min-keep guarantee.
+  if (cutoff > 0 && cutoff < history.length && history[cutoff].role !== 'user') {
+    let aligned = cutoff;
+    while (aligned > 0 && history[aligned].role !== 'user') {
+      aligned--;
+    }
+    cutoff = aligned;
   }
 
   const kept = history.slice(cutoff);
@@ -403,7 +408,7 @@ export function emergencyTruncate(
  * Covers Anthropic, OpenAI, and xAI error message patterns.
  */
 export function isTokenOverflowError(message: string): boolean {
-  return /maximum.*prompt.*length|prompt.*too.*long|context.*length.*exceeded|token.*limit/i.test(message);
+  return /maximum.*prompt.*length|prompt.*too.*long|context.*length.*exceeded|maximum.*context.*length|token.*limit/i.test(message);
 }
 
 function extractText(msg: CoreMessage): string | null {
