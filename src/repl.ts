@@ -391,8 +391,9 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
       } else {
         // Show per-domain breakdown
         const counts = ragStore.countByDomain();
+        const knownDomains = new Set(getDomainIds());
         printInfo('  By domain:');
-        for (const domainId of getDomainIds()) {
+        for (const domainId of knownDomains) {
           const domainCount = counts[domainId] ?? 0;
           if (domainCount > 0) {
             const domain = getDomain(domainId);
@@ -401,7 +402,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
         }
         // Show any domains not in registry (legacy)
         for (const [domainId, domainCount] of Object.entries(counts)) {
-          if (!getDomainIds().includes(domainId)) {
+          if (!knownDomains.has(domainId)) {
             printInfo(`    ${domainId}: ${domainCount}`);
           }
         }

@@ -164,13 +164,13 @@ export async function extractDomainFacts(
   );
 
   const domainFacts: DomainFacts[] = [];
-  for (const result of results) {
+  results.forEach((result, index) => {
     if (result.status === 'fulfilled' && result.value.facts.length > 0) {
       domainFacts.push(result.value);
     } else if (result.status === 'rejected') {
-      debugLog('context:extractDomainFacts', `Domain extraction failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+      debugLog('context:extractDomainFacts', `Domain "${domainIds[index]}" extraction failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
     }
-  }
+  });
 
   return domainFacts;
 }
