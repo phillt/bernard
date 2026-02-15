@@ -3,6 +3,7 @@ import { getModel } from './providers/index.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 import type { RAGStore } from './rag.js';
+import { DOMAIN_REGISTRY, getDomainIds } from './domains.js';
 
 /** Model name → context window size in tokens */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
@@ -112,59 +113,76 @@ export function countRecentMessages(history: CoreMessage[], turnsToKeep: number)
   return 0;
 }
 
-const FACT_EXTRACTION_PROMPT = `You are a fact extraction system. Extract notable, self-contained facts from the conversation below that would be useful to recall in future sessions.
-
-Extract:
-- User preferences and habits
-- Project details, structure, and conventions
-- Technical environment info (OS, languages, tools, versions)
-- Decisions made and their reasoning
-- Recurring patterns or workflows
-- Names, roles, and relationships mentioned
-
-Do NOT extract:
-- Task-specific transient details (e.g., "the user asked to fix a typo on line 42")
-- Generic knowledge that any AI would know
-- Greetings, filler, or conversational noise
-
-Return a JSON array of strings. Each string should be a self-contained fact (understandable without the original conversation). Maximum 500 characters per fact. If there are no notable facts, return an empty array [].`;
-
 const FACT_EXTRACTION_MAX = 500;
+
+export interface DomainFacts {
+  domain: string;
+  facts: string[];
+}
+
+/**
+ * Extract facts from serialized conversation text using domain-specific prompts.
+ * Runs all domain extractors in parallel via Promise.allSettled.
+ * Partial failures (one domain errors) don't block others.
+ */
+export async function extractDomainFacts(
+  serializedText: string,
+  config: BernardConfig,
+): Promise<DomainFacts[]> {
+  if (!serializedText.trim()) return [];
+
+  const domainIds = getDomainIds();
+
+  const results = await Promise.allSettled(
+    domainIds.map(async (domainId) => {
+      const domain = DOMAIN_REGISTRY[domainId];
+
+      const result = await generateText({
+        model: getModel(config.provider, config.model),
+        maxTokens: 2048,
+        system: domain.extractionPrompt,
+        messages: [
+          { role: 'user', content: `Extract facts from this conversation:\n\n${serializedText}` },
+        ],
+      });
+
+      const text = result.text?.trim();
+      if (!text) return { domain: domainId, facts: [] };
+
+      // Parse JSON array from response — handle markdown code fences
+      const jsonStr = text.replace(/^```(?:json)?\s*/m, '').replace(/\s*```$/m, '');
+      const parsed = JSON.parse(jsonStr);
+
+      if (!Array.isArray(parsed)) return { domain: domainId, facts: [] };
+
+      const facts = parsed
+        .filter((item): item is string => typeof item === 'string' && item.length > 0)
+        .filter((item) => item.length <= FACT_EXTRACTION_MAX);
+
+      return { domain: domainId, facts };
+    }),
+  );
+
+  const domainFacts: DomainFacts[] = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled' && result.value.facts.length > 0) {
+      domainFacts.push(result.value);
+    } else if (result.status === 'rejected') {
+      debugLog('context:extractDomainFacts', `Domain extraction failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+    }
+  }
+
+  return domainFacts;
+}
 
 /**
  * Extract notable facts from serialized conversation text via LLM.
- * Returns an empty array on any failure.
+ * Returns a flat array of facts (backward-compatible wrapper around extractDomainFacts).
  * @internal
  */
 export async function extractFacts(serializedText: string, config: BernardConfig): Promise<string[]> {
-  if (!serializedText.trim()) return [];
-
-  try {
-    const result = await generateText({
-      model: getModel(config.provider, config.model),
-      maxTokens: 2048,
-      system: FACT_EXTRACTION_PROMPT,
-      messages: [
-        { role: 'user', content: `Extract facts from this conversation:\n\n${serializedText}` },
-      ],
-    });
-
-    const text = result.text?.trim();
-    if (!text) return [];
-
-    // Parse JSON array from response — handle markdown code fences
-    const jsonStr = text.replace(/^```(?:json)?\s*/m, '').replace(/\s*```$/m, '');
-    const parsed = JSON.parse(jsonStr);
-
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed
-      .filter((item): item is string => typeof item === 'string' && item.length > 0)
-      .filter((item) => item.length <= FACT_EXTRACTION_MAX);
-  } catch (err) {
-    debugLog('context:extractFacts', `Failed: ${err instanceof Error ? err.message : String(err)}`);
-    return [];
-  }
+  const domainFacts = await extractDomainFacts(serializedText, config);
+  return domainFacts.flatMap((df) => df.facts);
 }
 
 const SUMMARIZATION_PROMPT = `You are a conversation summarizer. Produce a concise summary of the conversation below, preserving:
@@ -201,7 +219,7 @@ export async function compressHistory(
   }
 
   try {
-    // Run summarization and fact extraction in parallel
+    // Run summarization and domain-specific fact extraction in parallel
     const summarizePromise = generateText({
       model: getModel(config.provider, config.model),
       maxTokens: 2048,
@@ -212,16 +230,18 @@ export async function compressHistory(
     });
 
     const extractPromise = ragStore
-      ? extractFacts(serialized, config)
+      ? extractDomainFacts(serialized, config)
       : Promise.resolve([]);
 
-    const [result, facts] = await Promise.all([summarizePromise, extractPromise]);
+    const [result, domainFacts] = await Promise.all([summarizePromise, extractPromise]);
 
-    // Store extracted facts fire-and-forget
-    if (ragStore && facts.length > 0) {
-      ragStore.addFacts(facts, 'compression').catch((err) => {
-        debugLog('context:compress:rag', `Failed to store facts: ${err instanceof Error ? err.message : String(err)}`);
-      });
+    // Store extracted facts per domain, fire-and-forget
+    if (ragStore && domainFacts.length > 0) {
+      for (const df of domainFacts) {
+        ragStore.addFacts(df.facts, 'compression', df.domain).catch((err) => {
+          debugLog('context:compress:rag', `Failed to store facts for domain ${df.domain}: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
     }
 
     const summary = result.text?.trim();
@@ -244,7 +264,7 @@ export async function compressHistory(
       oldMessageCount: oldMessages.length,
       recentMessageCount: recentMessages.length,
       summaryLength: summary.length,
-      factsExtracted: facts.length,
+      domainFactsCount: domainFacts.reduce((sum, df) => sum + df.facts.length, 0),
     });
 
     return [summaryMessage, ackMessage, ...recentMessages];
