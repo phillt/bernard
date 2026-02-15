@@ -191,6 +191,10 @@ const SUMMARIZATION_PROMPT = `You are a conversation summarizer. Produce a conci
 - Any user preferences or requirements mentioned
 - The overall arc of what was discussed and accomplished
 
+For each task or goal mentioned, clearly mark its status:
+- COMPLETED — if the task was finished or resolved
+- IN PROGRESS — if the task is still ongoing and unfinished
+
 Be concise but complete. Use bullet points. Do not include greetings or filler.`;
 
 /**
@@ -254,7 +258,7 @@ export async function compressHistory(
 
     const summaryMessage: CoreMessage = {
       role: 'user',
-      content: `[Context Summary — earlier conversation was compressed]\n\n${summary}`,
+      content: `[Context Summary — earlier conversation was compressed. This is background context only. Focus on the messages that follow for the current task.]\n\n${summary}`,
     };
 
     const ackMessage: CoreMessage = {
