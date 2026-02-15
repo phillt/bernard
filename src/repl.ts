@@ -16,6 +16,7 @@ import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
 import { serializeMessages } from './context.js';
+import { getDomain, getDomainIds } from './domains.js';
 
 export async function startRepl(config: BernardConfig, alertContext?: string, resume?: boolean): Promise<void> {
   const SLASH_COMMANDS = [
@@ -388,6 +389,23 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
       if (count === 0) {
         printInfo('  No RAG memories yet. Memories are extracted automatically during context compression.');
       } else {
+        // Show per-domain breakdown
+        const counts = ragStore.countByDomain();
+        printInfo('  By domain:');
+        for (const domainId of getDomainIds()) {
+          const domainCount = counts[domainId] ?? 0;
+          if (domainCount > 0) {
+            const domain = getDomain(domainId);
+            printInfo(`    ${domain.name}: ${domainCount}`);
+          }
+        }
+        // Show any domains not in registry (legacy)
+        for (const [domainId, domainCount] of Object.entries(counts)) {
+          if (!getDomainIds().includes(domainId)) {
+            printInfo(`    ${domainId}: ${domainCount}`);
+          }
+        }
+
         const facts = ragStore.listFacts();
         const recent = facts.slice(-10);
         printInfo(`\n  Most recent (up to 10):`);
