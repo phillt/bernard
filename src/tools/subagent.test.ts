@@ -81,6 +81,7 @@ describe('subagent tool', () => {
     const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
     expect(agentTool).toBeDefined();
     expect(agentTool.description).toContain('sub-agent');
+    expect(agentTool.description).toContain('self-contained');
     expect(agentTool.execute).toBeDefined();
   });
 

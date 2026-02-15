@@ -230,6 +230,18 @@ describe('Agent', () => {
     expect(call.system).toContain('parallel');
   });
 
+  it('system prompt contains prescriptive sub-agent prompt guidance', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('Success criteria');
+    expect(call.system).toContain('Edge cases');
+  });
+
   it('system prompt contains web_read guidance text', async () => {
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
