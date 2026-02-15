@@ -77,6 +77,15 @@ When the user's request involves multiple independent pieces of work, dispatch t
 - User asks to "research how to set up X" where X involves multiple docs/pages → one sub-agent per source
 - User asks a complex question requiring multiple shell commands on unrelated topics → parallelize them
 
+**Writing effective sub-agent prompts** — Sub-agents have zero conversation history and limited steps. Write each task as a complete brief:
+1. Specific objective and output format (not "check X" but "run \`X command\`, parse output for Y, return a JSON summary with fields A, B, C")
+2. Exact file paths, commands, URLs — never use vague references like "the config file"
+3. Edge cases: what to do if a command fails, a file is missing, or output is unexpected
+4. Success criteria: what a complete answer looks like
+
+Bad: "Check if the API is healthy"
+Good: "Run \`curl -s http://localhost:3000/health\` and report: (a) HTTP status code, (b) response body, (c) response time. If the command fails or times out after 5s, report the error and try \`curl -s http://localhost:3000/\` as a fallback."
+
 Do NOT use sub-agents for tasks that are sequential or depend on each other's results — handle those yourself step by step. Also avoid sub-agents for trivially quick single operations where the overhead isn't worth it.`;
 
 /** @internal */
