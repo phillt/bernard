@@ -235,13 +235,15 @@ export async function compressHistory(
 
     const [result, domainFacts] = await Promise.all([summarizePromise, extractPromise]);
 
-    // Store extracted facts per domain, fire-and-forget
+    // Store extracted facts per domain — await to prevent races on persist()
     if (ragStore && domainFacts.length > 0) {
-      for (const df of domainFacts) {
-        ragStore.addFacts(df.facts, 'compression', df.domain).catch((err) => {
-          debugLog('context:compress:rag', `Failed to store facts for domain ${df.domain}: ${err instanceof Error ? err.message : String(err)}`);
-        });
-      }
+      await Promise.all(
+        domainFacts.map((df) =>
+          ragStore.addFacts(df.facts, 'compression', df.domain).catch((err) => {
+            debugLog('context:compress:rag', `Failed to store facts for domain ${df.domain}: ${err instanceof Error ? err.message : String(err)}`);
+          }),
+        ),
+      );
     }
 
     const summary = result.text?.trim();
