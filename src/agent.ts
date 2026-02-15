@@ -8,6 +8,7 @@ import { shouldCompress, compressHistory } from './context.js';
 import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
+import { getDomain } from './domains.js';
 
 const BASE_SYSTEM_PROMPT = `# Identity
 
@@ -87,9 +88,22 @@ export function buildSystemPrompt(config: BernardConfig, memoryStore: MemoryStor
   prompt += `\nYou are running as provider: ${config.provider}, model: ${config.model}. The user can switch with /provider and /model.`;
 
   if (ragResults && ragResults.length > 0) {
-    prompt += '\n\n## Recalled Context\nThe following are automatically recalled observations from previous conversations.\nReference them only if directly relevant to the current discussion.';
+    prompt += '\n\n## Recalled Context\nReference only if directly relevant to the current discussion.';
+
+    // Group results by domain
+    const byDomain = new Map<string, RAGSearchResult[]>();
     for (const r of ragResults) {
-      prompt += `\n- ${r.fact}`;
+      const d = r.domain;
+      if (!byDomain.has(d)) byDomain.set(d, []);
+      byDomain.get(d)!.push(r);
+    }
+
+    for (const [domainId, results] of byDomain) {
+      const domain = getDomain(domainId);
+      prompt += `\n\n### ${domain.name}`;
+      for (const r of results) {
+        prompt += `\n- ${r.fact}`;
+      }
     }
   }
 
