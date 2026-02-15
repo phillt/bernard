@@ -188,10 +188,12 @@ export class Agent {
       const contextWindow = getContextWindow(this.config.model);
       const estimatedTokens = estimateHistoryTokens(this.history) + Math.ceil(systemPrompt.length / 4);
       const hardLimit = contextWindow * HARD_LIMIT_RATIO;
+      let preflightTruncated = false;
 
       if (estimatedTokens > hardLimit) {
         printInfo('Context approaching limit, emergency truncating...');
-        this.history = emergencyTruncate(this.history, hardLimit, systemPrompt);
+        this.history = emergencyTruncate(this.history, hardLimit, systemPrompt, userInput);
+        preflightTruncated = true;
       }
 
       const baseTools = createTools(this.toolOptions, this.memoryStore, this.mcpTools);
@@ -245,11 +247,14 @@ export class Agent {
 
         // Token overflow — emergency truncate and retry once
         if (isTokenOverflowError(apiMessage)) {
+          // If pre-flight already truncated, use a more aggressive 60% target
+          const retryRatio = preflightTruncated ? 0.6 : 0.8;
           printInfo('Context too large, truncating and retrying...');
           this.history = emergencyTruncate(
             this.history,
-            contextWindow * 0.8,  // aggressive 80% target on retry
+            contextWindow * retryRatio,
             systemPrompt,
+            userInput,
           );
           result = await callGenerateText();
         } else {
