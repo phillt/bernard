@@ -8,7 +8,7 @@ import { shouldCompress, compressHistory, truncateToolResults, estimateHistoryTo
 import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
-import { getDomain } from './domains.js';
+import { buildMemoryContext } from './memory-context.js';
 
 const BASE_SYSTEM_PROMPT = `# Identity
 
@@ -87,41 +87,7 @@ export function buildSystemPrompt(config: BernardConfig, memoryStore: MemoryStor
   let prompt = BASE_SYSTEM_PROMPT + `\n\nToday's date is ${today}.`;
   prompt += `\nYou are running as provider: ${config.provider}, model: ${config.model}. The user can switch with /provider and /model.`;
 
-  if (ragResults && ragResults.length > 0) {
-    prompt += '\n\n## Recalled Context\nReference only if directly relevant to the current discussion.';
-
-    // Group results by domain
-    const byDomain = new Map<string, RAGSearchResult[]>();
-    for (const r of ragResults) {
-      const d = r.domain;
-      if (!byDomain.has(d)) byDomain.set(d, []);
-      byDomain.get(d)!.push(r);
-    }
-
-    for (const [domainId, results] of byDomain) {
-      const domain = getDomain(domainId);
-      prompt += `\n\n### ${domain.name}`;
-      for (const r of results) {
-        prompt += `\n- ${r.fact}`;
-      }
-    }
-  }
-
-  const memories = memoryStore.getAllMemoryContents();
-  if (memories.size > 0) {
-    prompt += '\n\n## Persistent Memory\n';
-    for (const [key, content] of memories) {
-      prompt += `\n### ${key}\n${content}\n`;
-    }
-  }
-
-  const scratch = memoryStore.getAllScratchContents();
-  if (scratch.size > 0) {
-    prompt += '\n\n## Scratch Notes (session only)\n';
-    for (const [key, content] of scratch) {
-      prompt += `\n### ${key}\n${content}\n`;
-    }
-  }
+  prompt += buildMemoryContext({ memoryStore, ragResults, includeScratch: true });
 
   prompt += `\n\n## MCP Servers
 
