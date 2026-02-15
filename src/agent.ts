@@ -180,6 +180,7 @@ export class Agent {
     this.history.push({ role: 'user', content: userInput });
 
     this.abortController = new AbortController();
+    this.lastStepPromptTokens = 0;
 
     try {
       // Check if context compression is needed
@@ -283,7 +284,7 @@ export class Agent {
 
       // Track token usage for compression decisions — use last step's prompt tokens
       // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)
-      this.lastPromptTokens = this.lastStepPromptTokens || result.usage?.promptTokens || 0;
+      this.lastPromptTokens = this.lastStepPromptTokens ?? result.usage?.promptTokens ?? 0;
 
       // Truncate large tool results before adding to history
       const truncatedMessages = truncateToolResults(result.response.messages as CoreMessage[]);
