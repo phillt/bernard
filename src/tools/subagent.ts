@@ -38,9 +38,9 @@ export function createSubAgentTool(
   ragStore?: RAGStore,
 ) {
   return tool({
-    description: 'Delegate a task to an independent sub-agent that runs in parallel. Each sub-agent gets its own tool set and works independently. Call this tool multiple times in a single response to run tasks in parallel.',
+    description: 'Delegate a task to an independent sub-agent that runs in parallel. Sub-agents have NO conversation history and limited steps — your task description must be fully self-contained and highly prescriptive. Specify exact commands, file paths, expected output format, edge cases, and success/failure criteria. Call multiple times in one response for parallel execution.',
     parameters: z.object({
-      task: z.string().describe('The task for the sub-agent to complete'),
+      task: z.string().describe('A detailed, self-contained task description. Include: (1) specific objective and expected output format, (2) exact file paths, commands, or URLs, (3) edge cases and what to do if something fails, (4) what "done" looks like. The sub-agent has zero prior context.'),
       context: z.string().optional().describe('Optional additional context to help the sub-agent'),
     }),
     execute: async ({ task, context }, execOptions) => {
