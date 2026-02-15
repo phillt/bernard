@@ -274,6 +274,129 @@ export async function compressHistory(
   }
 }
 
+/** Max characters to keep per tool-result content part in history. */
+export const MAX_TOOL_RESULT_CHARS = 10_000;
+
+/**
+ * Truncate large tool-result content parts in response messages before adding to history.
+ * The user already sees the full result via onStepFinish; the history copy just needs
+ * enough for the LLM to understand what happened on subsequent turns.
+ * Returns a new array — does not mutate the input.
+ */
+export function truncateToolResults(
+  messages: CoreMessage[],
+  maxChars: number = MAX_TOOL_RESULT_CHARS,
+): CoreMessage[] {
+  return messages.map((msg) => {
+    if (msg.role !== 'tool' || !Array.isArray(msg.content)) return msg;
+
+    let changed = false;
+    const newContent = msg.content.map((part: any) => {
+      if (
+        typeof part === 'object' &&
+        part !== null &&
+        'type' in part &&
+        part.type === 'tool-result'
+      ) {
+        const resultStr = typeof part.result === 'string'
+          ? part.result
+          : JSON.stringify(part.result);
+        if (resultStr.length > maxChars) {
+          changed = true;
+          return {
+            ...part,
+            result: resultStr.slice(0, maxChars) +
+              `\n...[truncated from ${resultStr.length} to ${maxChars} chars]`,
+          };
+        }
+      }
+      return part;
+    });
+
+    return changed ? { ...msg, content: newContent } : msg;
+  });
+}
+
+/**
+ * Rough-but-safe token estimator for pre-flight checks.
+ * Uses 3.6 chars/token (instead of 4) for a ~10% safety margin,
+ * since tool-result tokens can be denser than natural language.
+ */
+export function estimateHistoryTokens(history: CoreMessage[]): number {
+  let chars = 0;
+  for (const msg of history) {
+    chars += JSON.stringify(msg.content).length;
+  }
+  return Math.ceil(chars / 3.6);
+}
+
+/**
+ * Progressively drop oldest messages until estimated tokens fit within budget.
+ * Always keeps at least the last 2 messages so the model has some context.
+ * Prepends a synthetic truncation notice.
+ */
+export function emergencyTruncate(
+  history: CoreMessage[],
+  tokenBudget: number,
+  systemPrompt: string,
+): CoreMessage[] {
+  const systemTokens = Math.ceil(systemPrompt.length / 4);
+  const historyBudget = tokenBudget - systemTokens;
+
+  if (historyBudget <= 0) {
+    // System prompt alone exceeds budget — keep last 2 messages anyway
+    const kept = history.slice(-2);
+    return [
+      { role: 'user', content: '[Earlier conversation was truncated to fit context window]' },
+      { role: 'assistant', content: 'Understood. Continuing with limited context.' },
+      ...kept,
+    ];
+  }
+
+  // Walk backward, accumulating estimated tokens
+  let accumulated = 0;
+  let cutoff = history.length;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msgTokens = Math.ceil(JSON.stringify(history[i].content).length / 3.6);
+    if (accumulated + msgTokens > historyBudget) {
+      cutoff = i + 1;
+      break;
+    }
+    accumulated += msgTokens;
+    if (i === 0) cutoff = 0;
+  }
+
+  // Always keep at least 2 messages
+  const minKeep = Math.max(0, history.length - 2);
+  if (cutoff > minKeep) cutoff = minKeep;
+
+  const kept = history.slice(cutoff);
+
+  if (cutoff === 0) {
+    // Nothing was dropped
+    return history;
+  }
+
+  const notice: CoreMessage = {
+    role: 'user',
+    content: '[Earlier conversation was truncated to fit context window]',
+  };
+  const ack: CoreMessage = {
+    role: 'assistant',
+    content: 'Understood. Continuing with limited context.',
+  };
+
+  return [notice, ack, ...kept];
+}
+
+/**
+ * Detect token overflow errors from various providers.
+ * Covers Anthropic, OpenAI, and xAI error message patterns.
+ */
+export function isTokenOverflowError(message: string): boolean {
+  return /maximum.*prompt.*length|prompt.*too.*long|context.*length.*exceeded|token.*limit/i.test(message);
+}
+
 function extractText(msg: CoreMessage): string | null {
   if (typeof msg.content === 'string') return msg.content;
   if (!Array.isArray(msg.content)) return null;
