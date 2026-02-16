@@ -187,6 +187,7 @@ export function printHelp(): void {
   console.log(t.text('  /model') + t.muted('    — Switch model for current provider'));
   console.log(t.text('  /theme') + t.muted('    — Switch color theme'));
   console.log(t.text('  /options') + t.muted('  — View and set options (max-tokens, shell-timeout)'));
+  console.log(t.text('  /update') + t.muted('   — Check for and install updates'));
   console.log(t.text('  exit') + t.muted('      — Quit Bernard'));
   console.log();
 }

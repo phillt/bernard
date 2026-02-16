@@ -2,7 +2,7 @@
 
 import { Command } from 'commander';
 import * as readline from 'node:readline';
-import { loadConfig, saveProviderKey, removeProviderKey, getProviderKeyStatus, PROVIDER_ENV_VARS, OPTIONS_REGISTRY, resetOption, resetAllOptions } from './config.js';
+import { loadConfig, loadPreferences, savePreferences, saveProviderKey, removeProviderKey, getProviderKeyStatus, PROVIDER_ENV_VARS, OPTIONS_REGISTRY, resetOption, resetAllOptions, getDefaultModel } from './config.js';
 import { startRepl } from './repl.js';
 import { printWelcome, printError, printInfo } from './output.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
@@ -10,13 +10,14 @@ import { CronStore } from './cron/store.js';
 import { cronList, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
 import { listMCPServers, removeMCPServer } from './mcp.js';
 import { runFirstTimeSetup } from './setup.js';
+import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
 
 const program = new Command();
 
 program
   .name('bernard')
   .description('Local CLI AI agent with multi-provider support')
-  .version('0.1.0')
+  .version(getLocalVersion())
   .option('-p, --provider <provider>', 'LLM provider (anthropic, openai, xai)')
   .option('-m, --model <model>', 'Model name')
   .option('-r, --resume', 'Resume the previous conversation')
@@ -63,6 +64,8 @@ The user has been notified and this session is open for them to review and act o
       }
 
       printWelcome(config.provider, config.model);
+      const prefs = loadPreferences();
+      startupUpdateCheck(!!prefs.autoUpdate);
       await startRepl(config, alertContext, !!opts.resume);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -284,6 +287,41 @@ program
       printError(message);
       process.exit(1);
     }
+  });
+
+program
+  .command('update')
+  .description('Check for and install updates')
+  .action(async () => {
+    try {
+      await interactiveUpdate();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('auto-update <state>')
+  .description('Enable or disable automatic updates (on/off)')
+  .action((state: string) => {
+    const lower = state.toLowerCase();
+    if (lower !== 'on' && lower !== 'off') {
+      printError('Usage: bernard auto-update <on|off>');
+      process.exit(1);
+    }
+    const enabled = lower === 'on';
+    const prefs = loadPreferences();
+    savePreferences({
+      provider: prefs.provider || 'anthropic',
+      model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
+      maxTokens: prefs.maxTokens,
+      shellTimeout: prefs.shellTimeout,
+      theme: prefs.theme,
+      autoUpdate: enabled,
+    });
+    printInfo(`Auto-update ${enabled ? 'enabled' : 'disabled'}.`);
   });
 
 program.parse();
