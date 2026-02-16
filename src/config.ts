@@ -208,17 +208,18 @@ export function getProviderKeyStatus(): Array<{ provider: string; hasKey: boolea
 
 export const PROVIDER_MODELS: Record<string, string[]> = {
   anthropic: [
+    'claude-opus-4-6',
     'claude-sonnet-4-5-20250929',
+    'claude-haiku-4-5-20251001',
     'claude-opus-4-20250514',
     'claude-sonnet-4-20250514',
-    'claude-3-5-haiku-latest',
   ],
   openai: [
-    'gpt-4o',
-    'gpt-4o-mini',
+    'gpt-5.2',
+    'gpt-5.2-chat-latest',
     'o3',
     'o3-mini',
-    'o4-mini',
+    'gpt-4o-mini',
     'gpt-4.1',
     'gpt-4.1-mini',
     'gpt-4.1-nano',

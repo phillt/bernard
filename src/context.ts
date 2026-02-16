@@ -8,11 +8,14 @@ import { DOMAIN_REGISTRY, getDomainIds } from './domains.js';
 /** Model name → context window size in tokens */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic
+  'claude-opus-4-6': 200_000,
   'claude-sonnet-4-5-20250929': 200_000,
+  'claude-haiku-4-5-20251001': 200_000,
   'claude-opus-4-20250514': 200_000,
   'claude-sonnet-4-20250514': 200_000,
-  'claude-3-5-haiku-latest': 200_000,
   // OpenAI
+  'gpt-5.2': 400_000,
+  'gpt-5.2-chat-latest': 128_000,
   'gpt-4o': 128_000,
   'gpt-4o-mini': 128_000,
   'o3': 200_000,
