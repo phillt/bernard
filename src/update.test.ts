@@ -95,6 +95,53 @@ function mockHttpsGet(responseBody: string, statusCode = 200) {
   });
 }
 
+describe('readCache validation', () => {
+  beforeEach(() => {
+    fsMock.readFileSync.mockReset();
+    fsMock.writeFileSync.mockReset();
+    fsMock.existsSync.mockReturnValue(true);
+    fsMock.mkdirSync.mockReturnValue(undefined);
+    httpsMock.get.mockReset();
+  });
+
+  it('rejects cache with invalid latestVersion', async () => {
+    const badCache = {
+      lastCheck: new Date().toISOString(),
+      latestVersion: 'not-semver',
+      currentVersion: '1.0.0',
+    };
+    let callCount = 0;
+    fsMock.readFileSync.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return JSON.stringify({ version: '1.0.0' });
+      return JSON.stringify(badCache);
+    });
+
+    mockHttpsGet(JSON.stringify({ version: '2.0.0' }));
+
+    const result = await checkForUpdate();
+    // Should have fetched from registry since cache was invalid
+    expect(result.cached).toBe(false);
+    expect(httpsMock.get).toHaveBeenCalled();
+  });
+
+  it('rejects cache with missing fields', async () => {
+    const badCache = { lastCheck: new Date().toISOString() };
+    let callCount = 0;
+    fsMock.readFileSync.mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) return JSON.stringify({ version: '1.0.0' });
+      return JSON.stringify(badCache);
+    });
+
+    mockHttpsGet(JSON.stringify({ version: '2.0.0' }));
+
+    const result = await checkForUpdate();
+    expect(result.cached).toBe(false);
+    expect(httpsMock.get).toHaveBeenCalled();
+  });
+});
+
 describe('checkForUpdate', () => {
   beforeEach(() => {
     fsMock.readFileSync.mockReset();
@@ -189,6 +236,29 @@ describe('fetchLatestVersion', () => {
   it('rejects on invalid version format from registry', async () => {
     mockHttpsGet(JSON.stringify({ version: 'not-semver' }));
     await expect(fetchLatestVersion()).rejects.toThrow('No valid version field');
+  });
+
+  it('rejects when response exceeds size limit', async () => {
+    const resDestroyFn = vi.fn();
+    httpsMock.get.mockImplementation((_url: string, _opts: unknown, cb: (res: unknown) => void) => {
+      const res = {
+        statusCode: 200,
+        destroy: resDestroyFn,
+        on: vi.fn((event: string, handler: (data?: unknown) => void) => {
+          if (event === 'data') {
+            // Send a chunk larger than 1MB
+            const largeChunk = Buffer.alloc(1024 * 1024 + 1, 'x');
+            handler(largeChunk);
+          }
+          // Don't fire 'end' — the request should be destroyed
+          return res;
+        }),
+      };
+      cb(res);
+      return { on: vi.fn(), destroy: vi.fn() };
+    });
+
+    await expect(fetchLatestVersion()).rejects.toThrow('Registry response too large');
   });
 });
 
