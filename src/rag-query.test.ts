@@ -196,17 +196,16 @@ describe('applyStickiness', () => {
     expect(output.length).toBeLessThanOrEqual(9);
   });
 
-  it('does not cumulatively boost (only single turn)', () => {
+  it('boost is applied to input similarity regardless of source', () => {
     const results = makeResults([
       { fact: 'fact A', similarity: 0.8, domain: 'general' },
     ]);
-    // Apply stickiness twice — the second call should use the same boost magnitude
+    // Apply stickiness twice — the second call uses the boosted similarity from the first call
     const prev1 = new Set(['fact A']);
     const output1 = applyStickiness(results, prev1);
     expect(output1[0].similarity).toBeCloseTo(0.85, 5);
 
-    // If we pass output1 as new results with a fresh previous set containing fact A,
-    // it still only adds 0.05 once (boost is on the raw result, not cumulative)
+    // Stickiness is applied again to whatever similarity the results currently have
     const output2 = applyStickiness(output1, prev1);
     expect(output2[0].similarity).toBeCloseTo(0.9, 5);
   });
