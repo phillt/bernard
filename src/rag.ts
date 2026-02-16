@@ -33,6 +33,15 @@ export interface RAGSearchResult {
   domain: string;
 }
 
+export interface RAGSearchResultWithId {
+  id: string;
+  fact: string;
+  similarity: number;
+  domain: string;
+  createdAt: string;
+  accessCount: number;
+}
+
 export interface RAGStoreConfig {
   topKPerDomain?: number;
   maxResults?: number;
@@ -227,6 +236,84 @@ export class RAGStore {
       counts[m.domain] = (counts[m.domain] ?? 0) + 1;
     }
     return counts;
+  }
+
+  /**
+   * Search for memories relevant to the query, returning rich metadata.
+   * Same scoring/grouping/capping as search() but does NOT update access metadata.
+   */
+  async searchWithIds(query: string): Promise<RAGSearchResultWithId[]> {
+    if (this.memories.length === 0) return [];
+
+    const provider = await getEmbeddingProvider();
+    if (!provider) return [];
+
+    let queryEmbedding: number[];
+    try {
+      const embeddings = await provider.embed([query]);
+      queryEmbedding = embeddings[0];
+    } catch (err) {
+      debugLog('rag:searchWithIds', `Query embedding failed: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    }
+
+    // Score all memories
+    const scored = this.memories
+      .map((m) => ({
+        memory: m,
+        similarity: cosineSimilarity(queryEmbedding, m.embedding),
+      }))
+      .filter((s) => s.similarity >= this.similarityThreshold)
+      .sort((a, b) => b.similarity - a.similarity);
+
+    // Group by domain, take top-k per domain
+    const byDomain = new Map<string, typeof scored>();
+    for (const entry of scored) {
+      const d = entry.memory.domain;
+      if (!byDomain.has(d)) byDomain.set(d, []);
+      const group = byDomain.get(d)!;
+      if (group.length < this.topKPerDomain) {
+        group.push(entry);
+      }
+    }
+
+    // Merge all domain groups, sort by similarity, cap at maxResults
+    const merged = Array.from(byDomain.values()).flat();
+    merged.sort((a, b) => b.similarity - a.similarity);
+    const capped = merged.slice(0, this.maxResults);
+
+    return capped.map((s) => ({
+      id: s.memory.id,
+      fact: s.memory.fact,
+      similarity: s.similarity,
+      domain: s.memory.domain,
+      createdAt: s.memory.createdAt,
+      accessCount: s.memory.accessCount,
+    }));
+  }
+
+  /** Return all memories as RAGSearchResultWithId (similarity=1.0 placeholder). */
+  listMemories(): RAGSearchResultWithId[] {
+    return this.memories.map((m) => ({
+      id: m.id,
+      fact: m.fact,
+      similarity: 1.0,
+      domain: m.domain,
+      createdAt: m.createdAt,
+      accessCount: m.accessCount,
+    }));
+  }
+
+  /** Delete memories by ID. Returns the number of memories deleted. */
+  deleteByIds(ids: string[]): number {
+    const idSet = new Set(ids);
+    const before = this.memories.length;
+    this.memories = this.memories.filter((m) => !idSet.has(m.id));
+    const deleted = before - this.memories.length;
+    if (deleted > 0) {
+      this.persist();
+    }
+    return deleted;
   }
 
   /**
