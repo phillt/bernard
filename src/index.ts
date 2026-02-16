@@ -316,6 +316,9 @@ program
     savePreferences({
       provider: prefs.provider || 'anthropic',
       model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
+      maxTokens: prefs.maxTokens,
+      shellTimeout: prefs.shellTimeout,
+      theme: prefs.theme,
       autoUpdate: enabled,
     });
     printInfo(`Auto-update ${enabled ? 'enabled' : 'disabled'}.`);
