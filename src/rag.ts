@@ -105,7 +105,7 @@ export class RAGStore {
 
     let embeddings: number[][];
     try {
-      embeddings = await provider.embed(facts);
+      embeddings = (await provider.embed(facts)).map((e) => Array.from(e));
     } catch (err) {
       debugLog('rag:addFacts', `Embedding failed: ${err instanceof Error ? err.message : String(err)}`);
       return 0;
@@ -161,8 +161,7 @@ export class RAGStore {
 
     let queryEmbedding: number[];
     try {
-      const embeddings = await provider.embed([query]);
-      queryEmbedding = embeddings[0];
+      queryEmbedding = Array.from((await provider.embed([query]))[0]);
     } catch (err) {
       debugLog('rag:search', `Query embedding failed: ${err instanceof Error ? err.message : String(err)}`);
       return [];
@@ -192,6 +191,8 @@ export class RAGStore {
     const merged = Array.from(byDomain.values()).flat();
     merged.sort((a, b) => b.similarity - a.similarity);
     const capped = merged.slice(0, this.maxResults);
+
+    debugLog('rag:search', { query: query.slice(0, 100), totalScored: scored.length, returned: capped.length });
 
     // Update access metadata
     const now = new Date().toISOString();
@@ -250,8 +251,7 @@ export class RAGStore {
 
     let queryEmbedding: number[];
     try {
-      const embeddings = await provider.embed([query]);
-      queryEmbedding = embeddings[0];
+      queryEmbedding = Array.from((await provider.embed([query]))[0]);
     } catch (err) {
       debugLog('rag:searchWithIds', `Query embedding failed: ${err instanceof Error ? err.message : String(err)}`);
       return [];
@@ -350,6 +350,9 @@ export class RAGStore {
         this.memories = parsed.map((m: any) => ({
           ...m,
           domain: m.domain ?? DEFAULT_DOMAIN,
+          embedding: Array.isArray(m.embedding)
+            ? m.embedding
+            : Object.values(m.embedding),
         }));
       }
     } catch (err) {
