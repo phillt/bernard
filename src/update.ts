@@ -92,7 +92,15 @@ export function fetchLatestVersion(): Promise<string> {
 function readCache(): CacheData | null {
   try {
     const raw = fs.readFileSync(CACHE_PATH, 'utf-8');
-    return JSON.parse(raw) as CacheData;
+    const parsed = JSON.parse(raw);
+    if (
+      typeof parsed.lastCheck === 'string' &&
+      typeof parsed.latestVersion === 'string' && SEMVER_RE.test(parsed.latestVersion) &&
+      typeof parsed.currentVersion === 'string' && SEMVER_RE.test(parsed.currentVersion)
+    ) {
+      return parsed as CacheData;
+    }
+    return null;
   } catch {
     return null;
   }
