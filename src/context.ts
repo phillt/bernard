@@ -420,7 +420,7 @@ export function isTokenOverflowError(message: string): boolean {
   return /maximum.*prompt.*length|prompt.*too.*long|context.*length.*exceeded|maximum.*context.*length|token.*limit/i.test(message);
 }
 
-function extractText(msg: CoreMessage): string | null {
+export function extractText(msg: CoreMessage): string | null {
   if (typeof msg.content === 'string') return msg.content;
   if (!Array.isArray(msg.content)) return null;
 
