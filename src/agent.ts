@@ -122,6 +122,7 @@ export class Agent {
   private alertContext?: string;
   private ragStore?: RAGStore;
   private previousRAGFacts: Set<string> = new Set();
+  private lastRAGResults: RAGSearchResult[] = [];
   private abortController: AbortController | null = null;
   private lastPromptTokens: number = 0;
   private lastStepPromptTokens: number = 0;
@@ -145,6 +146,10 @@ export class Agent {
     return this.history;
   }
 
+  getLastRAGResults(): RAGSearchResult[] {
+    return this.lastRAGResults;
+  }
+
   abort(): void {
     this.abortController?.abort();
   }
@@ -158,6 +163,7 @@ export class Agent {
 
     this.abortController = new AbortController();
     this.lastStepPromptTokens = 0;
+    this.lastRAGResults = [];
 
     try {
       // Check if context compression is needed
@@ -180,6 +186,7 @@ export class Agent {
 
           // Apply stickiness from previous turn
           ragResults = applyStickiness(rawResults, this.previousRAGFacts);
+          this.lastRAGResults = ragResults;
 
           // Track for next turn
           this.previousRAGFacts = new Set(ragResults.map((r) => r.fact));
@@ -299,5 +306,6 @@ export class Agent {
     this.history = [];
     this.memoryStore.clearScratch();
     this.previousRAGFacts = new Set();
+    this.lastRAGResults = [];
   }
 }
