@@ -304,4 +304,115 @@ describe('RAGStore', () => {
       expect(store.count()).toBe(0);
     });
   });
+
+  describe('searchWithIds', () => {
+    it('returns results with id, createdAt, and accessCount', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode for all editors'], 'test', 'user-preferences');
+      const results = await store.searchWithIds('User prefers dark mode for all editors');
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]).toHaveProperty('id');
+      expect(results[0]).toHaveProperty('createdAt');
+      expect(results[0]).toHaveProperty('accessCount');
+      expect(results[0].domain).toBe('user-preferences');
+      expect(results[0].fact).toContain('dark mode');
+    });
+
+    it('does NOT update accessCount', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode'], 'test');
+
+      // Clear mocks to track only searchWithIds calls
+      vi.mocked(fs.writeFileSync).mockClear();
+      vi.mocked(fs.renameSync).mockClear();
+
+      const results = await store.searchWithIds('User prefers dark mode');
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].accessCount).toBe(0);
+
+      // persist should NOT be called (no access metadata update)
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('returns empty when no memories', async () => {
+      const store = await createStore();
+      const results = await store.searchWithIds('anything');
+      expect(results).toEqual([]);
+    });
+
+    it('returns empty when provider is unavailable', async () => {
+      const store = await createStore();
+      await store.addFacts(['some fact'], 'test');
+      mockProvider = null;
+      const results = await store.searchWithIds('some fact');
+      expect(results).toEqual([]);
+    });
+  });
+
+  describe('listMemories', () => {
+    it('returns all memories with correct fields', async () => {
+      const store = await createStore();
+      await store.addFacts(['fact A'], 'test', 'general');
+      await store.addFacts(['fact B'], 'test', 'tool-usage');
+
+      const memories = store.listMemories();
+      expect(memories).toHaveLength(2);
+      expect(memories[0]).toHaveProperty('id');
+      expect(memories[0]).toHaveProperty('fact');
+      expect(memories[0]).toHaveProperty('domain');
+      expect(memories[0]).toHaveProperty('createdAt');
+      expect(memories[0]).toHaveProperty('accessCount');
+      expect(memories[0].similarity).toBe(1.0);
+    });
+
+    it('returns empty array when no memories', async () => {
+      const store = await createStore();
+      const memories = store.listMemories();
+      expect(memories).toEqual([]);
+    });
+  });
+
+  describe('deleteByIds', () => {
+    it('deletes matching memories and persists', async () => {
+      const store = await createStore();
+      await store.addFacts(['fact A', 'fact B', 'fact C'], 'test');
+
+      const all = store.listMemories();
+      expect(all).toHaveLength(3);
+
+      vi.mocked(fs.writeFileSync).mockClear();
+      vi.mocked(fs.renameSync).mockClear();
+
+      const deleted = store.deleteByIds([all[0].id, all[2].id]);
+      expect(deleted).toBe(2);
+      expect(store.count()).toBe(1);
+      expect(store.listMemories()[0].id).toBe(all[1].id);
+
+      // Should persist after deletion
+      expect(fs.writeFileSync).toHaveBeenCalled();
+      expect(fs.renameSync).toHaveBeenCalled();
+    });
+
+    it('returns 0 for empty ids array', async () => {
+      const store = await createStore();
+      await store.addFacts(['fact A'], 'test');
+      const deleted = store.deleteByIds([]);
+      expect(deleted).toBe(0);
+      expect(store.count()).toBe(1);
+    });
+
+    it('returns 0 for non-existent ids', async () => {
+      const store = await createStore();
+      await store.addFacts(['fact A'], 'test');
+
+      vi.mocked(fs.writeFileSync).mockClear();
+
+      const deleted = store.deleteByIds(['nonexistent-id']);
+      expect(deleted).toBe(0);
+      expect(store.count()).toBe(1);
+
+      // Should NOT persist when nothing was deleted
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+  });
 });
