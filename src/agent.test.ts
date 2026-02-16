@@ -552,6 +552,105 @@ describe('Agent', () => {
     expect(mockApplyStickiness).toHaveBeenCalledWith(ragResults, expect.any(Set));
   });
 
+  it('getLastRAGResults returns empty array before any input', () => {
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    expect(agent.getLastRAGResults()).toEqual([]);
+  });
+
+  it('getLastRAGResults returns RAG results after a turn with RAG hits', async () => {
+    const ragResults = [
+      { fact: 'User prefers dark mode', similarity: 0.85, domain: 'user-preferences' },
+      { fact: 'Project uses TypeScript', similarity: 0.72, domain: 'general' },
+    ];
+
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue(ragResults),
+      addFacts: vi.fn(),
+    };
+
+    mockApplyStickiness.mockReturnValueOnce(ragResults);
+
+    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    await agent.processInput('Hello');
+
+    expect(agent.getLastRAGResults()).toEqual(ragResults);
+  });
+
+  it('getLastRAGResults resets between turns', async () => {
+    const firstResults = [
+      { fact: 'fact A', similarity: 0.9, domain: 'general' },
+    ];
+
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue(firstResults),
+      addFacts: vi.fn(),
+    };
+
+    mockApplyStickiness.mockReturnValueOnce(firstResults);
+
+    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    await agent.processInput('Hello');
+    expect(agent.getLastRAGResults()).toEqual(firstResults);
+
+    // Second turn with no results
+    mockRagStore.search.mockResolvedValue([]);
+    mockApplyStickiness.mockReturnValueOnce([]);
+
+    await agent.processInput('Hi again');
+    expect(agent.getLastRAGResults()).toEqual([]);
+  });
+
+  it('getLastRAGResults is empty when RAG search fails', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockRejectedValue(new Error('RAG failure')),
+      addFacts: vi.fn(),
+    };
+
+    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    await agent.processInput('Hello');
+    expect(agent.getLastRAGResults()).toEqual([]);
+  });
+
+  it('clearHistory resets lastRAGResults', async () => {
+    const ragResults = [
+      { fact: 'fact A', similarity: 0.8, domain: 'general' },
+    ];
+
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue(ragResults),
+      addFacts: vi.fn(),
+    };
+
+    mockApplyStickiness.mockReturnValueOnce(ragResults);
+
+    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    await agent.processInput('Hello');
+    expect(agent.getLastRAGResults()).toEqual(ragResults);
+
+    agent.clearHistory();
+    expect(agent.getLastRAGResults()).toEqual([]);
+  });
+
   it('clearHistory resets previousRAGFacts', async () => {
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
