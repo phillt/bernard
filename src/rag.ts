@@ -149,25 +149,10 @@ export class RAGStore {
   }
 
   /**
-   * Search for memories relevant to the query.
-   * Per-domain top-k: takes up to topKPerDomain results per domain,
-   * then merges and caps at maxResults total.
+   * Score, group by domain (top-k per domain), and cap at maxResults.
+   * Shared by search() and searchWithIds().
    */
-  async search(query: string): Promise<RAGSearchResult[]> {
-    if (this.memories.length === 0) return [];
-
-    const provider = await getEmbeddingProvider();
-    if (!provider) return [];
-
-    let queryEmbedding: number[];
-    try {
-      queryEmbedding = Array.from((await provider.embed([query]))[0]);
-    } catch (err) {
-      debugLog('rag:search', `Query embedding failed: ${err instanceof Error ? err.message : String(err)}`);
-      return [];
-    }
-
-    // Score all memories
+  private scoreAndRank(queryEmbedding: number[]): { memory: RAGMemory; similarity: number }[] {
     const scored = this.memories
       .map((m) => ({
         memory: m,
@@ -176,7 +161,6 @@ export class RAGStore {
       .filter((s) => s.similarity >= this.similarityThreshold)
       .sort((a, b) => b.similarity - a.similarity);
 
-    // Group by domain, take top-k per domain
     const byDomain = new Map<string, typeof scored>();
     for (const entry of scored) {
       const d = entry.memory.domain;
@@ -187,12 +171,38 @@ export class RAGStore {
       }
     }
 
-    // Merge all domain groups, sort by similarity, cap at maxResults
     const merged = Array.from(byDomain.values()).flat();
     merged.sort((a, b) => b.similarity - a.similarity);
-    const capped = merged.slice(0, this.maxResults);
+    return merged.slice(0, this.maxResults);
+  }
 
-    debugLog('rag:search', { query: query.slice(0, 100), totalScored: scored.length, returned: capped.length });
+  /** Embed a query string, returning the embedding vector or null on failure. */
+  private async embedQuery(query: string, logLabel: string): Promise<number[] | null> {
+    const provider = await getEmbeddingProvider();
+    if (!provider) return null;
+
+    try {
+      return Array.from((await provider.embed([query]))[0]);
+    } catch (err) {
+      debugLog(logLabel, `Query embedding failed: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  }
+
+  /**
+   * Search for memories relevant to the query.
+   * Per-domain top-k: takes up to topKPerDomain results per domain,
+   * then merges and caps at maxResults total.
+   */
+  async search(query: string): Promise<RAGSearchResult[]> {
+    if (this.memories.length === 0) return [];
+
+    const queryEmbedding = await this.embedQuery(query, 'rag:search');
+    if (!queryEmbedding) return [];
+
+    const capped = this.scoreAndRank(queryEmbedding);
+
+    debugLog('rag:search', { query: query.slice(0, 100), returned: capped.length });
 
     // Update access metadata
     const now = new Date().toISOString();
@@ -246,41 +256,10 @@ export class RAGStore {
   async searchWithIds(query: string): Promise<RAGSearchResultWithId[]> {
     if (this.memories.length === 0) return [];
 
-    const provider = await getEmbeddingProvider();
-    if (!provider) return [];
+    const queryEmbedding = await this.embedQuery(query, 'rag:searchWithIds');
+    if (!queryEmbedding) return [];
 
-    let queryEmbedding: number[];
-    try {
-      queryEmbedding = Array.from((await provider.embed([query]))[0]);
-    } catch (err) {
-      debugLog('rag:searchWithIds', `Query embedding failed: ${err instanceof Error ? err.message : String(err)}`);
-      return [];
-    }
-
-    // Score all memories
-    const scored = this.memories
-      .map((m) => ({
-        memory: m,
-        similarity: cosineSimilarity(queryEmbedding, m.embedding),
-      }))
-      .filter((s) => s.similarity >= this.similarityThreshold)
-      .sort((a, b) => b.similarity - a.similarity);
-
-    // Group by domain, take top-k per domain
-    const byDomain = new Map<string, typeof scored>();
-    for (const entry of scored) {
-      const d = entry.memory.domain;
-      if (!byDomain.has(d)) byDomain.set(d, []);
-      const group = byDomain.get(d)!;
-      if (group.length < this.topKPerDomain) {
-        group.push(entry);
-      }
-    }
-
-    // Merge all domain groups, sort by similarity, cap at maxResults
-    const merged = Array.from(byDomain.values()).flat();
-    merged.sort((a, b) => b.similarity - a.similarity);
-    const capped = merged.slice(0, this.maxResults);
+    const capped = this.scoreAndRank(queryEmbedding);
 
     return capped.map((s) => ({
       id: s.memory.id,
