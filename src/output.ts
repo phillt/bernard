@@ -80,7 +80,7 @@ export function stopSpinner(): void {
 export function printWelcome(provider: string, model: string): void {
   console.log(getTheme().accentBold('\n  Bernard') + getTheme().muted(' — AI CLI Assistant'));
   console.log(getTheme().muted(`  Provider: ${provider} | Model: ${model}`));
-  if (process.env.BERNARD_DEBUG) {
+  if (process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1') {
     console.log(getTheme().warning('  DEBUG mode enabled — logging to .logs/'));
   }
   console.log(getTheme().muted('  Type /help for commands, exit to quit\n'));

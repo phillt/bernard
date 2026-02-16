@@ -5,7 +5,7 @@ const LOG_DIR = path.resolve('.logs');
 let dirCreated = false;
 
 export function debugLog(label: string, data: unknown): void {
-  if (!process.env.BERNARD_DEBUG) return;
+  if (process.env.BERNARD_DEBUG !== 'true' && process.env.BERNARD_DEBUG !== '1') return;
 
   if (!dirCreated) {
     fs.mkdirSync(LOG_DIR, { recursive: true });
