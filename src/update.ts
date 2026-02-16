@@ -59,8 +59,15 @@ export function fetchLatestVersion(): Promise<string> {
         reject(new Error(`Registry returned status ${res.statusCode}`));
         return;
       }
+      const MAX_RESPONSE_SIZE = 1024 * 1024; // 1MB
       let data = '';
-      res.on('data', (chunk: Buffer) => { data += chunk; });
+      res.on('data', (chunk: Buffer) => {
+        data += chunk;
+        if (data.length > MAX_RESPONSE_SIZE) {
+          res.destroy();
+          reject(new Error('Registry response too large'));
+        }
+      });
       res.on('end', () => {
         try {
           const parsed = JSON.parse(data);
