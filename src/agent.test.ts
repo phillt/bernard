@@ -36,6 +36,19 @@ vi.mock('./context.js', () => ({
   emergencyTruncate: vi.fn((history: any) => history),
   isTokenOverflowError: vi.fn(() => false),
   getContextWindow: vi.fn(() => 200_000),
+  extractText: vi.fn((msg: any) => {
+    if (typeof msg.content === 'string') return msg.content;
+    return null;
+  }),
+}));
+
+const mockExtractRecentUserTexts = vi.fn((): string[] => []);
+const mockBuildRAGQuery = vi.fn((input: string) => input);
+const mockApplyStickiness = vi.fn((results: any) => results);
+vi.mock('./rag-query.js', () => ({
+  extractRecentUserTexts: (...args: any[]) => mockExtractRecentUserTexts(...args),
+  buildRAGQuery: (...args: any[]) => mockBuildRAGQuery(...args),
+  applyStickiness: (...args: any[]) => mockApplyStickiness(...args),
 }));
 
 const mockSubAgentTool = { description: 'mock sub-agent', execute: vi.fn() };
@@ -469,5 +482,106 @@ describe('Agent', () => {
     mockGenerateText.mockRejectedValue(new Error('API rate limit'));
     const agent = new Agent(makeConfig(), toolOptions, store);
     await expect(agent.processInput('Hello')).rejects.toThrow('Agent error: API rate limit');
+  });
+
+  it('passes enriched query to ragStore.search when history exists', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([]),
+      addFacts: vi.fn(),
+    };
+
+    // Simulate history providing prior user texts
+    mockExtractRecentUserTexts.mockReturnValueOnce(['what build tools do we use?']);
+    mockBuildRAGQuery.mockReturnValueOnce('what build tools do we use?. how about compile?');
+
+    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    await agent.processInput('how about compile?');
+
+    expect(mockRagStore.search).toHaveBeenCalledWith('what build tools do we use?. how about compile?');
+  });
+
+  it('first message passes raw userInput to ragStore.search', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([]),
+      addFacts: vi.fn(),
+    };
+
+    // No history — extractRecentUserTexts returns []
+    mockExtractRecentUserTexts.mockReturnValueOnce([]);
+    mockBuildRAGQuery.mockReturnValueOnce('Hello');
+
+    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    await agent.processInput('Hello');
+
+    expect(mockRagStore.search).toHaveBeenCalledWith('Hello');
+  });
+
+  it('applies stickiness to RAG results', async () => {
+    const ragResults = [
+      { fact: 'fact A', similarity: 0.8, domain: 'general' },
+    ];
+    const boostedResults = [
+      { fact: 'fact A', similarity: 0.85, domain: 'general' },
+    ];
+
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue(ragResults),
+      addFacts: vi.fn(),
+    };
+
+    mockApplyStickiness.mockReturnValueOnce(boostedResults);
+
+    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    await agent.processInput('Hello');
+
+    expect(mockApplyStickiness).toHaveBeenCalledWith(ragResults, expect.any(Set));
+  });
+
+  it('clearHistory resets previousRAGFacts', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const ragResults = [
+      { fact: 'fact A', similarity: 0.8, domain: 'general' },
+    ];
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue(ragResults),
+      addFacts: vi.fn(),
+    };
+
+    mockApplyStickiness.mockImplementation((results: any) => results);
+
+    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+
+    // First call — builds up previousRAGFacts
+    await agent.processInput('Hello');
+    // applyStickiness should have been called with empty Set (first turn)
+    expect(mockApplyStickiness).toHaveBeenCalledWith(ragResults, new Set());
+
+    // Clear and call again
+    agent.clearHistory();
+    mockApplyStickiness.mockClear();
+
+    await agent.processInput('Hello again');
+    // After clearHistory, previousRAGFacts should be empty again
+    expect(mockApplyStickiness).toHaveBeenCalledWith(ragResults, new Set());
   });
 });
