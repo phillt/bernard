@@ -183,6 +183,7 @@ export function printHelp(): void {
   console.log(t.text('  /scratch') + t.muted(' — List session scratch notes'));
   console.log(t.text('  /mcp') + t.muted('      — List MCP servers and tools'));
   console.log(t.text('  /cron') + t.muted('     — Show cron jobs and daemon status'));
+  console.log(t.text('  /facts') + t.muted('    — Show RAG facts in current context window'));
   console.log(t.text('  /provider') + t.muted(' — Switch LLM provider'));
   console.log(t.text('  /model') + t.muted('    — Switch model for current provider'));
   console.log(t.text('  /theme') + t.muted('    — Switch color theme'));
