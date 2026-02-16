@@ -260,6 +260,90 @@ describe('RAGStore', () => {
     });
   });
 
+  describe('Float32Array embedding serialization', () => {
+    function createFloat32Provider(): EmbeddingProvider {
+      return {
+        async embed(texts: string[]): Promise<number[][]> {
+          // Simulate fastembed returning Float32Array
+          return fakeEmbed(texts).map((e) => new Float32Array(e) as unknown as number[]);
+        },
+        dimensions(): number {
+          return 16;
+        },
+      };
+    }
+
+    it('addFacts converts Float32Array embeddings to plain arrays for persistence', async () => {
+      mockProvider = createFloat32Provider();
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode'], 'test');
+
+      // Grab the JSON written to disk
+      const writeCall = vi.mocked(fs.writeFileSync).mock.calls.at(-1);
+      expect(writeCall).toBeDefined();
+      const persisted = JSON.parse(writeCall![1] as string);
+      expect(Array.isArray(persisted[0].embedding)).toBe(true);
+      // Verify it serializes as a real array, not {"0":...,"1":...}
+      const reserialized = JSON.parse(JSON.stringify(persisted[0].embedding));
+      expect(Array.isArray(reserialized)).toBe(true);
+    });
+
+    it('search works when provider returns Float32Array embeddings', async () => {
+      mockProvider = createFloat32Provider();
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode for all editors'], 'test');
+      const results = await store.search('User prefers dark mode for all editors');
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].similarity).not.toBeNaN();
+      expect(results[0].fact).toContain('dark mode');
+    });
+
+    it('searchWithIds works when provider returns Float32Array embeddings', async () => {
+      mockProvider = createFloat32Provider();
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode for all editors'], 'test');
+      const results = await store.searchWithIds('User prefers dark mode for all editors');
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].similarity).not.toBeNaN();
+    });
+
+    it('load() converts object-shaped embeddings back to arrays', async () => {
+      // Simulate a corrupted file where Float32Array was serialized as {"0":...}
+      const objectEmbedding: Record<string, number> = {};
+      for (let i = 0; i < 16; i++) {
+        objectEmbedding[String(i)] = i === 0 ? 1 : 0;
+      }
+      const memories = [
+        { id: '1', fact: 'test fact', embedding: objectEmbedding, source: 'test', domain: 'general', createdAt: new Date().toISOString(), accessCount: 0 },
+      ];
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
+
+      const store = await createStore();
+      expect(store.count()).toBe(1);
+
+      // Search should work against the repaired embedding
+      const results = await store.search('test fact');
+      for (const r of results) {
+        expect(r.similarity).not.toBeNaN();
+      }
+    });
+
+    it('load() preserves already-correct array embeddings', async () => {
+      const memories = [
+        { id: '1', fact: 'test fact', embedding: Array(16).fill(0).map((_, i) => i === 0 ? 1 : 0), source: 'test', domain: 'general', createdAt: new Date().toISOString(), accessCount: 0 },
+      ];
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
+
+      const store = await createStore();
+      const results = await store.search('test fact');
+      for (const r of results) {
+        expect(r.similarity).not.toBeNaN();
+      }
+    });
+  });
+
   describe('listFacts', () => {
     it('returns formatted fact list with domain', async () => {
       const memories = [
