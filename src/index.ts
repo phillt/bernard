@@ -11,6 +11,7 @@ import { cronList, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cro
 import { listMCPServers, removeMCPServer } from './mcp.js';
 import { runFirstTimeSetup } from './setup.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
+import { factsList, factsSearch } from './facts-cli.js';
 
 const program = new Command();
 
@@ -322,6 +323,23 @@ program
       autoUpdate: enabled,
     });
     printInfo(`Auto-update ${enabled ? 'enabled' : 'disabled'}.`);
+  });
+
+program
+  .command('facts [query]')
+  .description('Browse and manage RAG facts')
+  .action(async (query?: string) => {
+    try {
+      if (query) {
+        await factsSearch(query);
+      } else {
+        await factsList();
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
   });
 
 program.parse();

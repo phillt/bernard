@@ -260,6 +260,90 @@ describe('RAGStore', () => {
     });
   });
 
+  describe('Float32Array embedding serialization', () => {
+    function createFloat32Provider(): EmbeddingProvider {
+      return {
+        async embed(texts: string[]): Promise<number[][]> {
+          // Simulate fastembed returning Float32Array
+          return fakeEmbed(texts).map((e) => new Float32Array(e) as unknown as number[]);
+        },
+        dimensions(): number {
+          return 16;
+        },
+      };
+    }
+
+    it('addFacts converts Float32Array embeddings to plain arrays for persistence', async () => {
+      mockProvider = createFloat32Provider();
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode'], 'test');
+
+      // Grab the JSON written to disk
+      const writeCall = vi.mocked(fs.writeFileSync).mock.calls.at(-1);
+      expect(writeCall).toBeDefined();
+      const persisted = JSON.parse(writeCall![1] as string);
+      expect(Array.isArray(persisted[0].embedding)).toBe(true);
+      // Verify it serializes as a real array, not {"0":...,"1":...}
+      const reserialized = JSON.parse(JSON.stringify(persisted[0].embedding));
+      expect(Array.isArray(reserialized)).toBe(true);
+    });
+
+    it('search works when provider returns Float32Array embeddings', async () => {
+      mockProvider = createFloat32Provider();
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode for all editors'], 'test');
+      const results = await store.search('User prefers dark mode for all editors');
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].similarity).not.toBeNaN();
+      expect(results[0].fact).toContain('dark mode');
+    });
+
+    it('searchWithIds works when provider returns Float32Array embeddings', async () => {
+      mockProvider = createFloat32Provider();
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode for all editors'], 'test');
+      const results = await store.searchWithIds('User prefers dark mode for all editors');
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].similarity).not.toBeNaN();
+    });
+
+    it('load() converts object-shaped embeddings back to arrays', async () => {
+      // Simulate a corrupted file where Float32Array was serialized as {"0":...}
+      const objectEmbedding: Record<string, number> = {};
+      for (let i = 0; i < 16; i++) {
+        objectEmbedding[String(i)] = i === 0 ? 1 : 0;
+      }
+      const memories = [
+        { id: '1', fact: 'test fact', embedding: objectEmbedding, source: 'test', domain: 'general', createdAt: new Date().toISOString(), accessCount: 0 },
+      ];
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
+
+      const store = await createStore();
+      expect(store.count()).toBe(1);
+
+      // Search should work against the repaired embedding
+      const results = await store.search('test fact');
+      for (const r of results) {
+        expect(r.similarity).not.toBeNaN();
+      }
+    });
+
+    it('load() preserves already-correct array embeddings', async () => {
+      const memories = [
+        { id: '1', fact: 'test fact', embedding: Array(16).fill(0).map((_, i) => i === 0 ? 1 : 0), source: 'test', domain: 'general', createdAt: new Date().toISOString(), accessCount: 0 },
+      ];
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
+
+      const store = await createStore();
+      const results = await store.search('test fact');
+      for (const r of results) {
+        expect(r.similarity).not.toBeNaN();
+      }
+    });
+  });
+
   describe('listFacts', () => {
     it('returns formatted fact list with domain', async () => {
       const memories = [
@@ -302,6 +386,117 @@ describe('RAGStore', () => {
       await store.addFacts(['fact 1', 'fact 2'], 'test');
       store.clear();
       expect(store.count()).toBe(0);
+    });
+  });
+
+  describe('searchWithIds', () => {
+    it('returns results with id, createdAt, and accessCount', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode for all editors'], 'test', 'user-preferences');
+      const results = await store.searchWithIds('User prefers dark mode for all editors');
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]).toHaveProperty('id');
+      expect(results[0]).toHaveProperty('createdAt');
+      expect(results[0]).toHaveProperty('accessCount');
+      expect(results[0].domain).toBe('user-preferences');
+      expect(results[0].fact).toContain('dark mode');
+    });
+
+    it('does NOT update accessCount', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode'], 'test');
+
+      // Clear mocks to track only searchWithIds calls
+      vi.mocked(fs.writeFileSync).mockClear();
+      vi.mocked(fs.renameSync).mockClear();
+
+      const results = await store.searchWithIds('User prefers dark mode');
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].accessCount).toBe(0);
+
+      // persist should NOT be called (no access metadata update)
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('returns empty when no memories', async () => {
+      const store = await createStore();
+      const results = await store.searchWithIds('anything');
+      expect(results).toEqual([]);
+    });
+
+    it('returns empty when provider is unavailable', async () => {
+      const store = await createStore();
+      await store.addFacts(['some fact'], 'test');
+      mockProvider = null;
+      const results = await store.searchWithIds('some fact');
+      expect(results).toEqual([]);
+    });
+  });
+
+  describe('listMemories', () => {
+    it('returns all memories with correct fields', async () => {
+      const store = await createStore();
+      await store.addFacts(['fact A'], 'test', 'general');
+      await store.addFacts(['fact B'], 'test', 'tool-usage');
+
+      const memories = store.listMemories();
+      expect(memories).toHaveLength(2);
+      expect(memories[0]).toHaveProperty('id');
+      expect(memories[0]).toHaveProperty('fact');
+      expect(memories[0]).toHaveProperty('domain');
+      expect(memories[0]).toHaveProperty('createdAt');
+      expect(memories[0]).toHaveProperty('accessCount');
+      expect(memories[0].similarity).toBe(1.0);
+    });
+
+    it('returns empty array when no memories', async () => {
+      const store = await createStore();
+      const memories = store.listMemories();
+      expect(memories).toEqual([]);
+    });
+  });
+
+  describe('deleteByIds', () => {
+    it('deletes matching memories and persists', async () => {
+      const store = await createStore();
+      await store.addFacts(['fact A', 'fact B', 'fact C'], 'test');
+
+      const all = store.listMemories();
+      expect(all).toHaveLength(3);
+
+      vi.mocked(fs.writeFileSync).mockClear();
+      vi.mocked(fs.renameSync).mockClear();
+
+      const deleted = store.deleteByIds([all[0].id, all[2].id]);
+      expect(deleted).toBe(2);
+      expect(store.count()).toBe(1);
+      expect(store.listMemories()[0].id).toBe(all[1].id);
+
+      // Should persist after deletion
+      expect(fs.writeFileSync).toHaveBeenCalled();
+      expect(fs.renameSync).toHaveBeenCalled();
+    });
+
+    it('returns 0 for empty ids array', async () => {
+      const store = await createStore();
+      await store.addFacts(['fact A'], 'test');
+      const deleted = store.deleteByIds([]);
+      expect(deleted).toBe(0);
+      expect(store.count()).toBe(1);
+    });
+
+    it('returns 0 for non-existent ids', async () => {
+      const store = await createStore();
+      await store.addFacts(['fact A'], 'test');
+
+      vi.mocked(fs.writeFileSync).mockClear();
+
+      const deleted = store.deleteByIds(['nonexistent-id']);
+      expect(deleted).toBe(0);
+      expect(store.count()).toBe(1);
+
+      // Should NOT persist when nothing was deleted
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
     });
   });
 });

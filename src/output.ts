@@ -80,6 +80,9 @@ export function stopSpinner(): void {
 export function printWelcome(provider: string, model: string): void {
   console.log(getTheme().accentBold('\n  Bernard') + getTheme().muted(' — AI CLI Assistant'));
   console.log(getTheme().muted(`  Provider: ${provider} | Model: ${model}`));
+  if (process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1') {
+    console.log(getTheme().warning('  DEBUG mode enabled — logging to .logs/'));
+  }
   console.log(getTheme().muted('  Type /help for commands, exit to quit\n'));
 }
 
@@ -183,6 +186,7 @@ export function printHelp(): void {
   console.log(t.text('  /scratch') + t.muted(' — List session scratch notes'));
   console.log(t.text('  /mcp') + t.muted('      — List MCP servers and tools'));
   console.log(t.text('  /cron') + t.muted('     — Show cron jobs and daemon status'));
+  console.log(t.text('  /facts') + t.muted('    — Show RAG facts in current context window'));
   console.log(t.text('  /provider') + t.muted(' — Switch LLM provider'));
   console.log(t.text('  /model') + t.muted('    — Switch model for current provider'));
   console.log(t.text('  /theme') + t.muted('    — Switch color theme'));

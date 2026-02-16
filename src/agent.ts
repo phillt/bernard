@@ -9,6 +9,7 @@ import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import { buildMemoryContext } from './memory-context.js';
+import { extractRecentUserTexts, buildRAGQuery, applyStickiness } from './rag-query.js';
 
 const BASE_SYSTEM_PROMPT = `# Identity
 
@@ -120,6 +121,8 @@ export class Agent {
   private mcpServerNames?: string[];
   private alertContext?: string;
   private ragStore?: RAGStore;
+  private previousRAGFacts: Set<string> = new Set();
+  private lastRAGResults: RAGSearchResult[] = [];
   private abortController: AbortController | null = null;
   private lastPromptTokens: number = 0;
   private lastStepPromptTokens: number = 0;
@@ -143,6 +146,10 @@ export class Agent {
     return this.history;
   }
 
+  getLastRAGResults(): RAGSearchResult[] {
+    return this.lastRAGResults;
+  }
+
   abort(): void {
     this.abortController?.abort();
   }
@@ -156,6 +163,7 @@ export class Agent {
 
     this.abortController = new AbortController();
     this.lastStepPromptTokens = 0;
+    this.lastRAGResults = [];
 
     try {
       // Check if context compression is needed
@@ -165,13 +173,26 @@ export class Agent {
         this.history = await compressHistory(this.history, this.config, this.ragStore);
       }
 
-      // RAG search for relevant memories
+      // RAG search for relevant memories with sliding-window query
       let ragResults: RAGSearchResult[] | undefined;
       if (this.ragStore) {
         try {
-          ragResults = await this.ragStore.search(userInput);
+          // Build context-enriched query from recent user messages
+          const recentTexts = extractRecentUserTexts(this.history.slice(0, -1), 2);
+          const ragQuery = buildRAGQuery(userInput, recentTexts);
+
+          // Search with enriched query
+          const rawResults = await this.ragStore.search(ragQuery);
+
+          // Apply stickiness from previous turn
+          ragResults = applyStickiness(rawResults, this.previousRAGFacts);
+          this.lastRAGResults = ragResults;
+
+          // Track for next turn
+          this.previousRAGFacts = new Set(ragResults.map((r) => r.fact));
+
           if (ragResults.length > 0) {
-            debugLog('agent:rag', { query: userInput.slice(0, 100), results: ragResults.length });
+            debugLog('agent:rag', { query: ragQuery.slice(0, 100), results: ragResults.length });
           }
         } catch (err) {
           debugLog('agent:rag:error', err instanceof Error ? err.message : String(err));
@@ -284,5 +305,7 @@ export class Agent {
   clearHistory(): void {
     this.history = [];
     this.memoryStore.clearScratch();
+    this.previousRAGFacts = new Set();
+    this.lastRAGResults = [];
   }
 }

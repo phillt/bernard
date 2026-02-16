@@ -35,6 +35,44 @@ describe('DOMAIN_REGISTRY', () => {
       expect(domain.extractionPrompt).toContain('JSON array of strings');
     }
   });
+
+  it('each extraction prompt contains Good/Bad examples', () => {
+    for (const domain of Object.values(DOMAIN_REGISTRY)) {
+      expect(domain.extractionPrompt).toContain('Good:');
+      expect(domain.extractionPrompt).toContain('Bad:');
+    }
+  });
+
+  it('each extraction prompt emphasizes durable/long-term knowledge', () => {
+    for (const domain of Object.values(DOMAIN_REGISTRY)) {
+      expect(domain.extractionPrompt).toMatch(/durable|long-term/i);
+    }
+  });
+
+  it('general prompt mentions people and relationships', () => {
+    const prompt = DOMAIN_REGISTRY['general'].extractionPrompt;
+    expect(prompt).toContain('People, relationships, and contact methods');
+  });
+
+  it('general prompt excludes ephemeral UI state', () => {
+    const prompt = DOMAIN_REGISTRY['general'].extractionPrompt;
+    expect(prompt).toContain('Ephemeral UI state');
+  });
+
+  it('tool-usage prompt requires application or system context', () => {
+    const prompt = DOMAIN_REGISTRY['tool-usage'].extractionPrompt;
+    expect(prompt).toContain('application or system being operated on');
+  });
+
+  it('tool-usage prompt excludes individual UI interactions without context', () => {
+    const prompt = DOMAIN_REGISTRY['tool-usage'].extractionPrompt;
+    expect(prompt).toContain('Individual UI interactions');
+  });
+
+  it('user-preferences prompt excludes task-specific preferences', () => {
+    const prompt = DOMAIN_REGISTRY['user-preferences'].extractionPrompt;
+    expect(prompt).toContain('only apply to the current task');
+  });
 });
 
 describe('DEFAULT_DOMAIN', () => {

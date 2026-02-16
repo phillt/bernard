@@ -6,7 +6,7 @@ import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import { Agent } from './agent.js';
 import { MemoryStore } from './memory.js';
-import { RAGStore } from './rag.js';
+import { RAGStore, type RAGSearchResult } from './rag.js';
 import { MCPManager } from './mcp.js';
 import { printHelp, printInfo, printError, printConversationReplay, startSpinner, stopSpinner, buildSpinnerMessage, type SpinnerStats } from './output.js';
 import type { ToolOptions } from './tools';
@@ -28,6 +28,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     { command: '/mcp',      description: 'List MCP servers and tools' },
     { command: '/cron',     description: 'Show cron jobs and daemon status' },
     { command: '/rag',      description: 'Show RAG memory stats and recent facts' },
+    { command: '/facts',    description: 'Show RAG facts in the current context window' },
     { command: '/provider', description: 'Switch LLM provider' },
     { command: '/model',    description: 'Switch model for current provider' },
     { command: '/theme',    description: 'Switch color theme' },
@@ -432,6 +433,31 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
         }
       }
       console.log();
+      prompt();
+      return;
+    }
+
+    if (trimmed === '/facts') {
+      const results = agent.getLastRAGResults();
+      if (results.length === 0) {
+        printInfo('No RAG facts in current context window.');
+      } else {
+        printInfo(`\n## Recalled Context (${results.length} facts)\n`);
+        const byDomain = new Map<string, RAGSearchResult[]>();
+        for (const r of results) {
+          if (!byDomain.has(r.domain)) byDomain.set(r.domain, []);
+          byDomain.get(r.domain)!.push(r);
+        }
+        for (const [domainId, items] of byDomain) {
+          const domain = getDomain(domainId);
+          printInfo(`### ${domain.name}`);
+          for (const item of items) {
+            const pct = Math.round(item.similarity * 100);
+            printInfo(`  - (${pct}%) ${item.fact}`);
+          }
+          printInfo('');
+        }
+      }
       prompt();
       return;
     }

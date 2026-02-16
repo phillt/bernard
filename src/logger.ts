@@ -1,12 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const DEBUG = !!process.env.BERNARD_DEBUG;
 const LOG_DIR = path.resolve('.logs');
 let dirCreated = false;
 
 export function debugLog(label: string, data: unknown): void {
-  if (!DEBUG) return;
+  if (process.env.BERNARD_DEBUG !== 'true' && process.env.BERNARD_DEBUG !== '1') return;
 
   if (!dirCreated) {
     fs.mkdirSync(LOG_DIR, { recursive: true });
