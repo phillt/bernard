@@ -224,10 +224,14 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
     'gpt-4.1-nano',
   ],
   xai: [
+    'grok-4-fast-non-reasoning',
+    'grok-4-fast-reasoning',
+    'grok-4-1-fast-non-reasoning',
+    'grok-4-1-fast-reasoning',
+    'grok-4-0709',
+    'grok-code-fast-1',
     'grok-3',
-    'grok-3-fast',
     'grok-3-mini',
-    'grok-3-mini-fast',
   ],
 };
 
