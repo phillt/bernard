@@ -280,7 +280,10 @@ export async function startRepl(
     ragStore,
   );
 
+  let cleanedUp = false;
   const cleanup = async () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
     if (process.stdin.isTTY) {
       process.stdout.write('\x1b[?2004l'); // disable bracket paste mode
     }
@@ -717,7 +720,9 @@ export async function startRepl(
   // Handle Ctrl+C gracefully
   rl.on('close', () => {
     printInfo('\nGoodbye!');
-    void cleanup().then(() => process.exit(0));
+    void cleanup()
+      .then(() => process.exit(0))
+      .catch(() => process.exit(1));
   });
 
   void prompt();
