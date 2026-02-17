@@ -31,6 +31,18 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+  format:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+
   test:
     name: Tests (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
