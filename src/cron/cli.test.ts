@@ -224,6 +224,17 @@ describe('cron CLI commands', () => {
       expect(errorMessages().some(m => m.includes('threw') && m.includes('config load failed'))).toBe(true);
     });
 
+    it('exits with error when job is already running', async () => {
+      const job = makeJob({ lastRunStatus: 'running' });
+      mockStore.getJob.mockReturnValue(job);
+
+      await cronRun('job-1');
+
+      expect(errorMessages().some(m => m.includes('already running'))).toBe(true);
+      expect(mockExit).toHaveBeenCalledWith(1);
+      expect(mockRunJob).not.toHaveBeenCalled();
+    });
+
     it('prints disabled notice for disabled jobs', async () => {
       const job = makeJob({ enabled: false });
       mockStore.getJob.mockReturnValue(job);

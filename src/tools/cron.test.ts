@@ -306,6 +306,28 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       expect(result).toContain('Success');
     });
 
+    it('should return error when job is already running', async () => {
+      const job = {
+        id: 'test-id',
+        name: 'Running Job',
+        schedule: '0 * * * *',
+        prompt: 'Do something',
+        enabled: true,
+        createdAt: '2025-01-01T00:00:00.000Z',
+        lastRunStatus: 'running',
+      };
+      mockStore.getJob.mockReturnValue(job);
+
+      const result = await tools.cron_run.execute!(
+        { id: 'test-id' },
+        {} as any,
+      );
+
+      expect(result).toContain('already running');
+      expect(mockRunJob).not.toHaveBeenCalled();
+      expect(mockStore.updateJob).not.toHaveBeenCalled();
+    });
+
     it('should handle runJob failure', async () => {
       const job = {
         id: 'test-id',
