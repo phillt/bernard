@@ -209,6 +209,30 @@ describe('cron CLI commands', () => {
 
       expect(infoMessages().some(m => m.includes('Running job') && m.includes('My Backup'))).toBe(true);
     });
+
+    it('catches runJob throw and updates status to error', async () => {
+      const job = makeJob();
+      mockStore.getJob.mockReturnValue(job);
+      mockRunJob.mockRejectedValue(new Error('config load failed'));
+
+      await cronRun('job-1');
+
+      expect(mockStore.updateJob).toHaveBeenCalledWith('job-1', expect.objectContaining({
+        lastRunStatus: 'error',
+        lastResult: 'config load failed',
+      }));
+      expect(errorMessages().some(m => m.includes('threw') && m.includes('config load failed'))).toBe(true);
+    });
+
+    it('prints disabled notice for disabled jobs', async () => {
+      const job = makeJob({ enabled: false });
+      mockStore.getJob.mockReturnValue(job);
+      mockRunJob.mockResolvedValue({ success: true, output: 'Done' });
+
+      await cronRun('job-1');
+
+      expect(infoMessages().some(m => m.includes('currently disabled'))).toBe(true);
+    });
   });
 
   // ==================== cron-delete ====================

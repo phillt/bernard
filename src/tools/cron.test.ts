@@ -259,6 +259,53 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       }));
     });
 
+    it('should catch runJob throw and update status to error', async () => {
+      const job = {
+        id: 'test-id',
+        name: 'Throwing Job',
+        schedule: '0 * * * *',
+        prompt: 'Do something',
+        enabled: true,
+        createdAt: '2025-01-01T00:00:00.000Z',
+      };
+      mockStore.getJob.mockReturnValue(job);
+      mockRunJob.mockRejectedValue(new Error('config load failed'));
+
+      const result = await tools.cron_run.execute!(
+        { id: 'test-id' },
+        {} as any,
+      );
+
+      expect(result).toContain('Throwing Job');
+      expect(result).toContain('Error');
+      expect(result).toContain('config load failed');
+      expect(mockStore.updateJob).toHaveBeenCalledWith('test-id', expect.objectContaining({
+        lastRunStatus: 'error',
+        lastResult: 'config load failed',
+      }));
+    });
+
+    it('should include disabled notice for disabled jobs', async () => {
+      const job = {
+        id: 'test-id',
+        name: 'Disabled Job',
+        schedule: '0 * * * *',
+        prompt: 'Do something',
+        enabled: false,
+        createdAt: '2025-01-01T00:00:00.000Z',
+      };
+      mockStore.getJob.mockReturnValue(job);
+      mockRunJob.mockResolvedValue({ success: true, output: 'Done' });
+
+      const result = await tools.cron_run.execute!(
+        { id: 'test-id' },
+        {} as any,
+      );
+
+      expect(result).toContain('currently disabled');
+      expect(result).toContain('Success');
+    });
+
     it('should handle runJob failure', async () => {
       const job = {
         id: 'test-id',

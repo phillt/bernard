@@ -95,26 +95,37 @@ export function createCronTools() {
         const job = store.getJob(id);
         if (!job) return `Error: No job found with ID "${id}".`;
 
+        const disabledNote = job.enabled ? '' : '\nNote: this job is currently disabled.\n';
+
         const startTime = new Date().toISOString();
         store.updateJob(id, {
           lastRun: startTime,
           lastRunStatus: 'running',
         });
 
-        const logs: string[] = [];
-        const result = await runJob(job, (msg) => logs.push(msg));
+        try {
+          const logs: string[] = [];
+          const result = await runJob(job, (msg) => logs.push(msg));
 
-        store.updateJob(id, {
-          lastRunStatus: result.success ? 'success' : 'error',
-          lastResult: result.output.slice(0, 2000),
-        });
+          store.updateJob(id, {
+            lastRunStatus: result.success ? 'success' : 'error',
+            lastResult: result.output.slice(0, 2000),
+          });
 
-        const status = result.success ? 'Success' : 'Error';
-        let response = `Job "${job.name}" — ${status}\n\nOutput:\n${result.output}`;
-        if (logs.length > 0) {
-          response += `\n\nLogs:\n${logs.join('\n')}`;
+          const status = result.success ? 'Success' : 'Error';
+          let response = `${disabledNote}Job "${job.name}" — ${status}\n\nOutput:\n${result.output}`;
+          if (logs.length > 0) {
+            response += `\n\nLogs:\n${logs.join('\n')}`;
+          }
+          return response;
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          store.updateJob(id, {
+            lastRunStatus: 'error',
+            lastResult: message.slice(0, 2000),
+          });
+          return `${disabledNote}Job "${job.name}" — Error\n\nThrew: ${message}`;
         }
-        return response;
       },
     }),
 

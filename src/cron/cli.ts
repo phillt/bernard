@@ -64,6 +64,10 @@ export async function cronRun(id: string): Promise<void> {
     return;
   }
 
+  if (!job.enabled) {
+    printInfo('Note: this job is currently disabled.');
+  }
+
   printInfo(`Running job "${job.name}" (${job.id})...`);
 
   const startTime = new Date().toISOString();
