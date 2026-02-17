@@ -6,7 +6,7 @@ import { isDaemonRunning, startDaemon, stopDaemon } from './client.js';
 import { printInfo, printError } from '../output.js';
 
 function stopIfNoEnabledJobs(store: CronStore): void {
-  const remaining = store.loadJobs().filter(j => j.enabled);
+  const remaining = store.loadJobs().filter((j) => j.enabled);
   if (remaining.length === 0 && isDaemonRunning()) {
     stopDaemon();
     printInfo('No enabled jobs remain — daemon stopped.');
@@ -48,7 +48,7 @@ export async function cronList(): Promise<void> {
     printInfo(`    Schedule: ${job.schedule} | ${lastRun}`);
   }
 
-  const enabled = jobs.filter(j => j.enabled).length;
+  const enabled = jobs.filter((j) => j.enabled).length;
   const disabled = jobs.length - enabled;
   printInfo('');
   printInfo(`${jobs.length} job(s): ${enabled} enabled, ${disabled} disabled`);
@@ -65,7 +65,9 @@ export async function cronRun(id: string): Promise<void> {
   }
 
   if (job.lastRunStatus === 'running') {
-    printError(`Job "${job.name}" is already running. Wait for it to finish or check status with cron-list.`);
+    printError(
+      `Job "${job.name}" is already running. Wait for it to finish or check status with cron-list.`,
+    );
     process.exit(1);
     return;
   }
@@ -164,7 +166,9 @@ export async function cronDeleteAll(): Promise<void> {
     printInfo(`  - ${job.name}`);
   }
 
-  const confirmed = await confirm(`Delete ALL ${jobs.length} job(s) and their logs? This cannot be undone. (y/N): `);
+  const confirmed = await confirm(
+    `Delete ALL ${jobs.length} job(s) and their logs? This cannot be undone. (y/N): `,
+  );
   if (!confirmed) {
     printInfo('Cancelled.');
     return;
@@ -215,7 +219,7 @@ export async function cronBounce(ids?: string[]): Promise<void> {
   if (!ids || ids.length === 0) {
     // Bounce the daemon
     const store = new CronStore();
-    const enabled = store.loadJobs().filter(j => j.enabled);
+    const enabled = store.loadJobs().filter((j) => j.enabled);
 
     if (enabled.length === 0) {
       if (isDaemonRunning()) {
@@ -233,7 +237,7 @@ export async function cronBounce(ids?: string[]): Promise<void> {
     }
 
     // Brief delay to let the daemon process fully shut down before restarting
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, 500));
 
     startDaemon();
     printInfo(`Daemon ${wasRunning ? 'restarted' : 'started'}. ${enabled.length} enabled job(s).`);
@@ -265,7 +269,7 @@ export async function cronBounce(ids?: string[]): Promise<void> {
   }
 
   // Brief delay to let the daemon pick up the disabled state before re-enabling
-  await new Promise(resolve => setTimeout(resolve, 500));
+  await new Promise((resolve) => setTimeout(resolve, 500));
 
   // Re-enable
   for (const job of toBounce) {

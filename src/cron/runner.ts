@@ -74,10 +74,13 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
 
   try {
     const notifyTool = tool({
-      description: 'Send a desktop notification to alert the user. Use this when you find something that requires user attention. Clicking the notification will open a terminal with the alert context.',
+      description:
+        'Send a desktop notification to alert the user. Use this when you find something that requires user attention. Clicking the notification will open a terminal with the alert context.',
       parameters: z.object({
         message: z.string().describe('The alert message to show the user'),
-        severity: z.enum(['low', 'normal', 'critical']).describe('Urgency level of the notification'),
+        severity: z
+          .enum(['low', 'normal', 'critical'])
+          .describe('Urgency level of the notification'),
       }),
       execute: async ({ message, severity }): Promise<string> => {
         const alert = store.createAlert({
@@ -101,7 +104,8 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     });
 
     const selfDisableTool = tool({
-      description: 'Disable this cron job so it will not run again. Use when the job\'s task is complete and no further executions are needed.',
+      description:
+        "Disable this cron job so it will not run again. Use when the job's task is complete and no further executions are needed.",
       parameters: z.object({
         reason: z.string().describe('Brief reason for disabling (logged for the user)'),
       }),
@@ -133,18 +137,24 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       try {
         ragResults = await ragStore.search(job.prompt);
         if (ragResults.length > 0) {
-          debugLog('cron:rag', { jobId: job.id, query: job.prompt.slice(0, 100), results: ragResults.length });
+          debugLog('cron:rag', {
+            jobId: job.id,
+            query: job.prompt.slice(0, 100),
+            results: ragResults.length,
+          });
         }
       } catch (err) {
         debugLog('cron:rag:error', err instanceof Error ? err.message : String(err));
       }
     }
 
-    const enrichedPrompt = DAEMON_SYSTEM_PROMPT + buildMemoryContext({
-      memoryStore,
-      ragResults,
-      includeScratch: false,
-    });
+    const enrichedPrompt =
+      DAEMON_SYSTEM_PROMPT +
+      buildMemoryContext({
+        memoryStore,
+        ragResults,
+        includeScratch: false,
+      });
 
     const result = await generateText({
       model: getModel(config.provider, config.model),
@@ -154,7 +164,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       system: enrichedPrompt,
       messages: [{ role: 'user', content: job.prompt }],
       onStepFinish: ({ text, toolCalls, toolResults, usage, finishReason }) => {
-        const truncatedResults = (toolResults || []).map(tr => ({
+        const truncatedResults = (toolResults || []).map((tr) => ({
           toolName: tr.toolName,
           toolCallId: tr.toolCallId,
           result: truncateResult(tr.result, 10240),
@@ -163,7 +173,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
           stepIndex: stepIndex++,
           timestamp: new Date().toISOString(),
           text: text || '',
-          toolCalls: (toolCalls || []).map(tc => ({
+          toolCalls: (toolCalls || []).map((tc) => ({
             toolName: tc.toolName,
             toolCallId: tc.toolCallId,
             args: tc.args as Record<string, unknown>,

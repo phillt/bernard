@@ -69,7 +69,7 @@ export class MCPManager {
         command: serverConfig.command,
         args: serverConfig.args,
         env: serverConfig.env
-          ? { ...process.env as Record<string, string>, ...serverConfig.env }
+          ? { ...(process.env as Record<string, string>), ...serverConfig.env }
           : undefined,
       });
       return createMCPClient({ transport });
@@ -94,7 +94,7 @@ export class MCPManager {
         this.serverConfigs.set(name, serverConfig);
         const client = await this.createClientForConfig(serverConfig);
         return { name, client };
-      })
+      }),
     );
 
     for (let i = 0; i < results.length; i++) {
@@ -133,9 +133,8 @@ export class MCPManager {
           printError(`MCP server "${name}" failed to list tools: ${message}`);
         }
       } else {
-        const message = result.reason instanceof Error
-          ? result.reason.message
-          : String(result.reason);
+        const message =
+          result.reason instanceof Error ? result.reason.message : String(result.reason);
         this.serverStatuses.push({
           name,
           connected: false,
@@ -170,7 +169,11 @@ export class MCPManager {
     // Close the existing client
     const existingClient = this.clients.get(name);
     if (existingClient) {
-      try { await existingClient.close(); } catch { /* ignore */ }
+      try {
+        await existingClient.close();
+      } catch {
+        /* ignore */
+      }
       this.clients.delete(name);
     }
 
@@ -197,7 +200,7 @@ export class MCPManager {
       }
 
       // Update server status
-      const statusIndex = this.serverStatuses.findIndex(s => s.name === name);
+      const statusIndex = this.serverStatuses.findIndex((s) => s.name === name);
       const newStatus: ServerStatus = { name, connected: true, toolCount: toolNames.length };
       if (statusIndex >= 0) {
         this.serverStatuses[statusIndex] = newStatus;
@@ -210,7 +213,7 @@ export class MCPManager {
       const message = err instanceof Error ? err.message : String(err);
       printError(`MCP reconnection to "${name}" failed: ${message}`);
 
-      const statusIndex = this.serverStatuses.findIndex(s => s.name === name);
+      const statusIndex = this.serverStatuses.findIndex((s) => s.name === name);
       const newStatus: ServerStatus = { name, connected: false, toolCount: 0, error: message };
       if (statusIndex >= 0) {
         this.serverStatuses[statusIndex] = newStatus;
@@ -275,21 +278,25 @@ export class MCPManager {
   }
 
   getConnectedServerNames(): string[] {
-    return this.serverStatuses
-      .filter(s => s.connected)
-      .map(s => s.name);
+    return this.serverStatuses.filter((s) => s.connected).map((s) => s.name);
   }
 
   async close(): Promise<void> {
-    const closePromises = Array.from(this.clients.values()).map(client =>
-      client.close().catch(() => {})
+    const closePromises = Array.from(this.clients.values()).map((client) =>
+      client.close().catch(() => {}),
     );
     await Promise.allSettled(closePromises);
     this.clients.clear();
   }
 }
 
-export function listMCPServers(): { key: string; command?: string; args?: string[]; url?: string; type?: 'sse' | 'http' }[] {
+export function listMCPServers(): {
+  key: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  type?: 'sse' | 'http';
+}[] {
   if (!fs.existsSync(CONFIG_PATH)) {
     return [];
   }
@@ -330,7 +337,7 @@ export function addMCPServer(
   key: string,
   command: string,
   args?: string[],
-  env?: Record<string, string>
+  env?: Record<string, string>,
 ): void {
   if (!key || /\s/.test(key)) {
     throw new Error('Server key must be non-empty and contain no whitespace.');
@@ -370,7 +377,7 @@ export function addMCPUrlServer(
   key: string,
   url: string,
   type?: 'sse' | 'http',
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
 ): void {
   if (!key || /\s/.test(key)) {
     throw new Error('Server key must be non-empty and contain no whitespace.');
@@ -421,9 +428,8 @@ export function removeMCPServer(key: string): void {
 
   if (!(key in config.mcpServers)) {
     const validKeys = Object.keys(config.mcpServers);
-    const hint = validKeys.length > 0
-      ? ` Valid keys: ${validKeys.join(', ')}`
-      : ' No servers configured.';
+    const hint =
+      validKeys.length > 0 ? ` Valid keys: ${validKeys.join(', ')}` : ' No servers configured.';
     throw new Error(`MCP server "${key}" not found.${hint}`);
   }
 

@@ -84,9 +84,7 @@ describe('sendNotification', () => {
       alertId: 'alert-3',
     });
 
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ sound: false }),
-    );
+    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ sound: false }));
 
     mockNotify.mockClear();
 
@@ -97,9 +95,7 @@ describe('sendNotification', () => {
       alertId: 'alert-4',
     });
 
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ sound: true }),
-    );
+    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ sound: true }));
   });
 
   it('disables wait on Linux (click callbacks not supported)', () => {
@@ -112,9 +108,7 @@ describe('sendNotification', () => {
       alertId: 'alert-5',
     });
 
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ wait: false }),
-    );
+    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ wait: false }));
   });
 
   it('enables wait on macOS', () => {
@@ -127,9 +121,7 @@ describe('sendNotification', () => {
       alertId: 'alert-6',
     });
 
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({ wait: true }),
-    );
+    expect(mockNotify).toHaveBeenCalledWith(expect.objectContaining({ wait: true }));
   });
 
   it('does not register multiple click listeners', () => {

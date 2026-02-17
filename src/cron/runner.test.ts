@@ -200,9 +200,7 @@ describe('runJob', () => {
   });
 
   it('excludes scratch notes from daemon system prompt', async () => {
-    mockMemoryStore.getAllScratchContents.mockReturnValue(
-      new Map([['plan', 'step 1 done']]),
-    );
+    mockMemoryStore.getAllScratchContents.mockReturnValue(new Map([['plan', 'step 1 done']]));
 
     await runJob(testJob, vi.fn());
 
@@ -243,9 +241,7 @@ describe('runJob', () => {
   });
 
   it('still contains base daemon prompt when memory context is added', async () => {
-    mockRagSearch.mockResolvedValue([
-      { fact: 'test fact', similarity: 0.8, domain: 'general' },
-    ]);
+    mockRagSearch.mockResolvedValue([{ fact: 'test fact', similarity: 0.8, domain: 'general' }]);
 
     await runJob(testJob, vi.fn());
 

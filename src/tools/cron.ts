@@ -20,7 +20,7 @@ function ensureDaemon(): string | null {
 }
 
 function stopIfNoEnabledJobs(store: CronStore): string {
-  const remaining = store.loadJobs().filter(j => j.enabled);
+  const remaining = store.loadJobs().filter((j) => j.enabled);
   if (remaining.length === 0 && isDaemonRunning()) {
     stopDaemon();
     return ' No enabled jobs remain — daemon stopped.';
@@ -37,7 +37,9 @@ export function createCronTools() {
       description: 'Create a new scheduled cron job that runs an AI prompt on a schedule.',
       parameters: z.object({
         name: z.string().describe('Job name'),
-        schedule: z.string().describe('Cron expression (e.g. "0 * * * *" for hourly, "*/5 * * * *" for every 5 min)'),
+        schedule: z
+          .string()
+          .describe('Cron expression (e.g. "0 * * * *" for hourly, "*/5 * * * *" for every 5 min)'),
         prompt: z.string().describe('The AI prompt to execute on each run'),
       }),
       execute: async ({ name, schedule, prompt }): Promise<string> => {
@@ -72,7 +74,7 @@ export function createCronTools() {
         const jobs = store.loadJobs();
         if (jobs.length === 0) return 'No cron jobs configured.';
 
-        const lines = jobs.map(j => {
+        const lines = jobs.map((j) => {
           const status = j.enabled ? 'enabled' : 'disabled';
           const lastRun = j.lastRun
             ? `last run: ${j.lastRun} (${j.lastRunStatus || 'unknown'})`
@@ -85,7 +87,8 @@ export function createCronTools() {
     }),
 
     cron_run: tool({
-      description: 'Manually run a cron job immediately. Executes the job\'s prompt through the AI agent and returns the result.',
+      description:
+        "Manually run a cron job immediately. Executes the job's prompt through the AI agent and returns the result.",
       parameters: z.object({
         id: z.string().describe('Job ID to run'),
       }),
@@ -173,7 +176,10 @@ Examples:
         id: z.string().describe('Job ID'),
         name: z.string().optional().describe('New job name'),
         schedule: z.string().optional().describe('New cron expression'),
-        prompt: z.string().optional().describe('New AI prompt text — replaces the existing prompt entirely'),
+        prompt: z
+          .string()
+          .optional()
+          .describe('New AI prompt text — replaces the existing prompt entirely'),
       }),
       execute: async ({ id, name, schedule, prompt }): Promise<string> => {
         debugLog('cron_update:execute', { id, name, schedule, prompt });
@@ -183,9 +189,11 @@ Examples:
             .filter(([, v]) => v !== undefined)
             .map(([k]) => k)
             .join(', ');
-          return 'Error: update requires at least one field to change (name, schedule, prompt) as a parameter in this tool call. '
-            + 'Example: {"id":"...","prompt":"new prompt text"}. '
-            + `Received parameters: ${received}.`;
+          return (
+            'Error: update requires at least one field to change (name, schedule, prompt) as a parameter in this tool call. ' +
+            'Example: {"id":"...","prompt":"new prompt text"}. ' +
+            `Received parameters: ${received}.`
+          );
         }
 
         if (schedule && !cron.validate(schedule)) {
@@ -270,8 +278,8 @@ Examples:
 
         const running = isDaemonRunning();
         const jobs = store.loadJobs();
-        const enabled = jobs.filter(j => j.enabled).length;
-        const alerts = store.listAlerts().filter(a => !a.acknowledged);
+        const enabled = jobs.filter((j) => j.enabled).length;
+        const alerts = store.listAlerts().filter((a) => !a.acknowledged);
 
         let result = `Daemon: ${running ? 'running' : 'stopped'}\n`;
         result += `Jobs: ${jobs.length} total, ${enabled} enabled\n`;
@@ -289,7 +297,8 @@ Examples:
     }),
 
     cron_bounce: tool({
-      description: 'Restart the cron daemon. Useful after code updates or if the daemon is misbehaving.',
+      description:
+        'Restart the cron daemon. Useful after code updates or if the daemon is misbehaving.',
       parameters: z.object({}),
       execute: async (): Promise<string> => {
         debugLog('cron_bounce:execute', {});
@@ -298,10 +307,10 @@ Examples:
         if (wasRunning) {
           stopDaemon();
           // Brief delay for process cleanup
-          await new Promise(resolve => setTimeout(resolve, 500));
+          await new Promise((resolve) => setTimeout(resolve, 500));
         }
 
-        const enabled = store.loadJobs().filter(j => j.enabled);
+        const enabled = store.loadJobs().filter((j) => j.enabled);
         if (enabled.length === 0) {
           return wasRunning
             ? 'Daemon stopped. No enabled jobs — not restarting.'

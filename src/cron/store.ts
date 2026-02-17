@@ -24,11 +24,21 @@ export class CronStore {
 
   // --- Paths ---
 
-  static get cronDir(): string { return CRON_DIR; }
-  static get jobsFile(): string { return JOBS_FILE; }
-  static get alertsDir(): string { return ALERTS_DIR; }
-  static get pidFile(): string { return PID_FILE; }
-  static get logFile(): string { return LOG_FILE; }
+  static get cronDir(): string {
+    return CRON_DIR;
+  }
+  static get jobsFile(): string {
+    return JOBS_FILE;
+  }
+  static get alertsDir(): string {
+    return ALERTS_DIR;
+  }
+  static get pidFile(): string {
+    return PID_FILE;
+  }
+  static get logFile(): string {
+    return LOG_FILE;
+  }
 
   // --- Jobs ---
 
@@ -47,7 +57,7 @@ export class CronStore {
   }
 
   getJob(id: string): CronJob | undefined {
-    return this.loadJobs().find(j => j.id === id);
+    return this.loadJobs().find((j) => j.id === id);
   }
 
   createJob(name: string, schedule: string, prompt: string): CronJob {
@@ -68,9 +78,17 @@ export class CronStore {
     return job;
   }
 
-  updateJob(id: string, updates: Partial<Pick<CronJob, 'name' | 'schedule' | 'prompt' | 'enabled' | 'lastRun' | 'lastRunStatus' | 'lastResult'>>): CronJob | undefined {
+  updateJob(
+    id: string,
+    updates: Partial<
+      Pick<
+        CronJob,
+        'name' | 'schedule' | 'prompt' | 'enabled' | 'lastRun' | 'lastRunStatus' | 'lastResult'
+      >
+    >,
+  ): CronJob | undefined {
     const jobs = this.loadJobs();
-    const idx = jobs.findIndex(j => j.id === id);
+    const idx = jobs.findIndex((j) => j.id === id);
     if (idx === -1) return undefined;
     Object.assign(jobs[idx], updates);
     this.saveJobs(jobs);
@@ -79,7 +97,7 @@ export class CronStore {
 
   deleteJob(id: string): boolean {
     const jobs = this.loadJobs();
-    const filtered = jobs.filter(j => j.id !== id);
+    const filtered = jobs.filter((j) => j.id !== id);
     if (filtered.length === jobs.length) return false;
     this.saveJobs(filtered);
     return true;
@@ -111,7 +129,7 @@ export class CronStore {
 
   listAlerts(): CronAlert[] {
     if (!fs.existsSync(ALERTS_DIR)) return [];
-    const files = fs.readdirSync(ALERTS_DIR).filter(f => f.endsWith('.json'));
+    const files = fs.readdirSync(ALERTS_DIR).filter((f) => f.endsWith('.json'));
     const alerts: CronAlert[] = [];
     for (const file of files) {
       try {

@@ -103,9 +103,7 @@ export function applyStickiness(
   // Apply boost
   const boosted = currentResults.map((r) => ({
     ...r,
-    similarity: previousFacts.has(r.fact)
-      ? Math.min(r.similarity + boost, 1.0)
-      : r.similarity,
+    similarity: previousFacts.has(r.fact) ? Math.min(r.similarity + boost, 1.0) : r.similarity,
   }));
 
   // Re-sort by boosted similarity

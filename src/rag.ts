@@ -94,7 +94,11 @@ export class RAGStore {
    * Embed and store new facts. Deduplicates against existing memories.
    * Returns the number of facts actually added.
    */
-  async addFacts(facts: string[], source: string, domain: string = DEFAULT_DOMAIN): Promise<number> {
+  async addFacts(
+    facts: string[],
+    source: string,
+    domain: string = DEFAULT_DOMAIN,
+  ): Promise<number> {
     if (facts.length === 0) return 0;
 
     const provider = await getEmbeddingProvider();
@@ -107,7 +111,10 @@ export class RAGStore {
     try {
       embeddings = (await provider.embed(facts)).map((e) => Array.from(e));
     } catch (err) {
-      debugLog('rag:addFacts', `Embedding failed: ${err instanceof Error ? err.message : String(err)}`);
+      debugLog(
+        'rag:addFacts',
+        `Embedding failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return 0;
     }
 
@@ -184,7 +191,10 @@ export class RAGStore {
     try {
       return Array.from((await provider.embed([query]))[0]);
     } catch (err) {
-      debugLog(logLabel, `Query embedding failed: ${err instanceof Error ? err.message : String(err)}`);
+      debugLog(
+        logLabel,
+        `Query embedding failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
       return null;
     }
   }
@@ -329,13 +339,14 @@ export class RAGStore {
         this.memories = parsed.map((m: any) => ({
           ...m,
           domain: m.domain ?? DEFAULT_DOMAIN,
-          embedding: Array.isArray(m.embedding)
-            ? m.embedding
-            : Object.values(m.embedding),
+          embedding: Array.isArray(m.embedding) ? m.embedding : Object.values(m.embedding),
         }));
       }
     } catch (err) {
-      debugLog('rag:load', `Failed to load memories: ${err instanceof Error ? err.message : String(err)}`);
+      debugLog(
+        'rag:load',
+        `Failed to load memories: ${err instanceof Error ? err.message : String(err)}`,
+      );
       this.memories = [];
     }
   }
@@ -347,7 +358,10 @@ export class RAGStore {
       fs.writeFileSync(tmpFile, JSON.stringify(this.memories), 'utf-8');
       fs.renameSync(tmpFile, MEMORIES_FILE);
     } catch (err) {
-      debugLog('rag:persist', `Failed to persist memories: ${err instanceof Error ? err.message : String(err)}`);
+      debugLog(
+        'rag:persist',
+        `Failed to persist memories: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 }

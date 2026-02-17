@@ -17,7 +17,7 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'gpt-5.2': 400_000,
   'gpt-5.2-chat-latest': 128_000,
   'gpt-4o-mini': 128_000,
-  'o3': 200_000,
+  o3: 200_000,
   'o3-mini': 200_000,
   'gpt-4.1': 1_000_000,
   'gpt-4.1-mini': 1_000_000,
@@ -71,7 +71,12 @@ export function serializeMessages(messages: CoreMessage[]): string {
       // Include tool calls if present
       if (Array.isArray(msg.content)) {
         for (const part of msg.content) {
-          if (typeof part === 'object' && part !== null && 'type' in part && part.type === 'tool-call') {
+          if (
+            typeof part === 'object' &&
+            part !== null &&
+            'type' in part &&
+            part.type === 'tool-call'
+          ) {
             const tc = part as { toolName: string; args: unknown };
             lines.push(`Assistant [tool call]: ${tc.toolName}(${JSON.stringify(tc.args)})`);
           }
@@ -81,7 +86,12 @@ export function serializeMessages(messages: CoreMessage[]): string {
       // Tool results
       if (Array.isArray(msg.content)) {
         for (const part of msg.content) {
-          if (typeof part === 'object' && part !== null && 'type' in part && part.type === 'tool-result') {
+          if (
+            typeof part === 'object' &&
+            part !== null &&
+            'type' in part &&
+            part.type === 'tool-result'
+          ) {
             const tr = part as { toolName?: string; result: unknown };
             const name = tr.toolName ?? 'tool';
             const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
@@ -173,7 +183,10 @@ export async function extractDomainFacts(
     if (result.status === 'fulfilled' && result.value.facts.length > 0) {
       domainFacts.push(result.value);
     } else if (result.status === 'rejected') {
-      debugLog('context:extractDomainFacts', `Domain "${domainIds[index]}" extraction failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+      debugLog(
+        'context:extractDomainFacts',
+        `Domain "${domainIds[index]}" extraction failed: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
+      );
     }
   });
 
@@ -185,7 +198,10 @@ export async function extractDomainFacts(
  * Returns a flat array of facts (backward-compatible wrapper around extractDomainFacts).
  * @internal
  */
-export async function extractFacts(serializedText: string, config: BernardConfig): Promise<string[]> {
+export async function extractFacts(
+  serializedText: string,
+  config: BernardConfig,
+): Promise<string[]> {
   const domainFacts = await extractDomainFacts(serializedText, config);
   return domainFacts.flatMap((df) => df.facts);
 }
@@ -233,14 +249,10 @@ export async function compressHistory(
       model: getModel(config.provider, config.model),
       maxTokens: 2048,
       system: SUMMARIZATION_PROMPT,
-      messages: [
-        { role: 'user', content: `Summarize this conversation:\n\n${serialized}` },
-      ],
+      messages: [{ role: 'user', content: `Summarize this conversation:\n\n${serialized}` }],
     });
 
-    const extractPromise = ragStore
-      ? extractDomainFacts(serialized, config)
-      : Promise.resolve([]);
+    const extractPromise = ragStore ? extractDomainFacts(serialized, config) : Promise.resolve([]);
 
     const [result, domainFacts] = await Promise.all([summarizePromise, extractPromise]);
 
@@ -249,7 +261,10 @@ export async function compressHistory(
       await Promise.all(
         domainFacts.map((df) =>
           ragStore.addFacts(df.facts, 'compression', df.domain).catch((err) => {
-            debugLog('context:compress:rag', `Failed to store facts for domain ${df.domain}: ${err instanceof Error ? err.message : String(err)}`);
+            debugLog(
+              'context:compress:rag',
+              `Failed to store facts for domain ${df.domain}: ${err instanceof Error ? err.message : String(err)}`,
+            );
           }),
         ),
       );
@@ -268,7 +283,7 @@ export async function compressHistory(
 
     const ackMessage: CoreMessage = {
       role: 'assistant',
-      content: 'Understood. I have the context from our earlier conversation. Let\'s continue.',
+      content: "Understood. I have the context from our earlier conversation. Let's continue.",
     };
 
     debugLog('context:compress', {
@@ -309,14 +324,14 @@ export function truncateToolResults(
         'type' in part &&
         part.type === 'tool-result'
       ) {
-        const resultStr = typeof part.result === 'string'
-          ? part.result
-          : JSON.stringify(part.result);
+        const resultStr =
+          typeof part.result === 'string' ? part.result : JSON.stringify(part.result);
         if (resultStr.length > maxChars) {
           changed = true;
           return {
             ...part,
-            result: resultStr.slice(0, maxChars) +
+            result:
+              resultStr.slice(0, maxChars) +
               `\n...[truncated from ${resultStr.length} to ${maxChars} chars]`,
           };
         }
@@ -363,7 +378,10 @@ export function emergencyTruncate(
     // System prompt alone exceeds budget — keep last 6 messages anyway
     const kept = history.slice(-6);
     return [
-      { role: 'user', content: `[Earlier conversation was truncated to fit context window. Focus on the most recent messages below.]${taskHint}` },
+      {
+        role: 'user',
+        content: `[Earlier conversation was truncated to fit context window. Focus on the most recent messages below.]${taskHint}`,
+      },
       { role: 'assistant', content: 'Understood. Continuing with limited context.' },
       ...kept,
     ];
@@ -422,7 +440,9 @@ export function emergencyTruncate(
  * Covers Anthropic, OpenAI, and xAI error message patterns.
  */
 export function isTokenOverflowError(message: string): boolean {
-  return /maximum.*prompt.*length|prompt.*too.*long|context.*length.*exceeded|maximum.*context.*length|token.*limit/i.test(message);
+  return /maximum.*prompt.*length|prompt.*too.*long|context.*length.*exceeded|maximum.*context.*length|token.*limit/i.test(
+    message,
+  );
 }
 
 export function extractText(msg: CoreMessage): string | null {
@@ -430,9 +450,11 @@ export function extractText(msg: CoreMessage): string | null {
   if (!Array.isArray(msg.content)) return null;
 
   const textParts = msg.content
-    .filter((p): p is { type: 'text'; text: string } =>
-      typeof p === 'object' && p !== null && 'type' in p && p.type === 'text')
-    .map(p => p.text);
+    .filter(
+      (p): p is { type: 'text'; text: string } =>
+        typeof p === 'object' && p !== null && 'type' in p && p.type === 'text',
+    )
+    .map((p) => p.text);
 
   return textParts.length > 0 ? textParts.join(' ') : null;
 }

@@ -33,7 +33,7 @@ export async function runFirstTimeSetup(): Promise<boolean> {
     console.log(t.accentBold('\n  Welcome to Bernard'));
     console.log(t.muted('  Local CLI AI Agent with multi-provider support\n'));
     console.log(t.text('  It looks like this is your first time running Bernard.'));
-    console.log(t.text('  Let\'s get you set up with an AI provider.\n'));
+    console.log(t.text("  Let's get you set up with an AI provider.\n"));
 
     console.log(t.text('  Available providers:'));
     for (let i = 0; i < PROVIDERS.length; i++) {

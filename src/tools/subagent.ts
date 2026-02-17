@@ -2,7 +2,13 @@ import { generateText, tool } from 'ai';
 import { z } from 'zod';
 import { getModel } from '../providers/index.js';
 import { createTools, type ToolOptions } from './index.js';
-import { printSubAgentStart, printSubAgentEnd, printToolCall, printToolResult, printAssistantText } from '../output.js';
+import {
+  printSubAgentStart,
+  printSubAgentEnd,
+  printToolCall,
+  printToolResult,
+  printAssistantText,
+} from '../output.js';
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import type { BernardConfig } from '../config.js';
@@ -38,9 +44,14 @@ export function createSubAgentTool(
   ragStore?: RAGStore,
 ) {
   return tool({
-    description: 'Delegate a task to an independent sub-agent that runs in parallel. Sub-agents have NO conversation history and limited steps — your task description must be fully self-contained and highly prescriptive. Specify exact commands, file paths, expected output format, edge cases, and success/failure criteria. Call multiple times in one response for parallel execution.',
+    description:
+      'Delegate a task to an independent sub-agent that runs in parallel. Sub-agents have NO conversation history and limited steps — your task description must be fully self-contained and highly prescriptive. Specify exact commands, file paths, expected output format, edge cases, and success/failure criteria. Call multiple times in one response for parallel execution.',
     parameters: z.object({
-      task: z.string().describe('A detailed, self-contained task description. Include: (1) specific objective and expected output format, (2) exact file paths, commands, or URLs, (3) edge cases and what to do if something fails, (4) what "done" looks like. The sub-agent has zero prior context.'),
+      task: z
+        .string()
+        .describe(
+          'A detailed, self-contained task description. Include: (1) specific objective and expected output format, (2) exact file paths, commands, or URLs, (3) edge cases and what to do if something fails, (4) what "done" looks like. The sub-agent has zero prior context.',
+        ),
       context: z.string().optional().describe('Optional additional context to help the sub-agent'),
     }),
     execute: async ({ task, context }, execOptions) => {
@@ -75,11 +86,13 @@ export function createSubAgentTool(
           }
         }
 
-        const enrichedPrompt = SUB_AGENT_SYSTEM_PROMPT + buildMemoryContext({
-          memoryStore,
-          ragResults,
-          includeScratch: true,
-        });
+        const enrichedPrompt =
+          SUB_AGENT_SYSTEM_PROMPT +
+          buildMemoryContext({
+            memoryStore,
+            ragResults,
+            includeScratch: true,
+          });
 
         const result = await generateText({
           model: getModel(config.provider, config.model),

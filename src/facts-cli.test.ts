@@ -30,7 +30,7 @@ vi.mock('./domains.js', () => ({
     const domains: Record<string, { id: string; name: string }> = {
       'tool-usage': { id: 'tool-usage', name: 'Tool Usage Patterns' },
       'user-preferences': { id: 'user-preferences', name: 'User Preferences' },
-      'general': { id: 'general', name: 'General Knowledge' },
+      general: { id: 'general', name: 'General Knowledge' },
     };
     return domains[id] ?? domains['general'];
   }),
@@ -141,7 +141,7 @@ describe('factsList', () => {
   it('shows message when RAG is disabled', async () => {
     mockConfig.loadConfig.mockReturnValue({ ragEnabled: false });
     await factsList();
-    expect(infoMessages().some(m => m.includes('RAG is disabled'))).toBe(true);
+    expect(infoMessages().some((m) => m.includes('RAG is disabled'))).toBe(true);
   });
 
   it('shows message when store is empty', async () => {
@@ -158,13 +158,13 @@ describe('factsList', () => {
     await factsList();
 
     const msgs = infoMessages();
-    expect(msgs.some(m => m.includes('2 facts'))).toBe(true);
-    expect(msgs.some(m => m.includes('Tool Usage Patterns'))).toBe(true);
-    expect(msgs.some(m => m.includes('User Preferences'))).toBe(true);
+    expect(msgs.some((m) => m.includes('2 facts'))).toBe(true);
+    expect(msgs.some((m) => m.includes('Tool Usage Patterns'))).toBe(true);
+    expect(msgs.some((m) => m.includes('User Preferences'))).toBe(true);
     // Should NOT include percentage
-    expect(msgs.some(m => m.includes('%)') && m.includes('npm run build'))).toBe(false);
-    expect(msgs.some(m => m.includes('1.') && m.includes('npm run build'))).toBe(true);
-    expect(msgs.some(m => m.includes('2.') && m.includes('prefers dark mode'))).toBe(true);
+    expect(msgs.some((m) => m.includes('%)') && m.includes('npm run build'))).toBe(false);
+    expect(msgs.some((m) => m.includes('1.') && m.includes('npm run build'))).toBe(true);
+    expect(msgs.some((m) => m.includes('2.') && m.includes('prefers dark mode'))).toBe(true);
   });
 
   it('handles deletion flow', async () => {
@@ -180,7 +180,7 @@ describe('factsList', () => {
     await factsList();
 
     expect(mockRAGStore.deleteByIds).toHaveBeenCalledWith(['a']);
-    expect(infoMessages().some(m => m.includes('Deleted 1 fact(s)'))).toBe(true);
+    expect(infoMessages().some((m) => m.includes('Deleted 1 fact(s)'))).toBe(true);
   });
 
   it('handles cancel (empty input)', async () => {
@@ -213,9 +213,9 @@ describe('factsList', () => {
     await factsList();
 
     const msgs = infoMessages();
-    expect(msgs.some(m => m.includes('1.') && m.includes('fact one'))).toBe(true);
-    expect(msgs.some(m => m.includes('2.') && m.includes('fact two'))).toBe(true);
-    expect(msgs.some(m => m.includes('3.') && m.includes('fact three'))).toBe(true);
+    expect(msgs.some((m) => m.includes('1.') && m.includes('fact one'))).toBe(true);
+    expect(msgs.some((m) => m.includes('2.') && m.includes('fact two'))).toBe(true);
+    expect(msgs.some((m) => m.includes('3.') && m.includes('fact three'))).toBe(true);
   });
 });
 
@@ -232,7 +232,7 @@ describe('factsSearch', () => {
   it('shows message when RAG is disabled', async () => {
     mockConfig.loadConfig.mockReturnValue({ ragEnabled: false });
     await factsSearch('test query');
-    expect(infoMessages().some(m => m.includes('RAG is disabled'))).toBe(true);
+    expect(infoMessages().some((m) => m.includes('RAG is disabled'))).toBe(true);
   });
 
   it('shows message when no results found', async () => {
@@ -243,15 +243,20 @@ describe('factsSearch', () => {
   it('displays results with similarity percentages', async () => {
     mockRAGStore.searchWithIds.mockResolvedValue([
       makeResult({ similarity: 0.92, fact: 'npm run build compiles TypeScript' }),
-      makeResult({ id: 'b', similarity: 0.78, domain: 'user-preferences', fact: 'prefers dark mode' }),
+      makeResult({
+        id: 'b',
+        similarity: 0.78,
+        domain: 'user-preferences',
+        fact: 'prefers dark mode',
+      }),
     ]);
 
     await factsSearch('build tools');
 
     const msgs = infoMessages();
-    expect(msgs.some(m => m.includes('2 results'))).toBe(true);
-    expect(msgs.some(m => m.includes('92%') && m.includes('npm run build'))).toBe(true);
-    expect(msgs.some(m => m.includes('78%') && m.includes('prefers dark mode'))).toBe(true);
+    expect(msgs.some((m) => m.includes('2 results'))).toBe(true);
+    expect(msgs.some((m) => m.includes('92%') && m.includes('npm run build'))).toBe(true);
+    expect(msgs.some((m) => m.includes('78%') && m.includes('prefers dark mode'))).toBe(true);
   });
 
   it('detects file path and uses file contents as query', async () => {
@@ -262,7 +267,7 @@ describe('factsSearch', () => {
     await factsSearch('./README.md');
 
     expect(mockRAGStore.searchWithIds).toHaveBeenCalledWith('file content here');
-    expect(infoMessages().some(m => m.includes('Using contents of'))).toBe(true);
+    expect(infoMessages().some((m) => m.includes('Using contents of'))).toBe(true);
   });
 
   it('falls through to text query when path is not a file', async () => {
@@ -274,9 +279,7 @@ describe('factsSearch', () => {
   });
 
   it('handles deletion flow with search results', async () => {
-    mockRAGStore.searchWithIds.mockResolvedValue([
-      makeResult({ id: 'x', fact: 'some fact' }),
-    ]);
+    mockRAGStore.searchWithIds.mockResolvedValue([makeResult({ id: 'x', fact: 'some fact' })]);
     mockRAGStore.deleteByIds.mockReturnValue(1);
     promptAnswer = '1';
     confirmAnswer = 'y';

@@ -43,10 +43,9 @@ describe('MemoryStore', () => {
   });
 
   it('creates memory directory on construction', () => {
-    expect(fs.mkdirSync).toHaveBeenCalledWith(
-      expect.stringContaining('memory'),
-      { recursive: true },
-    );
+    expect(fs.mkdirSync).toHaveBeenCalledWith(expect.stringContaining('memory'), {
+      recursive: true,
+    });
   });
 
   describe('scratch operations (pure in-memory)', () => {
@@ -96,9 +95,12 @@ describe('MemoryStore', () => {
 
   describe('persistent memory (mocked fs)', () => {
     it('listMemory filters to .md files', () => {
-      vi.mocked(fs.readdirSync).mockReturnValue(
-        ['notes.md', 'prefs.md', 'other.txt', '.hidden'] as any,
-      );
+      vi.mocked(fs.readdirSync).mockReturnValue([
+        'notes.md',
+        'prefs.md',
+        'other.txt',
+        '.hidden',
+      ] as any);
       expect(store.listMemory()).toEqual(['notes', 'prefs']);
     });
 
@@ -136,9 +138,7 @@ describe('MemoryStore', () => {
     it('getAllMemoryContents returns all memory entries', () => {
       vi.mocked(fs.readdirSync).mockReturnValue(['a.md', 'b.md'] as any);
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync)
-        .mockReturnValueOnce('content-a')
-        .mockReturnValueOnce('content-b');
+      vi.mocked(fs.readFileSync).mockReturnValueOnce('content-a').mockReturnValueOnce('content-b');
       const all = store.getAllMemoryContents();
       expect(all.get('a')).toBe('content-a');
       expect(all.get('b')).toBe('content-b');

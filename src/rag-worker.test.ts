@@ -95,12 +95,23 @@ describe('rag-worker', () => {
 
     await runWorker(tempFile);
 
-    expect(mockLoadConfig).toHaveBeenCalledWith({ provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' });
+    expect(mockLoadConfig).toHaveBeenCalledWith({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5-20250929',
+    });
     expect(mockExtractDomainFacts).toHaveBeenCalledWith(payload.serialized, fakeConfig);
 
     // Should store facts per domain
-    expect(mockAddFacts).toHaveBeenCalledWith(['npm run build compiles project'], 'exit', 'tool-usage');
-    expect(mockAddFacts).toHaveBeenCalledWith(['User prefers dark mode'], 'exit', 'user-preferences');
+    expect(mockAddFacts).toHaveBeenCalledWith(
+      ['npm run build compiles project'],
+      'exit',
+      'tool-usage',
+    );
+    expect(mockAddFacts).toHaveBeenCalledWith(
+      ['User prefers dark mode'],
+      'exit',
+      'user-preferences',
+    );
     expect(mockAddFacts).toHaveBeenCalledWith(['Project uses TypeScript'], 'exit', 'general');
     expect(mockAddFacts).toHaveBeenCalledTimes(3);
 

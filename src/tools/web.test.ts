@@ -4,13 +4,18 @@ import { createWebReadTool } from './web.js';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
-function makeResponse(body: string, init?: { status?: number; statusText?: string; headers?: Record<string, string> }) {
+function makeResponse(
+  body: string,
+  init?: { status?: number; statusText?: string; headers?: Record<string, string> },
+) {
   const status = init?.status ?? 200;
   const statusText = init?.statusText ?? 'OK';
-  const headers = new Map(Object.entries({
-    'content-type': 'text/html; charset=utf-8',
-    ...init?.headers,
-  }));
+  const headers = new Map(
+    Object.entries({
+      'content-type': 'text/html; charset=utf-8',
+      ...init?.headers,
+    }),
+  );
   return {
     ok: status >= 200 && status < 300,
     status,
@@ -35,7 +40,9 @@ describe('createWebReadTool', () => {
   });
 
   it('includes page title in output', async () => {
-    mockFetch.mockResolvedValue(makeResponse('<html><head><title>My Page</title></head><body><p>Content</p></body></html>'));
+    mockFetch.mockResolvedValue(
+      makeResponse('<html><head><title>My Page</title></head><body><p>Content</p></body></html>'),
+    );
     const result = await webTool.execute({ url: 'https://example.com' }, {} as any);
     expect(result).toContain('# My Page');
   });
@@ -56,9 +63,13 @@ describe('createWebReadTool', () => {
   });
 
   it('respects selector parameter when provided', async () => {
-    const html = '<html><body><div class="sidebar">Side</div><article>Main article</article></body></html>';
+    const html =
+      '<html><body><div class="sidebar">Side</div><article>Main article</article></body></html>';
     mockFetch.mockResolvedValue(makeResponse(html));
-    const result = await webTool.execute({ url: 'https://example.com', selector: 'article' }, {} as any);
+    const result = await webTool.execute(
+      { url: 'https://example.com', selector: 'article' },
+      {} as any,
+    );
     expect(result).toContain('Main article');
     expect(result).not.toContain('Side');
   });
@@ -66,19 +77,26 @@ describe('createWebReadTool', () => {
   it('falls back to full body when selector does not match', async () => {
     const html = '<html><body><p>Fallback content</p></body></html>';
     mockFetch.mockResolvedValue(makeResponse(html));
-    const result = await webTool.execute({ url: 'https://example.com', selector: '.nonexistent' }, {} as any);
+    const result = await webTool.execute(
+      { url: 'https://example.com', selector: '.nonexistent' },
+      {} as any,
+    );
     expect(result).toContain('Fallback content');
   });
 
   it('returns error string for non-2xx status codes', async () => {
-    mockFetch.mockResolvedValue(makeResponse('Not Found', { status: 404, statusText: 'Not Found' }));
+    mockFetch.mockResolvedValue(
+      makeResponse('Not Found', { status: 404, statusText: 'Not Found' }),
+    );
     const result = await webTool.execute({ url: 'https://example.com/missing' }, {} as any);
     expect(result).toContain('Error');
     expect(result).toContain('404');
   });
 
   it('returns error string for non-HTML content type', async () => {
-    mockFetch.mockResolvedValue(makeResponse('binary', { headers: { 'content-type': 'application/pdf' } }));
+    mockFetch.mockResolvedValue(
+      makeResponse('binary', { headers: { 'content-type': 'application/pdf' } }),
+    );
     const result = await webTool.execute({ url: 'https://example.com/file.pdf' }, {} as any);
     expect(result).toContain('Error');
     expect(result).toContain('Non-HTML');

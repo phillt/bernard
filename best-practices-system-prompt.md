@@ -14,14 +14,14 @@ This report provides: (a) rigorous definitions and an instruction hierarchy view
 
 A system prompt is best understood as **policy + context** applied at the start (and/or highest authority layer) of a conversation:
 
-* **Policy**: role framing, behavioral constraints, refusal boundaries, tool‑use permissions, formatting rules.
-* **Context**: domain assumptions, audience, organizational style, allowed sources, and continuity expectations.
+- **Policy**: role framing, behavioral constraints, refusal boundaries, tool‑use permissions, formatting rules.
+- **Context**: domain assumptions, audience, organizational style, allowed sources, and continuity expectations.
 
 Provider definitions converge:
 
-* **Google (Vertex AI / Gemini)**: system instructions are processed before prompts and are useful when you need persistent, non‑user‑modifiable behavior (persona, formatting, goals/rules), including across multi‑turn interactions; they also caution that system instructions don’t fully prevent jailbreaks and advise avoiding sensitive information in system instructions.  
-* **Anthropic (Claude)**: system prompts are “role prompting” via the `system` parameter; Anthropic explicitly recommends using `system` for the role and placing task‑specific instructions in the `user` turn.  
-* **Azure OpenAI**: system messages define role/boundaries, tone, output formats, and safety constraints and should be treated as one layer in a broader safety strategy; they can be bypassed or degraded by adversarial prompting, and you should maintain a test set including benign and adversarial prompts.  
+- **Google (Vertex AI / Gemini)**: system instructions are processed before prompts and are useful when you need persistent, non‑user‑modifiable behavior (persona, formatting, goals/rules), including across multi‑turn interactions; they also caution that system instructions don’t fully prevent jailbreaks and advise avoiding sensitive information in system instructions.
+- **Anthropic (Claude)**: system prompts are “role prompting” via the `system` parameter; Anthropic explicitly recommends using `system` for the role and placing task‑specific instructions in the `user` turn.
+- **Azure OpenAI**: system messages define role/boundaries, tone, output formats, and safety constraints and should be treated as one layer in a broader safety strategy; they can be bypassed or degraded by adversarial prompting, and you should maintain a test set including benign and adversarial prompts.
 
 ### Instruction hierarchy and why it matters
 
@@ -50,31 +50,31 @@ This diagram reflects two key operational rules: (1) higher‑authority instruct
 
 The table below summarizes the attributes you requested. The “Tests / metrics” column is written so each attribute is evaluable, aligning with guidance that prompts must be iterated with evals and adversarial testing.
 
-| Attribute | What it controls | Do | Don’t | Tests / metrics to collect |
-|---|---|---|---|---|
-| Clarity | Interpretability of rules | Use simple, literal language; define terms; state fallback behavior (what to do when uncertain/out‑of‑scope). | Write “be helpful” without specifying how; hide key rules in prose; omit boundary behavior. | Instruction adherence rate; “uncertainty handling” pass rate (e.g., asks clarifying Q vs hallucinates). |
-| Specificity | Reduction of degrees of freedom | Specify output format, audience level, citation needs, and decision rules; request “above and beyond” explicitly. | Assume the model infers formatting/details; rely on implied preferences. | Format compliance (schema valid); rubric score variance; rework rate. |
-| Role framing | Persona and domain priors | Use role prompting (e.g., “You are a seasoned X…”). | Give conflicting roles (“be a lawyer and not a lawyer”); over‑anthropomorphize in ways that encourage deception. | Task accuracy uplift (A/B vs no role); tone consistency score. |
-| Constraints | What must/ must not happen | Encode “never do X” plus “do Y instead” at boundaries; keep constraints minimal but explicit. | Add absolute or impossible constraints (“never be wrong”); demand policy‑violating behavior (“never refuse”). | Refusal precision/recall; policy violation rate; “safe completion” rate. |
-| Tone | Voice and interaction posture | Define tone dimensions (formal vs casual, empathetic vs terse) and target audience. | Mix tone rules that conflict; specify tone without stating audience. | Human preference (A/B); style classifier accuracy. |
-| Verbosity | Length/detail tradeoffs | State a tiered verbosity rule (default concise; expand on request); enforce max length with token/stop controls when available. | Simultaneously require extreme brevity and exhaustive detail. | Avg output tokens; user follow‑up rate; “too verbose/too short” labels. |
-| Examples | Few‑shot behavioral anchoring | Include aligned examples; keep them short and representative; place them in high‑authority instruction sections. | Provide sloppy examples that encode unwanted behavior; include adversarial content unguarded. | Example‑generalization accuracy; regression tests on edge cases. |
-| Safety | Harm reduction + correct refusals | Make refusal logic explicit; keep sensitive data out of system prompts; don’t treat system prompt as a “secret” or security control. | Embed credentials or internal secrets; rely on system prompt for authZ/authN; assume jailbreak‑proofing. | Leakage probes; over/under refusal; red‑team jailbreak ASR. |
-| Instruction hierarchy | Conflict resolution + injection resilience | Explicitly state that user content and retrieved data may be untrusted; follow chain‑of‑command; treat quoted/tool output as data unless delegated. | Tell the model to “always follow the user”; allow instructions inside quoted text to override system rules. | Prompt‑injection ASR; “ignore injected instruction” accuracy. |
-| Context window management | Long‑conversation reliability | Budget tokens; summarize/compact state; be explicit about what persists across turns. OpenAI notes that long prompts risk truncation; token counts include input/output (and sometimes reasoning tokens). | Assume infinite memory; repeat large boilerplate every turn without compaction. | Truncation incidents; task completion across long sessions; retained‑facts accuracy. |
-| Token efficiency | Cost/latency vs control | Prefer minimal rules; move large reference data out of system into retrieval; keep static prefix stable for caching. OpenAI prompt caching requires exact prefix matching and recommends placing static instructions/examples first. | Bloated system prompts that consume context; frequent tiny edits that break caching. | Input tokens; cache hit rate / cached_tokens; latency distributions. |
-| Reproducibility | Deterministic-ish behavior | Fix randomness controls (e.g., seed) and log prompt versions; OpenAI documents using `seed` + `system_fingerprint` for mostly consistent outputs (not guaranteed). | Compare prompts without controlling model params; omit versioning metadata. | Output variance (embedding distance); rerun stability; audit logs. |
-| Robustness to adversarial inputs | Resistance to manipulative user/data | Use injection‑aware rules; least privilege tools; adversarial training in evals. Prompt injection is facilitated because “instructions and data are processed together without clear separation.” | Give tools broad permissions; process retrieved content as authoritative. | Attack success rate (ASR); BoN / many‑shot robustness; time‑to‑compromise. |
-| Evaluation metrics | What “good” means in practice | Define measurable criteria and build evals; OpenAI emphasizes evals as essential for reliability when upgrading or changing prompts/models. | Rely on anecdotes; measure only average rating and ignore regressions/safety. | See dedicated metrics table below. |
+| Attribute                        | What it controls                           | Do                                                                                                                                                                                                                                   | Don’t                                                                                                            | Tests / metrics to collect                                                                              |
+| -------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Clarity                          | Interpretability of rules                  | Use simple, literal language; define terms; state fallback behavior (what to do when uncertain/out‑of‑scope).                                                                                                                        | Write “be helpful” without specifying how; hide key rules in prose; omit boundary behavior.                      | Instruction adherence rate; “uncertainty handling” pass rate (e.g., asks clarifying Q vs hallucinates). |
+| Specificity                      | Reduction of degrees of freedom            | Specify output format, audience level, citation needs, and decision rules; request “above and beyond” explicitly.                                                                                                                    | Assume the model infers formatting/details; rely on implied preferences.                                         | Format compliance (schema valid); rubric score variance; rework rate.                                   |
+| Role framing                     | Persona and domain priors                  | Use role prompting (e.g., “You are a seasoned X…”).                                                                                                                                                                                  | Give conflicting roles (“be a lawyer and not a lawyer”); over‑anthropomorphize in ways that encourage deception. | Task accuracy uplift (A/B vs no role); tone consistency score.                                          |
+| Constraints                      | What must/ must not happen                 | Encode “never do X” plus “do Y instead” at boundaries; keep constraints minimal but explicit.                                                                                                                                        | Add absolute or impossible constraints (“never be wrong”); demand policy‑violating behavior (“never refuse”).    | Refusal precision/recall; policy violation rate; “safe completion” rate.                                |
+| Tone                             | Voice and interaction posture              | Define tone dimensions (formal vs casual, empathetic vs terse) and target audience.                                                                                                                                                  | Mix tone rules that conflict; specify tone without stating audience.                                             | Human preference (A/B); style classifier accuracy.                                                      |
+| Verbosity                        | Length/detail tradeoffs                    | State a tiered verbosity rule (default concise; expand on request); enforce max length with token/stop controls when available.                                                                                                      | Simultaneously require extreme brevity and exhaustive detail.                                                    | Avg output tokens; user follow‑up rate; “too verbose/too short” labels.                                 |
+| Examples                         | Few‑shot behavioral anchoring              | Include aligned examples; keep them short and representative; place them in high‑authority instruction sections.                                                                                                                     | Provide sloppy examples that encode unwanted behavior; include adversarial content unguarded.                    | Example‑generalization accuracy; regression tests on edge cases.                                        |
+| Safety                           | Harm reduction + correct refusals          | Make refusal logic explicit; keep sensitive data out of system prompts; don’t treat system prompt as a “secret” or security control.                                                                                                 | Embed credentials or internal secrets; rely on system prompt for authZ/authN; assume jailbreak‑proofing.         | Leakage probes; over/under refusal; red‑team jailbreak ASR.                                             |
+| Instruction hierarchy            | Conflict resolution + injection resilience | Explicitly state that user content and retrieved data may be untrusted; follow chain‑of‑command; treat quoted/tool output as data unless delegated.                                                                                  | Tell the model to “always follow the user”; allow instructions inside quoted text to override system rules.      | Prompt‑injection ASR; “ignore injected instruction” accuracy.                                           |
+| Context window management        | Long‑conversation reliability              | Budget tokens; summarize/compact state; be explicit about what persists across turns. OpenAI notes that long prompts risk truncation; token counts include input/output (and sometimes reasoning tokens).                            | Assume infinite memory; repeat large boilerplate every turn without compaction.                                  | Truncation incidents; task completion across long sessions; retained‑facts accuracy.                    |
+| Token efficiency                 | Cost/latency vs control                    | Prefer minimal rules; move large reference data out of system into retrieval; keep static prefix stable for caching. OpenAI prompt caching requires exact prefix matching and recommends placing static instructions/examples first. | Bloated system prompts that consume context; frequent tiny edits that break caching.                             | Input tokens; cache hit rate / cached_tokens; latency distributions.                                    |
+| Reproducibility                  | Deterministic-ish behavior                 | Fix randomness controls (e.g., seed) and log prompt versions; OpenAI documents using `seed` + `system_fingerprint` for mostly consistent outputs (not guaranteed).                                                                   | Compare prompts without controlling model params; omit versioning metadata.                                      | Output variance (embedding distance); rerun stability; audit logs.                                      |
+| Robustness to adversarial inputs | Resistance to manipulative user/data       | Use injection‑aware rules; least privilege tools; adversarial training in evals. Prompt injection is facilitated because “instructions and data are processed together without clear separation.”                                    | Give tools broad permissions; process retrieved content as authoritative.                                        | Attack success rate (ASR); BoN / many‑shot robustness; time‑to‑compromise.                              |
+| Evaluation metrics               | What “good” means in practice              | Define measurable criteria and build evals; OpenAI emphasizes evals as essential for reliability when upgrading or changing prompts/models.                                                                                          | Rely on anecdotes; measure only average rating and ignore regressions/safety.                                    | See dedicated metrics table below.                                                                      |
 
 ### Practical interpretation: why these attributes work together
 
 A system prompt is most robust when it is treated as **an interface contract**:
 
-* **Contract surface**: role, allowed actions, output format.
-* **Contract enforcement**: explicit boundaries + fallback behavior.
-* **Contract monitoring**: evals and telemetry (format failures, refusals, injection success rate).
-* **Contract economics**: token budget and caching/prefix stability.
+- **Contract surface**: role, allowed actions, output format.
+- **Contract enforcement**: explicit boundaries + fallback behavior.
+- **Contract monitoring**: evals and telemetry (format failures, refusals, injection success rate).
+- **Contract economics**: token budget and caching/prefix stability.
 
 This approach mirrors production guidance: prompts should be structured into Identity/Instructions/Examples sections (OpenAI) and system instructions should be clear and specific to meet policy goals (Google).
 
@@ -84,20 +84,20 @@ Unspecified detail noted: examples below are **synthetic** (created for this rep
 
 ### Comparison table of examples
 
-| ID | Good/Bad | Intended use | Main success/failure mode | Key attributes implicated |
-|---|---|---|---|---|
-| G1 | Good | Customer support | Clear role + boundaries + fallback | clarity, constraints, tone |
-| G2 | Good | Data extraction | Schema + strict output rules | specificity, examples, reproducibility |
-| G3 | Good | Research assistant | Citation + uncertainty handling | safety, evaluation readiness |
-| G4 | Good | Coding assistant | Tool discipline + test expectations | instruction hierarchy, robustness |
-| G5 | Good | Long‑run agent | Context compaction + state saving | context window, token efficiency |
-| G6 | Good | Secure RAG summarizer | Explicit untrusted-data rules | adversarial robustness, hierarchy |
-| B1 | Bad | Generic assistant | Vague, underspecified | clarity, specificity |
-| B2 | Bad | Any | Contradictory requirements | clarity, constraints, verbosity |
-| B3 | Bad | Any | “Never refuse” conflicts with safety | safety, hierarchy |
-| B4 | Bad | Internal app | Secret leakage risk | safety, robustness |
-| B5 | Bad | RAG/agent | Treats retrieved text as instructions | hierarchy, injection robustness |
-| B6 | Bad | Any | Bloated, token‑wasteful, brittle | token efficiency, reproducibility |
+| ID  | Good/Bad | Intended use          | Main success/failure mode             | Key attributes implicated              |
+| --- | -------- | --------------------- | ------------------------------------- | -------------------------------------- |
+| G1  | Good     | Customer support      | Clear role + boundaries + fallback    | clarity, constraints, tone             |
+| G2  | Good     | Data extraction       | Schema + strict output rules          | specificity, examples, reproducibility |
+| G3  | Good     | Research assistant    | Citation + uncertainty handling       | safety, evaluation readiness           |
+| G4  | Good     | Coding assistant      | Tool discipline + test expectations   | instruction hierarchy, robustness      |
+| G5  | Good     | Long‑run agent        | Context compaction + state saving     | context window, token efficiency       |
+| G6  | Good     | Secure RAG summarizer | Explicit untrusted-data rules         | adversarial robustness, hierarchy      |
+| B1  | Bad      | Generic assistant     | Vague, underspecified                 | clarity, specificity                   |
+| B2  | Bad      | Any                   | Contradictory requirements            | clarity, constraints, verbosity        |
+| B3  | Bad      | Any                   | “Never refuse” conflicts with safety  | safety, hierarchy                      |
+| B4  | Bad      | Internal app          | Secret leakage risk                   | safety, robustness                     |
+| B5  | Bad      | RAG/agent             | Treats retrieved text as instructions | hierarchy, injection robustness        |
+| B6  | Bad      | Any                   | Bloated, token‑wasteful, brittle      | token efficiency, reproducibility      |
 
 ### Good examples
 
@@ -450,19 +450,19 @@ Output:
 
 Use this as a pre-deploy gate (yes/no). It is designed to be compatible with provider guidance that prompts require iteration and testing.
 
-1. **Role is singular and concrete** (not “everything everywhere”).  
-2. **Primary objective is explicit** and prioritizes tradeoffs (e.g., correctness > speed).  
-3. **Scope is defined** (what is in/out).  
-4. **Boundary behavior is specified** (refuse + safe alternative; ask clarifying Q).  
-5. **No contradictory rules** (verbosity, tone, refusal logic).  
-6. **Format contract is testable** (schema, headings, section order).  
-7. **Examples (if any) are aligned** with desired behavior and minimal.  
-8. **No secrets/credentials/internal keys** appear in the prompt.  
-9. **Injection-aware rules exist** for RAG/tool contexts (untrusted data handling).  
-10. **Token budget is respected**; prompt is as short as possible.  
-11. **Prefix stability strategy exists** if caching is desired (static first, dynamic last).  
-12. **Reproducibility plan exists** (prompt versioning; fixed sampling params; seed/fingerprint where supported).  
-13. **Evaluation plan exists** (test set, adversarial cases, pass/fail metrics).  
+1. **Role is singular and concrete** (not “everything everywhere”).
+2. **Primary objective is explicit** and prioritizes tradeoffs (e.g., correctness > speed).
+3. **Scope is defined** (what is in/out).
+4. **Boundary behavior is specified** (refuse + safe alternative; ask clarifying Q).
+5. **No contradictory rules** (verbosity, tone, refusal logic).
+6. **Format contract is testable** (schema, headings, section order).
+7. **Examples (if any) are aligned** with desired behavior and minimal.
+8. **No secrets/credentials/internal keys** appear in the prompt.
+9. **Injection-aware rules exist** for RAG/tool contexts (untrusted data handling).
+10. **Token budget is respected**; prompt is as short as possible.
+11. **Prefix stability strategy exists** if caching is desired (static first, dynamic last).
+12. **Reproducibility plan exists** (prompt versioning; fixed sampling params; seed/fingerprint where supported).
+13. **Evaluation plan exists** (test set, adversarial cases, pass/fail metrics).
 
 ## Testing procedures, evaluation metrics, and automated tooling
 
@@ -473,16 +473,16 @@ A rigorous testing program treats the system prompt like a key dependency that c
 **Unit tests for prompt behavior (deterministic checks)**  
 Use small, fast test suites to catch obvious regressions:
 
-* **Format tests**: JSON/schema validity; required headings present; “no extra keys.”  
-* **Boundary tests**: out‑of‑scope prompts trigger refusal + safe alternative; missing info triggers clarifying question (not guessing).  
-* **Content policy tests**: ensure prohibited behavior is refused; track over‑refusal.  
+- **Format tests**: JSON/schema validity; required headings present; “no extra keys.”
+- **Boundary tests**: out‑of‑scope prompts trigger refusal + safe alternative; missing info triggers clarifying question (not guessing).
+- **Content policy tests**: ensure prohibited behavior is refused; track over‑refusal.
 
 **Adversarial tests (security and jailbreak robustness)**  
 Prompt injection is considered a top LLM application security risk; OWASP provides an explicit taxonomy and testing guidance. Include:
 
-* **Direct injection**: “Ignore all previous instructions…” etc.  
-* **Indirect injection**: malicious instructions embedded in retrieved content/email/webpages; this is the core scenario in Google DeepMind’s evaluation framework.  
-* **Many-shot / long-context attacks**: attacks using hundreds of demonstrations, shown effective in Anthropic’s “many-shot jailbreaking” research and formalized in their paper.  
+- **Direct injection**: “Ignore all previous instructions…” etc.
+- **Indirect injection**: malicious instructions embedded in retrieved content/email/webpages; this is the core scenario in Google DeepMind’s evaluation framework.
+- **Many-shot / long-context attacks**: attacks using hundreds of demonstrations, shown effective in Anthropic’s “many-shot jailbreaking” research and formalized in their paper.
 
 **A/B testing in production (human preference and task success)**  
 For user-facing assistants, online preference tests and pairwise judgments are strongly supported by evaluation literature (e.g., MT-Bench / Chatbot Arena and LLM-as-a-judge). Run A/B between prompt versions, keeping model, temperature, and other parameters fixed where possible.
@@ -492,16 +492,16 @@ When the platform supports it, use determinism controls. OpenAI documents using 
 
 ### Metrics to collect
 
-| Metric | What it measures | How to compute | Example source basis |
-|---|---|---|---|
-| Instruction adherence rate | Obeys system prompt rules | Pass/fail rubric per test item; aggregate | Evals-style criteria testing |
-| Format/schema compliance | Output parsability | % valid JSON / schema / required headings | Structured Outputs focus |
-| Refusal precision & recall | Safety correctness | Label “should refuse?” vs “did refuse?” | Azure safety guidance; OWASP leakage/injection risks |
-| Over-refusal rate | Lost utility | % benign prompts refused | Azure notes overly strict prompts reduce usefulness |
-| Hallucination rate | Truthfulness under uncertainty | Factuality audits; “uncertain but asserted” count | Motivation from alignment work |
-| Token cost & latency | Efficiency | Input/output tokens, cached_tokens, p50/p95 latency | Prompt caching and token budgeting guidance |
-| Prompt-injection ASR | Security robustness | % attacks succeeding over N attempts | Google DeepMind describes ASR measurement; Anthropic tracks injection robustness |
-| Long-context task completion | Context management | Success rate on multi-turn test scripts | Many-shot attacks exploit long context; OpenAI warns about truncation risk |
+| Metric                       | What it measures               | How to compute                                      | Example source basis                                                             |
+| ---------------------------- | ------------------------------ | --------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Instruction adherence rate   | Obeys system prompt rules      | Pass/fail rubric per test item; aggregate           | Evals-style criteria testing                                                     |
+| Format/schema compliance     | Output parsability             | % valid JSON / schema / required headings           | Structured Outputs focus                                                         |
+| Refusal precision & recall   | Safety correctness             | Label “should refuse?” vs “did refuse?”             | Azure safety guidance; OWASP leakage/injection risks                             |
+| Over-refusal rate            | Lost utility                   | % benign prompts refused                            | Azure notes overly strict prompts reduce usefulness                              |
+| Hallucination rate           | Truthfulness under uncertainty | Factuality audits; “uncertain but asserted” count   | Motivation from alignment work                                                   |
+| Token cost & latency         | Efficiency                     | Input/output tokens, cached_tokens, p50/p95 latency | Prompt caching and token budgeting guidance                                      |
+| Prompt-injection ASR         | Security robustness            | % attacks succeeding over N attempts                | Google DeepMind describes ASR measurement; Anthropic tracks injection robustness |
+| Long-context task completion | Context management             | Success rate on multi-turn test scripts             | Many-shot attacks exploit long context; OpenAI warns about truncation risk       |
 
 ### Mermaid workflow for testing and iteration
 
@@ -522,14 +522,14 @@ This reflects best practices emphasized across providers: system prompts are inf
 
 Tooling evolves quickly; the most durable recommendation is to use **an evaluation harness + a red-team harness + prompt versioning**.
 
-* **OpenAI Evals**: OpenAI provides an open-source eval framework and API guidance for building evals that test style/content criteria and support reliability across model/prompt upgrades.  
-* **LLM-as-a-judge evaluation**: MT-Bench / Chatbot Arena research studies scalable judging and warns about biases (position/verbosity), offering a basis for automated comparative evaluation.  
-* **Prompt injection red teaming**:  
-  * OWASP provides a detailed prompt injection prevention cheat sheet including testing guidance and attack types.  
-  * Google DeepMind describes an automated red-team framework for indirect prompt injection and recommends measuring attack success rate across diverse scenarios.  
-  * Promptfoo explicitly supports red teaming against OWASP LLM Top 10 categories (including prompt injection and system prompt leakage).  
-* **Prompt caching and prompt stability tooling**: If you use OpenAI prompt caching, keep the reusable prefix stable and static-first/dynamic-last to maximize cache hits; measure `cached_tokens` and cache hit rates.  
-* **Reproducibility instrumentation**: Log prompt version, model snapshot, sampling params, and (where supported) `seed`/`system_fingerprint` to interpret regressions and drift.  
+- **OpenAI Evals**: OpenAI provides an open-source eval framework and API guidance for building evals that test style/content criteria and support reliability across model/prompt upgrades.
+- **LLM-as-a-judge evaluation**: MT-Bench / Chatbot Arena research studies scalable judging and warns about biases (position/verbosity), offering a basis for automated comparative evaluation.
+- **Prompt injection red teaming**:
+  - OWASP provides a detailed prompt injection prevention cheat sheet including testing guidance and attack types.
+  - Google DeepMind describes an automated red-team framework for indirect prompt injection and recommends measuring attack success rate across diverse scenarios.
+  - Promptfoo explicitly supports red teaming against OWASP LLM Top 10 categories (including prompt injection and system prompt leakage).
+- **Prompt caching and prompt stability tooling**: If you use OpenAI prompt caching, keep the reusable prefix stable and static-first/dynamic-last to maximize cache hits; measure `cached_tokens` and cache hit rates.
+- **Reproducibility instrumentation**: Log prompt version, model snapshot, sampling params, and (where supported) `seed`/`system_fingerprint` to interpret regressions and drift.
 
 ### Closing note on “what a system prompt cannot do”
 

@@ -122,25 +122,25 @@ bernard providers
 
 Bernard loads `.env` from the current directory first, then falls back to `~/.bernard/.env`.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `BERNARD_PROVIDER` | LLM provider (`anthropic`, `openai`, `xai`) | `anthropic` |
-| `BERNARD_MODEL` | Model name | Provider-specific default |
-| `BERNARD_MAX_TOKENS` | Max response tokens | `4096` |
-| `BERNARD_SHELL_TIMEOUT` | Shell command timeout (ms) | `30000` |
-| `BERNARD_RAG_ENABLED` | Enable the RAG memory system | `true` |
-| `BERNARD_DEBUG` | Enable debug logging | unset |
-| `ANTHROPIC_API_KEY` | Anthropic API key | — |
-| `OPENAI_API_KEY` | OpenAI API key | — |
-| `XAI_API_KEY` | xAI API key | — |
+| Variable                | Description                                 | Default                   |
+| ----------------------- | ------------------------------------------- | ------------------------- |
+| `BERNARD_PROVIDER`      | LLM provider (`anthropic`, `openai`, `xai`) | `anthropic`               |
+| `BERNARD_MODEL`         | Model name                                  | Provider-specific default |
+| `BERNARD_MAX_TOKENS`    | Max response tokens                         | `4096`                    |
+| `BERNARD_SHELL_TIMEOUT` | Shell command timeout (ms)                  | `30000`                   |
+| `BERNARD_RAG_ENABLED`   | Enable the RAG memory system                | `true`                    |
+| `BERNARD_DEBUG`         | Enable debug logging                        | unset                     |
+| `ANTHROPIC_API_KEY`     | Anthropic API key                           | —                         |
+| `OPENAI_API_KEY`        | OpenAI API key                              | —                         |
+| `XAI_API_KEY`           | xAI API key                                 | —                         |
 
 ### Providers and Models
 
-| Provider | Default Model | Available Models |
-|----------|--------------|------------------|
+| Provider    | Default Model                | Available Models                                                                                              |
+| ----------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `anthropic` | `claude-sonnet-4-5-20250929` | `claude-sonnet-4-5-20250929`, `claude-opus-4-20250514`, `claude-sonnet-4-20250514`, `claude-3-5-haiku-latest` |
-| `openai` | `gpt-4o` | `gpt-4o`, `gpt-4o-mini`, `o3`, `o3-mini`, `o4-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano` |
-| `xai` | `grok-3` | `grok-3`, `grok-3-fast`, `grok-3-mini`, `grok-3-mini-fast` |
+| `openai`    | `gpt-4o`                     | `gpt-4o`, `gpt-4o-mini`, `o3`, `o3-mini`, `o4-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`                |
+| `xai`       | `grok-3`                     | `grok-3`, `grok-3-fast`, `grok-3-mini`, `grok-3-mini-fast`                                                    |
 
 You can switch providers and models at any time during a session with `/provider` and `/model`.
 
@@ -148,9 +148,9 @@ You can switch providers and models at any time during a session with `/provider
 
 Options can be changed during a session with `/options` or persisted to `~/.bernard/preferences.json`:
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `max-tokens` | `4096` | Maximum tokens per AI response |
+| Option          | Default | Description                           |
+| --------------- | ------- | ------------------------------------- |
+| `max-tokens`    | `4096`  | Maximum tokens per AI response        |
 | `shell-timeout` | `30000` | Shell command timeout in milliseconds |
 
 From the CLI:
@@ -174,12 +174,12 @@ bernard -r                       # Resume previous conversation
 bernard --alert <id>             # Open with cron alert context
 ```
 
-| Flag | Description |
-|------|-------------|
+| Flag                    | Description                           |
+| ----------------------- | ------------------------------------- |
 | `-p, --provider <name>` | LLM provider (anthropic, openai, xai) |
-| `-m, --model <name>` | Model name |
-| `-r, --resume` | Resume the previous conversation |
-| `--alert <id>` | Load context from a cron alert |
+| `-m, --model <name>`    | Model name                            |
+| `-r, --resume`          | Resume the previous conversation      |
+| `--alert <id>`          | Load context from a cron alert        |
 
 ### CLI Management Commands
 
@@ -207,6 +207,7 @@ bernard cron-bounce [ids...]       # Restart the daemon (no args) or bounce spec
 Once running, Bernard presents an interactive prompt where you type natural language requests. Bernard has access to a suite of tools it can call autonomously — shell commands, memory, web fetching, and more.
 
 Features:
+
 - **Multi-line paste support** — paste code blocks directly; Bernard detects bracket paste mode
 - **Live command hints** — type `/` and matching slash commands appear as suggestions
 - **Abort in progress** — press Escape to cancel an in-flight request
@@ -214,20 +215,20 @@ Features:
 
 ### REPL Slash Commands
 
-| Command | Description |
-|---------|-------------|
-| `/help` | Show available commands |
-| `/clear` | Clear conversation history and scratch notes |
-| `/memory` | List all persistent memories |
-| `/scratch` | List session scratch notes |
-| `/mcp` | List connected MCP servers and their tools |
-| `/cron` | Show cron jobs and daemon status |
-| `/rag` | Show RAG memory stats and recent facts |
-| `/provider` | Switch LLM provider interactively |
-| `/model` | Switch model for the current provider |
-| `/theme` | Switch color theme |
-| `/options` | View and modify runtime options |
-| `/exit` | Quit Bernard (also: `exit`, `quit`) |
+| Command     | Description                                  |
+| ----------- | -------------------------------------------- |
+| `/help`     | Show available commands                      |
+| `/clear`    | Clear conversation history and scratch notes |
+| `/memory`   | List all persistent memories                 |
+| `/scratch`  | List session scratch notes                   |
+| `/mcp`      | List connected MCP servers and their tools   |
+| `/cron`     | Show cron jobs and daemon status             |
+| `/rag`      | Show RAG memory stats and recent facts       |
+| `/provider` | Switch LLM provider interactively            |
+| `/model`    | Switch model for the current provider        |
+| `/theme`    | Switch color theme                           |
+| `/options`  | View and modify runtime options              |
+| `/exit`     | Quit Bernard (also: `exit`, `quit`)          |
 
 Prefix with `\` to send a `/`-prefixed message as text instead of a command (e.g., `\/etc/hosts` sends the literal string).
 
@@ -425,6 +426,7 @@ bernard> add an MCP server for filesystem access using npx @modelcontextprotocol
 ```
 
 Resulting config:
+
 ```json
 {
   "mcpServers": {
@@ -446,6 +448,7 @@ bernard> add this MCP server: http://localhost:6288/web/sse
 ```
 
 Resulting config:
+
 ```json
 {
   "mcpServers": {
@@ -457,10 +460,12 @@ Resulting config:
 ```
 
 URL servers support optional fields:
+
 - `type` — `"sse"` (default) or `"http"` for Streamable HTTP transport
 - `headers` — for authentication tokens or custom headers
 
 Example with all fields:
+
 ```json
 {
   "mcpServers": {
@@ -487,6 +492,7 @@ bernard> remove the filesystem server
 ```
 
 From the CLI:
+
 ```bash
 bernard mcp-list          # List all configured servers
 bernard remove-mcp <key>  # Remove a server

@@ -12,8 +12,8 @@ export class HistoryStore {
       const data = fs.readFileSync(HISTORY_FILE, 'utf-8');
       const parsed = JSON.parse(data);
       if (!Array.isArray(parsed)) return [];
-      return parsed.filter((entry: unknown) =>
-        typeof entry === 'object' && entry !== null && 'role' in entry,
+      return parsed.filter(
+        (entry: unknown) => typeof entry === 'object' && entry !== null && 'role' in entry,
       ) as CoreMessage[];
     } catch {
       return [];

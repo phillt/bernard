@@ -36,7 +36,10 @@ export async function getEmbeddingProvider(): Promise<EmbeddingProvider | null> 
 
     return cachedProvider;
   } catch (err) {
-    debugLog('embeddings:init', `Failed to load fastembed: ${err instanceof Error ? err.message : String(err)}`);
+    debugLog(
+      'embeddings:init',
+      `Failed to load fastembed: ${err instanceof Error ? err.message : String(err)}`,
+    );
     cachedProvider = null;
     return null;
   }

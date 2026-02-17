@@ -18,7 +18,9 @@ export function isDaemonRunning(): boolean {
     return true;
   } catch {
     // Process not running — clean up stale PID file
-    try { fs.unlinkSync(pidFile); } catch {}
+    try {
+      fs.unlinkSync(pidFile);
+    } catch {}
     return false;
   }
 }
@@ -67,6 +69,8 @@ export function stopDaemon(): boolean {
     // Process already dead
   }
 
-  try { fs.unlinkSync(CronStore.pidFile); } catch {}
+  try {
+    fs.unlinkSync(CronStore.pidFile);
+  } catch {}
   return true;
 }

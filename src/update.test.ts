@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('node:fs', () => ({
   existsSync: vi.fn(() => false),
-  readFileSync: vi.fn(() => { throw new Error('ENOENT'); }),
+  readFileSync: vi.fn(() => {
+    throw new Error('ENOENT');
+  }),
   writeFileSync: vi.fn(),
   mkdirSync: vi.fn(),
 }));
@@ -20,27 +22,35 @@ vi.mock('./output.js', () => ({
   printError: vi.fn(),
 }));
 
-const fsMock = await import('node:fs') as unknown as {
+const fsMock = (await import('node:fs')) as unknown as {
   existsSync: ReturnType<typeof vi.fn>;
   readFileSync: ReturnType<typeof vi.fn>;
   writeFileSync: ReturnType<typeof vi.fn>;
   mkdirSync: ReturnType<typeof vi.fn>;
 };
 
-const httpsMock = await import('node:https') as unknown as {
+const httpsMock = (await import('node:https')) as unknown as {
   get: ReturnType<typeof vi.fn>;
 };
 
-const cpMock = await import('node:child_process') as unknown as {
+const cpMock = (await import('node:child_process')) as unknown as {
   execSync: ReturnType<typeof vi.fn>;
 };
 
-const outputMock = await import('./output.js') as unknown as {
+const outputMock = (await import('./output.js')) as unknown as {
   printInfo: ReturnType<typeof vi.fn>;
   printError: ReturnType<typeof vi.fn>;
 };
 
-import { compareSemver, getLocalVersion, fetchLatestVersion, checkForUpdate, applyUpdate, interactiveUpdate, startupUpdateCheck } from './update.js';
+import {
+  compareSemver,
+  getLocalVersion,
+  fetchLatestVersion,
+  checkForUpdate,
+  applyUpdate,
+  interactiveUpdate,
+  startupUpdateCheck,
+} from './update.js';
 
 describe('compareSemver', () => {
   it('detects newer version', () => {
@@ -75,7 +85,9 @@ describe('getLocalVersion', () => {
   });
 
   it('returns 0.0.0 on error', () => {
-    fsMock.readFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
     expect(getLocalVersion()).toBe('0.0.0');
   });
 });
@@ -270,14 +282,15 @@ describe('applyUpdate', () => {
   it('runs npm install -g with correct version', () => {
     cpMock.execSync.mockReturnValue(undefined);
     applyUpdate('2.0.0');
-    expect(cpMock.execSync).toHaveBeenCalledWith(
-      'npm install -g bernard-agent@2.0.0',
-      { stdio: 'inherit' }
-    );
+    expect(cpMock.execSync).toHaveBeenCalledWith('npm install -g bernard-agent@2.0.0', {
+      stdio: 'inherit',
+    });
   });
 
   it('throws on failure', () => {
-    cpMock.execSync.mockImplementation(() => { throw new Error('npm failed'); });
+    cpMock.execSync.mockImplementation(() => {
+      throw new Error('npm failed');
+    });
     expect(() => applyUpdate('2.0.0')).toThrow('npm failed');
   });
 
@@ -317,10 +330,9 @@ describe('interactiveUpdate', () => {
 
     await interactiveUpdate();
 
-    expect(cpMock.execSync).toHaveBeenCalledWith(
-      'npm install -g bernard-agent@2.0.0',
-      { stdio: 'inherit' }
-    );
+    expect(cpMock.execSync).toHaveBeenCalledWith('npm install -g bernard-agent@2.0.0', {
+      stdio: 'inherit',
+    });
     expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('Updated to v2.0.0'));
   });
 });
@@ -366,10 +378,9 @@ describe('startupUpdateCheck', () => {
     startupUpdateCheck(true);
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(cpMock.execSync).toHaveBeenCalledWith(
-      'npm install -g bernard-agent@2.0.0',
-      { stdio: 'inherit' }
-    );
+    expect(cpMock.execSync).toHaveBeenCalledWith('npm install -g bernard-agent@2.0.0', {
+      stdio: 'inherit',
+    });
     expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('Updated bernard'));
   });
 });

@@ -96,7 +96,12 @@ describe('time tools', () => {
   describe('time_range_total', () => {
     it('sums multiple ranges', async () => {
       const result = await tools.time_range_total.execute!(
-        { ranges: [{ start: 500, end: 600 }, { start: 1300, end: 1530 }] },
+        {
+          ranges: [
+            { start: 500, end: 600 },
+            { start: 1300, end: 1530 },
+          ],
+        },
         {} as any,
       );
       expect(result).toContain('3 hours');
@@ -105,7 +110,12 @@ describe('time tools', () => {
 
     it('handles next-day wrap + normal range', async () => {
       const result = await tools.time_range_total.execute!(
-        { ranges: [{ start: 2300, end: 100 }, { start: 800, end: 1200 }] },
+        {
+          ranges: [
+            { start: 2300, end: 100 },
+            { start: 800, end: 1200 },
+          ],
+        },
         {} as any,
       );
       // 2300→0100 = 120 min, 0800→1200 = 240 min → 360 min = 6 hours
@@ -128,9 +138,15 @@ describe('time tools', () => {
 
     it('parses valid time_range_total input', () => {
       const parsed = tools.time_range_total.parameters.parse({
-        ranges: [{ start: 800, end: 1200 }, { start: 1300, end: 1700 }],
+        ranges: [
+          { start: 800, end: 1200 },
+          { start: 1300, end: 1700 },
+        ],
       });
-      expect(parsed.ranges).toEqual([{ start: 800, end: 1200 }, { start: 1300, end: 1700 }]);
+      expect(parsed.ranges).toEqual([
+        { start: 800, end: 1200 },
+        { start: 1300, end: 1700 },
+      ]);
     });
 
     it('rejects string values in ranges', () => {

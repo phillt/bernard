@@ -148,8 +148,8 @@ describe('output', () => {
       startSpinner();
       vi.advanceTimersByTime(80);
       expect(stdoutWriteSpy).toHaveBeenCalled();
-      const writes = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
-      const hasFrame = writes.some(w => w.includes('⠋') || w.includes('⠙'));
+      const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
+      const hasFrame = writes.some((w) => w.includes('⠋') || w.includes('⠙'));
       expect(hasFrame).toBe(true);
     });
 
@@ -176,9 +176,9 @@ describe('output', () => {
       vi.advanceTimersByTime(80);
       stdoutWriteSpy.mockClear();
       stopSpinner();
-      const writes = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
-      expect(writes.some(w => w.includes('\x1B[2K'))).toBe(true); // clear line
-      expect(writes.some(w => w.includes('\x1B[?25h'))).toBe(true); // show cursor
+      const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
+      expect(writes.some((w) => w.includes('\x1B[2K'))).toBe(true); // clear line
+      expect(writes.some((w) => w.includes('\x1B[?25h'))).toBe(true); // show cursor
     });
 
     it('is idempotent (double stop is a no-op)', () => {
@@ -195,54 +195,63 @@ describe('output', () => {
         { role: 'assistant', content: 'Hi there' },
       ];
       printConversationReplay(messages);
-      const output = logSpy.mock.calls.map(c => String(c[0]));
-      expect(output.some(l => l.includes('you>') && l.includes('Hello'))).toBe(true);
-      expect(output.some(l => l.includes('assistant>') && l.includes('Hi there'))).toBe(true);
+      const output = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(output.some((l) => l.includes('you>') && l.includes('Hello'))).toBe(true);
+      expect(output.some((l) => l.includes('assistant>') && l.includes('Hi there'))).toBe(true);
     });
 
     it('skips tool messages', () => {
       const messages: CoreMessage[] = [
         { role: 'user', content: 'run ls' },
-        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: '1', toolName: 'shell', args: { command: 'ls' } }] },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool-call', toolCallId: '1', toolName: 'shell', args: { command: 'ls' } },
+          ],
+        },
         { role: 'tool', content: [{ type: 'tool-result', toolCallId: '1', result: 'file.txt' }] },
         { role: 'assistant', content: 'Done' },
       ];
       printConversationReplay(messages);
-      const output = logSpy.mock.calls.map(c => String(c[0]));
-      expect(output.some(l => l.includes('tool-result'))).toBe(false);
-      expect(output.some(l => l.includes('file.txt'))).toBe(false);
+      const output = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(output.some((l) => l.includes('tool-result'))).toBe(false);
+      expect(output.some((l) => l.includes('file.txt'))).toBe(false);
     });
 
     it('skips assistant messages with only tool-call parts', () => {
       const messages: CoreMessage[] = [
-        { role: 'assistant', content: [{ type: 'tool-call', toolCallId: '1', toolName: 'shell', args: {} }] },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool-call', toolCallId: '1', toolName: 'shell', args: {} }],
+        },
       ];
       printConversationReplay(messages);
       // header + separator + blank line = 3 calls, no message lines
-      const output = logSpy.mock.calls.map(c => String(c[0]));
-      expect(output.some(l => l.includes('assistant>'))).toBe(false);
+      const output = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(output.some((l) => l.includes('assistant>'))).toBe(false);
     });
 
     it('extracts text parts from array content', () => {
       const messages: CoreMessage[] = [
-        { role: 'assistant', content: [
-          { type: 'text', text: 'Here is the result' },
-          { type: 'tool-call', toolCallId: '1', toolName: 'shell', args: {} },
-        ] },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'Here is the result' },
+            { type: 'tool-call', toolCallId: '1', toolName: 'shell', args: {} },
+          ],
+        },
       ];
       printConversationReplay(messages);
-      const output = logSpy.mock.calls.map(c => String(c[0]));
-      expect(output.some(l => l.includes('Here is the result'))).toBe(true);
+      const output = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(output.some((l) => l.includes('Here is the result'))).toBe(true);
     });
 
     it('truncates long messages', () => {
       const longText = 'a'.repeat(300);
-      const messages: CoreMessage[] = [
-        { role: 'user', content: longText },
-      ];
+      const messages: CoreMessage[] = [{ role: 'user', content: longText }];
       printConversationReplay(messages);
-      const output = logSpy.mock.calls.map(c => String(c[0]));
-      const userLine = output.find(l => l.includes('you>'));
+      const output = logSpy.mock.calls.map((c) => String(c[0]));
+      const userLine = output.find((l) => l.includes('you>'));
       expect(userLine).toBeDefined();
       expect(userLine!.includes('…')).toBe(true);
       // Should not contain the full 300-char string
@@ -251,16 +260,16 @@ describe('output', () => {
 
     it('prints header and separator', () => {
       printConversationReplay([{ role: 'user', content: 'hi' }]);
-      const output = logSpy.mock.calls.map(c => String(c[0]));
+      const output = logSpy.mock.calls.map((c) => String(c[0]));
       expect(output[0]).toContain('Previous conversation');
-      expect(output.some(l => l.includes('———'))).toBe(true);
+      expect(output.some((l) => l.includes('———'))).toBe(true);
     });
 
     it('handles empty messages array', () => {
       printConversationReplay([]);
-      const output = logSpy.mock.calls.map(c => String(c[0]));
+      const output = logSpy.mock.calls.map((c) => String(c[0]));
       expect(output[0]).toContain('Previous conversation');
-      expect(output.some(l => l.includes('———'))).toBe(true);
+      expect(output.some((l) => l.includes('———'))).toBe(true);
     });
   });
 
@@ -416,7 +425,10 @@ describe('output', () => {
 
     it('calls message function each frame', () => {
       let callCount = 0;
-      const getter = () => { callCount++; return `msg ${callCount}`; };
+      const getter = () => {
+        callCount++;
+        return `msg ${callCount}`;
+      };
       startSpinner(getter);
       vi.advanceTimersByTime(80 * 3);
       stopSpinner();
@@ -427,11 +439,11 @@ describe('output', () => {
       let counter = 0;
       startSpinner(() => `Step ${++counter}`);
       vi.advanceTimersByTime(80);
-      const writes = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
-      expect(writes.some(w => w.includes('Step 1'))).toBe(true);
+      const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
+      expect(writes.some((w) => w.includes('Step 1'))).toBe(true);
       vi.advanceTimersByTime(80);
-      const writes2 = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
-      expect(writes2.some(w => w.includes('Step 2'))).toBe(true);
+      const writes2 = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
+      expect(writes2.some((w) => w.includes('Step 2'))).toBe(true);
     });
   });
 
@@ -452,8 +464,8 @@ describe('output', () => {
       // Spinner should be stopped — further advances should not write more frames
       stdoutWriteSpy.mockClear();
       vi.advanceTimersByTime(160);
-      const writes = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
-      const hasFrame = writes.some(w => w.includes('⠋') || w.includes('⠙'));
+      const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
+      const hasFrame = writes.some((w) => w.includes('⠋') || w.includes('⠙'));
       expect(hasFrame).toBe(false);
     });
 
@@ -463,8 +475,8 @@ describe('output', () => {
       printToolCall('shell', { command: 'ls' });
       stdoutWriteSpy.mockClear();
       vi.advanceTimersByTime(160);
-      const writes = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
-      const hasFrame = writes.some(w => w.includes('⠋') || w.includes('⠙'));
+      const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
+      const hasFrame = writes.some((w) => w.includes('⠋') || w.includes('⠙'));
       expect(hasFrame).toBe(false);
     });
 
@@ -474,8 +486,8 @@ describe('output', () => {
       printError('something broke');
       stdoutWriteSpy.mockClear();
       vi.advanceTimersByTime(160);
-      const writes = stdoutWriteSpy.mock.calls.map(c => String(c[0]));
-      const hasFrame = writes.some(w => w.includes('⠋') || w.includes('⠙'));
+      const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
+      const hasFrame = writes.some((w) => w.includes('⠋') || w.includes('⠙'));
       expect(hasFrame).toBe(false);
     });
   });
