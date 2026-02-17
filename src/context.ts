@@ -8,24 +8,29 @@ import { DOMAIN_REGISTRY, getDomainIds } from './domains.js';
 /** Model name → context window size in tokens */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic
+  'claude-opus-4-6': 200_000,
   'claude-sonnet-4-5-20250929': 200_000,
+  'claude-haiku-4-5-20251001': 200_000,
   'claude-opus-4-20250514': 200_000,
   'claude-sonnet-4-20250514': 200_000,
-  'claude-3-5-haiku-latest': 200_000,
   // OpenAI
-  'gpt-4o': 128_000,
+  'gpt-5.2': 400_000,
+  'gpt-5.2-chat-latest': 128_000,
   'gpt-4o-mini': 128_000,
   'o3': 200_000,
   'o3-mini': 200_000,
-  'o4-mini': 200_000,
   'gpt-4.1': 1_000_000,
   'gpt-4.1-mini': 1_000_000,
   'gpt-4.1-nano': 1_000_000,
   // xAI
+  'grok-4-1-fast-reasoning': 2_000_000,
+  'grok-4-1-fast-non-reasoning': 2_000_000,
+  'grok-4-fast-reasoning': 2_000_000,
+  'grok-4-fast-non-reasoning': 2_000_000,
+  'grok-4-0709': 256_000,
+  'grok-code-fast-1': 256_000,
   'grok-3': 131_072,
-  'grok-3-fast': 131_072,
   'grok-3-mini': 131_072,
-  'grok-3-mini-fast': 131_072,
 };
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000;

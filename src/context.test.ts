@@ -54,7 +54,7 @@ describe('getContextWindow', () => {
   });
 
   it('returns correct value for known OpenAI model', () => {
-    expect(getContextWindow('gpt-4o')).toBe(128_000);
+    expect(getContextWindow('gpt-4o-mini')).toBe(128_000);
   });
 
   it('returns correct value for gpt-4.1 (1M)', () => {
@@ -83,16 +83,16 @@ describe('shouldCompress', () => {
   });
 
   it('returns true at exactly the threshold boundary', () => {
-    const window = getContextWindow('gpt-4o'); // 128k
+    const window = getContextWindow('gpt-4o-mini'); // 128k
     const threshold = window * COMPRESSION_THRESHOLD; // 96k
     // threshold + 1 should trigger
-    expect(shouldCompress(threshold, 1, 'gpt-4o')).toBe(true);
+    expect(shouldCompress(threshold, 1, 'gpt-4o-mini')).toBe(true);
   });
 
   it('returns false just below threshold', () => {
-    const window = getContextWindow('gpt-4o'); // 128k
+    const window = getContextWindow('gpt-4o-mini'); // 128k
     const threshold = window * COMPRESSION_THRESHOLD; // 96k
-    expect(shouldCompress(threshold - 1, 0, 'gpt-4o')).toBe(false);
+    expect(shouldCompress(threshold - 1, 0, 'gpt-4o-mini')).toBe(false);
   });
 
   it('uses fallback window for unknown models', () => {

@@ -101,9 +101,9 @@ describe('buildSystemPrompt', () => {
   });
 
   it('includes provider and model', () => {
-    const prompt = buildSystemPrompt(makeConfig({ provider: 'openai', model: 'gpt-4o' }), store);
+    const prompt = buildSystemPrompt(makeConfig({ provider: 'openai', model: 'gpt-4o-mini' }), store);
     expect(prompt).toContain('openai');
-    expect(prompt).toContain('gpt-4o');
+    expect(prompt).toContain('gpt-4o-mini');
   });
 
   it('includes memories when present', () => {

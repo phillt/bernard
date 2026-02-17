@@ -319,7 +319,7 @@ describe('output', () => {
         totalPromptTokens: 0,
         totalCompletionTokens: 0,
         latestPromptTokens: 0,
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
       };
       const msg = buildSpinnerMessage(stats);
       expect(msg).toBe('Thinking (5s)');
@@ -331,7 +331,7 @@ describe('output', () => {
         totalPromptTokens: 1500,
         totalCompletionTokens: 200,
         latestPromptTokens: 1500,
-        model: 'gpt-4o', // 128k context
+        model: 'gpt-4o-mini', // 128k context
       };
       const msg = buildSpinnerMessage(stats);
       expect(msg).toContain('12s');
@@ -346,7 +346,7 @@ describe('output', () => {
         totalPromptTokens: 20000,
         totalCompletionTokens: 15000,
         latestPromptTokens: 20000,
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
       };
       const msg = buildSpinnerMessage(stats);
       expect(msg).toContain('20k\u2191');
@@ -354,13 +354,13 @@ describe('output', () => {
     });
 
     it('shows 0% when at or beyond compression threshold', () => {
-      // gpt-4o = 128k, threshold = 75% = 96k
+      // gpt-4o-mini = 128k, threshold = 75% = 96k
       const stats: SpinnerStats = {
         startTime: Date.now() - 1000,
         totalPromptTokens: 100000,
         totalCompletionTokens: 5000,
         latestPromptTokens: 100000,
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
       };
       const msg = buildSpinnerMessage(stats);
       expect(msg).toContain('0% until compression');
@@ -372,7 +372,7 @@ describe('output', () => {
         totalPromptTokens: 0,
         totalCompletionTokens: 0,
         latestPromptTokens: 0,
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
       };
       const msg = buildSpinnerMessage(stats);
       expect(msg).toBe('Thinking (2m5s)');
@@ -384,7 +384,7 @@ describe('output', () => {
         totalPromptTokens: 850,
         totalCompletionTokens: 42,
         latestPromptTokens: 850,
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
       };
       const msg = buildSpinnerMessage(stats);
       expect(msg).toContain('850\u2191');
