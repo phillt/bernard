@@ -12,6 +12,8 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
     "format": "prettier --write \"src/**/*.{ts,md}\" \"docs/**/*.{html,css,md}\" \"*.md\"",
     "format:check": "prettier --check \"src/**/*.{ts,md}\" \"docs/**/*.{html,css,md}\" \"*.md\"",
     "prepublishOnly": "npm run build"
@@ -39,7 +41,7 @@
     "ai-sdk"
   ],
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.9.0"
   },
   "files": [
     "dist",
@@ -68,9 +70,12 @@
     "@types/node-cron": "^3.0.11",
     "@types/node-notifier": "^8.0.5",
     "@types/turndown": "^5.0.6",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.8.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.56.0",
     "vitest": "^1.6.1"
   }
 }

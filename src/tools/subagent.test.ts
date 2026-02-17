@@ -143,7 +143,7 @@ describe('subagent tool', () => {
 
   it('returns error string when concurrent limit exceeded', async () => {
     // Simulate 4 agents already active by running 4 that never resolve
-    let resolvers: Array<(value: any) => void> = [];
+    const resolvers: Array<(value: any) => void> = [];
     mockGenerateText.mockImplementation(
       () =>
         new Promise((resolve) => {

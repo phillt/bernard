@@ -27,9 +27,9 @@ export class Scheduler {
     // Stop tasks for removed or disabled jobs
     for (const [id, task] of this.tasks) {
       const job = jobMap.get(id);
-      if (!job || !job.enabled) {
+      if (!job?.enabled) {
         this.log(`Stopping task for job "${id}"`);
-        task.stop();
+        void task.stop();
         this.tasks.delete(id);
       }
     }
@@ -58,7 +58,7 @@ export class Scheduler {
       this.queue.push(job);
       return;
     }
-    this.executeJob(job);
+    void this.executeJob(job);
   }
 
   private async executeJob(job: CronJob): Promise<void> {
@@ -94,13 +94,13 @@ export class Scheduler {
   private drainQueue(): void {
     while (this.queue.length > 0 && this.runningCount < this.maxConcurrent) {
       const next = this.queue.shift()!;
-      this.executeJob(next);
+      void this.executeJob(next);
     }
   }
 
   stopAll(): void {
     for (const [id, task] of this.tasks) {
-      task.stop();
+      void task.stop();
       this.tasks.delete(id);
     }
   }

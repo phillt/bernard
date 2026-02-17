@@ -280,7 +280,10 @@ export async function startRepl(
     ragStore,
   );
 
+  let cleanedUp = false;
   const cleanup = async () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
     if (process.stdin.isTTY) {
       process.stdout.write('\x1b[?2004l'); // disable bracket paste mode
     }
@@ -327,7 +330,7 @@ export async function startRepl(
     let trimmed = text.trim();
 
     if (!trimmed) {
-      prompt();
+      void prompt();
       return;
     }
 
@@ -339,7 +342,7 @@ export async function startRepl(
 
     // Bare "/" was handled by live keypress hints; just re-prompt
     if (!pasted && !isEscapedSlash && trimmed === '/') {
-      prompt();
+      void prompt();
       return;
     }
 
@@ -354,7 +357,7 @@ export async function startRepl(
     if (!pasted && !isEscapedSlash && trimmed.startsWith('/')) {
       if (trimmed === '/help') {
         printHelp();
-        prompt();
+        void prompt();
         return;
       }
 
@@ -364,7 +367,7 @@ export async function startRepl(
         console.clear();
         printWelcome(config.provider, config.model, getLocalVersion());
         printInfo('Conversation history and scratch notes cleared.');
-        prompt();
+        void prompt();
         return;
       }
 
@@ -378,7 +381,7 @@ export async function startRepl(
             printInfo(`  - ${key}`);
           }
         }
-        prompt();
+        void prompt();
         return;
       }
 
@@ -392,7 +395,7 @@ export async function startRepl(
             printInfo(`  - ${key}`);
           }
         }
-        prompt();
+        void prompt();
         return;
       }
 
@@ -414,7 +417,7 @@ export async function startRepl(
             printInfo(`\nMCP tools: ${toolNames.join(', ')}`);
           }
         }
-        prompt();
+        void prompt();
         return;
       }
 
@@ -448,14 +451,14 @@ export async function startRepl(
           }
           console.log();
         }
-        prompt();
+        void prompt();
         return;
       }
 
       if (trimmed === '/rag') {
         if (!ragStore) {
           printInfo('RAG is disabled. Set BERNARD_RAG_ENABLED=true (default) to enable.');
-          prompt();
+          void prompt();
           return;
         }
         const count = ragStore.count();
@@ -491,7 +494,7 @@ export async function startRepl(
           }
         }
         console.log();
-        prompt();
+        void prompt();
         return;
       }
 
@@ -516,7 +519,7 @@ export async function startRepl(
             printInfo('');
           }
         }
-        prompt();
+        void prompt();
         return;
       }
 
@@ -524,7 +527,7 @@ export async function startRepl(
         const available = getAvailableProviders(config);
         if (available.length === 0) {
           printError('No providers have API keys configured.');
-          prompt();
+          void prompt();
           return;
         }
         printInfo(`\n  Current: ${config.provider} (${config.model})\n`);
@@ -550,7 +553,7 @@ export async function startRepl(
             printInfo('  Cancelled.');
           }
           console.log();
-          prompt();
+          void prompt();
         });
         return;
       }
@@ -559,7 +562,7 @@ export async function startRepl(
         const models = PROVIDER_MODELS[config.provider];
         if (!models || models.length === 0) {
           printError(`No models listed for provider "${config.provider}".`);
-          prompt();
+          void prompt();
           return;
         }
         printInfo(`\n  Current: ${config.provider} / ${config.model}\n`);
@@ -584,7 +587,7 @@ export async function startRepl(
             printInfo('  Cancelled.');
           }
           console.log();
-          prompt();
+          void prompt();
         });
         return;
       }
@@ -630,7 +633,7 @@ export async function startRepl(
             printInfo('  Cancelled.');
           }
           console.log();
-          prompt();
+          void prompt();
         });
         return;
       }
@@ -663,12 +666,12 @@ export async function startRepl(
                 printError('  Invalid value. Must be a positive integer.');
               }
               console.log();
-              prompt();
+              void prompt();
             });
           } else {
             printInfo('  Cancelled.');
             console.log();
-            prompt();
+            void prompt();
           }
         });
         return;
@@ -676,7 +679,7 @@ export async function startRepl(
 
       if (trimmed === '/update') {
         await interactiveUpdate();
-        prompt();
+        void prompt();
         return;
       }
     } // end slash command handling
@@ -711,15 +714,16 @@ export async function startRepl(
     }
 
     console.log(); // blank line between turns
-    prompt();
+    void prompt();
   };
 
   // Handle Ctrl+C gracefully
-  rl.on('close', async () => {
+  rl.on('close', () => {
     printInfo('\nGoodbye!');
-    await cleanup();
-    process.exit(0);
+    void cleanup()
+      .then(() => process.exit(0))
+      .catch(() => process.exit(1));
   });
 
-  prompt();
+  void prompt();
 }
