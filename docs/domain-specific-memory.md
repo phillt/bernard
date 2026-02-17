@@ -16,7 +16,7 @@ This created three problems:
 
 2. **Domain starvation** — If Bernard accumulated 50 general project facts and only 3 tool usage facts, similarity search would almost never surface the tool facts, even when you were asking about build commands.
 
-3. **Unstructured recall** — The system prompt presented recalled facts as a flat bullet list, giving Bernard no signal about what *kind* of knowledge each fact represented.
+3. **Unstructured recall** — The system prompt presented recalled facts as a flat bullet list, giving Bernard no signal about what _kind_ of knowledge each fact represented.
 
 ---
 
@@ -27,30 +27,33 @@ Domain-specific memory solves these problems by partitioning knowledge into thre
 ### Tool Usage Patterns (`tool-usage`)
 
 The extraction prompt steers the LLM toward things like:
+
 - Shell command sequences that accomplished a task
 - Which tools were used together and in what order
 - Error messages and how they were resolved
 - Build, test, and deploy workflows
 - Git workflows and branching patterns
 
-These are examples, not a fixed list — the LLM generalizes from them and will capture any operational knowledge that fits the domain's intent. Think of this as Bernard's "muscle memory" — the operational knowledge of *how to do things* on your system.
+These are examples, not a fixed list — the LLM generalizes from them and will capture any operational knowledge that fits the domain's intent. Think of this as Bernard's "muscle memory" — the operational knowledge of _how to do things_ on your system.
 
 ### User Preferences (`user-preferences`)
 
 The extraction prompt steers the LLM toward things like:
+
 - Communication style preferences (verbosity, format)
 - Workflow conventions (commit style, branching strategy)
 - Repeated instructions or corrections you've given
 - Naming conventions and coding style
 - Explicit "always do X" or "never do Y" directives
 
-These aren't hard-coded categories — the LLM generalizes from them. If you said "always respond in Spanish" or "I hate tabs," those would be captured as user preferences even though they aren't listed above. The bullet points are guidance that tells the LLM what *kind* of thing this domain is about, not an exhaustive list.
+These aren't hard-coded categories — the LLM generalizes from them. If you said "always respond in Spanish" or "I hate tabs," those would be captured as user preferences even though they aren't listed above. The bullet points are guidance that tells the LLM what _kind_ of thing this domain is about, not an exhaustive list.
 
-This is Bernard's understanding of *how you like things done*.
+This is Bernard's understanding of _how you like things done_.
 
 ### General Knowledge (`general`)
 
 The extraction prompt steers the LLM toward things like:
+
 - Project structure and architecture decisions
 - Technical environment details (languages, frameworks, versions)
 - Team context, roles, and relationships
@@ -59,7 +62,7 @@ The extraction prompt steers the LLM toward things like:
 
 Same as above — these are examples, not a fixed list. If your conversation covered database migration strategies or third-party vendor constraints, the LLM would extract those as general knowledge even though they aren't explicitly enumerated.
 
-This is the factual knowledge about *what things are* in your environment.
+This is the factual knowledge about _what things are_ in your environment.
 
 ---
 
@@ -109,6 +112,7 @@ Each domain's "Do NOT extract" section mirrors the other domains' "Extract" sect
 All three extraction calls run in parallel via `Promise.allSettled`. If one domain's extraction fails (network error, invalid JSON response, etc.), the other two still succeed. Partial failure is handled gracefully.
 
 The LLM returns a JSON array of strings. Each fact must be:
+
 - Self-contained (understandable without the original conversation)
 - At most 500 characters
 - A non-empty string
@@ -134,7 +138,7 @@ Facts are stored in `~/.bernard/rag/memories.json`. Each memory entry looks like
 
 ### Embeddings
 
-When a fact is stored, it's converted into a 384-dimensional vector using the `all-MiniLM-L6-v2` model from fastembed (runs locally, no API calls). This vector captures the *semantic meaning* of the text, so "npm run build compiles the project" and "how do I build this?" would have high similarity even though they share few words.
+When a fact is stored, it's converted into a 384-dimensional vector using the `all-MiniLM-L6-v2` model from fastembed (runs locally, no API calls). This vector captures the _semantic meaning_ of the text, so "npm run build compiles the project" and "how do I build this?" would have high similarity even though they share few words.
 
 ### Deduplication
 
@@ -143,6 +147,7 @@ Before adding a fact, Bernard checks if any existing memory has a cosine similar
 ### Pruning
 
 The store has a cap of 5,000 memories. When exceeded, memories are scored by:
+
 - **Recency** — exponential decay with a 90-day half-life
 - **Access frequency** — `log2(accessCount + 1)`
 
@@ -193,7 +198,7 @@ Reference only if directly relevant to the current discussion.
 - API runs on port 3000 in development
 ```
 
-This grouping gives the LLM clear signal about *what kind* of knowledge each fact represents. It can weigh tool-usage facts more heavily when you're asking about commands, and user-preference facts more heavily when deciding how to format a response.
+This grouping gives the LLM clear signal about _what kind_ of knowledge each fact represents. It can weigh tool-usage facts more heavily when you're asking about commands, and user-preference facts more heavily when deciding how to format a response.
 
 Only domains with actual results get a heading — if no user-preference facts were recalled, that section is omitted entirely.
 
@@ -297,10 +302,10 @@ src/repl.ts             ← imports getDomain, getDomainIds from domains
 
 ```typescript
 interface MemoryDomain {
-  id: string;                // machine key for storage/retrieval ('tool-usage')
-  name: string;              // human-readable label ('Tool Usage Patterns')
-  description: string;       // one-liner for /rag display
-  extractionPrompt: string;  // full LLM system prompt for this domain
+  id: string; // machine key for storage/retrieval ('tool-usage')
+  name: string; // human-readable label ('Tool Usage Patterns')
+  description: string; // one-liner for /rag display
+  extractionPrompt: string; // full LLM system prompt for this domain
 }
 ```
 
@@ -310,14 +315,14 @@ The `DOMAIN_REGISTRY` is a `Record<string, MemoryDomain>` — a plain object key
 
 ```typescript
 interface RAGMemory {
-  id: string;              // '{timestamp}-{random6}' for uniqueness
-  fact: string;            // the extracted text
-  embedding: number[];     // 384-dim float vector from all-MiniLM-L6-v2
-  source: string;          // 'compression' | 'exit' — when/how it was extracted
-  domain: string;          // domain ID from the registry
-  createdAt: string;       // ISO 8601 timestamp
-  accessCount: number;     // incremented on each search hit
-  lastAccessed?: string;   // ISO 8601 timestamp of last retrieval
+  id: string; // '{timestamp}-{random6}' for uniqueness
+  fact: string; // the extracted text
+  embedding: number[]; // 384-dim float vector from all-MiniLM-L6-v2
+  source: string; // 'compression' | 'exit' — when/how it was extracted
+  domain: string; // domain ID from the registry
+  createdAt: string; // ISO 8601 timestamp
+  accessCount: number; // incremented on each search hit
+  lastAccessed?: string; // ISO 8601 timestamp of last retrieval
 }
 ```
 
@@ -328,8 +333,8 @@ This is the on-disk format. The full array is serialized as JSON to `~/.bernard/
 ```typescript
 interface RAGSearchResult {
   fact: string;
-  similarity: number;   // cosine similarity score (0.0 to 1.0)
-  domain: string;       // domain ID, used by agent.ts for grouping
+  similarity: number; // cosine similarity score (0.0 to 1.0)
+  domain: string; // domain ID, used by agent.ts for grouping
 }
 ```
 
@@ -339,10 +344,10 @@ This is the return type from `RAGStore.search()`. The `domain` field is what all
 
 ```typescript
 interface RAGStoreConfig {
-  topKPerDomain?: number;        // max results per domain (default: 3)
-  maxResults?: number;           // max total results (default: 9)
-  similarityThreshold?: number;  // minimum cosine similarity (default: 0.35)
-  maxMemories?: number;          // prune cap (default: 5000)
+  topKPerDomain?: number; // max results per domain (default: 3)
+  maxResults?: number; // max total results (default: 9)
+  similarityThreshold?: number; // minimum cosine similarity (default: 0.35)
+  maxMemories?: number; // prune cap (default: 5000)
 }
 ```
 
@@ -352,8 +357,8 @@ All fields are optional with sensible defaults. The constructor destructures wit
 
 ```typescript
 interface DomainFacts {
-  domain: string;    // domain ID
-  facts: string[];   // extracted facts for this domain
+  domain: string; // domain ID
+  facts: string[]; // extracted facts for this domain
 }
 ```
 
@@ -371,7 +376,7 @@ This is the core extraction function. It takes serialized conversation text and 
 async function extractDomainFacts(
   serializedText: string,
   config: BernardConfig,
-): Promise<DomainFacts[]>
+): Promise<DomainFacts[]>;
 ```
 
 **Implementation details:**
@@ -397,10 +402,7 @@ The choice of `Promise.allSettled` over `Promise.all` is deliberate. If the LLM 
 Backward-compatible wrapper:
 
 ```typescript
-async function extractFacts(
-  serializedText: string,
-  config: BernardConfig,
-): Promise<string[]> {
+async function extractFacts(serializedText: string, config: BernardConfig): Promise<string[]> {
   const domainFacts = await extractDomainFacts(serializedText, config);
   return domainFacts.flatMap((df) => df.facts);
 }
@@ -464,7 +466,7 @@ async search(query: string): Promise<RAGSearchResult[]>
    persist to disk
 ```
 
-The critical insight is step 4: because the input list is already sorted by similarity (descending), each domain gets its *best* matches. A domain with only 1 relevant fact gets that 1 fact. A domain with 50 relevant facts gets its top 3. No domain can monopolize all 9 result slots.
+The critical insight is step 4: because the input list is already sorted by similarity (descending), each domain gets its _best_ matches. A domain with only 1 relevant fact gets that 1 fact. A domain with 50 relevant facts gets its top 3. No domain can monopolize all 9 result slots.
 
 ### `RAGStore.load()` — src/rag.ts:257
 
@@ -502,7 +504,7 @@ function buildSystemPrompt(
   memoryStore: MemoryStore,
   mcpServerNames?: string[],
   ragResults?: RAGSearchResult[],
-): string
+): string;
 ```
 
 When `ragResults` is present and non-empty, it builds the domain-grouped section:
@@ -533,21 +535,18 @@ async function compressHistory(
   history: CoreMessage[],
   config: BernardConfig,
   ragStore?: RAGStore,
-): Promise<CoreMessage[]>
+): Promise<CoreMessage[]>;
 ```
 
 This orchestrates mid-session compression. The domain-relevant portion:
 
 ```typescript
-const summarizePromise = generateText({ /* ... */ });
-const extractPromise = ragStore
-  ? extractDomainFacts(serialized, config)
-  : Promise.resolve([]);
+const summarizePromise = generateText({
+  /* ... */
+});
+const extractPromise = ragStore ? extractDomainFacts(serialized, config) : Promise.resolve([]);
 
-const [result, domainFacts] = await Promise.all([
-  summarizePromise,
-  extractPromise,
-]);
+const [result, domainFacts] = await Promise.all([summarizePromise, extractPromise]);
 
 if (ragStore && domainFacts.length > 0) {
   for (const df of domainFacts) {
@@ -571,24 +570,28 @@ Key implementation choices:
 ```typescript
 // In repl.ts cleanup handler:
 const tempFile = path.join(ragDir, `.pending-${crypto.randomBytes(8).toString('hex')}.json`);
-fs.writeFileSync(tempFile, JSON.stringify({
-  serialized,             // full conversation as plain text
-  provider: config.provider,
-  model: config.model,
-}));
+fs.writeFileSync(
+  tempFile,
+  JSON.stringify({
+    serialized, // full conversation as plain text
+    provider: config.provider,
+    model: config.model,
+  }),
+);
 
 const workerPath = path.join(__dirname, 'rag-worker.js');
 const child = childProcess.spawn(process.execPath, [workerPath, tempFile], {
-  detached: true,         // survives parent exit
-  stdio: 'ignore',        // no stdout/stderr pipes
-  env: process.env,       // inherits env (API keys, etc.)
+  detached: true, // survives parent exit
+  stdio: 'ignore', // no stdout/stderr pipes
+  env: process.env, // inherits env (API keys, etc.)
 });
-child.unref();            // don't keep parent alive
+child.unref(); // don't keep parent alive
 ```
 
 The worker does its own `loadConfig()` call to reconstruct the config from `.env` files and the provider/model overrides in the temp file. This means it doesn't need any IPC — the temp file is the entire communication channel.
 
 **Failure handling:**
+
 - If the worker crashes before deleting the temp file, it stays on disk
 - `RAGStore.cleanupStaleTemp()` runs on every `new RAGStore()` call
 - Temp files older than 1 hour (`STALE_TEMP_MAX_AGE_MS`) are deleted
@@ -632,8 +635,8 @@ const halfLifeMs = 90 * 24 * 60 * 60 * 1000; // 90 days
 
 const scored = this.memories.map((m) => {
   const ageMs = now - new Date(m.createdAt).getTime();
-  const recency = Math.pow(0.5, ageMs / halfLifeMs);   // exponential decay
-  const access = Math.log2(m.accessCount + 1);           // logarithmic boost
+  const recency = Math.pow(0.5, ageMs / halfLifeMs); // exponential decay
+  const access = Math.log2(m.accessCount + 1); // logarithmic boost
   return { memory: m, score: recency + access };
 });
 
@@ -651,19 +654,19 @@ this.memories = scored.slice(0, this.maxMemories).map((s) => s.memory);
 
 ## Constants Reference
 
-| Constant | Value | Location | Purpose |
-|----------|-------|----------|---------|
-| `DEFAULT_TOP_K_PER_DOMAIN` | 3 | rag.ts | Max search results per domain |
-| `DEFAULT_MAX_RESULTS` | 9 | rag.ts | Max total search results |
-| `DEFAULT_SIMILARITY_THRESHOLD` | 0.35 | rag.ts | Min cosine similarity for search |
-| `DEFAULT_MAX_MEMORIES` | 5000 | rag.ts | Prune cap |
-| `DEDUP_THRESHOLD` | 0.92 | rag.ts | Cosine similarity above which a fact is considered duplicate |
-| `PRUNE_HALF_LIFE_DAYS` | 90 | rag.ts | Recency decay half-life |
-| `STALE_TEMP_MAX_AGE_MS` | 3,600,000 | rag.ts | 1 hour — max age for pending temp files |
-| `FACT_EXTRACTION_MAX` | 500 | context.ts | Max characters per extracted fact |
-| `COMPRESSION_THRESHOLD` | 0.75 | context.ts | Fraction of context window that triggers compression |
-| `RECENT_TURNS_TO_KEEP` | 4 | context.ts | User turns kept intact during compression |
-| `DEFAULT_DOMAIN` | `'general'` | domains.ts | Fallback domain for legacy entries and untagged facts |
+| Constant                       | Value       | Location   | Purpose                                                      |
+| ------------------------------ | ----------- | ---------- | ------------------------------------------------------------ |
+| `DEFAULT_TOP_K_PER_DOMAIN`     | 3           | rag.ts     | Max search results per domain                                |
+| `DEFAULT_MAX_RESULTS`          | 9           | rag.ts     | Max total search results                                     |
+| `DEFAULT_SIMILARITY_THRESHOLD` | 0.35        | rag.ts     | Min cosine similarity for search                             |
+| `DEFAULT_MAX_MEMORIES`         | 5000        | rag.ts     | Prune cap                                                    |
+| `DEDUP_THRESHOLD`              | 0.92        | rag.ts     | Cosine similarity above which a fact is considered duplicate |
+| `PRUNE_HALF_LIFE_DAYS`         | 90          | rag.ts     | Recency decay half-life                                      |
+| `STALE_TEMP_MAX_AGE_MS`        | 3,600,000   | rag.ts     | 1 hour — max age for pending temp files                      |
+| `FACT_EXTRACTION_MAX`          | 500         | context.ts | Max characters per extracted fact                            |
+| `COMPRESSION_THRESHOLD`        | 0.75        | context.ts | Fraction of context window that triggers compression         |
+| `RECENT_TURNS_TO_KEEP`         | 4           | context.ts | User turns kept intact during compression                    |
+| `DEFAULT_DOMAIN`               | `'general'` | domains.ts | Fallback domain for legacy entries and untagged facts        |
 
 ---
 
@@ -671,12 +674,12 @@ this.memories = scored.slice(0, this.maxMemories).map((s) => s.memory);
 
 The domain-specific memory system is covered by tests across five test files:
 
-| Test file | Tests | What it verifies |
-|-----------|-------|-----------------|
-| `src/domains.test.ts` | 10 | Registry completeness, required fields, extraction prompt structure, `getDomain` fallback, `getDomainIds` |
-| `src/rag.test.ts` | 23 | Domain tagging on add/search, `topKPerDomain` limits, `maxResults` cap, legacy backfill, `countByDomain`, dedup, prune |
-| `src/context.test.ts` | 37 | Parallel domain extraction (3 LLM calls), partial failure handling, empty input, fact filtering, `extractFacts` wrapper, `compressHistory` with domain tags |
-| `src/agent.test.ts` | 25 | System prompt domain grouping with `###` headings, mixed-domain results, omission of empty domains |
-| `src/rag-worker.test.ts` | 4 | Worker uses `extractDomainFacts`, stores per-domain, handles empty extraction, passes config overrides |
+| Test file                | Tests | What it verifies                                                                                                                                            |
+| ------------------------ | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/domains.test.ts`    | 10    | Registry completeness, required fields, extraction prompt structure, `getDomain` fallback, `getDomainIds`                                                   |
+| `src/rag.test.ts`        | 23    | Domain tagging on add/search, `topKPerDomain` limits, `maxResults` cap, legacy backfill, `countByDomain`, dedup, prune                                      |
+| `src/context.test.ts`    | 37    | Parallel domain extraction (3 LLM calls), partial failure handling, empty input, fact filtering, `extractFacts` wrapper, `compressHistory` with domain tags |
+| `src/agent.test.ts`      | 25    | System prompt domain grouping with `###` headings, mixed-domain results, omission of empty domains                                                          |
+| `src/rag-worker.test.ts` | 4     | Worker uses `extractDomainFacts`, stores per-domain, handles empty extraction, passes config overrides                                                      |
 
 All tests use Vitest with `vi.mock()` for dependency isolation. The LLM calls are mocked — tests verify the wiring and data flow, not the LLM output quality.

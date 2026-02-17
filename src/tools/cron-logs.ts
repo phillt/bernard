@@ -8,7 +8,8 @@ export function createCronLogTools() {
 
   return {
     cron_logs_list: tool({
-      description: 'List recent cron job execution runs. Returns one-line summaries (no step details). Use cron_logs_get for full traces.',
+      description:
+        'List recent cron job execution runs. Returns one-line summaries (no step details). Use cron_logs_get for full traces.',
       parameters: z.object({
         job_id: z.string().describe('Job ID to list runs for'),
         limit: z.number().min(1).max(50).default(10).describe('Number of runs to return (max 50)'),
@@ -25,7 +26,7 @@ export function createCronLogTools() {
         }
 
         const total = logStore.getEntryCount(job_id);
-        const lines = entries.map(e => {
+        const lines = entries.map((e) => {
           const status = e.success ? 'OK' : 'ERR';
           const dur = `${e.durationMs}ms`;
           const stepCount = e.steps.length;
@@ -38,7 +39,8 @@ export function createCronLogTools() {
     }),
 
     cron_logs_get: tool({
-      description: 'Get the full execution trace for a specific cron job run, including all steps, tool calls, and results.',
+      description:
+        'Get the full execution trace for a specific cron job run, including all steps, tool calls, and results.',
       parameters: z.object({
         job_id: z.string().describe('Job ID'),
         run_id: z.string().describe('Run ID (from cron_logs_list output)'),
@@ -70,7 +72,8 @@ export function createCronLogTools() {
           }
           for (const tr of step.toolResults) {
             const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
-            const truncated = resultStr.length > 500 ? resultStr.slice(0, 500) + '... (truncated)' : resultStr;
+            const truncated =
+              resultStr.length > 500 ? resultStr.slice(0, 500) + '... (truncated)' : resultStr;
             result += `  Tool result [${tr.toolName}]: ${truncated}\n`;
           }
         }
@@ -81,7 +84,8 @@ export function createCronLogTools() {
     }),
 
     cron_logs_summary: tool({
-      description: 'Get aggregate statistics for a cron job: success rate, average duration, total token usage, recent run count.',
+      description:
+        'Get aggregate statistics for a cron job: success rate, average duration, total token usage, recent run count.',
       parameters: z.object({
         job_id: z.string().describe('Job ID to summarize'),
       }),
@@ -94,10 +98,12 @@ export function createCronLogTools() {
         // Read all entries for summary (capped at most recent 500)
         const entries = logStore.getEntries(job_id, 500, 0);
 
-        const successes = entries.filter(e => e.success).length;
+        const successes = entries.filter((e) => e.success).length;
         const failures = entries.length - successes;
         const successRate = ((successes / entries.length) * 100).toFixed(1);
-        const avgDuration = Math.round(entries.reduce((s, e) => s + e.durationMs, 0) / entries.length);
+        const avgDuration = Math.round(
+          entries.reduce((s, e) => s + e.durationMs, 0) / entries.length,
+        );
         const totalTokens = entries.reduce((s, e) => s + e.totalUsage.totalTokens, 0);
         const avgTokens = Math.round(totalTokens / entries.length);
 
@@ -115,11 +121,19 @@ export function createCronLogTools() {
     }),
 
     cron_logs_cleanup: tool({
-      description: 'Rotate or delete cron job execution logs. Use "rotate" to keep only the most recent entries, or "delete" to remove all logs for a job.',
+      description:
+        'Rotate or delete cron job execution logs. Use "rotate" to keep only the most recent entries, or "delete" to remove all logs for a job.',
       parameters: z.object({
         job_id: z.string().describe('Job ID'),
-        action: z.enum(['rotate', 'delete']).describe('Action: "rotate" keeps recent entries, "delete" removes all'),
-        keep: z.number().min(1).max(10000).default(500).describe('Number of recent entries to keep (only for rotate)'),
+        action: z
+          .enum(['rotate', 'delete'])
+          .describe('Action: "rotate" keeps recent entries, "delete" removes all'),
+        keep: z
+          .number()
+          .min(1)
+          .max(10000)
+          .default(500)
+          .describe('Number of recent entries to keep (only for rotate)'),
       }),
       execute: async ({ job_id, action, keep }): Promise<string> => {
         debugLog('cron_logs_cleanup:execute', { job_id, action, keep });

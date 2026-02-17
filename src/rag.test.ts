@@ -19,7 +19,9 @@ vi.mock('./embeddings.js', () => ({
   cosineSimilarity: vi.fn((a: number[], b: number[]) => {
     // Real cosine similarity for deterministic fake embeddings
     if (a.length !== b.length || a.length === 0) return 0;
-    let dot = 0, normA = 0, normB = 0;
+    let dot = 0,
+      normA = 0,
+      normB = 0;
     for (let i = 0; i < a.length; i++) {
       dot += a[i] * b[i];
       normA += a[i] * a[i];
@@ -44,7 +46,7 @@ function fakeEmbed(texts: string[]): number[][] {
     let hash = 0;
     for (let i = 0; i < text.length; i++) {
       hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
-      embedding[(i * 7 + Math.abs(hash)) % dims] += (hash & 1) ? 1 : -1;
+      embedding[(i * 7 + Math.abs(hash)) % dims] += hash & 1 ? 1 : -1;
     }
     // Normalize
     const norm = Math.sqrt(embedding.reduce((s, v) => s + v * v, 0));
@@ -79,7 +81,10 @@ describe('RAGStore', () => {
   describe('addFacts', () => {
     it('stores facts with embeddings', async () => {
       const store = await createStore();
-      const added = await store.addFacts(['User prefers dark mode', 'Project uses TypeScript'], 'compression');
+      const added = await store.addFacts(
+        ['User prefers dark mode', 'Project uses TypeScript'],
+        'compression',
+      );
       expect(added).toBe(2);
       expect(store.count()).toBe(2);
     });
@@ -129,8 +134,10 @@ describe('RAGStore', () => {
     it('prunes when over max capacity', async () => {
       const store = await createStore();
       // Use unique-enough facts so they don't deduplicate
-      const facts = Array.from({ length: 110 }, (_, i) =>
-        `Fact number ${i} about topic ${String.fromCharCode(65 + (i % 26))} with extra details ${i * 7}`
+      const facts = Array.from(
+        { length: 110 },
+        (_, i) =>
+          `Fact number ${i} about topic ${String.fromCharCode(65 + (i % 26))} with extra details ${i * 7}`,
       );
       await store.addFacts(facts, 'compression');
       expect(store.count()).toBeLessThanOrEqual(100);
@@ -154,11 +161,14 @@ describe('RAGStore', () => {
 
     it('returns matching results sorted by similarity', async () => {
       const store = await createStore();
-      await store.addFacts([
-        'User prefers dark mode for all editors',
-        'Project is built with TypeScript and Node.js',
-        'The cat sat on the mat',
-      ], 'test');
+      await store.addFacts(
+        [
+          'User prefers dark mode for all editors',
+          'Project is built with TypeScript and Node.js',
+          'The cat sat on the mat',
+        ],
+        'test',
+      );
 
       const results = await store.search('User prefers dark mode for all editors');
       expect(results.length).toBeGreaterThan(0);
@@ -192,20 +202,24 @@ describe('RAGStore', () => {
 
       const results = await store.search('Build step for project alpha');
       // Should be capped at 2 per domain
-      const toolUsageResults = results.filter(r => r.domain === 'tool-usage');
+      const toolUsageResults = results.filter((r) => r.domain === 'tool-usage');
       expect(toolUsageResults.length).toBeLessThanOrEqual(2);
     });
 
     it('caps total results at maxResults', async () => {
       const store = await createStore({ topKPerDomain: 5, maxResults: 3 });
 
-      await store.addFacts([
-        'Fact A about building software',
-        'Fact B about building software',
-        'Fact C about building software',
-        'Fact D about building software',
-        'Fact E about building software',
-      ], 'test', 'general');
+      await store.addFacts(
+        [
+          'Fact A about building software',
+          'Fact B about building software',
+          'Fact C about building software',
+          'Fact D about building software',
+          'Fact E about building software',
+        ],
+        'test',
+        'general',
+      );
 
       const results = await store.search('building software');
       expect(results.length).toBeLessThanOrEqual(3);
@@ -224,7 +238,17 @@ describe('RAGStore', () => {
   describe('persistence', () => {
     it('loads memories on construction', async () => {
       const memories = [
-        { id: '1', fact: 'test fact', embedding: Array(16).fill(0).map((_, i) => i === 0 ? 1 : 0), source: 'test', domain: 'general', createdAt: new Date().toISOString(), accessCount: 0 },
+        {
+          id: '1',
+          fact: 'test fact',
+          embedding: Array(16)
+            .fill(0)
+            .map((_, i) => (i === 0 ? 1 : 0)),
+          source: 'test',
+          domain: 'general',
+          createdAt: new Date().toISOString(),
+          accessCount: 0,
+        },
       ];
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
@@ -235,7 +259,16 @@ describe('RAGStore', () => {
 
     it('backfills general domain for legacy entries without domain', async () => {
       const memories = [
-        { id: '1', fact: 'legacy fact', embedding: Array(16).fill(0).map((_, i) => i === 0 ? 1 : 0), source: 'test', createdAt: new Date().toISOString(), accessCount: 0 },
+        {
+          id: '1',
+          fact: 'legacy fact',
+          embedding: Array(16)
+            .fill(0)
+            .map((_, i) => (i === 0 ? 1 : 0)),
+          source: 'test',
+          createdAt: new Date().toISOString(),
+          accessCount: 0,
+        },
       ];
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
@@ -314,7 +347,15 @@ describe('RAGStore', () => {
         objectEmbedding[String(i)] = i === 0 ? 1 : 0;
       }
       const memories = [
-        { id: '1', fact: 'test fact', embedding: objectEmbedding, source: 'test', domain: 'general', createdAt: new Date().toISOString(), accessCount: 0 },
+        {
+          id: '1',
+          fact: 'test fact',
+          embedding: objectEmbedding,
+          source: 'test',
+          domain: 'general',
+          createdAt: new Date().toISOString(),
+          accessCount: 0,
+        },
       ];
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
@@ -331,7 +372,17 @@ describe('RAGStore', () => {
 
     it('load() preserves already-correct array embeddings', async () => {
       const memories = [
-        { id: '1', fact: 'test fact', embedding: Array(16).fill(0).map((_, i) => i === 0 ? 1 : 0), source: 'test', domain: 'general', createdAt: new Date().toISOString(), accessCount: 0 },
+        {
+          id: '1',
+          fact: 'test fact',
+          embedding: Array(16)
+            .fill(0)
+            .map((_, i) => (i === 0 ? 1 : 0)),
+          source: 'test',
+          domain: 'general',
+          createdAt: new Date().toISOString(),
+          accessCount: 0,
+        },
       ];
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
@@ -347,7 +398,17 @@ describe('RAGStore', () => {
   describe('listFacts', () => {
     it('returns formatted fact list with domain', async () => {
       const memories = [
-        { id: '1', fact: 'test fact', embedding: Array(16).fill(0).map((_, i) => i === 0 ? 1 : 0), source: 'test', domain: 'tool-usage', createdAt: '2025-01-15T00:00:00.000Z', accessCount: 3 },
+        {
+          id: '1',
+          fact: 'test fact',
+          embedding: Array(16)
+            .fill(0)
+            .map((_, i) => (i === 0 ? 1 : 0)),
+          source: 'test',
+          domain: 'tool-usage',
+          createdAt: '2025-01-15T00:00:00.000Z',
+          accessCount: 3,
+        },
       ];
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));

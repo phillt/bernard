@@ -18,7 +18,8 @@ export function buildMemoryContext(options: MemoryContextOptions): string {
   let context = '';
 
   if (ragResults && ragResults.length > 0) {
-    context += '\n\n## Recalled Context\nReference only if directly relevant to the current discussion.';
+    context +=
+      '\n\n## Recalled Context\nReference only if directly relevant to the current discussion.';
 
     const byDomain = new Map<string, RAGSearchResult[]>();
     for (const r of ragResults) {

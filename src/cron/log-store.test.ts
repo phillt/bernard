@@ -42,10 +42,7 @@ describe('CronLogStore', () => {
   });
 
   it('creates logs directory on construction', () => {
-    expect(fs.mkdirSync).toHaveBeenCalledWith(
-      expect.stringContaining('logs'),
-      { recursive: true },
-    );
+    expect(fs.mkdirSync).toHaveBeenCalledWith(expect.stringContaining('logs'), { recursive: true });
   });
 
   describe('appendEntry', () => {
@@ -102,9 +99,10 @@ describe('CronLogStore', () => {
     });
 
     it('respects limit and offset', () => {
-      const lines = Array.from({ length: 5 }, (_, i) =>
-        JSON.stringify(makeEntry({ runId: `run-${i}` }))
-      ).join('\n') + '\n';
+      const lines =
+        Array.from({ length: 5 }, (_, i) => JSON.stringify(makeEntry({ runId: `run-${i}` }))).join(
+          '\n',
+        ) + '\n';
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(lines);
 
@@ -181,9 +179,10 @@ describe('CronLogStore', () => {
 
   describe('rotate', () => {
     it('keeps last N entries', () => {
-      const lines = Array.from({ length: 10 }, (_, i) =>
-        JSON.stringify(makeEntry({ runId: `run-${i}` }))
-      ).join('\n') + '\n';
+      const lines =
+        Array.from({ length: 10 }, (_, i) => JSON.stringify(makeEntry({ runId: `run-${i}` }))).join(
+          '\n',
+        ) + '\n';
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(lines);
 

@@ -57,7 +57,12 @@ export const THEMES: Record<string, Theme> = {
     success: chalk.hex('#34d399'),
     dim: chalk.dim,
     warning: chalk.hex('#fbbf24'),
-    prefixColors: [chalk.hex('#38bdf8'), chalk.hex('#818cf8'), chalk.hex('#34d399'), chalk.hex('#06b6d4')],
+    prefixColors: [
+      chalk.hex('#38bdf8'),
+      chalk.hex('#818cf8'),
+      chalk.hex('#34d399'),
+      chalk.hex('#06b6d4'),
+    ],
     ansi: {
       prompt: '\x1b[38;2;6;182;212m',
       hintCmd: '\x1b[38;2;226;232;240m',
@@ -78,7 +83,12 @@ export const THEMES: Record<string, Theme> = {
     success: chalk.hex('#4ade80'),
     dim: chalk.dim,
     warning: chalk.hex('#facc15'),
-    prefixColors: [chalk.hex('#4ade80'), chalk.hex('#a78bfa'), chalk.hex('#fbbf24'), chalk.hex('#22d3ee')],
+    prefixColors: [
+      chalk.hex('#4ade80'),
+      chalk.hex('#a78bfa'),
+      chalk.hex('#fbbf24'),
+      chalk.hex('#22d3ee'),
+    ],
     ansi: {
       prompt: '\x1b[38;2;34;197;94m',
       hintCmd: '\x1b[38;2;229;229;229m',
@@ -99,7 +109,12 @@ export const THEMES: Record<string, Theme> = {
     success: chalk.hex('#34d399'),
     dim: chalk.dim,
     warning: chalk.hex('#fde68a'),
-    prefixColors: [chalk.hex('#f472b6'), chalk.hex('#818cf8'), chalk.hex('#22d3ee'), chalk.hex('#c084fc')],
+    prefixColors: [
+      chalk.hex('#f472b6'),
+      chalk.hex('#818cf8'),
+      chalk.hex('#22d3ee'),
+      chalk.hex('#c084fc'),
+    ],
     ansi: {
       prompt: '\x1b[38;2;192;132;252m',
       hintCmd: '\x1b[38;2;240;171;252m',
@@ -120,7 +135,12 @@ export const THEMES: Record<string, Theme> = {
     success: chalk.bold.greenBright,
     dim: chalk.white,
     warning: chalk.bold.yellowBright,
-    prefixColors: [chalk.bold.magentaBright, chalk.bold.cyanBright, chalk.bold.greenBright, chalk.bold.yellowBright],
+    prefixColors: [
+      chalk.bold.magentaBright,
+      chalk.bold.cyanBright,
+      chalk.bold.greenBright,
+      chalk.bold.yellowBright,
+    ],
     ansi: {
       prompt: '\x1b[1;97m',
       hintCmd: '\x1b[97m',
@@ -141,7 +161,12 @@ export const THEMES: Record<string, Theme> = {
     success: chalk.hex('#648FFF'),
     dim: chalk.dim,
     warning: chalk.hex('#FFB000'),
-    prefixColors: [chalk.hex('#785EF0'), chalk.hex('#DC267F'), chalk.hex('#FFB000'), chalk.hex('#648FFF')],
+    prefixColors: [
+      chalk.hex('#785EF0'),
+      chalk.hex('#DC267F'),
+      chalk.hex('#FFB000'),
+      chalk.hex('#648FFF'),
+    ],
     ansi: {
       prompt: '\x1b[38;2;100;143;255m',
       hintCmd: '\x1b[38;2;224;224;224m',

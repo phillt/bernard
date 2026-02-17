@@ -54,33 +54,37 @@ export function getLocalVersion(): string {
  */
 export function fetchLatestVersion(): Promise<string> {
   return new Promise((resolve, reject) => {
-    const req = https.get(`https://registry.npmjs.org/${PACKAGE_NAME}/latest`, { timeout: 5000 }, (res) => {
-      if (res.statusCode !== 200) {
-        reject(new Error(`Registry returned status ${res.statusCode}`));
-        return;
-      }
-      const MAX_RESPONSE_SIZE = 1024 * 1024; // 1MB
-      let data = '';
-      res.on('data', (chunk: Buffer) => {
-        data += chunk;
-        if (data.length > MAX_RESPONSE_SIZE) {
-          res.destroy();
-          reject(new Error('Registry response too large'));
+    const req = https.get(
+      `https://registry.npmjs.org/${PACKAGE_NAME}/latest`,
+      { timeout: 5000 },
+      (res) => {
+        if (res.statusCode !== 200) {
+          reject(new Error(`Registry returned status ${res.statusCode}`));
+          return;
         }
-      });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.version && SEMVER_RE.test(parsed.version)) {
-            resolve(parsed.version);
-          } else {
-            reject(new Error('No valid version field in registry response'));
+        const MAX_RESPONSE_SIZE = 1024 * 1024; // 1MB
+        let data = '';
+        res.on('data', (chunk: Buffer) => {
+          data += chunk;
+          if (data.length > MAX_RESPONSE_SIZE) {
+            res.destroy();
+            reject(new Error('Registry response too large'));
           }
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
+        });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.version && SEMVER_RE.test(parsed.version)) {
+              resolve(parsed.version);
+            } else {
+              reject(new Error('No valid version field in registry response'));
+            }
+          } catch (err) {
+            reject(err);
+          }
+        });
+      },
+    );
     req.on('error', reject);
     req.on('timeout', () => {
       req.destroy();
@@ -95,8 +99,10 @@ function readCache(): CacheData | null {
     const parsed = JSON.parse(raw);
     if (
       typeof parsed.lastCheck === 'string' &&
-      typeof parsed.latestVersion === 'string' && SEMVER_RE.test(parsed.latestVersion) &&
-      typeof parsed.currentVersion === 'string' && SEMVER_RE.test(parsed.currentVersion)
+      typeof parsed.latestVersion === 'string' &&
+      SEMVER_RE.test(parsed.latestVersion) &&
+      typeof parsed.currentVersion === 'string' &&
+      SEMVER_RE.test(parsed.currentVersion)
     ) {
       return parsed as CacheData;
     }
@@ -175,7 +181,9 @@ export function startupUpdateCheck(autoUpdate: boolean): void {
         try {
           printInfo(`\n  Applying update to v${result.latestVersion}...`);
           applyUpdate(result.latestVersion);
-          printInfo(`  Updated bernard to v${result.latestVersion}. Restart to use the new version.\n`);
+          printInfo(
+            `  Updated bernard to v${result.latestVersion}. Restart to use the new version.\n`,
+          );
         } catch {
           printInfo(`\n  Update to v${result.latestVersion} failed. Run: bernard update\n`);
         }

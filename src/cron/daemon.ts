@@ -16,7 +16,9 @@ function createLogger() {
         const stat = fs.statSync(logFile);
         if (stat.size > MAX_LOG_SIZE) {
           const rotated = logFile + '.old';
-          try { fs.unlinkSync(rotated); } catch {}
+          try {
+            fs.unlinkSync(rotated);
+          } catch {}
           fs.renameSync(logFile, rotated);
         }
       } catch {
@@ -53,8 +55,13 @@ function main() {
   const jobs = store.loadJobs();
   for (const job of jobs) {
     if (job.lastRunStatus === 'running') {
-      log(`Warning: Job "${job.name}" (${job.id}) was in running state at startup — previous daemon may have crashed`);
-      store.updateJob(job.id, { lastRunStatus: 'error', lastResult: 'Daemon restarted while job was running' });
+      log(
+        `Warning: Job "${job.name}" (${job.id}) was in running state at startup — previous daemon may have crashed`,
+      );
+      store.updateJob(job.id, {
+        lastRunStatus: 'error',
+        lastResult: 'Daemon restarted while job was running',
+      });
     }
   }
 
@@ -77,14 +84,18 @@ function main() {
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    log(`Warning: Could not watch cron directory: ${message}. Changes won't be detected until restart.`);
+    log(
+      `Warning: Could not watch cron directory: ${message}. Changes won't be detected until restart.`,
+    );
   }
 
   // Graceful shutdown
   const shutdown = (signal: string) => {
     log(`Received ${signal}, shutting down`);
     scheduler.stopAll();
-    try { fs.unlinkSync(CronStore.pidFile); } catch {}
+    try {
+      fs.unlinkSync(CronStore.pidFile);
+    } catch {}
     log('Daemon stopped');
     process.exit(0);
   };

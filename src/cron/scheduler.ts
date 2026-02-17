@@ -16,12 +16,13 @@ export class Scheduler {
   constructor(store: CronStore, log: (msg: string) => void) {
     this.store = store;
     this.log = log;
-    this.maxConcurrent = parseInt(process.env.BERNARD_CRON_MAX_CONCURRENT || '', 10) || DEFAULT_MAX_CONCURRENT;
+    this.maxConcurrent =
+      parseInt(process.env.BERNARD_CRON_MAX_CONCURRENT || '', 10) || DEFAULT_MAX_CONCURRENT;
   }
 
   reconcile(): void {
     const jobs = this.store.loadJobs();
-    const jobMap = new Map(jobs.map(j => [j.id, j]));
+    const jobMap = new Map(jobs.map((j) => [j.id, j]));
 
     // Stop tasks for removed or disabled jobs
     for (const [id, task] of this.tasks) {

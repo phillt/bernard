@@ -42,19 +42,30 @@ function getLinuxTerminalArgs(terminal: string, command: string): string[] {
   }
 }
 
-function openAlertInTerminal(alertId: string, log?: (msg: string) => void, platform?: string): void {
+function openAlertInTerminal(
+  alertId: string,
+  log?: (msg: string) => void,
+  platform?: string,
+): void {
   const plat = platform ?? osPlatform();
   const command = `bernard --alert ${alertId}`;
 
   if (plat === 'darwin') {
     try {
-      const child = spawn('osascript', ['-e', `tell application "Terminal" to do script "${command}"`], {
-        detached: true,
-        stdio: 'ignore',
-      });
+      const child = spawn(
+        'osascript',
+        ['-e', `tell application "Terminal" to do script "${command}"`],
+        {
+          detached: true,
+          stdio: 'ignore',
+        },
+      );
       child.unref();
     } catch (err) {
-      if (log) log(`Warning: Failed to open macOS Terminal: ${err instanceof Error ? err.message : String(err)}`);
+      if (log)
+        log(
+          `Warning: Failed to open macOS Terminal: ${err instanceof Error ? err.message : String(err)}`,
+        );
     }
     return;
   }
@@ -77,7 +88,10 @@ function openAlertInTerminal(alertId: string, log?: (msg: string) => void, platf
         });
         child.unref();
       } catch (err) {
-        if (log) log(`Warning: Failed to open Windows terminal: ${err instanceof Error ? err.message : String(err)}`);
+        if (log)
+          log(
+            `Warning: Failed to open Windows terminal: ${err instanceof Error ? err.message : String(err)}`,
+          );
       }
     }
     return;
@@ -98,7 +112,8 @@ function openAlertInTerminal(alertId: string, log?: (msg: string) => void, platf
     });
     child.unref();
   } catch (err) {
-    if (log) log(`Warning: Failed to open terminal: ${err instanceof Error ? err.message : String(err)}`);
+    if (log)
+      log(`Warning: Failed to open terminal: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

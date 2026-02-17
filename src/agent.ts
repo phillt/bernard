@@ -2,9 +2,25 @@ import { generateText, type CoreMessage } from 'ai';
 import { getModel } from './providers/index.js';
 import { createTools, type ToolOptions } from './tools/index.js';
 import { createSubAgentTool } from './tools/subagent.js';
-import { printAssistantText, printToolCall, printToolResult, printInfo, startSpinner, buildSpinnerMessage, type SpinnerStats } from './output.js';
+import {
+  printAssistantText,
+  printToolCall,
+  printToolResult,
+  printInfo,
+  startSpinner,
+  buildSpinnerMessage,
+  type SpinnerStats,
+} from './output.js';
 import { debugLog } from './logger.js';
-import { shouldCompress, compressHistory, truncateToolResults, estimateHistoryTokens, emergencyTruncate, isTokenOverflowError, getContextWindow } from './context.js';
+import {
+  shouldCompress,
+  compressHistory,
+  truncateToolResults,
+  estimateHistoryTokens,
+  emergencyTruncate,
+  isTokenOverflowError,
+  getContextWindow,
+} from './context.js';
 import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
@@ -90,9 +106,17 @@ Good: "Run \`curl -s http://localhost:3000/health\` and report: (a) HTTP status 
 Do NOT use sub-agents for tasks that are sequential or depend on each other's results — handle those yourself step by step. Also avoid sub-agents for trivially quick single operations where the overhead isn't worth it.`;
 
 /** @internal */
-export function buildSystemPrompt(config: BernardConfig, memoryStore: MemoryStore, mcpServerNames?: string[], ragResults?: RAGSearchResult[]): string {
+export function buildSystemPrompt(
+  config: BernardConfig,
+  memoryStore: MemoryStore,
+  mcpServerNames?: string[],
+  ragResults?: RAGSearchResult[],
+): string {
   const today = new Date().toLocaleDateString('en-US', {
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
   });
   let prompt = BASE_SYSTEM_PROMPT + `\n\nToday's date is ${today}.`;
   prompt += `\nYou are running as provider: ${config.provider}, model: ${config.model}. The user can switch with /provider and /model.`;
@@ -128,7 +152,16 @@ export class Agent {
   private lastStepPromptTokens: number = 0;
   private spinnerStats: SpinnerStats | null = null;
 
-  constructor(config: BernardConfig, toolOptions: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>, mcpServerNames?: string[], alertContext?: string, initialHistory?: CoreMessage[], ragStore?: RAGStore) {
+  constructor(
+    config: BernardConfig,
+    toolOptions: ToolOptions,
+    memoryStore: MemoryStore,
+    mcpTools?: Record<string, any>,
+    mcpServerNames?: string[],
+    alertContext?: string,
+    initialHistory?: CoreMessage[],
+    ragStore?: RAGStore,
+  ) {
     this.config = config;
     this.toolOptions = toolOptions;
     this.memoryStore = memoryStore;
@@ -199,7 +232,12 @@ export class Agent {
         }
       }
 
-      let systemPrompt = buildSystemPrompt(this.config, this.memoryStore, this.mcpServerNames, ragResults);
+      let systemPrompt = buildSystemPrompt(
+        this.config,
+        this.memoryStore,
+        this.mcpServerNames,
+        ragResults,
+      );
       if (this.alertContext) {
         systemPrompt += '\n\n' + this.alertContext;
       }
@@ -207,7 +245,8 @@ export class Agent {
       // Pre-flight token guard: emergency truncate if estimated tokens exceed 90% of context window
       const HARD_LIMIT_RATIO = 0.9;
       const contextWindow = getContextWindow(this.config.model);
-      const estimatedTokens = estimateHistoryTokens(this.history) + Math.ceil(systemPrompt.length / 4);
+      const estimatedTokens =
+        estimateHistoryTokens(this.history) + Math.ceil(systemPrompt.length / 4);
       const hardLimit = contextWindow * HARD_LIMIT_RATIO;
       let preflightTruncated = false;
 
@@ -220,43 +259,50 @@ export class Agent {
       const baseTools = createTools(this.toolOptions, this.memoryStore, this.mcpTools);
       const tools = {
         ...baseTools,
-        agent: createSubAgentTool(this.config, this.toolOptions, this.memoryStore, this.mcpTools, this.ragStore),
+        agent: createSubAgentTool(
+          this.config,
+          this.toolOptions,
+          this.memoryStore,
+          this.mcpTools,
+          this.ragStore,
+        ),
       };
 
-      const callGenerateText = () => generateText({
-        model: getModel(this.config.provider, this.config.model),
-        tools,
-        maxSteps: 20,
-        maxTokens: this.config.maxTokens,
-        system: systemPrompt,
-        messages: this.history,
-        abortSignal: this.abortController!.signal,
-        onStepFinish: ({ text, toolCalls, toolResults, usage }) => {
-          if (usage) {
-            this.lastStepPromptTokens = usage.promptTokens;
-            if (this.spinnerStats) {
-              this.spinnerStats.totalPromptTokens += usage.promptTokens;
-              this.spinnerStats.totalCompletionTokens += usage.completionTokens;
-              this.spinnerStats.latestPromptTokens = usage.promptTokens;
+      const callGenerateText = () =>
+        generateText({
+          model: getModel(this.config.provider, this.config.model),
+          tools,
+          maxSteps: 20,
+          maxTokens: this.config.maxTokens,
+          system: systemPrompt,
+          messages: this.history,
+          abortSignal: this.abortController!.signal,
+          onStepFinish: ({ text, toolCalls, toolResults, usage }) => {
+            if (usage) {
+              this.lastStepPromptTokens = usage.promptTokens;
+              if (this.spinnerStats) {
+                this.spinnerStats.totalPromptTokens += usage.promptTokens;
+                this.spinnerStats.totalCompletionTokens += usage.completionTokens;
+                this.spinnerStats.latestPromptTokens = usage.promptTokens;
+              }
             }
-          }
-          for (const tc of toolCalls) {
-            debugLog(`onStepFinish:toolCall:${tc.toolName}`, tc.args);
-            printToolCall(tc.toolName, tc.args as Record<string, unknown>);
-          }
-          for (const tr of toolResults) {
-            debugLog(`onStepFinish:toolResult:${tr.toolName}`, tr.result);
-            printToolResult(tr.toolName, tr.result);
-          }
-          if (text) {
-            printAssistantText(text);
-          }
-          // Restart spinner between tool-call steps (another LLM call is coming)
-          if (toolCalls.length > 0 && this.spinnerStats) {
-            startSpinner(() => buildSpinnerMessage(this.spinnerStats!));
-          }
-        },
-      });
+            for (const tc of toolCalls) {
+              debugLog(`onStepFinish:toolCall:${tc.toolName}`, tc.args);
+              printToolCall(tc.toolName, tc.args as Record<string, unknown>);
+            }
+            for (const tr of toolResults) {
+              debugLog(`onStepFinish:toolResult:${tr.toolName}`, tr.result);
+              printToolResult(tr.toolName, tr.result);
+            }
+            if (text) {
+              printAssistantText(text);
+            }
+            // Restart spinner between tool-call steps (another LLM call is coming)
+            if (toolCalls.length > 0 && this.spinnerStats) {
+              startSpinner(() => buildSpinnerMessage(this.spinnerStats!));
+            }
+          },
+        });
 
       let result;
       try {

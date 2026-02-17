@@ -155,15 +155,17 @@ describe('cron log tools', () => {
     it('truncates long tool results', async () => {
       const longResult = 'x'.repeat(1000);
       const entry = makeEntry({
-        steps: [{
-          stepIndex: 0,
-          timestamp: '2025-01-01T00:00:00.500Z',
-          text: '',
-          toolCalls: [{ toolName: 'shell', toolCallId: 'tc-1', args: { command: 'ls' } }],
-          toolResults: [{ toolName: 'shell', toolCallId: 'tc-1', result: longResult }],
-          usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
-          finishReason: 'tool-calls',
-        }],
+        steps: [
+          {
+            stepIndex: 0,
+            timestamp: '2025-01-01T00:00:00.500Z',
+            text: '',
+            toolCalls: [{ toolName: 'shell', toolCallId: 'tc-1', args: { command: 'ls' } }],
+            toolResults: [{ toolName: 'shell', toolCallId: 'tc-1', result: longResult }],
+            usage: { promptTokens: 10, completionTokens: 20, totalTokens: 30 },
+            finishReason: 'tool-calls',
+          },
+        ],
       });
       mockLogStore.getEntry.mockReturnValue(entry);
 
@@ -182,27 +184,36 @@ describe('cron log tools', () => {
     it('returns message when no logs exist', async () => {
       mockLogStore.getEntryCount.mockReturnValue(0);
 
-      const result = await tools.cron_logs_summary.execute!(
-        { job_id: 'job-1' },
-        {} as any,
-      );
+      const result = await tools.cron_logs_summary.execute!({ job_id: 'job-1' }, {} as any);
 
       expect(result).toContain('No execution logs found');
     });
 
     it('calculates statistics', async () => {
       const entries = [
-        makeEntry({ runId: 'r1', success: true, durationMs: 1000, totalUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 } }),
-        makeEntry({ runId: 'r2', success: true, durationMs: 2000, totalUsage: { promptTokens: 200, completionTokens: 100, totalTokens: 300 } }),
-        makeEntry({ runId: 'r3', success: false, durationMs: 500, totalUsage: { promptTokens: 50, completionTokens: 25, totalTokens: 75 } }),
+        makeEntry({
+          runId: 'r1',
+          success: true,
+          durationMs: 1000,
+          totalUsage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+        }),
+        makeEntry({
+          runId: 'r2',
+          success: true,
+          durationMs: 2000,
+          totalUsage: { promptTokens: 200, completionTokens: 100, totalTokens: 300 },
+        }),
+        makeEntry({
+          runId: 'r3',
+          success: false,
+          durationMs: 500,
+          totalUsage: { promptTokens: 50, completionTokens: 25, totalTokens: 75 },
+        }),
       ];
       mockLogStore.getEntryCount.mockReturnValue(3);
       mockLogStore.getEntries.mockReturnValue(entries);
 
-      const result = await tools.cron_logs_summary.execute!(
-        { job_id: 'job-1' },
-        {} as any,
-      );
+      const result = await tools.cron_logs_summary.execute!({ job_id: 'job-1' }, {} as any);
 
       expect(result).toContain('66.7%');
       expect(result).toContain('2 ok');
@@ -238,8 +249,8 @@ describe('cron log tools', () => {
 
     it('rotates logs', async () => {
       mockLogStore.getEntryCount
-        .mockReturnValueOnce(100)   // before
-        .mockReturnValueOnce(50);   // after
+        .mockReturnValueOnce(100) // before
+        .mockReturnValueOnce(50); // after
 
       const result = await tools.cron_logs_cleanup.execute!(
         { job_id: 'job-1', action: 'rotate', keep: 50 },

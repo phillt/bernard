@@ -58,7 +58,7 @@ vi.mock('./tools/subagent.js', () => ({
 
 const mockGenerateText = vi.fn();
 vi.mock('ai', async (importOriginal) => {
-  const actual = await importOriginal() as any;
+  const actual = (await importOriginal()) as any;
   return {
     ...actual,
     generateText: (...args: any[]) => mockGenerateText(...args),
@@ -94,14 +94,17 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('You are Bernard');
   });
 
-  it('includes today\'s date', () => {
+  it("includes today's date", () => {
     const prompt = buildSystemPrompt(makeConfig(), store);
     // Should contain a date-like string
     expect(prompt).toMatch(/\d{4}/);
   });
 
   it('includes provider and model', () => {
-    const prompt = buildSystemPrompt(makeConfig({ provider: 'openai', model: 'gpt-4o-mini' }), store);
+    const prompt = buildSystemPrompt(
+      makeConfig({ provider: 'openai', model: 'gpt-4o-mini' }),
+      store,
+    );
     expect(prompt).toContain('openai');
     expect(prompt).toContain('gpt-4o-mini');
   });
@@ -182,9 +185,7 @@ describe('Agent', () => {
     const agent = new Agent(makeConfig(), toolOptions, store);
     await agent.processInput('Hello');
     const call = mockGenerateText.mock.calls[0][0];
-    expect(call.messages).toEqual(
-      expect.arrayContaining([{ role: 'user', content: 'Hello' }]),
-    );
+    expect(call.messages).toEqual(expect.arrayContaining([{ role: 'user', content: 'Hello' }]));
   });
 
   it('appends response messages to history', async () => {
@@ -327,7 +328,16 @@ describe('Agent', () => {
       addFacts: vi.fn(),
     };
 
-    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
     // Should not throw
     await agent.processInput('Hello');
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
@@ -347,7 +357,16 @@ describe('Agent', () => {
       addFacts: vi.fn(),
     };
 
-    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
     await agent.processInput('Hello');
 
     expect(compressHistory).toHaveBeenCalledWith(
@@ -379,7 +398,8 @@ describe('Agent', () => {
   });
 
   it('pre-flight guard triggers emergency truncation when estimated tokens exceed limit', async () => {
-    const { estimateHistoryTokens, emergencyTruncate, getContextWindow } = await import('./context.js');
+    const { estimateHistoryTokens, emergencyTruncate, getContextWindow } =
+      await import('./context.js');
     // Simulate high token estimate: 190k estimated vs 200k * 0.9 = 180k limit
     vi.mocked(estimateHistoryTokens).mockReturnValue(185_000);
     vi.mocked(getContextWindow).mockReturnValue(200_000);
@@ -403,7 +423,9 @@ describe('Agent', () => {
     mockGenerateText.mockImplementation(async () => {
       callCount++;
       if (callCount === 1) {
-        throw new Error("This model's maximum prompt length is 131072 but the request contains 134090 tokens");
+        throw new Error(
+          "This model's maximum prompt length is 131072 but the request contains 134090 tokens",
+        );
       }
       return {
         response: { messages: [{ role: 'assistant', content: 'Recovered!' }] },
@@ -432,7 +454,16 @@ describe('Agent', () => {
       addFacts: vi.fn(),
     };
 
-    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
     await agent.processInput('Hello');
 
     expect(createSubAgentTool).toHaveBeenCalledWith(
@@ -445,7 +476,8 @@ describe('Agent', () => {
   });
 
   it('retry uses 0.6 ratio when pre-flight already truncated', async () => {
-    const { isTokenOverflowError, emergencyTruncate, estimateHistoryTokens, getContextWindow } = await import('./context.js');
+    const { isTokenOverflowError, emergencyTruncate, estimateHistoryTokens, getContextWindow } =
+      await import('./context.js');
 
     // Make pre-flight trigger by reporting high token estimate
     vi.mocked(estimateHistoryTokens).mockReturnValue(185_000);
@@ -499,10 +531,21 @@ describe('Agent', () => {
     mockExtractRecentUserTexts.mockReturnValueOnce(['what build tools do we use?']);
     mockBuildRAGQuery.mockReturnValueOnce('what build tools do we use?. how about compile?');
 
-    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
     await agent.processInput('how about compile?');
 
-    expect(mockRagStore.search).toHaveBeenCalledWith('what build tools do we use?. how about compile?');
+    expect(mockRagStore.search).toHaveBeenCalledWith(
+      'what build tools do we use?. how about compile?',
+    );
   });
 
   it('first message passes raw userInput to ragStore.search', async () => {
@@ -520,19 +563,24 @@ describe('Agent', () => {
     mockExtractRecentUserTexts.mockReturnValueOnce([]);
     mockBuildRAGQuery.mockReturnValueOnce('Hello');
 
-    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
     await agent.processInput('Hello');
 
     expect(mockRagStore.search).toHaveBeenCalledWith('Hello');
   });
 
   it('applies stickiness to RAG results', async () => {
-    const ragResults = [
-      { fact: 'fact A', similarity: 0.8, domain: 'general' },
-    ];
-    const boostedResults = [
-      { fact: 'fact A', similarity: 0.85, domain: 'general' },
-    ];
+    const ragResults = [{ fact: 'fact A', similarity: 0.8, domain: 'general' }];
+    const boostedResults = [{ fact: 'fact A', similarity: 0.85, domain: 'general' }];
 
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
@@ -546,7 +594,16 @@ describe('Agent', () => {
 
     mockApplyStickiness.mockReturnValueOnce(boostedResults);
 
-    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
     await agent.processInput('Hello');
 
     expect(mockApplyStickiness).toHaveBeenCalledWith(ragResults, expect.any(Set));
@@ -575,16 +632,23 @@ describe('Agent', () => {
 
     mockApplyStickiness.mockReturnValueOnce(ragResults);
 
-    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
     await agent.processInput('Hello');
 
     expect(agent.getLastRAGResults()).toEqual(ragResults);
   });
 
   it('getLastRAGResults resets between turns', async () => {
-    const firstResults = [
-      { fact: 'fact A', similarity: 0.9, domain: 'general' },
-    ];
+    const firstResults = [{ fact: 'fact A', similarity: 0.9, domain: 'general' }];
 
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
@@ -598,7 +662,16 @@ describe('Agent', () => {
 
     mockApplyStickiness.mockReturnValueOnce(firstResults);
 
-    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
     await agent.processInput('Hello');
     expect(agent.getLastRAGResults()).toEqual(firstResults);
 
@@ -621,15 +694,22 @@ describe('Agent', () => {
       addFacts: vi.fn(),
     };
 
-    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
     await agent.processInput('Hello');
     expect(agent.getLastRAGResults()).toEqual([]);
   });
 
   it('clearHistory resets lastRAGResults', async () => {
-    const ragResults = [
-      { fact: 'fact A', similarity: 0.8, domain: 'general' },
-    ];
+    const ragResults = [{ fact: 'fact A', similarity: 0.8, domain: 'general' }];
 
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
@@ -643,7 +723,16 @@ describe('Agent', () => {
 
     mockApplyStickiness.mockReturnValueOnce(ragResults);
 
-    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
     await agent.processInput('Hello');
     expect(agent.getLastRAGResults()).toEqual(ragResults);
 
@@ -657,9 +746,7 @@ describe('Agent', () => {
       usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
     });
 
-    const ragResults = [
-      { fact: 'fact A', similarity: 0.8, domain: 'general' },
-    ];
+    const ragResults = [{ fact: 'fact A', similarity: 0.8, domain: 'general' }];
 
     const mockRagStore = {
       search: vi.fn().mockResolvedValue(ragResults),
@@ -668,7 +755,16 @@ describe('Agent', () => {
 
     mockApplyStickiness.mockImplementation((results: any) => results);
 
-    const agent = new Agent(makeConfig(), toolOptions, store, undefined, undefined, undefined, undefined, mockRagStore as any);
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
 
     // First call — builds up previousRAGFacts
     await agent.processInput('Hello');

@@ -2,7 +2,19 @@
 
 import { Command } from 'commander';
 import * as readline from 'node:readline';
-import { loadConfig, loadPreferences, savePreferences, saveProviderKey, removeProviderKey, getProviderKeyStatus, PROVIDER_ENV_VARS, OPTIONS_REGISTRY, resetOption, resetAllOptions, getDefaultModel } from './config.js';
+import {
+  loadConfig,
+  loadPreferences,
+  savePreferences,
+  saveProviderKey,
+  removeProviderKey,
+  getProviderKeyStatus,
+  PROVIDER_ENV_VARS,
+  OPTIONS_REGISTRY,
+  resetOption,
+  resetAllOptions,
+  getDefaultModel,
+} from './config.js';
 import { startRepl } from './repl.js';
 import { printWelcome, printError, printInfo } from './output.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
@@ -148,7 +160,9 @@ program
   .action((option: string) => {
     try {
       if (!OPTIONS_REGISTRY[option]) {
-        printError(`Unknown option "${option}". Valid options: ${Object.keys(OPTIONS_REGISTRY).join(', ')}`);
+        printError(
+          `Unknown option "${option}". Valid options: ${Object.keys(OPTIONS_REGISTRY).join(', ')}`,
+        );
         process.exit(1);
       }
       resetOption(option);

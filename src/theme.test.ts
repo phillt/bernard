@@ -63,12 +63,23 @@ describe('theme', () => {
 
   describe('theme structure', () => {
     const requiredColorFns: (keyof Theme)[] = [
-      'accent', 'accentBold', 'muted', 'text', 'toolCall',
-      'error', 'success', 'dim', 'warning',
+      'accent',
+      'accentBold',
+      'muted',
+      'text',
+      'toolCall',
+      'error',
+      'success',
+      'dim',
+      'warning',
     ];
 
     const requiredAnsiKeys: (keyof Theme['ansi'])[] = [
-      'prompt', 'hintCmd', 'hintDesc', 'warning', 'reset',
+      'prompt',
+      'hintCmd',
+      'hintDesc',
+      'warning',
+      'reset',
     ];
 
     for (const key of getThemeKeys()) {

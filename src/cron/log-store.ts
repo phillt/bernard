@@ -36,7 +36,9 @@ export class CronLogStore {
     fs.mkdirSync(LOGS_DIR, { recursive: true });
   }
 
-  static get logsDir(): string { return LOGS_DIR; }
+  static get logsDir(): string {
+    return LOGS_DIR;
+  }
 
   private logPath(jobId: string): string {
     return path.join(LOGS_DIR, `${jobId}.jsonl`);
@@ -60,30 +62,34 @@ export class CronLogStore {
     const filePath = this.logPath(jobId);
     if (!fs.existsSync(filePath)) return [];
 
-    const lines = fs.readFileSync(filePath, 'utf-8')
+    const lines = fs
+      .readFileSync(filePath, 'utf-8')
       .split('\n')
-      .filter(line => line.trim() !== '');
+      .filter((line) => line.trim() !== '');
 
     // Newest first
     const reversed = lines.reverse();
     const sliced = reversed.slice(offset, offset + limit);
 
-    return sliced.map(line => {
-      try {
-        return JSON.parse(line) as CronLogEntry;
-      } catch {
-        return null;
-      }
-    }).filter((e): e is CronLogEntry => e !== null);
+    return sliced
+      .map((line) => {
+        try {
+          return JSON.parse(line) as CronLogEntry;
+        } catch {
+          return null;
+        }
+      })
+      .filter((e): e is CronLogEntry => e !== null);
   }
 
   getEntry(jobId: string, runId: string): CronLogEntry | undefined {
     const filePath = this.logPath(jobId);
     if (!fs.existsSync(filePath)) return undefined;
 
-    const lines = fs.readFileSync(filePath, 'utf-8')
+    const lines = fs
+      .readFileSync(filePath, 'utf-8')
       .split('\n')
-      .filter(line => line.trim() !== '');
+      .filter((line) => line.trim() !== '');
 
     for (const line of lines) {
       try {
@@ -99,9 +105,10 @@ export class CronLogStore {
 
   listJobIds(): string[] {
     if (!fs.existsSync(LOGS_DIR)) return [];
-    return fs.readdirSync(LOGS_DIR)
-      .filter(f => f.endsWith('.jsonl'))
-      .map(f => f.replace('.jsonl', ''));
+    return fs
+      .readdirSync(LOGS_DIR)
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => f.replace('.jsonl', ''));
   }
 
   getEntryCount(jobId: string): number {
@@ -109,16 +116,17 @@ export class CronLogStore {
     if (!fs.existsSync(filePath)) return 0;
 
     const content = fs.readFileSync(filePath, 'utf-8');
-    return content.split('\n').filter(line => line.trim() !== '').length;
+    return content.split('\n').filter((line) => line.trim() !== '').length;
   }
 
   rotate(jobId: string, keep: number = DEFAULT_KEEP): void {
     const filePath = this.logPath(jobId);
     if (!fs.existsSync(filePath)) return;
 
-    const lines = fs.readFileSync(filePath, 'utf-8')
+    const lines = fs
+      .readFileSync(filePath, 'utf-8')
       .split('\n')
-      .filter(line => line.trim() !== '');
+      .filter((line) => line.trim() !== '');
 
     const kept = lines.slice(-keep);
     const tmp = filePath + '.tmp';

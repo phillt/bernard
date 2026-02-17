@@ -57,7 +57,7 @@ describe('MCPManager reconnection', () => {
   async function setupWithServer(
     serverName: string,
     tools: Record<string, any>,
-    config: { url: string } = { url: 'http://test-server' }
+    config: { url: string } = { url: 'http://test-server' },
   ) {
     const client = makeMockClient(tools);
     mockCreateMCPClient.mockResolvedValue(client);
@@ -101,7 +101,7 @@ describe('MCPManager reconnection', () => {
     expect(failExecute).toHaveBeenCalledTimes(1);
     expect(successExecute).toHaveBeenCalledTimes(1);
     expect(mockPrintInfo).toHaveBeenCalledWith(
-      'MCP tool "myTool" failed, reconnecting to "test-server"...'
+      'MCP tool "myTool" failed, reconnecting to "test-server"...',
     );
   });
 
@@ -115,10 +115,10 @@ describe('MCPManager reconnection', () => {
     mockCreateMCPClient.mockRejectedValue(new Error('connection refused'));
 
     await expect(tools.myTool.execute({ query: 'fail' })).rejects.toThrow(
-      'SSE stream disconnected'
+      'SSE stream disconnected',
     );
     expect(mockPrintError).toHaveBeenCalledWith(
-      'MCP reconnection to "test-server" failed: connection refused'
+      'MCP reconnection to "test-server" failed: connection refused',
     );
   });
 
@@ -133,9 +133,7 @@ describe('MCPManager reconnection', () => {
     const newClient = makeMockClient({ myTool: makeDynamicTool(retryFailExecute) });
     mockCreateMCPClient.mockResolvedValue(newClient);
 
-    await expect(tools.myTool.execute({ query: 'fail' })).rejects.toThrow(
-      'retry also failed'
-    );
+    await expect(tools.myTool.execute({ query: 'fail' })).rejects.toThrow('retry also failed');
   });
 
   it('tracks tool-to-server mapping correctly', async () => {
@@ -185,14 +183,17 @@ describe('MCPManager reconnection', () => {
 
     // Reconnect with a new tool set
     const newExec = vi.fn().mockResolvedValue('new-ok');
-    const newClient = makeMockClient({ myTool: makeDynamicTool(newExec), extraTool: makeDynamicTool(newExec) });
+    const newClient = makeMockClient({
+      myTool: makeDynamicTool(newExec),
+      extraTool: makeDynamicTool(newExec),
+    });
     mockCreateMCPClient.mockResolvedValue(newClient);
 
     const result = await manager.reconnectServer('test-server');
     expect(result).toBe(true);
 
     const statuses = manager.getServerStatuses();
-    const status = statuses.find(s => s.name === 'test-server');
+    const status = statuses.find((s) => s.name === 'test-server');
     expect(status).toEqual({ name: 'test-server', connected: true, toolCount: 2 });
   });
 });

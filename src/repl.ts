@@ -8,9 +8,27 @@ import { Agent } from './agent.js';
 import { MemoryStore } from './memory.js';
 import { RAGStore, type RAGSearchResult } from './rag.js';
 import { MCPManager } from './mcp.js';
-import { printHelp, printInfo, printError, printConversationReplay, printWelcome, startSpinner, stopSpinner, buildSpinnerMessage, type SpinnerStats } from './output.js';
+import {
+  printHelp,
+  printInfo,
+  printError,
+  printConversationReplay,
+  printWelcome,
+  startSpinner,
+  stopSpinner,
+  buildSpinnerMessage,
+  type SpinnerStats,
+} from './output.js';
 import type { ToolOptions } from './tools';
-import { PROVIDER_MODELS, getAvailableProviders, getDefaultModel, savePreferences, OPTIONS_REGISTRY, saveOption, type BernardConfig } from './config.js';
+import {
+  PROVIDER_MODELS,
+  getAvailableProviders,
+  getDefaultModel,
+  savePreferences,
+  OPTIONS_REGISTRY,
+  saveOption,
+  type BernardConfig,
+} from './config.js';
 import { getTheme, setTheme, getThemeKeys, getActiveThemeKey, THEMES } from './theme.js';
 import { interactiveUpdate, getLocalVersion } from './update.js';
 import { CronStore } from './cron/store.js';
@@ -19,28 +37,32 @@ import { HistoryStore } from './history.js';
 import { serializeMessages } from './context.js';
 import { getDomain, getDomainIds } from './domains.js';
 
-export async function startRepl(config: BernardConfig, alertContext?: string, resume?: boolean): Promise<void> {
+export async function startRepl(
+  config: BernardConfig,
+  alertContext?: string,
+  resume?: boolean,
+): Promise<void> {
   const SLASH_COMMANDS = [
-    { command: '/help',     description: 'Show this help' },
-    { command: '/clear',    description: 'Clear conversation history and scratch notes' },
-    { command: '/memory',   description: 'List persistent memories' },
-    { command: '/scratch',  description: 'List session scratch notes' },
-    { command: '/mcp',      description: 'List MCP servers and tools' },
-    { command: '/cron',     description: 'Show cron jobs and daemon status' },
-    { command: '/rag',      description: 'Show RAG memory stats and recent facts' },
-    { command: '/facts',    description: 'Show RAG facts in the current context window' },
+    { command: '/help', description: 'Show this help' },
+    { command: '/clear', description: 'Clear conversation history and scratch notes' },
+    { command: '/memory', description: 'List persistent memories' },
+    { command: '/scratch', description: 'List session scratch notes' },
+    { command: '/mcp', description: 'List MCP servers and tools' },
+    { command: '/cron', description: 'Show cron jobs and daemon status' },
+    { command: '/rag', description: 'Show RAG memory stats and recent facts' },
+    { command: '/facts', description: 'Show RAG facts in the current context window' },
     { command: '/provider', description: 'Switch LLM provider' },
-    { command: '/model',    description: 'Switch model for current provider' },
-    { command: '/theme',    description: 'Switch color theme' },
-    { command: '/options',  description: 'View and set options (max-tokens, shell-timeout)' },
-    { command: '/update',   description: 'Check for and install updates' },
-    { command: '/exit',     description: 'Quit Bernard' },
+    { command: '/model', description: 'Switch model for current provider' },
+    { command: '/theme', description: 'Switch color theme' },
+    { command: '/options', description: 'View and set options (max-tokens, shell-timeout)' },
+    { command: '/update', description: 'Check for and install updates' },
+    { command: '/exit', description: 'Quit Bernard' },
   ];
 
   function completer(line: string): [string[], string] {
     if (line.startsWith('/')) {
-      const hits = SLASH_COMMANDS.filter(c => c.command.startsWith(line)).map(c => c.command);
-      return [hits.length ? hits : SLASH_COMMANDS.map(c => c.command), line];
+      const hits = SLASH_COMMANDS.filter((c) => c.command.startsWith(line)).map((c) => c.command);
+      return [hits.length ? hits : SLASH_COMMANDS.map((c) => c.command), line];
     }
     return [[], line];
   }
@@ -65,9 +87,10 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
   let hintLineCount = 0;
 
   function redrawWithHints(line: string): void {
-    const matches = (!isPasting && line.startsWith('/'))
-      ? SLASH_COMMANDS.filter(c => c.command.startsWith(line))
-      : [];
+    const matches =
+      !isPasting && line.startsWith('/')
+        ? SLASH_COMMANDS.filter((c) => c.command.startsWith(line))
+        : [];
 
     // Nothing to show and nothing to clean up — let readline handle display
     if (matches.length === 0 && hintLineCount === 0) return;
@@ -80,11 +103,13 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     process.stdout.write(`\r\x1b[J`);
 
     if (matches.length > 0) {
-      const maxLen = Math.max(...matches.map(c => c.command.length));
+      const maxLen = Math.max(...matches.map((c) => c.command.length));
       const { ansi } = getTheme();
       for (const c of matches) {
         const pad = ' '.repeat(maxLen - c.command.length + 2);
-        process.stdout.write(`  ${ansi.hintCmd}${c.command}${ansi.reset}${pad}${ansi.hintDesc}— ${c.description}${ansi.reset}\n`);
+        process.stdout.write(
+          `  ${ansi.hintCmd}${c.command}${ansi.reset}${pad}${ansi.hintDesc}— ${c.description}${ansi.reset}\n`,
+        );
       }
       hintLineCount = matches.length;
     } else {
@@ -120,7 +145,7 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     if (key.name === 'return' && hintLineCount > 0) {
       // Move up past hints, clear everything, reprint prompt+line so
       // readline's own newline lands cleanly
-      const line = (rl as any).line as string || '';
+      const line = ((rl as any).line as string) || '';
       process.stdout.write(`\x1b[${hintLineCount}A\r\x1b[J`);
       process.stdout.write(getPromptStr() + line);
       hintLineCount = 0;
@@ -128,7 +153,12 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     }
 
     // Show/update slash command hints on next tick (after readline updates rl.line)
-    if (!isPasting && key.name !== 'paste-start' && key.name !== 'paste-end' && key.name !== 'return') {
+    if (
+      !isPasting &&
+      key.name !== 'paste-start' &&
+      key.name !== 'paste-end' &&
+      key.name !== 'return'
+    ) {
       process.nextTick(() => {
         const line = (rl as any).line as string;
         if (line !== undefined) {
@@ -193,9 +223,12 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
   const confirmFn = (command: string): Promise<boolean> => {
     return new Promise((resolve) => {
       const { ansi } = getTheme();
-      rl.question(`${ansi.warning}  ⚠ Dangerous command: ${command}\n  Allow? (y/N): ${ansi.reset}`, (answer) => {
-        resolve(answer.trim().toLowerCase() === 'y');
-      });
+      rl.question(
+        `${ansi.warning}  ⚠ Dangerous command: ${command}\n  Allow? (y/N): ${ansi.reset}`,
+        (answer) => {
+          resolve(answer.trim().toLowerCase() === 'y');
+        },
+      );
     });
   };
 
@@ -212,17 +245,22 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
       // Filter out old session boundary markers to prevent accumulation
       const filtered = loaded.filter(
         (msg) =>
-          !(typeof msg.content === 'string' &&
+          !(
+            typeof msg.content === 'string' &&
             (msg.content.startsWith('[Previous session ended') ||
-             msg.content === "Understood. Starting a new session. I'll only reference prior context if relevant to your current request.")),
+              msg.content ===
+                "Understood. Starting a new session. I'll only reference prior context if relevant to your current request.")
+          ),
       );
       const boundary: import('ai').CoreMessage = {
         role: 'user',
-        content: '[Previous session ended. New session starting. Treat tasks from prior session as completed unless the user explicitly continues them.]',
+        content:
+          '[Previous session ended. New session starting. Treat tasks from prior session as completed unless the user explicitly continues them.]',
       };
       const boundaryAck: import('ai').CoreMessage = {
         role: 'assistant',
-        content: 'Understood. Starting a new session. I\'ll only reference prior context if relevant to your current request.',
+        content:
+          "Understood. Starting a new session. I'll only reference prior context if relevant to your current request.",
       };
       initialHistory = [...filtered, boundary, boundaryAck];
       printConversationReplay(loaded);
@@ -231,7 +269,16 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     }
   }
 
-  const agent = new Agent(config, toolOptions, memoryStore, mcpTools, mcpServerNames, alertContext, initialHistory, ragStore);
+  const agent = new Agent(
+    config,
+    toolOptions,
+    memoryStore,
+    mcpTools,
+    mcpServerNames,
+    alertContext,
+    initialHistory,
+    ragStore,
+  );
 
   const cleanup = async () => {
     if (process.stdin.isTTY) {
@@ -246,12 +293,18 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
         if (serialized.trim()) {
           const ragDir = path.join(os.homedir(), '.bernard', 'rag');
           fs.mkdirSync(ragDir, { recursive: true });
-          const tempFile = path.join(ragDir, `.pending-${crypto.randomBytes(8).toString('hex')}.json`);
-          fs.writeFileSync(tempFile, JSON.stringify({
-            serialized,
-            provider: config.provider,
-            model: config.model,
-          }));
+          const tempFile = path.join(
+            ragDir,
+            `.pending-${crypto.randomBytes(8).toString('hex')}.json`,
+          );
+          fs.writeFileSync(
+            tempFile,
+            JSON.stringify({
+              serialized,
+              provider: config.provider,
+              model: config.model,
+            }),
+          );
 
           const workerPath = path.join(__dirname, 'rag-worker.js');
           const child = childProcess.spawn(process.execPath, [workerPath, tempFile], {
@@ -299,313 +352,333 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
 
     // Slash commands are only handled for typed (non-pasted, non-escaped) input
     if (!pasted && !isEscapedSlash && trimmed.startsWith('/')) {
-
-    if (trimmed === '/help') {
-      printHelp();
-      prompt();
-      return;
-    }
-
-    if (trimmed === '/clear') {
-      agent.clearHistory();
-      historyStore.clear();
-      console.clear();
-      printWelcome(config.provider, config.model, getLocalVersion());
-      printInfo('Conversation history and scratch notes cleared.');
-      prompt();
-      return;
-    }
-
-    if (trimmed === '/memory') {
-      const keys = memoryStore.listMemory();
-      if (keys.length === 0) {
-        printInfo('No persistent memories stored.');
-      } else {
-        printInfo('Persistent memories:');
-        for (const key of keys) {
-          printInfo(`  - ${key}`);
-        }
-      }
-      prompt();
-      return;
-    }
-
-    if (trimmed === '/scratch') {
-      const keys = memoryStore.listScratch();
-      if (keys.length === 0) {
-        printInfo('No scratch notes in this session.');
-      } else {
-        printInfo('Scratch notes:');
-        for (const key of keys) {
-          printInfo(`  - ${key}`);
-        }
-      }
-      prompt();
-      return;
-    }
-
-    if (trimmed === '/mcp') {
-      const statuses = mcpManager.getServerStatuses();
-      if (statuses.length === 0) {
-        printInfo('No MCP servers configured. Add servers to ~/.bernard/mcp.json');
-      } else {
-        printInfo('MCP servers:');
-        for (const s of statuses) {
-          if (s.connected) {
-            printInfo(`  ✓ ${s.name} (${s.toolCount} tools)`);
-          } else {
-            printInfo(`  ✗ ${s.name} — ${s.error}`);
-          }
-        }
-        const toolNames = Object.keys(mcpManager.getTools());
-        if (toolNames.length > 0) {
-          printInfo(`\nMCP tools: ${toolNames.join(', ')}`);
-        }
-      }
-      prompt();
-      return;
-    }
-
-    if (trimmed === '/cron') {
-      const store = new CronStore();
-      const jobs = store.loadJobs();
-      const running = isDaemonRunning();
-
-      printInfo(`\n  Daemon: ${running ? 'running' : 'stopped'}`);
-      if (jobs.length === 0) {
-        printInfo('  No cron jobs configured.\n');
-      } else {
-        printInfo(`  Jobs (${jobs.length}):`);
-        for (const job of jobs) {
-          const status = job.enabled ? 'enabled' : 'disabled';
-          const lastRun = job.lastRun
-            ? `last: ${new Date(job.lastRun).toLocaleString()} (${job.lastRunStatus || 'unknown'})`
-            : 'never run';
-          printInfo(`    ${job.name} [${status}] — ${job.schedule} — ${lastRun}`);
-          printInfo(`      ID: ${job.id}`);
-        }
-
-        const alerts = store.listAlerts().filter(a => !a.acknowledged);
-        if (alerts.length > 0) {
-          printInfo(`\n  Unacknowledged alerts (${alerts.length}):`);
-          for (const alert of alerts.slice(0, 5)) {
-            printInfo(`    [${new Date(alert.timestamp).toLocaleString()}] ${alert.jobName}: ${alert.message}`);
-          }
-        }
-        console.log();
-      }
-      prompt();
-      return;
-    }
-
-    if (trimmed === '/rag') {
-      if (!ragStore) {
-        printInfo('RAG is disabled. Set BERNARD_RAG_ENABLED=true (default) to enable.');
+      if (trimmed === '/help') {
+        printHelp();
         prompt();
         return;
       }
-      const count = ragStore.count();
-      printInfo(`\n  RAG memories: ${count}`);
-      if (count === 0) {
-        printInfo('  No RAG memories yet. Memories are extracted automatically during context compression.');
-      } else {
-        // Show per-domain breakdown
-        const counts = ragStore.countByDomain();
-        const knownDomains = new Set(getDomainIds());
-        printInfo('  By domain:');
-        for (const domainId of knownDomains) {
-          const domainCount = counts[domainId] ?? 0;
-          if (domainCount > 0) {
-            const domain = getDomain(domainId);
-            printInfo(`    ${domain.name}: ${domainCount}`);
-          }
-        }
-        // Show any domains not in registry (legacy)
-        for (const [domainId, domainCount] of Object.entries(counts)) {
-          if (!knownDomains.has(domainId)) {
-            printInfo(`    ${domainId}: ${domainCount}`);
-          }
-        }
 
-        const facts = ragStore.listFacts();
-        const recent = facts.slice(-10);
-        printInfo(`\n  Most recent (up to 10):`);
-        for (const f of recent) {
-          printInfo(`    ${f}`);
-        }
-      }
-      console.log();
-      prompt();
-      return;
-    }
-
-    if (trimmed === '/facts') {
-      const results = agent.getLastRAGResults();
-      if (results.length === 0) {
-        printInfo('No RAG facts in current context window.');
-      } else {
-        printInfo(`\n## Recalled Context (${results.length} facts)\n`);
-        const byDomain = new Map<string, RAGSearchResult[]>();
-        for (const r of results) {
-          if (!byDomain.has(r.domain)) byDomain.set(r.domain, []);
-          byDomain.get(r.domain)!.push(r);
-        }
-        for (const [domainId, items] of byDomain) {
-          const domain = getDomain(domainId);
-          printInfo(`### ${domain.name}`);
-          for (const item of items) {
-            const pct = Math.round(item.similarity * 100);
-            printInfo(`  - (${pct}%) ${item.fact}`);
-          }
-          printInfo('');
-        }
-      }
-      prompt();
-      return;
-    }
-
-    if (trimmed === '/provider') {
-      const available = getAvailableProviders(config);
-      if (available.length === 0) {
-        printError('No providers have API keys configured.');
+      if (trimmed === '/clear') {
+        agent.clearHistory();
+        historyStore.clear();
+        console.clear();
+        printWelcome(config.provider, config.model, getLocalVersion());
+        printInfo('Conversation history and scratch notes cleared.');
         prompt();
         return;
       }
-      printInfo(`\n  Current: ${config.provider} (${config.model})\n`);
-      printInfo('  Available providers:');
-      for (let i = 0; i < available.length; i++) {
-        printInfo(`    ${i + 1}. ${available[i]}`);
-      }
-      console.log();
-      rl.question(`  Select [1-${available.length}]: `, (answer) => {
-        const num = parseInt(answer.trim(), 10);
-        if (num >= 1 && num <= available.length) {
-          config.provider = available[num - 1];
-          config.model = getDefaultModel(config.provider);
-          savePreferences({ provider: config.provider, model: config.model, maxTokens: config.maxTokens, shellTimeout: config.shellTimeout, theme: config.theme });
-          printInfo(`  Switched to ${config.provider} (${config.model})`);
-        } else {
-          printInfo('  Cancelled.');
-        }
-        console.log();
-        prompt();
-      });
-      return;
-    }
 
-    if (trimmed === '/model') {
-      const models = PROVIDER_MODELS[config.provider];
-      if (!models || models.length === 0) {
-        printError(`No models listed for provider "${config.provider}".`);
+      if (trimmed === '/memory') {
+        const keys = memoryStore.listMemory();
+        if (keys.length === 0) {
+          printInfo('No persistent memories stored.');
+        } else {
+          printInfo('Persistent memories:');
+          for (const key of keys) {
+            printInfo(`  - ${key}`);
+          }
+        }
         prompt();
         return;
       }
-      printInfo(`\n  Current: ${config.provider} / ${config.model}\n`);
-      printInfo('  Available models:');
-      for (let i = 0; i < models.length; i++) {
-        printInfo(`    ${i + 1}. ${models[i]}`);
-      }
-      console.log();
-      rl.question(`  Select [1-${models.length}]: `, (answer) => {
-        const num = parseInt(answer.trim(), 10);
-        if (num >= 1 && num <= models.length) {
-          config.model = models[num - 1];
-          savePreferences({ provider: config.provider, model: config.model, maxTokens: config.maxTokens, shellTimeout: config.shellTimeout, theme: config.theme });
-          printInfo(`  Switched to ${config.model}`);
+
+      if (trimmed === '/scratch') {
+        const keys = memoryStore.listScratch();
+        if (keys.length === 0) {
+          printInfo('No scratch notes in this session.');
         } else {
-          printInfo('  Cancelled.');
+          printInfo('Scratch notes:');
+          for (const key of keys) {
+            printInfo(`  - ${key}`);
+          }
         }
-        console.log();
         prompt();
-      });
-      return;
-    }
-
-    if (trimmed === '/theme') {
-      const allKeys = getThemeKeys();
-      const currentKey = getActiveThemeKey();
-      const regularKeys = allKeys.filter(k => k !== 'high-contrast' && k !== 'colorblind');
-      const a11yKeys = allKeys.filter(k => k === 'high-contrast' || k === 'colorblind');
-
-      printInfo(`\n  Current theme: ${THEMES[currentKey].name}\n`);
-      printInfo('  Themes:');
-      let idx = 1;
-      for (const k of regularKeys) {
-        const marker = k === currentKey ? ' (active)' : '';
-        printInfo(`    ${idx}. ${THEMES[k].name}${marker}`);
-        idx++;
+        return;
       }
-      printInfo('\n  Accessibility:');
-      for (const k of a11yKeys) {
-        const marker = k === currentKey ? ' (active)' : '';
-        printInfo(`    ${idx}. ${THEMES[k].name}${marker}`);
-        idx++;
-      }
-      console.log();
 
-      const ordered = [...regularKeys, ...a11yKeys];
-      rl.question(`  Select [1-${ordered.length}]: `, (answer) => {
-        const num = parseInt(answer.trim(), 10);
-        if (num >= 1 && num <= ordered.length) {
-          const chosen = ordered[num - 1];
-          setTheme(chosen);
-          config.theme = chosen;
-          savePreferences({ provider: config.provider, model: config.model, maxTokens: config.maxTokens, shellTimeout: config.shellTimeout, theme: chosen });
-          printInfo(`  Switched to ${THEMES[chosen].name} theme.`);
+      if (trimmed === '/mcp') {
+        const statuses = mcpManager.getServerStatuses();
+        if (statuses.length === 0) {
+          printInfo('No MCP servers configured. Add servers to ~/.bernard/mcp.json');
         } else {
-          printInfo('  Cancelled.');
-        }
-        console.log();
-        prompt();
-      });
-      return;
-    }
-
-    if (trimmed === '/options') {
-      const entries = Object.entries(OPTIONS_REGISTRY);
-      printInfo('\n  Options:');
-      for (let i = 0; i < entries.length; i++) {
-        const [name, opt] = entries[i];
-        const current = config[opt.configKey];
-        const isDefault = current === opt.default;
-        const label = isDefault ? '(default)' : '(custom)';
-        printInfo(`    ${i + 1}. ${name} = ${current} ${label}`);
-        printInfo(`       ${opt.description}`);
-      }
-      console.log();
-      rl.question(`  Select option [1-${entries.length}] (Enter to cancel): `, (answer) => {
-        const num = parseInt(answer.trim(), 10);
-        if (num >= 1 && num <= entries.length) {
-          const [name, opt] = entries[num - 1];
-          rl.question(`  New value for ${name} (Enter to cancel): `, (valAnswer) => {
-            const val = parseInt(valAnswer.trim(), 10);
-            if (val > 0) {
-              saveOption(name, val);
-              config[opt.configKey] = val;
-              printInfo(`  ${name} set to ${val}`);
-            } else if (valAnswer.trim() === '') {
-              printInfo('  Cancelled.');
+          printInfo('MCP servers:');
+          for (const s of statuses) {
+            if (s.connected) {
+              printInfo(`  ✓ ${s.name} (${s.toolCount} tools)`);
             } else {
-              printError('  Invalid value. Must be a positive integer.');
+              printInfo(`  ✗ ${s.name} — ${s.error}`);
             }
-            console.log();
-            prompt();
-          });
+          }
+          const toolNames = Object.keys(mcpManager.getTools());
+          if (toolNames.length > 0) {
+            printInfo(`\nMCP tools: ${toolNames.join(', ')}`);
+          }
+        }
+        prompt();
+        return;
+      }
+
+      if (trimmed === '/cron') {
+        const store = new CronStore();
+        const jobs = store.loadJobs();
+        const running = isDaemonRunning();
+
+        printInfo(`\n  Daemon: ${running ? 'running' : 'stopped'}`);
+        if (jobs.length === 0) {
+          printInfo('  No cron jobs configured.\n');
         } else {
-          printInfo('  Cancelled.');
+          printInfo(`  Jobs (${jobs.length}):`);
+          for (const job of jobs) {
+            const status = job.enabled ? 'enabled' : 'disabled';
+            const lastRun = job.lastRun
+              ? `last: ${new Date(job.lastRun).toLocaleString()} (${job.lastRunStatus || 'unknown'})`
+              : 'never run';
+            printInfo(`    ${job.name} [${status}] — ${job.schedule} — ${lastRun}`);
+            printInfo(`      ID: ${job.id}`);
+          }
+
+          const alerts = store.listAlerts().filter((a) => !a.acknowledged);
+          if (alerts.length > 0) {
+            printInfo(`\n  Unacknowledged alerts (${alerts.length}):`);
+            for (const alert of alerts.slice(0, 5)) {
+              printInfo(
+                `    [${new Date(alert.timestamp).toLocaleString()}] ${alert.jobName}: ${alert.message}`,
+              );
+            }
+          }
+          console.log();
+        }
+        prompt();
+        return;
+      }
+
+      if (trimmed === '/rag') {
+        if (!ragStore) {
+          printInfo('RAG is disabled. Set BERNARD_RAG_ENABLED=true (default) to enable.');
+          prompt();
+          return;
+        }
+        const count = ragStore.count();
+        printInfo(`\n  RAG memories: ${count}`);
+        if (count === 0) {
+          printInfo(
+            '  No RAG memories yet. Memories are extracted automatically during context compression.',
+          );
+        } else {
+          // Show per-domain breakdown
+          const counts = ragStore.countByDomain();
+          const knownDomains = new Set(getDomainIds());
+          printInfo('  By domain:');
+          for (const domainId of knownDomains) {
+            const domainCount = counts[domainId] ?? 0;
+            if (domainCount > 0) {
+              const domain = getDomain(domainId);
+              printInfo(`    ${domain.name}: ${domainCount}`);
+            }
+          }
+          // Show any domains not in registry (legacy)
+          for (const [domainId, domainCount] of Object.entries(counts)) {
+            if (!knownDomains.has(domainId)) {
+              printInfo(`    ${domainId}: ${domainCount}`);
+            }
+          }
+
+          const facts = ragStore.listFacts();
+          const recent = facts.slice(-10);
+          printInfo(`\n  Most recent (up to 10):`);
+          for (const f of recent) {
+            printInfo(`    ${f}`);
+          }
+        }
+        console.log();
+        prompt();
+        return;
+      }
+
+      if (trimmed === '/facts') {
+        const results = agent.getLastRAGResults();
+        if (results.length === 0) {
+          printInfo('No RAG facts in current context window.');
+        } else {
+          printInfo(`\n## Recalled Context (${results.length} facts)\n`);
+          const byDomain = new Map<string, RAGSearchResult[]>();
+          for (const r of results) {
+            if (!byDomain.has(r.domain)) byDomain.set(r.domain, []);
+            byDomain.get(r.domain)!.push(r);
+          }
+          for (const [domainId, items] of byDomain) {
+            const domain = getDomain(domainId);
+            printInfo(`### ${domain.name}`);
+            for (const item of items) {
+              const pct = Math.round(item.similarity * 100);
+              printInfo(`  - (${pct}%) ${item.fact}`);
+            }
+            printInfo('');
+          }
+        }
+        prompt();
+        return;
+      }
+
+      if (trimmed === '/provider') {
+        const available = getAvailableProviders(config);
+        if (available.length === 0) {
+          printError('No providers have API keys configured.');
+          prompt();
+          return;
+        }
+        printInfo(`\n  Current: ${config.provider} (${config.model})\n`);
+        printInfo('  Available providers:');
+        for (let i = 0; i < available.length; i++) {
+          printInfo(`    ${i + 1}. ${available[i]}`);
+        }
+        console.log();
+        rl.question(`  Select [1-${available.length}]: `, (answer) => {
+          const num = parseInt(answer.trim(), 10);
+          if (num >= 1 && num <= available.length) {
+            config.provider = available[num - 1];
+            config.model = getDefaultModel(config.provider);
+            savePreferences({
+              provider: config.provider,
+              model: config.model,
+              maxTokens: config.maxTokens,
+              shellTimeout: config.shellTimeout,
+              theme: config.theme,
+            });
+            printInfo(`  Switched to ${config.provider} (${config.model})`);
+          } else {
+            printInfo('  Cancelled.');
+          }
           console.log();
           prompt();
+        });
+        return;
+      }
+
+      if (trimmed === '/model') {
+        const models = PROVIDER_MODELS[config.provider];
+        if (!models || models.length === 0) {
+          printError(`No models listed for provider "${config.provider}".`);
+          prompt();
+          return;
         }
-      });
-      return;
-    }
+        printInfo(`\n  Current: ${config.provider} / ${config.model}\n`);
+        printInfo('  Available models:');
+        for (let i = 0; i < models.length; i++) {
+          printInfo(`    ${i + 1}. ${models[i]}`);
+        }
+        console.log();
+        rl.question(`  Select [1-${models.length}]: `, (answer) => {
+          const num = parseInt(answer.trim(), 10);
+          if (num >= 1 && num <= models.length) {
+            config.model = models[num - 1];
+            savePreferences({
+              provider: config.provider,
+              model: config.model,
+              maxTokens: config.maxTokens,
+              shellTimeout: config.shellTimeout,
+              theme: config.theme,
+            });
+            printInfo(`  Switched to ${config.model}`);
+          } else {
+            printInfo('  Cancelled.');
+          }
+          console.log();
+          prompt();
+        });
+        return;
+      }
 
-    if (trimmed === '/update') {
-      await interactiveUpdate();
-      prompt();
-      return;
-    }
+      if (trimmed === '/theme') {
+        const allKeys = getThemeKeys();
+        const currentKey = getActiveThemeKey();
+        const regularKeys = allKeys.filter((k) => k !== 'high-contrast' && k !== 'colorblind');
+        const a11yKeys = allKeys.filter((k) => k === 'high-contrast' || k === 'colorblind');
 
+        printInfo(`\n  Current theme: ${THEMES[currentKey].name}\n`);
+        printInfo('  Themes:');
+        let idx = 1;
+        for (const k of regularKeys) {
+          const marker = k === currentKey ? ' (active)' : '';
+          printInfo(`    ${idx}. ${THEMES[k].name}${marker}`);
+          idx++;
+        }
+        printInfo('\n  Accessibility:');
+        for (const k of a11yKeys) {
+          const marker = k === currentKey ? ' (active)' : '';
+          printInfo(`    ${idx}. ${THEMES[k].name}${marker}`);
+          idx++;
+        }
+        console.log();
+
+        const ordered = [...regularKeys, ...a11yKeys];
+        rl.question(`  Select [1-${ordered.length}]: `, (answer) => {
+          const num = parseInt(answer.trim(), 10);
+          if (num >= 1 && num <= ordered.length) {
+            const chosen = ordered[num - 1];
+            setTheme(chosen);
+            config.theme = chosen;
+            savePreferences({
+              provider: config.provider,
+              model: config.model,
+              maxTokens: config.maxTokens,
+              shellTimeout: config.shellTimeout,
+              theme: chosen,
+            });
+            printInfo(`  Switched to ${THEMES[chosen].name} theme.`);
+          } else {
+            printInfo('  Cancelled.');
+          }
+          console.log();
+          prompt();
+        });
+        return;
+      }
+
+      if (trimmed === '/options') {
+        const entries = Object.entries(OPTIONS_REGISTRY);
+        printInfo('\n  Options:');
+        for (let i = 0; i < entries.length; i++) {
+          const [name, opt] = entries[i];
+          const current = config[opt.configKey];
+          const isDefault = current === opt.default;
+          const label = isDefault ? '(default)' : '(custom)';
+          printInfo(`    ${i + 1}. ${name} = ${current} ${label}`);
+          printInfo(`       ${opt.description}`);
+        }
+        console.log();
+        rl.question(`  Select option [1-${entries.length}] (Enter to cancel): `, (answer) => {
+          const num = parseInt(answer.trim(), 10);
+          if (num >= 1 && num <= entries.length) {
+            const [name, opt] = entries[num - 1];
+            rl.question(`  New value for ${name} (Enter to cancel): `, (valAnswer) => {
+              const val = parseInt(valAnswer.trim(), 10);
+              if (val > 0) {
+                saveOption(name, val);
+                config[opt.configKey] = val;
+                printInfo(`  ${name} set to ${val}`);
+              } else if (valAnswer.trim() === '') {
+                printInfo('  Cancelled.');
+              } else {
+                printError('  Invalid value. Must be a positive integer.');
+              }
+              console.log();
+              prompt();
+            });
+          } else {
+            printInfo('  Cancelled.');
+            console.log();
+            prompt();
+          }
+        });
+        return;
+      }
+
+      if (trimmed === '/update') {
+        await interactiveUpdate();
+        prompt();
+        return;
+      }
     } // end slash command handling
 
     processing = true;

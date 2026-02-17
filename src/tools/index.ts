@@ -13,7 +13,11 @@ import type { MemoryStore } from '../memory.js';
 
 export type { ToolOptions } from './types.js';
 
-export function createTools(options: ToolOptions, memoryStore: MemoryStore, mcpTools?: Record<string, any>) {
+export function createTools(
+  options: ToolOptions,
+  memoryStore: MemoryStore,
+  mcpTools?: Record<string, any>,
+) {
   return {
     shell: createShellTool(options),
     memory: createMemoryTool(memoryStore),

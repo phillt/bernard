@@ -16,7 +16,7 @@ export function createMemoryTool(memoryStore: MemoryStore) {
         case 'list': {
           const keys = memoryStore.listMemory();
           if (keys.length === 0) return 'No persistent memories stored.';
-          return `Stored memories:\n${keys.map(k => `  - ${k}`).join('\n')}`;
+          return `Stored memories:\n${keys.map((k) => `  - ${k}`).join('\n')}`;
         }
         case 'read': {
           if (!key) return 'Error: key is required for read action.';
@@ -57,7 +57,7 @@ export function createScratchTool(memoryStore: MemoryStore) {
         case 'list': {
           const keys = memoryStore.listScratch();
           if (keys.length === 0) return 'No scratch notes in this session.';
-          return `Scratch notes:\n${keys.map(k => `  - ${k}`).join('\n')}`;
+          return `Scratch notes:\n${keys.map((k) => `  - ${k}`).join('\n')}`;
         }
         case 'read': {
           if (!key) return 'Error: key is required for read action.';

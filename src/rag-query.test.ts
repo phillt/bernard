@@ -15,10 +15,7 @@ describe('extractRecentUserTexts', () => {
       { role: 'user', content: 'second question' },
       { role: 'assistant', content: 'second answer' },
     ];
-    expect(extractRecentUserTexts(history, 2)).toEqual([
-      'first question',
-      'second question',
-    ]);
+    expect(extractRecentUserTexts(history, 2)).toEqual(['first question', 'second question']);
   });
 
   it('skips non-user roles (tool, assistant)', () => {
@@ -34,7 +31,10 @@ describe('extractRecentUserTexts', () => {
 
   it('skips context summary boundary messages', () => {
     const history: CoreMessage[] = [
-      { role: 'user', content: '[Context Summary — earlier conversation was compressed.]\n\nSummary here' },
+      {
+        role: 'user',
+        content: '[Context Summary — earlier conversation was compressed.]\n\nSummary here',
+      },
       { role: 'assistant', content: 'Understood.' },
       { role: 'user', content: 'real question' },
     ];
@@ -132,7 +132,9 @@ describe('buildRAGQuery', () => {
 });
 
 describe('applyStickiness', () => {
-  const makeResults = (items: Array<{ fact: string; similarity: number; domain: string }>): RAGSearchResult[] => items;
+  const makeResults = (
+    items: Array<{ fact: string; similarity: number; domain: string }>,
+  ): RAGSearchResult[] => items;
 
   it('returns results unchanged when no previous facts', () => {
     const results = makeResults([
@@ -155,9 +157,7 @@ describe('applyStickiness', () => {
   });
 
   it('clamps boosted similarity at 1.0', () => {
-    const results = makeResults([
-      { fact: 'fact A', similarity: 0.98, domain: 'general' },
-    ]);
+    const results = makeResults([{ fact: 'fact A', similarity: 0.98, domain: 'general' }]);
     const previous = new Set(['fact A']);
     const output = applyStickiness(results, previous);
     expect(output[0].similarity).toBe(1.0);
@@ -197,9 +197,7 @@ describe('applyStickiness', () => {
   });
 
   it('boost is applied to input similarity regardless of source', () => {
-    const results = makeResults([
-      { fact: 'fact A', similarity: 0.8, domain: 'general' },
-    ]);
+    const results = makeResults([{ fact: 'fact A', similarity: 0.8, domain: 'general' }]);
     // Apply stickiness twice — the second call uses the boosted similarity from the first call
     const prev1 = new Set(['fact A']);
     const output1 = applyStickiness(results, prev1);

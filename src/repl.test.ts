@@ -284,9 +284,7 @@ describe('REPL /clear command', () => {
     typeLine('/clear');
 
     await vi.waitFor(() => {
-      expect(mockPrintInfo).toHaveBeenCalledWith(
-        'Conversation history and scratch notes cleared.',
-      );
+      expect(mockPrintInfo).toHaveBeenCalledWith('Conversation history and scratch notes cleared.');
     });
 
     // Verify ordering: printWelcome should be called before printInfo

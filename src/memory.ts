@@ -20,9 +20,7 @@ export class MemoryStore {
 
   listMemory(): string[] {
     const files = fs.readdirSync(MEMORY_DIR);
-    return files
-      .filter(f => f.endsWith('.md'))
-      .map(f => f.replace(/\.md$/, ''));
+    return files.filter((f) => f.endsWith('.md')).map((f) => f.replace(/\.md$/, ''));
   }
 
   readMemory(key: string): string | null {

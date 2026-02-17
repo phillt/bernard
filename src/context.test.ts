@@ -29,7 +29,7 @@ vi.mock('./logger.js', () => ({
 
 const mockGenerateText = vi.fn();
 vi.mock('ai', async (importOriginal) => {
-  const actual = await importOriginal() as any;
+  const actual = (await importOriginal()) as any;
   return {
     ...actual,
     generateText: (...args: any[]) => mockGenerateText(...args),
@@ -104,16 +104,12 @@ describe('shouldCompress', () => {
 
 describe('serializeMessages', () => {
   it('serializes user messages', () => {
-    const msgs: CoreMessage[] = [
-      { role: 'user', content: 'Hello there' },
-    ];
+    const msgs: CoreMessage[] = [{ role: 'user', content: 'Hello there' }];
     expect(serializeMessages(msgs)).toBe('User: Hello there');
   });
 
   it('serializes assistant messages', () => {
-    const msgs: CoreMessage[] = [
-      { role: 'assistant', content: 'Hi! How can I help?' },
-    ];
+    const msgs: CoreMessage[] = [{ role: 'assistant', content: 'Hi! How can I help?' }];
     expect(serializeMessages(msgs)).toBe('Assistant: Hi! How can I help?');
   });
 
@@ -147,9 +143,7 @@ describe('serializeMessages', () => {
     const msgs: CoreMessage[] = [
       {
         role: 'tool',
-        content: [
-          { type: 'tool-result', toolCallId: 'tc1', result: 'file1.ts\nfile2.ts' },
-        ],
+        content: [{ type: 'tool-result', toolCallId: 'tc1', result: 'file1.ts\nfile2.ts' }],
       },
     ];
     const result = serializeMessages(msgs);
@@ -253,10 +247,10 @@ describe('extractDomainFacts', () => {
     const results = await extractDomainFacts('User: test\nAssistant: ok', makeConfig());
     expect(results.length).toBe(3);
 
-    const domains = results.map(r => r.domain).sort();
+    const domains = results.map((r) => r.domain).sort();
     expect(domains).toEqual(['general', 'tool-usage', 'user-preferences']);
 
-    const toolFacts = results.find(r => r.domain === 'tool-usage');
+    const toolFacts = results.find((r) => r.domain === 'tool-usage');
     expect(toolFacts?.facts).toEqual(['npm run build compiles project']);
   });
 
@@ -296,7 +290,7 @@ describe('extractDomainFacts', () => {
     });
 
     const results = await extractDomainFacts('User: test\nAssistant: ok', makeConfig());
-    const domains = results.map(r => r.domain);
+    const domains = results.map((r) => r.domain);
     expect(domains).not.toContain('tool-usage');
   });
 
@@ -328,7 +322,7 @@ describe('extractFacts', () => {
     const facts = await extractFacts('User: test\nAssistant: ok', makeConfig());
     // 3 domains, each producing 1 fact = 3 total
     expect(facts).toHaveLength(3);
-    expect(facts.every(f => f === 'fact from this domain')).toBe(true);
+    expect(facts.every((f) => f === 'fact from this domain')).toBe(true);
   });
 
   it('returns empty array for empty input', async () => {
@@ -475,11 +469,7 @@ describe('compressHistory', () => {
       'compression',
       'user-preferences',
     );
-    expect(mockRagStore.addFacts).toHaveBeenCalledWith(
-      expect.any(Array),
-      'compression',
-      'general',
-    );
+    expect(mockRagStore.addFacts).toHaveBeenCalledWith(expect.any(Array), 'compression', 'general');
     // Result should still be compressed
     expect(result[0].content).toContain('[Context Summary');
   });
@@ -508,9 +498,7 @@ describe('truncateToolResults', () => {
     const messages: CoreMessage[] = [
       {
         role: 'tool',
-        content: [
-          { type: 'tool-result', toolCallId: 'tc1', result: bigResult },
-        ],
+        content: [{ type: 'tool-result', toolCallId: 'tc1', result: bigResult }],
       },
     ];
     const result = truncateToolResults(messages, 10_000);
@@ -524,9 +512,7 @@ describe('truncateToolResults', () => {
     const messages: CoreMessage[] = [
       {
         role: 'tool',
-        content: [
-          { type: 'tool-result', toolCallId: 'tc1', result: smallResult },
-        ],
+        content: [{ type: 'tool-result', toolCallId: 'tc1', result: smallResult }],
       },
     ];
     const result = truncateToolResults(messages, 10_000);
@@ -547,9 +533,7 @@ describe('truncateToolResults', () => {
     const messages: CoreMessage[] = [
       {
         role: 'tool',
-        content: [
-          { type: 'tool-result', toolCallId: 'tc1', result: 'a'.repeat(500) },
-        ],
+        content: [{ type: 'tool-result', toolCallId: 'tc1', result: 'a'.repeat(500) }],
       },
     ];
     const result = truncateToolResults(messages, 100);
@@ -562,9 +546,7 @@ describe('truncateToolResults', () => {
     const messages: CoreMessage[] = [
       {
         role: 'tool',
-        content: [
-          { type: 'tool-result', toolCallId: 'tc1', result: original },
-        ],
+        content: [{ type: 'tool-result', toolCallId: 'tc1', result: original }],
       },
     ];
     truncateToolResults(messages, 100);
@@ -575,9 +557,7 @@ describe('truncateToolResults', () => {
 
 describe('estimateHistoryTokens', () => {
   it('returns reasonable estimates for string content', () => {
-    const messages: CoreMessage[] = [
-      { role: 'user', content: 'Hello world' },
-    ];
+    const messages: CoreMessage[] = [{ role: 'user', content: 'Hello world' }];
     const tokens = estimateHistoryTokens(messages);
     // "Hello world" is 11 chars + JSON quotes = 13 chars. 13 / 3.6 ≈ 4
     expect(tokens).toBeGreaterThan(0);
@@ -594,9 +574,7 @@ describe('estimateHistoryTokens', () => {
       },
       {
         role: 'tool',
-        content: [
-          { type: 'tool-result', toolCallId: 'tc1', result: 'file1.ts\nfile2.ts' },
-        ],
+        content: [{ type: 'tool-result', toolCallId: 'tc1', result: 'file1.ts\nfile2.ts' }],
       },
     ];
     const tokens = estimateHistoryTokens(messages);
@@ -670,12 +648,16 @@ describe('emergencyTruncate', () => {
       { role: 'user', content: `old msg ${'x'.repeat(2000)}` },
       { role: 'assistant', content: `old resp ${'y'.repeat(2000)}` },
       // This assistant+tool pair could be orphaned if cutoff lands here
-      { role: 'assistant', content: [
-        { type: 'tool-call', toolCallId: 'tc1', toolName: 'shell', args: { command: 'ls' } },
-      ] as any },
-      { role: 'tool', content: [
-        { type: 'tool-result', toolCallId: 'tc1', result: 'file1.ts' },
-      ] as any },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'tc1', toolName: 'shell', args: { command: 'ls' } },
+        ] as any,
+      },
+      {
+        role: 'tool',
+        content: [{ type: 'tool-result', toolCallId: 'tc1', result: 'file1.ts' }] as any,
+      },
       { role: 'user', content: 'recent msg' },
       { role: 'assistant', content: 'recent resp' },
     ];
@@ -685,10 +667,12 @@ describe('emergencyTruncate', () => {
 
     // Filter out the synthetic notice/ack pair
     const keptOriginal = result.filter(
-      m => !(typeof m.content === 'string' && (
-        m.content.includes('truncated to fit context window') ||
-        m.content.includes('Continuing with limited context')
-      )),
+      (m) =>
+        !(
+          typeof m.content === 'string' &&
+          (m.content.includes('truncated to fit context window') ||
+            m.content.includes('Continuing with limited context'))
+        ),
     );
 
     // The first kept original message must be a user message
@@ -724,12 +708,16 @@ describe('emergencyTruncate', () => {
       { role: 'user', content: `u1 ${'x'.repeat(2000)}` },
       { role: 'assistant', content: `a1 ${'y'.repeat(2000)}` },
       { role: 'user', content: `u2 ${'x'.repeat(2000)}` },
-      { role: 'assistant', content: [
-        { type: 'tool-call', toolCallId: 'tc1', toolName: 'shell', args: { command: 'ls' } },
-      ] as any },
-      { role: 'tool', content: [
-        { type: 'tool-result', toolCallId: 'tc1', result: 'output' },
-      ] as any },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'tc1', toolName: 'shell', args: { command: 'ls' } },
+        ] as any,
+      },
+      {
+        role: 'tool',
+        content: [{ type: 'tool-result', toolCallId: 'tc1', result: 'output' }] as any,
+      },
       { role: 'assistant', content: 'final response' },
     ];
 
@@ -739,10 +727,12 @@ describe('emergencyTruncate', () => {
     expect(result.length).toBeGreaterThanOrEqual(4);
     // The first kept original message should be a user, found by backward scan
     const keptOriginal = result.filter(
-      m => !(typeof m.content === 'string' && (
-        m.content.includes('truncated to fit context window') ||
-        m.content.includes('Continuing with limited context')
-      )),
+      (m) =>
+        !(
+          typeof m.content === 'string' &&
+          (m.content.includes('truncated to fit context window') ||
+            m.content.includes('Continuing with limited context'))
+        ),
     );
     expect(keptOriginal.length).toBeGreaterThanOrEqual(2);
     expect(keptOriginal[0].role).toBe('user');
@@ -751,18 +741,20 @@ describe('emergencyTruncate', () => {
 
 describe('isTokenOverflowError', () => {
   it('matches Anthropic-style error', () => {
-    expect(isTokenOverflowError(
-      "This model's maximum prompt length is 131072 but the request contains 134090 tokens"
-    )).toBe(true);
+    expect(
+      isTokenOverflowError(
+        "This model's maximum prompt length is 131072 but the request contains 134090 tokens",
+      ),
+    ).toBe(true);
   });
 
   it('matches OpenAI-style error', () => {
-    expect(isTokenOverflowError(
-      "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens."
-    )).toBe(true);
-    expect(isTokenOverflowError(
-      "context length exceeded"
-    )).toBe(true);
+    expect(
+      isTokenOverflowError(
+        "This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens.",
+      ),
+    ).toBe(true);
+    expect(isTokenOverflowError('context length exceeded')).toBe(true);
   });
 
   it('matches prompt too long error', () => {

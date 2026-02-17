@@ -116,10 +116,10 @@ describe('cron CLI commands', () => {
       await cronList();
 
       const msgs = infoMessages();
-      expect(msgs.some(m => m.includes('Daemon: running'))).toBe(true);
-      expect(msgs.some(m => m.includes('\u2713') && m.includes('Job A'))).toBe(true);
-      expect(msgs.some(m => m.includes('\u2717') && m.includes('Job B'))).toBe(true);
-      expect(msgs.some(m => m.includes('1 enabled, 1 disabled'))).toBe(true);
+      expect(msgs.some((m) => m.includes('Daemon: running'))).toBe(true);
+      expect(msgs.some((m) => m.includes('\u2713') && m.includes('Job A'))).toBe(true);
+      expect(msgs.some((m) => m.includes('\u2717') && m.includes('Job B'))).toBe(true);
+      expect(msgs.some((m) => m.includes('1 enabled, 1 disabled'))).toBe(true);
     });
 
     it('shows daemon stopped status', async () => {
@@ -129,7 +129,7 @@ describe('cron CLI commands', () => {
       await cronList();
 
       const msgs = infoMessages();
-      expect(msgs.some(m => m.includes('Daemon: stopped'))).toBe(true);
+      expect(msgs.some((m) => m.includes('Daemon: stopped'))).toBe(true);
     });
 
     it('shows last run info when available', async () => {
@@ -140,7 +140,9 @@ describe('cron CLI commands', () => {
       await cronList();
 
       const msgs = infoMessages();
-      expect(msgs.some(m => m.includes('2025-06-01T12:00:00Z') && m.includes('success'))).toBe(true);
+      expect(msgs.some((m) => m.includes('2025-06-01T12:00:00Z') && m.includes('success'))).toBe(
+        true,
+      );
     });
 
     it('shows "never run" for jobs without last run', async () => {
@@ -149,7 +151,7 @@ describe('cron CLI commands', () => {
       await cronList();
 
       const msgs = infoMessages();
-      expect(msgs.some(m => m.includes('never run'))).toBe(true);
+      expect(msgs.some((m) => m.includes('never run'))).toBe(true);
     });
   });
 
@@ -161,7 +163,7 @@ describe('cron CLI commands', () => {
 
       await cronRun('nonexistent');
 
-      expect(errorMessages().some(m => m.includes('not found'))).toBe(true);
+      expect(errorMessages().some((m) => m.includes('not found'))).toBe(true);
       expect(mockExit).toHaveBeenCalledWith(1);
     });
 
@@ -174,16 +176,22 @@ describe('cron CLI commands', () => {
 
       expect(mockRunJob).toHaveBeenCalledWith(job, expect.any(Function));
       // Should set running status first
-      expect(mockStore.updateJob).toHaveBeenCalledWith('job-1', expect.objectContaining({
-        lastRunStatus: 'running',
-      }));
+      expect(mockStore.updateJob).toHaveBeenCalledWith(
+        'job-1',
+        expect.objectContaining({
+          lastRunStatus: 'running',
+        }),
+      );
       // Should set success status after
-      expect(mockStore.updateJob).toHaveBeenCalledWith('job-1', expect.objectContaining({
-        lastRunStatus: 'success',
-        lastResult: 'All done!',
-      }));
-      expect(infoMessages().some(m => m.includes('completed successfully'))).toBe(true);
-      expect(infoMessages().some(m => m.includes('All done!'))).toBe(true);
+      expect(mockStore.updateJob).toHaveBeenCalledWith(
+        'job-1',
+        expect.objectContaining({
+          lastRunStatus: 'success',
+          lastResult: 'All done!',
+        }),
+      );
+      expect(infoMessages().some((m) => m.includes('completed successfully'))).toBe(true);
+      expect(infoMessages().some((m) => m.includes('All done!'))).toBe(true);
     });
 
     it('handles runJob failure and updates status to error', async () => {
@@ -193,11 +201,14 @@ describe('cron CLI commands', () => {
 
       await cronRun('job-1');
 
-      expect(mockStore.updateJob).toHaveBeenCalledWith('job-1', expect.objectContaining({
-        lastRunStatus: 'error',
-        lastResult: 'Error: something broke',
-      }));
-      expect(errorMessages().some(m => m.includes('failed'))).toBe(true);
+      expect(mockStore.updateJob).toHaveBeenCalledWith(
+        'job-1',
+        expect.objectContaining({
+          lastRunStatus: 'error',
+          lastResult: 'Error: something broke',
+        }),
+      );
+      expect(errorMessages().some((m) => m.includes('failed'))).toBe(true);
     });
 
     it('prints running message with job name', async () => {
@@ -207,7 +218,9 @@ describe('cron CLI commands', () => {
 
       await cronRun('job-1');
 
-      expect(infoMessages().some(m => m.includes('Running job') && m.includes('My Backup'))).toBe(true);
+      expect(infoMessages().some((m) => m.includes('Running job') && m.includes('My Backup'))).toBe(
+        true,
+      );
     });
 
     it('catches runJob throw and updates status to error', async () => {
@@ -217,11 +230,16 @@ describe('cron CLI commands', () => {
 
       await cronRun('job-1');
 
-      expect(mockStore.updateJob).toHaveBeenCalledWith('job-1', expect.objectContaining({
-        lastRunStatus: 'error',
-        lastResult: 'config load failed',
-      }));
-      expect(errorMessages().some(m => m.includes('threw') && m.includes('config load failed'))).toBe(true);
+      expect(mockStore.updateJob).toHaveBeenCalledWith(
+        'job-1',
+        expect.objectContaining({
+          lastRunStatus: 'error',
+          lastResult: 'config load failed',
+        }),
+      );
+      expect(
+        errorMessages().some((m) => m.includes('threw') && m.includes('config load failed')),
+      ).toBe(true);
     });
 
     it('exits with error when job is already running', async () => {
@@ -230,7 +248,7 @@ describe('cron CLI commands', () => {
 
       await cronRun('job-1');
 
-      expect(errorMessages().some(m => m.includes('already running'))).toBe(true);
+      expect(errorMessages().some((m) => m.includes('already running'))).toBe(true);
       expect(mockExit).toHaveBeenCalledWith(1);
       expect(mockRunJob).not.toHaveBeenCalled();
     });
@@ -242,7 +260,7 @@ describe('cron CLI commands', () => {
 
       await cronRun('job-1');
 
-      expect(infoMessages().some(m => m.includes('currently disabled'))).toBe(true);
+      expect(infoMessages().some((m) => m.includes('currently disabled'))).toBe(true);
     });
   });
 
@@ -254,7 +272,7 @@ describe('cron CLI commands', () => {
 
       await cronDelete(['nonexistent']);
 
-      expect(errorMessages().some(m => m.includes('not found'))).toBe(true);
+      expect(errorMessages().some((m) => m.includes('not found'))).toBe(true);
       expect(mockExit).toHaveBeenCalledWith(1);
     });
 
@@ -267,7 +285,7 @@ describe('cron CLI commands', () => {
 
       expect(mockStore.deleteJob).toHaveBeenCalledWith('job-1');
       expect(mockLogStore.deleteJobLogs).toHaveBeenCalledWith('job-1');
-      expect(infoMessages().some(m => m.includes('Deleted: Test Job'))).toBe(true);
+      expect(infoMessages().some((m) => m.includes('Deleted: Test Job'))).toBe(true);
     });
 
     it('cancels on "N"', async () => {
@@ -317,10 +335,7 @@ describe('cron CLI commands', () => {
     });
 
     it('deletes all jobs and stops daemon on "y"', async () => {
-      const jobs = [
-        makeJob({ id: 'j1', name: 'Job A' }),
-        makeJob({ id: 'j2', name: 'Job B' }),
-      ];
+      const jobs = [makeJob({ id: 'j1', name: 'Job A' }), makeJob({ id: 'j2', name: 'Job B' })];
       mockStore.loadJobs.mockReturnValue(jobs);
       mockClient.isDaemonRunning.mockReturnValue(true);
       confirmAnswer = 'y';
@@ -332,7 +347,7 @@ describe('cron CLI commands', () => {
       expect(mockLogStore.deleteJobLogs).toHaveBeenCalledWith('j1');
       expect(mockLogStore.deleteJobLogs).toHaveBeenCalledWith('j2');
       expect(mockClient.stopDaemon).toHaveBeenCalled();
-      expect(infoMessages().some(m => m.includes('Deleted 2 job(s)'))).toBe(true);
+      expect(infoMessages().some((m) => m.includes('Deleted 2 job(s)'))).toBe(true);
     });
 
     it('cancels on "N"', async () => {
@@ -387,7 +402,7 @@ describe('cron CLI commands', () => {
       await cronStop(['j1']);
 
       expect(mockStore.updateJob).toHaveBeenCalledWith('j1', { enabled: false });
-      expect(infoMessages().some(m => m.includes('Disabled: Job A'))).toBe(true);
+      expect(infoMessages().some((m) => m.includes('Disabled: Job A'))).toBe(true);
     });
 
     it('exits with error for unknown IDs', async () => {
@@ -395,7 +410,7 @@ describe('cron CLI commands', () => {
 
       await cronStop(['nonexistent']);
 
-      expect(errorMessages().some(m => m.includes('not found'))).toBe(true);
+      expect(errorMessages().some((m) => m.includes('not found'))).toBe(true);
       expect(mockExit).toHaveBeenCalledWith(1);
     });
 
@@ -422,7 +437,7 @@ describe('cron CLI commands', () => {
 
       expect(mockClient.stopDaemon).toHaveBeenCalled();
       expect(mockClient.startDaemon).toHaveBeenCalled();
-      expect(infoMessages().some(m => m.includes('restarted'))).toBe(true);
+      expect(infoMessages().some((m) => m.includes('restarted'))).toBe(true);
     });
 
     it('starts daemon if not running but has enabled jobs', async () => {
@@ -433,7 +448,7 @@ describe('cron CLI commands', () => {
 
       expect(mockClient.stopDaemon).not.toHaveBeenCalled();
       expect(mockClient.startDaemon).toHaveBeenCalled();
-      expect(infoMessages().some(m => m.includes('started'))).toBe(true);
+      expect(infoMessages().some((m) => m.includes('started'))).toBe(true);
     });
 
     it('prints message when no enabled jobs', async () => {
@@ -443,7 +458,7 @@ describe('cron CLI commands', () => {
       await cronBounce();
 
       expect(mockClient.startDaemon).not.toHaveBeenCalled();
-      expect(infoMessages().some(m => m.includes('No enabled jobs'))).toBe(true);
+      expect(infoMessages().some((m) => m.includes('No enabled jobs'))).toBe(true);
     });
 
     it('stops daemon and does not restart when no enabled jobs', async () => {
@@ -475,7 +490,9 @@ describe('cron CLI commands', () => {
       await cronBounce(['j1']);
 
       expect(mockStore.updateJob).not.toHaveBeenCalled();
-      expect(infoMessages().some(m => m.includes('Skipping') && m.includes('already disabled'))).toBe(true);
+      expect(
+        infoMessages().some((m) => m.includes('Skipping') && m.includes('already disabled')),
+      ).toBe(true);
     });
 
     it('exits with error for unknown IDs', async () => {
@@ -483,7 +500,7 @@ describe('cron CLI commands', () => {
 
       await cronBounce(['nonexistent']);
 
-      expect(errorMessages().some(m => m.includes('not found'))).toBe(true);
+      expect(errorMessages().some((m) => m.includes('not found'))).toBe(true);
       expect(mockExit).toHaveBeenCalledWith(1);
     });
 

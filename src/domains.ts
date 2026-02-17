@@ -11,7 +11,8 @@ export const DOMAIN_REGISTRY: Record<string, MemoryDomain> = {
   'tool-usage': {
     id: 'tool-usage',
     name: 'Tool Usage Patterns',
-    description: 'Command sequences, tool interaction patterns, error resolutions, build/deploy workflows',
+    description:
+      'Command sequences, tool interaction patterns, error resolutions, build/deploy workflows',
     extractionPrompt: `You are a tool-usage pattern extractor. Extract durable, reusable facts about how tools, commands, and workflows are used in the conversation below. Focus on lessons learned and patterns that would be useful in future sessions.
 
 Extract:
@@ -47,7 +48,8 @@ Return a JSON array of strings. Each string should be a self-contained fact (und
   'user-preferences': {
     id: 'user-preferences',
     name: 'User Preferences',
-    description: 'Communication style, workflow conventions, repeated instructions, naming preferences',
+    description:
+      'Communication style, workflow conventions, repeated instructions, naming preferences',
     extractionPrompt: `You are a user preference extractor. Extract durable, long-term facts about the user's preferences, habits, and conventions from the conversation below. Only extract preferences that would apply across multiple sessions and tasks.
 
 Extract:
@@ -78,7 +80,7 @@ Examples:
 Return a JSON array of strings. Each string should be a self-contained fact (understandable without the original conversation). Maximum 500 characters per fact. If there are no notable facts, return an empty array [].`,
   },
 
-  'general': {
+  general: {
     id: 'general',
     name: 'General Knowledge',
     description: 'Project structure, architecture decisions, environment info, team context',

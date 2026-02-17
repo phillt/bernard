@@ -9,9 +9,20 @@ export function createMCPConfigTool() {
     parameters: z.object({
       action: z.enum(['list', 'add', 'remove', 'get']).describe('The action to perform'),
       key: z.string().optional().describe('Server name/key (required for add, remove, get)'),
-      command: z.string().optional().describe('Executable to run, e.g. "npx", "python", "node" (required for add)'),
-      args: z.array(z.string()).optional().describe('Command arguments, e.g. ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"]'),
-      env: z.record(z.string()).optional().describe('Environment variables to pass to the server process'),
+      command: z
+        .string()
+        .optional()
+        .describe('Executable to run, e.g. "npx", "python", "node" (required for add)'),
+      args: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'Command arguments, e.g. ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"]',
+        ),
+      env: z
+        .record(z.string())
+        .optional()
+        .describe('Environment variables to pass to the server process'),
     }),
     execute: async ({ action, key, command, args, env }): Promise<string> => {
       switch (action) {
@@ -20,7 +31,7 @@ export function createMCPConfigTool() {
             const servers = listMCPServers();
             if (servers.length === 0) return 'No MCP servers configured.';
 
-            const lines = servers.map(s => {
+            const lines = servers.map((s) => {
               if (s.url) {
                 const typeStr = s.type ? ` (${s.type})` : ' (sse)';
                 return `  - ${s.key}\n    URL: ${s.url}${typeStr}`;
@@ -43,9 +54,8 @@ export function createMCPConfigTool() {
           try {
             addMCPServer(key, command, args, env);
             const argsStr = args && args.length > 0 ? `\n  Args: ${args.join(' ')}` : '';
-            const envStr = env && Object.keys(env).length > 0
-              ? `\n  Env: ${Object.keys(env).join(', ')}`
-              : '';
+            const envStr =
+              env && Object.keys(env).length > 0 ? `\n  Env: ${Object.keys(env).join(', ')}` : '';
             return `MCP server added:\n  Key: ${key}\n  Command: ${command}${argsStr}${envStr}\n\nRestart Bernard for the server to connect.`;
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -72,26 +82,30 @@ export function createMCPConfigTool() {
             const server = getMCPServer(key);
             if (!server) {
               const servers = listMCPServers();
-              const hint = servers.length > 0
-                ? ` Available servers: ${servers.map(s => s.key).join(', ')}`
-                : ' No servers configured.';
+              const hint =
+                servers.length > 0
+                  ? ` Available servers: ${servers.map((s) => s.key).join(', ')}`
+                  : ' No servers configured.';
               return `MCP server "${key}" not found.${hint}`;
             }
 
             if ('url' in server) {
               const typeStr = server.type ?? 'sse';
-              const headersStr = server.headers && Object.keys(server.headers).length > 0
-                ? `\n  Headers: ${Object.keys(server.headers).join(', ')}`
-                : '';
+              const headersStr =
+                server.headers && Object.keys(server.headers).length > 0
+                  ? `\n  Headers: ${Object.keys(server.headers).join(', ')}`
+                  : '';
               return `MCP server "${key}":\n  URL: ${server.url}\n  Transport: ${typeStr}${headersStr}`;
             }
 
-            const argsStr = server.args && server.args.length > 0
-              ? `\n  Args: ${server.args.join(' ')}`
-              : '';
-            const envStr = server.env && Object.keys(server.env).length > 0
-              ? `\n  Env: ${Object.entries(server.env).map(([k, v]) => `${k}=${v}`).join(', ')}`
-              : '';
+            const argsStr =
+              server.args && server.args.length > 0 ? `\n  Args: ${server.args.join(' ')}` : '';
+            const envStr =
+              server.env && Object.keys(server.env).length > 0
+                ? `\n  Env: ${Object.entries(server.env)
+                    .map(([k, v]) => `${k}=${v}`)
+                    .join(', ')}`
+                : '';
             return `MCP server "${key}":\n  Command: ${server.command}${argsStr}${envStr}`;
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);

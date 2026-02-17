@@ -104,10 +104,7 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
 
   describe('cron_update execute', () => {
     it('should return error when no fields provided (only id)', async () => {
-      const result = await tools.cron_update.execute!(
-        { id: 'test-id-123' },
-        {} as any,
-      );
+      const result = await tools.cron_update.execute!({ id: 'test-id-123' }, {} as any);
 
       expect(result).toContain('Error: update requires at least one field to change');
       expect(result).toContain('Received parameters:');
@@ -200,19 +197,13 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
     });
 
     it('should report received parameters dynamically in error', async () => {
-      const result = await tools.cron_update.execute!(
-        { id: 'test-id-123' },
-        {} as any,
-      );
+      const result = await tools.cron_update.execute!({ id: 'test-id-123' }, {} as any);
 
       expect(result).toMatch(/Received parameters:.*id/);
     });
 
     it('should treat empty string prompt as missing', async () => {
-      const result = await tools.cron_update.execute!(
-        { id: 'test-id-123', prompt: '' },
-        {} as any,
-      );
+      const result = await tools.cron_update.execute!({ id: 'test-id-123', prompt: '' }, {} as any);
 
       expect(result).toContain('Error: update requires at least one field to change');
     });
@@ -222,10 +213,7 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
     it('should return error when job not found', async () => {
       mockStore.getJob.mockReturnValue(undefined);
 
-      const result = await tools.cron_run.execute!(
-        { id: 'nonexistent' },
-        {} as any,
-      );
+      const result = await tools.cron_run.execute!({ id: 'nonexistent' }, {} as any);
 
       expect(result).toContain('Error: No job found');
     });
@@ -242,21 +230,24 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       mockStore.getJob.mockReturnValue(job);
       mockRunJob.mockResolvedValue({ success: true, output: 'Task completed' });
 
-      const result = await tools.cron_run.execute!(
-        { id: 'test-id' },
-        {} as any,
-      );
+      const result = await tools.cron_run.execute!({ id: 'test-id' }, {} as any);
 
       expect(result).toContain('Test Job');
       expect(result).toContain('Success');
       expect(result).toContain('Task completed');
       expect(mockRunJob).toHaveBeenCalledWith(job, expect.any(Function));
-      expect(mockStore.updateJob).toHaveBeenCalledWith('test-id', expect.objectContaining({
-        lastRunStatus: 'running',
-      }));
-      expect(mockStore.updateJob).toHaveBeenCalledWith('test-id', expect.objectContaining({
-        lastRunStatus: 'success',
-      }));
+      expect(mockStore.updateJob).toHaveBeenCalledWith(
+        'test-id',
+        expect.objectContaining({
+          lastRunStatus: 'running',
+        }),
+      );
+      expect(mockStore.updateJob).toHaveBeenCalledWith(
+        'test-id',
+        expect.objectContaining({
+          lastRunStatus: 'success',
+        }),
+      );
     });
 
     it('should catch runJob throw and update status to error', async () => {
@@ -271,18 +262,18 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       mockStore.getJob.mockReturnValue(job);
       mockRunJob.mockRejectedValue(new Error('config load failed'));
 
-      const result = await tools.cron_run.execute!(
-        { id: 'test-id' },
-        {} as any,
-      );
+      const result = await tools.cron_run.execute!({ id: 'test-id' }, {} as any);
 
       expect(result).toContain('Throwing Job');
       expect(result).toContain('Error');
       expect(result).toContain('config load failed');
-      expect(mockStore.updateJob).toHaveBeenCalledWith('test-id', expect.objectContaining({
-        lastRunStatus: 'error',
-        lastResult: 'config load failed',
-      }));
+      expect(mockStore.updateJob).toHaveBeenCalledWith(
+        'test-id',
+        expect.objectContaining({
+          lastRunStatus: 'error',
+          lastResult: 'config load failed',
+        }),
+      );
     });
 
     it('should include disabled notice for disabled jobs', async () => {
@@ -297,10 +288,7 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       mockStore.getJob.mockReturnValue(job);
       mockRunJob.mockResolvedValue({ success: true, output: 'Done' });
 
-      const result = await tools.cron_run.execute!(
-        { id: 'test-id' },
-        {} as any,
-      );
+      const result = await tools.cron_run.execute!({ id: 'test-id' }, {} as any);
 
       expect(result).toContain('currently disabled');
       expect(result).toContain('Success');
@@ -318,10 +306,7 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       };
       mockStore.getJob.mockReturnValue(job);
 
-      const result = await tools.cron_run.execute!(
-        { id: 'test-id' },
-        {} as any,
-      );
+      const result = await tools.cron_run.execute!({ id: 'test-id' }, {} as any);
 
       expect(result).toContain('already running');
       expect(mockRunJob).not.toHaveBeenCalled();
@@ -340,17 +325,17 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       mockStore.getJob.mockReturnValue(job);
       mockRunJob.mockResolvedValue({ success: false, output: 'Error: API down' });
 
-      const result = await tools.cron_run.execute!(
-        { id: 'test-id' },
-        {} as any,
-      );
+      const result = await tools.cron_run.execute!({ id: 'test-id' }, {} as any);
 
       expect(result).toContain('Failing Job');
       expect(result).toContain('Error');
       expect(result).toContain('API down');
-      expect(mockStore.updateJob).toHaveBeenCalledWith('test-id', expect.objectContaining({
-        lastRunStatus: 'error',
-      }));
+      expect(mockStore.updateJob).toHaveBeenCalledWith(
+        'test-id',
+        expect.objectContaining({
+          lastRunStatus: 'error',
+        }),
+      );
     });
   });
 });

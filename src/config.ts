@@ -27,12 +27,15 @@ export const PROVIDER_ENV_VARS: Record<string, string> = {
   xai: 'XAI_API_KEY',
 };
 
-export const OPTIONS_REGISTRY: Record<string, {
-  configKey: 'maxTokens' | 'shellTimeout';
-  default: number;
-  description: string;
-  envVar: string;
-}> = {
+export const OPTIONS_REGISTRY: Record<
+  string,
+  {
+    configKey: 'maxTokens' | 'shellTimeout';
+    default: number;
+    description: string;
+    envVar: string;
+  }
+> = {
   'max-tokens': {
     configKey: 'maxTokens',
     default: DEFAULT_MAX_TOKENS,
@@ -70,12 +73,21 @@ export function savePreferences(prefs: {
     try {
       const existing = JSON.parse(fs.readFileSync(PREFS_PATH, 'utf-8'));
       if (typeof existing.autoUpdate === 'boolean') data.autoUpdate = existing.autoUpdate;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
   fs.writeFileSync(PREFS_PATH, JSON.stringify(data, null, 2) + '\n');
 }
 
-export function loadPreferences(): { provider?: string; model?: string; maxTokens?: number; shellTimeout?: number; theme?: string; autoUpdate?: boolean } {
+export function loadPreferences(): {
+  provider?: string;
+  model?: string;
+  maxTokens?: number;
+  shellTimeout?: number;
+  theme?: string;
+  autoUpdate?: boolean;
+} {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
     const parsed = JSON.parse(data);
@@ -108,7 +120,7 @@ function loadStoredKeys(): Record<string, string> {
 export function saveProviderKey(provider: string, key: string): void {
   if (!PROVIDER_ENV_VARS[provider]) {
     throw new Error(
-      `Unknown provider "${provider}". Supported: ${Object.keys(PROVIDER_ENV_VARS).join(', ')}`
+      `Unknown provider "${provider}". Supported: ${Object.keys(PROVIDER_ENV_VARS).join(', ')}`,
     );
   }
   const dir = path.dirname(KEYS_PATH);
@@ -124,7 +136,7 @@ export function saveProviderKey(provider: string, key: string): void {
 export function removeProviderKey(provider: string): void {
   if (!PROVIDER_ENV_VARS[provider]) {
     throw new Error(
-      `Unknown provider "${provider}". Supported: ${Object.keys(PROVIDER_ENV_VARS).join(', ')}`
+      `Unknown provider "${provider}". Supported: ${Object.keys(PROVIDER_ENV_VARS).join(', ')}`,
     );
   }
   const existing = loadStoredKeys();
@@ -146,7 +158,7 @@ export function saveOption(name: string, value: number): void {
   const entry = OPTIONS_REGISTRY[name];
   if (!entry) {
     throw new Error(
-      `Unknown option "${name}". Valid options: ${Object.keys(OPTIONS_REGISTRY).join(', ')}`
+      `Unknown option "${name}". Valid options: ${Object.keys(OPTIONS_REGISTRY).join(', ')}`,
     );
   }
   const prefs = loadPreferences();
@@ -164,7 +176,7 @@ export function resetOption(name: string): void {
   const entry = OPTIONS_REGISTRY[name];
   if (!entry) {
     throw new Error(
-      `Unknown option "${name}". Valid options: ${Object.keys(OPTIONS_REGISTRY).join(', ')}`
+      `Unknown option "${name}". Valid options: ${Object.keys(OPTIONS_REGISTRY).join(', ')}`,
     );
   }
   const prefs = loadPreferences();
@@ -268,12 +280,15 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
   }
 
   const prefs = loadPreferences();
-  const provider = overrides?.provider || prefs.provider || process.env.BERNARD_PROVIDER || DEFAULT_PROVIDER;
-  const model = overrides?.model || prefs.model || process.env.BERNARD_MODEL || getDefaultModel(provider);
-  const maxTokens = prefs.maxTokens
-    ?? (parseInt(process.env.BERNARD_MAX_TOKENS || '', 10) || DEFAULT_MAX_TOKENS);
-  const shellTimeout = prefs.shellTimeout
-    ?? (parseInt(process.env.BERNARD_SHELL_TIMEOUT || '', 10) || DEFAULT_SHELL_TIMEOUT);
+  const provider =
+    overrides?.provider || prefs.provider || process.env.BERNARD_PROVIDER || DEFAULT_PROVIDER;
+  const model =
+    overrides?.model || prefs.model || process.env.BERNARD_MODEL || getDefaultModel(provider);
+  const maxTokens =
+    prefs.maxTokens ?? (parseInt(process.env.BERNARD_MAX_TOKENS || '', 10) || DEFAULT_MAX_TOKENS);
+  const shellTimeout =
+    prefs.shellTimeout ??
+    (parseInt(process.env.BERNARD_SHELL_TIMEOUT || '', 10) || DEFAULT_SHELL_TIMEOUT);
 
   const ragEnabled = process.env.BERNARD_RAG_ENABLED !== 'false';
   const theme = prefs.theme || 'bernard';
@@ -306,8 +321,8 @@ function validateConfig(config: BernardConfig): void {
     const envVar = PROVIDER_ENV_VARS[config.provider];
     throw new Error(
       `No API key found for provider "${config.provider}". ` +
-      `Run: bernard add-key ${config.provider} <your-api-key>\n` +
-      `Or set ${envVar} in your .env file or environment.`
+        `Run: bernard add-key ${config.provider} <your-api-key>\n` +
+        `Or set ${envVar} in your .env file or environment.`,
     );
   }
 }

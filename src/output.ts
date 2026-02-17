@@ -38,7 +38,10 @@ export function buildSpinnerMessage(stats: SpinnerStats): string {
   const down = formatTokenCount(stats.totalCompletionTokens);
   const contextWindow = getContextWindow(stats.model);
   const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;
-  const remainingPct = Math.max(0, Math.round((thresholdTokens - stats.latestPromptTokens) / thresholdTokens * 100));
+  const remainingPct = Math.max(
+    0,
+    Math.round(((thresholdTokens - stats.latestPromptTokens) / thresholdTokens) * 100),
+  );
 
   return `Thinking (${elapsed} | ${up}\u2191 ${down}\u2193 | ${remainingPct}% until compression)`;
 }
@@ -95,12 +98,14 @@ export function printAssistantText(text: string, prefix?: string): void {
   }
 }
 
-export function printToolCall(toolName: string, args: Record<string, unknown>, prefix?: string): void {
+export function printToolCall(
+  toolName: string,
+  args: Record<string, unknown>,
+  prefix?: string,
+): void {
   stopSpinner();
   const label = formatPrefix(prefix);
-  const argsStr = toolName === 'shell'
-    ? String(args.command || '')
-    : JSON.stringify(args);
+  const argsStr = toolName === 'shell' ? String(args.command || '') : JSON.stringify(args);
   console.log(label + getTheme().toolCall(`  ▶ ${toolName}`) + getTheme().muted(`: ${argsStr}`));
 }
 
@@ -120,7 +125,10 @@ export function printToolResult(toolName: string, result: unknown, prefix?: stri
     output = output.slice(0, MAX_TOOL_OUTPUT_LENGTH) + getTheme().muted('\n  ... (truncated)');
   }
 
-  const lines = output.split('\n').map(line => label + getTheme().muted(`  ${line}`)).join('\n');
+  const lines = output
+    .split('\n')
+    .map((line) => label + getTheme().muted(`  ${line}`))
+    .join('\n');
   console.log(lines);
 }
 
@@ -142,9 +150,8 @@ export function printConversationReplay(messages: CoreMessage[]): void {
     const text = extractText(msg);
     if (!text) continue;
 
-    const truncated = text.length > MAX_REPLAY_LENGTH
-      ? text.slice(0, MAX_REPLAY_LENGTH) + '…'
-      : text;
+    const truncated =
+      text.length > MAX_REPLAY_LENGTH ? text.slice(0, MAX_REPLAY_LENGTH) + '…' : text;
 
     const prefix = msg.role === 'user' ? '  you> ' : '  assistant> ';
     console.log(getTheme().dim(prefix + truncated));
@@ -159,8 +166,11 @@ function extractText(msg: CoreMessage): string | null {
   if (!Array.isArray(msg.content)) return null;
 
   const textParts = msg.content
-    .filter((p): p is { type: 'text'; text: string } => typeof p === 'object' && p !== null && 'type' in p && p.type === 'text')
-    .map(p => p.text);
+    .filter(
+      (p): p is { type: 'text'; text: string } =>
+        typeof p === 'object' && p !== null && 'type' in p && p.type === 'text',
+    )
+    .map((p) => p.text);
 
   return textParts.length > 0 ? textParts.join(' ') : null;
 }
@@ -191,7 +201,9 @@ export function printHelp(): void {
   console.log(t.text('  /provider') + t.muted(' — Switch LLM provider'));
   console.log(t.text('  /model') + t.muted('    — Switch model for current provider'));
   console.log(t.text('  /theme') + t.muted('    — Switch color theme'));
-  console.log(t.text('  /options') + t.muted('  — View and set options (max-tokens, shell-timeout)'));
+  console.log(
+    t.text('  /options') + t.muted('  — View and set options (max-tokens, shell-timeout)'),
+  );
   console.log(t.text('  /update') + t.muted('   — Check for and install updates'));
   console.log(t.text('  exit') + t.muted('      — Quit Bernard'));
   console.log();

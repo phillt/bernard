@@ -1,5 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getDefaultModel, getAvailableProviders, loadConfig, PROVIDER_MODELS, saveProviderKey, getProviderKeyStatus, PROVIDER_ENV_VARS, saveOption, resetOption, resetAllOptions, OPTIONS_REGISTRY } from './config.js';
+import {
+  getDefaultModel,
+  getAvailableProviders,
+  loadConfig,
+  PROVIDER_MODELS,
+  saveProviderKey,
+  getProviderKeyStatus,
+  PROVIDER_ENV_VARS,
+  saveOption,
+  resetOption,
+  resetAllOptions,
+  OPTIONS_REGISTRY,
+} from './config.js';
 import type { BernardConfig } from './config.js';
 
 vi.mock('dotenv', () => ({
@@ -8,13 +20,15 @@ vi.mock('dotenv', () => ({
 
 vi.mock('node:fs', () => ({
   existsSync: vi.fn(() => false),
-  readFileSync: vi.fn(() => { throw new Error('ENOENT'); }),
+  readFileSync: vi.fn(() => {
+    throw new Error('ENOENT');
+  }),
   writeFileSync: vi.fn(),
   chmodSync: vi.fn(),
   mkdirSync: vi.fn(),
 }));
 
-const fsMock = await import('node:fs') as unknown as {
+const fsMock = (await import('node:fs')) as unknown as {
   existsSync: ReturnType<typeof vi.fn>;
   readFileSync: ReturnType<typeof vi.fn>;
   writeFileSync: ReturnType<typeof vi.fn>;
@@ -83,7 +97,9 @@ describe('getAvailableProviders', () => {
 describe('saveProviderKey', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(false);
-    fsMock.readFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
     fsMock.writeFileSync.mockReturnValue(undefined);
     fsMock.chmodSync.mockReturnValue(undefined);
     fsMock.mkdirSync.mockReturnValue(undefined);
@@ -104,12 +120,9 @@ describe('saveProviderKey', () => {
 
     expect(fsMock.writeFileSync).toHaveBeenCalledWith(
       expect.stringContaining('keys.json'),
-      expect.stringContaining('"anthropic": "sk-ant-test"')
+      expect.stringContaining('"anthropic": "sk-ant-test"'),
     );
-    expect(fsMock.chmodSync).toHaveBeenCalledWith(
-      expect.stringContaining('keys.json'),
-      0o600
-    );
+    expect(fsMock.chmodSync).toHaveBeenCalledWith(expect.stringContaining('keys.json'), 0o600);
   });
 
   it('creates directory if it does not exist', () => {
@@ -117,10 +130,7 @@ describe('saveProviderKey', () => {
 
     saveProviderKey('openai', 'sk-openai-test');
 
-    expect(fsMock.mkdirSync).toHaveBeenCalledWith(
-      expect.any(String),
-      { recursive: true }
-    );
+    expect(fsMock.mkdirSync).toHaveBeenCalledWith(expect.any(String), { recursive: true });
   });
 
   it('merges with existing keys', () => {
@@ -138,7 +148,9 @@ describe('saveProviderKey', () => {
 describe('getProviderKeyStatus', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(false);
-    fsMock.readFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
     vi.stubEnv('ANTHROPIC_API_KEY', '');
     vi.stubEnv('OPENAI_API_KEY', '');
     vi.stubEnv('XAI_API_KEY', '');
@@ -176,7 +188,9 @@ describe('getProviderKeyStatus', () => {
 describe('loadConfig', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(false);
-    fsMock.readFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
     vi.stubEnv('OPENAI_API_KEY', '');
     vi.stubEnv('XAI_API_KEY', '');
@@ -292,7 +306,9 @@ describe('loadConfig', () => {
 describe('saveOption', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(true);
-    fsMock.readFileSync.mockReturnValue(JSON.stringify({ provider: 'anthropic', model: 'test-model' }));
+    fsMock.readFileSync.mockReturnValue(
+      JSON.stringify({ provider: 'anthropic', model: 'test-model' }),
+    );
     fsMock.writeFileSync.mockReturnValue(undefined);
     fsMock.mkdirSync.mockReturnValue(undefined);
   });
@@ -323,7 +339,14 @@ describe('saveOption', () => {
 describe('resetOption', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(true);
-    fsMock.readFileSync.mockReturnValue(JSON.stringify({ provider: 'anthropic', model: 'test-model', maxTokens: 8192, shellTimeout: 60000 }));
+    fsMock.readFileSync.mockReturnValue(
+      JSON.stringify({
+        provider: 'anthropic',
+        model: 'test-model',
+        maxTokens: 8192,
+        shellTimeout: 60000,
+      }),
+    );
     fsMock.writeFileSync.mockReturnValue(undefined);
     fsMock.mkdirSync.mockReturnValue(undefined);
   });
@@ -354,7 +377,14 @@ describe('resetOption', () => {
 describe('resetAllOptions', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(true);
-    fsMock.readFileSync.mockReturnValue(JSON.stringify({ provider: 'openai', model: 'gpt-4o-mini', maxTokens: 8192, shellTimeout: 60000 }));
+    fsMock.readFileSync.mockReturnValue(
+      JSON.stringify({
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        maxTokens: 8192,
+        shellTimeout: 60000,
+      }),
+    );
     fsMock.writeFileSync.mockReturnValue(undefined);
     fsMock.mkdirSync.mockReturnValue(undefined);
   });

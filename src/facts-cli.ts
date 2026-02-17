@@ -39,7 +39,10 @@ function promptLine(prompt: string): Promise<string> {
  * Returns sorted deduplicated 1-based indices, or null if invalid.
  */
 export function parseSelection(input: string, max: number): number[] | null {
-  const parts = input.split(',').map((s) => s.trim()).filter(Boolean);
+  const parts = input
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   if (parts.length === 0) return null;
 
   const indices = new Set<number>();
@@ -92,7 +95,9 @@ function displayResults(results: RAGSearchResultWithId[], showSimilarity: boolea
 async function promptDelete(results: RAGSearchResultWithId[], ragStore: RAGStore): Promise<void> {
   if (results.length === 0) return;
 
-  const input = await promptLine('Enter fact numbers to delete (e.g. 1,3,5-8), or press Enter to cancel: ');
+  const input = await promptLine(
+    'Enter fact numbers to delete (e.g. 1,3,5-8), or press Enter to cancel: ',
+  );
   if (!input) {
     return;
   }
