@@ -64,6 +64,12 @@ export async function cronRun(id: string): Promise<void> {
     return;
   }
 
+  if (job.lastRunStatus === 'running') {
+    printError(`Job "${job.name}" is already running. Wait for it to finish or check status with cron-list.`);
+    process.exit(1);
+    return;
+  }
+
   if (!job.enabled) {
     printInfo('Note: this job is currently disabled.');
   }

@@ -95,6 +95,10 @@ export function createCronTools() {
         const job = store.getJob(id);
         if (!job) return `Error: No job found with ID "${id}".`;
 
+        if (job.lastRunStatus === 'running') {
+          return `Error: Job "${job.name}" is already running. Wait for it to finish before triggering another run.`;
+        }
+
         const disabledNote = job.enabled ? '' : '\nNote: this job is currently disabled.\n';
 
         const startTime = new Date().toISOString();
