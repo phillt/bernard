@@ -17,6 +17,12 @@ vi.mock('../cron/store.js', () => ({
   CronStore: vi.fn(() => mockStore),
 }));
 
+const mockRunJob = vi.hoisted(() => vi.fn());
+
+vi.mock('../cron/runner.js', () => ({
+  runJob: mockRunJob,
+}));
+
 vi.mock('../cron/client.js', () => ({
   isDaemonRunning: vi.fn().mockReturnValue(false),
   startDaemon: vi.fn().mockReturnValue(true),
@@ -209,6 +215,73 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       );
 
       expect(result).toContain('Error: update requires at least one field to change');
+    });
+  });
+
+  describe('cron_run execute', () => {
+    it('should return error when job not found', async () => {
+      mockStore.getJob.mockReturnValue(undefined);
+
+      const result = await tools.cron_run.execute!(
+        { id: 'nonexistent' },
+        {} as any,
+      );
+
+      expect(result).toContain('Error: No job found');
+    });
+
+    it('should call runJob and return formatted output on success', async () => {
+      const job = {
+        id: 'test-id',
+        name: 'Test Job',
+        schedule: '0 * * * *',
+        prompt: 'Do something',
+        enabled: true,
+        createdAt: '2025-01-01T00:00:00.000Z',
+      };
+      mockStore.getJob.mockReturnValue(job);
+      mockRunJob.mockResolvedValue({ success: true, output: 'Task completed' });
+
+      const result = await tools.cron_run.execute!(
+        { id: 'test-id' },
+        {} as any,
+      );
+
+      expect(result).toContain('Test Job');
+      expect(result).toContain('Success');
+      expect(result).toContain('Task completed');
+      expect(mockRunJob).toHaveBeenCalledWith(job, expect.any(Function));
+      expect(mockStore.updateJob).toHaveBeenCalledWith('test-id', expect.objectContaining({
+        lastRunStatus: 'running',
+      }));
+      expect(mockStore.updateJob).toHaveBeenCalledWith('test-id', expect.objectContaining({
+        lastRunStatus: 'success',
+      }));
+    });
+
+    it('should handle runJob failure', async () => {
+      const job = {
+        id: 'test-id',
+        name: 'Failing Job',
+        schedule: '0 * * * *',
+        prompt: 'Do something',
+        enabled: true,
+        createdAt: '2025-01-01T00:00:00.000Z',
+      };
+      mockStore.getJob.mockReturnValue(job);
+      mockRunJob.mockResolvedValue({ success: false, output: 'Error: API down' });
+
+      const result = await tools.cron_run.execute!(
+        { id: 'test-id' },
+        {} as any,
+      );
+
+      expect(result).toContain('Failing Job');
+      expect(result).toContain('Error');
+      expect(result).toContain('API down');
+      expect(mockStore.updateJob).toHaveBeenCalledWith('test-id', expect.objectContaining({
+        lastRunStatus: 'error',
+      }));
     });
   });
 });
