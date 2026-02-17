@@ -1,6 +1,7 @@
 import * as readline from 'node:readline';
 import { CronStore } from './store.js';
 import { CronLogStore } from './log-store.js';
+import { runJob } from './runner.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from './client.js';
 import { printInfo, printError } from '../output.js';
 
@@ -51,6 +52,40 @@ export async function cronList(): Promise<void> {
   const disabled = jobs.length - enabled;
   printInfo('');
   printInfo(`${jobs.length} job(s): ${enabled} enabled, ${disabled} disabled`);
+}
+
+export async function cronRun(id: string): Promise<void> {
+  const store = new CronStore();
+  const job = store.getJob(id);
+
+  if (!job) {
+    printError(`Job not found: ${id}`);
+    process.exit(1);
+    return;
+  }
+
+  printInfo(`Running job "${job.name}" (${job.id})...`);
+
+  const startTime = new Date().toISOString();
+  store.updateJob(id, {
+    lastRun: startTime,
+    lastRunStatus: 'running',
+  });
+
+  const result = await runJob(job, (msg) => printInfo(`  ${msg}`));
+
+  store.updateJob(id, {
+    lastRunStatus: result.success ? 'success' : 'error',
+    lastResult: result.output.slice(0, 2000),
+  });
+
+  if (result.success) {
+    printInfo(`Job "${job.name}" completed successfully.`);
+    printInfo(result.output);
+  } else {
+    printError(`Job "${job.name}" failed.`);
+    printError(result.output);
+  }
 }
 
 export async function cronDelete(ids: string[]): Promise<void> {
