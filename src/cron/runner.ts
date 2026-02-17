@@ -118,7 +118,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
 
     const shellTool = createShellTool({
       shellTimeout: config.shellTimeout,
-      confirmDangerous: async () => false, // Auto-deny in daemon mode
+      confirmDangerous: () => Promise.resolve(false), // Auto-deny in daemon mode
     });
 
     const tools = {
