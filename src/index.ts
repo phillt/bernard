@@ -64,7 +64,7 @@ The user has been notified and this session is open for them to review and act o
         printInfo(`  Time: ${alert.timestamp}\n`);
       }
 
-      printWelcome(config.provider, config.model);
+      printWelcome(config.provider, config.model, getLocalVersion());
       const prefs = loadPreferences();
       startupUpdateCheck(!!prefs.autoUpdate);
       await startRepl(config, alertContext, !!opts.resume);
