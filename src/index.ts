@@ -7,7 +7,7 @@ import { startRepl } from './repl.js';
 import { printWelcome, printError, printInfo } from './output.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
-import { cronList, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
+import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
 import { listMCPServers, removeMCPServer } from './mcp.js';
 import { runFirstTimeSetup } from './setup.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
@@ -231,6 +231,19 @@ program
   .action(async () => {
     try {
       await cronList();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('cron-run <id>')
+  .description('Manually run a cron job immediately')
+  .action(async (id: string) => {
+    try {
+      await cronRun(id);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);

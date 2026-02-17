@@ -195,6 +195,7 @@ bernard remove-mcp <key>           # Remove an MCP server
 
 # Cron management
 bernard cron-list                  # List all cron jobs with status
+bernard cron-run <id>              # Manually run a cron job immediately
 bernard cron-delete <ids...>       # Delete specific cron jobs by ID
 bernard cron-delete-all            # Delete all cron jobs
 bernard cron-stop [ids...]         # Stop the daemon (no args) or disable specific jobs
@@ -361,6 +362,9 @@ bernard> disable the disk-check job
 bernard> update the api health check to run every 30 minutes instead
   ▶ cron_update: { id: "def456", schedule: "*/30 * * * *" }
 
+bernard> run the api health check right now
+  ▶ cron_run: { id: "def456" }
+
 bernard> delete the disk-check job
   ▶ cron_delete: { id: "abc123" }
 
@@ -368,9 +372,15 @@ bernard> what's the cron daemon status?
   ▶ cron_status
 ```
 
+You can also run jobs manually from the CLI without entering the REPL:
+
+```bash
+bernard cron-run <id>
+```
+
 Use `/cron` in the REPL for a quick status overview.
 
-Available cron tools: `cron_create`, `cron_list`, `cron_get`, `cron_update`, `cron_delete`, `cron_enable`, `cron_disable`, `cron_status`, `cron_bounce`, `cron_logs_list`, `cron_logs_get`, `cron_logs_summary`, `cron_logs_cleanup`.
+Available cron tools: `cron_create`, `cron_list`, `cron_run`, `cron_get`, `cron_update`, `cron_delete`, `cron_enable`, `cron_disable`, `cron_status`, `cron_bounce`, `cron_logs_list`, `cron_logs_get`, `cron_logs_summary`, `cron_logs_cleanup`.
 
 ### Execution Logs
 

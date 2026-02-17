@@ -54,7 +54,13 @@ vi.mock('node:readline', () => ({
 // Mock process.exit
 const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
 
-import { cronList, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cli.js';
+const mockRunJob = vi.hoisted(() => vi.fn());
+
+vi.mock('./runner.js', () => ({
+  runJob: mockRunJob,
+}));
+
+import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cli.js';
 
 afterAll(() => {
   vi.restoreAllMocks();
@@ -144,6 +150,99 @@ describe('cron CLI commands', () => {
 
       const msgs = infoMessages();
       expect(msgs.some(m => m.includes('never run'))).toBe(true);
+    });
+  });
+
+  // ==================== cron-run ====================
+
+  describe('cron-run', () => {
+    it('exits with error when job not found', async () => {
+      mockStore.getJob.mockReturnValue(undefined);
+
+      await cronRun('nonexistent');
+
+      expect(errorMessages().some(m => m.includes('not found'))).toBe(true);
+      expect(mockExit).toHaveBeenCalledWith(1);
+    });
+
+    it('calls runJob and updates status on success', async () => {
+      const job = makeJob();
+      mockStore.getJob.mockReturnValue(job);
+      mockRunJob.mockResolvedValue({ success: true, output: 'All done!' });
+
+      await cronRun('job-1');
+
+      expect(mockRunJob).toHaveBeenCalledWith(job, expect.any(Function));
+      // Should set running status first
+      expect(mockStore.updateJob).toHaveBeenCalledWith('job-1', expect.objectContaining({
+        lastRunStatus: 'running',
+      }));
+      // Should set success status after
+      expect(mockStore.updateJob).toHaveBeenCalledWith('job-1', expect.objectContaining({
+        lastRunStatus: 'success',
+        lastResult: 'All done!',
+      }));
+      expect(infoMessages().some(m => m.includes('completed successfully'))).toBe(true);
+      expect(infoMessages().some(m => m.includes('All done!'))).toBe(true);
+    });
+
+    it('handles runJob failure and updates status to error', async () => {
+      const job = makeJob();
+      mockStore.getJob.mockReturnValue(job);
+      mockRunJob.mockResolvedValue({ success: false, output: 'Error: something broke' });
+
+      await cronRun('job-1');
+
+      expect(mockStore.updateJob).toHaveBeenCalledWith('job-1', expect.objectContaining({
+        lastRunStatus: 'error',
+        lastResult: 'Error: something broke',
+      }));
+      expect(errorMessages().some(m => m.includes('failed'))).toBe(true);
+    });
+
+    it('prints running message with job name', async () => {
+      const job = makeJob({ name: 'My Backup' });
+      mockStore.getJob.mockReturnValue(job);
+      mockRunJob.mockResolvedValue({ success: true, output: 'Done' });
+
+      await cronRun('job-1');
+
+      expect(infoMessages().some(m => m.includes('Running job') && m.includes('My Backup'))).toBe(true);
+    });
+
+    it('catches runJob throw and updates status to error', async () => {
+      const job = makeJob();
+      mockStore.getJob.mockReturnValue(job);
+      mockRunJob.mockRejectedValue(new Error('config load failed'));
+
+      await cronRun('job-1');
+
+      expect(mockStore.updateJob).toHaveBeenCalledWith('job-1', expect.objectContaining({
+        lastRunStatus: 'error',
+        lastResult: 'config load failed',
+      }));
+      expect(errorMessages().some(m => m.includes('threw') && m.includes('config load failed'))).toBe(true);
+    });
+
+    it('exits with error when job is already running', async () => {
+      const job = makeJob({ lastRunStatus: 'running' });
+      mockStore.getJob.mockReturnValue(job);
+
+      await cronRun('job-1');
+
+      expect(errorMessages().some(m => m.includes('already running'))).toBe(true);
+      expect(mockExit).toHaveBeenCalledWith(1);
+      expect(mockRunJob).not.toHaveBeenCalled();
+    });
+
+    it('prints disabled notice for disabled jobs', async () => {
+      const job = makeJob({ enabled: false });
+      mockStore.getJob.mockReturnValue(job);
+      mockRunJob.mockResolvedValue({ success: true, output: 'Done' });
+
+      await cronRun('job-1');
+
+      expect(infoMessages().some(m => m.includes('currently disabled'))).toBe(true);
     });
   });
 

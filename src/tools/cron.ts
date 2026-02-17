@@ -3,6 +3,7 @@ import { z } from 'zod';
 import cron from 'node-cron';
 import { CronStore } from '../cron/store.js';
 import { CronLogStore } from '../cron/log-store.js';
+import { runJob } from '../cron/runner.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from '../cron/client.js';
 import { debugLog } from '../logger.js';
 
@@ -80,6 +81,55 @@ export function createCronTools() {
         });
 
         return `Cron jobs (${jobs.length}):\n${lines.join('\n')}`;
+      },
+    }),
+
+    cron_run: tool({
+      description: 'Manually run a cron job immediately. Executes the job\'s prompt through the AI agent and returns the result.',
+      parameters: z.object({
+        id: z.string().describe('Job ID to run'),
+      }),
+      execute: async ({ id }): Promise<string> => {
+        debugLog('cron_run:execute', { id });
+
+        const job = store.getJob(id);
+        if (!job) return `Error: No job found with ID "${id}".`;
+
+        if (job.lastRunStatus === 'running') {
+          return `Error: Job "${job.name}" is already running. Wait for it to finish before triggering another run.`;
+        }
+
+        const disabledNote = job.enabled ? '' : '\nNote: this job is currently disabled.\n';
+
+        const startTime = new Date().toISOString();
+        store.updateJob(id, {
+          lastRun: startTime,
+          lastRunStatus: 'running',
+        });
+
+        try {
+          const logs: string[] = [];
+          const result = await runJob(job, (msg) => logs.push(msg));
+
+          store.updateJob(id, {
+            lastRunStatus: result.success ? 'success' : 'error',
+            lastResult: result.output.slice(0, 2000),
+          });
+
+          const status = result.success ? 'Success' : 'Error';
+          let response = `${disabledNote}Job "${job.name}" — ${status}\n\nOutput:\n${result.output}`;
+          if (logs.length > 0) {
+            response += `\n\nLogs:\n${logs.join('\n')}`;
+          }
+          return response;
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          store.updateJob(id, {
+            lastRunStatus: 'error',
+            lastResult: message.slice(0, 2000),
+          });
+          return `${disabledNote}Job "${job.name}" — Error\n\nThrew: ${message}`;
+        }
       },
     }),
 
