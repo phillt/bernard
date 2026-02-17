@@ -8,11 +8,11 @@ import { Agent } from './agent.js';
 import { MemoryStore } from './memory.js';
 import { RAGStore, type RAGSearchResult } from './rag.js';
 import { MCPManager } from './mcp.js';
-import { printHelp, printInfo, printError, printConversationReplay, startSpinner, stopSpinner, buildSpinnerMessage, type SpinnerStats } from './output.js';
+import { printHelp, printInfo, printError, printConversationReplay, printWelcome, startSpinner, stopSpinner, buildSpinnerMessage, type SpinnerStats } from './output.js';
 import type { ToolOptions } from './tools';
 import { PROVIDER_MODELS, getAvailableProviders, getDefaultModel, savePreferences, OPTIONS_REGISTRY, saveOption, type BernardConfig } from './config.js';
 import { getTheme, setTheme, getThemeKeys, getActiveThemeKey, THEMES } from './theme.js';
-import { interactiveUpdate } from './update.js';
+import { interactiveUpdate, getLocalVersion } from './update.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
@@ -309,6 +309,8 @@ export async function startRepl(config: BernardConfig, alertContext?: string, re
     if (trimmed === '/clear') {
       agent.clearHistory();
       historyStore.clear();
+      console.clear();
+      printWelcome(config.provider, config.model, getLocalVersion());
       printInfo('Conversation history and scratch notes cleared.');
       prompt();
       return;
