@@ -354,7 +354,7 @@ describe('resetOption', () => {
 describe('resetAllOptions', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(true);
-    fsMock.readFileSync.mockReturnValue(JSON.stringify({ provider: 'openai', model: 'gpt-4o', maxTokens: 8192, shellTimeout: 60000 }));
+    fsMock.readFileSync.mockReturnValue(JSON.stringify({ provider: 'openai', model: 'gpt-4o-mini', maxTokens: 8192, shellTimeout: 60000 }));
     fsMock.writeFileSync.mockReturnValue(undefined);
     fsMock.mkdirSync.mockReturnValue(undefined);
   });
@@ -374,6 +374,6 @@ describe('resetAllOptions', () => {
     resetAllOptions();
     const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
     expect(writtenData.provider).toBe('openai');
-    expect(writtenData.model).toBe('gpt-4o');
+    expect(writtenData.model).toBe('gpt-4o-mini');
   });
 });

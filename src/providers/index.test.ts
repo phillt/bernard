@@ -24,7 +24,7 @@ describe('getModel', () => {
   });
 
   it('dispatches to openai SDK', () => {
-    const model = getModel('openai', 'gpt-4o');
+    const model = getModel('openai', 'gpt-4o-mini');
     expect(model).toBe(mockOpenaiModel);
   });
 

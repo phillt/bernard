@@ -114,7 +114,7 @@ describe('rag-worker', () => {
     const payload = {
       serialized: 'User: hello\nAssistant: hi',
       provider: 'openai',
-      model: 'gpt-4o',
+      model: 'gpt-4o-mini',
     };
     fs.writeFileSync(tempFile, JSON.stringify(payload));
 
@@ -129,13 +129,13 @@ describe('rag-worker', () => {
     const payload = {
       serialized: 'User: test\nAssistant: ok',
       provider: 'openai',
-      model: 'gpt-4o',
+      model: 'gpt-4o-mini',
     };
     fs.writeFileSync(tempFile, JSON.stringify(payload));
 
     await runWorker(tempFile);
 
-    expect(mockLoadConfig).toHaveBeenCalledWith({ provider: 'openai', model: 'gpt-4o' });
+    expect(mockLoadConfig).toHaveBeenCalledWith({ provider: 'openai', model: 'gpt-4o-mini' });
   });
 
   it('handles partial domain extraction (only some domains have facts)', async () => {
