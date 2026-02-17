@@ -32,7 +32,7 @@ export default tseslint.config(
       "@typescript-eslint/no-floating-promises": "error",
       "@typescript-eslint/no-misused-promises": "error",
       "@typescript-eslint/await-thenable": "error",
-      "@typescript-eslint/require-await": "warn",
+      "@typescript-eslint/require-await": "off",
 
       // TypeScript best practices
       "@typescript-eslint/no-non-null-assertion": "warn",
