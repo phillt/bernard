@@ -123,7 +123,7 @@ describe('output', () => {
     it('omits version when not provided', () => {
       printWelcome('anthropic', 'claude-sonnet');
       const output = logSpy.mock.calls[0][0];
-      expect(output).not.toContain('v');
+      expect(output).not.toMatch(/v\d+\.\d+/);
     });
   });
 
