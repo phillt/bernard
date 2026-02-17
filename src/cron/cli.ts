@@ -76,19 +76,28 @@ export async function cronRun(id: string): Promise<void> {
     lastRunStatus: 'running',
   });
 
-  const result = await runJob(job, (msg) => printInfo(`  ${msg}`));
+  try {
+    const result = await runJob(job, (msg) => printInfo(`  ${msg}`));
 
-  store.updateJob(id, {
-    lastRunStatus: result.success ? 'success' : 'error',
-    lastResult: result.output.slice(0, 2000),
-  });
+    store.updateJob(id, {
+      lastRunStatus: result.success ? 'success' : 'error',
+      lastResult: result.output.slice(0, 2000),
+    });
 
-  if (result.success) {
-    printInfo(`Job "${job.name}" completed successfully.`);
-    printInfo(result.output);
-  } else {
-    printError(`Job "${job.name}" failed.`);
-    printError(result.output);
+    if (result.success) {
+      printInfo(`Job "${job.name}" completed successfully.`);
+      printInfo(result.output);
+    } else {
+      printError(`Job "${job.name}" failed.`);
+      printError(result.output);
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    store.updateJob(id, {
+      lastRunStatus: 'error',
+      lastResult: message.slice(0, 2000),
+    });
+    printError(`Job "${job.name}" threw: ${message}`);
   }
 }
 
