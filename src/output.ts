@@ -77,8 +77,9 @@ export function stopSpinner(): void {
   process.stdout.write('\x1B[?25h'); // show cursor
 }
 
-export function printWelcome(provider: string, model: string): void {
-  console.log(getTheme().accentBold('\n  Bernard') + getTheme().muted(' — AI CLI Assistant'));
+export function printWelcome(provider: string, model: string, version?: string): void {
+  const ver = version ? getTheme().muted(` v${version}`) : '';
+  console.log(getTheme().accentBold('\n  Bernard') + ver + getTheme().muted(' — AI CLI Assistant'));
   console.log(getTheme().muted(`  Provider: ${provider} | Model: ${model}`));
   if (process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1') {
     console.log(getTheme().warning('  DEBUG mode enabled — logging to .logs/'));
