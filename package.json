@@ -12,8 +12,8 @@
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "format": "prettier --write \"src/**/*.ts\" \"docs/**/*.{html,css}\"",
-    "format:check": "prettier --check \"src/**/*.ts\" \"docs/**/*.{html,css}\"",
+    "format": "prettier --write \"src/**/*.{ts,md}\" \"docs/**/*.{html,css,md}\" \"*.md\"",
+    "format:check": "prettier --check \"src/**/*.{ts,md}\" \"docs/**/*.{html,css,md}\" \"*.md\"",
     "prepublishOnly": "npm run build"
   },
   "repository": {
