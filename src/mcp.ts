@@ -227,7 +227,7 @@ export class MCPManager {
 
   private convertTool(name: string, tool: any): any {
     if (tool.type === 'dynamic') {
-      const { type, inputSchema, ...rest } = tool;
+      const { type: _type, inputSchema, ...rest } = tool;
       return {
         ...rest,
         parameters: jsonSchema(inputSchema.jsonSchema),
