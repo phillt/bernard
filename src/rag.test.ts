@@ -524,9 +524,9 @@ describe('RAGStore', () => {
       await store.addFacts(['User prefers dark mode'], 'test');
 
       // Inspect the persisted data
-      const writeCall = vi.mocked(fs.writeFileSync).mock.calls.find((c) =>
-        String(c[0]).includes('memories.json.tmp'),
-      );
+      const writeCall = vi
+        .mocked(fs.writeFileSync)
+        .mock.calls.find((c) => String(c[0]).includes('memories.json.tmp'));
       expect(writeCall).toBeDefined();
       const persisted = JSON.parse(writeCall![1] as string);
       expect(persisted[0].expiresAt).toBeDefined();
@@ -651,9 +651,9 @@ describe('RAGStore', () => {
       await store.search('fact about to expire with testing keywords');
 
       // Get the persisted data after search
-      const writeCall = vi.mocked(fs.writeFileSync).mock.calls.find((c) =>
-        String(c[0]).includes('memories.json.tmp'),
-      );
+      const writeCall = vi
+        .mocked(fs.writeFileSync)
+        .mock.calls.find((c) => String(c[0]).includes('memories.json.tmp'));
       expect(writeCall).toBeDefined();
       const updatedData = JSON.parse(writeCall![1] as string);
 
