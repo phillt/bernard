@@ -388,6 +388,16 @@
         white-space: nowrap;
       }
 
+      .table-wrap {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        margin-bottom: 20px;
+      }
+
+      .table-wrap table {
+        margin-bottom: 0;
+      }
+
       /* ── Callout boxes ── */
       .callout {
         padding: 16px 20px;
@@ -707,7 +717,9 @@
         <h2 id="getting-started">1. Getting Started</h2>
 
         <h3 id="installation">Installation</h3>
-        <p>Bernard requires <strong>Node.js 20</strong> or later. Install it globally from npm:</p>
+        <p>
+          Bernard requires <strong>Node.js 20.9.0</strong> or later. Install it globally from npm:
+        </p>
         <pre><code><span class="accent">$</span> npm install -g bernard-agent</code></pre>
         <p>
           After installation, the <code>bernard</code> command is available globally in your
@@ -746,42 +758,44 @@
         </p>
 
         <h3 id="cli-flags">CLI Flags</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>Flag</th>
-              <th>Description</th>
-              <th>Example</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>-p, --provider</code></td>
-              <td>Override the LLM provider</td>
-              <td><code>bernard -p openai</code></td>
-            </tr>
-            <tr>
-              <td><code>-m, --model</code></td>
-              <td>Override the model name</td>
-              <td><code>bernard -m gpt-4o</code></td>
-            </tr>
-            <tr>
-              <td><code>-r, --resume</code></td>
-              <td>Resume the previous conversation</td>
-              <td><code>bernard -r</code></td>
-            </tr>
-            <tr>
-              <td><code>--alert &lt;id&gt;</code></td>
-              <td>Open with a cron alert context</td>
-              <td><code>bernard --alert abc123</code></td>
-            </tr>
-            <tr>
-              <td><code>-V, --version</code></td>
-              <td>Show version number</td>
-              <td><code>bernard -V</code></td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Flag</th>
+                <th>Description</th>
+                <th>Example</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>-p, --provider</code></td>
+                <td>Override the LLM provider</td>
+                <td><code>bernard -p openai</code></td>
+              </tr>
+              <tr>
+                <td><code>-m, --model</code></td>
+                <td>Override the model name</td>
+                <td><code>bernard -m gpt-4o</code></td>
+              </tr>
+              <tr>
+                <td><code>-r, --resume</code></td>
+                <td>Resume the previous conversation</td>
+                <td><code>bernard -r</code></td>
+              </tr>
+              <tr>
+                <td><code>--alert &lt;id&gt;</code></td>
+                <td>Open with a cron alert context</td>
+                <td><code>bernard --alert abc123</code></td>
+              </tr>
+              <tr>
+                <td><code>-V, --version</code></td>
+                <td>Show version number</td>
+                <td><code>bernard -V</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <h3 id="resuming-conversations">Resuming Conversations</h3>
         <p>
@@ -796,57 +810,59 @@
         <h2 id="configuration">2. Configuration</h2>
 
         <h3 id="env-vars">Environment Variables</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>Variable</th>
-              <th>Description</th>
-              <th>Default</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>BERNARD_PROVIDER</code></td>
-              <td>Default LLM provider</td>
-              <td><code>anthropic</code></td>
-            </tr>
-            <tr>
-              <td><code>BERNARD_MODEL</code></td>
-              <td>Default model name</td>
-              <td>Provider-specific (first in list)</td>
-            </tr>
-            <tr>
-              <td><code>BERNARD_MAX_TOKENS</code></td>
-              <td>Max tokens per AI response</td>
-              <td><code>4096</code></td>
-            </tr>
-            <tr>
-              <td><code>BERNARD_SHELL_TIMEOUT</code></td>
-              <td>Shell command timeout (ms)</td>
-              <td><code>30000</code></td>
-            </tr>
-            <tr>
-              <td><code>BERNARD_RAG_ENABLED</code></td>
-              <td>Enable/disable RAG memory</td>
-              <td><code>true</code></td>
-            </tr>
-            <tr>
-              <td><code>ANTHROPIC_API_KEY</code></td>
-              <td>Anthropic API key</td>
-              <td>&mdash;</td>
-            </tr>
-            <tr>
-              <td><code>OPENAI_API_KEY</code></td>
-              <td>OpenAI API key</td>
-              <td>&mdash;</td>
-            </tr>
-            <tr>
-              <td><code>XAI_API_KEY</code></td>
-              <td>xAI API key</td>
-              <td>&mdash;</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Variable</th>
+                <th>Description</th>
+                <th>Default</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>BERNARD_PROVIDER</code></td>
+                <td>Default LLM provider</td>
+                <td><code>anthropic</code></td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_MODEL</code></td>
+                <td>Default model name</td>
+                <td>Provider-specific (first in list)</td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_MAX_TOKENS</code></td>
+                <td>Max tokens per AI response</td>
+                <td><code>4096</code></td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_SHELL_TIMEOUT</code></td>
+                <td>Shell command timeout (ms)</td>
+                <td><code>30000</code></td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_RAG_ENABLED</code></td>
+                <td>Enable/disable RAG memory</td>
+                <td><code>true</code></td>
+              </tr>
+              <tr>
+                <td><code>ANTHROPIC_API_KEY</code></td>
+                <td>Anthropic API key</td>
+                <td>&mdash;</td>
+              </tr>
+              <tr>
+                <td><code>OPENAI_API_KEY</code></td>
+                <td>OpenAI API key</td>
+                <td>&mdash;</td>
+              </tr>
+              <tr>
+                <td><code>XAI_API_KEY</code></td>
+                <td>xAI API key</td>
+                <td>&mdash;</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <h3 id="env-loading">.env File Loading</h3>
         <p>
@@ -882,30 +898,32 @@
           Configurable options can be viewed and changed from the CLI or within the REPL
           (<code>/options</code>):
         </p>
-        <table>
-          <thead>
-            <tr>
-              <th>Option</th>
-              <th>Env Var</th>
-              <th>Default</th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>max-tokens</code></td>
-              <td><code>BERNARD_MAX_TOKENS</code></td>
-              <td>4096</td>
-              <td>Maximum tokens per AI response</td>
-            </tr>
-            <tr>
-              <td><code>shell-timeout</code></td>
-              <td><code>BERNARD_SHELL_TIMEOUT</code></td>
-              <td>30000</td>
-              <td>Shell command timeout in milliseconds</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Option</th>
+                <th>Env Var</th>
+                <th>Default</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>max-tokens</code></td>
+                <td><code>BERNARD_MAX_TOKENS</code></td>
+                <td>4096</td>
+                <td>Maximum tokens per AI response</td>
+              </tr>
+              <tr>
+                <td><code>shell-timeout</code></td>
+                <td><code>BERNARD_SHELL_TIMEOUT</code></td>
+                <td>30000</td>
+                <td>Shell command timeout in milliseconds</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <pre><code><span class="comment"># List current option values</span>
 <span class="accent">$</span> bernard list-options
 
@@ -920,40 +938,42 @@
           Bernard comes with six built-in color themes. Switch at any time using the
           <code>/theme</code> REPL command. Your choice persists across sessions.
         </p>
-        <table>
-          <thead>
-            <tr>
-              <th>Theme</th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>bernard</code></td>
-              <td>Default orange accent theme</td>
-            </tr>
-            <tr>
-              <td><code>ocean</code></td>
-              <td>Cyan/blue palette</td>
-            </tr>
-            <tr>
-              <td><code>forest</code></td>
-              <td>Green nature palette</td>
-            </tr>
-            <tr>
-              <td><code>synthwave</code></td>
-              <td>Purple/pink retro palette</td>
-            </tr>
-            <tr>
-              <td><code>high-contrast</code></td>
-              <td>Accessibility &mdash; maximized contrast</td>
-            </tr>
-            <tr>
-              <td><code>colorblind</code></td>
-              <td>Accessibility &mdash; IBM color-blind safe palette</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Theme</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>bernard</code></td>
+                <td>Default orange accent theme</td>
+              </tr>
+              <tr>
+                <td><code>ocean</code></td>
+                <td>Cyan/blue palette</td>
+              </tr>
+              <tr>
+                <td><code>forest</code></td>
+                <td>Green nature palette</td>
+              </tr>
+              <tr>
+                <td><code>synthwave</code></td>
+                <td>Purple/pink retro palette</td>
+              </tr>
+              <tr>
+                <td><code>high-contrast</code></td>
+                <td>Accessibility &mdash; maximized contrast</td>
+              </tr>
+              <tr>
+                <td><code>colorblind</code></td>
+                <td>Accessibility &mdash; IBM color-blind safe palette</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <!-- ═══════════════ 3. Providers ═══════════════ -->
         <h2 id="providers">3. Providers</h2>
@@ -1037,76 +1057,83 @@
           Type slash commands in the REPL to control Bernard. Tab-completion is supported, and live
           hints appear as you type.
         </p>
-        <table>
-          <thead>
-            <tr>
-              <th>Command</th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>/help</code></td>
-              <td>Show all available commands</td>
-            </tr>
-            <tr>
-              <td><code>/clear</code></td>
-              <td>Clear conversation history, scratch notes, and the terminal screen</td>
-            </tr>
-            <tr>
-              <td><code>/memory</code></td>
-              <td>List all persistent memory keys</td>
-            </tr>
-            <tr>
-              <td><code>/scratch</code></td>
-              <td>List session scratch note keys</td>
-            </tr>
-            <tr>
-              <td><code>/mcp</code></td>
-              <td>Show MCP server connection status and available tools</td>
-            </tr>
-            <tr>
-              <td><code>/cron</code></td>
-              <td>Show cron jobs, daemon status, and unacknowledged alerts</td>
-            </tr>
-            <tr>
-              <td><code>/rag</code></td>
-              <td>Show RAG memory stats, domain breakdown, and recent facts</td>
-            </tr>
-            <tr>
-              <td><code>/facts</code></td>
-              <td>Show RAG facts currently in the context window</td>
-            </tr>
-            <tr>
-              <td><code>/provider</code></td>
-              <td>Interactively switch LLM provider</td>
-            </tr>
-            <tr>
-              <td><code>/model</code></td>
-              <td>Interactively switch model for the current provider</td>
-            </tr>
-            <tr>
-              <td><code>/theme</code></td>
-              <td>Interactively switch color theme</td>
-            </tr>
-            <tr>
-              <td><code>/options</code></td>
-              <td>View and set options (max-tokens, shell-timeout)</td>
-            </tr>
-            <tr>
-              <td><code>/update</code></td>
-              <td>Check for and install updates</td>
-            </tr>
-            <tr>
-              <td><code>/exit</code></td>
-              <td>Quit Bernard (also: <code>exit</code>, <code>quit</code>, or Ctrl+C)</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>/help</code></td>
+                <td>Show all available commands</td>
+              </tr>
+              <tr>
+                <td><code>/clear</code></td>
+                <td>Clear conversation history, scratch notes, and the terminal screen</td>
+              </tr>
+              <tr>
+                <td><code>/memory</code></td>
+                <td>List all persistent memory keys</td>
+              </tr>
+              <tr>
+                <td><code>/scratch</code></td>
+                <td>List session scratch note keys</td>
+              </tr>
+              <tr>
+                <td><code>/mcp</code></td>
+                <td>Show MCP server connection status and available tools</td>
+              </tr>
+              <tr>
+                <td><code>/cron</code></td>
+                <td>Show cron jobs, daemon status, and unacknowledged alerts</td>
+              </tr>
+              <tr>
+                <td><code>/rag</code></td>
+                <td>Show RAG memory stats, domain breakdown, and recent facts</td>
+              </tr>
+              <tr>
+                <td><code>/facts</code></td>
+                <td>Show RAG facts currently in the context window</td>
+              </tr>
+              <tr>
+                <td><code>/provider</code></td>
+                <td>Interactively switch LLM provider</td>
+              </tr>
+              <tr>
+                <td><code>/model</code></td>
+                <td>Interactively switch model for the current provider</td>
+              </tr>
+              <tr>
+                <td><code>/theme</code></td>
+                <td>Interactively switch color theme</td>
+              </tr>
+              <tr>
+                <td><code>/options</code></td>
+                <td>View and set options (max-tokens, shell-timeout)</td>
+              </tr>
+              <tr>
+                <td><code>/update</code></td>
+                <td>Check for and install updates</td>
+              </tr>
+              <tr>
+                <td><code>/exit</code></td>
+                <td>Quit Bernard (also: <code>exit</code>, <code>quit</code>, or Ctrl+C)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <div class="callout callout-tip">
           <div class="callout-title">Tip</div>
           To send a message that starts with <code>/</code> without triggering a slash command,
           escape it with a backslash: <code>\/not-a-command</code>
+        </div>
+        <div class="callout callout-info">
+          <div class="callout-title">Keyboard Shortcut</div>
+          Press <code>Escape</code> while the agent is running to interrupt the current turn and
+          return to the prompt.
         </div>
 
         <!-- ═══════════════ 5. Tools ═══════════════ -->
@@ -1177,8 +1204,9 @@
         <h3 id="tool-subagent">Sub-Agents</h3>
         <p>
           Bernard can delegate tasks to independent sub-agents that run in parallel. Each sub-agent
-          gets its own AI context with access to all tools (shell, memory, web, MCP tools, etc.) but
-          no conversation history.
+          gets its own AI context with access to the base tools (shell, memory, web, cron, MCP
+          tools, etc.) but not the agent tool itself (no recursive sub-agents), and no conversation
+          history.
         </p>
         <ul>
           <li>Up to <strong>4 concurrent</strong> sub-agents</li>
@@ -1195,9 +1223,10 @@
 
         <h3 id="tool-datetime">Date/Time</h3>
         <p>
-          The <code>datetime</code> tool returns the current date and time information, and the
-          <code>time</code> tools provide timers and stopwatch functionality for measuring elapsed
-          time during tasks.
+          The <code>datetime</code> tool returns the current date and time information. The
+          <code>time_range</code> tool calculates the duration between two military/24-hour times,
+          and the <code>time_range_total</code> tool calculates the total duration across multiple
+          military time ranges.
         </p>
 
         <h3 id="tool-wait">Wait</h3>
@@ -1230,56 +1259,58 @@
 
         <h3 id="cron-managing">Managing Jobs</h3>
         <p>The agent has tools for full cron job lifecycle management:</p>
-        <table>
-          <thead>
-            <tr>
-              <th>Tool</th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>cron_create</code></td>
-              <td>Create a new scheduled job</td>
-            </tr>
-            <tr>
-              <td><code>cron_list</code></td>
-              <td>List all jobs with status</td>
-            </tr>
-            <tr>
-              <td><code>cron_get</code></td>
-              <td>Get full details of a job including prompt and last result</td>
-            </tr>
-            <tr>
-              <td><code>cron_run</code></td>
-              <td>Manually trigger a job immediately</td>
-            </tr>
-            <tr>
-              <td><code>cron_update</code></td>
-              <td>Update a job's name, schedule, or prompt</td>
-            </tr>
-            <tr>
-              <td><code>cron_enable</code></td>
-              <td>Enable a disabled job</td>
-            </tr>
-            <tr>
-              <td><code>cron_disable</code></td>
-              <td>Disable a job without deleting it</td>
-            </tr>
-            <tr>
-              <td><code>cron_delete</code></td>
-              <td>Permanently delete a job</td>
-            </tr>
-            <tr>
-              <td><code>cron_status</code></td>
-              <td>Check daemon status and job counts</td>
-            </tr>
-            <tr>
-              <td><code>cron_bounce</code></td>
-              <td>Restart the cron daemon</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Tool</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>cron_create</code></td>
+                <td>Create a new scheduled job</td>
+              </tr>
+              <tr>
+                <td><code>cron_list</code></td>
+                <td>List all jobs with status</td>
+              </tr>
+              <tr>
+                <td><code>cron_get</code></td>
+                <td>Get full details of a job including prompt and last result</td>
+              </tr>
+              <tr>
+                <td><code>cron_run</code></td>
+                <td>Manually trigger a job immediately</td>
+              </tr>
+              <tr>
+                <td><code>cron_update</code></td>
+                <td>Update a job's name, schedule, or prompt</td>
+              </tr>
+              <tr>
+                <td><code>cron_enable</code></td>
+                <td>Enable a disabled job</td>
+              </tr>
+              <tr>
+                <td><code>cron_disable</code></td>
+                <td>Disable a job without deleting it</td>
+              </tr>
+              <tr>
+                <td><code>cron_delete</code></td>
+                <td>Permanently delete a job</td>
+              </tr>
+              <tr>
+                <td><code>cron_status</code></td>
+                <td>Check daemon status and job counts</td>
+              </tr>
+              <tr>
+                <td><code>cron_bounce</code></td>
+                <td>Restart the cron daemon</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <h3 id="cron-daemon">Daemon Management</h3>
         <p>
@@ -1313,47 +1344,60 @@
 
         <h3 id="cron-logs">Logs</h3>
         <p>
-          Cron job execution logs are stored locally. The agent has <code>cron_log_list</code> and
-          <code>cron_log_get</code> tools to inspect past runs, including timestamps, status
-          (success/error), and output.
+          Cron job execution logs are stored locally. The agent has the following tools to inspect
+          and manage past runs:
         </p>
+        <ul>
+          <li><code>cron_logs_list</code> &mdash; List recent execution runs for a specific job</li>
+          <li><code>cron_logs_get</code> &mdash; Retrieve a specific log entry by ID</li>
+          <li>
+            <code>cron_logs_summary</code> &mdash; Aggregate statistics across jobs (run counts,
+            success/error rates)
+          </li>
+          <li>
+            <code>cron_logs_cleanup</code> &mdash; Rotate and delete old log entries to reclaim
+            space
+          </li>
+        </ul>
 
         <h3 id="cron-cli">CLI Commands</h3>
         <p>Cron jobs can also be managed from the command line without entering the REPL:</p>
-        <table>
-          <thead>
-            <tr>
-              <th>Command</th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>bernard cron-list</code></td>
-              <td>List all cron jobs with status</td>
-            </tr>
-            <tr>
-              <td><code>bernard cron-run &lt;id&gt;</code></td>
-              <td>Manually run a job immediately</td>
-            </tr>
-            <tr>
-              <td><code>bernard cron-delete &lt;ids...&gt;</code></td>
-              <td>Delete specific jobs by ID</td>
-            </tr>
-            <tr>
-              <td><code>bernard cron-delete-all</code></td>
-              <td>Delete all cron jobs</td>
-            </tr>
-            <tr>
-              <td><code>bernard cron-stop [ids...]</code></td>
-              <td>Stop the daemon (no args) or disable specific jobs</td>
-            </tr>
-            <tr>
-              <td><code>bernard cron-bounce [ids...]</code></td>
-              <td>Restart the daemon (no args) or bounce specific jobs</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>bernard cron-list</code></td>
+                <td>List all cron jobs with status</td>
+              </tr>
+              <tr>
+                <td><code>bernard cron-run &lt;id&gt;</code></td>
+                <td>Manually run a job immediately</td>
+              </tr>
+              <tr>
+                <td><code>bernard cron-delete &lt;ids...&gt;</code></td>
+                <td>Delete specific jobs by ID</td>
+              </tr>
+              <tr>
+                <td><code>bernard cron-delete-all</code></td>
+                <td>Delete all cron jobs</td>
+              </tr>
+              <tr>
+                <td><code>bernard cron-stop [ids...]</code></td>
+                <td>Stop the daemon (no args) or disable specific jobs</td>
+              </tr>
+              <tr>
+                <td><code>bernard cron-bounce [ids...]</code></td>
+                <td>Restart the daemon (no args) or bounce specific jobs</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <!-- ═══════════════ 7. MCP ═══════════════ -->
         <h2 id="mcp">7. MCP (Model Context Protocol)</h2>
@@ -1394,99 +1438,105 @@
           <code>command</code>, optional <code>args</code> array, and optional
           <code>env</code> object:
         </p>
-        <table>
-          <thead>
-            <tr>
-              <th>Field</th>
-              <th>Required</th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>command</code></td>
-              <td>Yes</td>
-              <td>
-                Executable to run (e.g., <code>npx</code>, <code>python</code>, <code>node</code>)
-              </td>
-            </tr>
-            <tr>
-              <td><code>args</code></td>
-              <td>No</td>
-              <td>Array of command arguments</td>
-            </tr>
-            <tr>
-              <td><code>env</code></td>
-              <td>No</td>
-              <td>Environment variables to pass (merged with process env)</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Field</th>
+                <th>Required</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>command</code></td>
+                <td>Yes</td>
+                <td>
+                  Executable to run (e.g., <code>npx</code>, <code>python</code>, <code>node</code>)
+                </td>
+              </tr>
+              <tr>
+                <td><code>args</code></td>
+                <td>No</td>
+                <td>Array of command arguments</td>
+              </tr>
+              <tr>
+                <td><code>env</code></td>
+                <td>No</td>
+                <td>Environment variables to pass (merged with process env)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <h3 id="mcp-url">URL-Based Servers</h3>
         <p>URL-based servers connect over HTTP using SSE or HTTP transport:</p>
-        <table>
-          <thead>
-            <tr>
-              <th>Field</th>
-              <th>Required</th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>url</code></td>
-              <td>Yes</td>
-              <td>Server URL</td>
-            </tr>
-            <tr>
-              <td><code>type</code></td>
-              <td>No</td>
-              <td>Transport type: <code>sse</code> (default) or <code>http</code></td>
-            </tr>
-            <tr>
-              <td><code>headers</code></td>
-              <td>No</td>
-              <td>HTTP headers to send with requests</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Field</th>
+                <th>Required</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>url</code></td>
+                <td>Yes</td>
+                <td>Server URL</td>
+              </tr>
+              <tr>
+                <td><code>type</code></td>
+                <td>No</td>
+                <td>Transport type: <code>sse</code> (default) or <code>http</code></td>
+              </tr>
+              <tr>
+                <td><code>headers</code></td>
+                <td>No</td>
+                <td>HTTP headers to send with requests</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <p>
           You can also add URL-based servers from within a session using the
           <code>mcp_add_url</code> tool.
         </p>
 
         <h3 id="mcp-commands">Commands</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>Command / Tool</th>
-              <th>Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>/mcp</code></td>
-              <td>REPL: Show connected servers and their tools</td>
-            </tr>
-            <tr>
-              <td><code>bernard mcp-list</code></td>
-              <td>CLI: List configured MCP servers</td>
-            </tr>
-            <tr>
-              <td><code>bernard remove-mcp &lt;key&gt;</code></td>
-              <td>CLI: Remove a configured MCP server</td>
-            </tr>
-            <tr>
-              <td><code>mcp_config</code></td>
-              <td>Agent tool: List, add, remove, or inspect MCP servers</td>
-            </tr>
-            <tr>
-              <td><code>mcp_add_url</code></td>
-              <td>Agent tool: Add a URL-based MCP server</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Command / Tool</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>/mcp</code></td>
+                <td>REPL: Show connected servers and their tools</td>
+              </tr>
+              <tr>
+                <td><code>bernard mcp-list</code></td>
+                <td>CLI: List configured MCP servers</td>
+              </tr>
+              <tr>
+                <td><code>bernard remove-mcp &lt;key&gt;</code></td>
+                <td>CLI: Remove a configured MCP server</td>
+              </tr>
+              <tr>
+                <td><code>mcp_config</code></td>
+                <td>Agent tool: List, add, remove, or inspect MCP servers</td>
+              </tr>
+              <tr>
+                <td><code>mcp_add_url</code></td>
+                <td>Agent tool: Add a URL-based MCP server</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
         <div class="callout callout-info">
           <div class="callout-title">Note</div>
           MCP server changes take effect after restarting Bernard. The agent will remind you to
@@ -1503,9 +1553,9 @@
         <h3 id="rag-how">How It Works</h3>
         <ol>
           <li>
-            <strong>Extraction</strong> &mdash; When a session ends (and the conversation has
-            sufficient length), a background worker extracts durable facts from the conversation.
-            Each domain has a specialized extraction prompt that filters for relevant facts.
+            <strong>Extraction</strong> &mdash; When a session ends (and the conversation has 4 or
+            more messages), a background worker extracts durable facts from the conversation. Each
+            domain has a specialized extraction prompt that filters for relevant facts.
           </li>
           <li>
             <strong>Embedding</strong> &mdash; Facts are embedded locally using
@@ -1524,43 +1574,46 @@
             the system prompt as recalled context.
           </li>
           <li>
-            <strong>Deduplication</strong> &mdash; Near-duplicate facts (similarity &ge; 0.92) are
-            automatically merged to prevent bloat.
+            <strong>Deduplication</strong> &mdash; Near-duplicate facts (similarity &gt; 0.92) are
+            automatically skipped to prevent bloat.
           </li>
         </ol>
 
         <h3 id="rag-domains">Domains</h3>
         <p>Facts are categorized into three domains, each with a specialized extraction prompt:</p>
-        <table>
-          <thead>
-            <tr>
-              <th>Domain</th>
-              <th>Description</th>
-              <th>Examples</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><code>tool-usage</code></td>
-              <td>Tool Usage Patterns</td>
-              <td>Command sequences, error resolutions, build/deploy workflows, git patterns</td>
-            </tr>
-            <tr>
-              <td><code>user-preferences</code></td>
-              <td>User Preferences</td>
-              <td>
-                Communication style, workflow conventions, naming preferences, "always/never" rules
-              </td>
-            </tr>
-            <tr>
-              <td><code>general</code></td>
-              <td>General Knowledge</td>
-              <td>
-                Project architecture, environment info, team context, API endpoints, decisions
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Domain</th>
+                <th>Description</th>
+                <th>Examples</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>tool-usage</code></td>
+                <td>Tool Usage Patterns</td>
+                <td>Command sequences, error resolutions, build/deploy workflows, git patterns</td>
+              </tr>
+              <tr>
+                <td><code>user-preferences</code></td>
+                <td>User Preferences</td>
+                <td>
+                  Communication style, workflow conventions, naming preferences, "always/never"
+                  rules
+                </td>
+              </tr>
+              <tr>
+                <td><code>general</code></td>
+                <td>General Knowledge</td>
+                <td>
+                  Project architecture, environment info, team context, API endpoints, decisions
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <h3 id="rag-facts">Managing Facts</h3>
         <p>Use the CLI or REPL to browse and manage stored facts:</p>
@@ -1597,7 +1650,10 @@
         <ul>
           <li><strong>Max memories:</strong> 5,000</li>
           <li><strong>Default TTL:</strong> 90 days</li>
-          <li><strong>Decay half-life:</strong> 90 days</li>
+          <li>
+            <strong>Decay half-life:</strong> 90 days (used for capacity-based pruning when memory
+            count exceeds the cap)
+          </li>
           <li><strong>Similarity threshold:</strong> 0.35 (minimum for retrieval)</li>
           <li>Disable RAG entirely by setting <code>BERNARD_RAG_ENABLED=false</code></li>
         </ul>
