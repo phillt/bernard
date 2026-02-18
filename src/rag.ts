@@ -397,20 +397,7 @@ export class RAGStore {
 
     let dirty = false;
 
-    // Compensate for idle days — TTL only counts days Bernard was used
-    const idleDays = this.getIdleDays();
-    if (idleDays > 0) {
-      const shiftMs = idleDays * 86400000;
-      for (const m of this.memories) {
-        if (m.expiresAt) {
-          m.expiresAt = new Date(new Date(m.expiresAt).getTime() + shiftMs).toISOString();
-        }
-      }
-      debugLog('rag:load', { idleDaysCompensated: idleDays });
-      dirty = true;
-    }
-
-    // Backfill expiresAt for legacy facts without one
+    // Backfill expiresAt for legacy facts without one (must run before idle-day shift)
     const now = Date.now();
     const ttlMs = this.ragTtlDays * 86400000;
     const gracePeriodMs = 14 * 86400000;
@@ -422,6 +409,19 @@ export class RAGStore {
         m.expiresAt = new Date(now + Math.max(remainingMs, gracePeriodMs)).toISOString();
         dirty = true;
       }
+    }
+
+    // Compensate for idle days — TTL only counts days Bernard was used
+    const idleDays = this.getIdleDays();
+    if (idleDays > 0) {
+      const shiftMs = idleDays * 86400000;
+      for (const m of this.memories) {
+        if (m.expiresAt) {
+          m.expiresAt = new Date(new Date(m.expiresAt).getTime() + shiftMs).toISOString();
+        }
+      }
+      debugLog('rag:load', { idleDaysCompensated: idleDays });
+      dirty = true;
     }
 
     if (dirty) {
