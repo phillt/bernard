@@ -1,0 +1,1722 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>User Manual — Bernard</title>
+    <meta
+      name="description"
+      content="Comprehensive user manual for Bernard, a multi-provider CLI AI agent with tools, memory, cron jobs, and MCP support."
+    />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="User Manual — Bernard" />
+    <meta
+      property="og:description"
+      content="Comprehensive user manual for Bernard, a multi-provider CLI AI agent."
+    />
+    <meta property="og:image" content="https://phillt.github.io/bernard/img.png" />
+    <meta property="og:url" content="https://phillt.github.io/bernard/manual.html" />
+
+    <!-- SEO -->
+    <link rel="canonical" href="https://phillt.github.io/bernard/manual.html" />
+    <meta name="robots" content="index, follow" />
+    <meta name="author" content="phillt" />
+    <meta name="theme-color" content="#f97316" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      *,
+      *::before,
+      *::after {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      :root {
+        --bg: #0d1117;
+        --surface: #161b22;
+        --border: #30363d;
+        --text: #e6edf3;
+        --text-secondary: #8b949e;
+        --accent: #f97316;
+        --accent-dim: rgba(249, 115, 22, 0.15);
+        --mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+        --sidebar-width: 280px;
+        --nav-height: 56px;
+      }
+
+      html {
+        scroll-behavior: smooth;
+        scroll-padding-top: calc(var(--nav-height) + 24px);
+      }
+
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        line-height: 1.7;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      a:hover {
+        text-decoration: underline;
+      }
+
+      /* ── Nav ── */
+      nav {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        background: rgba(13, 17, 23, 0.85);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid var(--border);
+      }
+
+      nav .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 0 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: var(--nav-height);
+      }
+
+      nav .logo {
+        font-family: var(--mono);
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--accent);
+      }
+
+      nav .logo span {
+        color: var(--text);
+      }
+
+      nav .links {
+        display: flex;
+        align-items: center;
+        gap: 24px;
+      }
+      nav .links a {
+        color: var(--text-secondary);
+        font-size: 14px;
+        transition: color 0.2s;
+      }
+      nav .links a:hover {
+        color: var(--text);
+        text-decoration: none;
+      }
+      nav .links a.active {
+        color: var(--accent);
+      }
+
+      nav .links .nav-sep {
+        width: 1px;
+        height: 20px;
+        background: var(--border);
+        flex-shrink: 0;
+      }
+
+      nav .links .nav-ext {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      nav .links .nav-ext svg {
+        width: 16px;
+        height: 16px;
+        fill: currentColor;
+      }
+
+      /* ── Hamburger Toggle ── */
+      .menu-toggle {
+        display: none;
+        flex-direction: column;
+        justify-content: center;
+        gap: 6px;
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 8px;
+      }
+
+      .menu-toggle span {
+        display: block;
+        width: 24px;
+        height: 2px;
+        background: var(--text);
+        border-radius: 1px;
+        transition:
+          transform 0.3s,
+          opacity 0.3s;
+      }
+
+      nav.open .menu-toggle span:nth-child(1) {
+        transform: translateY(8px) rotate(45deg);
+      }
+      nav.open .menu-toggle span:nth-child(2) {
+        opacity: 0;
+      }
+      nav.open .menu-toggle span:nth-child(3) {
+        transform: translateY(-8px) rotate(-45deg);
+      }
+
+      /* ── Layout ── */
+      .manual-layout {
+        display: flex;
+        max-width: 1200px;
+        margin: 0 auto;
+        padding-top: var(--nav-height);
+      }
+
+      /* ── Sidebar ── */
+      .sidebar {
+        position: fixed;
+        top: var(--nav-height);
+        left: max(0px, calc((100vw - 1200px) / 2));
+        width: var(--sidebar-width);
+        height: calc(100vh - var(--nav-height));
+        overflow-y: auto;
+        padding: 24px 16px 40px 24px;
+        border-right: 1px solid var(--border);
+        scrollbar-width: thin;
+        scrollbar-color: var(--border) transparent;
+      }
+
+      .sidebar::-webkit-scrollbar {
+        width: 4px;
+      }
+      .sidebar::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .sidebar::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 2px;
+      }
+
+      .sidebar-title {
+        font-family: var(--mono);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: var(--accent);
+        margin-bottom: 16px;
+      }
+
+      .toc-list {
+        list-style: none;
+      }
+
+      .toc-list li {
+        margin-bottom: 2px;
+      }
+
+      .toc-list a {
+        display: block;
+        padding: 4px 10px;
+        font-size: 13px;
+        color: var(--text-secondary);
+        border-radius: 6px;
+        transition:
+          color 0.2s,
+          background 0.2s;
+      }
+
+      .toc-list a:hover {
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.03);
+        text-decoration: none;
+      }
+
+      .toc-list a.active {
+        color: var(--accent);
+        background: var(--accent-dim);
+      }
+
+      .toc-sub {
+        list-style: none;
+        padding-left: 14px;
+      }
+
+      .toc-sub a {
+        font-size: 12px;
+        padding: 2px 10px;
+      }
+
+      /* ── Content ── */
+      .content {
+        flex: 1;
+        min-width: 0;
+        margin-left: var(--sidebar-width);
+        padding: 40px 48px 80px;
+        max-width: calc(1200px - var(--sidebar-width));
+      }
+
+      .content h1 {
+        font-family: var(--mono);
+        font-size: 32px;
+        font-weight: 800;
+        margin-bottom: 8px;
+      }
+
+      .content h1 .accent {
+        color: var(--accent);
+      }
+
+      .content .subtitle {
+        color: var(--text-secondary);
+        font-size: 16px;
+        margin-bottom: 48px;
+      }
+
+      .content h2 {
+        font-size: 24px;
+        font-weight: 700;
+        margin-top: 64px;
+        margin-bottom: 16px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .content h3 {
+        font-size: 18px;
+        font-weight: 600;
+        margin-top: 32px;
+        margin-bottom: 12px;
+      }
+
+      .content h4 {
+        font-size: 15px;
+        font-weight: 600;
+        margin-top: 24px;
+        margin-bottom: 8px;
+        color: var(--text-secondary);
+      }
+
+      .content p {
+        margin-bottom: 16px;
+        color: var(--text);
+      }
+
+      .content ul,
+      .content ol {
+        padding-left: 24px;
+        margin-bottom: 16px;
+      }
+
+      .content li {
+        margin-bottom: 6px;
+      }
+
+      .content code {
+        font-family: var(--mono);
+        font-size: 13px;
+        background: var(--accent-dim);
+        color: var(--accent);
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+
+      .content pre {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin-bottom: 20px;
+        overflow-x: auto;
+      }
+
+      .content pre code {
+        background: none;
+        color: var(--text);
+        padding: 0;
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .content pre .comment {
+        color: var(--text-secondary);
+      }
+      .content pre .accent {
+        color: var(--accent);
+      }
+
+      /* ── Tables ── */
+      .content table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 20px;
+        font-size: 14px;
+      }
+
+      .content table th {
+        text-align: left;
+        padding: 10px 14px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        font-weight: 600;
+        font-size: 13px;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .content table td {
+        padding: 10px 14px;
+        border: 1px solid var(--border);
+        vertical-align: top;
+      }
+
+      .content table td code {
+        white-space: nowrap;
+      }
+
+      /* ── Callout boxes ── */
+      .callout {
+        padding: 16px 20px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+        font-size: 14px;
+        line-height: 1.6;
+        border-left: 3px solid;
+      }
+
+      .callout-tip {
+        background: rgba(52, 211, 153, 0.08);
+        border-color: #34d399;
+      }
+      .callout-tip .callout-title {
+        color: #34d399;
+      }
+
+      .callout-warning {
+        background: rgba(251, 191, 36, 0.08);
+        border-color: #fbbf24;
+      }
+      .callout-warning .callout-title {
+        color: #fbbf24;
+      }
+
+      .callout-info {
+        background: rgba(96, 165, 250, 0.08);
+        border-color: #60a5fa;
+      }
+      .callout-info .callout-title {
+        color: #60a5fa;
+      }
+
+      .callout-title {
+        font-weight: 600;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 4px;
+      }
+
+      /* ── Footer ── */
+      footer {
+        border-top: 1px solid var(--border);
+        padding: 40px 0;
+        margin-left: var(--sidebar-width);
+      }
+
+      footer .container {
+        max-width: calc(1200px - var(--sidebar-width));
+        margin: 0 auto;
+        padding: 0 48px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 16px;
+      }
+
+      footer .footer-left {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+
+      footer .footer-links {
+        display: flex;
+        gap: 20px;
+      }
+
+      footer .footer-links a {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: var(--text-secondary);
+        transition: color 0.2s;
+      }
+
+      footer .footer-links a:hover {
+        color: var(--accent);
+      }
+
+      footer .footer-links a svg {
+        width: 16px;
+        height: 16px;
+        fill: currentColor;
+      }
+
+      /* ── Mobile sidebar toggle ── */
+      .sidebar-toggle {
+        display: none;
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 50;
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        cursor: pointer;
+        font-size: 20px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        align-items: center;
+        justify-content: center;
+      }
+
+      /* ── Responsive ── */
+      @media (max-width: 900px) {
+        .sidebar {
+          display: none;
+          position: fixed;
+          top: var(--nav-height);
+          left: 0;
+          width: 100%;
+          height: calc(100vh - var(--nav-height));
+          z-index: 50;
+          background: var(--bg);
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .sidebar.open {
+          display: block;
+        }
+
+        .content {
+          margin-left: 0;
+          padding: 32px 20px 80px;
+          max-width: 100%;
+        }
+
+        footer {
+          margin-left: 0;
+        }
+
+        footer .container {
+          max-width: 100%;
+          padding: 0 20px;
+        }
+
+        .sidebar-toggle {
+          display: flex;
+        }
+
+        .menu-toggle {
+          display: flex;
+        }
+
+        nav .links {
+          display: none;
+          flex-direction: column;
+          position: absolute;
+          top: 56px;
+          left: 0;
+          right: 0;
+          background: rgba(13, 17, 23, 0.95);
+          backdrop-filter: blur(12px);
+          border-bottom: 1px solid var(--border);
+        }
+        nav .links a {
+          font-size: 14px;
+          padding: 12px 24px;
+        }
+        nav .links a:hover {
+          background: rgba(255, 255, 255, 0.03);
+        }
+        nav .links .nav-sep {
+          width: auto;
+          height: 1px;
+          margin: 4px 24px;
+        }
+        nav .links .nav-ext {
+          padding: 12px 24px;
+        }
+        nav.open .links {
+          display: flex;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Nav -->
+    <nav>
+      <div class="container">
+        <a href="index.html" class="logo" style="text-decoration: none"
+          ><span>&gt;</span> bernard</a
+        >
+        <div class="links">
+          <a href="index.html">Home</a>
+          <a href="manual.html" class="active">Manual</a>
+          <span class="nav-sep"></span>
+          <a
+            class="nav-ext"
+            href="https://github.com/phillt/bernard"
+            target="_blank"
+            rel="noopener noreferrer"
+            ><svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
+              /></svg
+            >GitHub</a
+          >
+          <a
+            class="nav-ext"
+            href="https://www.npmjs.com/package/bernard-agent"
+            target="_blank"
+            rel="noopener noreferrer"
+            ><svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"
+              /></svg
+            >npm</a
+          >
+        </div>
+        <button class="menu-toggle" aria-label="Toggle menu">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    </nav>
+
+    <div class="manual-layout">
+      <!-- Sidebar TOC -->
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-title">User Manual</div>
+        <ol class="toc-list">
+          <li>
+            <a href="#getting-started">Getting Started</a>
+            <ul class="toc-sub">
+              <li><a href="#installation">Installation</a></li>
+              <li><a href="#first-time-setup">First-Time Setup</a></li>
+              <li><a href="#basic-usage">Basic Usage</a></li>
+              <li><a href="#cli-flags">CLI Flags</a></li>
+              <li><a href="#resuming-conversations">Resuming Conversations</a></li>
+            </ul>
+          </li>
+          <li>
+            <a href="#configuration">Configuration</a>
+            <ul class="toc-sub">
+              <li><a href="#env-vars">Environment Variables</a></li>
+              <li><a href="#env-loading">File Loading</a></li>
+              <li><a href="#api-keys">API Key Management</a></li>
+              <li><a href="#options">Options</a></li>
+              <li><a href="#themes">Themes</a></li>
+            </ul>
+          </li>
+          <li>
+            <a href="#providers">Providers</a>
+            <ul class="toc-sub">
+              <li><a href="#anthropic">Anthropic</a></li>
+              <li><a href="#openai">OpenAI</a></li>
+              <li><a href="#xai">xAI</a></li>
+              <li><a href="#switching-providers">Switching Providers</a></li>
+            </ul>
+          </li>
+          <li>
+            <a href="#repl-commands">REPL Commands</a>
+          </li>
+          <li>
+            <a href="#tools">Tools &amp; Capabilities</a>
+            <ul class="toc-sub">
+              <li><a href="#tool-shell">Shell</a></li>
+              <li><a href="#tool-memory">Memory</a></li>
+              <li><a href="#tool-scratch">Scratch</a></li>
+              <li><a href="#tool-web">Web Read</a></li>
+              <li><a href="#tool-subagent">Sub-Agents</a></li>
+              <li><a href="#tool-datetime">Date/Time</a></li>
+              <li><a href="#tool-wait">Wait</a></li>
+            </ul>
+          </li>
+          <li>
+            <a href="#cron">Cron Jobs</a>
+            <ul class="toc-sub">
+              <li><a href="#cron-creating">Creating Jobs</a></li>
+              <li><a href="#cron-managing">Managing Jobs</a></li>
+              <li><a href="#cron-daemon">Daemon</a></li>
+              <li><a href="#cron-alerts">Alerts</a></li>
+              <li><a href="#cron-logs">Logs</a></li>
+              <li><a href="#cron-cli">CLI Commands</a></li>
+            </ul>
+          </li>
+          <li>
+            <a href="#mcp">MCP</a>
+            <ul class="toc-sub">
+              <li><a href="#mcp-config">Configuration</a></li>
+              <li><a href="#mcp-stdio">Stdio Servers</a></li>
+              <li><a href="#mcp-url">URL-Based Servers</a></li>
+              <li><a href="#mcp-commands">Commands</a></li>
+            </ul>
+          </li>
+          <li>
+            <a href="#rag">RAG Memory</a>
+            <ul class="toc-sub">
+              <li><a href="#rag-how">How It Works</a></li>
+              <li><a href="#rag-domains">Domains</a></li>
+              <li><a href="#rag-facts">Managing Facts</a></li>
+              <li><a href="#rag-expiration">Auto-Expiration</a></li>
+            </ul>
+          </li>
+          <li>
+            <a href="#updates">Auto-Updates</a>
+          </li>
+        </ol>
+      </aside>
+
+      <!-- Main Content -->
+      <main class="content">
+        <h1><span class="accent">&gt;</span> User Manual</h1>
+        <p class="subtitle">
+          Everything you need to know about installing, configuring, and using Bernard.
+        </p>
+
+        <!-- ═══════════════ 1. Getting Started ═══════════════ -->
+        <h2 id="getting-started">1. Getting Started</h2>
+
+        <h3 id="installation">Installation</h3>
+        <p>Bernard requires <strong>Node.js 20</strong> or later. Install it globally from npm:</p>
+        <pre><code><span class="accent">$</span> npm install -g bernard-agent</code></pre>
+        <p>
+          After installation, the <code>bernard</code> command is available globally in your
+          terminal.
+        </p>
+
+        <h3 id="first-time-setup">First-Time Setup</h3>
+        <p>
+          On first launch, Bernard runs an interactive setup wizard that walks you through selecting
+          a provider and entering your API key. You can also configure it manually:
+        </p>
+        <pre><code><span class="comment"># Store an API key</span>
+<span class="accent">$</span> bernard add-key anthropic sk-ant-...
+
+<span class="comment"># Verify it's configured</span>
+<span class="accent">$</span> bernard providers</code></pre>
+        <p>All configuration is stored in <code>~/.bernard/</code>:</p>
+        <ul>
+          <li><code>keys.json</code> &mdash; Stored API keys (file permissions set to 0600)</li>
+          <li><code>preferences.json</code> &mdash; Provider, model, theme, and option choices</li>
+          <li><code>.env</code> &mdash; Fallback environment variable file</li>
+        </ul>
+
+        <h3 id="basic-usage">Basic Usage</h3>
+        <p>
+          Launch the REPL by running <code>bernard</code> with no arguments. Type natural-language
+          requests and Bernard will use its tools to help you:
+        </p>
+        <pre><code><span class="accent">$</span> bernard
+<span class="accent">bernard&gt;</span> what git branch am I on?
+  &#x25B6; shell: git branch --show-current
+  You're on the main branch.</code></pre>
+        <p>
+          Type <code>/help</code> to see available slash commands, or <code>/exit</code> (or
+          <code>Ctrl+C</code>) to quit.
+        </p>
+
+        <h3 id="cli-flags">CLI Flags</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Flag</th>
+              <th>Description</th>
+              <th>Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>-p, --provider</code></td>
+              <td>Override the LLM provider</td>
+              <td><code>bernard -p openai</code></td>
+            </tr>
+            <tr>
+              <td><code>-m, --model</code></td>
+              <td>Override the model name</td>
+              <td><code>bernard -m gpt-4o</code></td>
+            </tr>
+            <tr>
+              <td><code>-r, --resume</code></td>
+              <td>Resume the previous conversation</td>
+              <td><code>bernard -r</code></td>
+            </tr>
+            <tr>
+              <td><code>--alert &lt;id&gt;</code></td>
+              <td>Open with a cron alert context</td>
+              <td><code>bernard --alert abc123</code></td>
+            </tr>
+            <tr>
+              <td><code>-V, --version</code></td>
+              <td>Show version number</td>
+              <td><code>bernard -V</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="resuming-conversations">Resuming Conversations</h3>
+        <p>
+          Use the <code>-r</code> flag to pick up where you left off. Bernard saves conversation
+          history to disk between sessions and replays it on resume. A session boundary marker is
+          injected so the agent knows prior tasks are considered complete.
+        </p>
+        <pre><code><span class="accent">$</span> bernard -r
+<span class="comment"># Previous conversation is restored</span></code></pre>
+
+        <!-- ═══════════════ 2. Configuration ═══════════════ -->
+        <h2 id="configuration">2. Configuration</h2>
+
+        <h3 id="env-vars">Environment Variables</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Variable</th>
+              <th>Description</th>
+              <th>Default</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>BERNARD_PROVIDER</code></td>
+              <td>Default LLM provider</td>
+              <td><code>anthropic</code></td>
+            </tr>
+            <tr>
+              <td><code>BERNARD_MODEL</code></td>
+              <td>Default model name</td>
+              <td>Provider-specific (first in list)</td>
+            </tr>
+            <tr>
+              <td><code>BERNARD_MAX_TOKENS</code></td>
+              <td>Max tokens per AI response</td>
+              <td><code>4096</code></td>
+            </tr>
+            <tr>
+              <td><code>BERNARD_SHELL_TIMEOUT</code></td>
+              <td>Shell command timeout (ms)</td>
+              <td><code>30000</code></td>
+            </tr>
+            <tr>
+              <td><code>BERNARD_RAG_ENABLED</code></td>
+              <td>Enable/disable RAG memory</td>
+              <td><code>true</code></td>
+            </tr>
+            <tr>
+              <td><code>ANTHROPIC_API_KEY</code></td>
+              <td>Anthropic API key</td>
+              <td>&mdash;</td>
+            </tr>
+            <tr>
+              <td><code>OPENAI_API_KEY</code></td>
+              <td>OpenAI API key</td>
+              <td>&mdash;</td>
+            </tr>
+            <tr>
+              <td><code>XAI_API_KEY</code></td>
+              <td>xAI API key</td>
+              <td>&mdash;</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="env-loading">.env File Loading</h3>
+        <p>
+          Bernard loads environment variables from <code>.env</code> files in this priority order:
+        </p>
+        <ol>
+          <li>
+            <strong>Current working directory</strong> &mdash; <code>./.env</code> (checked first)
+          </li>
+          <li><strong>Home config</strong> &mdash; <code>~/.bernard/.env</code> (fallback)</li>
+        </ol>
+        <p>
+          API keys stored via <code>bernard add-key</code> take precedence over
+          <code>.env</code> values.
+        </p>
+
+        <h3 id="api-keys">API Key Management</h3>
+        <pre><code><span class="comment"># Add a key</span>
+<span class="accent">$</span> bernard add-key anthropic sk-ant-...
+
+<span class="comment"># Remove a key</span>
+<span class="accent">$</span> bernard remove-key anthropic
+
+<span class="comment"># Check key status for all providers</span>
+<span class="accent">$</span> bernard providers</code></pre>
+        <p>
+          Keys are stored in <code>~/.bernard/keys.json</code> with file permissions set to
+          <code>0600</code> (owner read/write only).
+        </p>
+
+        <h3 id="options">Options Management</h3>
+        <p>
+          Configurable options can be viewed and changed from the CLI or within the REPL
+          (<code>/options</code>):
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Option</th>
+              <th>Env Var</th>
+              <th>Default</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>max-tokens</code></td>
+              <td><code>BERNARD_MAX_TOKENS</code></td>
+              <td>4096</td>
+              <td>Maximum tokens per AI response</td>
+            </tr>
+            <tr>
+              <td><code>shell-timeout</code></td>
+              <td><code>BERNARD_SHELL_TIMEOUT</code></td>
+              <td>30000</td>
+              <td>Shell command timeout in milliseconds</td>
+            </tr>
+          </tbody>
+        </table>
+        <pre><code><span class="comment"># List current option values</span>
+<span class="accent">$</span> bernard list-options
+
+<span class="comment"># Reset a single option to default</span>
+<span class="accent">$</span> bernard reset-option max-tokens
+
+<span class="comment"># Reset all options to defaults</span>
+<span class="accent">$</span> bernard reset-options</code></pre>
+
+        <h3 id="themes">Themes</h3>
+        <p>
+          Bernard comes with six built-in color themes. Switch at any time using the
+          <code>/theme</code> REPL command. Your choice persists across sessions.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Theme</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>bernard</code></td>
+              <td>Default orange accent theme</td>
+            </tr>
+            <tr>
+              <td><code>ocean</code></td>
+              <td>Cyan/blue palette</td>
+            </tr>
+            <tr>
+              <td><code>forest</code></td>
+              <td>Green nature palette</td>
+            </tr>
+            <tr>
+              <td><code>synthwave</code></td>
+              <td>Purple/pink retro palette</td>
+            </tr>
+            <tr>
+              <td><code>high-contrast</code></td>
+              <td>Accessibility &mdash; maximized contrast</td>
+            </tr>
+            <tr>
+              <td><code>colorblind</code></td>
+              <td>Accessibility &mdash; IBM color-blind safe palette</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- ═══════════════ 3. Providers ═══════════════ -->
+        <h2 id="providers">3. Providers</h2>
+        <p>
+          Bernard uses the
+          <a href="https://sdk.vercel.ai" target="_blank" rel="noopener noreferrer"
+            >Vercel AI SDK</a
+          >
+          for unified access to multiple LLM providers. All tools, memory, and capabilities work
+          identically regardless of which provider you choose.
+        </p>
+
+        <h3 id="anthropic">Anthropic</h3>
+        <p>
+          Default provider. Set <code>ANTHROPIC_API_KEY</code> or run
+          <code>bernard add-key anthropic &lt;key&gt;</code>.
+        </p>
+        <h4>Available Models</h4>
+        <ul>
+          <li><code>claude-sonnet-4-5-20250929</code> (default)</li>
+          <li><code>claude-opus-4-6</code></li>
+          <li><code>claude-haiku-4-5-20251001</code></li>
+          <li><code>claude-opus-4-20250514</code></li>
+          <li><code>claude-sonnet-4-20250514</code></li>
+        </ul>
+
+        <h3 id="openai">OpenAI</h3>
+        <p>
+          Set <code>OPENAI_API_KEY</code> or run <code>bernard add-key openai &lt;key&gt;</code>.
+        </p>
+        <h4>Available Models</h4>
+        <ul>
+          <li><code>gpt-5.2</code> (default)</li>
+          <li><code>gpt-5.2-chat-latest</code></li>
+          <li><code>o3</code></li>
+          <li><code>o3-mini</code></li>
+          <li><code>gpt-4o-mini</code></li>
+          <li><code>gpt-4.1</code></li>
+          <li><code>gpt-4.1-mini</code></li>
+          <li><code>gpt-4.1-nano</code></li>
+        </ul>
+
+        <h3 id="xai">xAI</h3>
+        <p>Set <code>XAI_API_KEY</code> or run <code>bernard add-key xai &lt;key&gt;</code>.</p>
+        <h4>Available Models</h4>
+        <ul>
+          <li><code>grok-4-fast-non-reasoning</code> (default)</li>
+          <li><code>grok-4-fast-reasoning</code></li>
+          <li><code>grok-4-1-fast-non-reasoning</code></li>
+          <li><code>grok-4-1-fast-reasoning</code></li>
+          <li><code>grok-4-0709</code></li>
+          <li><code>grok-code-fast-1</code></li>
+          <li><code>grok-3</code></li>
+          <li><code>grok-3-mini</code></li>
+        </ul>
+
+        <h3 id="switching-providers">Switching Providers</h3>
+        <p>There are three ways to switch your provider and model:</p>
+        <ol>
+          <li>
+            <strong>CLI flags</strong> &mdash;
+            <code>bernard -p openai -m gpt-4o</code>
+          </li>
+          <li>
+            <strong>REPL commands</strong> &mdash; <code>/provider</code> and
+            <code>/model</code> for interactive selection
+          </li>
+          <li>
+            <strong>Environment variables</strong> &mdash; <code>BERNARD_PROVIDER</code> and
+            <code>BERNARD_MODEL</code>
+          </li>
+        </ol>
+        <p>
+          Changes made via <code>/provider</code> and <code>/model</code> are saved to preferences
+          and persist across sessions.
+        </p>
+
+        <!-- ═══════════════ 4. REPL Commands ═══════════════ -->
+        <h2 id="repl-commands">4. REPL Commands</h2>
+        <p>
+          Type slash commands in the REPL to control Bernard. Tab-completion is supported, and live
+          hints appear as you type.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/help</code></td>
+              <td>Show all available commands</td>
+            </tr>
+            <tr>
+              <td><code>/clear</code></td>
+              <td>Clear conversation history, scratch notes, and the terminal screen</td>
+            </tr>
+            <tr>
+              <td><code>/memory</code></td>
+              <td>List all persistent memory keys</td>
+            </tr>
+            <tr>
+              <td><code>/scratch</code></td>
+              <td>List session scratch note keys</td>
+            </tr>
+            <tr>
+              <td><code>/mcp</code></td>
+              <td>Show MCP server connection status and available tools</td>
+            </tr>
+            <tr>
+              <td><code>/cron</code></td>
+              <td>Show cron jobs, daemon status, and unacknowledged alerts</td>
+            </tr>
+            <tr>
+              <td><code>/rag</code></td>
+              <td>Show RAG memory stats, domain breakdown, and recent facts</td>
+            </tr>
+            <tr>
+              <td><code>/facts</code></td>
+              <td>Show RAG facts currently in the context window</td>
+            </tr>
+            <tr>
+              <td><code>/provider</code></td>
+              <td>Interactively switch LLM provider</td>
+            </tr>
+            <tr>
+              <td><code>/model</code></td>
+              <td>Interactively switch model for the current provider</td>
+            </tr>
+            <tr>
+              <td><code>/theme</code></td>
+              <td>Interactively switch color theme</td>
+            </tr>
+            <tr>
+              <td><code>/options</code></td>
+              <td>View and set options (max-tokens, shell-timeout)</td>
+            </tr>
+            <tr>
+              <td><code>/update</code></td>
+              <td>Check for and install updates</td>
+            </tr>
+            <tr>
+              <td><code>/exit</code></td>
+              <td>Quit Bernard (also: <code>exit</code>, <code>quit</code>, or Ctrl+C)</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="callout callout-tip">
+          <div class="callout-title">Tip</div>
+          To send a message that starts with <code>/</code> without triggering a slash command,
+          escape it with a backslash: <code>\/not-a-command</code>
+        </div>
+
+        <!-- ═══════════════ 5. Tools ═══════════════ -->
+        <h2 id="tools">5. Tools &amp; Capabilities</h2>
+        <p>
+          Bernard has access to a set of built-in tools that it uses autonomously based on your
+          requests. You don't call tools directly &mdash; Bernard decides when to use them.
+        </p>
+
+        <h3 id="tool-shell">Shell</h3>
+        <p>
+          Executes shell commands in your current working directory. Output is captured and returned
+          to the AI. Commands have a configurable timeout (default: 30 seconds) and a 10 MB output
+          buffer.
+        </p>
+        <h4>Dangerous Command Detection</h4>
+        <p>
+          Bernard detects potentially dangerous commands and asks for confirmation before executing
+          them. The following patterns trigger the safety check:
+        </p>
+        <ul>
+          <li><code>rm</code> with <code>-r</code> or <code>-f</code> flags</li>
+          <li><code>sudo</code></li>
+          <li><code>mkfs</code>, <code>dd</code></li>
+          <li>Writing to <code>/dev/sd*</code></li>
+          <li><code>chmod 777</code>, <code>chown -R</code></li>
+          <li><code>reboot</code>, <code>shutdown</code></li>
+          <li><code>systemctl stop/disable/mask</code></li>
+          <li><code>kill -9</code>, <code>pkill</code>, <code>killall</code></li>
+        </ul>
+        <div class="callout callout-warning">
+          <div class="callout-title">Warning</div>
+          These checks are pattern-based and not exhaustive. Always review commands that Bernard
+          proposes, especially when working with important data.
+        </div>
+
+        <h3 id="tool-memory">Memory</h3>
+        <p>
+          Persistent, disk-backed storage at <code>~/.bernard/memory/</code>. Survives across
+          sessions. The agent can list, read, write, and delete memory entries by key.
+        </p>
+        <p>
+          Use this for things like project conventions, server addresses, or personal preferences.
+        </p>
+        <pre><code><span class="accent">bernard&gt;</span> remember that this project uses pnpm
+  &#x25B6; memory: write "project-conventions"
+  Saved to persistent memory.</code></pre>
+
+        <h3 id="tool-scratch">Scratch</h3>
+        <p>
+          Session-only scratch notes for tracking complex task progress, intermediate findings, and
+          working plans. Scratch notes survive context compression within a session but are
+          discarded when the session ends. Same actions as memory: list, read, write, delete.
+        </p>
+
+        <h3 id="tool-web">Web Read</h3>
+        <p>
+          Fetches a web page by URL and converts it to markdown. Useful for reading documentation,
+          articles, Stack Overflow answers, or any public URL. Supports an optional CSS selector to
+          extract specific content.
+        </p>
+        <ul>
+          <li>Strips navigation, footer, scripts, and other non-content elements</li>
+          <li>HTML limit: 1 MB, output limit: 20,000 characters</li>
+          <li>Fetch timeout: 15 seconds</li>
+        </ul>
+
+        <h3 id="tool-subagent">Sub-Agents</h3>
+        <p>
+          Bernard can delegate tasks to independent sub-agents that run in parallel. Each sub-agent
+          gets its own AI context with access to all tools (shell, memory, web, MCP tools, etc.) but
+          no conversation history.
+        </p>
+        <ul>
+          <li>Up to <strong>4 concurrent</strong> sub-agents</li>
+          <li>Each sub-agent gets up to <strong>10 tool steps</strong></li>
+          <li>Task descriptions must be self-contained &mdash; sub-agents have no prior context</li>
+          <li>Sub-agents can access RAG memory and persistent memory for context</li>
+        </ul>
+        <pre><code><span class="accent">bernard&gt;</span> check disk usage and count lines of code in parallel
+  &#x25B6; agent: "Check disk usage"
+  &#x25B6; agent: "Count lines of code"
+  [sub:1] &#x25B6; shell: df -h /
+  [sub:2] &#x25B6; shell: find . -name "*.ts" | xargs wc -l
+  Disk: 42G used of 256G (16%). Code: 2,847 lines across 23 files.</code></pre>
+
+        <h3 id="tool-datetime">Date/Time</h3>
+        <p>
+          The <code>datetime</code> tool returns the current date and time information, and the
+          <code>time</code> tools provide timers and stopwatch functionality for measuring elapsed
+          time during tasks.
+        </p>
+
+        <h3 id="tool-wait">Wait</h3>
+        <p>
+          Pauses execution for a specified number of seconds. Useful when a task requires waiting
+          within the current turn (e.g., server restart, build propagation).
+        </p>
+        <ul>
+          <li>Minimum: 0.1 seconds</li>
+          <li>Maximum: 300 seconds (5 minutes)</li>
+        </ul>
+
+        <!-- ═══════════════ 6. Cron Jobs ═══════════════ -->
+        <h2 id="cron">6. Cron Jobs</h2>
+        <p>
+          Bernard can schedule recurring tasks that run in the background on a timer. Cron jobs
+          execute an AI prompt through the agent on each run, with access to all tools.
+        </p>
+
+        <h3 id="cron-creating">Creating Jobs</h3>
+        <p>
+          Ask Bernard to create a cron job with natural language, or the agent will use the
+          <code>cron_create</code> tool with a name, cron expression, and prompt:
+        </p>
+        <pre><code><span class="accent">bernard&gt;</span> every hour, check if the API is healthy
+  &#x25B6; cron_create: "api-health-check"
+  Schedule: 0 * * * * (every hour)
+  &#x2713; Created cron job &mdash; runs every hour.</code></pre>
+        <p>The cron daemon starts automatically when the first job is created.</p>
+
+        <h3 id="cron-managing">Managing Jobs</h3>
+        <p>The agent has tools for full cron job lifecycle management:</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Tool</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>cron_create</code></td>
+              <td>Create a new scheduled job</td>
+            </tr>
+            <tr>
+              <td><code>cron_list</code></td>
+              <td>List all jobs with status</td>
+            </tr>
+            <tr>
+              <td><code>cron_get</code></td>
+              <td>Get full details of a job including prompt and last result</td>
+            </tr>
+            <tr>
+              <td><code>cron_run</code></td>
+              <td>Manually trigger a job immediately</td>
+            </tr>
+            <tr>
+              <td><code>cron_update</code></td>
+              <td>Update a job's name, schedule, or prompt</td>
+            </tr>
+            <tr>
+              <td><code>cron_enable</code></td>
+              <td>Enable a disabled job</td>
+            </tr>
+            <tr>
+              <td><code>cron_disable</code></td>
+              <td>Disable a job without deleting it</td>
+            </tr>
+            <tr>
+              <td><code>cron_delete</code></td>
+              <td>Permanently delete a job</td>
+            </tr>
+            <tr>
+              <td><code>cron_status</code></td>
+              <td>Check daemon status and job counts</td>
+            </tr>
+            <tr>
+              <td><code>cron_bounce</code></td>
+              <td>Restart the cron daemon</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="cron-daemon">Daemon Management</h3>
+        <p>
+          The cron daemon is a background process that ticks and executes jobs on schedule. It
+          starts automatically when enabled jobs exist and stops automatically when none remain.
+        </p>
+        <ul>
+          <li>
+            The daemon runs independently of the REPL &mdash; jobs continue after you exit Bernard
+          </li>
+          <li>Use <code>/cron</code> in the REPL to check daemon status</li>
+          <li>
+            If the daemon misbehaves, restart it with the <code>cron_bounce</code> tool or
+            <code>bernard cron-bounce</code>
+          </li>
+        </ul>
+
+        <h3 id="cron-alerts">Alerts &amp; Notifications</h3>
+        <p>
+          Cron jobs can generate alerts (e.g., when a monitored API goes down). Alerts are stored
+          locally and can trigger desktop notifications.
+        </p>
+        <p>
+          Use the <code>--alert &lt;id&gt;</code> flag to open a Bernard session with alert context
+          pre-loaded, so you can review and act on the alert immediately.
+        </p>
+        <pre><code><span class="accent">$</span> bernard --alert abc123
+  Alert from cron job: api-health-check
+  Message: API returned 503
+  Time: 2025-01-15T10:00:00Z</code></pre>
+
+        <h3 id="cron-logs">Logs</h3>
+        <p>
+          Cron job execution logs are stored locally. The agent has <code>cron_log_list</code> and
+          <code>cron_log_get</code> tools to inspect past runs, including timestamps, status
+          (success/error), and output.
+        </p>
+
+        <h3 id="cron-cli">CLI Commands</h3>
+        <p>Cron jobs can also be managed from the command line without entering the REPL:</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>bernard cron-list</code></td>
+              <td>List all cron jobs with status</td>
+            </tr>
+            <tr>
+              <td><code>bernard cron-run &lt;id&gt;</code></td>
+              <td>Manually run a job immediately</td>
+            </tr>
+            <tr>
+              <td><code>bernard cron-delete &lt;ids...&gt;</code></td>
+              <td>Delete specific jobs by ID</td>
+            </tr>
+            <tr>
+              <td><code>bernard cron-delete-all</code></td>
+              <td>Delete all cron jobs</td>
+            </tr>
+            <tr>
+              <td><code>bernard cron-stop [ids...]</code></td>
+              <td>Stop the daemon (no args) or disable specific jobs</td>
+            </tr>
+            <tr>
+              <td><code>bernard cron-bounce [ids...]</code></td>
+              <td>Restart the daemon (no args) or bounce specific jobs</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- ═══════════════ 7. MCP ═══════════════ -->
+        <h2 id="mcp">7. MCP (Model Context Protocol)</h2>
+        <p>
+          Bernard supports the
+          <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener noreferrer"
+            >Model Context Protocol</a
+          >
+          for connecting to external tool servers. MCP servers extend Bernard with additional
+          capabilities like file system access, database queries, API integrations, and more.
+        </p>
+
+        <h3 id="mcp-config">Configuration</h3>
+        <p>
+          MCP servers are configured in <code>~/.bernard/mcp.json</code>. The file uses a
+          <code>mcpServers</code> object where each key is the server name:
+        </p>
+        <pre><code>{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"],
+      "env": {}
+    },
+    "remote-api": {
+      "url": "https://api.example.com/mcp",
+      "type": "sse",
+      "headers": {
+        "Authorization": "Bearer token..."
+      }
+    }
+  }
+}</code></pre>
+
+        <h3 id="mcp-stdio">Stdio Servers</h3>
+        <p>
+          Stdio-based MCP servers are spawned as child processes. Specify the
+          <code>command</code>, optional <code>args</code> array, and optional
+          <code>env</code> object:
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Required</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>command</code></td>
+              <td>Yes</td>
+              <td>
+                Executable to run (e.g., <code>npx</code>, <code>python</code>, <code>node</code>)
+              </td>
+            </tr>
+            <tr>
+              <td><code>args</code></td>
+              <td>No</td>
+              <td>Array of command arguments</td>
+            </tr>
+            <tr>
+              <td><code>env</code></td>
+              <td>No</td>
+              <td>Environment variables to pass (merged with process env)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="mcp-url">URL-Based Servers</h3>
+        <p>URL-based servers connect over HTTP using SSE or HTTP transport:</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Field</th>
+              <th>Required</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>url</code></td>
+              <td>Yes</td>
+              <td>Server URL</td>
+            </tr>
+            <tr>
+              <td><code>type</code></td>
+              <td>No</td>
+              <td>Transport type: <code>sse</code> (default) or <code>http</code></td>
+            </tr>
+            <tr>
+              <td><code>headers</code></td>
+              <td>No</td>
+              <td>HTTP headers to send with requests</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          You can also add URL-based servers from within a session using the
+          <code>mcp_add_url</code> tool.
+        </p>
+
+        <h3 id="mcp-commands">Commands</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Command / Tool</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>/mcp</code></td>
+              <td>REPL: Show connected servers and their tools</td>
+            </tr>
+            <tr>
+              <td><code>bernard mcp-list</code></td>
+              <td>CLI: List configured MCP servers</td>
+            </tr>
+            <tr>
+              <td><code>bernard remove-mcp &lt;key&gt;</code></td>
+              <td>CLI: Remove a configured MCP server</td>
+            </tr>
+            <tr>
+              <td><code>mcp_config</code></td>
+              <td>Agent tool: List, add, remove, or inspect MCP servers</td>
+            </tr>
+            <tr>
+              <td><code>mcp_add_url</code></td>
+              <td>Agent tool: Add a URL-based MCP server</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="callout callout-info">
+          <div class="callout-title">Note</div>
+          MCP server changes take effect after restarting Bernard. The agent will remind you to
+          restart when adding or removing servers.
+        </div>
+
+        <!-- ═══════════════ 8. RAG Memory ═══════════════ -->
+        <h2 id="rag">8. RAG Memory</h2>
+        <p>
+          Bernard automatically builds a long-term knowledge base from your conversations using
+          local embeddings and retrieval-augmented generation (RAG). No data leaves your machine.
+        </p>
+
+        <h3 id="rag-how">How It Works</h3>
+        <ol>
+          <li>
+            <strong>Extraction</strong> &mdash; When a session ends (and the conversation has
+            sufficient length), a background worker extracts durable facts from the conversation.
+            Each domain has a specialized extraction prompt that filters for relevant facts.
+          </li>
+          <li>
+            <strong>Embedding</strong> &mdash; Facts are embedded locally using
+            <a
+              href="https://github.com/Anush008/fastembed-js"
+              target="_blank"
+              rel="noopener noreferrer"
+              >fastembed</a
+            >
+            &mdash; no API calls required. Embeddings and facts are stored in
+            <code>~/.bernard/rag/memories.json</code>.
+          </li>
+          <li>
+            <strong>Retrieval</strong> &mdash; On each new message, Bernard searches the RAG store
+            using cosine similarity. The top results (up to 3 per domain, 9 total) are injected into
+            the system prompt as recalled context.
+          </li>
+          <li>
+            <strong>Deduplication</strong> &mdash; Near-duplicate facts (similarity &ge; 0.92) are
+            automatically merged to prevent bloat.
+          </li>
+        </ol>
+
+        <h3 id="rag-domains">Domains</h3>
+        <p>Facts are categorized into three domains, each with a specialized extraction prompt:</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Domain</th>
+              <th>Description</th>
+              <th>Examples</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>tool-usage</code></td>
+              <td>Tool Usage Patterns</td>
+              <td>Command sequences, error resolutions, build/deploy workflows, git patterns</td>
+            </tr>
+            <tr>
+              <td><code>user-preferences</code></td>
+              <td>User Preferences</td>
+              <td>
+                Communication style, workflow conventions, naming preferences, "always/never" rules
+              </td>
+            </tr>
+            <tr>
+              <td><code>general</code></td>
+              <td>General Knowledge</td>
+              <td>
+                Project architecture, environment info, team context, API endpoints, decisions
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3 id="rag-facts">Managing Facts</h3>
+        <p>Use the CLI or REPL to browse and manage stored facts:</p>
+        <pre><code><span class="comment"># List all stored facts</span>
+<span class="accent">$</span> bernard facts
+
+<span class="comment"># Search facts by query</span>
+<span class="accent">$</span> bernard facts "deployment workflow"
+
+<span class="comment"># Search using a file's contents as query</span>
+<span class="accent">$</span> bernard facts ./src/deploy.ts</code></pre>
+        <p>
+          Both commands show facts grouped by domain and offer an interactive prompt to select and
+          delete facts by number (e.g., <code>1,3,5-8</code>).
+        </p>
+        <p>Within the REPL:</p>
+        <ul>
+          <li>
+            <code>/rag</code> &mdash; Show total count, per-domain breakdown, and 10 most recent
+            facts
+          </li>
+          <li>
+            <code>/facts</code> &mdash; Show facts currently in the context window with similarity
+            scores
+          </li>
+        </ul>
+
+        <h3 id="rag-expiration">Auto-Expiration</h3>
+        <p>
+          RAG memories have a configurable TTL (default: 90 days). Facts that are never accessed
+          decay over time and are eventually pruned. Actively recalled facts have their
+          <code>lastAccessed</code> timestamp refreshed, keeping them alive.
+        </p>
+        <ul>
+          <li><strong>Max memories:</strong> 5,000</li>
+          <li><strong>Default TTL:</strong> 90 days</li>
+          <li><strong>Decay half-life:</strong> 90 days</li>
+          <li><strong>Similarity threshold:</strong> 0.35 (minimum for retrieval)</li>
+          <li>Disable RAG entirely by setting <code>BERNARD_RAG_ENABLED=false</code></li>
+        </ul>
+
+        <!-- ═══════════════ 9. Auto-Updates ═══════════════ -->
+        <h2 id="updates">9. Auto-Updates</h2>
+        <p>
+          Bernard can check for new versions on npm and install them for you. Update checks are
+          cached for 24 hours.
+        </p>
+        <pre><code><span class="comment"># Check for updates interactively</span>
+<span class="accent">$</span> bernard update
+
+<span class="comment"># Or from within the REPL</span>
+<span class="accent">bernard&gt;</span> /update
+
+<span class="comment"># Enable automatic update checks on startup</span>
+<span class="accent">$</span> bernard auto-update on
+
+<span class="comment"># Disable automatic update checks</span>
+<span class="accent">$</span> bernard auto-update off</code></pre>
+        <p>
+          When auto-update is enabled, Bernard checks for new versions each time you start a session
+          and notifies you if one is available.
+        </p>
+      </main>
+    </div>
+
+    <!-- Footer -->
+    <footer>
+      <div class="container">
+        <div class="footer-left">
+          bernard-agent &copy; <span id="year">2025</span> &middot; MIT License
+        </div>
+        <div class="footer-links">
+          <a href="https://github.com/phillt/bernard" target="_blank" rel="noopener noreferrer"
+            ><svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"
+              /></svg
+            >GitHub</a
+          >
+          <a
+            href="https://www.npmjs.com/package/bernard-agent"
+            target="_blank"
+            rel="noopener noreferrer"
+            ><svg role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"
+              /></svg
+            >npm</a
+          >
+          <a
+            href="https://github.com/phillt/bernard/issues"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Issues</a
+          >
+        </div>
+      </div>
+    </footer>
+
+    <!-- Mobile sidebar toggle button -->
+    <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle table of contents">
+      &#9776;
+    </button>
+
+    <script>
+      // ── Mobile Menu Toggle ──
+      const navEl = document.querySelector('nav');
+      document.querySelector('.menu-toggle').addEventListener('click', () => {
+        navEl.classList.toggle('open');
+      });
+      document.querySelectorAll('nav .links a').forEach((a) => {
+        a.addEventListener('click', () => navEl.classList.remove('open'));
+      });
+      document.addEventListener('click', (e) => {
+        if (!navEl.contains(e.target)) navEl.classList.remove('open');
+      });
+
+      // ── Dynamic year ──
+      document.getElementById('year').textContent = new Date().getFullYear();
+
+      // ── Sidebar toggle (mobile) ──
+      const sidebar = document.getElementById('sidebar');
+      const sidebarToggle = document.getElementById('sidebar-toggle');
+      sidebarToggle.addEventListener('click', () => {
+        sidebar.classList.toggle('open');
+      });
+
+      // Close sidebar when a TOC link is clicked (mobile)
+      sidebar.querySelectorAll('a').forEach((a) => {
+        a.addEventListener('click', () => {
+          sidebar.classList.remove('open');
+        });
+      });
+
+      // ── Scroll Spy for TOC ──
+      const tocLinks = document.querySelectorAll('.toc-list a');
+      const headings = Array.from(tocLinks)
+        .map((a) => {
+          const id = a.getAttribute('href').slice(1);
+          return document.getElementById(id);
+        })
+        .filter(Boolean);
+
+      function updateActiveTOC() {
+        const scrollY = window.scrollY + 100;
+        let currentId = '';
+        for (const heading of headings) {
+          if (heading.offsetTop <= scrollY) currentId = heading.id;
+        }
+        tocLinks.forEach((a) => {
+          a.classList.toggle('active', a.getAttribute('href') === '#' + currentId);
+        });
+      }
+
+      window.addEventListener('scroll', updateActiveTOC, { passive: true });
+      updateActiveTOC();
+    </script>
+  </body>
+</html>
