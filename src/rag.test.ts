@@ -396,7 +396,7 @@ describe('RAGStore', () => {
   });
 
   describe('listFacts', () => {
-    it('returns formatted fact list with domain', async () => {
+    it('returns formatted fact list with domain and expiration', async () => {
       const memories = [
         {
           id: '1',
@@ -420,6 +420,7 @@ describe('RAGStore', () => {
       expect(facts[0]).toContain('[tool-usage]');
       expect(facts[0]).toContain('3x');
       expect(facts[0]).toContain('test fact');
+      expect(facts[0]).toMatch(/expires in \d+d/);
     });
   });
 
@@ -514,6 +515,259 @@ describe('RAGStore', () => {
       const store = await createStore();
       const memories = store.listMemories();
       expect(memories).toEqual([]);
+    });
+  });
+
+  describe('expiration', () => {
+    it('addFacts sets expiresAt ~90 days in the future', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode'], 'test');
+
+      // Inspect the persisted data
+      const writeCall = vi
+        .mocked(fs.writeFileSync)
+        .mock.calls.find((c) => String(c[0]).includes('memories.json.tmp'));
+      expect(writeCall).toBeDefined();
+      const persisted = JSON.parse(writeCall![1] as string);
+      expect(persisted[0].expiresAt).toBeDefined();
+
+      const expiresAt = new Date(persisted[0].expiresAt).getTime();
+      const expectedMin = Date.now() + 89 * 86400000;
+      const expectedMax = Date.now() + 91 * 86400000;
+      expect(expiresAt).toBeGreaterThan(expectedMin);
+      expect(expiresAt).toBeLessThan(expectedMax);
+    });
+
+    it('removes expired facts on startup', async () => {
+      const pastExpiry = new Date(Date.now() - 86400000).toISOString();
+      const futureExpiry = new Date(Date.now() + 30 * 86400000).toISOString();
+      const memories = [
+        {
+          id: '1',
+          fact: 'expired fact',
+          embedding: Array(16)
+            .fill(0)
+            .map((_, i) => (i === 0 ? 1 : 0)),
+          source: 'test',
+          domain: 'general',
+          createdAt: new Date(Date.now() - 100 * 86400000).toISOString(),
+          accessCount: 0,
+          expiresAt: pastExpiry,
+        },
+        {
+          id: '2',
+          fact: 'valid fact',
+          embedding: Array(16)
+            .fill(0)
+            .map((_, i) => (i === 1 ? 1 : 0)),
+          source: 'test',
+          domain: 'general',
+          createdAt: new Date().toISOString(),
+          accessCount: 0,
+          expiresAt: futureExpiry,
+        },
+      ];
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
+
+      const store = await createStore();
+      expect(store.count()).toBe(1);
+      const facts = store.listFacts();
+      expect(facts[0]).toContain('valid fact');
+    });
+
+    it('backfill gives at least 14 days grace for old legacy facts', async () => {
+      const memories = [
+        {
+          id: '1',
+          fact: 'old legacy fact',
+          embedding: Array(16)
+            .fill(0)
+            .map((_, i) => (i === 0 ? 1 : 0)),
+          source: 'test',
+          domain: 'general',
+          createdAt: new Date(Date.now() - 200 * 86400000).toISOString(),
+          accessCount: 5,
+        },
+      ];
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
+
+      const store = await createStore();
+      expect(store.count()).toBe(1);
+
+      // 200 days old with 90d TTL → remaining is negative → 14d grace period
+      const facts = store.listFacts();
+      expect(facts[0]).toMatch(/expires in 1[34]d/);
+    });
+
+    it('backfill gives remaining TTL for recent legacy facts', async () => {
+      const memories = [
+        {
+          id: '1',
+          fact: 'recent legacy fact',
+          embedding: Array(16)
+            .fill(0)
+            .map((_, i) => (i === 0 ? 1 : 0)),
+          source: 'test',
+          domain: 'general',
+          createdAt: new Date(Date.now() - 10 * 86400000).toISOString(),
+          accessCount: 0,
+        },
+      ];
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
+
+      const store = await createStore();
+      expect(store.count()).toBe(1);
+
+      // 10 days old with 90d TTL → ~80 days remaining
+      const facts = store.listFacts();
+      expect(facts[0]).toMatch(/expires in (79|80|81)d/);
+    });
+
+    it('search extends expiresAt when fact is close to expiring', async () => {
+      const nearExpiry = new Date(Date.now() + 3 * 86400000).toISOString();
+      const memories = [
+        {
+          id: '1',
+          fact: 'fact about to expire with testing keywords',
+          embedding: fakeEmbed(['fact about to expire with testing keywords'])[0],
+          source: 'test',
+          domain: 'general',
+          createdAt: new Date(Date.now() - 87 * 86400000).toISOString(),
+          accessCount: 0,
+          expiresAt: nearExpiry,
+        },
+      ];
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(memories));
+
+      const store = await createStore();
+
+      // Clear write mocks to only see search-triggered writes
+      vi.mocked(fs.writeFileSync).mockClear();
+
+      await store.search('fact about to expire with testing keywords');
+
+      // Get the persisted data after search
+      const writeCall = vi
+        .mocked(fs.writeFileSync)
+        .mock.calls.find((c) => String(c[0]).includes('memories.json.tmp'));
+      expect(writeCall).toBeDefined();
+      const updatedData = JSON.parse(writeCall![1] as string);
+
+      expect(updatedData[0].accessCount).toBe(1);
+      const newExpiry = new Date(updatedData[0].expiresAt).getTime();
+      // Extension with accessCount=1: min(45, 7 + log2(2)*3) = 10 days
+      // So newExpiry ≈ now + 10d, which is > original 3 days
+      expect(newExpiry).toBeGreaterThan(Date.now() + 9 * 86400000);
+    });
+
+    it('listFacts shows expiration in output', async () => {
+      const store = await createStore();
+      await store.addFacts(['some fact about expiration display'], 'test');
+
+      const facts = store.listFacts();
+      expect(facts[0]).toMatch(/expires in \d+d/);
+      expect(facts[0]).toContain('expires in 90d');
+    });
+
+    it('idle days shift expiresAt forward', async () => {
+      const expiresIn30Days = new Date(Date.now() + 30 * 86400000).toISOString();
+      const memories = [
+        {
+          id: '1',
+          fact: 'a fact',
+          embedding: Array(16)
+            .fill(0)
+            .map((_, i) => (i === 0 ? 1 : 0)),
+          source: 'test',
+          domain: 'general',
+          createdAt: new Date(Date.now() - 60 * 86400000).toISOString(),
+          accessCount: 2,
+          expiresAt: expiresIn30Days,
+        },
+      ];
+
+      // Last session was 31 days ago → 30 idle days
+      const lastSession = new Date(Date.now() - 31 * 86400000).toISOString().slice(0, 10);
+
+      vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+        const pathStr = String(p);
+        if (pathStr.includes('memories.json')) return true;
+        if (pathStr.includes('last-session.txt')) return true;
+        return false;
+      });
+      vi.mocked(fs.readFileSync).mockImplementation((p: any) => {
+        const pathStr = String(p);
+        if (pathStr.includes('memories.json')) return JSON.stringify(memories);
+        if (pathStr.includes('last-session.txt')) return lastSession;
+        return '';
+      });
+
+      const store = await createStore();
+      expect(store.count()).toBe(1);
+
+      // Original: 30 days from now → after 30 idle days shift: ~60 days from now
+      const facts = store.listFacts();
+      expect(facts[0]).toMatch(/expires in (59|60|61)d/);
+    });
+
+    it('consecutive days (no idle gap) does not shift expiresAt', async () => {
+      const expiresIn30Days = new Date(Date.now() + 30 * 86400000).toISOString();
+      const memories = [
+        {
+          id: '1',
+          fact: 'a fact',
+          embedding: Array(16)
+            .fill(0)
+            .map((_, i) => (i === 0 ? 1 : 0)),
+          source: 'test',
+          domain: 'general',
+          createdAt: new Date(Date.now() - 60 * 86400000).toISOString(),
+          accessCount: 0,
+          expiresAt: expiresIn30Days,
+        },
+      ];
+
+      // Last session was yesterday → 0 idle days
+      const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+      vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+        const pathStr = String(p);
+        if (pathStr.includes('memories.json')) return true;
+        if (pathStr.includes('last-session.txt')) return true;
+        return false;
+      });
+      vi.mocked(fs.readFileSync).mockImplementation((p: any) => {
+        const pathStr = String(p);
+        if (pathStr.includes('memories.json')) return JSON.stringify(memories);
+        if (pathStr.includes('last-session.txt')) return yesterday;
+        return '';
+      });
+
+      const store = await createStore();
+      expect(store.count()).toBe(1);
+
+      // No shift — should still be ~30 days
+      const facts = store.listFacts();
+      expect(facts[0]).toMatch(/expires in (29|30|31)d/);
+    });
+
+    it('saves session date on first use so idle compensation works later', async () => {
+      // First run: no memories, no session file
+      const store = await createStore();
+      await store.addFacts(['brand new fact'], 'test');
+
+      // saveSessionDate should have been called in constructor
+      const sessionWriteCall = vi
+        .mocked(fs.writeFileSync)
+        .mock.calls.find((c) => String(c[0]).includes('last-session.txt'));
+      expect(sessionWriteCall).toBeDefined();
+
+      const dateWritten = sessionWriteCall![1] as string;
+      expect(dateWritten).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     });
   });
 

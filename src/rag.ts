@@ -7,6 +7,7 @@ import { DEFAULT_DOMAIN } from './domains.js';
 
 const RAG_DIR = path.join(os.homedir(), '.bernard', 'rag');
 const MEMORIES_FILE = path.join(RAG_DIR, 'memories.json');
+const LAST_SESSION_FILE = path.join(RAG_DIR, 'last-session.txt');
 
 const DEFAULT_TOP_K_PER_DOMAIN = 3;
 const DEFAULT_MAX_RESULTS = 9;
@@ -15,6 +16,7 @@ const DEFAULT_MAX_MEMORIES = 5000;
 const DEDUP_THRESHOLD = 0.92;
 const PRUNE_HALF_LIFE_DAYS = 90;
 const STALE_TEMP_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
+const DEFAULT_RAG_TTL_DAYS = 90;
 
 export interface RAGMemory {
   id: string;
@@ -25,6 +27,7 @@ export interface RAGMemory {
   createdAt: string;
   accessCount: number;
   lastAccessed?: string;
+  expiresAt?: string;
 }
 
 export interface RAGSearchResult {
@@ -47,6 +50,7 @@ export interface RAGStoreConfig {
   maxResults?: number;
   similarityThreshold?: number;
   maxMemories?: number;
+  ragTtlDays?: number;
 }
 
 export class RAGStore {
@@ -55,15 +59,19 @@ export class RAGStore {
   private maxResults: number;
   private similarityThreshold: number;
   private maxMemories: number;
+  private ragTtlDays: number;
 
   constructor(config?: RAGStoreConfig) {
     this.topKPerDomain = config?.topKPerDomain ?? DEFAULT_TOP_K_PER_DOMAIN;
     this.maxResults = config?.maxResults ?? DEFAULT_MAX_RESULTS;
     this.similarityThreshold = config?.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD;
     this.maxMemories = config?.maxMemories ?? DEFAULT_MAX_MEMORIES;
+    this.ragTtlDays = config?.ragTtlDays ?? DEFAULT_RAG_TTL_DAYS;
 
     fs.mkdirSync(RAG_DIR, { recursive: true });
     this.load();
+    this.saveSessionDate();
+    this.pruneExpired();
     RAGStore.cleanupStaleTemp();
   }
 
@@ -142,6 +150,7 @@ export class RAGStore {
         domain,
         createdAt: now,
         accessCount: 0,
+        expiresAt: new Date(Date.now() + this.ragTtlDays * 86400000).toISOString(),
       });
       added++;
     }
@@ -214,11 +223,22 @@ export class RAGStore {
 
     debugLog('rag:search', { query: query.slice(0, 100), returned: capped.length });
 
-    // Update access metadata
+    // Update access metadata and extend expiration
     const now = new Date().toISOString();
+    const nowMs = Date.now();
     for (const { memory } of capped) {
       memory.accessCount++;
       memory.lastAccessed = now;
+
+      // Extend expiresAt: base of 7d + log scaling by access count, capped at half TTL
+      const extensionDays = Math.min(
+        this.ragTtlDays * 0.5,
+        7 + Math.log2(memory.accessCount + 1) * 3,
+      );
+      const newExpiry = nowMs + extensionDays * 86400000;
+      if (!memory.expiresAt || newExpiry > new Date(memory.expiresAt).getTime()) {
+        memory.expiresAt = new Date(newExpiry).toISOString();
+      }
     }
     if (capped.length > 0) {
       this.persist();
@@ -233,9 +253,13 @@ export class RAGStore {
 
   /** List all facts as plain text lines. */
   listFacts(): string[] {
+    const now = Date.now();
     return this.memories.map((m) => {
       const date = m.createdAt.slice(0, 10);
-      return `[${date}] [${m.domain}] (accessed ${m.accessCount}x) ${m.fact}`;
+      const daysLeft = m.expiresAt
+        ? Math.max(0, Math.ceil((new Date(m.expiresAt).getTime() - now) / 86400000))
+        : '?';
+      return `[${date}] [${m.domain}] (accessed ${m.accessCount}x, expires in ${daysLeft}d) ${m.fact}`;
     });
   }
 
@@ -305,12 +329,30 @@ export class RAGStore {
     return deleted;
   }
 
+  /** Remove facts whose expiresAt has passed. Returns the number removed. */
+  private pruneExpired(): number {
+    const now = Date.now();
+    const before = this.memories.length;
+    this.memories = this.memories.filter(
+      (m) => !m.expiresAt || new Date(m.expiresAt).getTime() > now,
+    );
+    const expired = before - this.memories.length;
+    if (expired > 0) {
+      debugLog('rag:pruneExpired', { expired });
+      this.persist();
+    }
+    return expired;
+  }
+
   /**
    * Prune memories if over the cap.
+   * First removes expired facts, then applies capacity-based scoring.
    * Score = recency decay (half-life 90 days) + log2(accessCount + 1)
    * Keeps top N by score.
    */
   private prune(): void {
+    this.pruneExpired();
+
     if (this.memories.length <= this.maxMemories) return;
 
     const now = Date.now();
@@ -329,7 +371,7 @@ export class RAGStore {
     debugLog('rag:prune', { kept: this.memories.length });
   }
 
-  /** Load memories from disk. Backfills 'general' domain for legacy entries. */
+  /** Load memories from disk. Backfills domain, expiresAt, and compensates for idle days. */
   private load(): void {
     try {
       if (!fs.existsSync(MEMORIES_FILE)) return;
@@ -348,6 +390,75 @@ export class RAGStore {
         `Failed to load memories: ${err instanceof Error ? err.message : String(err)}`,
       );
       this.memories = [];
+      return;
+    }
+
+    if (this.memories.length === 0) return;
+
+    let dirty = false;
+
+    // Backfill expiresAt for legacy facts without one (must run before idle-day shift)
+    const now = Date.now();
+    const ttlMs = this.ragTtlDays * 86400000;
+    const gracePeriodMs = 14 * 86400000;
+
+    for (const m of this.memories) {
+      if (!m.expiresAt) {
+        const ageMs = now - new Date(m.createdAt).getTime();
+        const remainingMs = ttlMs - ageMs;
+        m.expiresAt = new Date(now + Math.max(remainingMs, gracePeriodMs)).toISOString();
+        dirty = true;
+      }
+    }
+
+    // Compensate for idle days — TTL only counts days Bernard was used
+    const idleDays = this.getIdleDays();
+    if (idleDays > 0) {
+      const shiftMs = idleDays * 86400000;
+      for (const m of this.memories) {
+        if (m.expiresAt) {
+          m.expiresAt = new Date(new Date(m.expiresAt).getTime() + shiftMs).toISOString();
+        }
+      }
+      debugLog('rag:load', { idleDaysCompensated: idleDays });
+      dirty = true;
+    }
+
+    if (dirty) {
+      this.persist();
+    }
+  }
+
+  /**
+   * Compute the number of idle calendar days since the last session.
+   * Returns 0 if no previous session recorded or if used today/yesterday.
+   */
+  private getIdleDays(): number {
+    try {
+      if (!fs.existsSync(LAST_SESSION_FILE)) return 0;
+      const lastDateStr = fs.readFileSync(LAST_SESSION_FILE, 'utf-8').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(lastDateStr)) return 0;
+
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const lastDate = new Date(lastDateStr + 'T00:00:00Z');
+      const today = new Date(todayStr + 'T00:00:00Z');
+      const daysBetween = Math.round((today.getTime() - lastDate.getTime()) / 86400000);
+
+      // 0 = same day, 1 = consecutive days (normal), 2+ = idle gap
+      return Math.max(0, daysBetween - 1);
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Write today's date as the last session date. */
+  private saveSessionDate(): void {
+    try {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      fs.writeFileSync(LAST_SESSION_FILE, todayStr, 'utf-8');
+    } catch {
+      // Non-critical — just log
+      debugLog('rag:saveSessionDate', 'Failed to save session date');
     }
   }
 
