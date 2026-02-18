@@ -70,6 +70,7 @@ export class RAGStore {
 
     fs.mkdirSync(RAG_DIR, { recursive: true });
     this.load();
+    this.saveSessionDate();
     this.pruneExpired();
     RAGStore.cleanupStaleTemp();
   }
@@ -422,9 +423,6 @@ export class RAGStore {
         dirty = true;
       }
     }
-
-    // Save session date for future idle-day calculation
-    this.saveSessionDate();
 
     if (dirty) {
       this.persist();
