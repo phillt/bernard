@@ -754,6 +754,21 @@ describe('RAGStore', () => {
       const facts = store.listFacts();
       expect(facts[0]).toMatch(/expires in (29|30|31)d/);
     });
+
+    it('saves session date on first use so idle compensation works later', async () => {
+      // First run: no memories, no session file
+      const store = await createStore();
+      await store.addFacts(['brand new fact'], 'test');
+
+      // saveSessionDate should have been called in constructor
+      const sessionWriteCall = vi
+        .mocked(fs.writeFileSync)
+        .mock.calls.find((c) => String(c[0]).includes('last-session.txt'));
+      expect(sessionWriteCall).toBeDefined();
+
+      const dateWritten = sessionWriteCall![1] as string;
+      expect(dateWritten).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
   });
 
   describe('deleteByIds', () => {
