@@ -147,7 +147,7 @@ function loadStoredKeys(): Record<string, string> {
 /**
  * Stores an API key for the given provider in `~/.bernard/keys.json` (mode 0600).
  *
- * @throws If `provider` is not a recognised provider name.
+ * @throws {Error} If `provider` is not a recognised provider name.
  */
 export function saveProviderKey(provider: string, key: string): void {
   if (!PROVIDER_ENV_VARS[provider]) {
@@ -170,7 +170,7 @@ export function saveProviderKey(provider: string, key: string): void {
  *
  * Deletes `keys.json` entirely when no keys remain.
  *
- * @throws If `provider` is unrecognised or has no stored key.
+ * @throws {Error} If `provider` is unrecognised or has no stored key.
  */
 export function removeProviderKey(provider: string): void {
   if (!PROVIDER_ENV_VARS[provider]) {
@@ -196,7 +196,7 @@ export function removeProviderKey(provider: string): void {
 /**
  * Sets a numeric option (e.g. "max-tokens") and persists it to preferences.
  *
- * @throws If `name` is not in {@link OPTIONS_REGISTRY}.
+ * @throws {Error} If `name` is not in {@link OPTIONS_REGISTRY}.
  */
 export function saveOption(name: string, value: number): void {
   const entry = OPTIONS_REGISTRY[name];
@@ -219,7 +219,7 @@ export function saveOption(name: string, value: number): void {
 /**
  * Resets a single numeric option back to its default by removing it from preferences.
  *
- * @throws If `name` is not in {@link OPTIONS_REGISTRY}.
+ * @throws {Error} If `name` is not in {@link OPTIONS_REGISTRY}.
  */
 export function resetOption(name: string): void {
   const entry = OPTIONS_REGISTRY[name];
@@ -326,7 +326,7 @@ export function getAvailableProviders(config: BernardConfig): string[] {
  * Also loads `.env` files and stored API keys into `process.env`.
  *
  * @param overrides - Optional CLI-supplied provider/model that take highest priority.
- * @throws If the selected provider has no API key configured.
+ * @throws {Error} If the selected provider has no API key configured.
  */
 export function loadConfig(overrides?: { provider?: string; model?: string }): BernardConfig {
   // Load .env from cwd first, then fallback to ~/.bernard/.env

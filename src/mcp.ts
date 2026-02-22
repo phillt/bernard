@@ -57,7 +57,7 @@ export class MCPManager {
   /**
    * Reads and parses the MCP configuration from `~/.bernard/mcp.json`.
    * @returns The parsed config, or an empty config if the file does not exist.
-   * @throws If the file exists but contains invalid JSON.
+   * @throws {Error} If the file exists but contains invalid JSON.
    */
   loadConfig(): MCPConfig {
     if (!fs.existsSync(CONFIG_PATH)) {
@@ -346,7 +346,7 @@ export class MCPManager {
 /**
  * Lists all MCP servers in the config file with their connection details.
  * @returns An array of server summaries. Returns an empty array if no config file exists.
- * @throws If the config file contains invalid JSON.
+ * @throws {Error} If the config file contains invalid JSON.
  */
 export function listMCPServers(): {
   key: string;
@@ -379,7 +379,7 @@ export function listMCPServers(): {
  * Retrieves the configuration for a single MCP server by key.
  * @param key - The server key as defined in the config file.
  * @returns The server config, or `undefined` if the key or config file does not exist.
- * @throws If the config file contains invalid JSON.
+ * @throws {Error} If the config file contains invalid JSON.
  */
 export function getMCPServer(key: string): MCPServerConfig | undefined {
   if (!fs.existsSync(CONFIG_PATH)) {
@@ -403,7 +403,7 @@ export function getMCPServer(key: string): MCPServerConfig | undefined {
  * @param command - The command to spawn (e.g. `"npx"`).
  * @param args - Optional command-line arguments.
  * @param env - Optional extra environment variables merged with `process.env`.
- * @throws If the key is empty/contains whitespace, the command is empty,
+ * @throws {Error} If the key is empty/contains whitespace, the command is empty,
  *         the key already exists, or the config file contains invalid JSON.
  */
 export function addMCPServer(
@@ -452,7 +452,7 @@ export function addMCPServer(
  * @param url - The server endpoint URL.
  * @param type - Transport type; defaults to `'sse'` at connection time.
  * @param headers - Optional HTTP headers sent with every request.
- * @throws If the key is empty/contains whitespace, the URL is empty,
+ * @throws {Error} If the key is empty/contains whitespace, the URL is empty,
  *         the key already exists, or the config file contains invalid JSON.
  */
 export function addMCPUrlServer(
@@ -498,7 +498,7 @@ export function addMCPUrlServer(
 /**
  * Removes an MCP server entry from `~/.bernard/mcp.json`.
  * @param key - The server key to remove.
- * @throws If the config file does not exist, contains invalid JSON, or the key is not found.
+ * @throws {Error} If the config file does not exist, contains invalid JSON, or the key is not found.
  */
 export function removeMCPServer(key: string): void {
   if (!fs.existsSync(CONFIG_PATH)) {
