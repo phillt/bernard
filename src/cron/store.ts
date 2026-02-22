@@ -12,7 +12,15 @@ const LOG_FILE = path.join(CRON_DIR, 'daemon.log');
 
 const MAX_JOBS = 50;
 
+/**
+ * Disk-backed store for cron jobs and alerts under `~/.bernard/cron/`.
+ *
+ * Jobs are persisted as a single `jobs.json` array; alerts are individual
+ * JSON files inside `alerts/`. All writes use atomic rename to prevent
+ * partial-read corruption when the daemon `fs.watch`es for changes.
+ */
 export class CronStore {
+  /** Ensures the cron and alerts directories and `jobs.json` exist on disk. */
   constructor() {
     fs.mkdirSync(CRON_DIR, { recursive: true });
     fs.mkdirSync(ALERTS_DIR, { recursive: true });
@@ -24,24 +32,30 @@ export class CronStore {
 
   // --- Paths ---
 
+  /** Absolute path to `~/.bernard/cron/`. */
   static get cronDir(): string {
     return CRON_DIR;
   }
+  /** Absolute path to `~/.bernard/cron/jobs.json`. */
   static get jobsFile(): string {
     return JOBS_FILE;
   }
+  /** Absolute path to `~/.bernard/cron/alerts/`. */
   static get alertsDir(): string {
     return ALERTS_DIR;
   }
+  /** Absolute path to `~/.bernard/cron/daemon.pid`. */
   static get pidFile(): string {
     return PID_FILE;
   }
+  /** Absolute path to `~/.bernard/cron/daemon.log`. */
   static get logFile(): string {
     return LOG_FILE;
   }
 
   // --- Jobs ---
 
+  /** Reads and parses all jobs from `jobs.json`, returning an empty array on missing or corrupt file. */
   loadJobs(): CronJob[] {
     if (!fs.existsSync(JOBS_FILE)) return [];
     const raw = fs.readFileSync(JOBS_FILE, 'utf-8');
@@ -52,14 +66,21 @@ export class CronStore {
     }
   }
 
+  /** Atomically writes the full jobs array to `jobs.json`. */
   saveJobs(jobs: CronJob[]): void {
     this.atomicWrite(JOBS_FILE, JSON.stringify(jobs, null, 2));
   }
 
+  /** Returns a single job by ID, or `undefined` if not found. */
   getJob(id: string): CronJob | undefined {
     return this.loadJobs().find((j) => j.id === id);
   }
 
+  /**
+   * Creates a new cron job and persists it.
+   *
+   * @throws {Error} If the maximum number of jobs ({@link MAX_JOBS}) has been reached.
+   */
   createJob(name: string, schedule: string, prompt: string): CronJob {
     const jobs = this.loadJobs();
     if (jobs.length >= MAX_JOBS) {
@@ -78,6 +99,11 @@ export class CronStore {
     return job;
   }
 
+  /**
+   * Applies partial updates to an existing job and persists the result.
+   *
+   * @returns The updated job, or `undefined` if the ID was not found.
+   */
   updateJob(
     id: string,
     updates: Partial<
@@ -95,6 +121,7 @@ export class CronStore {
     return jobs[idx];
   }
 
+  /** Removes a job by ID. Returns `true` if the job existed and was deleted. */
   deleteJob(id: string): boolean {
     const jobs = this.loadJobs();
     const filtered = jobs.filter((j) => j.id !== id);
@@ -105,6 +132,7 @@ export class CronStore {
 
   // --- Alerts ---
 
+  /** Creates a new alert file in the alerts directory with auto-generated ID and timestamp. */
   createAlert(alert: Omit<CronAlert, 'id' | 'timestamp' | 'acknowledged'>): CronAlert {
     const full: CronAlert = {
       ...alert,
@@ -117,6 +145,7 @@ export class CronStore {
     return full;
   }
 
+  /** Returns a single alert by ID, or `undefined` if not found or corrupt. */
   getAlert(id: string): CronAlert | undefined {
     const filePath = path.join(ALERTS_DIR, `${id}.json`);
     if (!fs.existsSync(filePath)) return undefined;
@@ -127,6 +156,7 @@ export class CronStore {
     }
   }
 
+  /** Returns all alerts sorted newest-first, skipping any corrupt files. */
   listAlerts(): CronAlert[] {
     if (!fs.existsSync(ALERTS_DIR)) return [];
     const files = fs.readdirSync(ALERTS_DIR).filter((f) => f.endsWith('.json'));
@@ -142,6 +172,7 @@ export class CronStore {
     return alerts.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
   }
 
+  /** Marks an alert as acknowledged. Returns `false` if the alert was not found. */
   acknowledgeAlert(id: string): boolean {
     const alert = this.getAlert(id);
     if (!alert) return false;
@@ -153,6 +184,7 @@ export class CronStore {
 
   // --- Utility ---
 
+  /** Writes data to a `.tmp` file then renames it into place for crash-safe persistence. */
   private atomicWrite(filePath: string, data: string): void {
     const tmp = filePath + '.tmp';
     fs.writeFileSync(tmp, data, 'utf-8');

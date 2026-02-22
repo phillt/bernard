@@ -1,12 +1,25 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 
+/**
+ * Converts a military/24-hour time integer to total minutes since midnight.
+ *
+ * @param time - Time in military format (e.g. 830 for 08:30, 1545 for 15:45).
+ * @returns Total minutes since midnight.
+ */
 export function militaryToMinutes(time: number): number {
   const hours = Math.floor(time / 100);
   const minutes = time % 100;
   return hours * 60 + minutes;
 }
 
+/**
+ * Calculates the duration in minutes between two military times, handling next-day wrap.
+ *
+ * @param start - Start time in military format.
+ * @param end - End time in military format.
+ * @returns Duration in minutes.
+ */
 export function calcRangeMinutes(start: number, end: number): number {
   const startMin = militaryToMinutes(start);
   const endMin = militaryToMinutes(end);
@@ -14,6 +27,11 @@ export function calcRangeMinutes(start: number, end: number): number {
   return 24 * 60 - startMin + endMin;
 }
 
+/**
+ * Formats a duration in minutes as a human-readable string (e.g. "2 hours 15 minutes").
+ *
+ * @param totalMinutes - Duration in minutes.
+ */
 export function formatHours(totalMinutes: number): string {
   if (totalMinutes === 0) return '0 minutes';
   const hours = Math.floor(totalMinutes / 60);
@@ -24,6 +42,7 @@ export function formatHours(totalMinutes: number): string {
   return parts.join(' ');
 }
 
+/** Creates tools for calculating durations between military/24-hour time ranges. */
 export function createTimeTools() {
   return {
     time_range: tool({

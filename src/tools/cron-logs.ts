@@ -3,6 +3,12 @@ import { z } from 'zod';
 import { CronLogStore } from '../cron/log-store.js';
 import { debugLog } from '../logger.js';
 
+/**
+ * Creates tools for inspecting and managing cron job execution logs.
+ *
+ * Includes listing recent runs, viewing full execution traces, aggregate
+ * statistics, and log rotation/cleanup.
+ */
 export function createCronLogTools() {
   const logStore = new CronLogStore();
 

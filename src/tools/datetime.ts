@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 
+/** Creates a tool that returns the current local date and time as a human-readable string. */
 export function createDateTimeTool() {
   return tool({
     description:

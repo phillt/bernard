@@ -5,6 +5,12 @@ import type { CronJob } from './types.js';
 
 const DEFAULT_MAX_CONCURRENT = 3;
 
+/**
+ * Maps enabled cron jobs to `node-cron` scheduled tasks and manages concurrent execution.
+ *
+ * Maintains a bounded concurrency pool (configurable via `BERNARD_CRON_MAX_CONCURRENT`)
+ * and a FIFO overflow queue so that jobs triggered while the pool is full are not dropped.
+ */
 export class Scheduler {
   private tasks: Map<string, ScheduledTask> = new Map();
   private store: CronStore;
@@ -13,6 +19,10 @@ export class Scheduler {
   private runningCount = 0;
   private queue: CronJob[] = [];
 
+  /**
+   * @param store - Job persistence store used for loading jobs and recording run results.
+   * @param log - Daemon-level logger callback.
+   */
   constructor(store: CronStore, log: (msg: string) => void) {
     this.store = store;
     this.log = log;
@@ -20,6 +30,7 @@ export class Scheduler {
       parseInt(process.env.BERNARD_CRON_MAX_CONCURRENT || '', 10) || DEFAULT_MAX_CONCURRENT;
   }
 
+  /** Syncs scheduled tasks with the current jobs on disk: stops removed/disabled jobs and starts new/re-enabled ones. */
   reconcile(): void {
     const jobs = this.store.loadJobs();
     const jobMap = new Map(jobs.map((j) => [j.id, j]));
@@ -52,6 +63,7 @@ export class Scheduler {
     }
   }
 
+  /** Queues a job for execution, running it immediately if the concurrency pool has capacity. */
   private enqueueRun(job: CronJob): void {
     if (this.runningCount >= this.maxConcurrent) {
       this.log(`Job "${job.name}" queued (${this.runningCount}/${this.maxConcurrent} running)`);
@@ -61,6 +73,7 @@ export class Scheduler {
     void this.executeJob(job);
   }
 
+  /** Runs a job via `runJob`, updates its status in the store, and drains the queue on completion. */
   private async executeJob(job: CronJob): Promise<void> {
     this.runningCount++;
     const startTime = new Date().toISOString();
@@ -91,6 +104,7 @@ export class Scheduler {
     }
   }
 
+  /** Dequeues and executes waiting jobs until the concurrency pool is full or the queue is empty. */
   private drainQueue(): void {
     while (this.queue.length > 0 && this.runningCount < this.maxConcurrent) {
       const next = this.queue.shift()!;
@@ -98,6 +112,7 @@ export class Scheduler {
     }
   }
 
+  /** Stops all scheduled tasks. Does not abort in-progress job executions. */
   stopAll(): void {
     for (const [id, task] of this.tasks) {
       void task.stop();
@@ -105,6 +120,7 @@ export class Scheduler {
     }
   }
 
+  /** Number of currently scheduled (not necessarily running) cron tasks. */
   get activeCount(): number {
     return this.tasks.size;
   }

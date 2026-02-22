@@ -2,9 +2,13 @@ import type { MemoryStore } from './memory.js';
 import type { RAGSearchResult } from './rag.js';
 import { getDomain } from './domains.js';
 
+/** Options for building the memory/RAG context block injected into the system prompt. */
 export interface MemoryContextOptions {
+  /** Persistent disk-backed memory store providing saved notes and scratch data. */
   memoryStore: MemoryStore;
+  /** RAG search results to include as recalled context (omit or empty to skip). */
   ragResults?: RAGSearchResult[];
+  /** Whether to include session-scoped scratch notes (default: true). */
   includeScratch?: boolean;
 }
 

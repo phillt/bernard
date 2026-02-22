@@ -1,7 +1,10 @@
 import { debugLog } from './logger.js';
 
+/** Abstraction over a text embedding model used by the RAG subsystem. */
 export interface EmbeddingProvider {
+  /** Compute embedding vectors for one or more text strings. */
   embed(texts: string[]): Promise<number[][]>;
+  /** Return the dimensionality of the embedding vectors produced by this provider. */
   dimensions(): number;
 }
 
@@ -63,7 +66,10 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-/** Reset cached provider — for testing only. */
+/**
+ * Reset cached provider — for testing only.
+ * @internal
+ */
 export function _resetEmbeddingProvider(): void {
   cachedProvider = undefined;
 }

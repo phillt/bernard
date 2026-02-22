@@ -9,33 +9,53 @@ const RAG_DIR = path.join(os.homedir(), '.bernard', 'rag');
 const MEMORIES_FILE = path.join(RAG_DIR, 'memories.json');
 const LAST_SESSION_FILE = path.join(RAG_DIR, 'last-session.txt');
 
+/** Maximum results returned per domain before merging. */
 const DEFAULT_TOP_K_PER_DOMAIN = 3;
+/** Maximum total results returned from a search. */
 const DEFAULT_MAX_RESULTS = 9;
+/** Minimum cosine similarity for a memory to be considered relevant. */
 const DEFAULT_SIMILARITY_THRESHOLD = 0.35;
+/** Hard cap on stored memories; excess is pruned by score. */
 const DEFAULT_MAX_MEMORIES = 5000;
+/** Cosine similarity above which a new fact is considered a duplicate. */
 const DEDUP_THRESHOLD = 0.92;
+/** Half-life in days for the recency decay used in capacity-based pruning. */
 const PRUNE_HALF_LIFE_DAYS = 90;
+/** Maximum age of `.pending-*.json` temp files before cleanup (1 hour). */
 const STALE_TEMP_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
+/** Default time-to-live in days for newly created memories. */
 const DEFAULT_RAG_TTL_DAYS = 90;
 
+/** A single stored memory with its embedding vector and lifecycle metadata. */
 export interface RAGMemory {
+  /** Unique identifier (timestamp + random suffix). */
   id: string;
+  /** The plain-text fact extracted from conversation. */
   fact: string;
+  /** Pre-computed embedding vector for similarity search. */
   embedding: number[];
+  /** Origin of the fact, e.g. "compression" or "user". */
   source: string;
+  /** Domain category this fact belongs to (e.g. "general", "tool-usage"). */
   domain: string;
+  /** ISO 8601 timestamp when the memory was created. */
   createdAt: string;
+  /** Number of times this memory has been returned in search results. */
   accessCount: number;
+  /** ISO 8601 timestamp of the most recent search hit. */
   lastAccessed?: string;
+  /** ISO 8601 timestamp after which the memory is eligible for expiration pruning. */
   expiresAt?: string;
 }
 
+/** A search result containing the matched fact, its similarity score, and domain. */
 export interface RAGSearchResult {
   fact: string;
   similarity: number;
   domain: string;
 }
 
+/** Extended search result that includes the memory ID and lifecycle metadata. */
 export interface RAGSearchResultWithId {
   id: string;
   fact: string;
@@ -45,14 +65,25 @@ export interface RAGSearchResultWithId {
   accessCount: number;
 }
 
+/** Optional configuration overrides for {@link RAGStore}. All fields fall back to sensible defaults. */
 export interface RAGStoreConfig {
+  /** Max results per domain before merging (default: 3). */
   topKPerDomain?: number;
+  /** Max total results from a search (default: 9). */
   maxResults?: number;
+  /** Minimum cosine similarity to include a result (default: 0.35). */
   similarityThreshold?: number;
+  /** Hard cap on stored memories (default: 5000). */
   maxMemories?: number;
+  /** Time-to-live in days for new memories (default: 90). */
   ragTtlDays?: number;
 }
 
+/**
+ * Disk-backed vector store for long-term conversational memory.
+ * Stores facts as embeddings, supports similarity search with per-domain top-k ranking,
+ * and manages memory lifecycle via TTL-based expiration and capacity pruning.
+ */
 export class RAGStore {
   private memories: RAGMemory[] = [];
   private topKPerDomain: number;

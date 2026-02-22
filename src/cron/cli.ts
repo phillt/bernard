@@ -5,6 +5,7 @@ import { runJob } from './runner.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from './client.js';
 import { printInfo, printError } from '../output.js';
 
+/** Stops the daemon automatically when no enabled jobs remain. */
 function stopIfNoEnabledJobs(store: CronStore): void {
   const remaining = store.loadJobs().filter((j) => j.enabled);
   if (remaining.length === 0 && isDaemonRunning()) {
@@ -13,6 +14,7 @@ function stopIfNoEnabledJobs(store: CronStore): void {
   }
 }
 
+/** Prompts the user for a yes/no confirmation via readline. Resolves `true` on "y". */
 function confirm(prompt: string): Promise<boolean> {
   return new Promise((resolve) => {
     const rl = readline.createInterface({
@@ -26,6 +28,7 @@ function confirm(prompt: string): Promise<boolean> {
   });
 }
 
+/** Lists all cron jobs with their status, schedule, and last-run info. */
 export async function cronList(): Promise<void> {
   const store = new CronStore();
   const jobs = store.loadJobs();
@@ -54,6 +57,7 @@ export async function cronList(): Promise<void> {
   printInfo(`${jobs.length} job(s): ${enabled} enabled, ${disabled} disabled`);
 }
 
+/** Manually triggers an immediate execution of a cron job by ID, printing the result. */
 export async function cronRun(id: string): Promise<void> {
   const store = new CronStore();
   const job = store.getJob(id);
@@ -109,6 +113,7 @@ export async function cronRun(id: string): Promise<void> {
   }
 }
 
+/** Deletes one or more cron jobs (and their logs) after user confirmation. */
 export async function cronDelete(ids: string[]): Promise<void> {
   const store = new CronStore();
   const logStore = new CronLogStore();
@@ -151,6 +156,7 @@ export async function cronDelete(ids: string[]): Promise<void> {
   stopIfNoEnabledJobs(store);
 }
 
+/** Deletes all cron jobs and their logs after user confirmation, stopping the daemon if running. */
 export async function cronDeleteAll(): Promise<void> {
   const store = new CronStore();
   const logStore = new CronLogStore();
@@ -187,6 +193,7 @@ export async function cronDeleteAll(): Promise<void> {
   printInfo(`Deleted ${jobs.length} job(s).`);
 }
 
+/** Stops the daemon (no args) or disables specific jobs by ID. Auto-stops the daemon if no enabled jobs remain. */
 export async function cronStop(ids?: string[]): Promise<void> {
   if (!ids || ids.length === 0) {
     // Stop the daemon
@@ -215,6 +222,7 @@ export async function cronStop(ids?: string[]): Promise<void> {
   stopIfNoEnabledJobs(store);
 }
 
+/** Restarts the daemon (no args) or bounces specific jobs by disabling then re-enabling them. */
 export async function cronBounce(ids?: string[]): Promise<void> {
   if (!ids || ids.length === 0) {
     // Bounce the daemon

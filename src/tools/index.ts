@@ -13,11 +13,19 @@ import type { MemoryStore } from '../memory.js';
 
 export type { ToolOptions } from './types.js';
 
+/**
+ * Assembles the complete tool registry for the agent.
+ *
+ * @param options - Shell execution options (timeout, dangerous-command confirmation callback).
+ * @param memoryStore - Persistent and scratch memory backing store.
+ * @param mcpTools - Optional MCP-provided tools to merge into the registry.
+ * @returns A flat record of all available AI SDK tools keyed by tool name.
+ */
 export function createTools(
   options: ToolOptions,
   memoryStore: MemoryStore,
   mcpTools?: Record<string, any>,
-) {
+): Record<string, any> {
   return {
     shell: createShellTool(options),
     memory: createMemoryTool(memoryStore),

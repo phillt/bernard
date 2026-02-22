@@ -1,9 +1,12 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 
+/** Upper bound for the wait tool's delay (5 minutes). */
 export const MAX_WAIT_SECONDS = 300;
+/** Lower bound for the wait tool's delay. */
 export const MIN_WAIT_SECONDS = 0.1;
 
+/** Creates a tool that pauses execution for a specified number of seconds. */
 export function createWaitTool() {
   return tool({
     description:

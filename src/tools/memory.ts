@@ -2,6 +2,13 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import type { MemoryStore } from '../memory.js';
 
+/**
+ * Creates the persistent memory tool backed by on-disk markdown files at `~/.bernard/memory/`.
+ *
+ * Supports list, read, write, and delete actions for cross-session recall.
+ *
+ * @param memoryStore - The backing MemoryStore instance.
+ */
 export function createMemoryTool(memoryStore: MemoryStore) {
   return tool({
     description:
@@ -43,6 +50,13 @@ export function createMemoryTool(memoryStore: MemoryStore) {
   });
 }
 
+/**
+ * Creates the session-scoped scratch-pad tool for tracking intermediate work.
+ *
+ * Scratch notes survive context compression but are discarded when the session ends.
+ *
+ * @param memoryStore - The backing MemoryStore instance.
+ */
 export function createScratchTool(memoryStore: MemoryStore) {
   return tool({
     description:

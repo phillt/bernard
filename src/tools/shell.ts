@@ -20,11 +20,25 @@ const DANGEROUS_PATTERNS = [
   /\bkillall\b/,
 ];
 
-/** @internal */
+/**
+ * Tests whether a shell command matches any dangerous pattern (rm -rf, sudo, mkfs, etc.).
+ *
+ * @internal Exported for testing only.
+ * @param command - The raw shell command string to evaluate.
+ * @returns `true` if the command matches a dangerous pattern.
+ */
 export function isDangerous(command: string): boolean {
   return DANGEROUS_PATTERNS.some((pattern) => pattern.test(command));
 }
 
+/**
+ * Creates the shell execution tool that runs commands in the user's terminal.
+ *
+ * Dangerous commands are intercepted and require explicit user confirmation
+ * before execution.
+ *
+ * @param options - Shell timeout and dangerous-command confirmation callback.
+ */
 export function createShellTool(options: ToolOptions) {
   return tool({
     description:

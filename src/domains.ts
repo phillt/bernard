@@ -1,12 +1,21 @@
+/**
+ * Describes a RAG memory domain — a category of facts with its own extraction prompt.
+ */
 export interface MemoryDomain {
+  /** Unique identifier used as the storage key (e.g. `"tool-usage"`). */
   id: string;
+  /** Human-readable display name shown in `/rag` and `/facts` output. */
   name: string;
+  /** Short summary of what facts this domain captures. */
   description: string;
+  /** Full LLM system prompt used to extract facts for this domain from a conversation. */
   extractionPrompt: string;
 }
 
+/** Domain ID used as the fallback when a requested domain is not found in the registry. */
 export const DEFAULT_DOMAIN = 'general';
 
+/** Registry of all known memory domains, keyed by domain ID. */
 export const DOMAIN_REGISTRY: Record<string, MemoryDomain> = {
   'tool-usage': {
     id: 'tool-usage',
@@ -117,10 +126,15 @@ Return a JSON array of strings. Each string should be a self-contained fact (und
   },
 };
 
+/** Return the IDs of all registered memory domains. */
 export function getDomainIds(): string[] {
   return Object.keys(DOMAIN_REGISTRY);
 }
 
+/**
+ * Look up a memory domain by ID, falling back to `DEFAULT_DOMAIN` if not found.
+ * @param id - Domain identifier to look up.
+ */
 export function getDomain(id: string): MemoryDomain {
   return DOMAIN_REGISTRY[id] ?? DOMAIN_REGISTRY[DEFAULT_DOMAIN];
 }
