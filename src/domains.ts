@@ -134,6 +134,7 @@ export function getDomainIds(): string[] {
 /**
  * Look up a memory domain by ID, falling back to `DEFAULT_DOMAIN` if not found.
  * @param id - Domain identifier to look up.
+ * @returns The matching {@link MemoryDomain}, or the `general` domain if `id` is unknown.
  */
 export function getDomain(id: string): MemoryDomain {
   return DOMAIN_REGISTRY[id] ?? DOMAIN_REGISTRY[DEFAULT_DOMAIN];

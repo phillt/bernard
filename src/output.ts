@@ -217,8 +217,12 @@ export function printConversationReplay(messages: CoreMessage[]): void {
 }
 
 /**
- * Extracts the plain-text content from a {@link CoreMessage}.
- * Returns `null` if the message has no text parts.
+ * Extracts the plain-text content from a {@link CoreMessage} for display formatting.
+ *
+ * Unlike {@link extractText} in `context.ts` (which is used for serialization and compression),
+ * this variant is scoped to output rendering only.
+ *
+ * @returns The joined text content, or `null` if the message has no text parts.
  * @internal
  */
 function extractText(msg: CoreMessage): string | null {

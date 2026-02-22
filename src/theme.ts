@@ -217,7 +217,10 @@ export const DEFAULT_THEME = 'bernard';
 let activeThemeKey: string = DEFAULT_THEME;
 let activeTheme: Theme = THEMES[DEFAULT_THEME];
 
-/** Returns the currently active {@link Theme} object. */
+/**
+ * Returns the currently active {@link Theme} object.
+ * @returns The active theme, defaulting to the `bernard` theme at startup.
+ */
 export function getTheme(): Theme {
   return activeTheme;
 }
