@@ -10,6 +10,6 @@ export interface ToolOptions {
 export interface ShellResult {
   /** Combined stdout/stderr output of the command. */
   output: string;
-  /** `true` when the command exited with a non-zero status or was rejected. */
+  /** `true` when the command exited with a non-zero status or timed out. */
   is_error: boolean;
 }
