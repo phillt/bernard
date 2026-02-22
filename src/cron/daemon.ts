@@ -5,6 +5,10 @@ import { loadConfig } from '../config.js';
 
 const MAX_LOG_SIZE = 1_000_000; // 1MB
 
+/**
+ * Creates a logger function that appends timestamped lines to the daemon log file.
+ * Automatically rotates the log when it exceeds {@link MAX_LOG_SIZE}.
+ */
 function createLogger() {
   const logFile = CronStore.logFile;
 
@@ -31,6 +35,10 @@ function createLogger() {
   };
 }
 
+/**
+ * Daemon entry point: loads config, initializes the scheduler, watches for
+ * job changes, and handles graceful shutdown on SIGTERM/SIGINT.
+ */
 function main() {
   const log = createLogger();
   log('Daemon starting');

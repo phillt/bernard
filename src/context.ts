@@ -33,8 +33,11 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'grok-3-mini': 131_072,
 };
 
+/** Fallback context window size (in tokens) for models not listed in MODEL_CONTEXT_WINDOWS. */
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
+/** Fraction of the context window at which history compression is triggered. */
 export const COMPRESSION_THRESHOLD = 0.75;
+/** Number of recent user/assistant exchanges preserved verbatim during compression. */
 export const RECENT_TURNS_TO_KEEP = 4;
 
 /** Look up context window for a model, falling back to 128k for unknown models. */
@@ -130,8 +133,11 @@ export function countRecentMessages(history: CoreMessage[], turnsToKeep: number)
 
 const FACT_EXTRACTION_MAX = 500;
 
+/** Facts extracted from a conversation segment, grouped by their knowledge domain. */
 export interface DomainFacts {
+  /** Domain identifier (e.g. "general", "tool-usage", "user-preferences"). */
   domain: string;
+  /** Plain-text facts extracted for this domain. */
   facts: string[];
 }
 
@@ -445,6 +451,7 @@ export function isTokenOverflowError(message: string): boolean {
   );
 }
 
+/** Extract the plain-text content from a CoreMessage, joining multiple text parts with spaces. */
 export function extractText(msg: CoreMessage): string | null {
   if (typeof msg.content === 'string') return msg.content;
   if (!Array.isArray(msg.content)) return null;

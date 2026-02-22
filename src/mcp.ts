@@ -8,24 +8,29 @@ import { printInfo, printError } from './output.js';
 
 const CONFIG_PATH = path.join(os.homedir(), '.bernard', 'mcp.json');
 
+/** Configuration for an MCP server launched via stdio subprocess. */
 interface MCPStdioConfig {
   command: string;
   args?: string[];
   env?: Record<string, string>;
 }
 
+/** Configuration for an MCP server accessed over a network URL (SSE or HTTP). */
 interface MCPUrlConfig {
   url: string;
   type?: 'sse' | 'http';
   headers?: Record<string, string>;
 }
 
+/** Discriminated union of stdio and URL-based MCP server configurations. */
 type MCPServerConfig = MCPStdioConfig | MCPUrlConfig;
 
+/** Top-level shape of the `~/.bernard/mcp.json` configuration file. */
 interface MCPConfig {
   mcpServers: Record<string, MCPServerConfig>;
 }
 
+/** Runtime connection status for a single MCP server. */
 interface ServerStatus {
   name: string;
   connected: boolean;
@@ -33,6 +38,13 @@ interface ServerStatus {
   error?: string;
 }
 
+/**
+ * Manages the lifecycle of MCP (Model Context Protocol) server connections.
+ *
+ * Reads server definitions from `~/.bernard/mcp.json`, establishes connections
+ * (stdio or URL-based), aggregates tools from all servers, and handles
+ * automatic reconnection with retry when a tool call fails.
+ */
 export class MCPManager {
   private clients: Map<string, MCPClient> = new Map();
   private serverStatuses: ServerStatus[] = [];
@@ -42,6 +54,11 @@ export class MCPManager {
   // Per-server reconnection lock to coalesce concurrent reconnect attempts
   private reconnectPromises: Map<string, Promise<boolean>> = new Map();
 
+  /**
+   * Reads and parses the MCP configuration from `~/.bernard/mcp.json`.
+   * @returns The parsed config, or an empty config if the file does not exist.
+   * @throws {Error} If the file exists but contains invalid JSON.
+   */
   loadConfig(): MCPConfig {
     if (!fs.existsSync(CONFIG_PATH)) {
       return { mcpServers: {} };
@@ -55,6 +72,10 @@ export class MCPManager {
     }
   }
 
+  /**
+   * Creates an MCP client for the given server configuration.
+   * @internal
+   */
   private async createClientForConfig(serverConfig: MCPServerConfig): Promise<MCPClient> {
     if ('url' in serverConfig) {
       return createMCPClient({
@@ -76,6 +97,13 @@ export class MCPManager {
     }
   }
 
+  /**
+   * Connects to all MCP servers defined in the config file.
+   *
+   * Connections are established concurrently via `Promise.allSettled`.
+   * Servers that fail to connect are recorded with an error status and
+   * logged, but do not prevent other servers from connecting.
+   */
   async connect(): Promise<void> {
     let config: MCPConfig;
     try {
@@ -146,6 +174,14 @@ export class MCPManager {
     }
   }
 
+  /**
+   * Reconnects a single MCP server by name, closing the old client first.
+   *
+   * Concurrent calls for the same server are coalesced so only one
+   * reconnection attempt runs at a time.
+   * @param name - The server key as defined in the config file.
+   * @returns `true` if the reconnection succeeded, `false` otherwise.
+   */
   async reconnectServer(name: string): Promise<boolean> {
     // Coalesce concurrent reconnect attempts for the same server —
     // if a reconnect is already in progress, return its promise instead
@@ -162,6 +198,10 @@ export class MCPManager {
     }
   }
 
+  /**
+   * Performs the actual reconnection logic for a single server.
+   * @internal
+   */
   private async doReconnectServer(name: string): Promise<boolean> {
     const config = this.serverConfigs.get(name);
     if (!config) return false;
@@ -225,6 +265,10 @@ export class MCPManager {
     }
   }
 
+  /**
+   * Converts a dynamic MCP tool to the function-tool shape expected by AI SDK v4.
+   * @internal
+   */
   private convertTool(name: string, tool: any): any {
     if (tool.type === 'dynamic') {
       const { type: _type, inputSchema, ...rest } = tool;
@@ -236,6 +280,12 @@ export class MCPManager {
     return tool;
   }
 
+  /**
+   * Returns all MCP tools, converted for AI SDK v4 compatibility.
+   *
+   * Each tool's `execute` method is wrapped with automatic reconnect-and-retry:
+   * if a call fails, the owning server is reconnected and the call retried once.
+   */
   getTools(): Record<string, any> {
     // Convert dynamic MCP tools to function tools compatible with AI SDK v4.
     // @ai-sdk/mcp@1.x returns tools with type:'dynamic' and inputSchema from
@@ -273,14 +323,17 @@ export class MCPManager {
     return converted;
   }
 
+  /** Returns the current connection status for every configured server. */
   getServerStatuses(): ServerStatus[] {
     return this.serverStatuses;
   }
 
+  /** Returns the names of all servers that are currently connected. */
   getConnectedServerNames(): string[] {
     return this.serverStatuses.filter((s) => s.connected).map((s) => s.name);
   }
 
+  /** Gracefully closes all active MCP client connections. */
   async close(): Promise<void> {
     const closePromises = Array.from(this.clients.values()).map((client) =>
       client.close().catch(() => {}),
@@ -290,6 +343,11 @@ export class MCPManager {
   }
 }
 
+/**
+ * Lists all MCP servers in the config file with their connection details.
+ * @returns An array of server summaries. Returns an empty array if no config file exists.
+ * @throws {Error} If the config file contains invalid JSON.
+ */
 export function listMCPServers(): {
   key: string;
   command?: string;
@@ -317,6 +375,12 @@ export function listMCPServers(): {
   });
 }
 
+/**
+ * Retrieves the configuration for a single MCP server by key.
+ * @param key - The server key as defined in the config file.
+ * @returns The server config, or `undefined` if the key or config file does not exist.
+ * @throws {Error} If the config file contains invalid JSON.
+ */
 export function getMCPServer(key: string): MCPServerConfig | undefined {
   if (!fs.existsSync(CONFIG_PATH)) {
     return undefined;
@@ -333,6 +397,15 @@ export function getMCPServer(key: string): MCPServerConfig | undefined {
   return config.mcpServers[key];
 }
 
+/**
+ * Adds a stdio-based MCP server entry to `~/.bernard/mcp.json`.
+ * @param key - Unique, whitespace-free identifier for the server.
+ * @param command - The command to spawn (e.g. `"npx"`).
+ * @param args - Optional command-line arguments.
+ * @param env - Optional extra environment variables merged with `process.env`.
+ * @throws {Error} If the key is empty/contains whitespace, the command is empty,
+ *         the key already exists, or the config file contains invalid JSON.
+ */
 export function addMCPServer(
   key: string,
   command: string,
@@ -373,6 +446,15 @@ export function addMCPServer(
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
 }
 
+/**
+ * Adds a URL-based (SSE or HTTP) MCP server entry to `~/.bernard/mcp.json`.
+ * @param key - Unique, whitespace-free identifier for the server.
+ * @param url - The server endpoint URL.
+ * @param type - Transport type; defaults to `'sse'` at connection time.
+ * @param headers - Optional HTTP headers sent with every request.
+ * @throws {Error} If the key is empty/contains whitespace, the URL is empty,
+ *         the key already exists, or the config file contains invalid JSON.
+ */
 export function addMCPUrlServer(
   key: string,
   url: string,
@@ -413,6 +495,11 @@ export function addMCPUrlServer(
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
 }
 
+/**
+ * Removes an MCP server entry from `~/.bernard/mcp.json`.
+ * @param key - The server key to remove.
+ * @throws {Error} If the config file does not exist, contains invalid JSON, or the key is not found.
+ */
 export function removeMCPServer(key: string): void {
   if (!fs.existsSync(CONFIG_PATH)) {
     throw new Error(`No MCP config file found. No servers configured.`);

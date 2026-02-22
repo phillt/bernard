@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 
+/**
+ * @module index
+ * CLI entry point for Bernard. Defines all Commander commands and
+ * dispatches to the interactive REPL or the appropriate sub-command handler.
+ */
+
 import { Command } from 'commander';
 import * as readline from 'node:readline';
 import {

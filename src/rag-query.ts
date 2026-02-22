@@ -2,8 +2,11 @@ import type { CoreMessage } from 'ai';
 import { extractText } from './context.js';
 import type { RAGSearchResult } from './rag.js';
 
+/** Number of recent user messages (beyond the current input) to include in the RAG query. */
 export const DEFAULT_WINDOW_SIZE = 2;
+/** Maximum character length for the composed RAG search query. */
 export const DEFAULT_MAX_QUERY_CHARS = 1000;
+/** Similarity score bonus applied to facts that appeared in the previous turn's results. */
 export const DEFAULT_STICKINESS_BOOST = 0.05;
 
 const BOUNDARY_PREFIXES = [
@@ -41,7 +44,9 @@ export function extractRecentUserTexts(
   return texts;
 }
 
+/** Options for {@link buildRAGQuery}. */
 export interface BuildRAGQueryOptions {
+  /** Character budget for the composed query (default: 1000). */
   maxQueryChars?: number;
 }
 
@@ -78,9 +83,13 @@ export function buildRAGQuery(
   return [...parts, current].join('. ');
 }
 
+/** Options for {@link applyStickiness}. */
 export interface ApplyStickinessOptions {
+  /** Similarity score bonus for previously-seen facts (default: 0.05). */
   boost?: number;
+  /** Max results to keep per domain after re-ranking (default: 3). */
   topKPerDomain?: number;
+  /** Max total results after re-ranking (default: 9). */
   maxResults?: number;
 }
 

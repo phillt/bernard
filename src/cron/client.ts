@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { fork } from 'node:child_process';
 import { CronStore } from './store.js';
 
+/** Checks whether the daemon process is alive by sending signal 0 to the recorded PID. Cleans up stale PID files. */
 export function isDaemonRunning(): boolean {
   const pidFile = CronStore.pidFile;
   if (!fs.existsSync(pidFile)) return false;
@@ -25,6 +26,7 @@ export function isDaemonRunning(): boolean {
   }
 }
 
+/** Reads the daemon PID from the PID file, or returns `null` if unavailable. */
 export function getDaemonPid(): number | null {
   const pidFile = CronStore.pidFile;
   if (!fs.existsSync(pidFile)) return null;
@@ -36,6 +38,12 @@ export function getDaemonPid(): number | null {
   }
 }
 
+/**
+ * Forks the daemon process in the background if it is not already running.
+ *
+ * @returns `true` if the daemon is now running (already was or just started).
+ * @throws {Error} If the compiled daemon script is missing (build required).
+ */
 export function startDaemon(): boolean {
   if (isDaemonRunning()) return true;
 
@@ -59,6 +67,7 @@ export function startDaemon(): boolean {
   return false;
 }
 
+/** Sends SIGTERM to the daemon and removes the PID file. Returns `false` if no daemon was found. */
 export function stopDaemon(): boolean {
   const pid = getDaemonPid();
   if (pid === null) return false;

@@ -14,9 +14,13 @@ import { loadConfig } from './config.js';
 import { extractDomainFacts } from './context.js';
 import { RAGStore } from './rag.js';
 
+/** Shape of the JSON temp file written by the REPL at exit. */
 interface TempPayload {
+  /** Serialized conversation messages to extract facts from. */
   serialized: string;
+  /** LLM provider to use for extraction (e.g. `"anthropic"`). */
   provider: string;
+  /** Model identifier to use for extraction. */
   model: string;
 }
 

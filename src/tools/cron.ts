@@ -28,6 +28,13 @@ function stopIfNoEnabledJobs(store: CronStore): string {
   return '';
 }
 
+/**
+ * Creates the full suite of cron job management tools.
+ *
+ * Includes create, list, get, update, delete, enable, disable, run, status,
+ * and bounce (daemon restart). The background daemon is auto-started when
+ * jobs are created or enabled, and auto-stopped when no enabled jobs remain.
+ */
 export function createCronTools() {
   const store = new CronStore();
   const logStore = new CronLogStore();

@@ -3,15 +3,25 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 
+/** Resolved runtime configuration for a Bernard session. */
 export interface BernardConfig {
+  /** Active LLM provider identifier (e.g. "anthropic", "openai", "xai"). */
   provider: string;
+  /** Model name passed to the provider SDK. */
   model: string;
+  /** Maximum tokens the model may generate per response. */
   maxTokens: number;
+  /** Timeout in milliseconds for shell tool commands. */
   shellTimeout: number;
+  /** Whether RAG memory retrieval is active. */
   ragEnabled: boolean;
+  /** Color theme name for terminal output. */
   theme: string;
+  /** Anthropic API key, if available. */
   anthropicApiKey?: string;
+  /** OpenAI API key, if available. */
   openaiApiKey?: string;
+  /** xAI API key, if available. */
   xaiApiKey?: string;
 }
 
@@ -21,12 +31,19 @@ const DEFAULT_SHELL_TIMEOUT = 30000;
 const PREFS_PATH = path.join(os.homedir(), '.bernard', 'preferences.json');
 const KEYS_PATH = path.join(os.homedir(), '.bernard', 'keys.json');
 
+/** Maps each provider name to the environment variable that holds its API key. */
 export const PROVIDER_ENV_VARS: Record<string, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
   openai: 'OPENAI_API_KEY',
   xai: 'XAI_API_KEY',
 };
 
+/**
+ * Registry of user-configurable numeric options.
+ *
+ * Each entry maps a CLI option name (e.g. "max-tokens") to its config key,
+ * default value, human-readable description, and corresponding env var.
+ */
 export const OPTIONS_REGISTRY: Record<
   string,
   {
@@ -50,6 +67,11 @@ export const OPTIONS_REGISTRY: Record<
   },
 };
 
+/**
+ * Persists user preferences to `~/.bernard/preferences.json`.
+ *
+ * Preserves the existing `autoUpdate` flag when the caller omits it.
+ */
 export function savePreferences(prefs: {
   provider: string;
   model: string;
@@ -80,6 +102,11 @@ export function savePreferences(prefs: {
   fs.writeFileSync(PREFS_PATH, JSON.stringify(data, null, 2) + '\n');
 }
 
+/**
+ * Reads stored preferences from `~/.bernard/preferences.json`.
+ *
+ * @returns Partial preferences object; missing fields are `undefined`.
+ */
 export function loadPreferences(): {
   provider?: string;
   model?: string;
@@ -117,6 +144,11 @@ function loadStoredKeys(): Record<string, string> {
   }
 }
 
+/**
+ * Stores an API key for the given provider in `~/.bernard/keys.json` (mode 0600).
+ *
+ * @throws {Error} If `provider` is not a recognised provider name.
+ */
 export function saveProviderKey(provider: string, key: string): void {
   if (!PROVIDER_ENV_VARS[provider]) {
     throw new Error(
@@ -133,6 +165,13 @@ export function saveProviderKey(provider: string, key: string): void {
   fs.chmodSync(KEYS_PATH, 0o600);
 }
 
+/**
+ * Removes the stored API key for the given provider.
+ *
+ * Deletes `keys.json` entirely when no keys remain.
+ *
+ * @throws {Error} If `provider` is unrecognised or has no stored key.
+ */
 export function removeProviderKey(provider: string): void {
   if (!PROVIDER_ENV_VARS[provider]) {
     throw new Error(
@@ -154,6 +193,11 @@ export function removeProviderKey(provider: string): void {
   }
 }
 
+/**
+ * Sets a numeric option (e.g. "max-tokens") and persists it to preferences.
+ *
+ * @throws {Error} If `name` is not in {@link OPTIONS_REGISTRY}.
+ */
 export function saveOption(name: string, value: number): void {
   const entry = OPTIONS_REGISTRY[name];
   if (!entry) {
@@ -172,6 +216,11 @@ export function saveOption(name: string, value: number): void {
   });
 }
 
+/**
+ * Resets a single numeric option back to its default by removing it from preferences.
+ *
+ * @throws {Error} If `name` is not in {@link OPTIONS_REGISTRY}.
+ */
 export function resetOption(name: string): void {
   const entry = OPTIONS_REGISTRY[name];
   if (!entry) {
@@ -190,6 +239,7 @@ export function resetOption(name: string): void {
   });
 }
 
+/** Resets all numeric options to their defaults by removing them from preferences. */
 export function resetAllOptions(): void {
   const prefs = loadPreferences();
   delete (prefs as Record<string, unknown>).maxTokens;
@@ -201,6 +251,11 @@ export function resetAllOptions(): void {
   });
 }
 
+/**
+ * Returns the API key availability status for every known provider.
+ *
+ * Checks both stored keys (`~/.bernard/keys.json`) and environment variables.
+ */
 export function getProviderKeyStatus(): Array<{ provider: string; hasKey: boolean }> {
   const cwdEnv = path.join(process.cwd(), '.env');
   const homeEnv = path.join(os.homedir(), '.bernard', '.env');
@@ -218,6 +273,7 @@ export function getProviderKeyStatus(): Array<{ provider: string; hasKey: boolea
   }));
 }
 
+/** Known model identifiers for each provider, ordered by preference (first = default). */
 export const PROVIDER_MODELS: Record<string, string[]> = {
   anthropic: [
     'claude-sonnet-4-5-20250929',
@@ -248,10 +304,12 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   ],
 };
 
+/** Returns the first (preferred) model for a provider, falling back to Anthropic's default. */
 export function getDefaultModel(provider: string): string {
   return PROVIDER_MODELS[provider]?.[0] ?? PROVIDER_MODELS[DEFAULT_PROVIDER][0];
 }
 
+/** Returns provider names that have an API key present in the given config. */
 export function getAvailableProviders(config: BernardConfig): string[] {
   const keyMap: Record<string, string | undefined> = {
     anthropic: config.anthropicApiKey,
@@ -261,6 +319,15 @@ export function getAvailableProviders(config: BernardConfig): string[] {
   return Object.keys(PROVIDER_MODELS).filter((p) => !!keyMap[p]);
 }
 
+/**
+ * Builds a fully-resolved {@link BernardConfig} by merging (in priority order):
+ * CLI overrides, saved preferences, environment variables, and built-in defaults.
+ *
+ * Also loads `.env` files and stored API keys into `process.env`.
+ *
+ * @param overrides - Optional CLI-supplied provider/model that take highest priority.
+ * @throws {Error} If the selected provider has no API key configured.
+ */
 export function loadConfig(overrides?: { provider?: string; model?: string }): BernardConfig {
   // Load .env from cwd first, then fallback to ~/.bernard/.env
   const cwdEnv = path.join(process.cwd(), '.env');

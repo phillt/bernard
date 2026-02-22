@@ -105,7 +105,14 @@ Good: "Run \`curl -s http://localhost:3000/health\` and report: (a) HTTP status 
 
 Do NOT use sub-agents for tasks that are sequential or depend on each other's results — handle those yourself step by step. Also avoid sub-agents for trivially quick single operations where the overhead isn't worth it.`;
 
-/** @internal */
+/**
+ * Assembles the full system prompt including base instructions, memory context, and MCP status.
+ * @internal Exported for testing only.
+ * @param config - Active Bernard configuration (provider, model, etc.)
+ * @param memoryStore - Store used to inject persistent memory and scratch context
+ * @param mcpServerNames - Names of currently connected MCP servers, if any
+ * @param ragResults - RAG search results to include as recalled context
+ */
 export function buildSystemPrompt(
   config: BernardConfig,
   memoryStore: MemoryStore,
@@ -136,6 +143,12 @@ MCP (Model Context Protocol) servers provide additional tools. Use the mcp_confi
   return prompt;
 }
 
+/**
+ * Core agent that manages a multi-step conversation loop with tool calling via the Vercel AI SDK.
+ *
+ * Maintains conversation history, handles context compression when token limits
+ * approach, performs RAG lookups, and orchestrates LLM calls with registered tools.
+ */
 export class Agent {
   private history: CoreMessage[] = [];
   private config: BernardConfig;
@@ -175,22 +188,34 @@ export class Agent {
     }
   }
 
+  /** Returns the current conversation message history. */
   getHistory(): CoreMessage[] {
     return this.history;
   }
 
+  /** Returns the RAG search results from the most recent `processInput` call. */
   getLastRAGResults(): RAGSearchResult[] {
     return this.lastRAGResults;
   }
 
+  /** Cancels the in-flight LLM request, if any. Safe to call when no request is active. */
   abort(): void {
     this.abortController?.abort();
   }
 
+  /** Attaches a spinner stats object that will be updated with token usage during generation. */
   setSpinnerStats(stats: SpinnerStats): void {
     this.spinnerStats = stats;
   }
 
+  /**
+   * Sends user input through the agent loop: RAG retrieval, context compression, LLM generation, and tool execution.
+   *
+   * Appends the user message and all response messages (including tool calls) to the conversation history.
+   * Automatically retries with emergency truncation on token overflow errors.
+   * @param userInput - The raw text from the user's REPL input
+   * @throws Error wrapping the underlying API error if generation fails for non-abort, non-overflow reasons
+   */
   async processInput(userInput: string): Promise<void> {
     this.history.push({ role: 'user', content: userInput });
 
@@ -348,6 +373,7 @@ export class Agent {
     }
   }
 
+  /** Resets conversation history, scratch notes, and RAG tracking state for a fresh session. */
   clearHistory(): void {
     this.history = [];
     this.memoryStore.clearScratch();

@@ -29,11 +29,22 @@ Guidelines:
 - If everything looks normal and no action is needed, simply report the results without notifying.
 - If the task is a one-time action and you have completed it successfully, use the cron_self_disable tool to prevent further executions.`;
 
+/** Outcome of a single cron job execution. */
 export interface RunJobResult {
   success: boolean;
   output: string;
 }
 
+/**
+ * Executes a cron job by running the agent loop (with tools) against the job's prompt.
+ *
+ * Sets up shell, memory, scratch, datetime, notify, and MCP tools, then calls
+ * `generateText` with up to 20 steps. Each step is recorded and persisted to
+ * the {@link CronLogStore} on completion or failure.
+ *
+ * @param job - The cron job definition to execute.
+ * @param log - Callback for daemon-level logging.
+ */
 export async function runJob(job: CronJob, log: (msg: string) => void): Promise<RunJobResult> {
   const config = loadConfig();
   const memoryStore = new MemoryStore();
@@ -255,6 +266,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
   }
 }
 
+/** @internal Truncates string results that exceed `maxLen` to keep log entries bounded. */
 function truncateResult(result: unknown, maxLen: number): unknown {
   if (typeof result === 'string' && result.length > maxLen) {
     return result.slice(0, maxLen) + `... (truncated, ${result.length} chars total)`;

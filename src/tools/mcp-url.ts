@@ -2,6 +2,12 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { addMCPUrlServer } from '../mcp.js';
 
+/**
+ * Creates the tool for adding URL-based (SSE/HTTP) MCP servers.
+ *
+ * Unlike {@link createMCPConfigTool}, this tool is specialized for URL endpoints
+ * rather than local stdio processes. Changes require a Bernard restart.
+ */
 export function createMCPAddUrlTool() {
   return tool({
     description:

@@ -2,6 +2,7 @@ import { execSync, spawn } from 'node:child_process';
 import { platform as osPlatform } from 'node:os';
 import notifier from 'node-notifier';
 
+/** Preferred terminal emulators to search for on Linux, in priority order. */
 const LINUX_TERMINALS = [
   'x-terminal-emulator',
   'gnome-terminal',
@@ -12,6 +13,7 @@ const LINUX_TERMINALS = [
   'xterm',
 ];
 
+/** Returns the first available Linux terminal emulator from {@link LINUX_TERMINALS}, or `null`. */
 function findLinuxTerminal(): string | null {
   for (const term of LINUX_TERMINALS) {
     try {
@@ -24,6 +26,7 @@ function findLinuxTerminal(): string | null {
   return null;
 }
 
+/** Returns the correct argument list to launch a command in the given Linux terminal emulator. */
 function getLinuxTerminalArgs(terminal: string, command: string): string[] {
   switch (terminal) {
     case 'gnome-terminal':
@@ -42,6 +45,12 @@ function getLinuxTerminalArgs(terminal: string, command: string): string[] {
   }
 }
 
+/**
+ * Opens a new terminal window running `bernard --alert <alertId>`.
+ * Supports macOS (Terminal.app via osascript), Windows (wt / cmd), and Linux.
+ *
+ * @param platform - Override for `os.platform()`, useful for testing.
+ */
 function openAlertInTerminal(
   alertId: string,
   log?: (msg: string) => void,
@@ -120,6 +129,13 @@ function openAlertInTerminal(
 let pendingAlertId: string | null = null;
 let clickListenerRegistered = false;
 
+/**
+ * Sends a cross-platform desktop notification via `node-notifier`.
+ *
+ * Clicking the notification opens a terminal with `bernard --alert` for the
+ * associated alert. Only one click-listener is registered regardless of how
+ * many notifications are sent; it always resolves the most recent alert.
+ */
 export function sendNotification(options: {
   title: string;
   message: string;

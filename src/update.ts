@@ -10,16 +10,25 @@ const CACHE_PATH = path.join(os.homedir(), '.bernard', 'update-check.json');
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PACKAGE_NAME = 'bernard-agent';
 
+/** Persisted update-check cache stored at `~/.bernard/update-check.json`. */
 interface CacheData {
+  /** ISO-8601 timestamp of the last registry check. */
   lastCheck: string;
+  /** Latest version reported by the npm registry. */
   latestVersion: string;
+  /** Local version at the time of the check. */
   currentVersion: string;
 }
 
+/** Result of comparing local and registry versions. */
 interface UpdateCheckResult {
+  /** `true` when the registry version is newer than the installed version. */
   updateAvailable: boolean;
+  /** Currently installed semver string. */
   currentVersion: string;
+  /** Latest semver string from the npm registry. */
   latestVersion: string;
+  /** `true` if the result was served from the local 24-hour cache. */
   cached: boolean;
 }
 

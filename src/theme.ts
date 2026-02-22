@@ -1,20 +1,42 @@
 import chalk from 'chalk';
 
+/** A function that applies a chalk color/style to a string and returns the styled result. */
 type ColorFn = (text: string) => string;
 
+/**
+ * Defines the color palette and styling functions for a terminal theme.
+ *
+ * Each theme provides semantic color functions for different UI elements
+ * and raw ANSI escape codes for use in readline prompts where chalk cannot be used.
+ */
 export interface Theme {
+  /** Human-readable display name for the theme. */
   name: string;
+  /** Primary accent color for branding and highlights. */
   accent: ColorFn;
+  /** Bold variant of the primary accent color. */
   accentBold: ColorFn;
+  /** Subdued color for secondary or less important text. */
   muted: ColorFn;
+  /** Default color for regular body text. */
   text: ColorFn;
+  /** Color for tool invocation labels. */
   toolCall: ColorFn;
+  /** Color for error messages. */
   error: ColorFn;
+  /** Color for success indicators. */
   success: ColorFn;
+  /** Dimmed color for de-emphasized content like conversation replays. */
   dim: ColorFn;
+  /** Color for warning messages. */
   warning: ColorFn;
+  /** Rotating palette of colors assigned to sub-agent prefixes. */
   prefixColors: readonly ColorFn[];
 
+  /**
+   * Raw ANSI escape sequences for contexts where chalk is unavailable
+   * (e.g. readline prompt strings).
+   */
   ansi: {
     prompt: string;
     hintCmd: string;
@@ -24,7 +46,14 @@ export interface Theme {
   };
 }
 
+/**
+ * Registry of all available color themes, keyed by slug.
+ *
+ * Includes: `bernard` (default orange), `ocean`, `forest`, `synthwave`,
+ * `high-contrast`, and `colorblind` (IBM-safe palette).
+ */
 export const THEMES: Record<string, Theme> = {
+  /** Default theme with warm orange accents. */
   bernard: {
     name: 'Bernard',
     accent: chalk.hex('#f97316'),
@@ -46,6 +75,7 @@ export const THEMES: Record<string, Theme> = {
     },
   },
 
+  /** Cool blue-cyan palette inspired by the sea. */
   ocean: {
     name: 'Ocean',
     accent: chalk.hex('#06b6d4'),
@@ -72,6 +102,7 @@ export const THEMES: Record<string, Theme> = {
     },
   },
 
+  /** Earthy green palette for a natural look. */
   forest: {
     name: 'Forest',
     accent: chalk.hex('#22c55e'),
@@ -98,6 +129,7 @@ export const THEMES: Record<string, Theme> = {
     },
   },
 
+  /** Retro neon purple and pink palette. */
   synthwave: {
     name: 'Synthwave',
     accent: chalk.hex('#c084fc'),
@@ -124,6 +156,7 @@ export const THEMES: Record<string, Theme> = {
     },
   },
 
+  /** Maximum contrast using bold bright whites and system colors. */
   'high-contrast': {
     name: 'High Contrast',
     accent: chalk.bold.white,
@@ -150,6 +183,7 @@ export const THEMES: Record<string, Theme> = {
     },
   },
 
+  /** Palette using IBM's colorblind-safe color scheme for accessibility. */
   colorblind: {
     name: 'Colorblind',
     accent: chalk.hex('#648FFF'),
@@ -177,15 +211,26 @@ export const THEMES: Record<string, Theme> = {
   },
 };
 
+/** Key of the theme used when no user preference is set. */
 export const DEFAULT_THEME = 'bernard';
 
 let activeThemeKey: string = DEFAULT_THEME;
 let activeTheme: Theme = THEMES[DEFAULT_THEME];
 
+/**
+ * Returns the currently active {@link Theme} object.
+ * @returns The active theme, defaulting to the `bernard` theme at startup.
+ */
 export function getTheme(): Theme {
   return activeTheme;
 }
 
+/**
+ * Switches the active theme by its slug key.
+ *
+ * @param key - Theme slug (e.g. `"ocean"`, `"forest"`).
+ * @returns `true` if the theme was found and activated, `false` if the key is unknown.
+ */
 export function setTheme(key: string): boolean {
   const theme = THEMES[key];
   if (!theme) return false;
@@ -194,10 +239,12 @@ export function setTheme(key: string): boolean {
   return true;
 }
 
+/** Returns an array of all registered theme slug keys. */
 export function getThemeKeys(): string[] {
   return Object.keys(THEMES);
 }
 
+/** Returns the slug key of the currently active theme (e.g. `"bernard"`). */
 export function getActiveThemeKey(): string {
   return activeThemeKey;
 }

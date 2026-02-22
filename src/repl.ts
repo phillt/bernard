@@ -37,6 +37,12 @@ import { HistoryStore } from './history.js';
 import { serializeMessages } from './context.js';
 import { getDomain, getDomainIds } from './domains.js';
 
+/**
+ * Launch the interactive REPL, wiring up readline, MCP servers, memory stores, and the agent loop.
+ * @param config - Resolved runtime configuration (provider, model, tokens, etc.).
+ * @param alertContext - Optional pre-filled context from a cron alert that triggered this session.
+ * @param resume - When true, reload the previous conversation from disk and continue it.
+ */
 export async function startRepl(
   config: BernardConfig,
   alertContext?: string,

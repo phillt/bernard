@@ -126,6 +126,10 @@ async function promptDelete(results: RAGSearchResultWithId[], ragStore: RAGStore
   printInfo(`Deleted ${deleted} fact(s).`);
 }
 
+/**
+ * List all stored RAG facts grouped by domain and optionally delete selected entries.
+ * Used by the `bernard facts` CLI command (no query argument).
+ */
 export async function factsList(): Promise<void> {
   const config = loadConfig();
   if (!config.ragEnabled) {
@@ -145,6 +149,11 @@ export async function factsList(): Promise<void> {
   await promptDelete(results, ragStore);
 }
 
+/**
+ * Search RAG facts by semantic similarity and optionally delete selected results.
+ * If `query` is a path to an existing file, its contents are used as the search text.
+ * @param query - Free-text search string or path to a file whose contents serve as the query.
+ */
 export async function factsSearch(query: string): Promise<void> {
   const config = loadConfig();
   if (!config.ragEnabled) {

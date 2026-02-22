@@ -3,6 +3,7 @@ import { z } from 'zod';
 import * as cheerio from 'cheerio';
 import TurndownService from 'turndown';
 
+/** CSS selectors for elements stripped before HTML-to-markdown conversion. */
 const STRIP_SELECTORS = [
   'script',
   'style',
@@ -17,13 +18,22 @@ const STRIP_SELECTORS = [
   '[aria-hidden="true"]',
 ];
 
-const MAX_HTML_BYTES = 1_000_000; // 1MB
+/** Maximum raw HTML size accepted before truncation (1 MB). */
+const MAX_HTML_BYTES = 1_000_000;
+/** Maximum character length of the returned markdown output. */
 const MAX_OUTPUT_CHARS = 20_000;
+/** HTTP fetch timeout in milliseconds. */
 const FETCH_TIMEOUT_MS = 15_000;
 
 const USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+/**
+ * Creates the web-read tool that fetches a URL and converts its HTML to markdown.
+ *
+ * Non-content elements (nav, footer, scripts, etc.) are stripped before conversion.
+ * Output is truncated to {@link MAX_OUTPUT_CHARS} characters.
+ */
 export function createWebReadTool() {
   return tool({
     description:

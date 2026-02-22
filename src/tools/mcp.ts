@@ -2,6 +2,12 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { listMCPServers, addMCPServer, removeMCPServer, getMCPServer } from '../mcp.js';
 
+/**
+ * Creates the MCP server configuration tool for managing stdio-based MCP servers.
+ *
+ * Supports add, remove, list, and get actions. Configuration changes require
+ * a Bernard restart to take effect.
+ */
 export function createMCPConfigTool() {
   return tool({
     description:

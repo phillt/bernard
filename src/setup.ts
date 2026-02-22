@@ -17,6 +17,11 @@ function ask(rl: readline.Interface, prompt: string): Promise<string> {
   });
 }
 
+/**
+ * Run the interactive first-time setup wizard if no API keys are configured.
+ * Prompts the user to select a provider and enter an API key, then persists both.
+ * @returns `true` if setup ran (keys were missing), `false` if skipped (keys already present).
+ */
 export async function runFirstTimeSetup(): Promise<boolean> {
   const statuses = getProviderKeyStatus();
   if (statuses.some((s) => s.hasKey)) {

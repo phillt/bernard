@@ -5,20 +5,34 @@ import { getTheme } from './theme.js';
 const MAX_TOOL_OUTPUT_LENGTH = 2000;
 const MAX_REPLAY_LENGTH = 200;
 
+/** Cumulative token-usage statistics displayed alongside the thinking spinner. */
 export interface SpinnerStats {
+  /** Epoch timestamp (ms) when the current agent step began. */
   startTime: number;
+  /** Running total of prompt tokens consumed across all steps. */
   totalPromptTokens: number;
+  /** Running total of completion tokens generated across all steps. */
   totalCompletionTokens: number;
+  /** Prompt tokens for the most recent LLM call (used for compression headroom). */
   latestPromptTokens: number;
+  /** Model identifier, used to look up the context-window size. */
   model: string;
 }
 
+/**
+ * Formats a token count into a compact human-readable string (e.g. `"3.2k"`).
+ * @internal
+ */
 function formatTokenCount(n: number): string {
   if (n < 1000) return String(n);
   const k = n / 1000;
   return k >= 10 ? `${Math.round(k)}k` : `${k.toFixed(1)}k`;
 }
 
+/**
+ * Formats a millisecond duration as `"Xs"` or `"XmYs"`.
+ * @internal
+ */
 function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   if (totalSeconds < 60) return `${totalSeconds}s`;
@@ -27,6 +41,12 @@ function formatElapsed(ms: number): string {
   return `${minutes}m${seconds}s`;
 }
 
+/**
+ * Builds the dynamic status text shown next to the spinner animation.
+ *
+ * Displays elapsed time, cumulative token counts (up/down arrows),
+ * and percentage of context window remaining before compression triggers.
+ */
 export function buildSpinnerMessage(stats: SpinnerStats): string {
   const elapsed = formatElapsed(Date.now() - stats.startTime);
 
@@ -46,6 +66,11 @@ export function buildSpinnerMessage(stats: SpinnerStats): string {
   return `Thinking (${elapsed} | ${up}\u2191 ${down}\u2193 | ${remainingPct}% until compression)`;
 }
 
+/**
+ * Wraps an optional sub-agent prefix (e.g. `"sub:2"`) in a colored bracket label.
+ * Returns an empty string when no prefix is provided.
+ * @internal
+ */
 function formatPrefix(prefix?: string): string {
   if (!prefix) return '';
   const prefixColors = getTheme().prefixColors;
@@ -60,6 +85,14 @@ const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', 
 let spinnerTimer: ReturnType<typeof setInterval> | null = null;
 let spinnerFrameIndex = 0;
 
+/**
+ * Starts a braille-dot spinner animation on stdout.
+ *
+ * Hides the cursor and redraws at 80 ms intervals. If a spinner is already
+ * running the call is a no-op. Call {@link stopSpinner} to clear it.
+ *
+ * @param message - Static string or callback returning a dynamic status line.
+ */
 export function startSpinner(message: string | (() => string) = 'Thinking'): void {
   if (spinnerTimer) return; // already running
   spinnerFrameIndex = 0;
@@ -72,6 +105,7 @@ export function startSpinner(message: string | (() => string) = 'Thinking'): voi
   }, 80);
 }
 
+/** Stops the spinner, clears its line, and restores the cursor. */
 export function stopSpinner(): void {
   if (!spinnerTimer) return;
   clearInterval(spinnerTimer);
@@ -80,6 +114,7 @@ export function stopSpinner(): void {
   process.stdout.write('\x1B[?25h'); // show cursor
 }
 
+/** Prints the branded welcome banner with provider, model, and optional version info. */
 export function printWelcome(provider: string, model: string, version?: string): void {
   const ver = version ? getTheme().muted(` v${version}`) : '';
   console.log(getTheme().accentBold('\n  Bernard') + ver + getTheme().muted(' — AI CLI Assistant'));
@@ -90,6 +125,7 @@ export function printWelcome(provider: string, model: string, version?: string):
   console.log(getTheme().muted('  Type /help for commands, exit to quit\n'));
 }
 
+/** Prints an assistant response, stopping any active spinner first. */
 export function printAssistantText(text: string, prefix?: string): void {
   stopSpinner();
   if (text.trim()) {
@@ -98,6 +134,12 @@ export function printAssistantText(text: string, prefix?: string): void {
   }
 }
 
+/**
+ * Prints a one-line summary of a tool invocation.
+ *
+ * For the `shell` tool the raw command string is shown; for all others
+ * the args object is JSON-serialized.
+ */
 export function printToolCall(
   toolName: string,
   args: Record<string, unknown>,
@@ -109,6 +151,11 @@ export function printToolCall(
   console.log(label + getTheme().toolCall(`  ▶ ${toolName}`) + getTheme().muted(`: ${argsStr}`));
 }
 
+/**
+ * Prints a tool's return value, truncated to {@link MAX_TOOL_OUTPUT_LENGTH} characters.
+ *
+ * Handles string results, `{ output: string }` shapes, and arbitrary objects.
+ */
 export function printToolResult(toolName: string, result: unknown, prefix?: string): void {
   stopSpinner();
   const label = formatPrefix(prefix);
@@ -132,15 +179,23 @@ export function printToolResult(toolName: string, result: unknown, prefix?: stri
   console.log(lines);
 }
 
+/** Prints an error message to stderr in the theme's error color. */
 export function printError(message: string): void {
   stopSpinner();
   console.error(getTheme().error(`Error: ${message}`));
 }
 
+/** Prints an informational message in the theme's muted color. */
 export function printInfo(message: string): void {
   console.log(getTheme().muted(message));
 }
 
+/**
+ * Prints a dimmed summary of a prior conversation for session-resume context.
+ *
+ * Each message is truncated to {@link MAX_REPLAY_LENGTH} characters.
+ * Tool-role messages are skipped.
+ */
 export function printConversationReplay(messages: CoreMessage[]): void {
   console.log(getTheme().dim('  Previous conversation:'));
 
@@ -161,6 +216,15 @@ export function printConversationReplay(messages: CoreMessage[]): void {
   console.log();
 }
 
+/**
+ * Extracts the plain-text content from a {@link CoreMessage} for display formatting.
+ *
+ * Unlike {@link extractText} in `context.ts` (which is used for serialization and compression),
+ * this variant is scoped to output rendering only.
+ *
+ * @returns The joined text content, or `null` if the message has no text parts.
+ * @internal
+ */
 function extractText(msg: CoreMessage): string | null {
   if (typeof msg.content === 'string') return msg.content;
   if (!Array.isArray(msg.content)) return null;
@@ -175,6 +239,7 @@ function extractText(msg: CoreMessage): string | null {
   return textParts.length > 0 ? textParts.join(' ') : null;
 }
 
+/** Prints a colored top-border line when a sub-agent begins executing a task. */
 export function printSubAgentStart(id: number, task: string): void {
   const prefixColors = getTheme().prefixColors;
   const colorFn = prefixColors[(id - 1) % prefixColors.length];
@@ -182,12 +247,14 @@ export function printSubAgentStart(id: number, task: string): void {
   console.log(colorFn(`┌─ sub:${id} — ${displayTask}`));
 }
 
+/** Prints a colored bottom-border line when a sub-agent finishes. */
 export function printSubAgentEnd(id: number): void {
   const prefixColors = getTheme().prefixColors;
   const colorFn = prefixColors[(id - 1) % prefixColors.length];
   console.log(colorFn(`└─ sub:${id} done`));
 }
 
+/** Prints the REPL help menu listing all available slash commands. */
 export function printHelp(): void {
   const t = getTheme();
   console.log(t.accent('\nCommands:'));
