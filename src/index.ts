@@ -29,7 +29,7 @@ import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } fr
 import { listMCPServers, removeMCPServer } from './mcp.js';
 import { runFirstTimeSetup } from './setup.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
-import { factsList, factsSearch } from './facts-cli.js';
+import { factsList, factsSearch, clearFacts } from './facts-cli.js';
 
 const program = new Command();
 
@@ -368,6 +368,19 @@ program
       } else {
         await factsList();
       }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('clear-facts')
+  .description('Permanently delete all stored RAG facts')
+  .action(async () => {
+    try {
+      await clearFacts();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);
