@@ -47,7 +47,7 @@ let clearConfirmAnswer = '';
 vi.mock('node:readline', () => ({
   createInterface: vi.fn(() => ({
     question: vi.fn((_prompt: string, cb: (answer: string) => void) => {
-      // Distinguish between selection prompt, clear-rag confirm, and y/N confirm
+      // Distinguish between selection prompt, clear-facts confirm, and y/N confirm
       if (_prompt.includes('delete all facts')) {
         cb(clearConfirmAnswer);
       } else if (_prompt.includes('Enter fact numbers')) {

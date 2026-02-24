@@ -173,11 +173,14 @@ export async function clearFacts(): Promise<void> {
   printInfo('');
   printInfo('\u26a0\ufe0f  This will permanently delete ALL learned RAG facts.');
   printInfo('');
+  const entries = Object.entries(counts);
+  const maxLen = Math.max(...entries.map(([d]) => d.length), 'Total:'.length);
+
   printInfo('  Current facts:');
-  for (const [domain, count] of Object.entries(counts)) {
-    printInfo(`    ${domain}: ${String(count).padStart(6)} facts`);
+  for (const [domain, count] of entries) {
+    printInfo(`    ${domain.padEnd(maxLen)}  ${String(count).padStart(6)} facts`);
   }
-  printInfo(`    ${'Total:'.padEnd(20)} ${String(total).padStart(6)} facts`);
+  printInfo(`    ${'Total:'.padEnd(maxLen)}  ${String(total).padStart(6)} facts`);
   printInfo('');
   printInfo('  Storage: ~/.bernard/rag/memories.json');
   printInfo('');
