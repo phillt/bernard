@@ -1624,10 +1624,18 @@
 <span class="accent">$</span> bernard facts "deployment workflow"
 
 <span class="comment"># Search using a file's contents as query</span>
-<span class="accent">$</span> bernard facts ./src/deploy.ts</code></pre>
+<span class="accent">$</span> bernard facts ./src/deploy.ts
+
+<span class="comment"># Delete ALL facts (requires exact confirmation phrase)</span>
+<span class="accent">$</span> bernard clear-facts</code></pre>
         <p>
           Both commands show facts grouped by domain and offer an interactive prompt to select and
           delete facts by number (e.g., <code>1,3,5-8</code>).
+        </p>
+        <p>
+          The <code>clear-facts</code> command deletes <em>all</em> stored facts. It displays a
+          per-domain breakdown and requires you to type the exact phrase
+          <code>yes, delete all facts</code> before proceeding.
         </p>
         <p>Within the REPL:</p>
         <ul>

@@ -6,6 +6,9 @@ const mockRAGStore = vi.hoisted(() => ({
   listMemories: vi.fn().mockReturnValue([]),
   searchWithIds: vi.fn().mockResolvedValue([]),
   deleteByIds: vi.fn().mockReturnValue(0),
+  count: vi.fn().mockReturnValue(0),
+  countByDomain: vi.fn().mockReturnValue({}),
+  clear: vi.fn(),
 }));
 
 const mockOutput = vi.hoisted(() => ({
@@ -39,12 +42,15 @@ vi.mock('./domains.js', () => ({
 // Mock readline to auto-respond to prompts
 let promptAnswer = '';
 let confirmAnswer = 'y';
+let clearConfirmAnswer = '';
 
 vi.mock('node:readline', () => ({
   createInterface: vi.fn(() => ({
     question: vi.fn((_prompt: string, cb: (answer: string) => void) => {
-      // Distinguish between selection prompt and confirm prompt
-      if (_prompt.includes('Enter fact numbers')) {
+      // Distinguish between selection prompt, clear-rag confirm, and y/N confirm
+      if (_prompt.includes('delete all facts')) {
+        cb(clearConfirmAnswer);
+      } else if (_prompt.includes('Enter fact numbers')) {
         cb(promptAnswer);
       } else {
         cb(confirmAnswer);
@@ -62,7 +68,7 @@ vi.mock('node:fs', () => ({
 
 const fs = await import('node:fs');
 
-import { factsList, factsSearch, parseSelection } from './facts-cli.js';
+import { factsList, factsSearch, parseSelection, clearFacts } from './facts-cli.js';
 
 afterAll(() => {
   vi.restoreAllMocks();
@@ -287,5 +293,85 @@ describe('factsSearch', () => {
     await factsSearch('some query');
 
     expect(mockRAGStore.deleteByIds).toHaveBeenCalledWith(['x']);
+  });
+});
+
+describe('clearFacts', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConfig.loadConfig.mockReturnValue({ ragEnabled: true });
+    mockRAGStore.count.mockReturnValue(0);
+    mockRAGStore.countByDomain.mockReturnValue({});
+    clearConfirmAnswer = '';
+  });
+
+  it('shows message when RAG is disabled', async () => {
+    mockConfig.loadConfig.mockReturnValue({ ragEnabled: false });
+    await clearFacts();
+    expect(infoMessages().some((m) => m.includes('RAG is disabled'))).toBe(true);
+    expect(mockRAGStore.clear).not.toHaveBeenCalled();
+  });
+
+  it('shows message when no facts stored', async () => {
+    mockRAGStore.count.mockReturnValue(0);
+    await clearFacts();
+    expect(infoMessages()).toContain('No facts stored. Nothing to clear.');
+    expect(mockRAGStore.clear).not.toHaveBeenCalled();
+  });
+
+  it('shows per-domain breakdown before confirming', async () => {
+    mockRAGStore.count.mockReturnValue(15);
+    mockRAGStore.countByDomain.mockReturnValue({
+      'tool-usage': 10,
+      'user-preferences': 5,
+    });
+    clearConfirmAnswer = 'no';
+
+    await clearFacts();
+
+    const msgs = infoMessages();
+    expect(msgs.some((m) => m.includes('tool-usage') && m.includes('10'))).toBe(true);
+    expect(msgs.some((m) => m.includes('user-preferences') && m.includes('5'))).toBe(true);
+    expect(msgs.some((m) => m.includes('Total:') && m.includes('15'))).toBe(true);
+  });
+
+  it('cancels when user types wrong confirmation', async () => {
+    mockRAGStore.count.mockReturnValue(5);
+    mockRAGStore.countByDomain.mockReturnValue({ general: 5 });
+    clearConfirmAnswer = 'yes';
+
+    await clearFacts();
+
+    expect(infoMessages()).toContain('Cancelled.');
+    expect(mockRAGStore.clear).not.toHaveBeenCalled();
+  });
+
+  it('cancels on empty input', async () => {
+    mockRAGStore.count.mockReturnValue(5);
+    mockRAGStore.countByDomain.mockReturnValue({ general: 5 });
+    clearConfirmAnswer = '';
+
+    await clearFacts();
+
+    expect(infoMessages()).toContain('Cancelled.');
+    expect(mockRAGStore.clear).not.toHaveBeenCalled();
+  });
+
+  it('clears all facts when user types exact confirmation phrase', async () => {
+    mockRAGStore.count.mockReturnValue(15);
+    mockRAGStore.countByDomain.mockReturnValue({
+      'tool-usage': 10,
+      'user-preferences': 5,
+    });
+    clearConfirmAnswer = 'yes, delete all facts';
+
+    await clearFacts();
+
+    expect(mockRAGStore.clear).toHaveBeenCalledOnce();
+    const msgs = infoMessages();
+    expect(msgs.some((m) => m.includes('Deleted 15 facts'))).toBe(true);
+    expect(msgs.some((m) => m.includes('10 tool-usage'))).toBe(true);
+    expect(msgs.some((m) => m.includes('5 user-preferences'))).toBe(true);
+    expect(msgs.some((m) => m.includes('RAG memory is now empty'))).toBe(true);
   });
 });

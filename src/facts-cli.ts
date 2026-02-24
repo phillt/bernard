@@ -150,6 +150,51 @@ export async function factsList(): Promise<void> {
 }
 
 /**
+ * Permanently delete all RAG facts after interactive confirmation.
+ * Requires the user to type an exact confirmation phrase.
+ */
+export async function clearFacts(): Promise<void> {
+  const config = loadConfig();
+  if (!config.ragEnabled) {
+    printInfo('RAG is disabled. Set BERNARD_RAG_ENABLED=true to enable.');
+    return;
+  }
+
+  const ragStore = new RAGStore();
+  const total = ragStore.count();
+
+  if (total === 0) {
+    printInfo('No facts stored. Nothing to clear.');
+    return;
+  }
+
+  const counts = ragStore.countByDomain();
+
+  printInfo('');
+  printInfo('\u26a0\ufe0f  This will permanently delete ALL learned RAG facts.');
+  printInfo('');
+  printInfo('  Current facts:');
+  for (const [domain, count] of Object.entries(counts)) {
+    printInfo(`    ${domain}: ${String(count).padStart(6)} facts`);
+  }
+  printInfo(`    ${'Total:'.padEnd(20)} ${String(total).padStart(6)} facts`);
+  printInfo('');
+  printInfo('  Storage: ~/.bernard/rag/memories.json');
+  printInfo('');
+
+  const answer = await promptLine('  Type "yes, delete all facts" to confirm: ');
+  if (answer !== 'yes, delete all facts') {
+    printInfo('Cancelled.');
+    return;
+  }
+
+  ragStore.clear();
+  printInfo('');
+  const parts = Object.entries(counts).map(([d, c]) => `${c} ${d}`);
+  printInfo(`\u2713 Deleted ${total} facts (${parts.join(', ')}). RAG memory is now empty.`);
+}
+
+/**
  * Search RAG facts by semantic similarity and optionally delete selected results.
  * If `query` is a path to an existing file, its contents are used as the search text.
  * @param query - Free-text search string or path to a file whose contents serve as the query.
