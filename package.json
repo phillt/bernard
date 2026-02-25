@@ -47,6 +47,7 @@
     "dist",
     "README.md",
     "LICENSE",
+    "THIRD_PARTY_LICENSES",
     ".env.example"
   ],
   "dependencies": {
