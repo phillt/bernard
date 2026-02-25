@@ -1,3 +1,5 @@
+import * as path from 'node:path';
+import * as os from 'node:os';
 import { debugLog } from './logger.js';
 
 /** Abstraction over a text embedding model used by the RAG subsystem. */
@@ -22,6 +24,8 @@ export async function getEmbeddingProvider(): Promise<EmbeddingProvider | null> 
     const { EmbeddingModel, FlagEmbedding } = await import('fastembed');
     const model = await FlagEmbedding.init({
       model: EmbeddingModel.AllMiniLML6V2,
+      cacheDir: path.join(os.homedir(), '.bernard', 'models'),
+      showDownloadProgress: false,
     });
 
     cachedProvider = {
