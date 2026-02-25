@@ -23,9 +23,12 @@ export async function getEmbeddingProvider(): Promise<EmbeddingProvider | null> 
 
   try {
     const { EmbeddingModel, FlagEmbedding } = await import('fastembed');
+    const cacheDir = path.join(os.homedir(), '.bernard', 'models');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    debugLog('embeddings:init', 'Loading embedding model (may download on first run)...');
     const model = await FlagEmbedding.init({
       model: EmbeddingModel.AllMiniLML6V2,
-      cacheDir: path.join(os.homedir(), '.bernard', 'models'),
+      cacheDir,
       showDownloadProgress: false,
     });
 
