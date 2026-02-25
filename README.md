@@ -695,7 +695,7 @@ Found a bug? Please [open an issue](https://github.com/phillt/bernard/issues/new
 
 ## Third-Party Licenses
 
-Bernard uses the [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) sentence-transformer model (via [fastembed](https://github.com/Anush008/fastembed-js)) for local RAG embeddings. This model is licensed under the Apache License 2.0. See [`THIRD_PARTY_LICENSES`](./THIRD_PARTY_LICENSES) for full license text and attribution.
+Bernard uses the [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) sentence-transformer model (via [fastembed](https://github.com/Anush008/fastembed-js)) for local RAG embeddings. This model is licensed under the Apache License 2.0. See [`THIRD-PARTY-NOTICES`](./THIRD-PARTY-NOTICES) for full license text and attribution.
 
 ## License
 

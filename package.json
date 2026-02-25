@@ -47,7 +47,7 @@
     "dist",
     "README.md",
     "LICENSE",
-    "THIRD_PARTY_LICENSES",
+    "THIRD-PARTY-NOTICES",
     ".env.example"
   ],
   "dependencies": {
