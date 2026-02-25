@@ -46,6 +46,7 @@ A local CLI AI agent that executes terminal commands, manages scheduled tasks, r
   - [Adding a New Tool](#adding-a-new-tool)
 - [Contributing](#contributing)
 - [Bug Reports](#bug-reports)
+- [Third-Party Licenses](#third-party-licenses)
 - [License](#license)
 
 ---
@@ -570,6 +571,7 @@ Bernard stores all data in `~/.bernard/`:
 ├── mcp.json                     # MCP server configuration
 ├── conversation-history.json    # Last session (for --resume)
 ├── memory/                      # Persistent memories (*.md)
+├── models/                      # Embedding model cache (fastembed)
 ├── rag/
 │   └── memories.json            # RAG fact embeddings
 └── cron/
@@ -690,6 +692,10 @@ Found a bug? Please [open an issue](https://github.com/phillt/bernard/issues/new
 - Expected vs. actual behavior
 - Your environment (OS, Node version, Bernard version, provider/model)
 - Any relevant logs (run with `BERNARD_DEBUG=1` for verbose output)
+
+## Third-Party Licenses
+
+Bernard uses the [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) sentence-transformer model (via [fastembed](https://github.com/Anush008/fastembed-js)) for local RAG embeddings. This model is licensed under the Apache License 2.0. See [`THIRD-PARTY-NOTICES`](./THIRD-PARTY-NOTICES) for full license text and attribution.
 
 ## License
 
