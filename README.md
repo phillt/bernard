@@ -571,6 +571,7 @@ Bernard stores all data in `~/.bernard/`:
 ├── mcp.json                     # MCP server configuration
 ├── conversation-history.json    # Last session (for --resume)
 ├── memory/                      # Persistent memories (*.md)
+├── models/                      # Embedding model cache (fastembed)
 ├── rag/
 │   └── memories.json            # RAG fact embeddings
 └── cron/
