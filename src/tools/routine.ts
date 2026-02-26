@@ -8,8 +8,8 @@ import { RoutineStore } from '../routines.js';
  * Routines are named procedures (deploy, release, onboarding, etc.) that the user can
  * teach Bernard and later invoke via `/{routine-id}` in the REPL.
  */
-export function createRoutineTool() {
-  const store = new RoutineStore();
+export function createRoutineTool(routineStore?: RoutineStore) {
+  const store = routineStore ?? new RoutineStore();
 
   return tool({
     description:
