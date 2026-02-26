@@ -1,9 +1,10 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { MemoryStore } from '../memory.js';
+import { MEMORY_DIR } from '../paths.js';
 
 /**
- * Creates the persistent memory tool backed by on-disk markdown files at `~/.bernard/memory/`.
+ * Creates the persistent memory tool backed by on-disk markdown files.
  *
  * Supports list, read, write, and delete actions for cross-session recall.
  *
@@ -11,8 +12,7 @@ import type { MemoryStore } from '../memory.js';
  */
 export function createMemoryTool(memoryStore: MemoryStore) {
   return tool({
-    description:
-      'Persistent memory that survives across sessions. Use this to remember user preferences, project knowledge, or anything worth recalling later. Stored as files on disk at ~/.bernard/memory/.',
+    description: `Persistent memory that survives across sessions. Use this to remember user preferences, project knowledge, or anything worth recalling later. Stored as files on disk at ${MEMORY_DIR}.`,
     parameters: z.object({
       action: z.enum(['list', 'read', 'write', 'delete']).describe('The action to perform'),
       key: z.string().optional().describe('The memory key (required for read/write/delete)'),

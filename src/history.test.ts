@@ -67,7 +67,7 @@ describe('HistoryStore', () => {
       const messages = [{ role: 'user' as const, content: 'hello' }];
       store.save(messages);
 
-      expect(fs.mkdirSync).toHaveBeenCalledWith(expect.stringContaining('.bernard'), {
+      expect(fs.mkdirSync).toHaveBeenCalledWith(expect.stringContaining('bernard'), {
         recursive: true,
       });
       expect(fs.writeFileSync).toHaveBeenCalledWith(
