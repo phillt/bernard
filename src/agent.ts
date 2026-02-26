@@ -155,9 +155,7 @@ MCP (Model Context Protocol) servers provide additional tools. Use the mcp_confi
   prompt += '\n\n## Routines';
   if (routineSummaries && routineSummaries.length > 0) {
     prompt += '\n\nSaved routines the user can invoke:\n';
-    prompt += routineSummaries
-      .map((r) => `- /${r.id} — ${r.name}: ${r.description}`)
-      .join('\n');
+    prompt += routineSummaries.map((r) => `- /${r.id} — ${r.name}: ${r.description}`).join('\n');
   } else {
     prompt +=
       '\n\nNo routines saved yet. When a user walks you through a multi-step workflow, suggest saving it as a routine using the routine tool so they can re-invoke it later with /{routine-id}.';
