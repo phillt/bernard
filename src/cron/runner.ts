@@ -86,11 +86,12 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
 
   const mcpManager = new MCPManager();
   let mcpTools: Record<string, any> = {};
+  let serverNames: string[] = [];
 
   try {
     await mcpManager.connect();
     mcpTools = mcpManager.getTools();
-    const serverNames = mcpManager.getConnectedServerNames();
+    serverNames = mcpManager.getConnectedServerNames();
     if (serverNames.length > 0) {
       log(`MCP servers connected: ${serverNames.join(', ')}`);
     }
@@ -194,12 +195,17 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       });
 
     // Append current date so the agent knows "today"
-    enrichedPrompt += `\n\nToday's date: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`;
+    const todayStr = new Date().toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+    enrichedPrompt += `\n\nToday's date: ${todayStr}`;
 
     // Append connected MCP server names so the agent knows what's available
-    const connectedServers = mcpManager.getConnectedServerNames();
-    if (connectedServers.length > 0) {
-      enrichedPrompt += `\nConnected MCP servers: ${connectedServers.join(', ')}`;
+    if (serverNames.length > 0) {
+      enrichedPrompt += `\nConnected MCP servers: ${serverNames.join(', ')}`;
     }
 
     const result = await generateText({
