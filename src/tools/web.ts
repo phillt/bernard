@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import * as cheerio from 'cheerio';
+import { parse } from 'node-html-parser';
 import TurndownService from 'turndown';
 
 /** CSS selectors for elements stripped before HTML-to-markdown conversion. */
@@ -93,25 +93,25 @@ export function createWebReadTool() {
         return `Error: Failed to read response body — ${message}`;
       }
 
-      const $ = cheerio.load(html);
+      const root = parse(html);
 
       // Strip junk elements
       for (const sel of STRIP_SELECTORS) {
-        $(sel).remove();
+        root.querySelectorAll(sel).forEach((el) => el.remove());
       }
 
       // Get page title
-      const title = $('title').text().trim();
+      const title = root.querySelector('title')?.text.trim() ?? '';
 
       // Select content
       let content: string;
       if (selector) {
-        const selected = $(selector);
-        content = selected.length > 0 ? selected.html() || '' : $.root().html() || '';
+        const selected = root.querySelector(selector);
+        content = selected ? selected.innerHTML : root.innerHTML;
       } else {
-        // Try common content containers, fall back to body
-        const body = $('body');
-        content = body.length > 0 ? body.html() || '' : $.root().html() || '';
+        // Try common content containers, fall back to root
+        const body = root.querySelector('body');
+        content = body ? body.innerHTML : root.innerHTML;
       }
 
       // Convert to markdown
