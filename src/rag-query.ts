@@ -46,8 +46,10 @@ export function extractRecentUserTexts(
 }
 
 /**
- * Extract the first key-value pair from tool args and truncate the value.
- * Returns a compact "key=value" string, or empty string if args is empty/null.
+ * Compact a tool call's args into a short summary string.
+ * Only includes the first key-value pair for brevity — tool calls
+ * are used as lightweight retrieval signals, not full records.
+ * Returns a "key=value" string, or empty string if args is empty/null.
  */
 function compactArgs(args: Record<string, unknown> | undefined | null): string {
   if (!args || typeof args !== 'object') return '';
@@ -82,18 +84,21 @@ export function extractRecentToolContext(
 
     if (!Array.isArray(msg.content)) continue;
 
+    const msgEntries: string[] = [];
     for (const part of msg.content) {
       if (part.type === 'tool-call') {
         const compact = compactArgs(part.args as Record<string, unknown>);
-        entries.unshift(compact ? `${part.toolName}(${compact})` : part.toolName);
+        msgEntries.push(compact ? `${part.toolName}(${compact})` : part.toolName);
       }
     }
+    entries.unshift(...msgEntries);
   }
 
   if (entries.length === 0) return '';
 
   let result = entries.join(', ');
   if (result.length > maxChars) {
+    if (maxChars < 3) return '';
     result = result.slice(0, maxChars - 3) + '...';
   }
   return result;

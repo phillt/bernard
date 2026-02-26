@@ -261,16 +261,12 @@ describe('extractRecentToolContext', () => {
     const history: CoreMessage[] = [
       {
         role: 'assistant',
-        content: [
-          { type: 'tool-call', toolCallId: 'tc1', toolName: 'first_tool', args: {} },
-        ],
+        content: [{ type: 'tool-call', toolCallId: 'tc1', toolName: 'first_tool', args: {} }],
       },
       { role: 'user', content: 'ok' },
       {
         role: 'assistant',
-        content: [
-          { type: 'tool-call', toolCallId: 'tc2', toolName: 'second_tool', args: {} },
-        ],
+        content: [{ type: 'tool-call', toolCallId: 'tc2', toolName: 'second_tool', args: {} }],
       },
     ];
     const result = extractRecentToolContext(history);
