@@ -171,10 +171,7 @@ describe('createRoutineTool', () => {
     });
 
     it('returns not-found for missing routine', async () => {
-      const result = await tool.execute(
-        { action: 'update', id: 'nope', content: 'x' },
-        {} as any,
-      );
+      const result = await tool.execute({ action: 'update', id: 'nope', content: 'x' }, {} as any);
       expect(result).toContain('No routine found');
     });
 

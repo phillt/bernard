@@ -25,14 +25,8 @@ export function createRoutineTool() {
           'Routine ID (kebab-case slug, e.g. "deploy-staging"). Required for create/read/update/delete.',
         ),
       name: z.string().optional().describe('Display name (required for create)'),
-      description: z
-        .string()
-        .optional()
-        .describe('One-line summary (required for create)'),
-      content: z
-        .string()
-        .optional()
-        .describe('Full procedure as markdown (required for create)'),
+      description: z.string().optional().describe('One-line summary (required for create)'),
+      content: z.string().optional().describe('Full procedure as markdown (required for create)'),
     }),
     execute: async ({ action, id, name, description, content }): Promise<string> => {
       switch (action) {
