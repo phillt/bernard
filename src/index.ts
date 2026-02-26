@@ -30,6 +30,8 @@ import { listMCPServers, removeMCPServer } from './mcp.js';
 import { runFirstTimeSetup } from './setup.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
+import { migrateFromLegacy } from './migrate.js';
+import { MCP_CONFIG_PATH } from './paths.js';
 
 const program = new Command();
 
@@ -43,6 +45,7 @@ program
   .option('--alert <id>', 'Open with cron alert context')
   .action(async (opts) => {
     try {
+      migrateFromLegacy();
       await runFirstTimeSetup();
 
       const config = loadConfig({
@@ -211,7 +214,7 @@ program
       const servers = listMCPServers();
       if (servers.length === 0) {
         printInfo('No MCP servers configured.');
-        printInfo('Add servers to ~/.bernard/mcp.json');
+        printInfo(`Add servers to ${MCP_CONFIG_PATH}`);
         return;
       }
       printInfo('MCP Servers:');
