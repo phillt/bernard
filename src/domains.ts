@@ -15,6 +15,12 @@ export interface MemoryDomain {
 /** Domain ID used as the fallback when a requested domain is not found in the registry. */
 export const DEFAULT_DOMAIN = 'general';
 
+/** Shared preamble describing the serialized tool interaction formats found in conversations. */
+const TOOL_FORMAT_PREAMBLE = `
+The conversation may contain serialized tool interactions in these formats:
+- "Assistant [tool call]: toolName(args)" — an AI assistant invoking a tool
+- "Tool [name]: result" — the tool's response/output`;
+
 /** Registry of all known memory domains, keyed by domain ID. */
 export const DOMAIN_REGISTRY: Record<string, MemoryDomain> = {
   'tool-usage': {
@@ -23,10 +29,7 @@ export const DOMAIN_REGISTRY: Record<string, MemoryDomain> = {
     description:
       'Command sequences, tool interaction patterns, error resolutions, build/deploy workflows',
     extractionPrompt: `You are a tool-usage pattern extractor. Extract durable, reusable facts about how tools, commands, and workflows are used in the conversation below. Focus on lessons learned and patterns that would be useful in future sessions.
-
-The conversation may contain serialized tool interactions in these formats:
-- "Assistant [tool call]: toolName(args)" — an AI assistant invoking a tool
-- "Tool [name]: result" — the tool's response/output
+${TOOL_FORMAT_PREAMBLE}
 Use tool call/result pairs as primary evidence for command sequences, error resolutions, and workflow patterns.
 
 Extract:
@@ -65,10 +68,7 @@ Return a JSON array of strings. Each string should be a self-contained fact (und
     description:
       'Communication style, workflow conventions, repeated instructions, naming preferences',
     extractionPrompt: `You are a user preference extractor. Extract durable, long-term facts about the user's preferences, habits, and conventions from the conversation below. Only extract preferences that would apply across multiple sessions and tasks.
-
-The conversation may contain serialized tool interactions in these formats:
-- "Assistant [tool call]: toolName(args)" — an AI assistant invoking a tool
-- "Tool [name]: result" — the tool's response/output
+${TOOL_FORMAT_PREAMBLE}
 Tool outputs may reveal user preferences such as preferred editors, package managers, shell configurations, and workflow habits.
 
 Extract:
@@ -104,10 +104,7 @@ Return a JSON array of strings. Each string should be a self-contained fact (und
     name: 'General Knowledge',
     description: 'Project structure, architecture decisions, environment info, team context',
     extractionPrompt: `You are a general knowledge extractor. Extract durable, long-term facts about the project, environment, people, and context from the conversation below. Focus on knowledge that remains true across sessions — not ephemeral task state.
-
-The conversation may contain serialized tool interactions in these formats:
-- "Assistant [tool call]: toolName(args)" — an AI assistant invoking a tool
-- "Tool [name]: result" — the tool's response/output
+${TOOL_FORMAT_PREAMBLE}
 Tool results may contain project structure, environment details, configuration values, and other durable facts worth extracting.
 
 Extract:
