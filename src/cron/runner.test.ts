@@ -86,6 +86,21 @@ vi.mock('../tools/datetime.js', () => ({
   createDateTimeTool: vi.fn().mockReturnValue({ type: 'mock-datetime' }),
 }));
 
+vi.mock('../tools/web.js', () => ({
+  createWebReadTool: vi.fn().mockReturnValue({ type: 'mock-web-read' }),
+}));
+
+vi.mock('../tools/wait.js', () => ({
+  createWaitTool: vi.fn().mockReturnValue({ type: 'mock-wait' }),
+}));
+
+vi.mock('../tools/time.js', () => ({
+  createTimeTools: vi.fn().mockReturnValue({
+    time_range: { type: 'mock-time-range' },
+    time_range_total: { type: 'mock-time-range-total' },
+  }),
+}));
+
 vi.mock('../logger.js', () => ({
   debugLog: vi.fn(),
 }));
@@ -199,13 +214,13 @@ describe('runJob', () => {
     expect(capturedSystem).toContain('uses vitest for testing');
   });
 
-  it('excludes scratch notes from daemon system prompt', async () => {
+  it('includes scratch notes in daemon system prompt', async () => {
     mockMemoryStore.getAllScratchContents.mockReturnValue(new Map([['plan', 'step 1 done']]));
 
     await runJob(testJob, vi.fn());
 
-    expect(capturedSystem).not.toContain('Scratch Notes');
-    expect(capturedSystem).not.toContain('step 1 done');
+    expect(capturedSystem).toContain('Scratch Notes');
+    expect(capturedSystem).toContain('step 1 done');
   });
 
   it('runs without RAG when ragEnabled is false', async () => {
@@ -247,5 +262,32 @@ describe('runJob', () => {
 
     expect(capturedSystem).toContain('daemon mode');
     expect(capturedSystem).toContain('Recalled Context');
+  });
+
+  it('includes web_read, wait, time_range, and time_range_total in tools', async () => {
+    await runJob(testJob, vi.fn());
+
+    expect(capturedTools).toHaveProperty('web_read');
+    expect(capturedTools).toHaveProperty('wait');
+    expect(capturedTools).toHaveProperty('time_range');
+    expect(capturedTools).toHaveProperty('time_range_total');
+  });
+
+  it("includes today's date in system prompt", async () => {
+    await runJob(testJob, vi.fn());
+
+    // The prompt should contain a formatted date string
+    const today = new Date();
+    const year = today.getFullYear().toString();
+    expect(capturedSystem).toContain("Today's date:");
+    expect(capturedSystem).toContain(year);
+  });
+
+  it('includes connected MCP server names in system prompt', async () => {
+    mockMcpManager.getConnectedServerNames.mockReturnValue(['email', 'calendar']);
+
+    await runJob(testJob, vi.fn());
+
+    expect(capturedSystem).toContain('Connected MCP servers: email, calendar');
   });
 });
