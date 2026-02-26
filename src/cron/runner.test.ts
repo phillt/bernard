@@ -86,6 +86,21 @@ vi.mock('../tools/datetime.js', () => ({
   createDateTimeTool: vi.fn().mockReturnValue({ type: 'mock-datetime' }),
 }));
 
+vi.mock('../tools/web.js', () => ({
+  createWebReadTool: vi.fn().mockReturnValue({ type: 'mock-web-read' }),
+}));
+
+vi.mock('../tools/wait.js', () => ({
+  createWaitTool: vi.fn().mockReturnValue({ type: 'mock-wait' }),
+}));
+
+vi.mock('../tools/time.js', () => ({
+  createTimeTools: vi.fn().mockReturnValue({
+    time_range: { type: 'mock-time-range' },
+    time_range_total: { type: 'mock-time-range-total' },
+  }),
+}));
+
 vi.mock('../logger.js', () => ({
   debugLog: vi.fn(),
 }));
