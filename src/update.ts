@@ -1,16 +1,15 @@
 import * as https from 'node:https';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import { execSync } from 'node:child_process';
 import { printInfo, printError } from './output.js';
+import { UPDATE_CACHE_PATH as CACHE_PATH } from './paths.js';
 
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
-const CACHE_PATH = path.join(os.homedir(), '.bernard', 'update-check.json');
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PACKAGE_NAME = 'bernard-agent';
 
-/** Persisted update-check cache stored at `~/.bernard/update-check.json`. */
+/** Persisted update-check cache. */
 interface CacheData {
   /** ISO-8601 timestamp of the last registry check. */
   lastCheck: string;

@@ -1,9 +1,9 @@
 import * as readline from 'node:readline';
 import * as childProcess from 'node:child_process';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
+import { RAG_DIR, MCP_CONFIG_PATH } from './paths.js';
 import { Agent } from './agent.js';
 import { MemoryStore } from './memory.js';
 import { RAGStore, type RAGSearchResult } from './rag.js';
@@ -300,10 +300,9 @@ export async function startRepl(
       if (ragStore && history.length >= 4) {
         const serialized = serializeMessages(history);
         if (serialized.trim()) {
-          const ragDir = path.join(os.homedir(), '.bernard', 'rag');
-          fs.mkdirSync(ragDir, { recursive: true });
+          fs.mkdirSync(RAG_DIR, { recursive: true });
           const tempFile = path.join(
-            ragDir,
+            RAG_DIR,
             `.pending-${crypto.randomBytes(8).toString('hex')}.json`,
           );
           fs.writeFileSync(
@@ -408,7 +407,7 @@ export async function startRepl(
       if (trimmed === '/mcp') {
         const statuses = mcpManager.getServerStatuses();
         if (statuses.length === 0) {
-          printInfo('No MCP servers configured. Add servers to ~/.bernard/mcp.json');
+          printInfo(`No MCP servers configured. Add servers to ${MCP_CONFIG_PATH}`);
         } else {
           printInfo('MCP servers:');
           for (const s of statuses) {

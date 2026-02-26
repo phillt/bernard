@@ -1,13 +1,9 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
-import * as os from 'node:os';
 import type { CoreMessage } from 'ai';
-
-const BERNARD_DIR = path.join(os.homedir(), '.bernard');
-const HISTORY_FILE = path.join(BERNARD_DIR, 'conversation-history.json');
+import { STATE_DIR, HISTORY_FILE } from './paths.js';
 
 /**
- * Manages persistence of conversation history to `~/.bernard/conversation-history.json`.
+ * Manages persistence of conversation history.
  *
  * Uses atomic writes (write-to-temp then rename) to prevent corruption on unexpected exit.
  */
@@ -28,7 +24,7 @@ export class HistoryStore {
 
   /** Atomically writes the conversation history to disk. */
   save(messages: CoreMessage[]): void {
-    fs.mkdirSync(BERNARD_DIR, { recursive: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
     const tmp = HISTORY_FILE + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(messages, null, 2), 'utf-8');
     fs.renameSync(tmp, HISTORY_FILE);

@@ -30,6 +30,8 @@ import { listMCPServers, removeMCPServer } from './mcp.js';
 import { runFirstTimeSetup } from './setup.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
+import { migrateFromLegacy } from './migrate.js';
+import { MCP_CONFIG_PATH } from './paths.js';
 
 const program = new Command();
 
@@ -211,7 +213,7 @@ program
       const servers = listMCPServers();
       if (servers.length === 0) {
         printInfo('No MCP servers configured.');
-        printInfo('Add servers to ~/.bernard/mcp.json');
+        printInfo(`Add servers to ${MCP_CONFIG_PATH}`);
         return;
       }
       printInfo('MCP Servers:');
@@ -388,4 +390,5 @@ program
     }
   });
 
+migrateFromLegacy();
 program.parse();

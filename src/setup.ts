@@ -8,6 +8,7 @@ import {
   getDefaultModel,
 } from './config.js';
 import { getTheme } from './theme.js';
+import { KEYS_PATH } from './paths.js';
 
 const PROVIDERS = Object.keys(PROVIDER_ENV_VARS);
 
@@ -59,7 +60,7 @@ export async function runFirstTimeSetup(): Promise<boolean> {
 
     const envVar = PROVIDER_ENV_VARS[provider];
     console.log(t.muted(`\n  You'll need an API key for ${provider}.`));
-    console.log(t.muted('  (This will be saved securely to ~/.bernard/keys.json)\n'));
+    console.log(t.muted(`  (This will be saved securely to ${KEYS_PATH})\n`));
 
     let key: string | undefined;
     while (!key) {

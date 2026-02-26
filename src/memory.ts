@@ -1,8 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
-
-const MEMORY_DIR = path.join(os.homedir(), '.bernard', 'memory');
+import { MEMORY_DIR } from './paths.js';
 
 /** @internal */
 export function sanitizeKey(key: string): string {
@@ -12,7 +10,7 @@ export function sanitizeKey(key: string): string {
 /**
  * Dual-layer store providing disk-backed persistent memory and ephemeral in-memory scratch notes.
  *
- * Persistent memory is stored as individual Markdown files in `~/.bernard/memory/`.
+ * Persistent memory is stored as individual Markdown files in the data directory.
  * Scratch notes live only for the current session and are discarded on exit.
  */
 export class MemoryStore {

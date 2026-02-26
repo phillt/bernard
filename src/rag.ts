@@ -1,13 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import { getEmbeddingProvider, cosineSimilarity } from './embeddings.js';
 import { debugLog } from './logger.js';
 import { DEFAULT_DOMAIN } from './domains.js';
-
-const RAG_DIR = path.join(os.homedir(), '.bernard', 'rag');
-const MEMORIES_FILE = path.join(RAG_DIR, 'memories.json');
-const LAST_SESSION_FILE = path.join(RAG_DIR, 'last-session.txt');
+import { RAG_DIR, MEMORIES_FILE, LAST_SESSION_FILE } from './paths.js';
 
 /** Maximum results returned per domain before merging. */
 export const DEFAULT_TOP_K_PER_DOMAIN = 5;
