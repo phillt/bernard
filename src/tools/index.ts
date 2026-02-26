@@ -11,6 +11,7 @@ import { createWaitTool } from './wait.js';
 import { createRoutineTool } from './routine.js';
 import type { ToolOptions } from './types.js';
 import type { MemoryStore } from '../memory.js';
+import type { RoutineStore } from '../routines.js';
 
 export type { ToolOptions } from './types.js';
 
@@ -26,12 +27,13 @@ export function createTools(
   options: ToolOptions,
   memoryStore: MemoryStore,
   mcpTools?: Record<string, any>,
+  routineStore?: RoutineStore,
 ): Record<string, any> {
   return {
     shell: createShellTool(options),
     memory: createMemoryTool(memoryStore),
     scratch: createScratchTool(memoryStore),
-    routine: createRoutineTool(),
+    routine: createRoutineTool(routineStore),
     datetime: createDateTimeTool(),
     ...createCronTools(),
     ...createCronLogTools(),

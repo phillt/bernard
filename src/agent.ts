@@ -312,7 +312,12 @@ export class Agent {
         preflightTruncated = true;
       }
 
-      const baseTools = createTools(this.toolOptions, this.memoryStore, this.mcpTools);
+      const baseTools = createTools(
+        this.toolOptions,
+        this.memoryStore,
+        this.mcpTools,
+        this.routineStore,
+      );
       const tools = {
         ...baseTools,
         agent: createSubAgentTool(
