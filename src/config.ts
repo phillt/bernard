@@ -1,7 +1,7 @@
 import * as dotenv from 'dotenv';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import * as fs from 'node:fs';
+import { PREFS_PATH, KEYS_PATH, ENV_PATH, LEGACY_DIR } from './paths.js';
 
 /** Resolved runtime configuration for a Bernard session. */
 export interface BernardConfig {
@@ -28,8 +28,6 @@ export interface BernardConfig {
 const DEFAULT_PROVIDER = 'anthropic';
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_SHELL_TIMEOUT = 30000;
-const PREFS_PATH = path.join(os.homedir(), '.bernard', 'preferences.json');
-const KEYS_PATH = path.join(os.homedir(), '.bernard', 'keys.json');
 
 /** Maps each provider name to the environment variable that holds its API key. */
 export const PROVIDER_ENV_VARS: Record<string, string> = {
@@ -68,7 +66,7 @@ export const OPTIONS_REGISTRY: Record<
 };
 
 /**
- * Persists user preferences to `~/.bernard/preferences.json`.
+ * Persists user preferences to the config directory.
  *
  * Preserves the existing `autoUpdate` flag when the caller omits it.
  */
@@ -103,7 +101,7 @@ export function savePreferences(prefs: {
 }
 
 /**
- * Reads stored preferences from `~/.bernard/preferences.json`.
+ * Reads stored preferences from the config directory.
  *
  * @returns Partial preferences object; missing fields are `undefined`.
  */
@@ -145,7 +143,7 @@ function loadStoredKeys(): Record<string, string> {
 }
 
 /**
- * Stores an API key for the given provider in `~/.bernard/keys.json` (mode 0600).
+ * Stores an API key for the given provider in the config directory (mode 0600).
  *
  * @throws {Error} If `provider` is not a recognised provider name.
  */
@@ -254,15 +252,18 @@ export function resetAllOptions(): void {
 /**
  * Returns the API key availability status for every known provider.
  *
- * Checks both stored keys (`~/.bernard/keys.json`) and environment variables.
+ * Checks both stored keys and environment variables.
  */
 export function getProviderKeyStatus(): Array<{ provider: string; hasKey: boolean }> {
   const cwdEnv = path.join(process.cwd(), '.env');
-  const homeEnv = path.join(os.homedir(), '.bernard', '.env');
+  const homeEnv = ENV_PATH;
+  const legacyEnv = path.join(LEGACY_DIR, '.env');
   if (fs.existsSync(cwdEnv)) {
     dotenv.config({ path: cwdEnv });
   } else if (fs.existsSync(homeEnv)) {
     dotenv.config({ path: homeEnv });
+  } else if (fs.existsSync(legacyEnv)) {
+    dotenv.config({ path: legacyEnv });
   }
 
   const storedKeys = loadStoredKeys();
@@ -329,14 +330,16 @@ export function getAvailableProviders(config: BernardConfig): string[] {
  * @throws {Error} If the selected provider has no API key configured.
  */
 export function loadConfig(overrides?: { provider?: string; model?: string }): BernardConfig {
-  // Load .env from cwd first, then fallback to ~/.bernard/.env
+  // Load .env from cwd first, then XDG config dir, then legacy ~/.bernard/
   const cwdEnv = path.join(process.cwd(), '.env');
-  const homeEnv = path.join(os.homedir(), '.bernard', '.env');
+  const legacyEnv = path.join(LEGACY_DIR, '.env');
 
   if (fs.existsSync(cwdEnv)) {
     dotenv.config({ path: cwdEnv });
-  } else if (fs.existsSync(homeEnv)) {
-    dotenv.config({ path: homeEnv });
+  } else if (fs.existsSync(ENV_PATH)) {
+    dotenv.config({ path: ENV_PATH });
+  } else if (fs.existsSync(legacyEnv)) {
+    dotenv.config({ path: legacyEnv });
   }
 
   // Stored keys override .env — user explicitly ran `add-key`
