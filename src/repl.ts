@@ -70,12 +70,22 @@ export async function startRepl(
 
   const routineStore = new RoutineStore();
 
+  let cachedAllCommands: { command: string; description: string }[] | null = null;
+  let cachedAllCommandsAt = 0;
+  const COMMAND_CACHE_TTL = 5_000; // 5 seconds
+
   function getAllSlashCommands(): { command: string; description: string }[] {
+    const now = Date.now();
+    if (cachedAllCommands && now - cachedAllCommandsAt < COMMAND_CACHE_TTL) {
+      return cachedAllCommands;
+    }
     const routineCommands = routineStore.getSummaries().map((r) => ({
       command: `/${r.id}`,
       description: `Routine: ${r.name}`,
     }));
-    return [...SLASH_COMMANDS, ...routineCommands];
+    cachedAllCommands = [...SLASH_COMMANDS, ...routineCommands];
+    cachedAllCommandsAt = now;
+    return cachedAllCommands;
   }
 
   function completer(line: string): [string[], string] {
@@ -298,6 +308,7 @@ export async function startRepl(
     alertContext,
     initialHistory,
     ragStore,
+    routineStore,
   );
 
   let cleanedUp = false;
