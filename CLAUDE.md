@@ -19,6 +19,7 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - **src/output.ts** — Chalk-based terminal formatting
 - **src/theme.ts** — Color theme definitions (bernard, ocean, forest, synthwave, high-contrast, colorblind)
 - **src/domains.ts** — Memory domain registry (tool-usage, user-preferences, general) with specialized extraction prompts
+- **src/routines.ts** — RoutineStore class: per-file JSON storage for named multi-step workflows
 - **src/providers/** — `getModel()` factory returning AI SDK `LanguageModel`
 - **src/tools/** — Tool registry; each tool is a separate file using `tool()` from `ai`
 
@@ -39,7 +40,7 @@ Bernard follows the [XDG Base Directory Specification](https://specifications.fr
 | Category   | Default Location          | Contents                                                                          |
 | ---------- | ------------------------- | --------------------------------------------------------------------------------- |
 | **Config** | `~/.config/bernard/`      | `preferences.json`, `keys.json`, `.env`, `mcp.json`                               |
-| **Data**   | `~/.local/share/bernard/` | `memory/*.md`, `rag/`, `cron/jobs.json`, `cron/alerts/`                           |
+| **Data**   | `~/.local/share/bernard/` | `memory/*.md`, `rag/`, `routines/*.json`, `cron/jobs.json`, `cron/alerts/`        |
 | **Cache**  | `~/.cache/bernard/`       | `models/` (embeddings), `update-check.json`                                       |
 | **State**  | `~/.local/state/bernard/` | `conversation-history.json`, `logs/*.jsonl`, `cron-daemon.pid`, `cron-daemon.log` |
 
