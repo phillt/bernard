@@ -45,7 +45,6 @@ program
   .option('--alert <id>', 'Open with cron alert context')
   .action(async (opts) => {
     try {
-      migrateFromLegacy();
       await runFirstTimeSetup();
 
       const config = loadConfig({
@@ -391,4 +390,5 @@ program
     }
   });
 
+migrateFromLegacy();
 program.parse();
