@@ -45,10 +45,66 @@ export function extractRecentUserTexts(
   return texts;
 }
 
+/**
+ * Extract the first key-value pair from tool args and truncate the value.
+ * Returns a compact "key=value" string, or empty string if args is empty/null.
+ */
+function compactArgs(args: Record<string, unknown> | undefined | null): string {
+  if (!args || typeof args !== 'object') return '';
+  const keys = Object.keys(args);
+  if (keys.length === 0) return '';
+  const key = keys[0];
+  const raw = String(args[key] ?? '');
+  const value = raw.length > 60 ? raw.slice(0, 57) + '...' : raw;
+  return `${key}=${value}`;
+}
+
+/**
+ * Walk history backward and collect tool call names + compact args from assistant messages.
+ * Returns a comma-separated string in chronological order (oldest first).
+ *
+ * @param history - Conversation history to scan
+ * @param maxMessages - Maximum number of assistant messages to scan (default: 3)
+ * @param maxChars - Maximum character length for the returned string (default: 200)
+ */
+export function extractRecentToolContext(
+  history: CoreMessage[],
+  maxMessages: number = 3,
+  maxChars: number = 200,
+): string {
+  const entries: string[] = [];
+  let scanned = 0;
+
+  for (let i = history.length - 1; i >= 0 && scanned < maxMessages; i--) {
+    const msg = history[i];
+    if (msg.role !== 'assistant') continue;
+    scanned++;
+
+    if (!Array.isArray(msg.content)) continue;
+
+    for (const part of msg.content) {
+      if (part.type === 'tool-call') {
+        const compact = compactArgs(part.args as Record<string, unknown>);
+        entries.unshift(compact ? `${part.toolName}(${compact})` : part.toolName);
+      }
+    }
+  }
+
+  if (entries.length === 0) return '';
+
+  let result = entries.join(', ');
+  if (result.length > maxChars) {
+    result = result.slice(0, maxChars - 3) + '...';
+  }
+  return result;
+}
+
 /** Options for {@link buildRAGQuery}. */
 export interface BuildRAGQueryOptions {
   /** Character budget for the composed query (default: 1000). */
   maxQueryChars?: number;
+  /** Comma-separated tool context string (e.g. "shell(command=ls), memory"). */
+  toolContext?: string;
 }
 
 /**
@@ -63,7 +119,9 @@ export function buildRAGQuery(
 ): string {
   const maxChars = options?.maxQueryChars ?? DEFAULT_MAX_QUERY_CHARS;
 
-  if (recentUserTexts.length === 0) return currentInput.slice(0, maxChars);
+  const toolContext = options?.toolContext;
+
+  if (recentUserTexts.length === 0 && !toolContext) return currentInput.slice(0, maxChars);
 
   // Always preserve current input (truncate if alone it exceeds budget)
   const current = currentInput.slice(0, maxChars);
@@ -79,6 +137,13 @@ export function buildRAGQuery(
     const truncated = text.slice(0, remaining);
     parts.unshift(truncated);
     remaining -= truncated.length + 2; // -2 for ". " separator between parts
+  }
+
+  // Tool context is lowest-priority: only inserted if remaining budget > 10 chars
+  if (toolContext && remaining > 10) {
+    const wrapped = `[tools: ${toolContext}]`;
+    const truncatedTool = wrapped.slice(0, remaining);
+    parts.unshift(truncatedTool);
   }
 
   return [...parts, current].join('. ');

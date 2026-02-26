@@ -25,7 +25,12 @@ import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import { buildMemoryContext } from './memory-context.js';
-import { extractRecentUserTexts, buildRAGQuery, applyStickiness } from './rag-query.js';
+import {
+  extractRecentUserTexts,
+  extractRecentToolContext,
+  buildRAGQuery,
+  applyStickiness,
+} from './rag-query.js';
 
 const BASE_SYSTEM_PROMPT = `# Identity
 
@@ -235,9 +240,12 @@ export class Agent {
       let ragResults: RAGSearchResult[] | undefined;
       if (this.ragStore) {
         try {
-          // Build context-enriched query from recent user messages
+          // Build context-enriched query from recent user messages and tool calls
           const recentTexts = extractRecentUserTexts(this.history.slice(0, -1), 2);
-          const ragQuery = buildRAGQuery(userInput, recentTexts);
+          const toolContext = extractRecentToolContext(this.history.slice(0, -1));
+          const ragQuery = buildRAGQuery(userInput, recentTexts, {
+            toolContext: toolContext || undefined,
+          });
 
           // Search with enriched query
           const rawResults = await this.ragStore.search(ragQuery);
