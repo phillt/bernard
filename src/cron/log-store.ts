@@ -1,8 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
-
-const LOGS_DIR = path.join(os.homedir(), '.bernard', 'logs');
+import { LOGS_DIR } from '../paths.js';
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const DEFAULT_KEEP = 500;
 
@@ -36,7 +34,7 @@ export interface CronLogEntry {
 /**
  * Append-only JSONL log store for cron job execution history.
  *
- * Each job gets its own `{jobId}.jsonl` file under `~/.bernard/logs/`.
+ * Each job gets its own `{jobId}.jsonl` file under the state logs directory.
  * Files are automatically rotated when they exceed {@link MAX_FILE_SIZE}.
  */
 export class CronLogStore {
@@ -45,7 +43,7 @@ export class CronLogStore {
     fs.mkdirSync(LOGS_DIR, { recursive: true });
   }
 
-  /** Absolute path to `~/.bernard/logs/`. */
+  /** Absolute path to the logs directory. */
   static get logsDir(): string {
     return LOGS_DIR;
   }

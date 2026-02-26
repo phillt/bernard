@@ -1,19 +1,19 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import * as crypto from 'node:crypto';
 import type { CronJob, CronAlert } from './types.js';
-
-const CRON_DIR = path.join(os.homedir(), '.bernard', 'cron');
-const JOBS_FILE = path.join(CRON_DIR, 'jobs.json');
-const ALERTS_DIR = path.join(CRON_DIR, 'alerts');
-const PID_FILE = path.join(CRON_DIR, 'daemon.pid');
-const LOG_FILE = path.join(CRON_DIR, 'daemon.log');
+import {
+  CRON_DIR,
+  CRON_JOBS_FILE as JOBS_FILE,
+  CRON_ALERTS_DIR as ALERTS_DIR,
+  CRON_PID_FILE as PID_FILE,
+  CRON_LOG_FILE as LOG_FILE,
+} from '../paths.js';
 
 const MAX_JOBS = 50;
 
 /**
- * Disk-backed store for cron jobs and alerts under `~/.bernard/cron/`.
+ * Disk-backed store for cron jobs and alerts.
  *
  * Jobs are persisted as a single `jobs.json` array; alerts are individual
  * JSON files inside `alerts/`. All writes use atomic rename to prevent
@@ -32,23 +32,23 @@ export class CronStore {
 
   // --- Paths ---
 
-  /** Absolute path to `~/.bernard/cron/`. */
+  /** Absolute path to the cron data directory. */
   static get cronDir(): string {
     return CRON_DIR;
   }
-  /** Absolute path to `~/.bernard/cron/jobs.json`. */
+  /** Absolute path to the cron jobs file. */
   static get jobsFile(): string {
     return JOBS_FILE;
   }
-  /** Absolute path to `~/.bernard/cron/alerts/`. */
+  /** Absolute path to the cron alerts directory. */
   static get alertsDir(): string {
     return ALERTS_DIR;
   }
-  /** Absolute path to `~/.bernard/cron/daemon.pid`. */
+  /** Absolute path to the daemon PID file. */
   static get pidFile(): string {
     return PID_FILE;
   }
-  /** Absolute path to `~/.bernard/cron/daemon.log`. */
+  /** Absolute path to the daemon log file. */
   static get logFile(): string {
     return LOG_FILE;
   }
