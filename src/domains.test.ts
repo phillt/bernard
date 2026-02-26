@@ -73,6 +73,13 @@ describe('DOMAIN_REGISTRY', () => {
     const prompt = DOMAIN_REGISTRY['user-preferences'].extractionPrompt;
     expect(prompt).toContain('only apply to the current task');
   });
+
+  it('each extraction prompt references tool call serialized format', () => {
+    for (const domain of Object.values(DOMAIN_REGISTRY)) {
+      expect(domain.extractionPrompt).toContain('Assistant [tool call]:');
+      expect(domain.extractionPrompt).toContain('Tool [name]:');
+    }
+  });
 });
 
 describe('DEFAULT_DOMAIN', () => {
