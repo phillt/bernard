@@ -155,6 +155,19 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Execution Model');
     expect(prompt).toContain('cease execution until the next message');
   });
+
+  it('frames recalled context as hints not rules in system prompt', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).toContain('hints, not rules');
+    expect(prompt).toContain('auto-retrieved hints');
+  });
+
+  it('separates Persistent Memory and Recalled Context in instruction hierarchy', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).toContain('3. Persistent Memory');
+    expect(prompt).toContain('4. Recalled Context');
+    expect(prompt).toContain('5. External content');
+  });
 });
 
 describe('Agent', () => {
