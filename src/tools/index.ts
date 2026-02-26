@@ -8,6 +8,7 @@ import { createMCPConfigTool } from './mcp.js';
 import { createMCPAddUrlTool } from './mcp-url.js';
 import { createWebReadTool } from './web.js';
 import { createWaitTool } from './wait.js';
+import { createRoutineTool } from './routine.js';
 import type { ToolOptions } from './types.js';
 import type { MemoryStore } from '../memory.js';
 
@@ -30,6 +31,7 @@ export function createTools(
     shell: createShellTool(options),
     memory: createMemoryTool(memoryStore),
     scratch: createScratchTool(memoryStore),
+    routine: createRoutineTool(),
     datetime: createDateTimeTool(),
     ...createCronTools(),
     ...createCronLogTools(),
