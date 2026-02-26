@@ -64,6 +64,7 @@ export async function startRepl(
     { command: '/options', description: 'View and set options (max-tokens, shell-timeout)' },
     { command: '/update', description: 'Check for and install updates' },
     { command: '/routines', description: 'List saved routines' },
+    { command: '/create-routine', description: 'Create a routine with guided AI assistance' },
     { command: '/exit', description: 'Quit Bernard' },
   ];
 
@@ -712,6 +713,56 @@ export async function startRepl(
           }
           console.log();
         }
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/create-routine') {
+        const message = `The user wants to create a new routine interactively. Guide them through the process:
+
+1. Ask what workflow they want to save (what task, what steps, what's the goal)
+2. Ask clarifying questions if the instructions are vague or incomplete — e.g., what should happen on errors, are there optional steps, what tools/commands are involved
+3. Once you have enough information, draft the routine by optimizing their raw instructions into a well-structured routine using these prompting best practices:
+   - **Clarity**: use simple, literal language; define terms; state fallback behavior
+   - **Specificity**: specify exact commands, file paths, expected outputs, and decision rules
+   - **Structure**: organize steps logically with clear numbering and section headers
+   - **Constraints**: encode "never do X" + "do Y instead" at boundaries; keep constraints minimal but explicit
+   - **Robustness**: include error handling guidance, edge cases, and "if X then Y" decision points
+   - **Conciseness**: be token-efficient — no filler, no redundant instructions
+4. Present the draft routine (id, name, description, content) to the user for review
+5. Make any requested changes
+6. Use the routine tool to save it once the user approves
+
+Remember: routine content should be written as clear instructions that Bernard can follow. Think of it like writing a mini system prompt — specific, structured, and actionable.`;
+
+        processing = true;
+        interrupted = false;
+        try {
+          const spinnerStats: SpinnerStats = {
+            startTime: Date.now(),
+            totalPromptTokens: 0,
+            totalCompletionTokens: 0,
+            latestPromptTokens: 0,
+            model: config.model,
+          };
+          agent.setSpinnerStats(spinnerStats);
+          startSpinner(() => buildSpinnerMessage(spinnerStats));
+          await agent.processInput(message);
+          historyStore.save(agent.getHistory());
+        } catch (err: unknown) {
+          if (!interrupted) {
+            const message = err instanceof Error ? err.message : String(err);
+            printError(message);
+          }
+        } finally {
+          processing = false;
+          stopSpinner();
+        }
+        if (interrupted) {
+          printInfo('Interrupted.');
+          interrupted = false;
+        }
+        console.log();
         void prompt();
         return;
       }
