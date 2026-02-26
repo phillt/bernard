@@ -24,6 +24,7 @@ A local CLI AI agent that executes terminal commands, manages scheduled tasks, r
   - [Date and Time](#date-and-time)
   - [Time Range Calculations](#time-range-calculations)
   - [Sub-Agents](#sub-agents)
+  - [Routines](#routines)
 - [Cron Jobs (Scheduled Tasks)](#cron-jobs-scheduled-tasks)
   - [Creating Jobs](#creating-jobs)
   - [Managing Jobs](#managing-jobs)
@@ -216,20 +217,24 @@ Features:
 
 ### REPL Slash Commands
 
-| Command     | Description                                  |
-| ----------- | -------------------------------------------- |
-| `/help`     | Show available commands                      |
-| `/clear`    | Clear conversation history and scratch notes |
-| `/memory`   | List all persistent memories                 |
-| `/scratch`  | List session scratch notes                   |
-| `/mcp`      | List connected MCP servers and their tools   |
-| `/cron`     | Show cron jobs and daemon status             |
-| `/rag`      | Show RAG memory stats and recent facts       |
-| `/provider` | Switch LLM provider interactively            |
-| `/model`    | Switch model for the current provider        |
-| `/theme`    | Switch color theme                           |
-| `/options`  | View and modify runtime options              |
-| `/exit`     | Quit Bernard (also: `exit`, `quit`)          |
+| Command           | Description                                  |
+| ----------------- | -------------------------------------------- |
+| `/help`           | Show available commands                      |
+| `/clear`          | Clear conversation history and scratch notes |
+| `/memory`         | List all persistent memories                 |
+| `/scratch`        | List session scratch notes                   |
+| `/mcp`            | List connected MCP servers and their tools   |
+| `/cron`           | Show cron jobs and daemon status             |
+| `/rag`            | Show RAG memory stats and recent facts       |
+| `/provider`       | Switch LLM provider interactively            |
+| `/model`          | Switch model for the current provider        |
+| `/theme`          | Switch color theme                           |
+| `/routines`       | List saved routines                          |
+| `/create-routine` | Create a routine with guided AI assistance   |
+| `/options`        | View and modify runtime options              |
+| `/exit`           | Quit Bernard (also: `exit`, `quit`)          |
+
+Type `/{routine-id}` to invoke a saved routine directly (e.g., `/deploy-staging`).
 
 Prefix with `\` to send a `/`-prefixed message as text instead of a command (e.g., `\/etc/hosts` sends the literal string).
 
@@ -327,6 +332,47 @@ bernard> check the disk usage on /, look up the weather in Austin, and count lin
 ```
 
 Up to 4 concurrent sub-agents. Each gets 10 max steps. Color-coded output in the terminal.
+
+### Routines
+
+Named, persistent multi-step workflows that you can teach Bernard and later invoke with a slash command. Routines capture procedures — deploy scripts, release checklists, onboarding flows — as free-form markdown.
+
+```
+bernard> save a routine called "deploy-staging" that runs our build, pushes the docker image, and updates the k8s deployment
+  ▶ routine: create { id: "deploy-staging", name: "Deploy to Staging", ... }
+
+Routine "Deploy to Staging" (/deploy-staging) created.
+```
+
+Invoke a routine by typing `/{routine-id}`:
+
+```
+bernard> /deploy-staging
+  (Bernard follows the saved procedure with full tool access)
+
+bernard> /deploy-staging to production
+  (Bernard follows the routine with "to production" as additional context)
+```
+
+Manage routines:
+
+```
+bernard> list my routines
+  ▶ routine: list
+
+bernard> show the deploy-staging routine
+  ▶ routine: read { id: "deploy-staging" }
+
+bernard> update the deploy-staging routine to add a rollback step
+  ▶ routine: update { id: "deploy-staging", content: "..." }
+
+bernard> delete the deploy-staging routine
+  ▶ routine: delete { id: "deploy-staging" }
+```
+
+Use `/routines` in the REPL for a quick list. Routine names also appear in the live hint/autocomplete system when typing `/`.
+
+Storage: one JSON file per routine in `~/.local/share/bernard/routines/`. Max 100 routines. IDs must be lowercase kebab-case (1–60 chars).
 
 ---
 
@@ -572,6 +618,7 @@ Bernard stores all data in `~/.bernard/`:
 ├── conversation-history.json    # Last session (for --resume)
 ├── memory/                      # Persistent memories (*.md)
 ├── models/                      # Embedding model cache (fastembed)
+├── routines/                    # Saved routines (*.json)
 ├── rag/
 │   └── memories.json            # RAG fact embeddings
 └── cron/
@@ -639,6 +686,7 @@ src/
 ├── domains.ts            # Memory domain registry + extraction prompts
 ├── rag.ts                # RAG store (domain-tagged embeddings + per-domain search)
 ├── embeddings.ts         # FastEmbed wrapper
+├── routines.ts           # RoutineStore (named multi-step workflows)
 ├── mcp.ts                # MCP server manager
 ├── rag-worker.ts         # Background RAG fact extraction worker
 ├── setup.ts              # First-time setup wizard
@@ -659,6 +707,7 @@ src/
 │   ├── cron-logs.ts      # Cron execution logs
 │   ├── mcp.ts            # MCP config (stdio)
 │   ├── mcp-url.ts        # MCP config (URL-based)
+│   ├── routine.ts        # Routine management tool
 │   └── subagent.ts       # Parallel sub-agents
 └── cron/
     ├── cli.ts            # Cron CLI subcommands

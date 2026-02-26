@@ -672,6 +672,14 @@
             </ul>
           </li>
           <li>
+            <a href="#routines">Routines</a>
+            <ul class="toc-sub">
+              <li><a href="#routines-creating">Creating Routines</a></li>
+              <li><a href="#routines-invoking">Invoking Routines</a></li>
+              <li><a href="#routines-managing">Managing Routines</a></li>
+            </ul>
+          </li>
+          <li>
             <a href="#cron">Cron Jobs</a>
             <ul class="toc-sub">
               <li><a href="#cron-creating">Creating Jobs</a></li>
@@ -1119,6 +1127,18 @@
                 <td>Check for and install updates</td>
               </tr>
               <tr>
+                <td><code>/routines</code></td>
+                <td>List all saved routines</td>
+              </tr>
+              <tr>
+                <td><code>/create-routine</code></td>
+                <td>Create a routine with guided AI assistance</td>
+              </tr>
+              <tr>
+                <td><code>/{routine-id}</code></td>
+                <td>Execute a saved routine (with optional arguments)</td>
+              </tr>
+              <tr>
                 <td><code>/exit</code></td>
                 <td>Quit Bernard (also: <code>exit</code>, <code>quit</code>, or Ctrl+C)</td>
               </tr>
@@ -1239,8 +1259,93 @@
           <li>Maximum: 300 seconds (5 minutes)</li>
         </ul>
 
-        <!-- ═══════════════ 6. Cron Jobs ═══════════════ -->
-        <h2 id="cron">6. Cron Jobs</h2>
+        <!-- ═══════════════ 6. Routines ═══════════════ -->
+        <h2 id="routines">6. Routines</h2>
+        <p>
+          Routines are named, persistent multi-step workflows that Bernard can execute on demand.
+          Use them to capture repeatable procedures &mdash; deploy scripts, release checklists,
+          onboarding flows, code review steps &mdash; as structured instructions that Bernard
+          follows with full tool access.
+        </p>
+
+        <h3 id="routines-creating">Creating Routines</h3>
+        <p>There are two ways to create a routine:</p>
+        <h4>Natural language</h4>
+        <p>
+          Ask Bernard to save a routine directly. The agent will use the <code>routine</code> tool
+          to create it:
+        </p>
+        <pre><code><span class="accent">bernard&gt;</span> save a routine called "deploy-staging" that builds, pushes the docker image, and updates k8s
+  &#x25B6; routine: create { id: "deploy-staging", name: "Deploy to Staging", ... }
+  &#x2713; Routine "Deploy to Staging" (/deploy-staging) created.</code></pre>
+
+        <h4>Guided creation</h4>
+        <p>
+          Use the <code>/create-routine</code> command for a guided, interactive experience. Bernard
+          will ask about your workflow, clarify ambiguities, and draft a well-structured routine
+          using prompt-engineering best practices before saving:
+        </p>
+        <pre><code><span class="accent">bernard&gt;</span> /create-routine
+  What workflow would you like to save as a routine?
+  &hellip; (interactive Q&amp;A to build the routine)</code></pre>
+
+        <h3 id="routines-invoking">Invoking Routines</h3>
+        <p>
+          Type <code>/{routine-id}</code> to execute a saved routine. Bernard follows the stored
+          procedure with full access to all tools:
+        </p>
+        <pre><code><span class="accent">bernard&gt;</span> /deploy-staging
+  (Bernard follows the saved deploy steps)
+
+<span class="accent">bernard&gt;</span> /deploy-staging to production instead
+  (Bernard follows the routine with "to production instead" as additional context)</code></pre>
+        <p>Routine names appear in the live autocomplete hints when you type <code>/</code>.</p>
+
+        <h3 id="routines-managing">Managing Routines</h3>
+        <p>
+          The agent has a <code>routine</code> tool for full lifecycle management. You can also use
+          <code>/routines</code> in the REPL for a quick list.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>How</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>List routines</td>
+                <td><code>/routines</code> or ask Bernard to list them</td>
+              </tr>
+              <tr>
+                <td>View a routine</td>
+                <td>Ask Bernard: &ldquo;show the deploy-staging routine&rdquo;</td>
+              </tr>
+              <tr>
+                <td>Update a routine</td>
+                <td>Ask Bernard: &ldquo;update deploy-staging to add a rollback step&rdquo;</td>
+              </tr>
+              <tr>
+                <td>Delete a routine</td>
+                <td>Ask Bernard: &ldquo;delete the deploy-staging routine&rdquo;</td>
+              </tr>
+              <tr>
+                <td>Create (guided)</td>
+                <td><code>/create-routine</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Storage: one JSON file per routine in
+          <code>~/.local/share/bernard/routines/</code>. Maximum 100 routines. IDs must be lowercase
+          kebab-case (1&ndash;60 characters).
+        </p>
+
+        <!-- ═══════════════ 7. Cron Jobs ═══════════════ -->
+        <h2 id="cron">7. Cron Jobs</h2>
         <p>
           Bernard can schedule recurring tasks that run in the background on a timer. Cron jobs
           execute an AI prompt through the agent on each run, with access to all tools.
@@ -1399,8 +1504,8 @@
           </table>
         </div>
 
-        <!-- ═══════════════ 7. MCP ═══════════════ -->
-        <h2 id="mcp">7. MCP (Model Context Protocol)</h2>
+        <!-- ═══════════════ 8. MCP ═══════════════ -->
+        <h2 id="mcp">8. MCP (Model Context Protocol)</h2>
         <p>
           Bernard supports the
           <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener noreferrer"
@@ -1543,8 +1648,8 @@
           restart when adding or removing servers.
         </div>
 
-        <!-- ═══════════════ 8. RAG Memory ═══════════════ -->
-        <h2 id="rag">8. RAG Memory</h2>
+        <!-- ═══════════════ 9. RAG Memory ═══════════════ -->
+        <h2 id="rag">9. RAG Memory</h2>
         <p>
           Bernard automatically builds a long-term knowledge base from your conversations using
           local embeddings and retrieval-augmented generation (RAG). No data leaves your machine.
@@ -1666,8 +1771,8 @@
           <li>Disable RAG entirely by setting <code>BERNARD_RAG_ENABLED=false</code></li>
         </ul>
 
-        <!-- ═══════════════ 9. Auto-Updates ═══════════════ -->
-        <h2 id="updates">9. Auto-Updates</h2>
+        <!-- ═══════════════ 10. Auto-Updates ═══════════════ -->
+        <h2 id="updates">10. Auto-Updates</h2>
         <p>
           Bernard can check for new versions on npm and install them for you. Update checks are
           cached for 24 hours.
