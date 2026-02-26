@@ -351,6 +351,49 @@ describe('loadConfig', () => {
       expect(config.provider).toBe('openai');
       expect(config.model).toBe(PROVIDER_MODELS.openai[0]);
     });
+
+    it('preserves explicitly set model when provider is auto-detected via override', () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('OPENAI_API_KEY', '');
+      vi.stubEnv('XAI_API_KEY', 'xai-test-key');
+      const config = loadConfig({ model: 'my-custom-model' });
+      expect(config.provider).toBe('xai');
+      expect(config.model).toBe('my-custom-model');
+    });
+
+    it('preserves explicitly set model when provider is auto-detected via env var', () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('OPENAI_API_KEY', '');
+      vi.stubEnv('XAI_API_KEY', 'xai-test-key');
+      vi.stubEnv('BERNARD_MODEL', 'env-custom-model');
+      const config = loadConfig();
+      expect(config.provider).toBe('xai');
+      expect(config.model).toBe('env-custom-model');
+    });
+
+    it('does not auto-detect when provider is set via stored preferences', () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('XAI_API_KEY', 'xai-test-key');
+      fsMock.readFileSync.mockReturnValue(JSON.stringify({ provider: 'anthropic' }));
+      fsMock.existsSync.mockReturnValue(true);
+      expect(() => loadConfig()).toThrow(/No API key found/);
+    });
+
+    it('throws a helpful error when no provider keys are configured', () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('OPENAI_API_KEY', '');
+      vi.stubEnv('XAI_API_KEY', '');
+      expect(() => loadConfig()).toThrow(/No API key found/);
+    });
+
+    it('skips auto-detection when default provider already has a key', () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+      vi.stubEnv('OPENAI_API_KEY', 'sk-openai-test');
+      vi.stubEnv('XAI_API_KEY', 'xai-test-key');
+      const config = loadConfig();
+      expect(config.provider).toBe('anthropic');
+      expect(config.model).toBe(PROVIDER_MODELS.anthropic[0]);
+    });
   });
 });
 
