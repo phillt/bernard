@@ -1,12 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as os from 'node:os';
 import { createMCPClient, type MCPClient } from '@ai-sdk/mcp';
 import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
 import { jsonSchema } from 'ai';
 import { printInfo, printError } from './output.js';
-
-const CONFIG_PATH = path.join(os.homedir(), '.bernard', 'mcp.json');
+import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
 
 /** Configuration for an MCP server launched via stdio subprocess. */
 interface MCPStdioConfig {
@@ -25,7 +23,7 @@ interface MCPUrlConfig {
 /** Discriminated union of stdio and URL-based MCP server configurations. */
 type MCPServerConfig = MCPStdioConfig | MCPUrlConfig;
 
-/** Top-level shape of the `~/.bernard/mcp.json` configuration file. */
+/** Top-level shape of the MCP configuration file. */
 interface MCPConfig {
   mcpServers: Record<string, MCPServerConfig>;
 }
@@ -41,7 +39,7 @@ interface ServerStatus {
 /**
  * Manages the lifecycle of MCP (Model Context Protocol) server connections.
  *
- * Reads server definitions from `~/.bernard/mcp.json`, establishes connections
+ * Reads server definitions from the MCP config file, establishes connections
  * (stdio or URL-based), aggregates tools from all servers, and handles
  * automatic reconnection with retry when a tool call fails.
  */
@@ -55,7 +53,7 @@ export class MCPManager {
   private reconnectPromises: Map<string, Promise<boolean>> = new Map();
 
   /**
-   * Reads and parses the MCP configuration from `~/.bernard/mcp.json`.
+   * Reads and parses the MCP configuration file.
    * @returns The parsed config, or an empty config if the file does not exist.
    * @throws {Error} If the file exists but contains invalid JSON.
    */
@@ -398,7 +396,7 @@ export function getMCPServer(key: string): MCPServerConfig | undefined {
 }
 
 /**
- * Adds a stdio-based MCP server entry to `~/.bernard/mcp.json`.
+ * Adds a stdio-based MCP server entry to the MCP config file.
  * @param key - Unique, whitespace-free identifier for the server.
  * @param command - The command to spawn (e.g. `"npx"`).
  * @param args - Optional command-line arguments.
@@ -447,7 +445,7 @@ export function addMCPServer(
 }
 
 /**
- * Adds a URL-based (SSE or HTTP) MCP server entry to `~/.bernard/mcp.json`.
+ * Adds a URL-based (SSE or HTTP) MCP server entry to the MCP config file.
  * @param key - Unique, whitespace-free identifier for the server.
  * @param url - The server endpoint URL.
  * @param type - Transport type; defaults to `'sse'` at connection time.
@@ -496,7 +494,7 @@ export function addMCPUrlServer(
 }
 
 /**
- * Removes an MCP server entry from `~/.bernard/mcp.json`.
+ * Removes an MCP server entry from the MCP config file.
  * @param key - The server key to remove.
  * @throws {Error} If the config file does not exist, contains invalid JSON, or the key is not found.
  */
