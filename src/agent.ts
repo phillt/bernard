@@ -185,7 +185,7 @@ export class Agent {
   private lastPromptTokens: number = 0;
   private lastStepPromptTokens: number = 0;
   private spinnerStats: SpinnerStats | null = null;
-  private _routineStore?: RoutineStore;
+  private routineStore: RoutineStore;
 
   constructor(
     config: BernardConfig,
@@ -196,6 +196,7 @@ export class Agent {
     alertContext?: string,
     initialHistory?: CoreMessage[],
     ragStore?: RAGStore,
+    routineStore?: RoutineStore,
   ) {
     this.config = config;
     this.toolOptions = toolOptions;
@@ -204,16 +205,11 @@ export class Agent {
     this.mcpServerNames = mcpServerNames;
     this.alertContext = alertContext;
     this.ragStore = ragStore;
+    this.routineStore = routineStore ?? new RoutineStore();
     if (initialHistory) {
       this.history = [...initialHistory];
       this.lastPromptTokens = Math.ceil(JSON.stringify(initialHistory).length / 4);
     }
-  }
-
-  /** Lazily creates and returns the RoutineStore. */
-  private get routineStore(): RoutineStore {
-    if (!this._routineStore) this._routineStore = new RoutineStore();
-    return this._routineStore;
   }
 
   /** Returns the current conversation message history. */
