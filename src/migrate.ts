@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { LEGACY_DIR, CONFIG_DIR, DATA_DIR, CACHE_DIR, STATE_DIR, PREFS_PATH } from './paths.js';
+import { LEGACY_DIR, CONFIG_DIR, DATA_DIR, CACHE_DIR, STATE_DIR } from './paths.js';
 
 const MIGRATED_MARKER = path.join(LEGACY_DIR, 'MIGRATED');
 
@@ -11,6 +11,9 @@ const MIGRATION_MAP: Array<{ src: string; destDir: string; mode?: number }> = [
   { src: 'keys.json', destDir: CONFIG_DIR, mode: 0o600 },
   { src: '.env', destDir: CONFIG_DIR },
   { src: 'mcp.json', destDir: CONFIG_DIR },
+
+  // Cache files
+  { src: 'update-check.json', destDir: CACHE_DIR },
 
   // State files
   { src: 'conversation-history.json', destDir: STATE_DIR },
@@ -109,8 +112,15 @@ export function migrateFromLegacy(): { migrated: boolean; errors: string[] } {
   if (fs.existsSync(MIGRATED_MARKER)) {
     return { migrated: false, errors };
   }
-  if (fs.existsSync(PREFS_PATH)) {
-    return { migrated: false, errors };
+  if (fs.existsSync(CONFIG_DIR)) {
+    try {
+      const entries = fs.readdirSync(CONFIG_DIR);
+      if (entries.length > 0) {
+        return { migrated: false, errors };
+      }
+    } catch {
+      /* proceed with migration */
+    }
   }
 
   // Ensure XDG base directories exist with 0700

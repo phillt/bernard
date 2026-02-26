@@ -88,6 +88,17 @@ describe('migrateFromLegacy', () => {
     expect(result.migrated).toBe(false);
   });
 
+  it('no-op when CONFIG_DIR has any files (e.g. keys.json from add-key)', async () => {
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, 'preferences.json'), '{}');
+    const xdgConfig = path.join(testDir, '.config', 'bernard');
+    fs.mkdirSync(xdgConfig, { recursive: true });
+    fs.writeFileSync(path.join(xdgConfig, 'keys.json'), '{"anthropic":"sk-test"}');
+    const { migrateFromLegacy } = await importMigrate();
+    const result = migrateFromLegacy();
+    expect(result.migrated).toBe(false);
+  });
+
   it('migrates config files to CONFIG_DIR', async () => {
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(path.join(legacyDir, 'preferences.json'), '{"provider":"openai"}');
@@ -145,6 +156,20 @@ describe('migrateFromLegacy', () => {
     expect(fs.existsSync(path.join(testDir, '.cache', 'bernard', 'models', 'model.bin'))).toBe(
       true,
     );
+  });
+
+  it('migrates update-check.json to CACHE_DIR', async () => {
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(path.join(legacyDir, 'update-check.json'), '{"lastCheck":123}');
+
+    const { migrateFromLegacy } = await importMigrate();
+    const result = migrateFromLegacy();
+    expect(result.migrated).toBe(true);
+
+    const cacheDir = path.join(testDir, '.cache', 'bernard');
+    expect(fs.existsSync(path.join(cacheDir, 'update-check.json'))).toBe(true);
+    const content = fs.readFileSync(path.join(cacheDir, 'update-check.json'), 'utf-8');
+    expect(JSON.parse(content).lastCheck).toBe(123);
   });
 
   it('migrates state files to STATE_DIR', async () => {
