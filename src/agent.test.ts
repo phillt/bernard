@@ -168,6 +168,37 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('4. Recalled Context');
     expect(prompt).toContain('5. External content');
   });
+
+  it('includes routine summaries when provided', () => {
+    const summaries = [
+      { id: 'deploy', name: 'Deploy', description: 'Deploy to prod' },
+      { id: 'release', name: 'Release', description: 'Cut a release' },
+    ];
+    const prompt = buildSystemPrompt(makeConfig(), store, undefined, undefined, summaries);
+    expect(prompt).toContain('## Routines');
+    expect(prompt).toContain('/deploy');
+    expect(prompt).toContain('Deploy to prod');
+    expect(prompt).toContain('/release');
+    expect(prompt).toContain('Cut a release');
+  });
+
+  it('includes "no routines" message when empty', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store, undefined, undefined, []);
+    expect(prompt).toContain('## Routines');
+    expect(prompt).toContain('No routines saved yet');
+  });
+
+  it('includes "no routines" message when undefined', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).toContain('## Routines');
+    expect(prompt).toContain('No routines saved yet');
+  });
+
+  it('includes routine tool in base system prompt', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).toContain('routine');
+    expect(prompt).toContain('/{routine-id}');
+  });
 });
 
 describe('Agent', () => {
