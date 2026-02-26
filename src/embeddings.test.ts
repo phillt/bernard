@@ -67,4 +67,17 @@ describe('getEmbeddingProvider', () => {
     const second = await getEmbeddingProvider();
     expect(first).toBe(second);
   });
+
+  it('reshapes output into per-text vectors', async () => {
+    mockExtractor.mockResolvedValueOnce({
+      data: new Float32Array([...Array(384).fill(1), ...Array(384).fill(2)]),
+      dims: [2, 384],
+    });
+    const provider = await getEmbeddingProvider();
+    const results = await provider!.embed(['a', 'b']);
+    expect(results).toHaveLength(2);
+    expect(results[0]).toHaveLength(384);
+    expect(results[0][0]).toBe(1);
+    expect(results[1][0]).toBe(2);
+  });
 });
