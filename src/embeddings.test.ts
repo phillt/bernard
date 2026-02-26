@@ -5,6 +5,15 @@ vi.mock('./logger.js', () => ({
   debugLog: vi.fn(),
 }));
 
+const mockExtractor = vi.fn().mockResolvedValue({
+  data: new Float32Array(384), // single embedding of zeros
+  dims: [1, 384],
+});
+
+vi.mock('@xenova/transformers', () => ({
+  pipeline: vi.fn().mockResolvedValue(mockExtractor),
+}));
+
 describe('cosineSimilarity', () => {
   it('returns 1 for identical vectors', () => {
     const v = [1, 2, 3];
@@ -45,21 +54,30 @@ describe('getEmbeddingProvider', () => {
     _resetEmbeddingProvider();
   });
 
-  it('returns null when fastembed is unavailable', async () => {
-    // fastembed requires ONNX runtime which may not be available in test env
-    // The provider should gracefully return null or a valid provider
+  it('returns a valid provider when @xenova/transformers is available', async () => {
     const provider = await getEmbeddingProvider();
-    // Either null (no ONNX) or a valid provider — both are correct
-    if (provider !== null) {
-      expect(typeof provider.embed).toBe('function');
-      expect(typeof provider.dimensions).toBe('function');
-      expect(provider.dimensions()).toBe(384);
-    }
+    expect(provider).not.toBeNull();
+    expect(typeof provider!.embed).toBe('function');
+    expect(typeof provider!.dimensions).toBe('function');
+    expect(provider!.dimensions()).toBe(384);
   });
 
   it('caches the provider on subsequent calls', async () => {
     const first = await getEmbeddingProvider();
     const second = await getEmbeddingProvider();
     expect(first).toBe(second);
+  });
+
+  it('reshapes output into per-text vectors', async () => {
+    mockExtractor.mockResolvedValueOnce({
+      data: new Float32Array([...Array(384).fill(1), ...Array(384).fill(2)]),
+      dims: [2, 384],
+    });
+    const provider = await getEmbeddingProvider();
+    const results = await provider!.embed(['a', 'b']);
+    expect(results).toHaveLength(2);
+    expect(results[0]).toHaveLength(384);
+    expect(results[0][0]).toBe(1);
+    expect(results[1][0]).toBe(2);
   });
 });

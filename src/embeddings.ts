@@ -12,34 +12,38 @@ export interface EmbeddingProvider {
 
 let cachedProvider: EmbeddingProvider | null | undefined;
 
+/** Embedding vector dimensionality for all-MiniLM-L6-v2. */
+const DIMENSIONS = 384;
+
 /**
- * Lazily load fastembed and return an EmbeddingProvider.
- * Returns null if fastembed is unavailable or fails to initialize.
+ * Lazily load @xenova/transformers and return an EmbeddingProvider.
+ * Returns null if the library is unavailable or fails to initialize.
  * Caches the result after first call.
  */
 export async function getEmbeddingProvider(): Promise<EmbeddingProvider | null> {
   if (cachedProvider !== undefined) return cachedProvider;
 
   try {
-    const { EmbeddingModel, FlagEmbedding } = await import('fastembed');
+    const { pipeline } = await import('@xenova/transformers');
     fs.mkdirSync(MODELS_DIR, { recursive: true });
     debugLog('embeddings:init', 'Loading embedding model (may download on first run)...');
-    const model = await FlagEmbedding.init({
-      model: EmbeddingModel.AllMiniLML6V2,
-      cacheDir: MODELS_DIR,
-      showDownloadProgress: false,
+    const extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+      cache_dir: MODELS_DIR,
+      progress_callback: undefined,
     });
 
     cachedProvider = {
       async embed(texts: string[]): Promise<number[][]> {
+        const output = await extractor(texts, { pooling: 'mean', normalize: true });
+        const data = output.data as Float32Array;
         const results: number[][] = [];
-        for await (const batch of model.embed(texts)) {
-          results.push(...batch);
+        for (let i = 0; i < texts.length; i++) {
+          results.push(Array.from(data.slice(i * DIMENSIONS, (i + 1) * DIMENSIONS)));
         }
         return results;
       },
       dimensions(): number {
-        return 384;
+        return DIMENSIONS;
       },
     };
 
@@ -47,7 +51,7 @@ export async function getEmbeddingProvider(): Promise<EmbeddingProvider | null> 
   } catch (err) {
     debugLog(
       'embeddings:init',
-      `Failed to load fastembed: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to load @xenova/transformers: ${err instanceof Error ? err.message : String(err)}`,
     );
     cachedProvider = null;
     return null;
