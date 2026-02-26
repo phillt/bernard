@@ -24,6 +24,11 @@ export const DOMAIN_REGISTRY: Record<string, MemoryDomain> = {
       'Command sequences, tool interaction patterns, error resolutions, build/deploy workflows',
     extractionPrompt: `You are a tool-usage pattern extractor. Extract durable, reusable facts about how tools, commands, and workflows are used in the conversation below. Focus on lessons learned and patterns that would be useful in future sessions.
 
+The conversation may contain serialized tool interactions in these formats:
+- "Assistant [tool call]: toolName(args)" — an AI assistant invoking a tool
+- "Tool [name]: result" — the tool's response/output
+Use tool call/result pairs as primary evidence for command sequences, error resolutions, and workflow patterns.
+
 Extract:
 - Shell command sequences and pipelines that accomplished a task
 - Tool interaction patterns (which tools were used together, in what order)
@@ -61,6 +66,11 @@ Return a JSON array of strings. Each string should be a self-contained fact (und
       'Communication style, workflow conventions, repeated instructions, naming preferences',
     extractionPrompt: `You are a user preference extractor. Extract durable, long-term facts about the user's preferences, habits, and conventions from the conversation below. Only extract preferences that would apply across multiple sessions and tasks.
 
+The conversation may contain serialized tool interactions in these formats:
+- "Assistant [tool call]: toolName(args)" — an AI assistant invoking a tool
+- "Tool [name]: result" — the tool's response/output
+Tool outputs may reveal user preferences such as preferred editors, package managers, shell configurations, and workflow habits.
+
 Extract:
 - Communication style preferences (verbosity, tone, format)
 - Workflow conventions (branching strategy, commit style, review process)
@@ -94,6 +104,11 @@ Return a JSON array of strings. Each string should be a self-contained fact (und
     name: 'General Knowledge',
     description: 'Project structure, architecture decisions, environment info, team context',
     extractionPrompt: `You are a general knowledge extractor. Extract durable, long-term facts about the project, environment, people, and context from the conversation below. Focus on knowledge that remains true across sessions — not ephemeral task state.
+
+The conversation may contain serialized tool interactions in these formats:
+- "Assistant [tool call]: toolName(args)" — an AI assistant invoking a tool
+- "Tool [name]: result" — the tool's response/output
+Tool results may contain project structure, environment details, configuration values, and other durable facts worth extracting.
 
 Extract:
 - Project structure, architecture, and design decisions
