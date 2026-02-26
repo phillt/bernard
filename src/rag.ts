@@ -10,9 +10,9 @@ const MEMORIES_FILE = path.join(RAG_DIR, 'memories.json');
 const LAST_SESSION_FILE = path.join(RAG_DIR, 'last-session.txt');
 
 /** Maximum results returned per domain before merging. */
-const DEFAULT_TOP_K_PER_DOMAIN = 3;
+export const DEFAULT_TOP_K_PER_DOMAIN = 5;
 /** Maximum total results returned from a search. */
-const DEFAULT_MAX_RESULTS = 9;
+export const DEFAULT_MAX_RESULTS = 15;
 /** Minimum cosine similarity for a memory to be considered relevant. */
 const DEFAULT_SIMILARITY_THRESHOLD = 0.35;
 /** Hard cap on stored memories; excess is pruned by score. */
@@ -67,9 +67,9 @@ export interface RAGSearchResultWithId {
 
 /** Optional configuration overrides for {@link RAGStore}. All fields fall back to sensible defaults. */
 export interface RAGStoreConfig {
-  /** Max results per domain before merging (default: 3). */
+  /** Max results per domain before merging (default: 5). */
   topKPerDomain?: number;
-  /** Max total results from a search (default: 9). */
+  /** Max total results from a search (default: 15). */
   maxResults?: number;
   /** Minimum cosine similarity to include a result (default: 0.35). */
   similarityThreshold?: number;

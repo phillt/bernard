@@ -1,6 +1,7 @@
 import type { CoreMessage } from 'ai';
 import { extractText } from './context.js';
 import type { RAGSearchResult } from './rag.js';
+import { DEFAULT_TOP_K_PER_DOMAIN, DEFAULT_MAX_RESULTS } from './rag.js';
 
 /** Number of recent user messages (beyond the current input) to include in the RAG query. */
 export const DEFAULT_WINDOW_SIZE = 2;
@@ -87,9 +88,9 @@ export function buildRAGQuery(
 export interface ApplyStickinessOptions {
   /** Similarity score bonus for previously-seen facts (default: 0.05). */
   boost?: number;
-  /** Max results to keep per domain after re-ranking (default: 3). */
+  /** Max results to keep per domain after re-ranking (default: 5). */
   topKPerDomain?: number;
-  /** Max total results after re-ranking (default: 9). */
+  /** Max total results after re-ranking (default: 15). */
   maxResults?: number;
 }
 
@@ -106,8 +107,8 @@ export function applyStickiness(
   if (previousFacts.size === 0) return currentResults;
 
   const boost = options?.boost ?? DEFAULT_STICKINESS_BOOST;
-  const topKPerDomain = options?.topKPerDomain ?? 3;
-  const maxResults = options?.maxResults ?? 9;
+  const topKPerDomain = options?.topKPerDomain ?? DEFAULT_TOP_K_PER_DOMAIN;
+  const maxResults = options?.maxResults ?? DEFAULT_MAX_RESULTS;
 
   // Apply boost
   const boosted = currentResults.map((r) => ({
