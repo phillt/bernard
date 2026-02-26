@@ -1,7 +1,6 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
-import * as os from 'node:os';
 import { debugLog } from './logger.js';
+import { MODELS_DIR } from './paths.js';
 
 /** Abstraction over a text embedding model used by the RAG subsystem. */
 export interface EmbeddingProvider {
@@ -23,12 +22,11 @@ export async function getEmbeddingProvider(): Promise<EmbeddingProvider | null> 
 
   try {
     const { EmbeddingModel, FlagEmbedding } = await import('fastembed');
-    const cacheDir = path.join(os.homedir(), '.bernard', 'models');
-    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.mkdirSync(MODELS_DIR, { recursive: true });
     debugLog('embeddings:init', 'Loading embedding model (may download on first run)...');
     const model = await FlagEmbedding.init({
       model: EmbeddingModel.AllMiniLML6V2,
-      cacheDir,
+      cacheDir: MODELS_DIR,
       showDownloadProgress: false,
     });
 

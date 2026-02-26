@@ -5,6 +5,7 @@ import type { RAGSearchResultWithId } from './rag.js';
 import { getDomain } from './domains.js';
 import { loadConfig } from './config.js';
 import { printInfo, printError } from './output.js';
+import { MEMORIES_FILE } from './paths.js';
 
 const MAX_FILE_QUERY_LENGTH = 10000;
 
@@ -182,7 +183,7 @@ export async function clearFacts(): Promise<void> {
   }
   printInfo(`    ${'Total:'.padEnd(maxLen)}  ${String(total).padStart(6)} facts`);
   printInfo('');
-  printInfo('  Storage: ~/.bernard/rag/memories.json');
+  printInfo(`  Storage: ${MEMORIES_FILE}`);
   printInfo('');
 
   const answer = await promptLine('  Type "yes, delete all facts" to confirm: ');
