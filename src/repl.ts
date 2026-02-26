@@ -36,6 +36,7 @@ import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
 import { serializeMessages } from './context.js';
 import { getDomain, getDomainIds } from './domains.js';
+import { RoutineStore } from './routines.js';
 
 /**
  * Launch the interactive REPL, wiring up readline, MCP servers, memory stores, and the agent loop.
@@ -62,13 +63,25 @@ export async function startRepl(
     { command: '/theme', description: 'Switch color theme' },
     { command: '/options', description: 'View and set options (max-tokens, shell-timeout)' },
     { command: '/update', description: 'Check for and install updates' },
+    { command: '/routines', description: 'List saved routines' },
     { command: '/exit', description: 'Quit Bernard' },
   ];
 
+  const routineStore = new RoutineStore();
+
+  function getAllSlashCommands(): { command: string; description: string }[] {
+    const routineCommands = routineStore.getSummaries().map((r) => ({
+      command: `/${r.id}`,
+      description: `Routine: ${r.name}`,
+    }));
+    return [...SLASH_COMMANDS, ...routineCommands];
+  }
+
   function completer(line: string): [string[], string] {
     if (line.startsWith('/')) {
-      const hits = SLASH_COMMANDS.filter((c) => c.command.startsWith(line)).map((c) => c.command);
-      return [hits.length ? hits : SLASH_COMMANDS.map((c) => c.command), line];
+      const all = getAllSlashCommands();
+      const hits = all.filter((c) => c.command.startsWith(line)).map((c) => c.command);
+      return [hits.length ? hits : all.map((c) => c.command), line];
     }
     return [[], line];
   }
@@ -95,7 +108,7 @@ export async function startRepl(
   function redrawWithHints(line: string): void {
     const matches =
       !isPasting && line.startsWith('/')
-        ? SLASH_COMMANDS.filter((c) => c.command.startsWith(line))
+        ? getAllSlashCommands().filter((c) => c.command.startsWith(line))
         : [];
 
     // Nothing to show and nothing to clean up — let readline handle display
@@ -686,6 +699,70 @@ export async function startRepl(
         await interactiveUpdate();
         void prompt();
         return;
+      }
+
+      if (trimmed === '/routines') {
+        const routines = routineStore.list();
+        if (routines.length === 0) {
+          printInfo('No routines saved. Teach me a workflow and I can save it as a routine.');
+        } else {
+          printInfo(`\n  Routines (${routines.length}):`);
+          for (const r of routines) {
+            printInfo(`    /${r.id} — ${r.name}: ${r.description}`);
+          }
+          console.log();
+        }
+        void prompt();
+        return;
+      }
+
+      // Dynamic routine invocation: /{routine-id} [args...]
+      {
+        const parts = trimmed.slice(1).split(/\s+/);
+        const routineId = parts[0];
+        const routine = routineStore.get(routineId);
+        if (routine) {
+          const args = parts.slice(1).join(' ');
+          let message = `Execute routine "${routine.name}" (/${routine.id}):\n${routine.description}\n\n## Routine Steps\n${routine.content}`;
+          if (args) {
+            message += `\n\n## Additional Context\n${args}`;
+          }
+          message +=
+            "\n\nFollow this routine intelligently — adapt to the current situation, skip steps that don't apply, and explain any deviations.";
+
+          processing = true;
+          interrupted = false;
+          try {
+            const spinnerStats: SpinnerStats = {
+              startTime: Date.now(),
+              totalPromptTokens: 0,
+              totalCompletionTokens: 0,
+              latestPromptTokens: 0,
+              model: config.model,
+            };
+            agent.setSpinnerStats(spinnerStats);
+            startSpinner(() => buildSpinnerMessage(spinnerStats));
+            await agent.processInput(message);
+            historyStore.save(agent.getHistory());
+          } catch (err: unknown) {
+            if (!interrupted) {
+              const message = err instanceof Error ? err.message : String(err);
+              printError(message);
+            }
+          } finally {
+            processing = false;
+            stopSpinner();
+          }
+
+          if (interrupted) {
+            printInfo('Interrupted.');
+            interrupted = false;
+          }
+
+          console.log();
+          void prompt();
+          return;
+        }
       }
     } // end slash command handling
 
