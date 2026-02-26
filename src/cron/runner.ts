@@ -160,6 +160,9 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       memory: createMemoryTool(memoryStore),
       scratch: createScratchTool(memoryStore),
       datetime: createDateTimeTool(),
+      web_read: createWebReadTool(),
+      wait: createWaitTool(),
+      ...createTimeTools(),
       notify: notifyTool,
       cron_self_disable: selfDisableTool,
       ...mcpTools,
@@ -182,13 +185,22 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       }
     }
 
-    const enrichedPrompt =
+    let enrichedPrompt =
       DAEMON_SYSTEM_PROMPT +
       buildMemoryContext({
         memoryStore,
         ragResults,
-        includeScratch: false,
+        includeScratch: true,
       });
+
+    // Append current date so the agent knows "today"
+    enrichedPrompt += `\n\nToday's date: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`;
+
+    // Append connected MCP server names so the agent knows what's available
+    const connectedServers = mcpManager.getConnectedServerNames();
+    if (connectedServers.length > 0) {
+      enrichedPrompt += `\nConnected MCP servers: ${connectedServers.join(', ')}`;
+    }
 
     const result = await generateText({
       model: getModel(config.provider, config.model),
