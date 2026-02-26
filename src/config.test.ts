@@ -301,6 +301,48 @@ describe('loadConfig', () => {
     expect(config.maxTokens).toBe(4096);
     expect(config.shellTimeout).toBe(30000);
   });
+
+  describe('provider auto-detection', () => {
+    it('selects xai when only xai has a key and no provider is explicitly set', () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('OPENAI_API_KEY', '');
+      vi.stubEnv('XAI_API_KEY', 'xai-test-key');
+      const config = loadConfig();
+      expect(config.provider).toBe('xai');
+      expect(config.model).toBe(PROVIDER_MODELS.xai[0]);
+    });
+
+    it('selects openai when only openai has a key and no provider is explicitly set', () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('OPENAI_API_KEY', 'sk-openai-test');
+      vi.stubEnv('XAI_API_KEY', '');
+      const config = loadConfig();
+      expect(config.provider).toBe('openai');
+      expect(config.model).toBe(PROVIDER_MODELS.openai[0]);
+    });
+
+    it('does not auto-detect when provider is explicitly set via override', () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('XAI_API_KEY', 'xai-test-key');
+      expect(() => loadConfig({ provider: 'anthropic' })).toThrow(/No API key found/);
+    });
+
+    it('does not auto-detect when provider is set via env var', () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('BERNARD_PROVIDER', 'anthropic');
+      vi.stubEnv('XAI_API_KEY', 'xai-test-key');
+      expect(() => loadConfig()).toThrow(/No API key found/);
+    });
+
+    it('uses stored key for auto-detection', () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('OPENAI_API_KEY', '');
+      vi.stubEnv('XAI_API_KEY', '');
+      fsMock.readFileSync.mockReturnValue(JSON.stringify({ xai: 'stored-xai-key' }));
+      const config = loadConfig();
+      expect(config.provider).toBe('xai');
+    });
+  });
 });
 
 describe('saveOption', () => {

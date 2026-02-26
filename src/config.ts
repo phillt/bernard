@@ -350,10 +350,29 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
   }
 
   const prefs = loadPreferences();
-  const provider =
-    overrides?.provider || prefs.provider || process.env.BERNARD_PROVIDER || DEFAULT_PROVIDER;
-  const model =
+  const explicitProvider = overrides?.provider || prefs.provider || process.env.BERNARD_PROVIDER;
+  let provider = explicitProvider || DEFAULT_PROVIDER;
+  let model =
     overrides?.model || prefs.model || process.env.BERNARD_MODEL || getDefaultModel(provider);
+
+  // When provider was not explicitly chosen and the default has no key,
+  // auto-detect the first provider that does have a key available.
+  if (!explicitProvider) {
+    const keyMap: Record<string, string | undefined> = {
+      anthropic: process.env.ANTHROPIC_API_KEY,
+      openai: process.env.OPENAI_API_KEY,
+      xai: process.env.XAI_API_KEY,
+    };
+    if (!keyMap[provider]) {
+      const available = Object.keys(PROVIDER_ENV_VARS).find((p) => !!keyMap[p]);
+      if (available) {
+        provider = available;
+        if (!overrides?.model && !prefs.model && !process.env.BERNARD_MODEL) {
+          model = getDefaultModel(provider);
+        }
+      }
+    }
+  }
   const maxTokens =
     prefs.maxTokens ?? (parseInt(process.env.BERNARD_MAX_TOKENS || '', 10) || DEFAULT_MAX_TOKENS);
   const shellTimeout =
