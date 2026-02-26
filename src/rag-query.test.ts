@@ -295,12 +295,36 @@ describe('extractRecentToolContext', () => {
     const history: CoreMessage[] = [
       {
         role: 'assistant',
-        content: [
-          { type: 'tool-call', toolCallId: 'tc1', toolName: 'datetime', args: {} },
-        ],
+        content: [{ type: 'tool-call', toolCallId: 'tc1', toolName: 'datetime', args: {} }],
       },
     ];
     expect(extractRecentToolContext(history)).toBe('datetime');
+  });
+
+  it('preserves intra-message tool call order', () => {
+    const history: CoreMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'tc1', toolName: 'alpha', args: {} },
+          { type: 'tool-call', toolCallId: 'tc2', toolName: 'beta', args: {} },
+        ],
+      },
+    ];
+    const result = extractRecentToolContext(history);
+    expect(result).toBe('alpha, beta');
+  });
+
+  it('returns empty string when maxChars < 3', () => {
+    const history: CoreMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'tc1', toolName: 'shell', args: { command: 'ls' } },
+        ],
+      },
+    ];
+    expect(extractRecentToolContext(history, 3, 2)).toBe('');
   });
 
   it('truncates long arg values to 60 chars', () => {
@@ -432,6 +456,29 @@ describe('applyStickiness', () => {
     }
     const output = applyStickiness(results, new Set(['fact11']), { maxResults: 9 });
     expect(output.length).toBeLessThanOrEqual(9);
+  });
+
+  it('applies default topKPerDomain=5 and maxResults=15 when no options given', () => {
+    // Create 8 results per domain across 3 domains = 24 total
+    const results: RAGSearchResult[] = [];
+    for (let d = 0; d < 3; d++) {
+      for (let i = 0; i < 8; i++) {
+        results.push({
+          fact: `d${d}-fact${i}`,
+          similarity: 0.9 - i * 0.01,
+          domain: `domain-${d}`,
+        });
+      }
+    }
+    const previous = new Set(['d0-fact0']);
+    const output = applyStickiness(results, previous);
+    // Per-domain cap of 5 should apply
+    for (let d = 0; d < 3; d++) {
+      const domainResults = output.filter((r) => r.domain === `domain-${d}`);
+      expect(domainResults.length).toBeLessThanOrEqual(5);
+    }
+    // Total cap of 15 should apply
+    expect(output.length).toBeLessThanOrEqual(15);
   });
 
   it('boost is applied to input similarity regardless of source', () => {
