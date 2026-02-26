@@ -342,6 +342,15 @@ describe('loadConfig', () => {
       const config = loadConfig();
       expect(config.provider).toBe('xai');
     });
+
+    it('prefers openai over xai when both have keys (iteration order)', () => {
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+      vi.stubEnv('OPENAI_API_KEY', 'sk-openai-test');
+      vi.stubEnv('XAI_API_KEY', 'xai-test-key');
+      const config = loadConfig();
+      expect(config.provider).toBe('openai');
+      expect(config.model).toBe(PROVIDER_MODELS.openai[0]);
+    });
   });
 });
 
