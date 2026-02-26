@@ -37,6 +37,7 @@ const RESERVED_NAMES = new Set([
   'update',
   'exit',
   'routines',
+  'create-routine',
 ]);
 
 /**

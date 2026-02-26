@@ -67,6 +67,7 @@ describe('RoutineStore', () => {
       expect(store.validateId('memory')).toContain('reserved');
       expect(store.validateId('routines')).toContain('reserved');
       expect(store.validateId('exit')).toContain('reserved');
+      expect(store.validateId('create-routine')).toContain('reserved');
     });
 
     it('accepts valid kebab-case', () => {
