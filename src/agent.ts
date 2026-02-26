@@ -261,7 +261,8 @@ export class Agent {
           this.previousRAGFacts = new Set(ragResults.map((r) => r.fact));
 
           if (ragResults.length > 0) {
-            debugLog('agent:rag', { query: ragQuery.slice(0, 100), results: ragResults.length });
+            const logQuery = ragQuery.replace(/^\[tools: [^\]]*]\. ?/, '').slice(0, 100);
+            debugLog('agent:rag', { query: logQuery, results: ragResults.length });
           }
         } catch (err) {
           debugLog('agent:rag:error', err instanceof Error ? err.message : String(err));
