@@ -43,10 +43,12 @@ vi.mock('./context.js', () => ({
 }));
 
 const mockExtractRecentUserTexts = vi.fn((): string[] => []);
+const mockExtractRecentToolContext = vi.fn((): string => '');
 const mockBuildRAGQuery = vi.fn((input: string) => input);
 const mockApplyStickiness = vi.fn((results: any) => results);
 vi.mock('./rag-query.js', () => ({
   extractRecentUserTexts: (...args: any[]) => mockExtractRecentUserTexts(...args),
+  extractRecentToolContext: (...args: any[]) => mockExtractRecentToolContext(...args),
   buildRAGQuery: (...args: any[]) => mockBuildRAGQuery(...args),
   applyStickiness: (...args: any[]) => mockApplyStickiness(...args),
 }));
@@ -738,6 +740,70 @@ describe('Agent', () => {
 
     agent.clearHistory();
     expect(agent.getLastRAGResults()).toEqual([]);
+  });
+
+  it('passes tool context to buildRAGQuery when present', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([]),
+      addFacts: vi.fn(),
+    };
+
+    mockExtractRecentUserTexts.mockReturnValueOnce([]);
+    mockExtractRecentToolContext.mockReturnValueOnce('shell(command=ls)');
+    mockBuildRAGQuery.mockReturnValueOnce('Hello');
+
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
+    await agent.processInput('Hello');
+
+    expect(mockBuildRAGQuery).toHaveBeenCalledWith('Hello', [], {
+      toolContext: 'shell(command=ls)',
+    });
+  });
+
+  it('passes undefined toolContext when extractRecentToolContext returns empty string', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([]),
+      addFacts: vi.fn(),
+    };
+
+    mockExtractRecentUserTexts.mockReturnValueOnce([]);
+    mockExtractRecentToolContext.mockReturnValueOnce('');
+    mockBuildRAGQuery.mockReturnValueOnce('Hello');
+
+    const agent = new Agent(
+      makeConfig(),
+      toolOptions,
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mockRagStore as any,
+    );
+    await agent.processInput('Hello');
+
+    expect(mockBuildRAGQuery).toHaveBeenCalledWith('Hello', [], {
+      toolContext: undefined,
+    });
   });
 
   it('clearHistory resets previousRAGFacts', async () => {
