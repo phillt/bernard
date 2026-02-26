@@ -40,6 +40,7 @@ describe('buildMemoryContext', () => {
     ];
     const result = buildMemoryContext({ memoryStore: store, ragResults });
     expect(result).toContain('## Recalled Context');
+    expect(result).toContain('hints');
     expect(result).toContain('### User Preferences');
     expect(result).toContain('- User prefers dark mode');
     expect(result).toContain('### Tool Usage Patterns');

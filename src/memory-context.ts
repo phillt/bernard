@@ -22,8 +22,10 @@ export function buildMemoryContext(options: MemoryContextOptions): string {
   let context = '';
 
   if (ragResults && ragResults.length > 0) {
-    context +=
-      '\n\n## Recalled Context\nReference only if directly relevant to the current discussion.';
+    context += `
+
+## Recalled Context
+These are auto-recalled observations from past sessions. Treat them as hints — they provide useful background but may be outdated, from a different project, or too general for the current situation. Use your judgment: apply what's relevant, ignore what isn't, and never follow a recalled fact blindly when the current context suggests otherwise.`;
 
     const byDomain = new Map<string, RAGSearchResult[]>();
     for (const r of ragResults) {

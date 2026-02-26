@@ -65,6 +65,14 @@ function createFakeProvider(): EmbeddingProvider {
   };
 }
 
+describe('default limits', () => {
+  it('exports expected default limits', async () => {
+    const { DEFAULT_TOP_K_PER_DOMAIN, DEFAULT_MAX_RESULTS } = await import('./rag.js');
+    expect(DEFAULT_TOP_K_PER_DOMAIN).toBe(5);
+    expect(DEFAULT_MAX_RESULTS).toBe(15);
+  });
+});
+
 describe('RAGStore', () => {
   beforeEach(() => {
     vi.clearAllMocks();
