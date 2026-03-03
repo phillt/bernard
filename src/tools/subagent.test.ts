@@ -320,7 +320,9 @@ describe('subagent tool', () => {
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
     );
     const call = mockGenerateText.mock.calls[0][0];
-    expect(call.system).toContain('NEVER simulate tool execution');
+    expect(call.system).toContain('NEVER simulate');
+    expect(call.system).toContain('Only report results you actually received');
+    expect(call.system).toContain('verification command');
   });
 
   it('uses task text as RAG search query', async () => {
