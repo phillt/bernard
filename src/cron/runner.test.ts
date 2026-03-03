@@ -290,4 +290,10 @@ describe('runJob', () => {
 
     expect(capturedSystem).toContain('Connected MCP servers: email, calendar');
   });
+
+  it('includes tool execution integrity rules in system prompt', async () => {
+    await runJob(testJob, vi.fn());
+    expect(capturedSystem).toContain('Tool Execution Integrity');
+    expect(capturedSystem).toContain('NEVER simulate');
+  });
 });

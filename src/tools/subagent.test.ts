@@ -312,6 +312,19 @@ describe('subagent tool', () => {
     expect(call.system).not.toContain('Recalled Context');
   });
 
+  it('includes tool execution integrity rule in system prompt', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    await agentTool.execute!(
+      { task: 'test' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as any },
+    );
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('NEVER simulate');
+    expect(call.system).toContain('Only report results you actually received');
+    expect(call.system).toContain('verification command');
+  });
+
   it('uses task text as RAG search query', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     const mockRagStore = {

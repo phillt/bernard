@@ -199,6 +199,12 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('routine');
     expect(prompt).toContain('/{routine-id}');
   });
+
+  it('includes tool execution integrity rules', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).toContain('Tool Execution Integrity');
+    expect(prompt).toContain('NEVER simulate');
+  });
 });
 
 describe('Agent', () => {
