@@ -264,6 +264,7 @@ export function printHelp(): void {
   console.log(
     t.text('  /clear') + t.muted('   — Clear conversation (--save/-s to summarize first)'),
   );
+  console.log(t.text('  /compact') + t.muted(' — Compress conversation history in-place'));
   console.log(t.text('  /memory') + t.muted('  — List persistent memories'));
   console.log(t.text('  /scratch') + t.muted(' — List session scratch notes'));
   console.log(t.text('  /mcp') + t.muted('      — List MCP servers and tools'));
