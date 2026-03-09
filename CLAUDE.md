@@ -56,5 +56,6 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_MODEL` — Model name (default: provider-specific)
 - `BERNARD_MAX_TOKENS` — Response token limit (default: 4096)
 - `BERNARD_SHELL_TIMEOUT` — Shell command timeout ms (default: 30000)
+- `BERNARD_TOKEN_WINDOW` — Context window size for compression, 0 = auto-detect (default: 0)
 - `BERNARD_HOME` — Override all XDG directories with a single flat path
 - `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `XAI_API_KEY` — Provider API keys

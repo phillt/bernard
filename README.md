@@ -124,17 +124,18 @@ bernard providers
 
 Bernard loads `.env` from the current directory first, then falls back to `~/.bernard/.env`.
 
-| Variable                | Description                                 | Default                   |
-| ----------------------- | ------------------------------------------- | ------------------------- |
-| `BERNARD_PROVIDER`      | LLM provider (`anthropic`, `openai`, `xai`) | `anthropic`               |
-| `BERNARD_MODEL`         | Model name                                  | Provider-specific default |
-| `BERNARD_MAX_TOKENS`    | Max response tokens                         | `4096`                    |
-| `BERNARD_SHELL_TIMEOUT` | Shell command timeout (ms)                  | `30000`                   |
-| `BERNARD_RAG_ENABLED`   | Enable the RAG memory system                | `true`                    |
-| `BERNARD_DEBUG`         | Enable debug logging                        | unset                     |
-| `ANTHROPIC_API_KEY`     | Anthropic API key                           | —                         |
-| `OPENAI_API_KEY`        | OpenAI API key                              | —                         |
-| `XAI_API_KEY`           | xAI API key                                 | —                         |
+| Variable                | Description                                           | Default                   |
+| ----------------------- | ----------------------------------------------------- | ------------------------- |
+| `BERNARD_PROVIDER`      | LLM provider (`anthropic`, `openai`, `xai`)           | `anthropic`               |
+| `BERNARD_MODEL`         | Model name                                            | Provider-specific default |
+| `BERNARD_MAX_TOKENS`    | Max response tokens                                   | `4096`                    |
+| `BERNARD_SHELL_TIMEOUT` | Shell command timeout (ms)                            | `30000`                   |
+| `BERNARD_TOKEN_WINDOW`  | Context window size for compression (0 = auto-detect) | `0`                       |
+| `BERNARD_RAG_ENABLED`   | Enable the RAG memory system                          | `true`                    |
+| `BERNARD_DEBUG`         | Enable debug logging                                  | unset                     |
+| `ANTHROPIC_API_KEY`     | Anthropic API key                                     | —                         |
+| `OPENAI_API_KEY`        | OpenAI API key                                        | —                         |
+| `XAI_API_KEY`           | xAI API key                                           | —                         |
 
 ### Providers and Models
 
@@ -150,10 +151,11 @@ You can switch providers and models at any time during a session with `/provider
 
 Options can be changed during a session with `/options` or persisted to `~/.bernard/preferences.json`:
 
-| Option          | Default | Description                           |
-| --------------- | ------- | ------------------------------------- |
-| `max-tokens`    | `4096`  | Maximum tokens per AI response        |
-| `shell-timeout` | `30000` | Shell command timeout in milliseconds |
+| Option          | Default | Description                                           |
+| --------------- | ------- | ----------------------------------------------------- |
+| `max-tokens`    | `4096`  | Maximum tokens per AI response                        |
+| `shell-timeout` | `30000` | Shell command timeout in milliseconds                 |
+| `token-window`  | `0`     | Context window size for compression (0 = auto-detect) |
 
 From the CLI:
 
