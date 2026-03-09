@@ -36,7 +36,12 @@ import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
 import { generateText } from 'ai';
 import { getModel } from './providers/index.js';
-import { serializeMessages, SUMMARIZATION_PROMPT, extractDomainFacts } from './context.js';
+import {
+  serializeMessages,
+  SUMMARIZATION_PROMPT,
+  extractDomainFacts,
+  getContextWindow,
+} from './context.js';
 import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
 import { debugLog } from './logger.js';
@@ -64,7 +69,10 @@ export async function startRepl(
     { command: '/provider', description: 'Switch LLM provider' },
     { command: '/model', description: 'Switch model for current provider' },
     { command: '/theme', description: 'Switch color theme' },
-    { command: '/options', description: 'View and set options (max-tokens, shell-timeout)' },
+    {
+      command: '/options',
+      description: 'View and set options (max-tokens, shell-timeout, token-window)',
+    },
     { command: '/update', description: 'Check for and install updates' },
     { command: '/routines', description: 'List saved routines' },
     { command: '/create-routine', description: 'Create a routine with guided AI assistance' },
@@ -651,6 +659,7 @@ export async function startRepl(
               model: config.model,
               maxTokens: config.maxTokens,
               shellTimeout: config.shellTimeout,
+              tokenWindow: config.tokenWindow,
               theme: config.theme,
             });
             printInfo(`  Switched to ${config.provider} (${config.model})`);
@@ -685,6 +694,7 @@ export async function startRepl(
               model: config.model,
               maxTokens: config.maxTokens,
               shellTimeout: config.shellTimeout,
+              tokenWindow: config.tokenWindow,
               theme: config.theme,
             });
             printInfo(`  Switched to ${config.model}`);
@@ -731,6 +741,7 @@ export async function startRepl(
               model: config.model,
               maxTokens: config.maxTokens,
               shellTimeout: config.shellTimeout,
+              tokenWindow: config.tokenWindow,
               theme: chosen,
             });
             printInfo(`  Switched to ${THEMES[chosen].name} theme.`);
@@ -765,6 +776,14 @@ export async function startRepl(
                 saveOption(name, val);
                 config[opt.configKey] = val;
                 printInfo(`  ${name} set to ${val}`);
+                if (name === 'token-window') {
+                  const modelWindow = getContextWindow(config.model);
+                  if (val > modelWindow) {
+                    printInfo(
+                      `  Warning: ${val} exceeds ${config.model}'s context window (${modelWindow})`,
+                    );
+                  }
+                }
               } else if (valAnswer.trim() === '') {
                 printInfo('  Cancelled.');
               } else {
@@ -830,6 +849,7 @@ Remember: routine content should be written as clear instructions that Bernard c
             totalCompletionTokens: 0,
             latestPromptTokens: 0,
             model: config.model,
+            contextWindowOverride: config.tokenWindow || undefined,
           };
           agent.setSpinnerStats(spinnerStats);
           startSpinner(() => buildSpinnerMessage(spinnerStats));
@@ -876,6 +896,7 @@ Remember: routine content should be written as clear instructions that Bernard c
               totalCompletionTokens: 0,
               latestPromptTokens: 0,
               model: config.model,
+              contextWindowOverride: config.tokenWindow || undefined,
             };
             agent.setSpinnerStats(spinnerStats);
             startSpinner(() => buildSpinnerMessage(spinnerStats));
@@ -912,6 +933,7 @@ Remember: routine content should be written as clear instructions that Bernard c
         totalCompletionTokens: 0,
         latestPromptTokens: 0,
         model: config.model,
+        contextWindowOverride: config.tokenWindow || undefined,
       };
       agent.setSpinnerStats(spinnerStats);
       startSpinner(() => buildSpinnerMessage(spinnerStats));
