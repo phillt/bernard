@@ -17,6 +17,7 @@ import {
   startSpinner,
   stopSpinner,
   buildSpinnerMessage,
+  formatTokenCount,
   type SpinnerStats,
 } from './output.js';
 import type { ToolOptions } from './tools';
@@ -60,6 +61,7 @@ export async function startRepl(
   const SLASH_COMMANDS = [
     { command: '/help', description: 'Show this help' },
     { command: '/clear', description: 'Clear conversation (--save/-s to summarize first)' },
+    { command: '/compact', description: 'Compress conversation history in-place' },
     { command: '/memory', description: 'List persistent memories' },
     { command: '/scratch', description: 'List session scratch notes' },
     { command: '/mcp', description: 'List MCP servers and tools' },
@@ -480,6 +482,38 @@ export async function startRepl(
         console.clear();
         printWelcome(config.provider, config.model, getLocalVersion());
         printInfo('Conversation history and scratch notes cleared.');
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/compact') {
+        const history = agent.getHistory();
+        if (history.length < 2) {
+          printInfo('Not enough conversation to compact.');
+          void prompt();
+          return;
+        }
+        processing = true;
+        startSpinner('Compacting conversation...');
+        try {
+          const result = await agent.compactHistory();
+          if (!result.compacted) {
+            printInfo('Nothing to compact — conversation is already short enough.');
+          } else {
+            const saved = result.tokensBefore - result.tokensAfter;
+            const pct = Math.round((saved / result.tokensBefore) * 100);
+            printInfo(
+              `Compacted: ~${formatTokenCount(result.tokensBefore)} → ~${formatTokenCount(result.tokensAfter)} tokens (${pct}% reduction)`,
+            );
+          }
+          historyStore.save(agent.getHistory());
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          printError(`Compaction failed: ${message}`);
+        } finally {
+          processing = false;
+          stopSpinner();
+        }
         void prompt();
         return;
       }
