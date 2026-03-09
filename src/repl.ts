@@ -53,7 +53,7 @@ export async function startRepl(
 ): Promise<void> {
   const SLASH_COMMANDS = [
     { command: '/help', description: 'Show this help' },
-    { command: '/clear', description: 'Clear conversation history and scratch notes' },
+    { command: '/clear', description: 'Clear conversation (--save/-s to summarize first)' },
     { command: '/memory', description: 'List persistent memories' },
     { command: '/scratch', description: 'List session scratch notes' },
     { command: '/mcp', description: 'List MCP servers and tools' },
