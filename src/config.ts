@@ -84,6 +84,7 @@ export function savePreferences(prefs: {
   model: string;
   maxTokens?: number;
   shellTimeout?: number;
+  tokenWindow?: number;
   theme?: string;
   autoUpdate?: boolean;
 }): void {
@@ -94,6 +95,7 @@ export function savePreferences(prefs: {
   const data: Record<string, unknown> = { provider: prefs.provider, model: prefs.model };
   if (prefs.maxTokens !== undefined) data.maxTokens = prefs.maxTokens;
   if (prefs.shellTimeout !== undefined) data.shellTimeout = prefs.shellTimeout;
+  if (prefs.tokenWindow !== undefined) data.tokenWindow = prefs.tokenWindow;
   if (prefs.theme !== undefined) data.theme = prefs.theme;
   if (prefs.autoUpdate !== undefined) {
     data.autoUpdate = prefs.autoUpdate;
@@ -119,6 +121,7 @@ export function loadPreferences(): {
   model?: string;
   maxTokens?: number;
   shellTimeout?: number;
+  tokenWindow?: number;
   theme?: string;
   autoUpdate?: boolean;
 } {
@@ -130,6 +133,7 @@ export function loadPreferences(): {
       model: typeof parsed.model === 'string' ? parsed.model : undefined,
       maxTokens: typeof parsed.maxTokens === 'number' ? parsed.maxTokens : undefined,
       shellTimeout: typeof parsed.shellTimeout === 'number' ? parsed.shellTimeout : undefined,
+      tokenWindow: typeof parsed.tokenWindow === 'number' ? parsed.tokenWindow : undefined,
       theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
       autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
     };
@@ -219,6 +223,7 @@ export function saveOption(name: string, value: number): void {
     model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
     maxTokens: prefs.maxTokens,
     shellTimeout: prefs.shellTimeout,
+    tokenWindow: prefs.tokenWindow,
     theme: prefs.theme,
   });
 }
@@ -242,6 +247,7 @@ export function resetOption(name: string): void {
     model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
     maxTokens: prefs.maxTokens,
     shellTimeout: prefs.shellTimeout,
+    tokenWindow: prefs.tokenWindow,
     theme: prefs.theme,
   });
 }
@@ -251,6 +257,7 @@ export function resetAllOptions(): void {
   const prefs = loadPreferences();
   delete (prefs as Record<string, unknown>).maxTokens;
   delete (prefs as Record<string, unknown>).shellTimeout;
+  delete (prefs as Record<string, unknown>).tokenWindow;
   savePreferences({
     provider: prefs.provider || 'anthropic',
     model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
@@ -387,6 +394,9 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
   const shellTimeout =
     prefs.shellTimeout ??
     (parseInt(process.env.BERNARD_SHELL_TIMEOUT || '', 10) || DEFAULT_SHELL_TIMEOUT);
+  const tokenWindow =
+    prefs.tokenWindow ??
+    (parseInt(process.env.BERNARD_TOKEN_WINDOW || '', 10) || DEFAULT_TOKEN_WINDOW);
 
   const ragEnabled = process.env.BERNARD_RAG_ENABLED !== 'false';
   const theme = prefs.theme || 'bernard';
@@ -396,6 +406,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     model,
     maxTokens,
     shellTimeout,
+    tokenWindow,
     ragEnabled,
     theme,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
