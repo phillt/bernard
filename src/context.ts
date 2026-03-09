@@ -41,7 +41,8 @@ export const COMPRESSION_THRESHOLD = 0.75;
 export const RECENT_TURNS_TO_KEEP = 4;
 
 /** Look up context window for a model, falling back to 128k for unknown models. */
-export function getContextWindow(model: string): number {
+export function getContextWindow(model: string, override?: number): number {
+  if (override && override > 0) return override;
   return MODEL_CONTEXT_WINDOWS[model] ?? DEFAULT_CONTEXT_WINDOW;
 }
 
@@ -50,13 +51,15 @@ export function getContextWindow(model: string): number {
  * @param lastPromptTokens - actual prompt token count from the last API call
  * @param newMessageEstimate - rough token estimate for the new user message
  * @param model - model name for context window lookup
+ * @param contextWindowOverride - optional override for the context window size (0 or undefined = auto-detect)
  */
 export function shouldCompress(
   lastPromptTokens: number,
   newMessageEstimate: number,
   model: string,
+  contextWindowOverride?: number,
 ): boolean {
-  const contextWindow = getContextWindow(model);
+  const contextWindow = getContextWindow(model, contextWindowOverride);
   const estimated = lastPromptTokens + newMessageEstimate;
   return estimated > contextWindow * COMPRESSION_THRESHOLD;
 }

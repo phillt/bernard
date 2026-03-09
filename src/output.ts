@@ -17,6 +17,8 @@ export interface SpinnerStats {
   latestPromptTokens: number;
   /** Model identifier, used to look up the context-window size. */
   model: string;
+  /** Optional context window override (0 or undefined = auto-detect). */
+  contextWindowOverride?: number;
 }
 
 /**
@@ -56,7 +58,7 @@ export function buildSpinnerMessage(stats: SpinnerStats): string {
 
   const up = formatTokenCount(stats.totalPromptTokens);
   const down = formatTokenCount(stats.totalCompletionTokens);
-  const contextWindow = getContextWindow(stats.model);
+  const contextWindow = getContextWindow(stats.model, stats.contextWindowOverride);
   const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;
   const remainingPct = Math.max(
     0,
@@ -271,7 +273,8 @@ export function printHelp(): void {
   console.log(t.text('  /model') + t.muted('    — Switch model for current provider'));
   console.log(t.text('  /theme') + t.muted('    — Switch color theme'));
   console.log(
-    t.text('  /options') + t.muted('  — View and set options (max-tokens, shell-timeout)'),
+    t.text('  /options') +
+      t.muted('  — View and set options (max-tokens, shell-timeout, token-window)'),
   );
   console.log(t.text('  /update') + t.muted('   — Check for and install updates'));
   console.log(t.text('  exit') + t.muted('      — Quit Bernard'));

@@ -256,7 +256,14 @@ export class Agent {
     try {
       // Check if context compression is needed
       const newMessageEstimate = Math.ceil(userInput.length / 4);
-      if (shouldCompress(this.lastPromptTokens, newMessageEstimate, this.config.model)) {
+      if (
+        shouldCompress(
+          this.lastPromptTokens,
+          newMessageEstimate,
+          this.config.model,
+          this.config.tokenWindow,
+        )
+      ) {
         printInfo('Compressing conversation context...');
         this.history = await compressHistory(this.history, this.config, this.ragStore);
       }
@@ -306,7 +313,7 @@ export class Agent {
 
       // Pre-flight token guard: emergency truncate if estimated tokens exceed 90% of context window
       const HARD_LIMIT_RATIO = 0.9;
-      const contextWindow = getContextWindow(this.config.model);
+      const contextWindow = getContextWindow(this.config.model, this.config.tokenWindow);
       const estimatedTokens =
         estimateHistoryTokens(this.history) + Math.ceil(systemPrompt.length / 4);
       const hardLimit = contextWindow * HARD_LIMIT_RATIO;

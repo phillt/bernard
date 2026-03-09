@@ -354,6 +354,7 @@ program
       model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
       maxTokens: prefs.maxTokens,
       shellTimeout: prefs.shellTimeout,
+      tokenWindow: prefs.tokenWindow,
       theme: prefs.theme,
       autoUpdate: enabled,
     });
