@@ -13,6 +13,8 @@ export interface BernardConfig {
   maxTokens: number;
   /** Timeout in milliseconds for shell tool commands. */
   shellTimeout: number;
+  /** Context window size override for compression (0 = auto-detect from model). */
+  tokenWindow: number;
   /** Whether RAG memory retrieval is active. */
   ragEnabled: boolean;
   /** Color theme name for terminal output. */
@@ -28,6 +30,7 @@ export interface BernardConfig {
 const DEFAULT_PROVIDER = 'anthropic';
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_SHELL_TIMEOUT = 30000;
+const DEFAULT_TOKEN_WINDOW = 0;
 
 /** Maps each provider name to the environment variable that holds its API key. */
 export const PROVIDER_ENV_VARS: Record<string, string> = {
@@ -45,7 +48,7 @@ export const PROVIDER_ENV_VARS: Record<string, string> = {
 export const OPTIONS_REGISTRY: Record<
   string,
   {
-    configKey: 'maxTokens' | 'shellTimeout';
+    configKey: 'maxTokens' | 'shellTimeout' | 'tokenWindow';
     default: number;
     description: string;
     envVar: string;
@@ -62,6 +65,12 @@ export const OPTIONS_REGISTRY: Record<
     default: DEFAULT_SHELL_TIMEOUT,
     description: 'Shell command timeout in milliseconds (how long commands can run)',
     envVar: 'BERNARD_SHELL_TIMEOUT',
+  },
+  'token-window': {
+    configKey: 'tokenWindow',
+    default: DEFAULT_TOKEN_WINDOW,
+    description: 'Context window size for compression (0 = auto-detect from model)',
+    envVar: 'BERNARD_TOKEN_WINDOW',
   },
 };
 
