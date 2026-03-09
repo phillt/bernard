@@ -39,6 +39,7 @@ import { getModel } from './providers/index.js';
 import { serializeMessages, SUMMARIZATION_PROMPT, extractDomainFacts } from './context.js';
 import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
+import { debugLog } from './logger.js';
 
 /**
  * Launch the interactive REPL, wiring up readline, MCP servers, memory stores, and the agent loop.
@@ -436,7 +437,12 @@ export async function startRepl(
                 const totalFacts = domainFacts.reduce((sum, df) => sum + df.facts.length, 0);
                 await Promise.all(
                   domainFacts.map((df) =>
-                    ragStore.addFacts(df.facts, 'clear-save', df.domain).catch(() => {}),
+                    ragStore.addFacts(df.facts, 'clear-save', df.domain).catch((err) => {
+                      debugLog(
+                        'repl:clear-save:rag',
+                        `Failed to store facts for domain ${df.domain}: ${err instanceof Error ? err.message : String(err)}`,
+                      );
+                    }),
                   ),
                 );
                 printInfo(`Extracted ${totalFacts} facts to RAG memory.`);
