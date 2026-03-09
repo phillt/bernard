@@ -61,6 +61,7 @@ describe('getAvailableProviders', () => {
       model: 'test',
       maxTokens: 4096,
       shellTimeout: 30000,
+      tokenWindow: 0,
       ragEnabled: true,
     };
     expect(getAvailableProviders(config)).toEqual([]);
@@ -72,6 +73,7 @@ describe('getAvailableProviders', () => {
       model: 'test',
       maxTokens: 4096,
       shellTimeout: 30000,
+      tokenWindow: 0,
       ragEnabled: true,
       anthropicApiKey: 'sk-ant-test',
       openaiApiKey: 'sk-openai-test',
@@ -85,6 +87,7 @@ describe('getAvailableProviders', () => {
       model: 'test',
       maxTokens: 4096,
       shellTimeout: 30000,
+      tokenWindow: 0,
       ragEnabled: true,
       anthropicApiKey: 'sk-ant-test',
       openaiApiKey: 'sk-openai-test',
@@ -198,6 +201,7 @@ describe('loadConfig', () => {
     vi.stubEnv('BERNARD_MODEL', '');
     vi.stubEnv('BERNARD_MAX_TOKENS', '');
     vi.stubEnv('BERNARD_SHELL_TIMEOUT', '');
+    vi.stubEnv('BERNARD_TOKEN_WINDOW', '');
   });
 
   afterEach(() => {
@@ -211,6 +215,7 @@ describe('loadConfig', () => {
     expect(config.model).toBe(PROVIDER_MODELS.anthropic[0]);
     expect(config.maxTokens).toBe(4096);
     expect(config.shellTimeout).toBe(30000);
+    expect(config.tokenWindow).toBe(0);
   });
 
   it('overrides take priority over env vars', () => {
@@ -242,6 +247,12 @@ describe('loadConfig', () => {
     vi.stubEnv('BERNARD_SHELL_TIMEOUT', '60000');
     const config = loadConfig();
     expect(config.shellTimeout).toBe(60000);
+  });
+
+  it('parses BERNARD_TOKEN_WINDOW', () => {
+    vi.stubEnv('BERNARD_TOKEN_WINDOW', '100000');
+    const config = loadConfig();
+    expect(config.tokenWindow).toBe(100000);
   });
 
   it('reads API keys from process.env', () => {
@@ -300,6 +311,7 @@ describe('loadConfig', () => {
     const config = loadConfig();
     expect(config.maxTokens).toBe(4096);
     expect(config.shellTimeout).toBe(30000);
+    expect(config.tokenWindow).toBe(0);
   });
 
   describe('provider auto-detection', () => {
@@ -492,6 +504,7 @@ describe('resetAllOptions', () => {
     const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
     expect(writtenData.maxTokens).toBeUndefined();
     expect(writtenData.shellTimeout).toBeUndefined();
+    expect(writtenData.tokenWindow).toBeUndefined();
   });
 
   it('preserves provider/model', () => {

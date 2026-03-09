@@ -42,6 +42,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     model: 'claude-sonnet-4-5-20250929',
     maxTokens: 4096,
     shellTimeout: 30000,
+    tokenWindow: 0,
     ragEnabled: true,
     anthropicApiKey: 'sk-test',
     ...overrides,
@@ -68,6 +69,18 @@ describe('getContextWindow', () => {
   it('falls back to DEFAULT_CONTEXT_WINDOW for unknown models', () => {
     expect(getContextWindow('unknown-model-xyz')).toBe(DEFAULT_CONTEXT_WINDOW);
     expect(getContextWindow('unknown-model-xyz')).toBe(128_000);
+  });
+
+  it('returns override when override is positive', () => {
+    expect(getContextWindow('claude-sonnet-4-5-20250929', 100_000)).toBe(100_000);
+  });
+
+  it('ignores override when override is 0', () => {
+    expect(getContextWindow('claude-sonnet-4-5-20250929', 0)).toBe(200_000);
+  });
+
+  it('ignores override when override is undefined', () => {
+    expect(getContextWindow('claude-sonnet-4-5-20250929', undefined)).toBe(200_000);
   });
 });
 
@@ -99,6 +112,18 @@ describe('shouldCompress', () => {
     // 128k * 0.75 = 96k
     expect(shouldCompress(90_000, 10_000, 'mystery-model')).toBe(true);
     expect(shouldCompress(50_000, 10_000, 'mystery-model')).toBe(false);
+  });
+
+  it('uses override window when provided', () => {
+    // Override 100k * 0.75 = 75k threshold
+    expect(shouldCompress(70_000, 10_000, 'claude-sonnet-4-5-20250929', 100_000)).toBe(true);
+    expect(shouldCompress(50_000, 10_000, 'claude-sonnet-4-5-20250929', 100_000)).toBe(false);
+  });
+
+  it('ignores override of 0 (auto-detect)', () => {
+    // 200k * 0.75 = 150k threshold — same as no override
+    expect(shouldCompress(140_000, 15_000, 'claude-sonnet-4-5-20250929', 0)).toBe(true);
+    expect(shouldCompress(50_000, 1_000, 'claude-sonnet-4-5-20250929', 0)).toBe(false);
   });
 });
 

@@ -69,6 +69,7 @@ vi.mock('../config.js', () => ({
     model: 'test',
     maxTokens: 1024,
     shellTimeout: 5000,
+    tokenWindow: 0,
     ragEnabled: true,
   }),
 }));
@@ -152,6 +153,7 @@ describe('runJob', () => {
       model: 'test',
       maxTokens: 1024,
       shellTimeout: 5000,
+      tokenWindow: 0,
       ragEnabled: true,
       theme: 'bernard',
     });
@@ -229,6 +231,7 @@ describe('runJob', () => {
       model: 'test',
       maxTokens: 1024,
       shellTimeout: 5000,
+      tokenWindow: 0,
       ragEnabled: false,
       theme: 'bernard',
     });

@@ -35,6 +35,7 @@ describe('rag-worker', () => {
     model: 'claude-sonnet-4-5-20250929',
     maxTokens: 4096,
     shellTimeout: 30000,
+    tokenWindow: 0,
     ragEnabled: true,
     anthropicApiKey: 'sk-test',
   };
