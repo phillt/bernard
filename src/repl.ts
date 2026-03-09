@@ -772,7 +772,8 @@ export async function startRepl(
             const [name, opt] = entries[num - 1];
             rl.question(`  New value for ${name} (Enter to cancel): `, (valAnswer) => {
               const val = parseInt(valAnswer.trim(), 10);
-              if (val > 0) {
+              const minVal = opt.default === 0 ? 0 : 1;
+              if (!isNaN(val) && val >= minVal) {
                 saveOption(name, val);
                 config[opt.configKey] = val;
                 printInfo(`  ${name} set to ${val}`);
@@ -787,7 +788,9 @@ export async function startRepl(
               } else if (valAnswer.trim() === '') {
                 printInfo('  Cancelled.');
               } else {
-                printError('  Invalid value. Must be a positive integer.');
+                printError(
+                  `  Invalid value. Must be ${minVal === 0 ? 'a non-negative integer' : 'a positive integer'}.`,
+                );
               }
               console.log();
               void prompt();
