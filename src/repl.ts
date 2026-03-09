@@ -399,7 +399,7 @@ export async function startRepl(
         const shouldSave = clearArgs === '--save' || clearArgs === '-s';
 
         if (clearArgs && !shouldSave) {
-          printError(`Unknown flag: ${clearArgs}. Use --save or -s.`);
+          printError('Usage: /clear [--save|-s]');
           void prompt();
           return;
         }
@@ -428,24 +428,34 @@ export async function startRepl(
 
               const summary = summaryResult.text?.trim();
               if (summary) {
-                const key = `session-summary-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+                const key = `session-summary-${new Date().toISOString().replace(/[:.]/g, '-')}`;
                 memoryStore.writeMemory(key, summary);
                 printInfo(`Summary saved to memory: ${key}`);
               }
 
               if (ragStore && domainFacts.length > 0) {
                 const totalFacts = domainFacts.reduce((sum, df) => sum + df.facts.length, 0);
-                await Promise.all(
-                  domainFacts.map((df) =>
-                    ragStore.addFacts(df.facts, 'clear-save', df.domain).catch((err) => {
-                      debugLog(
-                        'repl:clear-save:rag',
-                        `Failed to store facts for domain ${df.domain}: ${err instanceof Error ? err.message : String(err)}`,
-                      );
-                    }),
-                  ),
+                const results = await Promise.allSettled(
+                  domainFacts.map((df) => ragStore.addFacts(df.facts, 'clear-save', df.domain)),
                 );
-                printInfo(`Extracted ${totalFacts} facts to RAG memory.`);
+                let storedFacts = 0;
+                results.forEach((result, i) => {
+                  if (result.status === 'fulfilled') {
+                    storedFacts += domainFacts[i].facts.length;
+                  } else {
+                    debugLog(
+                      'repl:clear-save:rag',
+                      `Failed to store facts for domain ${domainFacts[i].domain}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
+                    );
+                  }
+                });
+                if (storedFacts > 0) {
+                  printInfo(
+                    storedFacts === totalFacts
+                      ? `Extracted ${storedFacts} facts to RAG memory.`
+                      : `Extracted ${storedFacts}/${totalFacts} facts to RAG memory.`,
+                  );
+                }
               }
             } catch (err: unknown) {
               const message = err instanceof Error ? err.message : String(err);
