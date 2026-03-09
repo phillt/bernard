@@ -393,7 +393,62 @@ export async function startRepl(
         return;
       }
 
-      if (trimmed === '/clear') {
+      if (trimmed === '/clear' || trimmed.startsWith('/clear ')) {
+        const clearArgs = trimmed.slice('/clear'.length).trim();
+        const shouldSave = clearArgs === '--save' || clearArgs === '-s';
+
+        if (clearArgs && !shouldSave) {
+          printError(`Unknown flag: ${clearArgs}. Use --save or -s.`);
+          void prompt();
+          return;
+        }
+
+        if (shouldSave) {
+          const history = agent.getHistory();
+          if (history.length < 2) {
+            printInfo('Not enough conversation to summarize.');
+          } else {
+            processing = true;
+            startSpinner('Summarizing conversation...');
+            try {
+              const serialized = serializeMessages(history);
+
+              const [summaryResult, domainFacts] = await Promise.all([
+                generateText({
+                  model: getModel(config.provider, config.model),
+                  maxTokens: 2048,
+                  system: SUMMARIZATION_PROMPT,
+                  messages: [{ role: 'user', content: `Summarize this conversation:\n\n${serialized}` }],
+                }),
+                extractDomainFacts(serialized, config),
+              ]);
+
+              const summary = summaryResult.text?.trim();
+              if (summary) {
+                const key = `session-summary-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+                memoryStore.writeMemory(key, summary);
+                printInfo(`Summary saved to memory: ${key}`);
+              }
+
+              if (ragStore && domainFacts.length > 0) {
+                const totalFacts = domainFacts.reduce((sum, df) => sum + df.facts.length, 0);
+                await Promise.all(
+                  domainFacts.map((df) =>
+                    ragStore.addFacts(df.facts, 'clear-save', df.domain).catch(() => {}),
+                  ),
+                );
+                printInfo(`Extracted ${totalFacts} facts to RAG memory.`);
+              }
+            } catch (err: unknown) {
+              const message = err instanceof Error ? err.message : String(err);
+              printError(`Failed to summarize: ${message}. Clearing anyway.`);
+            } finally {
+              processing = false;
+              stopSpinner();
+            }
+          }
+        }
+
         agent.clearHistory();
         historyStore.clear();
         console.clear();
