@@ -212,7 +212,7 @@ export async function extractFacts(
   return domainFacts.flatMap((df) => df.facts);
 }
 
-const SUMMARIZATION_PROMPT = `You are a conversation summarizer. Produce a concise summary of the conversation below, preserving:
+export const SUMMARIZATION_PROMPT = `You are a conversation summarizer. Produce a concise summary of the conversation below, preserving:
 - Key facts, decisions, and outcomes
 - Important tool results and command outputs
 - Any user preferences or requirements mentioned
