@@ -418,7 +418,9 @@ export async function startRepl(
                   model: getModel(config.provider, config.model),
                   maxTokens: 2048,
                   system: SUMMARIZATION_PROMPT,
-                  messages: [{ role: 'user', content: `Summarize this conversation:\n\n${serialized}` }],
+                  messages: [
+                    { role: 'user', content: `Summarize this conversation:\n\n${serialized}` },
+                  ],
                 }),
                 extractDomainFacts(serialized, config),
               ]);
