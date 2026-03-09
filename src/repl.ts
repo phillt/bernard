@@ -34,7 +34,9 @@ import { interactiveUpdate, getLocalVersion } from './update.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
-import { serializeMessages } from './context.js';
+import { generateText } from 'ai';
+import { getModel } from './providers/index.js';
+import { serializeMessages, SUMMARIZATION_PROMPT, extractDomainFacts } from './context.js';
 import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
 
