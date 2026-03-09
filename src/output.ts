@@ -25,7 +25,7 @@ export interface SpinnerStats {
  * Formats a token count into a compact human-readable string (e.g. `"3.2k"`).
  * @internal
  */
-function formatTokenCount(n: number): string {
+export function formatTokenCount(n: number): string {
   if (n < 1000) return String(n);
   const k = n / 1000;
   return k >= 10 ? `${Math.round(k)}k` : `${k.toFixed(1)}k`;
