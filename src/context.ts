@@ -51,6 +51,7 @@ export function getContextWindow(model: string, override?: number): number {
  * @param lastPromptTokens - actual prompt token count from the last API call
  * @param newMessageEstimate - rough token estimate for the new user message
  * @param model - model name for context window lookup
+ * @param contextWindowOverride - optional override for the context window size (0 or undefined = auto-detect)
  */
 export function shouldCompress(
   lastPromptTokens: number,
