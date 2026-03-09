@@ -34,9 +34,12 @@ import { interactiveUpdate, getLocalVersion } from './update.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
-import { serializeMessages } from './context.js';
+import { generateText } from 'ai';
+import { getModel } from './providers/index.js';
+import { serializeMessages, SUMMARIZATION_PROMPT, extractDomainFacts } from './context.js';
 import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
+import { debugLog } from './logger.js';
 
 /**
  * Launch the interactive REPL, wiring up readline, MCP servers, memory stores, and the agent loop.
@@ -51,7 +54,7 @@ export async function startRepl(
 ): Promise<void> {
   const SLASH_COMMANDS = [
     { command: '/help', description: 'Show this help' },
-    { command: '/clear', description: 'Clear conversation history and scratch notes' },
+    { command: '/clear', description: 'Clear conversation (--save/-s to summarize first)' },
     { command: '/memory', description: 'List persistent memories' },
     { command: '/scratch', description: 'List session scratch notes' },
     { command: '/mcp', description: 'List MCP servers and tools' },
@@ -391,7 +394,79 @@ export async function startRepl(
         return;
       }
 
-      if (trimmed === '/clear') {
+      if (trimmed === '/clear' || trimmed.startsWith('/clear ')) {
+        const clearArgs = trimmed.slice('/clear'.length).trim();
+        const shouldSave = clearArgs === '--save' || clearArgs === '-s';
+
+        if (clearArgs && !shouldSave) {
+          printError('Usage: /clear [--save|-s]');
+          void prompt();
+          return;
+        }
+
+        if (shouldSave) {
+          const history = agent.getHistory();
+          if (history.length < 2) {
+            printInfo('Not enough conversation to summarize.');
+          } else {
+            processing = true;
+            startSpinner('Summarizing conversation...');
+            try {
+              const serialized = serializeMessages(history);
+
+              const [summaryResult, domainFacts] = await Promise.all([
+                generateText({
+                  model: getModel(config.provider, config.model),
+                  maxTokens: 2048,
+                  system: SUMMARIZATION_PROMPT,
+                  messages: [
+                    { role: 'user', content: `Summarize this conversation:\n\n${serialized}` },
+                  ],
+                }),
+                extractDomainFacts(serialized, config),
+              ]);
+
+              const summary = summaryResult.text?.trim();
+              if (summary) {
+                const key = `session-summary-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+                memoryStore.writeMemory(key, summary);
+                printInfo(`Summary saved to memory: ${key}`);
+              }
+
+              if (ragStore && domainFacts.length > 0) {
+                const totalFacts = domainFacts.reduce((sum, df) => sum + df.facts.length, 0);
+                const results = await Promise.allSettled(
+                  domainFacts.map((df) => ragStore.addFacts(df.facts, 'clear-save', df.domain)),
+                );
+                let storedFacts = 0;
+                results.forEach((result, i) => {
+                  if (result.status === 'fulfilled') {
+                    storedFacts += domainFacts[i].facts.length;
+                  } else {
+                    debugLog(
+                      'repl:clear-save:rag',
+                      `Failed to store facts for domain ${domainFacts[i].domain}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
+                    );
+                  }
+                });
+                if (storedFacts > 0) {
+                  printInfo(
+                    storedFacts === totalFacts
+                      ? `Extracted ${storedFacts} facts to RAG memory.`
+                      : `Extracted ${storedFacts}/${totalFacts} facts to RAG memory.`,
+                  );
+                }
+              }
+            } catch (err: unknown) {
+              const message = err instanceof Error ? err.message : String(err);
+              printError(`Failed to summarize: ${message}. Clearing anyway.`);
+            } finally {
+              processing = false;
+              stopSpinner();
+            }
+          }
+        }
+
         agent.clearHistory();
         historyStore.clear();
         console.clear();

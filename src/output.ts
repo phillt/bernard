@@ -259,7 +259,9 @@ export function printHelp(): void {
   const t = getTheme();
   console.log(t.accent('\nCommands:'));
   console.log(t.text('  /help') + t.muted('    — Show this help'));
-  console.log(t.text('  /clear') + t.muted('   — Clear conversation history and scratch notes'));
+  console.log(
+    t.text('  /clear') + t.muted('   — Clear conversation (--save/-s to summarize first)'),
+  );
   console.log(t.text('  /memory') + t.muted('  — List persistent memories'));
   console.log(t.text('  /scratch') + t.muted(' — List session scratch notes'));
   console.log(t.text('  /mcp') + t.muted('      — List MCP servers and tools'));
