@@ -219,22 +219,22 @@ Features:
 
 ### REPL Slash Commands
 
-| Command           | Description                                  |
-| ----------------- | -------------------------------------------- |
-| `/help`           | Show available commands                      |
-| `/clear`          | Clear conversation history and scratch notes |
-| `/memory`         | List all persistent memories                 |
-| `/scratch`        | List session scratch notes                   |
-| `/mcp`            | List connected MCP servers and their tools   |
-| `/cron`           | Show cron jobs and daemon status             |
-| `/rag`            | Show RAG memory stats and recent facts       |
-| `/provider`       | Switch LLM provider interactively            |
-| `/model`          | Switch model for the current provider        |
-| `/theme`          | Switch color theme                           |
-| `/routines`       | List saved routines                          |
-| `/create-routine` | Create a routine with guided AI assistance   |
-| `/options`        | View and modify runtime options              |
-| `/exit`           | Quit Bernard (also: `exit`, `quit`)          |
+| Command           | Description                                                               |
+| ----------------- | ------------------------------------------------------------------------- |
+| `/help`           | Show available commands                                                   |
+| `/clear`          | Clear conversation history and scratch notes                              |
+| `/memory`         | List all persistent memories                                              |
+| `/scratch`        | List session scratch notes                                                |
+| `/mcp`            | List connected MCP servers and their tools                                |
+| `/cron`           | Show cron jobs and daemon status                                          |
+| `/rag`            | Show RAG memory stats and recent facts                                    |
+| `/provider`       | Switch LLM provider interactively                                         |
+| `/model`          | Switch model for the current provider                                     |
+| `/theme`          | Switch color theme                                                        |
+| `/routines`       | List saved routines                                                       |
+| `/create-routine` | Create a routine with guided AI assistance                                |
+| `/options`        | View and modify runtime options (max-tokens, shell-timeout, token-window) |
+| `/exit`           | Quit Bernard (also: `exit`, `quit`)                                       |
 
 Type `/{routine-id}` to invoke a saved routine directly (e.g., `/deploy-staging`).
 
