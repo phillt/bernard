@@ -52,6 +52,7 @@ Do NOT extract:
 - Raw accessibility snapshot element references (ref numbers, element labels)
 - Error messages without resolution or takeaway
 - Step-by-step narration of task progress ("first I clicked X, then I typed Y")
+- High-level conversation summaries or session outcomes
 
 Examples:
 - Bad: "The \`press-page-key\` tool was used to simulate keyboard navigation by pressing 'Tab' multiple times and 'Enter' on the 'Home' button (ref 9)"
@@ -89,6 +90,7 @@ Do NOT extract:
 - Task-specific transient details (e.g., "user asked to fix a typo on line 42")
 - Preferences that only apply to the current task (e.g., "user wants the button to be blue" for a specific UI ticket)
 - Observations about the user's emotional state or satisfaction with a specific result
+- High-level conversation summaries or session outcomes
 
 Examples:
 - Bad: "The user was satisfied with the fix for the login page"
@@ -127,6 +129,7 @@ Do NOT extract:
 - Ephemeral UI state (button labels, input field descriptions, accessibility snapshots)
 - One-time task instructions or step-by-step narration of task progress
 - Descriptions of what is currently visible on screen
+- High-level conversation summaries or session outcomes
 
 Examples:
 - Bad: "A specific conversation with Pablo Rico is active in Google Messages, with an input field labeled 'Type an RCS message'"
