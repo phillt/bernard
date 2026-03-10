@@ -96,6 +96,11 @@ describe('wrapTaskResult', () => {
   it('handles empty string', () => {
     expect(wrapTaskResult('')).toEqual({ status: 'success', output: '' });
   });
+
+  it('wraps JSON with invalid status value as success', () => {
+    const input = '{"status": "partial", "output": "some data"}';
+    expect(wrapTaskResult(input)).toEqual({ status: 'success', output: input });
+  });
 });
 
 describe('task tool', () => {

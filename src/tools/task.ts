@@ -56,7 +56,10 @@ export function wrapTaskResult(text: string): TaskResult {
   if (jsonMatch) {
     try {
       const parsed = JSON.parse(jsonMatch[0]);
-      if (parsed.status && parsed.output !== undefined) {
+      if (
+        (parsed.status === 'success' || parsed.status === 'error') &&
+        parsed.output !== undefined
+      ) {
         return {
           status: parsed.status,
           output: String(parsed.output),
