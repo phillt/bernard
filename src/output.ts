@@ -313,6 +313,10 @@ export function printHelp(): void {
   console.log(t.text('  /provider') + t.muted(' — Switch LLM provider'));
   console.log(t.text('  /model') + t.muted('    — Switch model for current provider'));
   console.log(t.text('  /theme') + t.muted('    — Switch color theme'));
+  console.log(t.text('  /specialists') + t.muted(' — List specialist agents'));
+  console.log(
+    t.text('  /create-specialist') + t.muted(' — Create a specialist with guided AI assistance'),
+  );
   console.log(
     t.text('  /options') +
       t.muted('  — View and set options (max-tokens, shell-timeout, token-window)'),
