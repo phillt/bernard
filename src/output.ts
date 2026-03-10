@@ -23,9 +23,8 @@ export interface SpinnerStats {
 
 /**
  * Formats a token count into a compact human-readable string (e.g. `"3.2k"`).
- * @internal
  */
-function formatTokenCount(n: number): string {
+export function formatTokenCount(n: number): string {
   if (n < 1000) return String(n);
   const k = n / 1000;
   return k >= 10 ? `${Math.round(k)}k` : `${k.toFixed(1)}k`;
@@ -264,6 +263,7 @@ export function printHelp(): void {
   console.log(
     t.text('  /clear') + t.muted('   — Clear conversation (--save/-s to summarize first)'),
   );
+  console.log(t.text('  /compact') + t.muted(' — Compress conversation history in-place'));
   console.log(t.text('  /memory') + t.muted('  — List persistent memories'));
   console.log(t.text('  /scratch') + t.muted(' — List session scratch notes'));
   console.log(t.text('  /mcp') + t.muted('      — List MCP servers and tools'));

@@ -170,6 +170,12 @@ MCP (Model Context Protocol) servers provide additional tools. Use the mcp_confi
   return prompt;
 }
 
+export interface CompactResult {
+  compacted: boolean;
+  tokensBefore: number;
+  tokensAfter: number;
+}
+
 /**
  * Core agent that manages a multi-step conversation loop with tool calling via the Vercel AI SDK.
  *
@@ -420,6 +426,19 @@ export class Agent {
       this.abortController = null;
       this.spinnerStats = null;
     }
+  }
+
+  /** Compresses conversation history in-place, returning token usage stats. */
+  async compactHistory(): Promise<CompactResult> {
+    const tokensBefore = estimateHistoryTokens(this.history);
+    const compressed = await compressHistory(this.history, this.config, this.ragStore);
+    const compacted = compressed !== this.history;
+    if (compacted) {
+      this.history = compressed;
+      this.lastPromptTokens = estimateHistoryTokens(this.history);
+    }
+    const tokensAfter = estimateHistoryTokens(this.history);
+    return { compacted, tokensBefore, tokensAfter };
   }
 
   /** Resets conversation history, scratch notes, and RAG tracking state for a fresh session. */

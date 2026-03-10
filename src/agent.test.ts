@@ -857,6 +857,80 @@ describe('Agent', () => {
     });
   });
 
+  describe('compactHistory', () => {
+    it('returns compacted: false when history is too short to compress', async () => {
+      const agent = new Agent(makeConfig(), toolOptions, store);
+      const result = await agent.compactHistory();
+      expect(result.compacted).toBe(false);
+    });
+
+    it('returns compacted: true with reduced tokens when compression succeeds', async () => {
+      const { compressHistory, estimateHistoryTokens } = await import('./context.js');
+      const compressedHistory = [{ role: 'user' as const, content: 'summary' }];
+      vi.mocked(compressHistory).mockResolvedValueOnce(compressedHistory);
+
+      let callCount = 0;
+      vi.mocked(estimateHistoryTokens).mockImplementation(() => {
+        callCount++;
+        // First call: tokensBefore (5000); subsequent calls (lastPromptTokens, tokensAfter): 1000
+        return callCount === 1 ? 5000 : 1000;
+      });
+
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+
+      const agent = new Agent(makeConfig(), toolOptions, store);
+      await agent.processInput('Hello');
+
+      callCount = 0;
+      const result = await agent.compactHistory();
+      expect(result.compacted).toBe(true);
+      expect(result.tokensBefore).toBe(5000);
+      expect(result.tokensAfter).toBe(1000);
+    });
+
+    it('updates internal history after compaction', async () => {
+      const { compressHistory, estimateHistoryTokens } = await import('./context.js');
+      const compressedHistory = [{ role: 'user' as const, content: 'compressed' }];
+      vi.mocked(compressHistory).mockResolvedValueOnce(compressedHistory);
+      vi.mocked(estimateHistoryTokens).mockReturnValue(500);
+
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+
+      const agent = new Agent(makeConfig(), toolOptions, store);
+      await agent.processInput('Hello');
+      await agent.compactHistory();
+
+      expect(agent.getHistory()).toBe(compressedHistory);
+    });
+
+    it('returns compacted: false when compressHistory returns same reference', async () => {
+      const { compressHistory, estimateHistoryTokens } = await import('./context.js');
+      // Default mock returns the same reference — simulates "nothing to compress"
+      vi.mocked(compressHistory).mockImplementation((history: any) => Promise.resolve(history));
+      vi.mocked(estimateHistoryTokens).mockReturnValue(1000);
+
+      const agent = new Agent(makeConfig(), toolOptions, store);
+      const result = await agent.compactHistory();
+      expect(result.compacted).toBe(false);
+      expect(result.tokensBefore).toBe(1000);
+      expect(result.tokensAfter).toBe(1000);
+    });
+
+    it('propagates errors from compressHistory', async () => {
+      const { compressHistory } = await import('./context.js');
+      vi.mocked(compressHistory).mockRejectedValueOnce(new Error('LLM down'));
+
+      const agent = new Agent(makeConfig(), toolOptions, store);
+      await expect(agent.compactHistory()).rejects.toThrow('LLM down');
+    });
+  });
+
   it('clearHistory resets previousRAGFacts', async () => {
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
