@@ -1,6 +1,6 @@
 # How Domain-Specific Memory Works
 
-Bernard's memory system learns from your conversations and organizes what it learns into three specialized domains. Instead of treating every fact the same, it categorizes knowledge so it can extract better facts and recall the right ones at the right time.
+Bernard's memory system learns from your conversations and organizes what it learns into four specialized domains. Instead of treating every fact the same, it categorizes knowledge so it can extract better facts and recall the right ones at the right time.
 
 This document walks through the full lifecycle — from how facts get extracted, to how they're stored, to how they show up in future conversations. It covers both the conceptual design and the technical implementation.
 
@@ -22,7 +22,7 @@ This created three problems:
 
 ## The Three Domains
 
-Domain-specific memory solves these problems by partitioning knowledge into three categories. Each has its own extraction prompt, storage tag, and retrieval budget.
+Domain-specific memory solves these problems by partitioning knowledge into four categories. Each has its own extraction prompt, storage tag, and retrieval budget.
 
 ### Tool Usage Patterns (`tool-usage`)
 
@@ -93,7 +93,7 @@ Bernard monitors token usage as the conversation grows. When estimated usage exc
 2. Old messages are serialized into plain text
 3. Two parallel operations kick off:
    - **Summarization** — An LLM call condenses the old messages into a bullet-point summary
-   - **Domain extraction** — Three parallel LLM calls extract facts (one per domain)
+   - **Domain extraction** — Four parallel LLM calls extract facts (one per domain)
 4. The summary replaces the old messages in the conversation
 5. Extracted facts are stored in the RAG database, tagged by domain
 
@@ -108,7 +108,7 @@ When you type `/exit` or Ctrl+D:
 3. It spawns a **detached background process** (`rag-worker.ts`) and immediately exits — you don't have to wait
 4. The background worker:
    - Reads the temp file
-   - Runs domain-specific extraction (3 parallel LLM calls)
+   - Runs domain-specific extraction (4 parallel LLM calls)
    - Stores extracted facts per domain in the RAG database
    - Deletes the temp file
 
@@ -118,13 +118,14 @@ This design means exit is instantaneous. The LLM extraction work happens after B
 
 Each domain has a specialized LLM prompt (defined in `src/domains.ts`). The prompts follow a complementary exclusion pattern:
 
-- **Tool Usage** prompt says "Extract command sequences, error resolutions, build workflows" and "Do NOT extract user preferences or project architecture"
-- **User Preferences** prompt says "Extract communication style, workflow conventions, repeated instructions" and "Do NOT extract shell commands or project structure"
-- **General Knowledge** prompt says "Extract project structure, environment info, architecture decisions" and "Do NOT extract shell commands or user preferences"
+- **Tool Usage** prompt says "Extract command sequences, error resolutions, build workflows" and "Do NOT extract user preferences, project architecture, or conversation summaries"
+- **User Preferences** prompt says "Extract communication style, workflow conventions, repeated instructions" and "Do NOT extract shell commands, project structure, or conversation summaries"
+- **General Knowledge** prompt says "Extract project structure, environment info, architecture decisions" and "Do NOT extract shell commands, user preferences, or conversation summaries"
+- **Conversation Summaries** prompt says "Extract what was discussed, approaches taken, tools/specialists/routines used, outcomes" and "Do NOT extract shell commands, user preferences, or project structure"
 
 Each domain's "Do NOT extract" section mirrors the other domains' "Extract" sections. This minimizes overlap without needing deduplication across domains.
 
-All three extraction calls run in parallel via `Promise.allSettled`. If one domain's extraction fails (network error, invalid JSON response, etc.), the other two still succeed. Partial failure is handled gracefully.
+All four extraction calls run in parallel via `Promise.allSettled`. If one domain's extraction fails (network error, invalid JSON response, etc.), the other two still succeed. Partial failure is handled gracefully.
 
 The LLM returns a JSON array of strings. Each fact must be:
 
@@ -189,7 +190,7 @@ When you send a message, Bernard searches the RAG store for relevant facts. Here
 
 Without per-domain budgeting, if you had 200 general facts and 5 tool-usage facts, a query about "how to build the project" might return 9 general facts and 0 tool-usage facts — even though the tool-usage facts about `npm run build` would be the most useful.
 
-With per-domain budgeting (3 per domain, 9 max), the same query would return up to 3 tool-usage facts, up to 3 user-preference facts, and up to 3 general facts — then the top 9 overall. This ensures every domain has a fair chance of being represented.
+With per-domain budgeting (3 per domain, 9 max), the same query would return up to 3 tool-usage facts, up to 3 user-preference facts, up to 3 general facts, and up to 3 conversation summary facts — then the top 9 overall. This ensures every domain has a fair chance of being represented.
 
 ---
 
@@ -211,6 +212,9 @@ Reference only if directly relevant to the current discussion.
 ### General Knowledge
 - Project uses PostgreSQL 15 with Prisma ORM
 - API runs on port 3000 in development
+
+### Conversation Summaries
+- Previous session focused on debugging a failing CI pipeline; root cause was a missing env var in the Docker build step
 ```
 
 This grouping gives the LLM clear signal about _what kind_ of knowledge each fact represents. It can weigh tool-usage facts more heavily when you're asking about commands, and user-preference facts more heavily when deciding how to format a response.
@@ -230,11 +234,12 @@ You can see domain-specific memory stats in a running session:
 This shows the total memory count and a per-domain breakdown:
 
 ```
-  RAG memories: 47
+  RAG memories: 52
   By domain:
     Tool Usage Patterns: 18
     User Preferences: 7
     General Knowledge: 22
+    Conversation Summaries: 5
 ```
 
 ---
@@ -267,7 +272,7 @@ Session start
 User sends a message
   ├─ If context > 75% of window → compress
   │   ├─ Summarize old messages (LLM call)
-  │   └─ Extract domain facts in parallel (3 LLM calls)  ──→ store per-domain
+  │   └─ Extract domain facts in parallel (4 LLM calls)  ──→ store per-domain
   ├─ Embed user message → search RAG store
   │   └─ Per-domain top-k (3/domain, 9 max)
   ├─ Build system prompt with domain-grouped recalled context
@@ -276,7 +281,7 @@ User sends a message
 User exits (/exit or Ctrl+D)
   ├─ Serialize full conversation → temp file
   ├─ Spawn detached background worker → exit immediately
-  └─ Worker: extract domain facts (3 LLM calls) → store per-domain → delete temp file
+  └─ Worker: extract domain facts (4 LLM calls) → store per-domain → delete temp file
 ```
 
 ---
@@ -410,7 +415,7 @@ async function extractDomainFacts(
 
 The choice of `Promise.allSettled` over `Promise.all` is deliberate. If the LLM returns invalid JSON for one domain (which happens occasionally), the other two domains' facts are still captured. This is a fire-and-forget background operation, so partial results are better than total failure.
 
-**Cost implications:** Three LLM calls instead of one. Since they run in parallel, wall-clock latency is roughly the same as a single call. Token cost triples. This is acceptable because extraction only happens during compression (already an expensive operation) and at exit (runs in a background process).
+**Cost implications:** Four LLM calls instead of one. Since they run in parallel, wall-clock latency is roughly the same as a single call. Token cost quadruples. This is acceptable because extraction only happens during compression (already an expensive operation) and at exit (runs in a background process).
 
 ### `extractFacts()` — src/context.ts:183
 
@@ -572,7 +577,7 @@ if (ragStore && domainFacts.length > 0) {
 
 Key implementation choices:
 
-- **`Promise.all` wraps summarization + extraction** — both run concurrently. Since `extractDomainFacts` internally uses `Promise.allSettled` for its 3 domain calls, the total concurrency is: 1 summarization call + 3 domain extraction calls = 4 parallel LLM requests.
+- **`Promise.all` wraps summarization + extraction** — both run concurrently. Since `extractDomainFacts` internally uses `Promise.allSettled` for its 4 domain calls, the total concurrency is: 1 summarization call + 4 domain extraction calls = 5 parallel LLM requests.
 - **`addFacts` calls are fire-and-forget** — `.catch()` logs errors but doesn't await. Storage failures don't block returning the compressed history.
 - **The `'compression'` source tag** distinguishes mid-session facts from exit-time facts (`'exit'`), which is useful for debugging but doesn't affect retrieval.
 
@@ -691,10 +696,10 @@ The domain-specific memory system is covered by tests across five test files:
 
 | Test file                | Tests | What it verifies                                                                                                                                            |
 | ------------------------ | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/domains.test.ts`    | 10    | Registry completeness, required fields, extraction prompt structure, `getDomain` fallback, `getDomainIds`                                                   |
-| `src/rag.test.ts`        | 23    | Domain tagging on add/search, `topKPerDomain` limits, `maxResults` cap, legacy backfill, `countByDomain`, dedup, prune                                      |
-| `src/context.test.ts`    | 37    | Parallel domain extraction (3 LLM calls), partial failure handling, empty input, fact filtering, `extractFacts` wrapper, `compressHistory` with domain tags |
-| `src/agent.test.ts`      | 25    | System prompt domain grouping with `###` headings, mixed-domain results, omission of empty domains                                                          |
+| `src/domains.test.ts`    | 20    | Registry completeness, required fields, extraction prompt structure, `getDomain` fallback, `getDomainIds`, conversations domain content                     |
+| `src/rag.test.ts`        | 47    | Domain tagging on add/search, `topKPerDomain` limits, `maxResults` cap, legacy backfill, `countByDomain`, dedup, prune                                      |
+| `src/context.test.ts`    | 63    | Parallel domain extraction (4 LLM calls), partial failure handling, empty input, fact filtering, `extractFacts` wrapper, `compressHistory` with domain tags |
+| `src/agent.test.ts`      | 55    | System prompt domain grouping with `###` headings, mixed-domain results, omission of empty domains                                                          |
 | `src/rag-worker.test.ts` | 4     | Worker uses `extractDomainFacts`, stores per-domain, handles empty extraction, passes config overrides                                                      |
 
 All tests use Vitest with `vi.mock()` for dependency isolation. The LLM calls are mocked — tests verify the wiring and data flow, not the LLM output quality.
