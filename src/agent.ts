@@ -535,6 +535,7 @@ export class Agent {
   private extractToolCallLog(steps: { toolCalls: any[]; toolResults: any[] }[]): CriticToolEntry[] {
     const entries: CriticToolEntry[] = [];
     for (const step of steps) {
+      // AI SDK guarantees toolResults[i] corresponds to toolCalls[i] within each step
       for (let i = 0; i < step.toolCalls.length; i++) {
         const tc = step.toolCalls[i];
         const tr = step.toolResults[i];
@@ -563,17 +564,31 @@ export class Agent {
         result:
           typeof entry.result === 'string'
             ? entry.result.slice(0, 500)
-            : JSON.stringify(entry.result).slice(0, 500),
+            : JSON.stringify(entry.result ?? null).slice(0, 500),
       }));
+
+      const MAX_RESPONSE_LENGTH = 2000;
+      const truncatedResponse =
+        responseText.length > MAX_RESPONSE_LENGTH
+          ? responseText.slice(0, MAX_RESPONSE_LENGTH) + '\n... (truncated)'
+          : responseText;
 
       const criticMessage = `## Original User Request
 ${userInput}
 
 ## Agent Response
-${responseText}
+${truncatedResponse}
 
 ## Tool Call Log (${truncatedLog.length} calls)
-${truncatedLog.map((e, i) => `${i + 1}. ${e.toolName}(${JSON.stringify(e.args)})\n   Result: ${e.result}`).join('\n\n')}`;
+${truncatedLog
+  .map((e, i) => {
+    const MAX_ARGS_LENGTH = 500;
+    const argsStr = JSON.stringify(e.args);
+    const truncatedArgs =
+      argsStr.length > MAX_ARGS_LENGTH ? argsStr.slice(0, MAX_ARGS_LENGTH) + '...' : argsStr;
+    return `${i + 1}. ${e.toolName}(${truncatedArgs})\n   Result: ${e.result}`;
+  })
+  .join('\n\n')}`;
 
       const result = await generateText({
         model: getModel(this.config.provider, this.config.model),
