@@ -195,8 +195,9 @@ export function startupUpdateCheck(autoUpdate: boolean): void {
           printInfo(`\n  Applying update to v${result.latestVersion}...`);
           applyUpdate(result.latestVersion);
           printInfo(
-            `  Updated bernard to v${result.latestVersion}. Restart to use the new version.\n`,
+            `  Updated bernard to v${result.latestVersion}. Restart to use the new version.`,
           );
+          printInfo(`  What's new: ${releaseNotesUrl(result.latestVersion)}\n`);
         } catch {
           printInfo(`\n  Update to v${result.latestVersion} failed. Run: bernard update\n`);
         }
@@ -230,7 +231,8 @@ export async function interactiveUpdate(): Promise<void> {
 
     applyUpdate(result.latestVersion);
 
-    printInfo(`\n  Updated to v${result.latestVersion}. Restart bernard to use the new version.\n`);
+    printInfo(`\n  Updated to v${result.latestVersion}. Restart bernard to use the new version.`);
+    printInfo(`  What's new: ${releaseNotesUrl(result.latestVersion)}\n`);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     printError(`  Update failed: ${message}\n`);
