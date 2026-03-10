@@ -43,6 +43,7 @@ const mockSetSpinnerStats = vi.fn();
 const mockProcessInput = vi.fn();
 const mockAbort = vi.fn();
 const mockGetLastRAGResults = vi.fn(() => []);
+const mockCompactHistory = vi.fn();
 
 vi.mock('./agent.js', () => ({
   Agent: vi.fn(() => ({
@@ -52,6 +53,7 @@ vi.mock('./agent.js', () => ({
     processInput: mockProcessInput,
     abort: mockAbort,
     getLastRAGResults: mockGetLastRAGResults,
+    compactHistory: mockCompactHistory,
   })),
 }));
 
@@ -84,10 +86,11 @@ vi.mock('./mcp.js', () => ({
 }));
 
 const mockHistoryClear = vi.fn();
+const mockHistorySave = vi.fn();
 vi.mock('./history.js', () => ({
   HistoryStore: vi.fn(() => ({
     load: vi.fn(() => []),
-    save: vi.fn(),
+    save: mockHistorySave,
     clear: mockHistoryClear,
   })),
 }));
@@ -114,6 +117,7 @@ vi.mock('./output.js', () => ({
   startSpinner: (...args: any[]) => mockStartSpinner(...args),
   stopSpinner: (...args: any[]) => mockStopSpinner(...args),
   buildSpinnerMessage: (...args: any[]) => mockBuildSpinnerMessage(...args),
+  formatTokenCount: (n: number) => String(n),
 }));
 
 vi.mock('./providers/index.js', () => ({
