@@ -10,6 +10,12 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PACKAGE_NAME = 'bernard-agent';
 const RELEASE_NOTES_BASE = 'https://phillt.github.io/bernard';
 
+/**
+ * Build the release-notes URL for a given version.
+ *
+ * @param version Semantic version in `MAJOR.MINOR.PATCH` format.
+ * @returns An HTTPS URL under `RELEASE_NOTES_BASE` pointing to that version's release notes.
+ */
 export function releaseNotesUrl(version: string): string {
   return `${RELEASE_NOTES_BASE}/whats-new-${version}.html`;
 }
