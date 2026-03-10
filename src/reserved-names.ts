@@ -23,4 +23,5 @@ export const RESERVED_NAMES = new Set([
   'create-routine',
   'specialists',
   'create-specialist',
+  'candidates',
 ]);
