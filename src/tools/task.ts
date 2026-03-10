@@ -145,7 +145,7 @@ export function createTaskTool(
           buildMemoryContext({
             memoryStore,
             ragResults,
-            includeScratch: true,
+            includeScratch: false,
           });
 
         const result = await generateText({

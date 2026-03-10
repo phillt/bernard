@@ -963,7 +963,7 @@ Remember: routine content should be written as clear instructions that Bernard c
 
           const systemPrompt =
             TASK_SYSTEM_PROMPT +
-            buildMemoryContext({ memoryStore, ragResults, includeScratch: true });
+            buildMemoryContext({ memoryStore, ragResults, includeScratch: false });
 
           const result = await generateText({
             model: getModel(config.provider, config.model),
