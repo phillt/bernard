@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildSystemPrompt, Agent } from './agent.js';
-import { printCriticVerdict } from './output.js';
 import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
 
@@ -93,6 +92,7 @@ describe('critic mode', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGenerateText.mockReset();
     vi.mocked(fs.readdirSync).mockReturnValue([] as any);
     vi.mocked(fs.existsSync).mockReturnValue(false);
     vi.mocked(fs.readFileSync).mockReturnValue('');
@@ -205,11 +205,121 @@ describe('critic mode', () => {
     });
   });
 
-  describe('printCriticVerdict', () => {
-    let logSpy: ReturnType<typeof vi.spyOn>;
+  describe('extractToolCallLog', () => {
+    it('extracts tool calls across multiple steps in order', async () => {
+      mockGenerateText
+        .mockResolvedValueOnce({
+          text: 'Done with multi-step work.',
+          steps: [
+            {
+              toolCalls: [
+                { toolName: 'shell', args: { command: 'ls' } },
+                { toolName: 'memory', args: { action: 'read' } },
+              ],
+              toolResults: [
+                { toolName: 'shell', result: 'file.txt' },
+                { toolName: 'memory', result: 'stored data' },
+              ],
+            },
+            {
+              toolCalls: [{ toolName: 'shell', args: { command: 'cat file.txt' } }],
+              toolResults: [{ toolName: 'shell', result: 'contents' }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        .mockResolvedValueOnce({
+          text: 'VERDICT: PASS\nAll good.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
+        });
 
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      await agent.processInput('Do multi-step work');
+
+      // Verify critic received all 3 tool calls in order
+      const criticCall = mockGenerateText.mock.calls[1][0];
+      const criticMsg = criticCall.messages[0].content as string;
+      expect(criticMsg).toContain('3 calls');
+      expect(criticMsg).toContain('1. shell');
+      expect(criticMsg).toContain('2. memory');
+      expect(criticMsg).toContain('3. shell');
+    });
+
+    it('handles mismatched toolResults length gracefully', async () => {
+      mockGenerateText
+        .mockResolvedValueOnce({
+          text: 'Partially done.',
+          steps: [
+            {
+              toolCalls: [
+                { toolName: 'shell', args: { command: 'ls' } },
+                { toolName: 'shell', args: { command: 'pwd' } },
+              ],
+              // Only one result — second toolResult is undefined
+              toolResults: [{ toolName: 'shell', result: 'file.txt' }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        .mockResolvedValueOnce({
+          text: 'VERDICT: WARN\nMissing result.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
+        });
+
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      // Should not throw — the tr?.result guard handles undefined
+      await expect(agent.processInput('Run commands')).resolves.toBeUndefined();
+
+      // Critic should still be called with both tool calls
+      expect(mockGenerateText).toHaveBeenCalledTimes(2);
+      const criticCall = mockGenerateText.mock.calls[1][0];
+      const criticMsg = criticCall.messages[0].content as string;
+      expect(criticMsg).toContain('2 calls');
+    });
+  });
+
+  describe('responseText truncation in critic', () => {
+    it('truncates long responseText before sending to critic', async () => {
+      const longText = 'x'.repeat(5000);
+      mockGenerateText
+        .mockResolvedValueOnce({
+          text: longText,
+          steps: [
+            {
+              toolCalls: [{ toolName: 'shell', args: { command: 'echo hi' } }],
+              toolResults: [{ toolName: 'shell', result: 'hi' }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        .mockResolvedValueOnce({
+          text: 'VERDICT: PASS\nOk.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
+        });
+
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      await agent.processInput('Generate long output');
+
+      const criticCall = mockGenerateText.mock.calls[1][0];
+      const criticMsg = criticCall.messages[0].content as string;
+      // Should be truncated — not contain the full 5000 chars
+      expect(criticMsg).not.toContain('x'.repeat(5000));
+      expect(criticMsg).toContain('... (truncated)');
+    });
+  });
+
+  describe('printCriticVerdict', () => {
     beforeEach(() => {
-      logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'log').mockImplementation(() => {});
     });
 
     it('is called with critic output text', async () => {
