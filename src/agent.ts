@@ -26,6 +26,8 @@ import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import { RoutineStore, type RoutineSummary } from './routines.js';
+import { SpecialistStore, type SpecialistSummary } from './specialists.js';
+import { createSpecialistRunTool } from './tools/specialist-run.js';
 import { buildMemoryContext } from './memory-context.js';
 import {
   extractRecentUserTexts,
@@ -74,6 +76,8 @@ Tool schemas describe each tool's parameters and purpose. Behavioral notes:
 - **agent** — Delegates tasks to parallel sub-agents. See Parallel Execution below.
 - **task** — Execute a focused, isolated task with structured JSON output {status, output, details?}. Tasks have no history and a 5-step budget. Use when you need a discrete, machine-readable result — especially during routine execution for chaining outcomes.
 - **routine** — Save and manage reusable multi-step workflows (routines). Once saved, users invoke them via /\{routine-id\} in the REPL.
+- **specialist** — Save and manage reusable expert profiles (specialists). Specialists are personas with custom system prompts and behavioral guidelines that shape how a sub-agent approaches work. Use for recurring delegation patterns.
+- **specialist_run** — Invoke a saved specialist to handle a task using its custom persona. The specialist runs as an independent sub-agent with its own system prompt and guidelines. Use when a task matches an existing specialist's domain.
 - **mcp_config / mcp_add_url** — Manage MCP server connections. Changes require a restart.
 - **datetime / time_range / time_range_total** — Time and duration utilities.
 
@@ -140,6 +144,7 @@ export function buildSystemPrompt(
   mcpServerNames?: string[],
   ragResults?: RAGSearchResult[],
   routineSummaries?: RoutineSummary[],
+  specialistSummaries?: SpecialistSummary[],
 ): string {
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
@@ -169,6 +174,17 @@ MCP (Model Context Protocol) servers provide additional tools. Use the mcp_confi
   } else {
     prompt +=
       '\n\nNo routines saved yet. When a user walks you through a multi-step workflow, suggest saving it as a routine using the routine tool so they can re-invoke it later with /{routine-id}.';
+  }
+
+  prompt += '\n\n## Specialists';
+  if (specialistSummaries && specialistSummaries.length > 0) {
+    prompt += '\n\nAvailable specialist agents you can delegate to via specialist_run:\n';
+    prompt += specialistSummaries
+      .map((s) => `- ${s.id} — ${s.name}: ${s.description}`)
+      .join('\n');
+  } else {
+    prompt +=
+      '\n\nNo specialists saved yet. When you notice recurring delegation patterns where the same kind of expertise or behavioral rules would help, suggest creating a specialist using the specialist tool.';
   }
 
   return prompt;
@@ -202,6 +218,7 @@ export class Agent {
   private lastStepPromptTokens: number = 0;
   private spinnerStats: SpinnerStats | null = null;
   private routineStore: RoutineStore;
+  private specialistStore: SpecialistStore;
 
   constructor(
     config: BernardConfig,
@@ -213,6 +230,7 @@ export class Agent {
     initialHistory?: CoreMessage[],
     ragStore?: RAGStore,
     routineStore?: RoutineStore,
+    specialistStore?: SpecialistStore,
   ) {
     this.config = config;
     this.toolOptions = toolOptions;
@@ -222,6 +240,7 @@ export class Agent {
     this.alertContext = alertContext;
     this.ragStore = ragStore;
     this.routineStore = routineStore ?? new RoutineStore();
+    this.specialistStore = specialistStore ?? new SpecialistStore();
     if (initialHistory) {
       this.history = [...initialHistory];
       this.lastPromptTokens = Math.ceil(JSON.stringify(initialHistory).length / 4);
@@ -309,6 +328,7 @@ export class Agent {
       }
 
       const routineSummaries = this.routineStore.getSummaries();
+      const specialistSummaries = this.specialistStore.getSummaries();
 
       let systemPrompt = buildSystemPrompt(
         this.config,
@@ -316,6 +336,7 @@ export class Agent {
         this.mcpServerNames,
         ragResults,
         routineSummaries,
+        specialistSummaries,
       );
       if (this.alertContext) {
         systemPrompt += '\n\n' + this.alertContext;
@@ -340,6 +361,7 @@ export class Agent {
         this.memoryStore,
         this.mcpTools,
         this.routineStore,
+        this.specialistStore,
       );
       const tools = {
         ...baseTools,
@@ -354,6 +376,14 @@ export class Agent {
           this.config,
           this.toolOptions,
           this.memoryStore,
+          this.mcpTools,
+          this.ragStore,
+        ),
+        specialist_run: createSpecialistRunTool(
+          this.config,
+          this.toolOptions,
+          this.memoryStore,
+          this.specialistStore,
           this.mcpTools,
           this.ragStore,
         ),
