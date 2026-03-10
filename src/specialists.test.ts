@@ -202,22 +202,18 @@ describe('SpecialistStore', () => {
     });
 
     it('throws on invalid id', () => {
-      expect(() =>
-        store.create('BAD', 'Bad', 'desc', 'prompt'),
-      ).toThrow();
+      expect(() => store.create('BAD', 'Bad', 'desc', 'prompt')).toThrow();
     });
 
     it('throws on reserved name', () => {
-      expect(() =>
-        store.create('help', 'Help', 'desc', 'prompt'),
-      ).toThrow('reserved');
+      expect(() => store.create('help', 'Help', 'desc', 'prompt')).toThrow('reserved');
     });
 
     it('throws on duplicate', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      expect(() =>
-        store.create('email-triage', 'Email Triage', 'desc', 'prompt'),
-      ).toThrow('already exists');
+      expect(() => store.create('email-triage', 'Email Triage', 'desc', 'prompt')).toThrow(
+        'already exists',
+      );
     });
 
     it('throws at MAX_SPECIALISTS', () => {
@@ -234,9 +230,7 @@ describe('SpecialistStore', () => {
         updatedAt: '2024-01-01T00:00:00.000Z',
       };
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specData));
-      expect(() =>
-        store.create('new-one', 'New', 'desc', 'prompt'),
-      ).toThrow('Maximum');
+      expect(() => store.create('new-one', 'New', 'desc', 'prompt')).toThrow('Maximum');
     });
   });
 

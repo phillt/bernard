@@ -93,24 +93,14 @@ describe('specialist-run tool', () => {
   });
 
   it('has correct description and execute function', () => {
-    const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-    );
+    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
     expect(tool).toBeDefined();
     expect(tool.description).toContain('specialist');
     expect(tool.execute).toBeDefined();
   });
 
   it('returns error when specialist not found', async () => {
-    const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-    );
+    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
     const result = await tool.execute!(
       { specialistId: 'nonexistent', task: 'Do something' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -125,12 +115,7 @@ describe('specialist-run tool', () => {
     // Mock the specialist store to return our specialist
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-    );
+    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
     await tool.execute!(
       { specialistId: 'email-triage', task: 'Triage these emails' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -150,12 +135,7 @@ describe('specialist-run tool', () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-    );
+    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
     await tool.execute!(
       {
         specialistId: 'email-triage',
@@ -173,12 +153,7 @@ describe('specialist-run tool', () => {
     mockGenerateText.mockResolvedValue({ text: 'Email triage complete: 3 urgent, 5 normal' });
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-    );
+    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
     const result = await tool.execute!(
       { specialistId: 'email-triage', task: 'Triage emails' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -190,12 +165,7 @@ describe('specialist-run tool', () => {
     mockGenerateText.mockRejectedValue(new Error('API rate limit'));
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-    );
+    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
     const result = await tool.execute!(
       { specialistId: 'email-triage', task: 'Triage emails' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -214,12 +184,7 @@ describe('specialist-run tool', () => {
         }),
     );
 
-    const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-    );
+    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
     const execOptions = { toolCallId: '1', messages: [], abortSignal: undefined as any };
 
     // Start 4 concurrent agents
@@ -244,12 +209,7 @@ describe('specialist-run tool', () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-    );
+    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
     await tool.execute!(
       { specialistId: 'email-triage', task: 'Triage emails' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -262,12 +222,7 @@ describe('specialist-run tool', () => {
     mockGenerateText.mockRejectedValue(new Error('fail'));
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-    );
+    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
     await tool.execute!(
       { specialistId: 'email-triage', task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -280,12 +235,7 @@ describe('specialist-run tool', () => {
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
     const controller = new AbortController();
 
-    const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-    );
+    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
     await tool.execute!(
       { specialistId: 'email-triage', task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: controller.signal },
@@ -299,12 +249,7 @@ describe('specialist-run tool', () => {
     const noGuidelinesSpec = { ...mockSpecialist, guidelines: [] };
     vi.spyOn(specialistStore, 'get').mockReturnValue(noGuidelinesSpec);
 
-    const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-    );
+    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
     await tool.execute!(
       { specialistId: 'email-triage', task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },

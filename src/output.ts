@@ -259,7 +259,7 @@ export function printSubAgentEnd(id: number): void {
 export function printSpecialistStart(id: number, specialistName: string, task: string): void {
   const prefixColors = getTheme().prefixColors;
   const colorFn = prefixColors[(id - 1) % prefixColors.length];
-  const displayTask = task.length > 80 ? task.slice(0, 80) + '...' : task;
+  const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
   console.log(colorFn(`┌─ spec:${id} [${specialistName}] — ${displayTask}`));
 }
 

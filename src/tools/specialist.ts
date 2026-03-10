@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { SpecialistStore } from '../specialists.js';
+import { SpecialistStore, type Specialist } from '../specialists.js';
 
 /**
  * Creates the specialist management tool for saving and retrieving reusable expert profiles.
@@ -36,7 +36,14 @@ export function createSpecialistTool(specialistStore?: SpecialistStore) {
         .optional()
         .describe('Short behavioral rules, appended as bullets (optional, defaults to [])'),
     }),
-    execute: async ({ action, id, name, description, systemPrompt, guidelines }): Promise<string> => {
+    execute: async ({
+      action,
+      id,
+      name,
+      description,
+      systemPrompt,
+      guidelines,
+    }): Promise<string> => {
       switch (action) {
         case 'list': {
           const specialists = store.list();
@@ -70,7 +77,9 @@ export function createSpecialistTool(specialistStore?: SpecialistStore) {
 
         case 'update': {
           if (!id) return 'Error: id is required for update action.';
-          const updates: Record<string, any> = {};
+          const updates: Partial<
+            Pick<Specialist, 'name' | 'description' | 'systemPrompt' | 'guidelines'>
+          > = {};
           if (name !== undefined) updates.name = name;
           if (description !== undefined) updates.description = description;
           if (systemPrompt !== undefined) updates.systemPrompt = systemPrompt;

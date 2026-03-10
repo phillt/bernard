@@ -179,9 +179,7 @@ MCP (Model Context Protocol) servers provide additional tools. Use the mcp_confi
   prompt += '\n\n## Specialists';
   if (specialistSummaries && specialistSummaries.length > 0) {
     prompt += '\n\nAvailable specialist agents you can delegate to via specialist_run:\n';
-    prompt += specialistSummaries
-      .map((s) => `- ${s.id} — ${s.name}: ${s.description}`)
-      .join('\n');
+    prompt += specialistSummaries.map((s) => `- ${s.id} — ${s.name}: ${s.description}`).join('\n');
   } else {
     prompt +=
       '\n\nNo specialists saved yet. When you notice recurring delegation patterns where the same kind of expertise or behavioral rules would help, suggest creating a specialist using the specialist tool.';

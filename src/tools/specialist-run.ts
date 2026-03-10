@@ -52,20 +52,15 @@ export function createSpecialistRunTool(
 ) {
   return tool({
     description:
-      'Invoke a saved specialist agent to handle a task using its custom persona, instructions, and behavioral guidelines. The specialist runs as an independent sub-agent with its own system prompt. Use this when the task matches an existing specialist\'s domain.',
+      "Invoke a saved specialist agent to handle a task using its custom persona, instructions, and behavioral guidelines. The specialist runs as an independent sub-agent with its own system prompt. Use this when the task matches an existing specialist's domain.",
     parameters: z.object({
-      specialistId: z
-        .string()
-        .describe('The ID of the specialist to invoke (e.g. "email-triage")'),
+      specialistId: z.string().describe('The ID of the specialist to invoke (e.g. "email-triage")'),
       task: z
         .string()
         .describe(
           'A detailed, self-contained task description. Include: (1) specific objective and expected output format, (2) exact file paths, commands, or URLs, (3) edge cases and what to do if something fails. The specialist has zero prior context beyond its own profile.',
         ),
-      context: z
-        .string()
-        .optional()
-        .describe('Optional additional context to help the specialist'),
+      context: z.string().optional().describe('Optional additional context to help the specialist'),
     }),
     execute: async ({ specialistId, task, context }, execOptions) => {
       const specialist = specialistStore.get(specialistId);
@@ -84,7 +79,7 @@ export function createSpecialistRunTool(
       printSpecialistStart(id, specialist.name, task);
 
       try {
-        const baseTools = createTools(options, memoryStore, mcpTools);
+        const baseTools = createTools(options, memoryStore, mcpTools, undefined, specialistStore);
 
         let userMessage = `Task: ${task}`;
         if (context) {
@@ -107,7 +102,8 @@ export function createSpecialistRunTool(
         // Build system prompt from specialist profile
         let systemPrompt = specialist.systemPrompt;
         if (specialist.guidelines.length > 0) {
-          systemPrompt += '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
+          systemPrompt +=
+            '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
         }
         systemPrompt += SPECIALIST_EXECUTION_RULES;
         systemPrompt += buildMemoryContext({

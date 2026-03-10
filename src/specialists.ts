@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { SPECIALISTS_DIR } from './paths.js';
+import { RESERVED_NAMES } from './reserved-names.js';
 
 export interface Specialist {
   id: string;
@@ -21,29 +22,6 @@ export interface SpecialistSummary {
 const MAX_SPECIALISTS = 50;
 
 const ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/;
-
-const RESERVED_NAMES = new Set([
-  'help',
-  'clear',
-  'compact',
-  'task',
-  'memory',
-  'scratch',
-  'mcp',
-  'cron',
-  'rag',
-  'facts',
-  'provider',
-  'model',
-  'theme',
-  'options',
-  'update',
-  'exit',
-  'routines',
-  'create-routine',
-  'specialists',
-  'create-specialist',
-]);
 
 /**
  * Disk-backed store for named specialists (reusable expert profiles).
@@ -86,6 +64,7 @@ export class SpecialistStore {
 
   /** Returns a single specialist by ID, or `undefined` if not found. */
   get(id: string): Specialist | undefined {
+    if (!ID_PATTERN.test(id)) return undefined;
     const filePath = path.join(SPECIALISTS_DIR, `${id}.json`);
     if (!fs.existsSync(filePath)) return undefined;
     try {
@@ -97,6 +76,7 @@ export class SpecialistStore {
 
   /** Returns true if a specialist with the given ID exists on disk. */
   exists(id: string): boolean {
+    if (!ID_PATTERN.test(id)) return false;
     return fs.existsSync(path.join(SPECIALISTS_DIR, `${id}.json`));
   }
 
@@ -115,7 +95,8 @@ export class SpecialistStore {
     if (idError) throw new Error(idError);
     if (this.exists(id)) throw new Error(`Specialist "${id}" already exists.`);
     const count = this.list().length;
-    if (count >= MAX_SPECIALISTS) throw new Error(`Maximum of ${MAX_SPECIALISTS} specialists reached.`);
+    if (count >= MAX_SPECIALISTS)
+      throw new Error(`Maximum of ${MAX_SPECIALISTS} specialists reached.`);
 
     const now = new Date().toISOString();
     const specialist: Specialist = {
@@ -139,6 +120,7 @@ export class SpecialistStore {
     id: string,
     updates: Partial<Pick<Specialist, 'name' | 'description' | 'systemPrompt' | 'guidelines'>>,
   ): Specialist | undefined {
+    if (!ID_PATTERN.test(id)) return undefined;
     const specialist = this.get(id);
     if (!specialist) return undefined;
     if (updates.name !== undefined) specialist.name = updates.name;
@@ -146,15 +128,13 @@ export class SpecialistStore {
     if (updates.systemPrompt !== undefined) specialist.systemPrompt = updates.systemPrompt;
     if (updates.guidelines !== undefined) specialist.guidelines = updates.guidelines;
     specialist.updatedAt = new Date().toISOString();
-    this.atomicWrite(
-      path.join(SPECIALISTS_DIR, `${id}.json`),
-      JSON.stringify(specialist, null, 2),
-    );
+    this.atomicWrite(path.join(SPECIALISTS_DIR, `${id}.json`), JSON.stringify(specialist, null, 2));
     return specialist;
   }
 
   /** Removes a specialist by ID. Returns `true` if it existed and was deleted. */
   delete(id: string): boolean {
+    if (!ID_PATTERN.test(id)) return false;
     const filePath = path.join(SPECIALISTS_DIR, `${id}.json`);
     if (!fs.existsSync(filePath)) return false;
     fs.unlinkSync(filePath);
