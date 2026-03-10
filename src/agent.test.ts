@@ -921,6 +921,14 @@ describe('Agent', () => {
       expect(result.tokensBefore).toBe(1000);
       expect(result.tokensAfter).toBe(1000);
     });
+
+    it('propagates errors from compressHistory', async () => {
+      const { compressHistory } = await import('./context.js');
+      vi.mocked(compressHistory).mockRejectedValueOnce(new Error('LLM down'));
+
+      const agent = new Agent(makeConfig(), toolOptions, store);
+      await expect(agent.compactHistory()).rejects.toThrow('LLM down');
+    });
   });
 
   it('clearHistory resets previousRAGFacts', async () => {
