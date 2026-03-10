@@ -20,7 +20,7 @@ This created three problems:
 
 ---
 
-## The Three Domains
+## The Four Domains
 
 Domain-specific memory solves these problems by partitioning knowledge into four categories. Each has its own extraction prompt, storage tag, and retrieval budget.
 
@@ -125,7 +125,7 @@ Each domain has a specialized LLM prompt (defined in `src/domains.ts`). The prom
 
 Each domain's "Do NOT extract" section mirrors the other domains' "Extract" sections. This minimizes overlap without needing deduplication across domains.
 
-All four extraction calls run in parallel via `Promise.allSettled`. If one domain's extraction fails (network error, invalid JSON response, etc.), the other two still succeed. Partial failure is handled gracefully.
+All four extraction calls run in parallel via `Promise.allSettled`. If one domain's extraction fails (network error, invalid JSON response, etc.), the other three still succeed. Partial failure is handled gracefully.
 
 The LLM returns a JSON array of strings. Each fact must be:
 
