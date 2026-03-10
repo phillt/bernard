@@ -64,6 +64,21 @@ Same as above — these are examples, not a fixed list. If your conversation cov
 
 This is the factual knowledge about _what things are_ in your environment.
 
+### Conversation Summaries (`conversations`)
+
+The extraction prompt steers the LLM toward things like:
+
+- What the user asked for and the high-level approach taken
+- Which tools, specialists, or routines were used and in what combination
+- Whether work was delegated to sub-agents, tasks, or specialists
+- Outcome of the conversation (success, partial, failure, abandoned)
+- Recurring themes or patterns across sessions
+- Notable decisions and their rationale
+
+Same as the other domains — these are examples, not a fixed list. The LLM generalizes from the guidance. If a session involved a novel debugging strategy or a multi-step deployment, the summarizer would capture the high-level picture even though the specifics aren't enumerated.
+
+This is Bernard's memory of _what happened_ — the session-level narrative that ties together the individual facts captured by the other three domains.
+
 ---
 
 ## The Extraction Pipeline
