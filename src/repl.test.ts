@@ -327,3 +327,121 @@ describe('REPL /clear command', () => {
     await replPromise.catch(() => {});
   });
 });
+
+describe('REPL /compact command', () => {
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rlEmitter = makeRl();
+    vi.spyOn(console, 'clear').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('prints info and re-prompts when history is too short', async () => {
+    mockGetHistory.mockReturnValue([]);
+    const { startRepl } = await import('./repl.js');
+
+    const replPromise = startRepl(makeConfig());
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/compact');
+
+    await vi.waitFor(() => {
+      expect(mockPrintInfo).toHaveBeenCalledWith('Not enough conversation to compact.');
+    });
+    expect(mockCompactHistory).not.toHaveBeenCalled();
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('prints nothing-to-compact when compactHistory returns compacted: false', async () => {
+    mockGetHistory.mockReturnValue([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+    ]);
+    mockCompactHistory.mockResolvedValue({
+      compacted: false,
+      tokensBefore: 500,
+      tokensAfter: 500,
+    });
+    const { startRepl } = await import('./repl.js');
+
+    const replPromise = startRepl(makeConfig());
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/compact');
+
+    await vi.waitFor(() => {
+      expect(mockPrintInfo).toHaveBeenCalledWith(
+        'Nothing to compact — conversation is already short enough.',
+      );
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('prints reduction message and saves history on successful compaction', async () => {
+    mockGetHistory.mockReturnValue([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+    ]);
+    mockCompactHistory.mockResolvedValue({
+      compacted: true,
+      tokensBefore: 5000,
+      tokensAfter: 1000,
+    });
+    const { startRepl } = await import('./repl.js');
+
+    const replPromise = startRepl(makeConfig());
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/compact');
+
+    await vi.waitFor(() => {
+      expect(mockPrintInfo).toHaveBeenCalledWith('Compacted: ~5000 → ~1000 tokens (80% reduction)');
+    });
+    expect(mockStopSpinner).toHaveBeenCalled();
+    expect(mockHistorySave).toHaveBeenCalled();
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('calls printError when compactHistory throws', async () => {
+    mockGetHistory.mockReturnValue([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+    ]);
+    mockCompactHistory.mockRejectedValue(new Error('API down'));
+    const { startRepl } = await import('./repl.js');
+
+    const replPromise = startRepl(makeConfig());
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/compact');
+
+    await vi.waitFor(() => {
+      expect(mockPrintError).toHaveBeenCalledWith('Compaction failed: API down');
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+});

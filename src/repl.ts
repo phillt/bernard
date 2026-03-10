@@ -497,11 +497,13 @@ export async function startRepl(
         startSpinner('Compacting conversation...');
         try {
           const result = await agent.compactHistory();
+          stopSpinner();
           if (!result.compacted) {
             printInfo('Nothing to compact — conversation is already short enough.');
           } else {
-            const saved = result.tokensBefore - result.tokensAfter;
-            const pct = Math.round((saved / result.tokensBefore) * 100);
+            const pct = Math.round(
+              ((result.tokensBefore - result.tokensAfter) / result.tokensBefore) * 100,
+            );
             printInfo(
               `Compacted: ~${formatTokenCount(result.tokensBefore)} → ~${formatTokenCount(result.tokensAfter)} tokens (${pct}% reduction)`,
             );
