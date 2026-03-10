@@ -872,7 +872,7 @@ describe('Agent', () => {
       let callCount = 0;
       vi.mocked(estimateHistoryTokens).mockImplementation(() => {
         callCount++;
-        // First call (tokensBefore) returns high count, second (tokensAfter) returns low
+        // First call: tokensBefore (5000); subsequent calls (lastPromptTokens, tokensAfter): 1000
         return callCount === 1 ? 5000 : 1000;
       });
 

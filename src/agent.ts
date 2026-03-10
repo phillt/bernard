@@ -170,18 +170,18 @@ MCP (Model Context Protocol) servers provide additional tools. Use the mcp_confi
   return prompt;
 }
 
-/**
- * Core agent that manages a multi-step conversation loop with tool calling via the Vercel AI SDK.
- *
- * Maintains conversation history, handles context compression when token limits
- * approach, performs RAG lookups, and orchestrates LLM calls with registered tools.
- */
 export interface CompactResult {
   compacted: boolean;
   tokensBefore: number;
   tokensAfter: number;
 }
 
+/**
+ * Core agent that manages a multi-step conversation loop with tool calling via the Vercel AI SDK.
+ *
+ * Maintains conversation history, handles context compression when token limits
+ * approach, performs RAG lookups, and orchestrates LLM calls with registered tools.
+ */
 export class Agent {
   private history: CoreMessage[] = [];
   private config: BernardConfig;
