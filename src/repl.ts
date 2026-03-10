@@ -45,6 +45,9 @@ import {
 } from './context.js';
 import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
+import { TASK_SYSTEM_PROMPT, wrapTaskResult } from './tools/task.js';
+import { printTaskStart, printTaskEnd } from './output.js';
+import { buildMemoryContext } from './memory-context.js';
 import { debugLog } from './logger.js';
 
 /**
@@ -76,6 +79,7 @@ export async function startRepl(
       description: 'View and set options (max-tokens, shell-timeout, token-window)',
     },
     { command: '/update', description: 'Check for and install updates' },
+    { command: '/task', description: 'Run an isolated task (no history, structured output)' },
     { command: '/routines', description: 'List saved routines' },
     { command: '/create-routine', description: 'Create a routine with guided AI assistance' },
     { command: '/exit', description: 'Quit Bernard' },
@@ -907,6 +911,86 @@ Remember: routine content should be written as clear instructions that Bernard c
           printInfo('Interrupted.');
           interrupted = false;
         }
+        console.log();
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/task' || trimmed.startsWith('/task ')) {
+        const taskDescription = trimmed.slice('/task'.length).trim();
+        if (!taskDescription) {
+          printError('Usage: /task <description>');
+          printInfo('  Example: /task List all .ts files in the src directory');
+          void prompt();
+          return;
+        }
+
+        processing = true;
+        interrupted = false;
+        printTaskStart(taskDescription);
+        startSpinner('Running task...');
+
+        try {
+          const { createTools } = await import('./tools/index.js');
+          const baseTools = createTools(toolOptions, memoryStore, mcpTools);
+
+          // Optional RAG search for context
+          let ragResults;
+          if (ragStore) {
+            try {
+              ragResults = await ragStore.search(taskDescription);
+              if (ragResults.length > 0) {
+                debugLog('repl:task:rag', {
+                  query: taskDescription.slice(0, 100),
+                  results: ragResults.length,
+                });
+              }
+            } catch (err) {
+              debugLog('repl:task:rag:error', err instanceof Error ? err.message : String(err));
+            }
+          }
+
+          const systemPrompt =
+            TASK_SYSTEM_PROMPT +
+            buildMemoryContext({ memoryStore, ragResults, includeScratch: true });
+
+          const result = await generateText({
+            model: getModel(config.provider, config.model),
+            tools: baseTools,
+            maxSteps: 5,
+            maxTokens: config.maxTokens,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: `Task: ${taskDescription}` }],
+          });
+
+          stopSpinner();
+          const taskResult = wrapTaskResult(result.text);
+          printTaskEnd(JSON.stringify(taskResult));
+
+          // Print the full output for the user
+          const t = getTheme();
+          if (taskResult.details) {
+            console.log(t.text(`\n${taskResult.output}\n${taskResult.details}`));
+          } else {
+            console.log(t.text(`\n${taskResult.output}`));
+          }
+        } catch (err: unknown) {
+          stopSpinner();
+          if (!interrupted) {
+            const message = err instanceof Error ? err.message : String(err);
+            printTaskEnd(JSON.stringify({ status: 'error', output: message }));
+            printError(message);
+          }
+        } finally {
+          processing = false;
+          stopSpinner();
+        }
+
+        if (interrupted) {
+          printInfo('Interrupted.');
+          interrupted = false;
+        }
+
         console.log();
         void prompt();
         return;
