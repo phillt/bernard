@@ -241,4 +241,146 @@ describe('detectSpecialistCandidate', () => {
     const result = await detectSpecialistCandidate(longText, makeConfig(), [], []);
     expect(result).toBeNull();
   });
+
+  it('returns null when name matches existing specialist (case-insensitive)', async () => {
+    mockGenerateText.mockResolvedValueOnce({
+      text: JSON.stringify({
+        shouldCreate: true,
+        candidate: {
+          draftId: 'code-reviewer',
+          name: 'Code Review',
+          description: 'Reviews code',
+          systemPrompt: 'You review code.',
+          guidelines: [],
+          confidence: 0.9,
+          reasoning: 'Strong pattern.',
+        },
+      }),
+    });
+
+    const longText = 'x'.repeat(600);
+    const existingSpecialists = [{ id: 'code-review', name: 'code review', description: 'desc' }];
+    const result = await detectSpecialistCandidate(longText, makeConfig(), existingSpecialists, []);
+    expect(result).toBeNull();
+  });
+
+  it('returns null when draftId is a prefix of existing specialist id', async () => {
+    mockGenerateText.mockResolvedValueOnce({
+      text: JSON.stringify({
+        shouldCreate: true,
+        candidate: {
+          draftId: 'code-review',
+          name: 'Code Review Pro',
+          description: 'Reviews code',
+          systemPrompt: 'You review code.',
+          guidelines: [],
+          confidence: 0.9,
+          reasoning: 'Strong pattern.',
+        },
+      }),
+    });
+
+    const longText = 'x'.repeat(600);
+    const existingSpecialists = [
+      { id: 'code-reviewer', name: 'Code Reviewer', description: 'desc' },
+    ];
+    const result = await detectSpecialistCandidate(longText, makeConfig(), existingSpecialists, []);
+    expect(result).toBeNull();
+  });
+
+  it('returns null when existing specialist id is a prefix of draftId', async () => {
+    mockGenerateText.mockResolvedValueOnce({
+      text: JSON.stringify({
+        shouldCreate: true,
+        candidate: {
+          draftId: 'code-reviewer',
+          name: 'Code Reviewer Pro',
+          description: 'Reviews code',
+          systemPrompt: 'You review code.',
+          guidelines: [],
+          confidence: 0.9,
+          reasoning: 'Strong pattern.',
+        },
+      }),
+    });
+
+    const longText = 'x'.repeat(600);
+    const existingSpecialists = [{ id: 'code-review', name: 'Code Review', description: 'desc' }];
+    const result = await detectSpecialistCandidate(longText, makeConfig(), existingSpecialists, []);
+    expect(result).toBeNull();
+  });
+
+  it('returns null when name matches pending candidate (case-insensitive)', async () => {
+    mockGenerateText.mockResolvedValueOnce({
+      text: JSON.stringify({
+        shouldCreate: true,
+        candidate: {
+          draftId: 'different-id',
+          name: 'Code Review',
+          description: 'Reviews code',
+          systemPrompt: 'You review code.',
+          guidelines: [],
+          confidence: 0.9,
+          reasoning: 'Strong pattern.',
+        },
+      }),
+    });
+
+    const longText = 'x'.repeat(600);
+    const pendingCandidates = [
+      {
+        id: 'uuid-1',
+        draftId: 'code-review',
+        name: 'code review',
+        description: 'Reviews code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        confidence: 0.9,
+        reasoning: 'reason',
+        detectedAt: new Date().toISOString(),
+        source: 'exit' as const,
+        acknowledged: false,
+        status: 'pending' as const,
+      },
+    ];
+    const result = await detectSpecialistCandidate(longText, makeConfig(), [], pendingCandidates);
+    expect(result).toBeNull();
+  });
+
+  it('returns null when draftId is a prefix of pending candidate draftId', async () => {
+    mockGenerateText.mockResolvedValueOnce({
+      text: JSON.stringify({
+        shouldCreate: true,
+        candidate: {
+          draftId: 'code-review',
+          name: 'Code Review Pro',
+          description: 'Reviews code',
+          systemPrompt: 'You review code.',
+          guidelines: [],
+          confidence: 0.9,
+          reasoning: 'Strong pattern.',
+        },
+      }),
+    });
+
+    const longText = 'x'.repeat(600);
+    const pendingCandidates = [
+      {
+        id: 'uuid-1',
+        draftId: 'code-reviewer',
+        name: 'Code Reviewer',
+        description: 'desc',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        confidence: 0.8,
+        reasoning: 'reason',
+        detectedAt: new Date().toISOString(),
+        source: 'exit' as const,
+        acknowledged: false,
+        status: 'pending' as const,
+      },
+    ];
+    const result = await detectSpecialistCandidate(longText, makeConfig(), [], pendingCandidates);
+    expect(result).toBeNull();
+  });
 });
