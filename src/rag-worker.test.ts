@@ -7,6 +7,10 @@ import * as os from 'node:os';
 const mockExtractDomainFacts = vi.fn();
 const mockLoadConfig = vi.fn();
 const mockAddFacts = vi.fn();
+const mockDetectSpecialistCandidate = vi.fn();
+const mockCandidateListPending = vi.fn(() => []);
+const mockCandidateCreate = vi.fn();
+const mockGetSummaries = vi.fn(() => []);
 
 vi.mock('./config.js', () => ({
   loadConfig: (...args: any[]) => mockLoadConfig(...args),
@@ -24,6 +28,24 @@ vi.mock('./rag.js', () => ({
 
 vi.mock('./logger.js', () => ({
   debugLog: vi.fn(),
+}));
+
+vi.mock('./specialist-candidates.js', () => ({
+  CandidateStore: vi.fn().mockImplementation(() => ({
+    listPending: mockCandidateListPending,
+    create: mockCandidateCreate,
+  })),
+  MAX_PENDING_CANDIDATES: 10,
+}));
+
+vi.mock('./specialists.js', () => ({
+  SpecialistStore: vi.fn().mockImplementation(() => ({
+    getSummaries: mockGetSummaries,
+  })),
+}));
+
+vi.mock('./specialist-detector.js', () => ({
+  detectSpecialistCandidate: (...args: any[]) => mockDetectSpecialistCandidate(...args),
 }));
 
 describe('rag-worker', () => {
@@ -68,6 +90,9 @@ describe('rag-worker', () => {
     const { loadConfig } = await import('./config.js');
     const { extractDomainFacts } = await import('./context.js');
     const { RAGStore } = await import('./rag.js');
+    const { CandidateStore, MAX_PENDING_CANDIDATES } = await import('./specialist-candidates.js');
+    const { SpecialistStore } = await import('./specialists.js');
+    const { detectSpecialistCandidate } = await import('./specialist-detector.js');
 
     const raw = fs.readFileSync(filePath, 'utf-8');
     const payload = JSON.parse(raw);
@@ -81,6 +106,23 @@ describe('rag-worker', () => {
       for (const df of domainFacts) {
         await ragStore.addFacts(df.facts, 'exit', df.domain);
       }
+    }
+
+    // Specialist candidate detection (non-blocking)
+    try {
+      const candidateStore = new CandidateStore();
+      if (candidateStore.listPending().length < MAX_PENDING_CANDIDATES) {
+        const specialistStore = new SpecialistStore();
+        const candidate = await detectSpecialistCandidate(
+          payload.serialized,
+          config,
+          specialistStore.getSummaries(),
+          candidateStore.listPending(),
+        );
+        if (candidate) candidateStore.create(candidate, 'exit');
+      }
+    } catch {
+      // Silent — detection failure must not block anything
     }
 
     fs.unlinkSync(filePath);
