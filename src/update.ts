@@ -8,6 +8,11 @@ import { UPDATE_CACHE_PATH as CACHE_PATH } from './paths.js';
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PACKAGE_NAME = 'bernard-agent';
+const RELEASE_NOTES_BASE = 'https://phillt.github.io/bernard';
+
+export function releaseNotesUrl(version: string): string {
+  return `${RELEASE_NOTES_BASE}/whats-new-${version}.html`;
+}
 
 /** Persisted update-check cache. */
 interface CacheData {
