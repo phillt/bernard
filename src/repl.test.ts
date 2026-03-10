@@ -44,6 +44,7 @@ const mockProcessInput = vi.fn();
 const mockAbort = vi.fn();
 const mockGetLastRAGResults = vi.fn(() => []);
 const mockCompactHistory = vi.fn();
+const mockSetAlertContext = vi.fn();
 
 vi.mock('./agent.js', () => ({
   Agent: vi.fn(() => ({
@@ -54,6 +55,7 @@ vi.mock('./agent.js', () => ({
     abort: mockAbort,
     getLastRAGResults: mockGetLastRAGResults,
     compactHistory: mockCompactHistory,
+    setAlertContext: mockSetAlertContext,
   })),
 }));
 
@@ -136,6 +138,8 @@ vi.mock('./config.js', () => ({
 vi.mock('./theme.js', () => ({
   getTheme: vi.fn(() => ({
     ansi: { prompt: '', reset: '', warning: '', hintCmd: '', hintDesc: '' },
+    text: (s: string) => s,
+    muted: (s: string) => s,
   })),
   setTheme: vi.fn(),
   getThemeKeys: vi.fn(() => []),
@@ -162,6 +166,41 @@ vi.mock('./cron/client.js', () => ({
 vi.mock('./domains.js', () => ({
   getDomain: vi.fn((id: string) => ({ name: id, id })),
   getDomainIds: vi.fn(() => []),
+}));
+
+vi.mock('./routines.js', () => ({
+  RoutineStore: vi.fn(() => ({
+    list: vi.fn(() => []),
+    get: vi.fn(),
+  })),
+}));
+
+vi.mock('./specialists.js', () => ({
+  SpecialistStore: vi.fn(() => ({
+    list: vi.fn(() => []),
+    get: vi.fn(),
+    getSummaries: vi.fn(() => []),
+  })),
+}));
+
+const mockListPending = vi.fn(() => []);
+const mockAcknowledge = vi.fn(() => true);
+const mockPruneOld = vi.fn(() => 0);
+const mockCandidateCreate = vi.fn();
+
+vi.mock('./specialist-candidates.js', () => ({
+  CandidateStore: vi.fn(() => ({
+    listPending: mockListPending,
+    acknowledge: mockAcknowledge,
+    pruneOld: mockPruneOld,
+    create: mockCandidateCreate,
+    list: vi.fn(() => []),
+  })),
+  MAX_PENDING_CANDIDATES: 10,
+}));
+
+vi.mock('./specialist-detector.js', () => ({
+  detectSpecialistCandidate: vi.fn().mockResolvedValue(null),
 }));
 
 // ── Helpers ────────────────────────────────────────────
