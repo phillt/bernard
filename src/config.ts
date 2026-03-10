@@ -79,7 +79,7 @@ export const OPTIONS_REGISTRY: Record<
 /**
  * Persists user preferences to the config directory.
  *
- * Preserves the existing `autoUpdate` flag when the caller omits it.
+ * Preserves the existing `autoUpdate` and `criticMode` flags when the caller omits them.
  */
 export function savePreferences(prefs: {
   provider: string;
@@ -101,18 +101,22 @@ export function savePreferences(prefs: {
   if (prefs.tokenWindow !== undefined) data.tokenWindow = prefs.tokenWindow;
   if (prefs.theme !== undefined) data.theme = prefs.theme;
   if (prefs.criticMode !== undefined) data.criticMode = prefs.criticMode;
+
+  // Preserve autoUpdate and criticMode from existing prefs when callers don't pass them
+  let existing: Record<string, unknown> | undefined;
+  try {
+    existing = JSON.parse(fs.readFileSync(PREFS_PATH, 'utf-8'));
+  } catch {
+    /* ignore */
+  }
+
   if (prefs.autoUpdate !== undefined) {
     data.autoUpdate = prefs.autoUpdate;
-  } else {
-    // Preserve autoUpdate and criticMode from existing prefs when callers don't pass them
-    try {
-      const existing = JSON.parse(fs.readFileSync(PREFS_PATH, 'utf-8'));
-      if (typeof existing.autoUpdate === 'boolean') data.autoUpdate = existing.autoUpdate;
-      if (prefs.criticMode === undefined && typeof existing.criticMode === 'boolean')
-        data.criticMode = existing.criticMode;
-    } catch {
-      /* ignore */
-    }
+  } else if (existing && typeof existing.autoUpdate === 'boolean') {
+    data.autoUpdate = existing.autoUpdate;
+  }
+  if (prefs.criticMode === undefined && existing && typeof existing.criticMode === 'boolean') {
+    data.criticMode = existing.criticMode;
   }
   fs.writeFileSync(PREFS_PATH, JSON.stringify(data, null, 2) + '\n');
 }
@@ -410,8 +414,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
   const theme = prefs.theme || 'bernard';
   const criticMode =
     prefs.criticMode ??
-    (process.env.BERNARD_CRITIC_MODE === 'true' || process.env.BERNARD_CRITIC_MODE === '1') ??
-    false;
+    (process.env.BERNARD_CRITIC_MODE === 'true' || process.env.BERNARD_CRITIC_MODE === '1');
 
   const config: BernardConfig = {
     provider,
