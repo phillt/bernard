@@ -268,7 +268,10 @@ export function printTaskEnd(result: string): void {
   try {
     const parsed = JSON.parse(result);
     const statusColor = parsed.status === 'success' ? t.accent : t.error;
-    const output = parsed.output ? `: ${parsed.output}` : '';
+    const MAX_TASK_OUTPUT_LENGTH = 80;
+    const output = parsed.output
+      ? `: ${parsed.output.length > MAX_TASK_OUTPUT_LENGTH ? parsed.output.slice(0, MAX_TASK_OUTPUT_LENGTH) + '…' : parsed.output}`
+      : '';
     console.log(statusColor(`└─ task ${parsed.status}${output}`));
   } catch {
     console.log(t.accent(`└─ task done`));
