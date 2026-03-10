@@ -183,14 +183,14 @@ When you send a message, Bernard searches the RAG store for relevant facts. Here
 2. Cosine similarity is computed against every stored memory
 3. Memories below the similarity threshold (0.35) are filtered out
 4. The remaining matches are sorted by similarity (highest first)
-5. **Per-domain budgeting**: iterate through the sorted list, allowing up to **3 results per domain**
-6. Merge all domain groups back together, sort by similarity, cap at **9 total**
+5. **Per-domain budgeting**: iterate through the sorted list, allowing up to **5 results per domain**
+6. Merge all domain groups back together, sort by similarity, cap at **15 total**
 
 ### Why Per-Domain Top-K Matters
 
 Without per-domain budgeting, if you had 200 general facts and 5 tool-usage facts, a query about "how to build the project" might return 9 general facts and 0 tool-usage facts — even though the tool-usage facts about `npm run build` would be the most useful.
 
-With per-domain budgeting (3 per domain, 9 max), the same query would return up to 3 tool-usage facts, up to 3 user-preference facts, up to 3 general facts, and up to 3 conversation summary facts — then the top 9 overall. This ensures every domain has a fair chance of being represented.
+With per-domain budgeting (5 per domain, 15 max), the same query would return up to 5 tool-usage facts, up to 5 user-preference facts, up to 5 general facts, and up to 5 conversation summary facts — then the top 15 overall. This ensures every domain has a fair chance of being represented.
 
 ---
 
@@ -274,7 +274,7 @@ User sends a message
   │   ├─ Summarize old messages (LLM call)
   │   └─ Extract domain facts in parallel (4 LLM calls)  ──→ store per-domain
   ├─ Embed user message → search RAG store
-  │   └─ Per-domain top-k (3/domain, 9 max)
+  │   └─ Per-domain top-k (5/domain, 15 max)
   ├─ Build system prompt with domain-grouped recalled context
   └─ Generate response
 
@@ -364,8 +364,8 @@ This is the return type from `RAGStore.search()`. The `domain` field is what all
 
 ```typescript
 interface RAGStoreConfig {
-  topKPerDomain?: number; // max results per domain (default: 3)
-  maxResults?: number; // max total results (default: 9)
+  topKPerDomain?: number; // max results per domain (default: 5)
+  maxResults?: number; // max total results (default: 15)
   similarityThreshold?: number; // minimum cosine similarity (default: 0.35)
   maxMemories?: number; // prune cap (default: 5000)
 }
@@ -413,7 +413,7 @@ async function extractDomainFacts(
    - `'fulfilled'` with non-empty facts → pushed to the output array
    - `'rejected'` → logged via `debugLog`, silently skipped
 
-The choice of `Promise.allSettled` over `Promise.all` is deliberate. If the LLM returns invalid JSON for one domain (which happens occasionally), the other two domains' facts are still captured. This is a fire-and-forget background operation, so partial results are better than total failure.
+The choice of `Promise.allSettled` over `Promise.all` is deliberate. If the LLM returns invalid JSON for one domain (which happens occasionally), the other three domains' facts are still captured. This is a fire-and-forget background operation, so partial results are better than total failure.
 
 **Cost implications:** Four LLM calls instead of one. Since they run in parallel, wall-clock latency is roughly the same as a single call. Token cost quadruples. This is acceptable because extraction only happens during compression (already an expensive operation) and at exit (runs in a background process).
 
@@ -473,20 +473,20 @@ async search(query: string): Promise<RAGSearchResult[]>
 4. group by domain (Map<string, scored[]>):
      iterate sorted list
      for each entry:
-       if domain group has < topKPerDomain (3) entries:
+       if domain group has < topKPerDomain (5) entries:
          add to group
        else:
          skip (this domain is full)
 
 5. flatten all groups into one array
    sort by similarity DESC
-   take first maxResults (9)
+   take first maxResults (15)
 
 6. update accessCount and lastAccessed on selected memories
    persist to disk
 ```
 
-The critical insight is step 4: because the input list is already sorted by similarity (descending), each domain gets its _best_ matches. A domain with only 1 relevant fact gets that 1 fact. A domain with 50 relevant facts gets its top 3. No domain can monopolize all 9 result slots.
+The critical insight is step 4: because the input list is already sorted by similarity (descending), each domain gets its _best_ matches. A domain with only 1 relevant fact gets that 1 fact. A domain with 50 relevant facts gets its top 5. No domain can monopolize all 15 result slots.
 
 ### `RAGStore.load()` — src/rag.ts:257
 
@@ -676,8 +676,8 @@ this.memories = scored.slice(0, this.maxMemories).map((s) => s.memory);
 
 | Constant                       | Value       | Location   | Purpose                                                      |
 | ------------------------------ | ----------- | ---------- | ------------------------------------------------------------ |
-| `DEFAULT_TOP_K_PER_DOMAIN`     | 3           | rag.ts     | Max search results per domain                                |
-| `DEFAULT_MAX_RESULTS`          | 9           | rag.ts     | Max total search results                                     |
+| `DEFAULT_TOP_K_PER_DOMAIN`     | 5           | rag.ts     | Max search results per domain                                |
+| `DEFAULT_MAX_RESULTS`          | 15          | rag.ts     | Max total search results                                     |
 | `DEFAULT_SIMILARITY_THRESHOLD` | 0.35        | rag.ts     | Min cosine similarity for search                             |
 | `DEFAULT_MAX_MEMORIES`         | 5000        | rag.ts     | Prune cap                                                    |
 | `DEDUP_THRESHOLD`              | 0.92        | rag.ts     | Cosine similarity above which a fact is considered duplicate |

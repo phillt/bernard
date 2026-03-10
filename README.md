@@ -646,7 +646,7 @@ Bernard has a Retrieval-Augmented Generation (RAG) system that provides long-ter
   - **General Knowledge** — project structure, architecture decisions, environment info
   - **Conversation Summaries** — what was discussed, approaches taken, tools/specialists/routines used, outcomes
 - **Parallel extraction** — all four domain extractors run concurrently via `Promise.allSettled`, so wall-clock latency is roughly the same as a single extraction
-- **Per-domain retrieval** — search returns up to 3 results per domain (9 total max), preventing any single domain from crowding out others
+- **Per-domain retrieval** — search returns up to 5 results per domain (15 total max), preventing any single domain from crowding out others
 - **Domain-grouped context** — recalled facts are organized by domain with headings in the system prompt, giving the LLM clear signal about what kind of knowledge each fact represents
 - **Semantic search** — on each new user message, relevant facts are retrieved and injected into the system prompt as "Recalled Context"
 - **Local embeddings** — uses FastEmbed (`AllMiniLML6V2`, 384 dimensions) for fully local embedding computation
