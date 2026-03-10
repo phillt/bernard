@@ -24,6 +24,7 @@ A local CLI AI agent that executes terminal commands, manages scheduled tasks, r
   - [Date and Time](#date-and-time)
   - [Time Range Calculations](#time-range-calculations)
   - [Sub-Agents](#sub-agents)
+  - [Tasks](#tasks)
   - [Routines](#routines)
 - [Cron Jobs (Scheduled Tasks)](#cron-jobs-scheduled-tasks)
   - [Creating Jobs](#creating-jobs)
@@ -223,6 +224,8 @@ Features:
 | ----------------- | ------------------------------------------------------------------------- |
 | `/help`           | Show available commands                                                   |
 | `/clear`          | Clear conversation history and scratch notes                              |
+| `/compact`        | Compress conversation history in-place                                    |
+| `/task`           | Run an isolated task (no history, structured output)                      |
 | `/memory`         | List all persistent memories                                              |
 | `/scratch`        | List session scratch notes                                                |
 | `/mcp`            | List connected MCP servers and their tools                                |
@@ -334,6 +337,27 @@ bernard> check the disk usage on /, look up the weather in Austin, and count lin
 ```
 
 Up to 4 concurrent sub-agents. Each gets 10 max steps. Color-coded output in the terminal.
+
+### Tasks
+
+Tasks are isolated, focused executions that return structured JSON output. Unlike sub-agents (which return free-form text), tasks always produce a `{status, output, details?}` response — making them ideal for machine-readable results, routine chaining, and conditional branching.
+
+```
+bernard> /task List all TypeScript files in the src directory
+┌─ task — List all TypeScript files in the src directory
+  ▶ shell: find src -name "*.ts" -type f
+└─ task success: Found 23 .ts files
+
+Found 23 .ts files
+```
+
+Key differences from sub-agents:
+
+- **5-step budget** (vs. 10 for sub-agents) — tasks are meant to be quick and focused
+- **Structured JSON output** — always returns `{status: "success"|"error", output: string, details?: string}`
+- **No conversation history** — completely isolated from the current session
+- **Available as both a tool and a command** — the agent can call `task` during routines for chaining, or users can run `/task` directly from the REPL
+- **Shared concurrency pool** — tasks and sub-agents share the same 4-slot limit
 
 ### Routines
 
@@ -710,7 +734,9 @@ src/
 │   ├── mcp.ts            # MCP config (stdio)
 │   ├── mcp-url.ts        # MCP config (URL-based)
 │   ├── routine.ts        # Routine management tool
-│   └── subagent.ts       # Parallel sub-agents
+│   ├── subagent.ts       # Parallel sub-agents
+│   ├── task.ts           # Isolated task execution (structured JSON output)
+│   └── agent-pool.ts     # Shared concurrency pool for agents and tasks
 └── cron/
     ├── cli.ts            # Cron CLI subcommands
     ├── types.ts          # Cron type definitions

@@ -667,6 +667,7 @@
               <li><a href="#tool-scratch">Scratch</a></li>
               <li><a href="#tool-web">Web Read</a></li>
               <li><a href="#tool-subagent">Sub-Agents</a></li>
+              <li><a href="#tool-task">Tasks</a></li>
               <li><a href="#tool-datetime">Date/Time</a></li>
               <li><a href="#tool-wait">Wait</a></li>
             </ul>
@@ -1094,6 +1095,16 @@
                 <td>Clear conversation history, scratch notes, and the terminal screen</td>
               </tr>
               <tr>
+                <td><code>/compact</code></td>
+                <td>Compress conversation history in-place</td>
+              </tr>
+              <tr>
+                <td><code>/task</code></td>
+                <td>
+                  Run an isolated task with structured JSON output (no history, 5-step budget)
+                </td>
+              </tr>
+              <tr>
                 <td><code>/memory</code></td>
                 <td>List all persistent memory keys</td>
               </tr>
@@ -1251,6 +1262,37 @@
   [sub:1] &#x25B6; shell: df -h /
   [sub:2] &#x25B6; shell: find . -name "*.ts" | xargs wc -l
   Disk: 42G used of 256G (16%). Code: 2,847 lines across 23 files.</code></pre>
+
+        <h3 id="tool-task">Tasks</h3>
+        <p>
+          Tasks are isolated, focused executions that return structured JSON output. Unlike
+          sub-agents (which return free-form text), tasks always produce a
+          <code>{status, output, details?}</code> response &mdash; making them ideal for
+          machine-readable results, routine chaining, and conditional branching.
+        </p>
+        <ul>
+          <li><strong>5-step budget</strong> (vs. 10 for sub-agents) &mdash; quick and focused</li>
+          <li>
+            <strong>Structured JSON output</strong> &mdash; always returns
+            <code>{status: "success"|"error", output, details?}</code>
+          </li>
+          <li>No conversation history &mdash; completely isolated from the current session</li>
+          <li>
+            Available as both a <strong>tool</strong> (the agent can call <code>task</code> during
+            routines) and a <strong>REPL command</strong> (<code>/task</code>)
+          </li>
+          <li>Shares the same 4-slot concurrency pool with sub-agents</li>
+        </ul>
+        <pre><code><span class="accent">bernard&gt;</span> /task List all TypeScript files in src
+  &#x250C;&#x2500; task &#x2014; List all TypeScript files in src
+  &#x25B6; shell: find src -name "*.ts" -type f
+  &#x2514;&#x2500; task success: Found 23 .ts files</code></pre>
+        <div class="callout callout-tip">
+          <div class="callout-title">Routine chaining</div>
+          When the agent executes a routine, it can call the <code>task</code> tool for isolated
+          sub-steps and use the structured JSON result to decide next steps &mdash; enabling
+          conditional branching and output chaining within routines.
+        </div>
 
         <h3 id="tool-datetime">Date/Time</h3>
         <p>

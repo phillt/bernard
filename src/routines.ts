@@ -24,6 +24,8 @@ const ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/;
 const RESERVED_NAMES = new Set([
   'help',
   'clear',
+  'compact',
+  'task',
   'memory',
   'scratch',
   'mcp',
