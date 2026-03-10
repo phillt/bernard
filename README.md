@@ -27,6 +27,7 @@ A local CLI AI agent that executes terminal commands, manages scheduled tasks, r
   - [Tasks](#tasks)
   - [Routines](#routines)
   - [Specialists](#specialists)
+  - [Specialist Suggestions](#specialist-suggestions)
   - [Critic Mode](#critic-mode)
 - [Cron Jobs (Scheduled Tasks)](#cron-jobs-scheduled-tasks)
   - [Creating Jobs](#creating-jobs)
@@ -240,6 +241,7 @@ Features:
 | `/routines`       | List saved routines                                                       |
 | `/create-routine` | Create a routine with guided AI assistance                                |
 | `/specialists`    | List saved specialists                                                    |
+| `/candidates`     | Review auto-detected specialist suggestions _(v0.6.0+)_                   |
 | `/critic`         | Toggle critic mode for response verification (on/off)                     |
 | `/options`        | View and modify runtime options (max-tokens, shell-timeout, token-window) |
 | `/exit`           | Quit Bernard (also: `exit`, `quit`)                                       |
@@ -343,7 +345,7 @@ bernard> check the disk usage on /, look up the weather in Austin, and count lin
 
 Up to 4 concurrent sub-agents. Each gets 10 max steps. Color-coded output in the terminal.
 
-### Tasks
+### Tasks _(v0.6.0+)_
 
 Tasks are isolated, focused executions that return structured JSON output. Unlike sub-agents (which return free-form text), tasks always produce a `{status, output, details?}` response — making them ideal for machine-readable results, routine chaining, and conditional branching.
 
@@ -364,7 +366,7 @@ Key differences from sub-agents:
 - **Available as both a tool and a command** — the agent can call `task` during routines for chaining, or users can run `/task` directly from the REPL
 - **Shared concurrency pool** — tasks and sub-agents share the same 4-slot limit
 
-### Routines
+### Routines _(v0.5.0+)_
 
 Named, persistent multi-step workflows that you can teach Bernard and later invoke with a slash command. Routines capture procedures — deploy scripts, release checklists, onboarding flows — as free-form markdown.
 
@@ -405,7 +407,7 @@ Use `/routines` in the REPL for a quick list. Routine names also appear in the l
 
 Storage: one JSON file per routine in `~/.local/share/bernard/routines/`. Max 100 routines. IDs must be lowercase kebab-case (1–60 chars).
 
-### Specialists
+### Specialists _(v0.6.0+)_
 
 Specialists are reusable expert profiles — persistent personas with custom system prompts and behavioral guidelines that shape how a sub-agent approaches work. Unlike routines (which define _what_ steps to follow), specialists define _how_ to work.
 
@@ -447,7 +449,23 @@ Use `/specialists` in the REPL for a quick list. Specialist names also appear in
 
 Storage: one JSON file per specialist in `~/.local/share/bernard/specialists/`. Max 50 specialists. IDs must be lowercase kebab-case (1–60 chars).
 
-### Critic Mode
+### Specialist Suggestions _(v0.6.0+)_
+
+Bernard automatically detects recurring delegation patterns in your conversations and suggests new specialists. Detection runs in the background when you exit a session or use `/clear --save`.
+
+When candidates are detected, you'll see a notification at the start of your next session:
+
+```
+  2 specialist suggestion(s) pending. Use /candidates to review.
+```
+
+Use `/candidates` to see pending suggestions with their name, description, confidence score, and reasoning. You can then accept or reject candidates conversationally (e.g., "accept the code-review candidate"), and Bernard will create the specialist for you.
+
+Candidates are auto-dismissed after 30 days if not reviewed. Up to 10 pending candidates are stored at a time.
+
+Storage: one JSON file per candidate in `~/.local/share/bernard/specialist-candidates/`.
+
+### Critic Mode _(v0.6.0+)_
 
 Critic mode adds planning, proactive scratch/memory usage, and post-response verification. Toggle it during a session:
 
@@ -716,6 +734,7 @@ Bernard stores all data in `~/.bernard/`:
 ├── models/                      # Embedding model cache (fastembed)
 ├── routines/                    # Saved routines (*.json)
 ├── specialists/                 # Saved specialist profiles (*.json)
+├── specialist-candidates/       # Auto-detected specialist suggestions (*.json)
 ├── rag/
 │   └── memories.json            # RAG fact embeddings
 └── cron/
@@ -785,8 +804,10 @@ src/
 ├── embeddings.ts         # FastEmbed wrapper
 ├── routines.ts           # RoutineStore (named multi-step workflows)
 ├── specialists.ts        # SpecialistStore (reusable expert profiles)
+├── specialist-candidates.ts  # CandidateStore (auto-detected suggestions)
+├── specialist-detector.ts    # LLM-based specialist pattern detection
 ├── mcp.ts                # MCP server manager
-├── rag-worker.ts         # Background RAG fact extraction worker
+├── rag-worker.ts         # Background RAG fact extraction + candidate detection
 ├── setup.ts              # First-time setup wizard
 ├── history.ts            # Conversation save/load
 ├── logger.ts             # Debug file logger
