@@ -27,6 +27,7 @@ A local CLI AI agent that executes terminal commands, manages scheduled tasks, r
   - [Tasks](#tasks)
   - [Routines](#routines)
   - [Specialists](#specialists)
+  - [Critic Mode](#critic-mode)
 - [Cron Jobs (Scheduled Tasks)](#cron-jobs-scheduled-tasks)
   - [Creating Jobs](#creating-jobs)
   - [Managing Jobs](#managing-jobs)
@@ -134,6 +135,7 @@ Bernard loads `.env` from the current directory first, then falls back to `~/.be
 | `BERNARD_SHELL_TIMEOUT` | Shell command timeout (ms)                            | `30000`                   |
 | `BERNARD_TOKEN_WINDOW`  | Context window size for compression (0 = auto-detect) | `0`                       |
 | `BERNARD_RAG_ENABLED`   | Enable the RAG memory system                          | `true`                    |
+| `BERNARD_CRITIC_MODE`   | Enable critic mode for response verification          | `false`                   |
 | `BERNARD_DEBUG`         | Enable debug logging                                  | unset                     |
 | `ANTHROPIC_API_KEY`     | Anthropic API key                                     | —                         |
 | `OPENAI_API_KEY`        | OpenAI API key                                        | —                         |
@@ -238,6 +240,7 @@ Features:
 | `/routines`       | List saved routines                                                       |
 | `/create-routine` | Create a routine with guided AI assistance                                |
 | `/specialists`    | List saved specialists                                                    |
+| `/critic`         | Toggle critic mode for response verification (on/off)                     |
 | `/options`        | View and modify runtime options (max-tokens, shell-timeout, token-window) |
 | `/exit`           | Quit Bernard (also: `exit`, `quit`)                                       |
 
@@ -444,6 +447,26 @@ Use `/specialists` in the REPL for a quick list. Specialist names also appear in
 
 Storage: one JSON file per specialist in `~/.local/share/bernard/specialists/`. Max 50 specialists. IDs must be lowercase kebab-case (1–60 chars).
 
+### Critic Mode
+
+Critic mode adds planning, proactive scratch/memory usage, and post-response verification. Toggle it during a session:
+
+```bash
+/critic on    # Enable critic mode
+/critic off   # Disable critic mode
+/critic       # Show current status
+```
+
+When enabled:
+
+- **Planning** — Bernard writes a plan to scratch before multi-step tasks
+- **Proactive scratch** — Accumulates findings in scratch during complex work
+- **Verification** — After tool-using responses, a critic agent reviews the work and prints a verdict (PASS/WARN/FAIL)
+
+The critic checks that claimed actions match actual tool calls and flags any discrepancies. It adds one extra LLM call after tool-using responses. Simple knowledge answers are not verified.
+
+Default: off. Recommended for high-stakes work (deployments, git operations, multi-file edits).
+
 ---
 
 ## Cron Jobs (Scheduled Tasks)
@@ -635,6 +658,8 @@ Bernard automatically compresses conversation history when it approaches 75% of 
 4. The conversation continues seamlessly with the compressed context
 
 Summarization and domain-specific fact extraction run in parallel. Scratch notes survive compression, so multi-step task progress is never lost.
+
+When critic mode is enabled (`/critic on`), Bernard writes plans to scratch before complex tasks and verifies outcomes after tool use. See [Critic Mode](#critic-mode).
 
 ### RAG Memory
 

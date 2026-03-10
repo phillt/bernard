@@ -14,7 +14,7 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 
 - **src/index.ts** — CLI entry point (Commander, shebang)
 - **src/repl.ts** — Interactive REPL loop (readline)
-- **src/agent.ts** — Agent loop using AI SDK `generateText` + `maxSteps`
+- **src/agent.ts** — Agent loop using AI SDK `generateText` + `maxSteps` + optional critic verification
 - **src/config.ts** — .env loading, defaults, validation
 - **src/output.ts** — Chalk-based terminal formatting
 - **src/theme.ts** — Color theme definitions (bernard, ocean, forest, synthwave, high-contrast, colorblind)
@@ -58,4 +58,5 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_SHELL_TIMEOUT` — Shell command timeout ms (default: 30000)
 - `BERNARD_TOKEN_WINDOW` — Context window size for compression, 0 = auto-detect (default: 0)
 - `BERNARD_HOME` — Override all XDG directories with a single flat path
+- `BERNARD_CRITIC_MODE` — Enable critic mode for verification (default: false)
 - `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `XAI_API_KEY` — Provider API keys

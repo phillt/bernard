@@ -293,6 +293,35 @@ export function printTaskEnd(result: string): void {
   }
 }
 
+/** Prints a colored top-border line when the critic starts verifying. */
+export function printCriticStart(): void {
+  stopSpinner();
+  const t = getTheme();
+  console.log(t.accent('┌─ critic — verifying response...'));
+}
+
+/** Prints the critic's verdict with color based on PASS/WARN/FAIL. */
+export function printCriticVerdict(text: string): void {
+  stopSpinner();
+  const t = getTheme();
+  const lines = text.trim().split('\n');
+  const verdictLine = lines.find((l) => l.startsWith('VERDICT:'));
+  const explanation = lines
+    .filter((l) => !l.startsWith('VERDICT:'))
+    .join(' ')
+    .trim();
+
+  let verdict = 'UNKNOWN';
+  if (verdictLine) {
+    const match = verdictLine.match(/VERDICT:\s*(PASS|WARN|FAIL)/i);
+    if (match) verdict = match[1].toUpperCase();
+  }
+
+  const colorFn = verdict === 'PASS' ? t.accent : verdict === 'WARN' ? t.warning : t.error;
+  const suffix = explanation ? `: ${explanation}` : '';
+  console.log(colorFn(`└─ critic ${verdict}${suffix}`));
+}
+
 /** Prints the REPL help menu listing all available slash commands. */
 export function printHelp(): void {
   const t = getTheme();
@@ -316,6 +345,9 @@ export function printHelp(): void {
   console.log(t.text('  /specialists') + t.muted(' — List specialist agents'));
   console.log(
     t.text('  /create-specialist') + t.muted(' — Create a specialist with guided AI assistance'),
+  );
+  console.log(
+    t.text('  /critic') + t.muted('   — Toggle critic mode (on/off) for response verification'),
   );
   console.log(
     t.text('  /options') +

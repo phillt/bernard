@@ -11,6 +11,8 @@ import {
   printConversationReplay,
   printSubAgentStart,
   printSubAgentEnd,
+  printCriticStart,
+  printCriticVerdict,
   startSpinner,
   stopSpinner,
   buildSpinnerMessage,
@@ -489,6 +491,48 @@ describe('output', () => {
       const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
       const hasFrame = writes.some((w) => w.includes('⠋') || w.includes('⠙'));
       expect(hasFrame).toBe(false);
+    });
+  });
+
+  describe('printCriticStart', () => {
+    it('prints the critic start border', () => {
+      printCriticStart();
+      expect(logSpy).toHaveBeenCalled();
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('critic');
+      expect(output).toContain('verifying');
+    });
+  });
+
+  describe('printCriticVerdict', () => {
+    it('prints PASS verdict', () => {
+      printCriticVerdict('VERDICT: PASS\nAll claims verified.');
+      expect(logSpy).toHaveBeenCalled();
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('PASS');
+      expect(output).toContain('All claims verified.');
+    });
+
+    it('prints WARN verdict', () => {
+      printCriticVerdict('VERDICT: WARN\nMinor discrepancy found.');
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('WARN');
+      expect(output).toContain('Minor discrepancy found.');
+    });
+
+    it('prints FAIL verdict', () => {
+      printCriticVerdict(
+        'VERDICT: FAIL\nAgent claimed file creation but no write tool was called.',
+      );
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('FAIL');
+      expect(output).toContain('no write tool was called');
+    });
+
+    it('handles missing verdict line', () => {
+      printCriticVerdict('Some text without verdict');
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('UNKNOWN');
     });
   });
 });

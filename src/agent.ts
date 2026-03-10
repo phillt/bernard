@@ -8,6 +8,8 @@ import {
   printToolCall,
   printToolResult,
   printInfo,
+  printCriticStart,
+  printCriticVerdict,
   startSpinner,
   buildSpinnerMessage,
   type SpinnerStats,
@@ -129,6 +131,56 @@ Do NOT use sub-agents for tasks that are sequential or depend on each other's re
 
 **agent vs. task** — Use \`agent\` for open-ended work where you need a narrative report. Use \`task\` when you need a discrete, machine-readable JSON result — particularly inside routines where you need to chain step outputs or branch on success/error. Both share the same concurrency pool.`;
 
+const CRITIC_MODE_PROMPT = `## Reliability Mode (Active)
+
+You are operating with enhanced reliability. Follow these additional rules:
+
+### Planning
+Before executing any task that requires more than two tool calls, file modifications, git operations, or multi-step research:
+1. Write a brief plan to scratch (key: "plan") listing the steps you intend to take and the expected outcomes.
+2. Reference this plan during execution. Update it if the approach changes.
+3. After completion, delete the plan from scratch to keep it clean.
+
+### Proactive Scratch Usage
+- At the start of multi-step work, write your approach to scratch before making any tool calls.
+- When gathering information from multiple sources, accumulate findings in scratch before synthesizing a response.
+- Before answering complex questions, check if scratch contains relevant notes from earlier in this session.
+
+### Proactive Memory Usage
+- After completing a task, consider whether any reusable patterns, user preferences, or project facts should be saved to persistent memory.
+- Before starting work, check if persistent memory contains relevant context that could inform your approach.
+
+### Verification
+- After any mutation (file write, git commit, API call), immediately verify the outcome with a read-only command.
+- Your work will be reviewed by a critic agent afterward. Only claim what you can prove with tool output.`;
+
+const CRITIC_SYSTEM_PROMPT = `You are a verification agent for Bernard, a CLI AI assistant. Your role is to review the agent's work and verify its integrity.
+
+You will receive:
+1. The user's original request
+2. The agent's final text response
+3. A complete log of actual tool calls made (tool name, arguments, results)
+
+Your job:
+- Check if the agent's claims in its response are supported by actual tool call results.
+- Verify that tool calls were actually made for actions the agent claims to have performed.
+- Flag any claims not backed by tool evidence (e.g., "I created the file" but no shell/write tool call).
+- Flag any tool results that suggest failure but were reported as success.
+- Check if the response addresses the user's original intent.
+
+Output format (plain text, concise):
+VERDICT: PASS | WARN | FAIL
+[1-3 sentence explanation]
+[If WARN/FAIL: specific issues found]
+
+Be strict but fair. Not every response needs tool calls — knowledge answers are fine. Focus on cases where the agent *claims* to have done something via tools.`;
+
+interface CriticToolEntry {
+  toolName: string;
+  args: unknown;
+  result: unknown;
+}
+
 /**
  * Assembles the full system prompt including base instructions, memory context, and MCP status.
  * @internal Exported for testing only.
@@ -154,6 +206,10 @@ export function buildSystemPrompt(
   });
   let prompt = BASE_SYSTEM_PROMPT + `\n\nToday's date is ${today}.`;
   prompt += `\nYou are running as provider: ${config.provider}, model: ${config.model}. The user can switch with /provider and /model.`;
+
+  if (config.criticMode) {
+    prompt += '\n\n' + CRITIC_MODE_PROMPT;
+  }
 
   prompt += buildMemoryContext({ memoryStore, ragResults, includeScratch: true });
 
@@ -452,6 +508,14 @@ export class Agent {
       // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)
       this.lastPromptTokens = this.lastStepPromptTokens ?? result.usage?.promptTokens ?? 0;
 
+      // Run critic verification if enabled and tool calls were made
+      if (this.config.criticMode && !this.abortController?.signal.aborted) {
+        const toolCallLog = this.extractToolCallLog(result.steps);
+        if (toolCallLog.length > 0) {
+          await this.runCritic(userInput, result.text, toolCallLog);
+        }
+      }
+
       // Truncate large tool results before adding to history
       const truncatedMessages = truncateToolResults(result.response.messages as CoreMessage[]);
       this.history.push(...truncatedMessages);
@@ -464,6 +528,82 @@ export class Agent {
     } finally {
       this.abortController = null;
       this.spinnerStats = null;
+    }
+  }
+
+  /** Extracts a structured log of tool calls from generateText step results. */
+  private extractToolCallLog(steps: { toolCalls: any[]; toolResults: any[] }[]): CriticToolEntry[] {
+    const entries: CriticToolEntry[] = [];
+    for (const step of steps) {
+      // AI SDK guarantees toolResults[i] corresponds to toolCalls[i] within each step
+      for (let i = 0; i < step.toolCalls.length; i++) {
+        const tc = step.toolCalls[i];
+        const tr = step.toolResults[i];
+        entries.push({
+          toolName: tc.toolName,
+          args: tc.args,
+          result: tr?.result,
+        });
+      }
+    }
+    return entries;
+  }
+
+  /** Runs the critic agent to verify the main agent's response against actual tool calls. */
+  private async runCritic(
+    userInput: string,
+    responseText: string,
+    toolCallLog: CriticToolEntry[],
+  ): Promise<void> {
+    try {
+      printCriticStart();
+
+      const truncatedLog = toolCallLog.map((entry) => ({
+        toolName: entry.toolName,
+        args: entry.args,
+        result:
+          typeof entry.result === 'string'
+            ? entry.result.slice(0, 500)
+            : JSON.stringify(entry.result ?? null).slice(0, 500),
+      }));
+
+      const MAX_RESPONSE_LENGTH = 2000;
+      const truncatedResponse =
+        responseText.length > MAX_RESPONSE_LENGTH
+          ? responseText.slice(0, MAX_RESPONSE_LENGTH) + '\n... (truncated)'
+          : responseText;
+
+      const criticMessage = `## Original User Request
+${userInput}
+
+## Agent Response
+${truncatedResponse}
+
+## Tool Call Log (${truncatedLog.length} calls)
+${truncatedLog
+  .map((e, i) => {
+    const MAX_ARGS_LENGTH = 500;
+    const argsStr = JSON.stringify(e.args);
+    const truncatedArgs =
+      argsStr.length > MAX_ARGS_LENGTH ? argsStr.slice(0, MAX_ARGS_LENGTH) + '...' : argsStr;
+    return `${i + 1}. ${e.toolName}(${truncatedArgs})\n   Result: ${e.result}`;
+  })
+  .join('\n\n')}`;
+
+      const result = await generateText({
+        model: getModel(this.config.provider, this.config.model),
+        system: CRITIC_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: criticMessage }],
+        maxSteps: 1,
+        maxTokens: 1024,
+        abortSignal: this.abortController?.signal,
+      });
+
+      if (result.text) {
+        printCriticVerdict(result.text);
+      }
+    } catch (err) {
+      debugLog('agent:critic:error', err instanceof Error ? err.message : String(err));
     }
   }
 

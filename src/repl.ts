@@ -92,6 +92,7 @@ export async function startRepl(
     { command: '/create-routine', description: 'Create a routine with guided AI assistance' },
     { command: '/specialists', description: 'List specialist agents' },
     { command: '/create-specialist', description: 'Create a specialist with guided AI assistance' },
+    { command: '/critic', description: 'Toggle critic mode for response verification' },
     { command: '/exit', description: 'Quit Bernard' },
   ];
 
@@ -135,7 +136,8 @@ export async function startRepl(
   let isPasting = false;
   function getPromptStr(): string {
     const { ansi } = getTheme();
-    return `${ansi.prompt}bernard>${ansi.reset} `;
+    const criticLabel = config.criticMode ? `${ansi.warning}[CRITIC]${ansi.reset} ` : '';
+    return `${criticLabel}${ansi.prompt}bernard>${ansi.reset} `;
   }
 
   if (process.stdin.isTTY) {
@@ -996,6 +998,39 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           interrupted = false;
         }
         console.log();
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/critic' || trimmed.startsWith('/critic ')) {
+        const arg = trimmed.slice('/critic'.length).trim().toLowerCase();
+        if (arg === 'on') {
+          config.criticMode = true;
+          savePreferences({
+            provider: config.provider,
+            model: config.model,
+            maxTokens: config.maxTokens,
+            shellTimeout: config.shellTimeout,
+            tokenWindow: config.tokenWindow,
+            theme: config.theme,
+            criticMode: true,
+          });
+          printInfo('[CRITIC:ON] Responses will be planned and verified.');
+        } else if (arg === 'off') {
+          config.criticMode = false;
+          savePreferences({
+            provider: config.provider,
+            model: config.model,
+            maxTokens: config.maxTokens,
+            shellTimeout: config.shellTimeout,
+            tokenWindow: config.tokenWindow,
+            theme: config.theme,
+            criticMode: false,
+          });
+          printInfo('[CRITIC:OFF] Critic mode disabled.');
+        } else {
+          printInfo(`Critic mode: ${config.criticMode ? 'ON' : 'OFF'}. Usage: /critic on|off`);
+        }
         void prompt();
         return;
       }
