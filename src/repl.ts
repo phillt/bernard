@@ -176,11 +176,15 @@ export async function startRepl(
 
   let processing = false;
   let interrupted = false;
+  let taskAbortController: AbortController | null = null;
 
   process.stdin.on('keypress', (_str: string, key: any) => {
     if (!key) return;
 
     if (key.name === 'escape' && processing) {
+      if (taskAbortController) {
+        taskAbortController.abort();
+      }
       agent.abort();
       interrupted = true;
       return;
@@ -1002,6 +1006,7 @@ Remember: routine content should be written as clear instructions that Bernard c
           }
         } finally {
           processing = false;
+          taskAbortController = null;
           stopSpinner();
         }
 
