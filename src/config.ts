@@ -19,6 +19,8 @@ export interface BernardConfig {
   ragEnabled: boolean;
   /** Color theme name for terminal output. */
   theme: string;
+  /** Whether critic mode (planning + verification) is active. */
+  criticMode: boolean;
   /** Anthropic API key, if available. */
   anthropicApiKey?: string;
   /** OpenAI API key, if available. */
@@ -87,6 +89,7 @@ export function savePreferences(prefs: {
   tokenWindow?: number;
   theme?: string;
   autoUpdate?: boolean;
+  criticMode?: boolean;
 }): void {
   const dir = path.dirname(PREFS_PATH);
   if (!fs.existsSync(dir)) {
@@ -97,13 +100,16 @@ export function savePreferences(prefs: {
   if (prefs.shellTimeout !== undefined) data.shellTimeout = prefs.shellTimeout;
   if (prefs.tokenWindow !== undefined) data.tokenWindow = prefs.tokenWindow;
   if (prefs.theme !== undefined) data.theme = prefs.theme;
+  if (prefs.criticMode !== undefined) data.criticMode = prefs.criticMode;
   if (prefs.autoUpdate !== undefined) {
     data.autoUpdate = prefs.autoUpdate;
   } else {
-    // Preserve autoUpdate from existing prefs when callers don't pass it
+    // Preserve autoUpdate and criticMode from existing prefs when callers don't pass them
     try {
       const existing = JSON.parse(fs.readFileSync(PREFS_PATH, 'utf-8'));
       if (typeof existing.autoUpdate === 'boolean') data.autoUpdate = existing.autoUpdate;
+      if (prefs.criticMode === undefined && typeof existing.criticMode === 'boolean')
+        data.criticMode = existing.criticMode;
     } catch {
       /* ignore */
     }
@@ -124,6 +130,7 @@ export function loadPreferences(): {
   tokenWindow?: number;
   theme?: string;
   autoUpdate?: boolean;
+  criticMode?: boolean;
 } {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
@@ -136,6 +143,7 @@ export function loadPreferences(): {
       tokenWindow: typeof parsed.tokenWindow === 'number' ? parsed.tokenWindow : undefined,
       theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
       autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
+      criticMode: typeof parsed.criticMode === 'boolean' ? parsed.criticMode : undefined,
     };
   } catch {
     return {};
@@ -400,6 +408,10 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
 
   const ragEnabled = process.env.BERNARD_RAG_ENABLED !== 'false';
   const theme = prefs.theme || 'bernard';
+  const criticMode =
+    prefs.criticMode ??
+    (process.env.BERNARD_CRITIC_MODE === 'true' || process.env.BERNARD_CRITIC_MODE === '1') ??
+    false;
 
   const config: BernardConfig = {
     provider,
@@ -409,6 +421,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     tokenWindow,
     ragEnabled,
     theme,
+    criticMode,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     xaiApiKey: process.env.XAI_API_KEY,

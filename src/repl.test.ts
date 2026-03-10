@@ -176,6 +176,8 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     shellTimeout: 30000,
     tokenWindow: 0,
     ragEnabled: false,
+    theme: 'bernard',
+    criticMode: false,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };
