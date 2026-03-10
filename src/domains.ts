@@ -52,6 +52,7 @@ Do NOT extract:
 - Raw accessibility snapshot element references (ref numbers, element labels)
 - Error messages without resolution or takeaway
 - Step-by-step narration of task progress ("first I clicked X, then I typed Y")
+- High-level conversation summaries or session outcomes
 
 Examples:
 - Bad: "The \`press-page-key\` tool was used to simulate keyboard navigation by pressing 'Tab' multiple times and 'Enter' on the 'Home' button (ref 9)"
@@ -89,6 +90,7 @@ Do NOT extract:
 - Task-specific transient details (e.g., "user asked to fix a typo on line 42")
 - Preferences that only apply to the current task (e.g., "user wants the button to be blue" for a specific UI ticket)
 - Observations about the user's emotional state or satisfaction with a specific result
+- High-level conversation summaries or session outcomes
 
 Examples:
 - Bad: "The user was satisfied with the fix for the login page"
@@ -127,6 +129,7 @@ Do NOT extract:
 - Ephemeral UI state (button labels, input field descriptions, accessibility snapshots)
 - One-time task instructions or step-by-step narration of task progress
 - Descriptions of what is currently visible on screen
+- High-level conversation summaries or session outcomes
 
 Examples:
 - Bad: "A specific conversation with Pablo Rico is active in Google Messages, with an input field labeled 'Type an RCS message'"
@@ -135,6 +138,39 @@ Examples:
 - Good: "The project uses TypeScript with Node16 module resolution and CommonJS output"
 
 Return a JSON array of strings. Each string should be a self-contained fact (understandable without the original conversation). Maximum 500 characters per fact. If there are no notable facts, return an empty array [].`,
+  },
+
+  conversations: {
+    id: 'conversations',
+    name: 'Conversation Summaries',
+    description: 'What was discussed, approaches taken, tools/specialists/routines used, outcomes',
+    extractionPrompt: `You are a conversation summarizer. Extract high-level summaries of what was discussed and accomplished in the conversation below. Focus on the nature of the interaction — what was asked for, how it was approached, what tools or workflows were involved, and how it turned out. These durable summaries help identify recurring patterns across sessions.
+${TOOL_FORMAT_PREAMBLE}
+Use tool call/result pairs to identify which tools, specialists, and routines were involved and whether they succeeded.
+
+Extract:
+- What the user asked for and the high-level approach taken to address it
+- Which tools, specialists, or routines were used and in what combination
+- Whether work was delegated to sub-agents, tasks, or specialists, and for what purpose
+- Outcome of the conversation (success, partial success, failure, abandoned)
+- Recurring themes or patterns (e.g., "user frequently asks for code reviews", "deploy workflows are a common topic")
+- Notable decisions made during the conversation and their rationale
+
+Do NOT extract:
+- Specific shell commands, error messages, or tool usage patterns (covered by tool-usage domain)
+- User preferences, communication style, or workflow conventions (covered by user-preferences domain)
+- Project structure, architecture, or environment details (covered by general domain)
+- Greetings, filler, or conversational noise
+- Verbatim code snippets or raw tool output
+- Step-by-step narration of individual tool calls
+
+Examples:
+- Bad: "The user ran 'git diff src/agent.ts' and then 'npm test' which passed with 925 tests"
+- Good: "User requested a code review of the specialist agents PR; review addressed path traversal, type safety, and instance sharing across 4 files"
+- Bad: "User prefers using pnpm instead of npm"
+- Good: "Session focused on addressing automated review comments on a pull request, involving edits to store classes and tool files, then updating documentation"
+
+Return a JSON array of strings. Each string should be a self-contained summary (understandable without the original conversation). Maximum 500 characters per fact. If there is nothing notable, return an empty array [].`,
   },
 };
 

@@ -8,10 +8,11 @@ import {
 } from './domains.js';
 
 describe('DOMAIN_REGISTRY', () => {
-  it('contains tool-usage, user-preferences, and general domains', () => {
+  it('contains tool-usage, user-preferences, general, and conversations domains', () => {
     expect(DOMAIN_REGISTRY).toHaveProperty('tool-usage');
     expect(DOMAIN_REGISTRY).toHaveProperty('user-preferences');
     expect(DOMAIN_REGISTRY).toHaveProperty('general');
+    expect(DOMAIN_REGISTRY).toHaveProperty('conversations');
   });
 
   it('all domains have required fields', () => {
@@ -74,6 +75,16 @@ describe('DOMAIN_REGISTRY', () => {
     expect(prompt).toContain('only apply to the current task');
   });
 
+  it('conversations prompt mentions specialists or routines', () => {
+    const prompt = DOMAIN_REGISTRY['conversations'].extractionPrompt;
+    expect(prompt).toMatch(/specialists|routines/);
+  });
+
+  it('conversations prompt excludes verbatim code snippets', () => {
+    const prompt = DOMAIN_REGISTRY['conversations'].extractionPrompt;
+    expect(prompt).toContain('Verbatim code snippets');
+  });
+
   it('each extraction prompt references tool call serialized format', () => {
     for (const domain of Object.values(DOMAIN_REGISTRY)) {
       expect(domain.extractionPrompt).toContain('Assistant [tool call]:');
@@ -98,6 +109,7 @@ describe('getDomainIds', () => {
     expect(ids).toContain('tool-usage');
     expect(ids).toContain('user-preferences');
     expect(ids).toContain('general');
+    expect(ids).toContain('conversations');
     expect(ids).toHaveLength(Object.keys(DOMAIN_REGISTRY).length);
   });
 });
