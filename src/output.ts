@@ -295,12 +295,14 @@ export function printTaskEnd(result: string): void {
 
 /** Prints a colored top-border line when the critic starts verifying. */
 export function printCriticStart(): void {
+  stopSpinner();
   const t = getTheme();
   console.log(t.accent('┌─ critic — verifying response...'));
 }
 
 /** Prints the critic's verdict with color based on PASS/WARN/FAIL. */
 export function printCriticVerdict(text: string): void {
+  stopSpinner();
   const t = getTheme();
   const lines = text.trim().split('\n');
   const verdictLine = lines.find((l) => l.startsWith('VERDICT:'));
