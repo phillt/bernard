@@ -23,7 +23,6 @@ export interface SpinnerStats {
 
 /**
  * Formats a token count into a compact human-readable string (e.g. `"3.2k"`).
- * @internal
  */
 export function formatTokenCount(n: number): string {
   if (n < 1000) return String(n);
