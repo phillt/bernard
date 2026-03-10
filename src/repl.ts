@@ -46,7 +46,14 @@ import {
 import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
 import { TASK_SYSTEM_PROMPT, wrapTaskResult } from './tools/task.js';
-import { printTaskStart, printTaskEnd } from './output.js';
+import { createTools } from './tools/index.js';
+import {
+  printTaskStart,
+  printTaskEnd,
+  printToolCall,
+  printToolResult,
+  printAssistantText,
+} from './output.js';
 import { buildMemoryContext } from './memory-context.js';
 import { debugLog } from './logger.js';
 
@@ -927,11 +934,11 @@ Remember: routine content should be written as clear instructions that Bernard c
 
         processing = true;
         interrupted = false;
+        taskAbortController = new AbortController();
         printTaskStart(taskDescription);
         startSpinner('Running task...');
 
         try {
-          const { createTools } = await import('./tools/index.js');
           const baseTools = createTools(toolOptions, memoryStore, mcpTools);
 
           // Optional RAG search for context
@@ -961,6 +968,18 @@ Remember: routine content should be written as clear instructions that Bernard c
             maxTokens: config.maxTokens,
             system: systemPrompt,
             messages: [{ role: 'user', content: `Task: ${taskDescription}` }],
+            abortSignal: taskAbortController.signal,
+            onStepFinish: ({ text, toolCalls, toolResults }) => {
+              for (const tc of toolCalls) {
+                printToolCall(tc.toolName, tc.args as Record<string, unknown>);
+              }
+              for (const tr of toolResults) {
+                printToolResult(tr.toolName, tr.result);
+              }
+              if (text) {
+                printAssistantText(text);
+              }
+            },
           });
 
           stopSpinner();
