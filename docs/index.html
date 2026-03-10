@@ -1011,6 +1011,7 @@
           <button class="feature-tab" data-feature="3">Cron Jobs</button>
           <button class="feature-tab" data-feature="4">MCP Support</button>
           <button class="feature-tab" data-feature="5">Sub-Agents</button>
+          <button class="feature-tab" data-feature="6">Tasks</button>
         </div>
         <div class="feature-desc" id="feature-desc">
           Switch between Anthropic, OpenAI, and xAI with a flag. One interface, any model.
@@ -1706,6 +1707,31 @@
             {
               type: 'instant',
               text: '  Disk: 42G used of 256G (16%). Code: 2,847 lines across 23 files.',
+              cls: 'output',
+            },
+          ],
+        },
+        {
+          desc: 'Run isolated tasks with structured JSON output. Ideal for routine chaining and machine-readable results.',
+          seq: [
+            { type: 'prompt', text: 'bernard> ' },
+            {
+              type: 'type',
+              text: '/task List all TypeScript files in the src directory',
+              cls: 'cmd',
+            },
+            { type: 'pause', ms: 400 },
+            { type: 'line' },
+            {
+              type: 'instant',
+              text: '  \u250C\u2500 task \u2014 List all TypeScript files in the src directory',
+              cls: 'sub',
+            },
+            { type: 'instant', text: '  \u25B6 shell: find src -name "*.ts" -type f', cls: 'tool' },
+            { type: 'pause', ms: 300 },
+            {
+              type: 'instant',
+              text: '  \u2514\u2500 task success: Found 23 .ts files',
               cls: 'output',
             },
           ],
