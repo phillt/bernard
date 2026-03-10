@@ -209,4 +209,76 @@ describe('rag-worker', () => {
     expect(mockAddFacts).toHaveBeenCalledTimes(1);
     expect(mockAddFacts).toHaveBeenCalledWith(['Project uses TypeScript'], 'exit', 'general');
   });
+
+  describe('specialist candidate detection', () => {
+    const makePayload = () => ({
+      serialized: 'User: review my code\nAssistant: Sure!',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5-20250929',
+    });
+
+    const fakeCandidate = {
+      draftId: 'code-review',
+      name: 'Code Review',
+      description: 'Reviews pull requests',
+      systemPrompt: 'You are a code reviewer.',
+      guidelines: [],
+      confidence: 0.85,
+      reasoning: 'Frequent code review requests',
+    };
+
+    it('creates candidate when detection returns a result', async () => {
+      mockDetectSpecialistCandidate.mockResolvedValue(fakeCandidate);
+      mockCandidateListPending.mockReturnValue([]);
+
+      const payload = makePayload();
+      fs.writeFileSync(tempFile, JSON.stringify(payload));
+      await runWorker(tempFile);
+
+      expect(mockDetectSpecialistCandidate).toHaveBeenCalledWith(
+        payload.serialized,
+        fakeConfig,
+        [],
+        [],
+      );
+      expect(mockCandidateCreate).toHaveBeenCalledWith(fakeCandidate, 'exit');
+    });
+
+    it('does not create candidate when detection returns null', async () => {
+      mockDetectSpecialistCandidate.mockResolvedValue(null);
+      mockCandidateListPending.mockReturnValue([]);
+
+      fs.writeFileSync(tempFile, JSON.stringify(makePayload()));
+      await runWorker(tempFile);
+
+      expect(mockDetectSpecialistCandidate).toHaveBeenCalled();
+      expect(mockCandidateCreate).not.toHaveBeenCalled();
+    });
+
+    it('skips detection when max pending candidates reached', async () => {
+      const tenCandidates = Array.from({ length: 10 }, (_, i) => ({ id: `c${i}` }));
+      mockCandidateListPending.mockReturnValue(tenCandidates);
+
+      fs.writeFileSync(tempFile, JSON.stringify(makePayload()));
+      await runWorker(tempFile);
+
+      expect(mockDetectSpecialistCandidate).not.toHaveBeenCalled();
+      expect(mockCandidateCreate).not.toHaveBeenCalled();
+    });
+
+    it('silently catches detection errors without affecting fact storage', async () => {
+      mockDetectSpecialistCandidate.mockRejectedValue(new Error('LLM timeout'));
+      mockCandidateListPending.mockReturnValue([]);
+
+      fs.writeFileSync(tempFile, JSON.stringify(makePayload()));
+      await runWorker(tempFile);
+
+      // Facts should still have been stored
+      expect(mockAddFacts).toHaveBeenCalledTimes(3);
+      // Candidate should not have been created
+      expect(mockCandidateCreate).not.toHaveBeenCalled();
+      // Temp file should still be cleaned up
+      expect(fs.existsSync(tempFile)).toBe(false);
+    });
+  });
 });
