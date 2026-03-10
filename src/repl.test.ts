@@ -44,6 +44,7 @@ const mockProcessInput = vi.fn();
 const mockAbort = vi.fn();
 const mockGetLastRAGResults = vi.fn(() => []);
 const mockCompactHistory = vi.fn();
+const mockSetAlertContext = vi.fn();
 
 vi.mock('./agent.js', () => ({
   Agent: vi.fn(() => ({
@@ -54,6 +55,7 @@ vi.mock('./agent.js', () => ({
     abort: mockAbort,
     getLastRAGResults: mockGetLastRAGResults,
     compactHistory: mockCompactHistory,
+    setAlertContext: mockSetAlertContext,
   })),
 }));
 
@@ -136,6 +138,8 @@ vi.mock('./config.js', () => ({
 vi.mock('./theme.js', () => ({
   getTheme: vi.fn(() => ({
     ansi: { prompt: '', reset: '', warning: '', hintCmd: '', hintDesc: '' },
+    text: (s: string) => s,
+    muted: (s: string) => s,
   })),
   setTheme: vi.fn(),
   getThemeKeys: vi.fn(() => []),
@@ -162,6 +166,41 @@ vi.mock('./cron/client.js', () => ({
 vi.mock('./domains.js', () => ({
   getDomain: vi.fn((id: string) => ({ name: id, id })),
   getDomainIds: vi.fn(() => []),
+}));
+
+vi.mock('./routines.js', () => ({
+  RoutineStore: vi.fn(() => ({
+    list: vi.fn(() => []),
+    get: vi.fn(),
+  })),
+}));
+
+vi.mock('./specialists.js', () => ({
+  SpecialistStore: vi.fn(() => ({
+    list: vi.fn(() => []),
+    get: vi.fn(),
+    getSummaries: vi.fn(() => []),
+  })),
+}));
+
+const mockListPending = vi.fn(() => []);
+const mockAcknowledge = vi.fn(() => true);
+const mockPruneOld = vi.fn(() => 0);
+const mockCandidateCreate = vi.fn();
+
+vi.mock('./specialist-candidates.js', () => ({
+  CandidateStore: vi.fn(() => ({
+    listPending: mockListPending,
+    acknowledge: mockAcknowledge,
+    pruneOld: mockPruneOld,
+    create: mockCandidateCreate,
+    list: vi.fn(() => []),
+  })),
+  MAX_PENDING_CANDIDATES: 10,
+}));
+
+vi.mock('./specialist-detector.js', () => ({
+  detectSpecialistCandidate: vi.fn().mockResolvedValue(null),
 }));
 
 // ── Helpers ────────────────────────────────────────────
@@ -441,6 +480,115 @@ describe('REPL /compact command', () => {
 
     await vi.waitFor(() => {
       expect(mockPrintError).toHaveBeenCalledWith('Compaction failed: API down');
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+});
+
+describe('REPL /candidates command', () => {
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rlEmitter = makeRl();
+    vi.spyOn(console, 'clear').mockImplementation(() => {});
+    consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('prints "No pending" when no candidates exist', async () => {
+    mockListPending.mockReturnValue([]);
+    const { startRepl } = await import('./repl.js');
+
+    const replPromise = startRepl(makeConfig());
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/candidates');
+
+    await vi.waitFor(() => {
+      expect(mockPrintInfo).toHaveBeenCalledWith('No pending specialist suggestions.');
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('displays candidates and acknowledges them', async () => {
+    const fakeCandidates = [
+      {
+        id: 'c1',
+        draftId: 'code-review',
+        name: 'Code Review',
+        description: 'Reviews pull requests',
+        systemPrompt: 'You are a code reviewer.',
+        guidelines: [],
+        confidence: 0.85,
+        reasoning: 'Frequent code review requests',
+        detectedAt: '2026-03-01T00:00:00.000Z',
+        source: 'exit' as const,
+        acknowledged: false,
+        status: 'pending' as const,
+      },
+    ];
+    mockListPending.mockReturnValue(fakeCandidates);
+    const { startRepl } = await import('./repl.js');
+
+    const replPromise = startRepl(makeConfig());
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/candidates');
+
+    await vi.waitFor(() => {
+      expect(mockPrintInfo).toHaveBeenCalledWith(
+        expect.stringContaining('Specialist Suggestions (1)'),
+      );
+    });
+
+    // Verify candidate details printed
+    expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringContaining('Code Review'));
+    expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringContaining('code-review'));
+    expect(consoleLogSpy).toHaveBeenCalledWith(expect.stringContaining('85%'));
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Frequent code review requests'),
+    );
+
+    // Verify acknowledge called for each candidate
+    expect(mockAcknowledge).toHaveBeenCalledWith('c1');
+
+    // Verify agent context injection
+    expect(mockSetAlertContext).toHaveBeenCalledWith(expect.stringContaining('Code Review'));
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('re-prompts after displaying candidates', async () => {
+    mockListPending.mockReturnValue([]);
+    const { startRepl } = await import('./repl.js');
+
+    const replPromise = startRepl(makeConfig());
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    const promptCountBefore = rlEmitter.prompt.mock.calls.length;
+
+    typeLine('/candidates');
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt.mock.calls.length).toBeGreaterThan(promptCountBefore);
     });
 
     rlEmitter.emit('close');

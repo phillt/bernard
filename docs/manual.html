@@ -398,6 +398,20 @@
         margin-bottom: 0;
       }
 
+      /* ── Version tags ── */
+      .vtag {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 1px 7px;
+        border-radius: 4px;
+        background: rgba(249, 115, 22, 0.15);
+        color: #f97316;
+        vertical-align: middle;
+        margin-left: 6px;
+        letter-spacing: 0.3px;
+      }
+
       /* ── Callout boxes ── */
       .callout {
         padding: 16px 20px;
@@ -686,6 +700,7 @@
               <li><a href="#specialists-creating">Creating Specialists</a></li>
               <li><a href="#specialists-invoking">Invoking Specialists</a></li>
               <li><a href="#specialists-managing">Managing Specialists</a></li>
+              <li><a href="#specialist-suggestions">Specialist Suggestions</a></li>
             </ul>
           </li>
           <li>
@@ -961,7 +976,7 @@
 <span class="comment"># Reset all options to defaults</span>
 <span class="accent">$</span> bernard reset-options</code></pre>
 
-        <h3 id="themes">Themes</h3>
+        <h3 id="themes">Themes <span class="vtag">v0.3.0+</span></h3>
         <p>
           Bernard comes with six built-in color themes. Switch at any time using the
           <code>/theme</code> REPL command. Your choice persists across sessions.
@@ -1169,6 +1184,10 @@
                 <td>List all saved specialists</td>
               </tr>
               <tr>
+                <td><code>/candidates</code></td>
+                <td>Review auto-detected specialist suggestions</td>
+              </tr>
+              <tr>
                 <td><code>/{routine-id}</code></td>
                 <td>Execute a saved routine (with optional arguments)</td>
               </tr>
@@ -1279,7 +1298,7 @@
   [sub:2] &#x25B6; shell: find . -name "*.ts" | xargs wc -l
   Disk: 42G used of 256G (16%). Code: 2,847 lines across 23 files.</code></pre>
 
-        <h3 id="tool-task">Tasks</h3>
+        <h3 id="tool-task">Tasks <span class="vtag">v0.6.0+</span></h3>
         <p>
           Tasks are isolated, focused executions that return structured JSON output. Unlike
           sub-agents (which return free-form text), tasks always produce a
@@ -1329,7 +1348,7 @@
         </ul>
 
         <!-- ═══════════════ 6. Routines ═══════════════ -->
-        <h2 id="routines">6. Routines</h2>
+        <h2 id="routines">6. Routines <span class="vtag">v0.5.0+</span></h2>
         <p>
           Routines are named, persistent multi-step workflows that Bernard can execute on demand.
           Use them to capture repeatable procedures &mdash; deploy scripts, release checklists,
@@ -1414,7 +1433,7 @@
         </p>
 
         <!-- ═══════════════ 7. Specialists ═══════════════ -->
-        <h2 id="specialists">7. Specialists</h2>
+        <h2 id="specialists">7. Specialists <span class="vtag">v0.6.0+</span></h2>
         <p>
           Specialists are reusable expert profiles &mdash; persistent personas with custom system
           prompts and behavioral guidelines that shape how a sub-agent approaches work. Unlike
@@ -1492,6 +1511,32 @@
           <code>~/.local/share/bernard/specialists/</code>. Maximum 50 specialists. IDs must be
           lowercase kebab-case (1&ndash;60 characters).
         </p>
+
+        <h3 id="specialist-suggestions">
+          Specialist Suggestions <span class="vtag">v0.6.0+</span>
+        </h3>
+        <p>
+          Bernard automatically detects recurring delegation patterns in your conversations and
+          suggests new specialists. Detection runs in the background when you exit a session or use
+          <code>/clear --save</code>.
+        </p>
+        <p>
+          When candidates are detected, you&rsquo;ll see a notification at the start of your next
+          session:
+        </p>
+        <pre><code>  2 specialist suggestion(s) pending. Use /candidates to review.</code></pre>
+        <p>
+          Use <code>/candidates</code> to see pending suggestions with their name, description,
+          confidence score, and reasoning. You can then accept or reject candidates conversationally
+          (e.g., &ldquo;accept the code-review candidate&rdquo;), and Bernard will create the
+          specialist for you.
+        </p>
+        <div class="callout callout-info">
+          <div class="callout-title">Lifecycle</div>
+          Candidates are auto-dismissed after 30 days if not reviewed. Up to 10 pending candidates
+          are stored at a time. Storage: one JSON file per candidate in
+          <code>~/.local/share/bernard/specialist-candidates/</code>.
+        </div>
 
         <!-- ═══════════════ 8. Cron Jobs ═══════════════ -->
         <h2 id="cron">8. Cron Jobs</h2>
@@ -1833,7 +1878,7 @@
           </li>
         </ol>
 
-        <h3 id="rag-domains">Domains</h3>
+        <h3 id="rag-domains">Domains <span class="vtag">v0.3.0+</span></h3>
         <p>Facts are categorized into four domains, each with a specialized extraction prompt:</p>
         <div class="table-wrap">
           <table>
@@ -1867,7 +1912,7 @@
               </tr>
               <tr>
                 <td><code>conversations</code></td>
-                <td>Conversation Summaries</td>
+                <td>Conversation Summaries <span class="vtag">v0.6.0+</span></td>
                 <td>
                   What was discussed, approaches taken, tools/specialists/routines used, outcomes
                 </td>
@@ -1910,7 +1955,7 @@
           </li>
         </ul>
 
-        <h3 id="rag-expiration">Auto-Expiration</h3>
+        <h3 id="rag-expiration">Auto-Expiration <span class="vtag">v0.4.0+</span></h3>
         <p>
           RAG memories have a configurable TTL (default: 90 days). Facts that are never accessed
           decay over time and are eventually pruned. Actively recalled facts have their
@@ -1928,7 +1973,7 @@
         </ul>
 
         <!-- ═══════════════ 11. Auto-Updates ═══════════════ -->
-        <h2 id="updates">11. Auto-Updates</h2>
+        <h2 id="updates">11. Auto-Updates <span class="vtag">v0.3.0+</span></h2>
         <p>
           Bernard can check for new versions on npm and install them for you. Update checks are
           cached for 24 hours.

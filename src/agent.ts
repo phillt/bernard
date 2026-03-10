@@ -321,6 +321,11 @@ export class Agent {
     this.spinnerStats = stats;
   }
 
+  /** Updates the alert context injected into the system prompt (e.g., specialist candidates). */
+  setAlertContext(ctx: string): void {
+    this.alertContext = ctx;
+  }
+
   /**
    * Sends user input through the agent loop: RAG retrieval, context compression, LLM generation, and tool execution.
    *

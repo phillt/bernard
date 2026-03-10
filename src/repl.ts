@@ -46,6 +46,8 @@ import {
 import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
 import { SpecialistStore } from './specialists.js';
+import { CandidateStore } from './specialist-candidates.js';
+import { detectSpecialistCandidate } from './specialist-detector.js';
 import { TASK_SYSTEM_PROMPT, wrapTaskResult } from './tools/task.js';
 import { createTools } from './tools/index.js';
 import {
@@ -92,12 +94,14 @@ export async function startRepl(
     { command: '/create-routine', description: 'Create a routine with guided AI assistance' },
     { command: '/specialists', description: 'List specialist agents' },
     { command: '/create-specialist', description: 'Create a specialist with guided AI assistance' },
+    { command: '/candidates', description: 'Review specialist suggestions' },
     { command: '/critic', description: 'Toggle critic mode for response verification' },
     { command: '/exit', description: 'Quit Bernard' },
   ];
 
   const routineStore = new RoutineStore();
   const specialistStore = new SpecialistStore();
+  const candidateStore = new CandidateStore();
 
   let cachedAllCommands: { command: string; description: string }[] | null = null;
   let cachedAllCommandsAt = 0;
@@ -333,6 +337,17 @@ export async function startRepl(
     }
   }
 
+  // Surface pending specialist candidates at session start
+  candidateStore.pruneOld();
+  const pendingCandidates = candidateStore.listPending();
+  if (pendingCandidates.length > 0) {
+    printInfo(
+      `  ${pendingCandidates.length} specialist suggestion(s) pending. Use /candidates to review.`,
+    );
+    const candidateContext = `## Specialist Suggestions\n\nBernard detected patterns in previous sessions that might benefit from saved specialists. Mention these when relevant.\n\n${pendingCandidates.map((c) => `- "${c.name}" (${c.draftId}): ${c.description}`).join('\n')}`;
+    alertContext = alertContext ? alertContext + '\n\n' + candidateContext : candidateContext;
+  }
+
   const agent = new Agent(
     config,
     toolOptions,
@@ -446,7 +461,7 @@ export async function startRepl(
             try {
               const serialized = serializeMessages(history);
 
-              const [summaryResult, domainFacts] = await Promise.all([
+              const [summaryResult, domainFacts, candidateResult] = await Promise.all([
                 generateText({
                   model: getModel(config.provider, config.model),
                   maxTokens: 2048,
@@ -456,6 +471,12 @@ export async function startRepl(
                   ],
                 }),
                 extractDomainFacts(serialized, config),
+                detectSpecialistCandidate(
+                  serialized,
+                  config,
+                  specialistStore.getSummaries(),
+                  candidateStore.listPending(),
+                ).catch(() => null),
               ]);
 
               const summary = summaryResult.text?.trim();
@@ -487,6 +508,17 @@ export async function startRepl(
                       ? `Extracted ${storedFacts} facts to RAG memory.`
                       : `Extracted ${storedFacts}/${totalFacts} facts to RAG memory.`,
                   );
+                }
+              }
+
+              if (candidateResult) {
+                try {
+                  candidateStore.create(candidateResult, 'clear-save');
+                  printInfo(
+                    `Specialist suggestion detected: "${candidateResult.name}". Use /candidates to review.`,
+                  );
+                } catch {
+                  // Silent — candidate storage failure is non-critical
                 }
               }
             } catch (err: unknown) {
@@ -998,6 +1030,37 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           interrupted = false;
         }
         console.log();
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/candidates') {
+        const pending = candidateStore.listPending();
+        if (pending.length === 0) {
+          printInfo('No pending specialist suggestions.');
+        } else {
+          const t = getTheme();
+          printInfo(`\n  Specialist Suggestions (${pending.length}):\n`);
+          for (const c of pending) {
+            const pct = Math.round(c.confidence * 100);
+            const date = new Date(c.detectedAt).toLocaleDateString();
+            console.log(t.text(`    ${c.name}`) + t.muted(` (${c.draftId})`));
+            console.log(t.muted(`      ${c.description}`));
+            console.log(t.muted(`      Confidence: ${pct}% | Detected: ${date}`));
+            console.log(t.muted(`      Reasoning: ${c.reasoning}`));
+            console.log();
+            candidateStore.acknowledge(c.id);
+          }
+          printInfo(
+            '  To accept or reject, tell Bernard conversationally (e.g., "accept the code-review candidate").',
+          );
+          printInfo(
+            '  The agent can create the specialist via the specialist tool, then update candidate status.\n',
+          );
+          // Inject candidate context so the agent knows about them for the rest of the session
+          const candidateContext = `## Specialist Suggestions\n\nBernard detected patterns in previous sessions that might benefit from saved specialists. Mention these when relevant.\n\n${pending.map((c) => `- "${c.name}" (${c.draftId}): ${c.description}`).join('\n')}`;
+          agent.setAlertContext(candidateContext);
+        }
         void prompt();
         return;
       }

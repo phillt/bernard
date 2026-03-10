@@ -346,6 +346,7 @@ export function printHelp(): void {
   console.log(
     t.text('  /create-specialist') + t.muted(' — Create a specialist with guided AI assistance'),
   );
+  console.log(t.text('  /candidates') + t.muted(' — Review specialist suggestions'));
   console.log(
     t.text('  /critic') + t.muted('   — Toggle critic mode (on/off) for response verification'),
   );

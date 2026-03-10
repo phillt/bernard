@@ -13,6 +13,9 @@ import * as fs from 'node:fs';
 import { loadConfig } from './config.js';
 import { extractDomainFacts } from './context.js';
 import { RAGStore } from './rag.js';
+import { CandidateStore, MAX_PENDING_CANDIDATES } from './specialist-candidates.js';
+import { SpecialistStore } from './specialists.js';
+import { detectSpecialistCandidate } from './specialist-detector.js';
 
 /** Shape of the JSON temp file written by the REPL at exit. */
 interface TempPayload {
@@ -55,6 +58,23 @@ async function main(): Promise<void> {
     for (const df of domainFacts) {
       await ragStore.addFacts(df.facts, 'exit', df.domain);
     }
+  }
+
+  // Specialist candidate detection (non-blocking — runs after facts are stored)
+  try {
+    const candidateStore = new CandidateStore();
+    if (candidateStore.listPending().length < MAX_PENDING_CANDIDATES) {
+      const specialistStore = new SpecialistStore();
+      const candidate = await detectSpecialistCandidate(
+        payload.serialized,
+        config,
+        specialistStore.getSummaries(),
+        candidateStore.listPending(),
+      );
+      if (candidate) candidateStore.create(candidate, 'exit');
+    }
+  } catch {
+    // Silent — detection failure must not block anything
   }
 
   // Clean up temp file
