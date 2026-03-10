@@ -118,15 +118,39 @@ export async function detectSpecialistCandidate(
     if (!draftId || !name || !systemPrompt) return null;
 
     // Duplicate check against existing specialists
-    if (existingSpecialists.some((s) => s.id === draftId)) {
-      debugLog('specialist-detector', `Duplicate draftId "${draftId}" matches existing specialist`);
-      return null;
+    const normalizedName = name.toLowerCase();
+    const normalizedDraftId = draftId.toLowerCase();
+
+    for (const s of existingSpecialists) {
+      if (
+        s.id === draftId ||
+        s.name.toLowerCase() === normalizedName ||
+        s.id.startsWith(normalizedDraftId) ||
+        normalizedDraftId.startsWith(s.id)
+      ) {
+        debugLog(
+          'specialist-detector',
+          `Duplicate: "${draftId}" matches existing specialist "${s.id}"`,
+        );
+        return null;
+      }
     }
 
     // Duplicate check against pending candidates
-    if (pendingCandidates.some((c) => c.draftId === draftId)) {
-      debugLog('specialist-detector', `Duplicate draftId "${draftId}" matches pending candidate`);
-      return null;
+    for (const c of pendingCandidates) {
+      const pendingDraftId = c.draftId.toLowerCase();
+      if (
+        c.draftId === draftId ||
+        c.name.toLowerCase() === normalizedName ||
+        pendingDraftId.startsWith(normalizedDraftId) ||
+        normalizedDraftId.startsWith(pendingDraftId)
+      ) {
+        debugLog(
+          'specialist-detector',
+          `Duplicate: "${draftId}" matches pending candidate "${c.draftId}"`,
+        );
+        return null;
+      }
     }
 
     return {
