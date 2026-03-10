@@ -75,7 +75,7 @@ export function buildSpinnerMessage(stats: SpinnerStats): string {
 function formatPrefix(prefix?: string): string {
   if (!prefix) return '';
   const prefixColors = getTheme().prefixColors;
-  const match = prefix.match(/^sub:(\d+)$/);
+  const match = prefix.match(/^(?:sub|task):(\d+)$/);
   const colorIndex = match ? (parseInt(match[1], 10) - 1) % prefixColors.length : 0;
   const colorFn = prefixColors[colorIndex];
   return colorFn(`[${prefix}] `);
@@ -255,6 +255,26 @@ export function printSubAgentEnd(id: number): void {
   console.log(colorFn(`└─ sub:${id} done`));
 }
 
+/** Prints a colored top-border line when a task begins executing. */
+export function printTaskStart(task: string): void {
+  const t = getTheme();
+  const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
+  console.log(t.accent(`┌─ task — ${displayTask}`));
+}
+
+/** Prints a colored bottom-border line when a task finishes, showing structured result. */
+export function printTaskEnd(result: string): void {
+  const t = getTheme();
+  try {
+    const parsed = JSON.parse(result);
+    const statusColor = parsed.status === 'success' ? t.accent : t.error;
+    const output = parsed.output ? `: ${parsed.output}` : '';
+    console.log(statusColor(`└─ task ${parsed.status}${output}`));
+  } catch {
+    console.log(t.accent(`└─ task done`));
+  }
+}
+
 /** Prints the REPL help menu listing all available slash commands. */
 export function printHelp(): void {
   const t = getTheme();
@@ -264,6 +284,9 @@ export function printHelp(): void {
     t.text('  /clear') + t.muted('   — Clear conversation (--save/-s to summarize first)'),
   );
   console.log(t.text('  /compact') + t.muted(' — Compress conversation history in-place'));
+  console.log(
+    t.text('  /task') + t.muted('    — Run an isolated task (no history, structured output)'),
+  );
   console.log(t.text('  /memory') + t.muted('  — List persistent memories'));
   console.log(t.text('  /scratch') + t.muted(' — List session scratch notes'));
   console.log(t.text('  /mcp') + t.muted('      — List MCP servers and tools'));
