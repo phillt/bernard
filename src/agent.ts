@@ -8,6 +8,8 @@ import {
   printToolCall,
   printToolResult,
   printInfo,
+  printCriticStart,
+  printCriticVerdict,
   startSpinner,
   buildSpinnerMessage,
   type SpinnerStats,
@@ -506,6 +508,14 @@ export class Agent {
       // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)
       this.lastPromptTokens = this.lastStepPromptTokens ?? result.usage?.promptTokens ?? 0;
 
+      // Run critic verification if enabled and tool calls were made
+      if (this.config.criticMode && !this.abortController?.signal.aborted) {
+        const toolCallLog = this.extractToolCallLog(result.steps);
+        if (toolCallLog.length > 0) {
+          await this.runCritic(userInput, result.text, toolCallLog);
+        }
+      }
+
       // Truncate large tool results before adding to history
       const truncatedMessages = truncateToolResults(result.response.messages as CoreMessage[]);
       this.history.push(...truncatedMessages);
@@ -518,6 +528,67 @@ export class Agent {
     } finally {
       this.abortController = null;
       this.spinnerStats = null;
+    }
+  }
+
+  /** Extracts a structured log of tool calls from generateText step results. */
+  private extractToolCallLog(steps: { toolCalls: any[]; toolResults: any[] }[]): CriticToolEntry[] {
+    const entries: CriticToolEntry[] = [];
+    for (const step of steps) {
+      for (let i = 0; i < step.toolCalls.length; i++) {
+        const tc = step.toolCalls[i];
+        const tr = step.toolResults[i];
+        entries.push({
+          toolName: tc.toolName,
+          args: tc.args,
+          result: tr?.result,
+        });
+      }
+    }
+    return entries;
+  }
+
+  /** Runs the critic agent to verify the main agent's response against actual tool calls. */
+  private async runCritic(
+    userInput: string,
+    responseText: string,
+    toolCallLog: CriticToolEntry[],
+  ): Promise<void> {
+    try {
+      printCriticStart();
+
+      const truncatedLog = toolCallLog.map((entry) => ({
+        toolName: entry.toolName,
+        args: entry.args,
+        result:
+          typeof entry.result === 'string'
+            ? entry.result.slice(0, 500)
+            : JSON.stringify(entry.result).slice(0, 500),
+      }));
+
+      const criticMessage = `## Original User Request
+${userInput}
+
+## Agent Response
+${responseText}
+
+## Tool Call Log (${truncatedLog.length} calls)
+${truncatedLog.map((e, i) => `${i + 1}. ${e.toolName}(${JSON.stringify(e.args)})\n   Result: ${e.result}`).join('\n\n')}`;
+
+      const result = await generateText({
+        model: getModel(this.config.provider, this.config.model),
+        system: CRITIC_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: criticMessage }],
+        maxSteps: 1,
+        maxTokens: 1024,
+        abortSignal: this.abortController?.signal,
+      });
+
+      if (result.text) {
+        printCriticVerdict(result.text);
+      }
+    } catch (err) {
+      debugLog('agent:critic:error', err instanceof Error ? err.message : String(err));
     }
   }
 
