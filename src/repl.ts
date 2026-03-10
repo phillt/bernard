@@ -45,6 +45,7 @@ import {
 } from './context.js';
 import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
+import { SpecialistStore } from './specialists.js';
 import { TASK_SYSTEM_PROMPT, wrapTaskResult } from './tools/task.js';
 import { createTools } from './tools/index.js';
 import {
@@ -89,10 +90,13 @@ export async function startRepl(
     { command: '/task', description: 'Run an isolated task (no history, structured output)' },
     { command: '/routines', description: 'List saved routines' },
     { command: '/create-routine', description: 'Create a routine with guided AI assistance' },
+    { command: '/specialists', description: 'List specialist agents' },
+    { command: '/create-specialist', description: 'Create a specialist with guided AI assistance' },
     { command: '/exit', description: 'Quit Bernard' },
   ];
 
   const routineStore = new RoutineStore();
+  const specialistStore = new SpecialistStore();
 
   let cachedAllCommands: { command: string; description: string }[] | null = null;
   let cachedAllCommandsAt = 0;
@@ -337,6 +341,7 @@ export async function startRepl(
     initialHistory,
     ragStore,
     routineStore,
+    specialistStore,
   );
 
   let cleanedUp = false;
@@ -893,6 +898,74 @@ export async function startRepl(
 6. Use the routine tool to save it once the user approves
 
 Remember: routine content should be written as clear instructions that Bernard can follow. Think of it like writing a mini system prompt — specific, structured, and actionable.`;
+
+        processing = true;
+        interrupted = false;
+        try {
+          const spinnerStats: SpinnerStats = {
+            startTime: Date.now(),
+            totalPromptTokens: 0,
+            totalCompletionTokens: 0,
+            latestPromptTokens: 0,
+            model: config.model,
+            contextWindowOverride: config.tokenWindow || undefined,
+          };
+          agent.setSpinnerStats(spinnerStats);
+          startSpinner(() => buildSpinnerMessage(spinnerStats));
+          await agent.processInput(message);
+          historyStore.save(agent.getHistory());
+        } catch (err: unknown) {
+          if (!interrupted) {
+            const message = err instanceof Error ? err.message : String(err);
+            printError(message);
+          }
+        } finally {
+          processing = false;
+          stopSpinner();
+        }
+        if (interrupted) {
+          printInfo('Interrupted.');
+          interrupted = false;
+        }
+        console.log();
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/specialists') {
+        const specialists = specialistStore.list();
+        if (specialists.length === 0) {
+          printInfo(
+            'No specialist agents defined yet. Ask me to create one or use /create-specialist.',
+          );
+        } else {
+          printInfo(`\n  Specialists (${specialists.length}):`);
+          for (const s of specialists) {
+            printInfo(`    ${s.id} — ${s.name}: ${s.description}`);
+          }
+          console.log();
+        }
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/create-specialist') {
+        const message = `The user wants to create a new specialist agent interactively. Guide them through the process:
+
+1. Ask what domain or recurring task pattern the specialist covers (e.g., email triage, code review, data analysis)
+2. Ask about behavioral preferences — how should the specialist approach work? What tone, priorities, output formats, or decision rules should it follow?
+3. Ask about specific guidelines — are there things it should always or never do?
+4. Once you have enough information, draft the specialist by creating:
+   - **id**: kebab-case slug (e.g., "email-triage")
+   - **name**: display name (e.g., "Email Triage Specialist")
+   - **description**: one-line summary
+   - **systemPrompt**: the specialist's persona and behavioral instructions (this is the core — write it like a focused system prompt)
+   - **guidelines**: short behavioral rules as a list of strings
+5. Present the draft to the user for review
+6. Make any requested changes
+7. Use the specialist tool to save it once the user approves
+
+Remember: the systemPrompt should read like a persona definition — who this specialist is, what they care about, how they work. Guidelines are individual rules that can be added/removed independently.`;
 
         processing = true;
         interrupted = false;

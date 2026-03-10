@@ -75,7 +75,7 @@ export function buildSpinnerMessage(stats: SpinnerStats): string {
 function formatPrefix(prefix?: string): string {
   if (!prefix) return '';
   const prefixColors = getTheme().prefixColors;
-  const match = prefix.match(/^(?:sub|task):(\d+)$/);
+  const match = prefix.match(/^(?:sub|task|spec):(\d+)$/);
   const colorIndex = match ? (parseInt(match[1], 10) - 1) % prefixColors.length : 0;
   const colorFn = prefixColors[colorIndex];
   return colorFn(`[${prefix}] `);
@@ -255,6 +255,21 @@ export function printSubAgentEnd(id: number): void {
   console.log(colorFn(`└─ sub:${id} done`));
 }
 
+/** Prints a colored top-border line when a specialist begins executing a task. */
+export function printSpecialistStart(id: number, specialistName: string, task: string): void {
+  const prefixColors = getTheme().prefixColors;
+  const colorFn = prefixColors[(id - 1) % prefixColors.length];
+  const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
+  console.log(colorFn(`┌─ spec:${id} [${specialistName}] — ${displayTask}`));
+}
+
+/** Prints a colored bottom-border line when a specialist finishes. */
+export function printSpecialistEnd(id: number): void {
+  const prefixColors = getTheme().prefixColors;
+  const colorFn = prefixColors[(id - 1) % prefixColors.length];
+  console.log(colorFn(`└─ spec:${id} done`));
+}
+
 /** Prints a colored top-border line when a task begins executing. */
 export function printTaskStart(task: string): void {
   const t = getTheme();
@@ -298,6 +313,10 @@ export function printHelp(): void {
   console.log(t.text('  /provider') + t.muted(' — Switch LLM provider'));
   console.log(t.text('  /model') + t.muted('    — Switch model for current provider'));
   console.log(t.text('  /theme') + t.muted('    — Switch color theme'));
+  console.log(t.text('  /specialists') + t.muted(' — List specialist agents'));
+  console.log(
+    t.text('  /create-specialist') + t.muted(' — Create a specialist with guided AI assistance'),
+  );
   console.log(
     t.text('  /options') +
       t.muted('  — View and set options (max-tokens, shell-timeout, token-window)'),

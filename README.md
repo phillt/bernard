@@ -26,6 +26,7 @@ A local CLI AI agent that executes terminal commands, manages scheduled tasks, r
   - [Sub-Agents](#sub-agents)
   - [Tasks](#tasks)
   - [Routines](#routines)
+  - [Specialists](#specialists)
 - [Cron Jobs (Scheduled Tasks)](#cron-jobs-scheduled-tasks)
   - [Creating Jobs](#creating-jobs)
   - [Managing Jobs](#managing-jobs)
@@ -236,10 +237,11 @@ Features:
 | `/theme`          | Switch color theme                                                        |
 | `/routines`       | List saved routines                                                       |
 | `/create-routine` | Create a routine with guided AI assistance                                |
+| `/specialists`    | List saved specialists                                                    |
 | `/options`        | View and modify runtime options (max-tokens, shell-timeout, token-window) |
 | `/exit`           | Quit Bernard (also: `exit`, `quit`)                                       |
 
-Type `/{routine-id}` to invoke a saved routine directly (e.g., `/deploy-staging`).
+Type `/{routine-id}` or `/{specialist-id}` to invoke a saved routine or specialist directly (e.g., `/deploy-staging`).
 
 Prefix with `\` to send a `/`-prefixed message as text instead of a command (e.g., `\/etc/hosts` sends the literal string).
 
@@ -399,6 +401,48 @@ bernard> delete the deploy-staging routine
 Use `/routines` in the REPL for a quick list. Routine names also appear in the live hint/autocomplete system when typing `/`.
 
 Storage: one JSON file per routine in `~/.local/share/bernard/routines/`. Max 100 routines. IDs must be lowercase kebab-case (1–60 chars).
+
+### Specialists
+
+Specialists are reusable expert profiles — persistent personas with custom system prompts and behavioral guidelines that shape how a sub-agent approaches work. Unlike routines (which define _what_ steps to follow), specialists define _how_ to work.
+
+```
+bernard> create a specialist called "code-reviewer" that reviews code for correctness, style, and security
+  ▶ specialist: create { id: "code-reviewer", name: "Code Reviewer", ... }
+
+Specialist "Code Reviewer" (code-reviewer) created.
+```
+
+Run a specialist by typing `/{specialist-id}` or using the `specialist_run` tool:
+
+```
+bernard> /code-reviewer review the changes in src/agent.ts
+┌─ spec:1 [Code Reviewer] — review the changes in src/agent.ts
+  ▶ shell: git diff src/agent.ts
+└─ spec:1 done
+```
+
+Each specialist run gets its own `generateText` loop with a 10-step budget, using the specialist's system prompt and guidelines as its persona. Specialists share the concurrency pool with sub-agents and tasks (4 slots max).
+
+Manage specialists:
+
+```
+bernard> list my specialists
+  ▶ specialist: list
+
+bernard> show the code-reviewer specialist
+  ▶ specialist: read { id: "code-reviewer" }
+
+bernard> update the code-reviewer specialist to also check for accessibility
+  ▶ specialist: update { id: "code-reviewer", guidelines: [...] }
+
+bernard> delete the code-reviewer specialist
+  ▶ specialist: delete { id: "code-reviewer" }
+```
+
+Use `/specialists` in the REPL for a quick list. Specialist names also appear in the live hint/autocomplete system when typing `/`.
+
+Storage: one JSON file per specialist in `~/.local/share/bernard/specialists/`. Max 50 specialists. IDs must be lowercase kebab-case (1–60 chars).
 
 ---
 
@@ -645,6 +689,7 @@ Bernard stores all data in `~/.bernard/`:
 ├── memory/                      # Persistent memories (*.md)
 ├── models/                      # Embedding model cache (fastembed)
 ├── routines/                    # Saved routines (*.json)
+├── specialists/                 # Saved specialist profiles (*.json)
 ├── rag/
 │   └── memories.json            # RAG fact embeddings
 └── cron/
@@ -713,6 +758,7 @@ src/
 ├── rag.ts                # RAG store (domain-tagged embeddings + per-domain search)
 ├── embeddings.ts         # FastEmbed wrapper
 ├── routines.ts           # RoutineStore (named multi-step workflows)
+├── specialists.ts        # SpecialistStore (reusable expert profiles)
 ├── mcp.ts                # MCP server manager
 ├── rag-worker.ts         # Background RAG fact extraction worker
 ├── setup.ts              # First-time setup wizard
@@ -734,9 +780,11 @@ src/
 │   ├── mcp.ts            # MCP config (stdio)
 │   ├── mcp-url.ts        # MCP config (URL-based)
 │   ├── routine.ts        # Routine management tool
+│   ├── specialist.ts     # Specialist management tool
+│   ├── specialist-run.ts # Specialist execution (sub-agent with custom persona)
 │   ├── subagent.ts       # Parallel sub-agents
 │   ├── task.ts           # Isolated task execution (structured JSON output)
-│   └── agent-pool.ts     # Shared concurrency pool for agents and tasks
+│   └── agent-pool.ts     # Shared concurrency pool for agents, tasks, and specialists
 └── cron/
     ├── cli.ts            # Cron CLI subcommands
     ├── types.ts          # Cron type definitions

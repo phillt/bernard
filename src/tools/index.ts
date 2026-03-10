@@ -9,9 +9,11 @@ import { createMCPAddUrlTool } from './mcp-url.js';
 import { createWebReadTool } from './web.js';
 import { createWaitTool } from './wait.js';
 import { createRoutineTool } from './routine.js';
+import { createSpecialistTool } from './specialist.js';
 import type { ToolOptions } from './types.js';
 import type { MemoryStore } from '../memory.js';
 import type { RoutineStore } from '../routines.js';
+import type { SpecialistStore } from '../specialists.js';
 
 export type { ToolOptions } from './types.js';
 
@@ -28,12 +30,14 @@ export function createTools(
   memoryStore: MemoryStore,
   mcpTools?: Record<string, any>,
   routineStore?: RoutineStore,
+  specialistStore?: SpecialistStore,
 ): Record<string, any> {
   return {
     shell: createShellTool(options),
     memory: createMemoryTool(memoryStore),
     scratch: createScratchTool(memoryStore),
     routine: createRoutineTool(routineStore),
+    specialist: createSpecialistTool(specialistStore),
     datetime: createDateTimeTool(),
     ...createCronTools(),
     ...createCronLogTools(),

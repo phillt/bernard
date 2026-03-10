@@ -1,0 +1,248 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createSpecialistTool } from './specialist.js';
+
+vi.mock('node:fs', () => ({
+  mkdirSync: vi.fn(),
+  readdirSync: vi.fn(() => []),
+  existsSync: vi.fn(() => false),
+  readFileSync: vi.fn(() => ''),
+  writeFileSync: vi.fn(),
+  unlinkSync: vi.fn(),
+  renameSync: vi.fn(),
+}));
+
+const fs = await import('node:fs');
+
+describe('createSpecialistTool', () => {
+  let tool: ReturnType<typeof createSpecialistTool>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readFileSync).mockReturnValue('');
+    tool = createSpecialistTool();
+  });
+
+  describe('list action', () => {
+    it('returns empty message when no specialists', async () => {
+      const result = await tool.execute({ action: 'list' }, {} as any);
+      expect(result).toContain('No specialists saved');
+    });
+
+    it('returns specialist list when populated', async () => {
+      const specialist = {
+        id: 'email-triage',
+        name: 'Email Triage',
+        description: 'Triage emails',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(['email-triage.json'] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'list' }, {} as any);
+      expect(result).toContain('email-triage');
+      expect(result).toContain('Email Triage');
+    });
+  });
+
+  describe('read action', () => {
+    it('returns error when no id', async () => {
+      const result = await tool.execute({ action: 'read' }, {} as any);
+      expect(result).toContain('id is required');
+    });
+
+    it('returns specialist content when found', async () => {
+      const specialist = {
+        id: 'email-triage',
+        name: 'Email Triage',
+        description: 'Triage emails',
+        systemPrompt: 'You are an email triage specialist.',
+        guidelines: ['Prioritize urgent'],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'read', id: 'email-triage' }, {} as any);
+      expect(result).toContain('Email Triage');
+      expect(result).toContain('email triage specialist');
+      expect(result).toContain('Prioritize urgent');
+    });
+
+    it('returns not-found for missing', async () => {
+      const result = await tool.execute({ action: 'read', id: 'nope' }, {} as any);
+      expect(result).toContain('No specialist found');
+    });
+  });
+
+  describe('create action', () => {
+    it('creates specialist successfully', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'email-triage',
+          name: 'Email Triage',
+          description: 'Triage emails',
+          systemPrompt: 'You are an email triage specialist.',
+          guidelines: ['Prioritize urgent emails'],
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+      expect(result).toContain('email-triage');
+    });
+
+    it('creates specialist without guidelines', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'code-review',
+          name: 'Code Review',
+          description: 'Review code',
+          systemPrompt: 'You are a code reviewer.',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('returns error for validation failure', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'BAD ID',
+          name: 'Bad',
+          description: 'desc',
+          systemPrompt: 'prompt',
+        },
+        {} as any,
+      );
+      expect(result).toContain('Error');
+    });
+
+    it('returns error for duplicate', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'email-triage',
+          name: 'Email Triage',
+          description: 'desc',
+          systemPrompt: 'prompt',
+        },
+        {} as any,
+      );
+      expect(result).toContain('already exists');
+    });
+
+    it('returns error when missing required fields', async () => {
+      const noId = await tool.execute(
+        { action: 'create', name: 'X', description: 'd', systemPrompt: 'p' },
+        {} as any,
+      );
+      expect(noId).toContain('id is required');
+
+      const noName = await tool.execute(
+        { action: 'create', id: 'x', description: 'd', systemPrompt: 'p' },
+        {} as any,
+      );
+      expect(noName).toContain('name is required');
+
+      const noDesc = await tool.execute(
+        { action: 'create', id: 'x', name: 'X', systemPrompt: 'p' },
+        {} as any,
+      );
+      expect(noDesc).toContain('description is required');
+
+      const noPrompt = await tool.execute(
+        { action: 'create', id: 'x', name: 'X', description: 'd' },
+        {} as any,
+      );
+      expect(noPrompt).toContain('systemPrompt is required');
+    });
+  });
+
+  describe('update action', () => {
+    it('updates specialist successfully', async () => {
+      const specialist = {
+        id: 'email-triage',
+        name: 'Email Triage',
+        description: 'Triage emails',
+        systemPrompt: 'old prompt',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute(
+        { action: 'update', id: 'email-triage', systemPrompt: 'new prompt' },
+        {} as any,
+      );
+      expect(result).toContain('updated');
+    });
+
+    it('updates guidelines', async () => {
+      const specialist = {
+        id: 'email-triage',
+        name: 'Email Triage',
+        description: 'Triage emails',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute(
+        { action: 'update', id: 'email-triage', guidelines: ['New rule'] },
+        {} as any,
+      );
+      expect(result).toContain('updated');
+    });
+
+    it('returns not-found for missing specialist', async () => {
+      const result = await tool.execute(
+        { action: 'update', id: 'nope', systemPrompt: 'x' },
+        {} as any,
+      );
+      expect(result).toContain('No specialist found');
+    });
+
+    it('returns error when no id provided', async () => {
+      const result = await tool.execute({ action: 'update', systemPrompt: 'x' }, {} as any);
+      expect(result).toContain('id is required');
+    });
+
+    it('returns error when no changes provided', async () => {
+      const result = await tool.execute({ action: 'update', id: 'email-triage' }, {} as any);
+      expect(result).toContain('at least one field');
+    });
+  });
+
+  describe('delete action', () => {
+    it('deletes specialist successfully', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      const result = await tool.execute({ action: 'delete', id: 'email-triage' }, {} as any);
+      expect(result).toContain('deleted');
+    });
+
+    it('returns not-found for missing', async () => {
+      const result = await tool.execute({ action: 'delete', id: 'nope' }, {} as any);
+      expect(result).toContain('No specialist found');
+    });
+
+    it('returns error when no id provided', async () => {
+      const result = await tool.execute({ action: 'delete' }, {} as any);
+      expect(result).toContain('id is required');
+    });
+  });
+});

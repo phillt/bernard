@@ -681,6 +681,14 @@
             </ul>
           </li>
           <li>
+            <a href="#specialists">Specialists</a>
+            <ul class="toc-sub">
+              <li><a href="#specialists-creating">Creating Specialists</a></li>
+              <li><a href="#specialists-invoking">Invoking Specialists</a></li>
+              <li><a href="#specialists-managing">Managing Specialists</a></li>
+            </ul>
+          </li>
+          <li>
             <a href="#cron">Cron Jobs</a>
             <ul class="toc-sub">
               <li><a href="#cron-creating">Creating Jobs</a></li>
@@ -1157,8 +1165,16 @@
                 <td>Create a routine with guided AI assistance</td>
               </tr>
               <tr>
+                <td><code>/specialists</code></td>
+                <td>List all saved specialists</td>
+              </tr>
+              <tr>
                 <td><code>/{routine-id}</code></td>
                 <td>Execute a saved routine (with optional arguments)</td>
+              </tr>
+              <tr>
+                <td><code>/{specialist-id}</code></td>
+                <td>Execute a saved specialist (with a task description)</td>
               </tr>
               <tr>
                 <td><code>/exit</code></td>
@@ -1397,8 +1413,88 @@
           kebab-case (1&ndash;60 characters).
         </p>
 
-        <!-- ═══════════════ 7. Cron Jobs ═══════════════ -->
-        <h2 id="cron">7. Cron Jobs</h2>
+        <!-- ═══════════════ 7. Specialists ═══════════════ -->
+        <h2 id="specialists">7. Specialists</h2>
+        <p>
+          Specialists are reusable expert profiles &mdash; persistent personas with custom system
+          prompts and behavioral guidelines that shape how a sub-agent approaches work. Unlike
+          routines (which define <em>what</em> steps to follow), specialists define <em>how</em> to
+          work.
+        </p>
+
+        <h3 id="specialists-creating">Creating Specialists</h3>
+        <p>
+          Ask Bernard to create a specialist. The agent will use the <code>specialist</code> tool
+          with an ID, name, description, system prompt, and optional guidelines:
+        </p>
+        <pre><code><span class="accent">bernard&gt;</span> create a specialist called "code-reviewer" that reviews code for correctness, style, and security
+  &#x25B6; specialist: create { id: "code-reviewer", name: "Code Reviewer", &hellip; }
+  &#x2713; Specialist "Code Reviewer" (code-reviewer) created.</code></pre>
+        <p>
+          Each specialist has a <strong>system prompt</strong> (the persona and behavioral
+          instructions) and optional <strong>guidelines</strong> (short behavioral rules appended as
+          bullet points).
+        </p>
+
+        <h3 id="specialists-invoking">Invoking Specialists</h3>
+        <p>
+          Type <code>/{specialist-id}</code> followed by a task description to run a specialist.
+          Bernard delegates the task to a sub-agent that uses the specialist&rsquo;s system prompt
+          and guidelines as its persona:
+        </p>
+        <pre><code><span class="accent">bernard&gt;</span> /code-reviewer review the changes in src/agent.ts
+&#x250C;&#x2500; spec:1 [Code Reviewer] &#x2014; review the changes in src/agent.ts
+  &#x25B6; shell: git diff src/agent.ts
+&#x2514;&#x2500; spec:1 done</code></pre>
+        <p>
+          Each specialist run gets its own <code>generateText</code> loop with a 10-step budget and
+          no conversation history. Specialists share the concurrency pool with sub-agents and tasks
+          (4 slots max).
+        </p>
+
+        <h3 id="specialists-managing">Managing Specialists</h3>
+        <p>
+          The agent has a <code>specialist</code> tool for full lifecycle management. You can also
+          use <code>/specialists</code> in the REPL for a quick list.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>How</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>List specialists</td>
+                <td><code>/specialists</code> or ask Bernard to list them</td>
+              </tr>
+              <tr>
+                <td>View a specialist</td>
+                <td>Ask Bernard: &ldquo;show the code-reviewer specialist&rdquo;</td>
+              </tr>
+              <tr>
+                <td>Update a specialist</td>
+                <td>
+                  Ask Bernard: &ldquo;update code-reviewer to also check for accessibility&rdquo;
+                </td>
+              </tr>
+              <tr>
+                <td>Delete a specialist</td>
+                <td>Ask Bernard: &ldquo;delete the code-reviewer specialist&rdquo;</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          Storage: one JSON file per specialist in
+          <code>~/.local/share/bernard/specialists/</code>. Maximum 50 specialists. IDs must be
+          lowercase kebab-case (1&ndash;60 characters).
+        </p>
+
+        <!-- ═══════════════ 8. Cron Jobs ═══════════════ -->
+        <h2 id="cron">8. Cron Jobs</h2>
         <p>
           Bernard can schedule recurring tasks that run in the background on a timer. Cron jobs
           execute an AI prompt through the agent on each run, with access to all tools.
@@ -1557,8 +1653,8 @@
           </table>
         </div>
 
-        <!-- ═══════════════ 8. MCP ═══════════════ -->
-        <h2 id="mcp">8. MCP (Model Context Protocol)</h2>
+        <!-- ═══════════════ 9. MCP ═══════════════ -->
+        <h2 id="mcp">9. MCP (Model Context Protocol)</h2>
         <p>
           Bernard supports the
           <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener noreferrer"
@@ -1701,8 +1797,8 @@
           restart when adding or removing servers.
         </div>
 
-        <!-- ═══════════════ 9. RAG Memory ═══════════════ -->
-        <h2 id="rag">9. RAG Memory</h2>
+        <!-- ═══════════════ 10. RAG Memory ═══════════════ -->
+        <h2 id="rag">10. RAG Memory</h2>
         <p>
           Bernard automatically builds a long-term knowledge base from your conversations using
           local embeddings and retrieval-augmented generation (RAG). No data leaves your machine.
@@ -1824,8 +1920,8 @@
           <li>Disable RAG entirely by setting <code>BERNARD_RAG_ENABLED=false</code></li>
         </ul>
 
-        <!-- ═══════════════ 10. Auto-Updates ═══════════════ -->
-        <h2 id="updates">10. Auto-Updates</h2>
+        <!-- ═══════════════ 11. Auto-Updates ═══════════════ -->
+        <h2 id="updates">11. Auto-Updates</h2>
         <p>
           Bernard can check for new versions on npm and install them for you. Update checks are
           cached for 24 hours.
