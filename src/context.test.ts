@@ -246,13 +246,13 @@ describe('extractDomainFacts', () => {
     vi.clearAllMocks();
   });
 
-  it('calls LLM once per domain (3 calls for 3 domains)', async () => {
+  it('calls LLM once per domain (4 calls for 4 domains)', async () => {
     mockGenerateText.mockResolvedValue({
       text: '["some fact"]',
     });
 
     await extractDomainFacts('User: test\nAssistant: ok', makeConfig());
-    expect(mockGenerateText).toHaveBeenCalledTimes(3);
+    expect(mockGenerateText).toHaveBeenCalledTimes(4);
   });
 
   it('returns domain-tagged facts', async () => {
@@ -266,14 +266,17 @@ describe('extractDomainFacts', () => {
       if (opts.system.includes('user preference')) {
         return { text: '["User prefers dark mode"]' };
       }
+      if (opts.system.includes('conversation summarizer')) {
+        return { text: '["Session focused on testing domain extraction"]' };
+      }
       return { text: '["Project uses TypeScript"]' };
     });
 
     const results = await extractDomainFacts('User: test\nAssistant: ok', makeConfig());
-    expect(results.length).toBe(3);
+    expect(results.length).toBe(4);
 
     const domains = results.map((r) => r.domain).sort();
-    expect(domains).toEqual(['general', 'tool-usage', 'user-preferences']);
+    expect(domains).toEqual(['conversations', 'general', 'tool-usage', 'user-preferences']);
 
     const toolFacts = results.find((r) => r.domain === 'tool-usage');
     expect(toolFacts?.facts).toEqual(['npm run build compiles project']);
@@ -290,8 +293,8 @@ describe('extractDomainFacts', () => {
     });
 
     const results = await extractDomainFacts('User: test\nAssistant: ok', makeConfig());
-    // 2 of 3 domains should succeed
-    expect(results.length).toBe(2);
+    // 3 of 4 domains should succeed
+    expect(results.length).toBe(3);
   });
 
   it('returns empty for empty input', async () => {
@@ -345,8 +348,8 @@ describe('extractFacts', () => {
     });
 
     const facts = await extractFacts('User: test\nAssistant: ok', makeConfig());
-    // 3 domains, each producing 1 fact = 3 total
-    expect(facts).toHaveLength(3);
+    // 4 domains, each producing 1 fact = 4 total
+    expect(facts).toHaveLength(4);
     expect(facts.every((f) => f === 'fact from this domain')).toBe(true);
   });
 
@@ -457,8 +460,8 @@ describe('compressHistory', () => {
 
   it('stores facts with domain tags when ragStore is provided', async () => {
     mockGenerateText.mockImplementation(async (opts: any) => {
-      // Summarization call has SUMMARIZATION_PROMPT
-      if (opts.system.includes('conversation summarizer')) {
+      // Summarization call has "Produce a concise summary" (distinct from conversations domain)
+      if (opts.system.includes('Produce a concise summary')) {
         return { text: '- Summary of conversation' };
       }
       // Domain extraction calls
@@ -467,6 +470,9 @@ describe('compressHistory', () => {
       }
       if (opts.system.includes('user preference')) {
         return { text: '["User likes dark mode"]' };
+      }
+      if (opts.system.includes('conversation summarizer')) {
+        return { text: '["Session involved build workflow testing"]' };
       }
       return { text: '["Project uses TypeScript"]' };
     });
@@ -495,6 +501,11 @@ describe('compressHistory', () => {
       'user-preferences',
     );
     expect(mockRagStore.addFacts).toHaveBeenCalledWith(expect.any(Array), 'compression', 'general');
+    expect(mockRagStore.addFacts).toHaveBeenCalledWith(
+      expect.any(Array),
+      'compression',
+      'conversations',
+    );
     // Result should still be compressed
     expect(result[0].content).toContain('[Context Summary');
   });
