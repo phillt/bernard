@@ -46,7 +46,7 @@ import {
 import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
 import { SpecialistStore } from './specialists.js';
-import { CandidateStore, MAX_PENDING_CANDIDATES } from './specialist-candidates.js';
+import { CandidateStore } from './specialist-candidates.js';
 import { detectSpecialistCandidate } from './specialist-detector.js';
 import { TASK_SYSTEM_PROMPT, wrapTaskResult } from './tools/task.js';
 import { createTools } from './tools/index.js';
@@ -1057,6 +1057,9 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           printInfo(
             '  The agent can create the specialist via the specialist tool, then update candidate status.\n',
           );
+          // Inject candidate context so the agent knows about them for the rest of the session
+          const candidateContext = `## Specialist Suggestions\n\nBernard detected patterns in previous sessions that might benefit from saved specialists. Mention these when relevant.\n\n${pending.map((c) => `- "${c.name}" (${c.draftId}): ${c.description}`).join('\n')}`;
+          agent.setAlertContext(candidateContext);
         }
         void prompt();
         return;
