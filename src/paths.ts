@@ -39,6 +39,7 @@ export const CRON_DIR = path.join(DATA_DIR, 'cron');
 export const CRON_JOBS_FILE = path.join(CRON_DIR, 'jobs.json');
 export const CRON_ALERTS_DIR = path.join(CRON_DIR, 'alerts');
 export const ROUTINES_DIR = path.join(DATA_DIR, 'routines');
+export const SPECIALISTS_DIR = path.join(DATA_DIR, 'specialists');
 
 // Cache
 export const MODELS_DIR = path.join(CACHE_DIR, 'models');
