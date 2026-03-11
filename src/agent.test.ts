@@ -208,6 +208,89 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('Tool Execution Integrity');
     expect(prompt).toContain('NEVER simulate');
   });
+
+  it('includes auto-dispatch instructions when specialists are provided', () => {
+    const specialists = [
+      { id: 'code-reviewer', name: 'Code Reviewer', description: 'Reviews code' },
+    ];
+    const prompt = buildSystemPrompt(
+      makeConfig(),
+      store,
+      undefined,
+      undefined,
+      undefined,
+      specialists,
+    );
+    expect(prompt).toContain('delegate to it via specialist_run without asking for permission');
+  });
+
+  it('includes specialist match advisory with AUTO-DISPATCH tag for high scores', () => {
+    const specialists = [
+      { id: 'code-reviewer', name: 'Code Reviewer', description: 'Reviews code' },
+    ];
+    const matches = [{ id: 'code-reviewer', name: 'Code Reviewer', score: 0.95 }];
+    const prompt = buildSystemPrompt(
+      makeConfig(),
+      store,
+      undefined,
+      undefined,
+      undefined,
+      specialists,
+      matches,
+    );
+    expect(prompt).toContain('### Specialist Match Advisory');
+    expect(prompt).toContain('AUTO-DISPATCH: score >= 0.8');
+    expect(prompt).toContain('code-reviewer (score: 0.95)');
+  });
+
+  it('includes CONFIRM WITH USER tag for medium scores', () => {
+    const specialists = [
+      { id: 'deploy-manager', name: 'Deploy Manager', description: 'Manages deploys' },
+    ];
+    const matches = [{ id: 'deploy-manager', name: 'Deploy Manager', score: 0.55 }];
+    const prompt = buildSystemPrompt(
+      makeConfig(),
+      store,
+      undefined,
+      undefined,
+      undefined,
+      specialists,
+      matches,
+    );
+    expect(prompt).toContain('CONFIRM WITH USER: score 0.4');
+    expect(prompt).toContain('deploy-manager (score: 0.55)');
+  });
+
+  it('omits specialist match advisory when matches array is empty', () => {
+    const specialists = [
+      { id: 'code-reviewer', name: 'Code Reviewer', description: 'Reviews code' },
+    ];
+    const prompt = buildSystemPrompt(
+      makeConfig(),
+      store,
+      undefined,
+      undefined,
+      undefined,
+      specialists,
+      [],
+    );
+    expect(prompt).not.toContain('Specialist Match Advisory');
+  });
+
+  it('omits specialist match advisory when matches is undefined', () => {
+    const specialists = [
+      { id: 'code-reviewer', name: 'Code Reviewer', description: 'Reviews code' },
+    ];
+    const prompt = buildSystemPrompt(
+      makeConfig(),
+      store,
+      undefined,
+      undefined,
+      undefined,
+      specialists,
+    );
+    expect(prompt).not.toContain('Specialist Match Advisory');
+  });
 });
 
 describe('Agent', () => {
