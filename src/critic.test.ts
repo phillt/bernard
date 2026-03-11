@@ -271,14 +271,32 @@ describe('critic mode', () => {
           steps: [],
           response: { messages: [] },
           usage: { promptTokens: 50, completionTokens: 20 },
+        })
+        // Retry agent response (triggered by WARN)
+        .mockResolvedValueOnce({
+          text: 'Retried.',
+          steps: [
+            {
+              toolCalls: [{ toolName: 'shell', args: { command: 'ls' } }],
+              toolResults: [{ toolName: 'shell', result: 'file.txt' }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        // Retry critic PASS
+        .mockResolvedValueOnce({
+          text: 'VERDICT: PASS\nOk now.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
         });
 
       const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
       // Should not throw — the tr?.result guard handles undefined
       await expect(agent.processInput('Run commands')).resolves.toBeUndefined();
 
-      // Critic should still be called with both tool calls
-      expect(mockGenerateText).toHaveBeenCalledTimes(2);
+      // Critic should have been called with both tool calls on first pass
       const criticCall = mockGenerateText.mock.calls[1][0];
       const criticMsg = criticCall.messages[0].content as string;
       expect(criticMsg).toContain('2 calls');
@@ -349,6 +367,198 @@ describe('critic mode', () => {
       await agent.processInput('list files');
 
       expect(mockVerdict).toHaveBeenCalledWith('VERDICT: PASS\nAll good.');
+    });
+  });
+
+  describe('critic retry loop', () => {
+    it('retries on WARN then stops on PASS', async () => {
+      const { printCriticRetry: mockRetry } = await import('./output.js');
+
+      mockGenerateText
+        // 1. Main agent response
+        .mockResolvedValueOnce({
+          text: 'I created the file.',
+          steps: [
+            {
+              toolCalls: [{ toolName: 'shell', args: { command: 'touch test.txt' } }],
+              toolResults: [{ toolName: 'shell', result: '' }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        // 2. Critic WARN
+        .mockResolvedValueOnce({
+          text: 'VERDICT: WARN\nFile was created but not verified.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
+        })
+        // 3. Retry agent response
+        .mockResolvedValueOnce({
+          text: 'I verified the file exists.',
+          steps: [
+            {
+              toolCalls: [{ toolName: 'shell', args: { command: 'ls test.txt' } }],
+              toolResults: [{ toolName: 'shell', result: 'test.txt' }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 120, completionTokens: 40 },
+        })
+        // 4. Critic PASS
+        .mockResolvedValueOnce({
+          text: 'VERDICT: PASS\nAll claims now verified.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
+        });
+
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      await agent.processInput('Create a file');
+
+      // 4 calls: main + critic(WARN) + retry + critic(PASS)
+      expect(mockGenerateText).toHaveBeenCalledTimes(4);
+      expect(mockRetry).toHaveBeenCalledWith(1, 2);
+    });
+
+    it('exhausts max retries on repeated FAIL', async () => {
+      const { printInfo: mockPrintInfo } = await import('./output.js');
+
+      const makeMainResponse = () => ({
+        text: 'Done.',
+        steps: [
+          {
+            toolCalls: [{ toolName: 'shell', args: { command: 'echo hi' } }],
+            toolResults: [{ toolName: 'shell', result: 'hi' }],
+          },
+        ],
+        response: { messages: [] },
+        usage: { promptTokens: 100, completionTokens: 50 },
+      });
+
+      const makeCriticFail = () => ({
+        text: 'VERDICT: FAIL\nClaim not supported.',
+        steps: [],
+        response: { messages: [] },
+        usage: { promptTokens: 50, completionTokens: 20 },
+      });
+
+      mockGenerateText
+        // 1. Main agent
+        .mockResolvedValueOnce(makeMainResponse())
+        // 2. Critic FAIL
+        .mockResolvedValueOnce(makeCriticFail())
+        // 3. Retry 1
+        .mockResolvedValueOnce(makeMainResponse())
+        // 4. Critic FAIL
+        .mockResolvedValueOnce(makeCriticFail())
+        // 5. Retry 2
+        .mockResolvedValueOnce(makeMainResponse())
+        // 6. Critic FAIL (at max retries, loop exits)
+        .mockResolvedValueOnce(makeCriticFail());
+
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      await agent.processInput('Do something');
+
+      // 6 calls: main + critic + retry + critic + retry + critic
+      expect(mockGenerateText).toHaveBeenCalledTimes(6);
+      expect(mockPrintInfo).toHaveBeenCalledWith('Critic still unsatisfied after maximum retries.');
+    });
+
+    it('does not retry on critic error (null)', async () => {
+      const { printCriticRetry: mockRetry } = await import('./output.js');
+      vi.mocked(mockRetry).mockClear();
+
+      mockGenerateText
+        // 1. Main agent response
+        .mockResolvedValueOnce({
+          text: 'Done.',
+          steps: [
+            {
+              toolCalls: [{ toolName: 'shell', args: { command: 'echo hi' } }],
+              toolResults: [{ toolName: 'shell', result: 'hi' }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        // 2. Critic throws error
+        .mockRejectedValueOnce(new Error('API error'));
+
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      await expect(agent.processInput('Say hi')).resolves.toBeUndefined();
+
+      // Only 2 calls: main + critic (errored)
+      expect(mockGenerateText).toHaveBeenCalledTimes(2);
+      expect(mockRetry).not.toHaveBeenCalled();
+    });
+
+    it('does not retry when critic returns PASS', async () => {
+      const { printCriticRetry: mockRetry } = await import('./output.js');
+      vi.mocked(mockRetry).mockClear();
+
+      mockGenerateText
+        .mockResolvedValueOnce({
+          text: 'I ran ls.',
+          steps: [
+            {
+              toolCalls: [{ toolName: 'shell', args: { command: 'ls' } }],
+              toolResults: [{ toolName: 'shell', result: 'file.txt' }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        .mockResolvedValueOnce({
+          text: 'VERDICT: PASS\nAll good.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
+        });
+
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      await agent.processInput('List files');
+
+      // 2 calls: main + critic(PASS)
+      expect(mockGenerateText).toHaveBeenCalledTimes(2);
+      expect(mockRetry).not.toHaveBeenCalled();
+    });
+
+    it('stops retrying when retry produces no tool calls', async () => {
+      mockGenerateText
+        // 1. Main agent response with tool calls
+        .mockResolvedValueOnce({
+          text: 'I did it.',
+          steps: [
+            {
+              toolCalls: [{ toolName: 'shell', args: { command: 'echo hi' } }],
+              toolResults: [{ toolName: 'shell', result: 'hi' }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        // 2. Critic WARN
+        .mockResolvedValueOnce({
+          text: 'VERDICT: WARN\nNeeds verification.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
+        })
+        // 3. Retry — no tool calls (pure text response)
+        .mockResolvedValueOnce({
+          text: 'I apologize, upon reflection the result was correct.',
+          steps: [{ toolCalls: [], toolResults: [] }],
+          response: { messages: [] },
+          usage: { promptTokens: 120, completionTokens: 40 },
+        });
+
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      await agent.processInput('Do something');
+
+      // 3 calls: main + critic(WARN) + retry(no tools, loop exits)
+      expect(mockGenerateText).toHaveBeenCalledTimes(3);
     });
   });
 });
