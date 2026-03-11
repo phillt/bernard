@@ -176,6 +176,14 @@ VERDICT: PASS | WARN | FAIL
 
 Be strict but fair. Not every response needs tool calls — knowledge answers are fine. Focus on cases where the agent *claims* to have done something via tools.`;
 
+interface CriticResult {
+  verdict: 'PASS' | 'WARN' | 'FAIL' | 'UNKNOWN';
+  explanation: string;
+  rawText: string;
+}
+
+const CRITIC_MAX_RETRIES = 2;
+
 interface CriticToolEntry {
   toolName: string;
   args: unknown;
@@ -555,12 +563,30 @@ export class Agent {
     return entries;
   }
 
+  /** Parses a critic response into a structured result. */
+  private parseCriticVerdict(text: string): CriticResult {
+    const lines = text.trim().split('\n');
+    const verdictLine = lines.find((l) => l.startsWith('VERDICT:'));
+    const explanation = lines
+      .filter((l) => !l.startsWith('VERDICT:'))
+      .join(' ')
+      .trim();
+
+    let verdict: CriticResult['verdict'] = 'UNKNOWN';
+    if (verdictLine) {
+      const match = verdictLine.match(/VERDICT:\s*(PASS|WARN|FAIL)/i);
+      if (match) verdict = match[1].toUpperCase() as CriticResult['verdict'];
+    }
+
+    return { verdict, explanation, rawText: text };
+  }
+
   /** Runs the critic agent to verify the main agent's response against actual tool calls. */
   private async runCritic(
     userInput: string,
     responseText: string,
     toolCallLog: CriticToolEntry[],
-  ): Promise<void> {
+  ): Promise<CriticResult | null> {
     try {
       printCriticStart();
 
@@ -606,10 +632,15 @@ ${truncatedLog
       });
 
       if (result.text) {
+        const parsed = this.parseCriticVerdict(result.text);
         printCriticVerdict(result.text);
+        return parsed;
       }
+
+      return null;
     } catch (err) {
       debugLog('agent:critic:error', err instanceof Error ? err.message : String(err));
+      return null;
     }
   }
 
