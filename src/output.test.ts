@@ -592,6 +592,24 @@ describe('output', () => {
       expect(result.verdict).toBe('PASS');
       expect(result.explanation).toBe('');
     });
+
+    it('handles leading whitespace before verdict', () => {
+      const result = parseCriticVerdict('  VERDICT: PASS\nAll good.');
+      expect(result.verdict).toBe('PASS');
+      expect(result.explanation).toBe('All good.');
+    });
+
+    it('handles markdown bold around verdict', () => {
+      const result = parseCriticVerdict('**VERDICT: FAIL**\nAgent lied.');
+      expect(result.verdict).toBe('FAIL');
+      expect(result.explanation).toBe('Agent lied.');
+    });
+
+    it('handles bullet prefix before verdict', () => {
+      const result = parseCriticVerdict('- VERDICT: WARN\nMinor issue.');
+      expect(result.verdict).toBe('WARN');
+      expect(result.explanation).toBe('Minor issue.');
+    });
   });
 
   describe('printCriticReVerify', () => {
