@@ -519,10 +519,6 @@ export class Agent {
         }
       }
 
-      // Track token usage for compression decisions — use last step's prompt tokens
-      // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)
-      this.lastPromptTokens = this.lastStepPromptTokens ?? result.usage?.promptTokens ?? 0;
-
       // Run critic verification if enabled and tool calls were made
       if (this.config.criticMode && !this.abortController?.signal.aborted) {
         let toolCallLog = this.extractToolCallLog(result.steps);
@@ -580,6 +576,10 @@ export class Agent {
           }
         }
       }
+
+      // Track token usage for compression decisions — use last step's prompt tokens
+      // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)
+      this.lastPromptTokens = this.lastStepPromptTokens ?? result.usage?.promptTokens ?? 0;
 
       // Truncate large tool results before adding to history
       const truncatedMessages = truncateToolResults(result.response.messages as CoreMessage[]);
