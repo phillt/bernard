@@ -33,6 +33,7 @@ import type { RAGStore, RAGSearchResult } from './rag.js';
 import { RoutineStore, type RoutineSummary } from './routines.js';
 import { SpecialistStore, type SpecialistSummary } from './specialists.js';
 import { createSpecialistRunTool } from './tools/specialist-run.js';
+import { matchSpecialists, type SpecialistMatch } from './specialist-matcher.js';
 import { buildMemoryContext } from './memory-context.js';
 import {
   extractRecentUserTexts,
@@ -207,6 +208,7 @@ export function buildSystemPrompt(
   ragResults?: RAGSearchResult[],
   routineSummaries?: RoutineSummary[],
   specialistSummaries?: SpecialistSummary[],
+  specialistMatches?: SpecialistMatch[],
 ): string {
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
@@ -246,6 +248,20 @@ MCP (Model Context Protocol) servers provide additional tools. Use the mcp_confi
   if (specialistSummaries && specialistSummaries.length > 0) {
     prompt += '\n\nAvailable specialist agents you can delegate to via specialist_run:\n';
     prompt += specialistSummaries.map((s) => `- ${s.id} — ${s.name}: ${s.description}`).join('\n');
+    prompt +=
+      "\n\nWhen a user request clearly falls within a saved specialist's domain, delegate to it via specialist_run without asking for permission. If the match is partial or ambiguous, briefly confirm with the user before dispatching.";
+
+    if (specialistMatches && specialistMatches.length > 0) {
+      prompt +=
+        '\n\n## Specialist Match Advisory (current message)\nThe following specialists may match this request:\n';
+      prompt += specialistMatches
+        .map((m) => {
+          const tag =
+            m.score >= 0.8 ? 'AUTO-DISPATCH: score >= 0.8' : 'CONFIRM WITH USER: score 0.4–0.8';
+          return `- ${m.id} (score: ${m.score.toFixed(2)}) — ${m.name} [${tag}]`;
+        })
+        .join('\n');
+    }
   } else {
     prompt +=
       '\n\nNo specialists saved yet. When you notice recurring delegation patterns where the same kind of expertise or behavioral rules would help, suggest creating a specialist using the specialist tool.';
@@ -398,6 +414,7 @@ export class Agent {
 
       const routineSummaries = this.routineStore.getSummaries();
       const specialistSummaries = this.specialistStore.getSummaries();
+      const specialistMatches = matchSpecialists(userInput, specialistSummaries);
 
       let systemPrompt = buildSystemPrompt(
         this.config,
@@ -406,6 +423,7 @@ export class Agent {
         ragResults,
         routineSummaries,
         specialistSummaries,
+        specialistMatches,
       );
       if (this.alertContext) {
         systemPrompt += '\n\n' + this.alertContext;
