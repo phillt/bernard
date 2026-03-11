@@ -307,10 +307,8 @@ export function printCriticRetry(attempt: number, maxRetries: number): void {
   console.log(t.warning(`├─ critic — retrying (${attempt}/${maxRetries})...`));
 }
 
-/** Prints the critic's verdict with color based on PASS/WARN/FAIL. */
-export function printCriticVerdict(text: string): void {
-  stopSpinner();
-  const t = getTheme();
+/** Parses a critic response into a structured verdict and explanation. */
+export function parseCriticVerdict(text: string): { verdict: string; explanation: string } {
   const lines = text.trim().split('\n');
   const verdictLine = lines.find((l) => l.startsWith('VERDICT:'));
   const explanation = lines
@@ -324,9 +322,25 @@ export function printCriticVerdict(text: string): void {
     if (match) verdict = match[1].toUpperCase();
   }
 
+  return { verdict, explanation };
+}
+
+/** Prints the critic's verdict with color based on PASS/WARN/FAIL. */
+export function printCriticVerdict(text: string): void {
+  stopSpinner();
+  const t = getTheme();
+  const { verdict, explanation } = parseCriticVerdict(text);
+
   const colorFn = verdict === 'PASS' ? t.accent : verdict === 'WARN' ? t.warning : t.error;
   const suffix = explanation ? `: ${explanation}` : '';
   console.log(colorFn(`└─ critic ${verdict}${suffix}`));
+}
+
+/** Prints a re-verify indicator when the critic re-checks after a retry. */
+export function printCriticReVerify(): void {
+  stopSpinner();
+  const t = getTheme();
+  console.log(t.accent('├─ critic — re-verifying response...'));
 }
 
 /** Prints the REPL help menu listing all available slash commands. */

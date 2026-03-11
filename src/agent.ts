@@ -11,6 +11,8 @@ import {
   printCriticStart,
   printCriticVerdict,
   printCriticRetry,
+  printCriticReVerify,
+  parseCriticVerdict,
   startSpinner,
   buildSpinnerMessage,
   type SpinnerStats,
@@ -608,32 +610,19 @@ export class Agent {
     return entries;
   }
 
-  /** Parses a critic response into a structured result. */
-  private parseCriticVerdict(text: string): CriticResult {
-    const lines = text.trim().split('\n');
-    const verdictLine = lines.find((l) => l.startsWith('VERDICT:'));
-    const explanation = lines
-      .filter((l) => !l.startsWith('VERDICT:'))
-      .join(' ')
-      .trim();
-
-    let verdict: CriticResult['verdict'] = 'UNKNOWN';
-    if (verdictLine) {
-      const match = verdictLine.match(/VERDICT:\s*(PASS|WARN|FAIL)/i);
-      if (match) verdict = match[1].toUpperCase() as CriticResult['verdict'];
-    }
-
-    return { verdict, explanation, rawText: text };
-  }
-
   /** Runs the critic agent to verify the main agent's response against actual tool calls. */
   private async runCritic(
     userInput: string,
     responseText: string,
     toolCallLog: CriticToolEntry[],
+    isRetry: boolean = false,
   ): Promise<CriticResult | null> {
     try {
-      printCriticStart();
+      if (isRetry) {
+        printCriticReVerify();
+      } else {
+        printCriticStart();
+      }
 
       const truncatedLog = toolCallLog.map((entry) => ({
         toolName: entry.toolName,
