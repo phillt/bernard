@@ -1181,6 +1181,12 @@
                 <td>Create a routine with guided AI assistance</td>
               </tr>
               <tr>
+                <td><code>/create-task</code></td>
+                <td>
+                  Create a task routine (<code>task-</code> prefixed) with guided AI assistance
+                </td>
+              </tr>
+              <tr>
                 <td><code>/specialists</code></td>
                 <td>List all saved specialists</td>
               </tr>
@@ -1378,6 +1384,19 @@
   What workflow would you like to save as a routine?
   &hellip; (interactive Q&amp;A to build the routine)</code></pre>
 
+        <h4>Task routines</h4>
+        <p>
+          Use <code>/create-task</code> to create a routine whose ID is automatically prefixed with
+          <code>task-</code>. This convention lets you organize quick, focused procedures under a
+          consistent <code>/task-{name}</code> namespace:
+        </p>
+        <pre><code><span class="accent">bernard&gt;</span> /create-task
+  What task would you like to save?
+  &hellip; (interactive Q&amp;A — the ID will be prefixed with task- automatically)
+
+<span class="accent">bernard&gt;</span> /task-run-tests
+  (Bernard follows the saved task procedure)</code></pre>
+
         <h3 id="routines-invoking">Invoking Routines</h3>
         <p>
           Type <code>/{routine-id}</code> to execute a saved routine. Bernard follows the stored
@@ -1423,6 +1442,10 @@
               <tr>
                 <td>Create (guided)</td>
                 <td><code>/create-routine</code></td>
+              </tr>
+              <tr>
+                <td>Create task (guided)</td>
+                <td><code>/create-task</code> (auto-prefixes ID with <code>task-</code>)</td>
               </tr>
             </tbody>
           </table>
