@@ -126,4 +126,38 @@ describe('matchSpecialists', () => {
     const match = result.find((m) => m.id === 'code-reviewer');
     expect(match).toBeUndefined();
   });
+
+  it('single-word ID specialist: score is binary on single identity token', () => {
+    const single: SpecialistSummary[] = [
+      { id: 'reviewer', name: 'Reviewer', description: 'Reviews things' },
+    ];
+    // Match: "reviewer" deduplicates to one identity token → score 1.0
+    const hit = matchSpecialists('reviewer', single);
+    expect(hit.length).toBe(1);
+    expect(hit[0].score).toBeGreaterThanOrEqual(0.8);
+
+    // Miss: no identity token overlap → no match
+    const miss = matchSpecialists('deploy something', single);
+    const match = miss.find((m) => m.id === 'reviewer');
+    expect(match).toBeUndefined();
+  });
+
+  it('exact ID input: hyphenated ID splits into matching tokens', () => {
+    // User types "code-reviewer" which tokenizes to ["code", "reviewer"]
+    const result = matchSpecialists('code-reviewer', specialists);
+    expect(result.length).toBeGreaterThanOrEqual(1);
+    expect(result[0].id).toBe('code-reviewer');
+    expect(result[0].score).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it('stop words in ID segments are filtered out', () => {
+    // "go-to-market" — "to" is a stop word and should not count as an identity token
+    const withStopWord: SpecialistSummary[] = [
+      { id: 'go-to-market', name: 'Go To Market', description: 'Handles GTM strategy' },
+    ];
+    // Only "go" and "market" should be identity tokens (after stop-word + tokenize dedup)
+    const result = matchSpecialists('go market', withStopWord);
+    expect(result.length).toBe(1);
+    expect(result[0].score).toBeGreaterThanOrEqual(0.8);
+  });
 });
