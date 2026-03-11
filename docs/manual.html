@@ -1386,13 +1386,14 @@
 
         <h4>Task routines</h4>
         <p>
-          Use <code>/create-task</code> to create a routine whose ID is automatically prefixed with
-          <code>task-</code>. This convention lets you organize quick, focused procedures under a
-          consistent <code>/task-{name}</code> namespace:
+          Use <code>/create-task</code> to create a routine whose ID follows a
+          <code>task-</code> prefix convention. Bernard will generate an ID prefixed with
+          <code>task-</code>, letting you organize quick, focused procedures under a consistent
+          <code>/task-{name}</code> namespace:
         </p>
         <pre><code><span class="accent">bernard&gt;</span> /create-task
   What task would you like to save?
-  &hellip; (interactive Q&amp;A — the ID will be prefixed with task- automatically)
+  &hellip; (interactive Q&amp;A — Bernard will generate an ID prefixed with task-)
 
 <span class="accent">bernard&gt;</span> /task-run-tests
   (Bernard follows the saved task procedure)</code></pre>
