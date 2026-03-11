@@ -700,6 +700,7 @@
             <ul class="toc-sub">
               <li><a href="#specialists-creating">Creating Specialists</a></li>
               <li><a href="#specialists-invoking">Invoking Specialists</a></li>
+              <li><a href="#specialists-auto-dispatch">Auto-Dispatch</a></li>
               <li><a href="#specialists-managing">Managing Specialists</a></li>
               <li><a href="#specialist-suggestions">Specialist Suggestions</a></li>
             </ul>
@@ -1494,6 +1495,16 @@
           Each specialist run gets its own <code>generateText</code> loop with a 10-step budget and
           no conversation history. Specialists share the concurrency pool with sub-agents and tasks
           (4 slots max).
+        </p>
+
+        <h3 id="specialists-auto-dispatch">Auto-Dispatch <span class="vtag">v0.7.0+</span></h3>
+        <p>
+          Bernard automatically detects when your message matches a saved specialist&rsquo;s domain
+          using lightweight keyword matching against specialist names and descriptions. For strong
+          matches (score &ge; 0.8), Bernard delegates to the specialist immediately without asking.
+          For partial matches (score 0.4&ndash;0.8), Bernard confirms with you before dispatching.
+          This means you don&rsquo;t need to remember specialist names &mdash; just describe what
+          you need and Bernard will route to the right expert.
         </p>
 
         <h3 id="specialists-managing">Managing Specialists</h3>
