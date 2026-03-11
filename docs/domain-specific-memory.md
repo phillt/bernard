@@ -516,7 +516,7 @@ countByDomain(): Record<string, number> {
 
 Simple frequency count. Used by the `/rag` command in `repl.ts` to display the per-domain breakdown. Returns raw domain IDs as keys — the REPL maps these to display names via `getDomain(id).name`.
 
-### `buildSystemPrompt()` — src/agent.ts:83
+### `buildSystemPrompt()` — src/agent.ts
 
 ```typescript
 function buildSystemPrompt(
@@ -524,6 +524,9 @@ function buildSystemPrompt(
   memoryStore: MemoryStore,
   mcpServerNames?: string[],
   ragResults?: RAGSearchResult[],
+  routineSummaries?: RoutineSummary[],
+  specialistSummaries?: SpecialistSummary[],
+  specialistMatches?: SpecialistMatch[],
 ): string;
 ```
 
