@@ -209,6 +209,7 @@ export function startupUpdateCheck(autoUpdate: boolean): void {
         }
       } else {
         printInfo(`\n  Update available: v${result.currentVersion} → v${result.latestVersion}`);
+        printInfo(`  What's new: ${releaseNotesUrl(result.latestVersion)}`);
         printInfo(`  Run: bernard update\n`);
       }
     })

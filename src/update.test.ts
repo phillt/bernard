@@ -378,6 +378,9 @@ describe('startupUpdateCheck', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('Update available'));
+    expect(outputMock.printInfo).toHaveBeenCalledWith(
+      expect.stringContaining("What's new: https://phillt.github.io/bernard/releases.html#v2.0.0"),
+    );
     expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('bernard update'));
   });
 
