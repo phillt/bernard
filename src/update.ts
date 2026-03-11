@@ -17,7 +17,7 @@ const RELEASE_NOTES_BASE = 'https://phillt.github.io/bernard';
  * @returns An HTTPS URL under `RELEASE_NOTES_BASE` pointing to that version's release notes.
  */
 export function releaseNotesUrl(version: string): string {
-  return `${RELEASE_NOTES_BASE}/whats-new-${version}.html`;
+  return `${RELEASE_NOTES_BASE}/releases.html#v${version}`;
 }
 
 /** Persisted update-check cache. */
@@ -209,6 +209,7 @@ export function startupUpdateCheck(autoUpdate: boolean): void {
         }
       } else {
         printInfo(`\n  Update available: v${result.currentVersion} → v${result.latestVersion}`);
+        printInfo(`  What's new: ${releaseNotesUrl(result.latestVersion)}`);
         printInfo(`  Run: bernard update\n`);
       }
     })
