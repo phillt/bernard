@@ -14,6 +14,8 @@ import {
   printCriticStart,
   printCriticVerdict,
   printCriticRetry,
+  printCriticReVerify,
+  parseCriticVerdict,
   startSpinner,
   stopSpinner,
   buildSpinnerMessage,

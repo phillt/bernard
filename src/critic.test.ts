@@ -27,6 +27,21 @@ vi.mock('./output.js', () => ({
   printCriticStart: vi.fn(),
   printCriticVerdict: vi.fn(),
   printCriticRetry: vi.fn(),
+  printCriticReVerify: vi.fn(),
+  parseCriticVerdict: vi.fn((text: string) => {
+    const lines = text.trim().split('\n');
+    const vl = lines.find((l: string) => l.startsWith('VERDICT:'));
+    const explanation = lines
+      .filter((l: string) => !l.startsWith('VERDICT:'))
+      .join(' ')
+      .trim();
+    let verdict = 'UNKNOWN';
+    if (vl) {
+      const m = vl.match(/VERDICT:\s*(PASS|WARN|FAIL)/i);
+      if (m) verdict = m[1].toUpperCase();
+    }
+    return { verdict, explanation };
+  }),
   startSpinner: vi.fn(),
   stopSpinner: vi.fn(),
 }));
