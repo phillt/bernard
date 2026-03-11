@@ -200,6 +200,8 @@ interface CriticToolEntry {
  * @param mcpServerNames - Names of currently connected MCP servers, if any
  * @param ragResults - RAG search results to include as recalled context
  * @param routineSummaries - Routine summaries to list in the prompt
+ * @param specialistSummaries - Specialist summaries to list in the prompt
+ * @param specialistMatches - Pre-computed specialist match results for the current input
  */
 export function buildSystemPrompt(
   config: BernardConfig,
@@ -253,7 +255,7 @@ MCP (Model Context Protocol) servers provide additional tools. Use the mcp_confi
 
     if (specialistMatches && specialistMatches.length > 0) {
       prompt +=
-        '\n\n## Specialist Match Advisory (current message)\nThe following specialists may match this request:\n';
+        '\n\n### Specialist Match Advisory (current message)\nThe following specialists may match this request:\n';
       prompt += specialistMatches
         .map((m) => {
           const tag =
