@@ -92,6 +92,7 @@ export async function startRepl(
     { command: '/task', description: 'Run an isolated task (no history, structured output)' },
     { command: '/routines', description: 'List saved routines' },
     { command: '/create-routine', description: 'Create a routine with guided AI assistance' },
+    { command: '/create-task', description: 'Create a task routine with guided AI assistance' },
     { command: '/specialists', description: 'List specialist agents' },
     { command: '/create-specialist', description: 'Create a specialist with guided AI assistance' },
     { command: '/candidates', description: 'Review specialist suggestions' },

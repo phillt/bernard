@@ -21,6 +21,7 @@ export const RESERVED_NAMES = new Set([
   'exit',
   'routines',
   'create-routine',
+  'create-task',
   'specialists',
   'create-specialist',
   'candidates',
