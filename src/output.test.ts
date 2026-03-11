@@ -13,6 +13,9 @@ import {
   printSubAgentEnd,
   printCriticStart,
   printCriticVerdict,
+  printCriticRetry,
+  printCriticReVerify,
+  parseCriticVerdict,
   startSpinner,
   stopSpinner,
   buildSpinnerMessage,
@@ -533,6 +536,90 @@ describe('output', () => {
       printCriticVerdict('Some text without verdict');
       const output = logSpy.mock.calls[0][0];
       expect(output).toContain('UNKNOWN');
+    });
+  });
+
+  describe('printCriticRetry', () => {
+    it('prints retry indicator with attempt and max', () => {
+      printCriticRetry(1, 2);
+      expect(logSpy).toHaveBeenCalled();
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('├─');
+      expect(output).toContain('critic');
+      expect(output).toContain('retrying');
+      expect(output).toContain('1/2');
+    });
+
+    it('shows correct attempt numbers', () => {
+      printCriticRetry(2, 2);
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('2/2');
+    });
+  });
+
+  describe('parseCriticVerdict', () => {
+    it('parses PASS verdict', () => {
+      const result = parseCriticVerdict('VERDICT: PASS\nAll claims verified.');
+      expect(result.verdict).toBe('PASS');
+      expect(result.explanation).toBe('All claims verified.');
+    });
+
+    it('parses WARN verdict', () => {
+      const result = parseCriticVerdict('VERDICT: WARN\nMinor discrepancy found.');
+      expect(result.verdict).toBe('WARN');
+      expect(result.explanation).toBe('Minor discrepancy found.');
+    });
+
+    it('parses FAIL verdict', () => {
+      const result = parseCriticVerdict('VERDICT: FAIL\nNo tool calls found.');
+      expect(result.verdict).toBe('FAIL');
+      expect(result.explanation).toBe('No tool calls found.');
+    });
+
+    it('returns UNKNOWN for missing verdict line', () => {
+      const result = parseCriticVerdict('Some text without verdict');
+      expect(result.verdict).toBe('UNKNOWN');
+      expect(result.explanation).toBe('Some text without verdict');
+    });
+
+    it('handles case-insensitive verdict', () => {
+      const result = parseCriticVerdict('VERDICT: pass\nOk.');
+      expect(result.verdict).toBe('PASS');
+    });
+
+    it('handles empty explanation', () => {
+      const result = parseCriticVerdict('VERDICT: PASS');
+      expect(result.verdict).toBe('PASS');
+      expect(result.explanation).toBe('');
+    });
+
+    it('handles leading whitespace before verdict', () => {
+      const result = parseCriticVerdict('  VERDICT: PASS\nAll good.');
+      expect(result.verdict).toBe('PASS');
+      expect(result.explanation).toBe('All good.');
+    });
+
+    it('handles markdown bold around verdict', () => {
+      const result = parseCriticVerdict('**VERDICT: FAIL**\nAgent lied.');
+      expect(result.verdict).toBe('FAIL');
+      expect(result.explanation).toBe('Agent lied.');
+    });
+
+    it('handles bullet prefix before verdict', () => {
+      const result = parseCriticVerdict('- VERDICT: WARN\nMinor issue.');
+      expect(result.verdict).toBe('WARN');
+      expect(result.explanation).toBe('Minor issue.');
+    });
+  });
+
+  describe('printCriticReVerify', () => {
+    it('prints re-verify indicator with tree connector', () => {
+      printCriticReVerify();
+      expect(logSpy).toHaveBeenCalled();
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('├─');
+      expect(output).toContain('critic');
+      expect(output).toContain('re-verifying');
     });
   });
 });

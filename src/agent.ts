@@ -10,6 +10,9 @@ import {
   printInfo,
   printCriticStart,
   printCriticVerdict,
+  printCriticRetry,
+  printCriticReVerify,
+  parseCriticVerdict,
   startSpinner,
   buildSpinnerMessage,
   type SpinnerStats,
@@ -174,6 +177,13 @@ VERDICT: PASS | WARN | FAIL
 [If WARN/FAIL: specific issues found]
 
 Be strict but fair. Not every response needs tool calls — knowledge answers are fine. Focus on cases where the agent *claims* to have done something via tools.`;
+
+interface CriticResult {
+  verdict: 'PASS' | 'WARN' | 'FAIL' | 'UNKNOWN';
+  explanation: string;
+}
+
+const CRITIC_MAX_RETRIES = 2;
 
 interface CriticToolEntry {
   toolName: string;
@@ -448,14 +458,14 @@ export class Agent {
         ),
       };
 
-      const callGenerateText = () =>
+      const callGenerateText = (messages?: CoreMessage[]) =>
         generateText({
           model: getModel(this.config.provider, this.config.model),
           tools,
           maxSteps: 20,
           maxTokens: this.config.maxTokens,
           system: systemPrompt,
-          messages: this.history,
+          messages: messages ?? this.history,
           abortSignal: this.abortController!.signal,
           onStepFinish: ({ text, toolCalls, toolResults, usage }) => {
             if (usage) {
@@ -509,17 +519,64 @@ export class Agent {
         }
       }
 
+      // Run critic verification if enabled and tool calls were made
+      if (this.config.criticMode && !this.abortController?.signal.aborted) {
+        let toolCallLog = this.extractToolCallLog(result.steps);
+        if (toolCallLog.length > 0) {
+          let retryCount = 0;
+
+          while (retryCount <= CRITIC_MAX_RETRIES) {
+            if (this.abortController?.signal.aborted) break;
+
+            const criticResult = await this.runCritic(
+              userInput,
+              result.text,
+              toolCallLog,
+              retryCount > 0,
+            );
+
+            // null (error) or PASS — stop looping
+            if (!criticResult || criticResult.verdict === 'PASS') break;
+
+            // Exhausted retries — warn and stop
+            if (retryCount >= CRITIC_MAX_RETRIES) {
+              printInfo('Critic still unsatisfied after maximum retries.');
+              break;
+            }
+
+            retryCount++;
+            printCriticRetry(retryCount, CRITIC_MAX_RETRIES);
+
+            // Push current attempt's messages + critic feedback into history before retrying
+            try {
+              const truncatedResultMessages = truncateToolResults(
+                result.response.messages as CoreMessage[],
+              );
+              this.history.push(...truncatedResultMessages);
+              this.history.push({
+                role: 'user' as const,
+                content: `The critic agent reviewed your work and found issues:\n\nVERDICT: ${criticResult.verdict}\n${criticResult.explanation}\n\nPlease address these issues and try again.`,
+              });
+
+              result = await callGenerateText();
+              toolCallLog = this.extractToolCallLog(result.steps);
+
+              // If no tool calls in retry, nothing more to verify
+              if (toolCallLog.length === 0) break;
+            } catch (retryErr) {
+              debugLog(
+                'agent:critic:retry-error',
+                retryErr instanceof Error ? retryErr.message : String(retryErr),
+              );
+              break;
+            }
+          }
+        }
+      }
+
       // Track token usage for compression decisions — use last step's prompt tokens
       // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)
       this.lastPromptTokens = this.lastStepPromptTokens ?? result.usage?.promptTokens ?? 0;
-
-      // Run critic verification if enabled and tool calls were made
-      if (this.config.criticMode && !this.abortController?.signal.aborted) {
-        const toolCallLog = this.extractToolCallLog(result.steps);
-        if (toolCallLog.length > 0) {
-          await this.runCritic(userInput, result.text, toolCallLog);
-        }
-      }
 
       // Truncate large tool results before adding to history
       const truncatedMessages = truncateToolResults(result.response.messages as CoreMessage[]);
@@ -559,9 +616,14 @@ export class Agent {
     userInput: string,
     responseText: string,
     toolCallLog: CriticToolEntry[],
-  ): Promise<void> {
+    isRetry: boolean = false,
+  ): Promise<CriticResult | null> {
     try {
-      printCriticStart();
+      if (isRetry) {
+        printCriticReVerify();
+      } else {
+        printCriticStart();
+      }
 
       const truncatedLog = toolCallLog.map((entry) => ({
         toolName: entry.toolName,
@@ -605,10 +667,18 @@ ${truncatedLog
       });
 
       if (result.text) {
+        const parsed = parseCriticVerdict(result.text);
         printCriticVerdict(result.text);
+        return {
+          verdict: parsed.verdict as CriticResult['verdict'],
+          explanation: parsed.explanation,
+        };
       }
+
+      return null;
     } catch (err) {
       debugLog('agent:critic:error', err instanceof Error ? err.message : String(err));
+      return null;
     }
   }
 

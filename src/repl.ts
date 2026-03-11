@@ -140,7 +140,7 @@ export async function startRepl(
   let isPasting = false;
   function getPromptStr(): string {
     const { ansi } = getTheme();
-    const criticLabel = config.criticMode ? `${ansi.warning}[CRITIC]${ansi.reset} ` : '';
+    const criticLabel = config.criticMode ? `${ansi.warning}\u25C6${ansi.reset} ` : '';
     return `${criticLabel}${ansi.prompt}bernard>${ansi.reset} `;
   }
 
