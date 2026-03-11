@@ -130,7 +130,8 @@ export function tokenize(text: string): string[] {
 }
 
 /**
- * Stem-prefix match: two tokens match if one is a prefix of the other (min 3 chars) or exact match.
+ * Stem-prefix match: exact match for any length, prefix matching requires both tokens >= 3 chars.
+ * This means 2-char tokens like "pr" only match exactly, while "review" can prefix-match "reviewer".
  */
 function stemMatch(a: string, b: string): boolean {
   if (a === b) return true;
@@ -155,8 +156,10 @@ export function matchSpecialists(
   const matches: SpecialistMatch[] = [];
 
   for (const spec of specialists) {
-    // Build identity tokens from id segments + name
-    const idSegments = spec.id.split('-').filter((s) => s.length >= 2 && !/^\d+$/.test(s));
+    // Build identity tokens from id segments + name (stop-word filtered to match tokenize behavior)
+    const idSegments = spec.id
+      .split('-')
+      .filter((s) => s.length >= 2 && !/^\d+$/.test(s) && !STOP_WORDS.has(s));
     const nameTokens = tokenize(spec.name);
     const identityTokens = [...new Set([...idSegments, ...nameTokens])];
 
@@ -195,7 +198,7 @@ export function matchSpecialists(
     }
 
     if (score >= 0.4) {
-      matches.push({ id: spec.id, name: spec.name, score: Math.round(score * 100) / 100 });
+      matches.push({ id: spec.id, name: spec.name, score });
     }
   }
 
