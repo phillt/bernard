@@ -181,7 +181,6 @@ Be strict but fair. Not every response needs tool calls — knowledge answers ar
 interface CriticResult {
   verdict: 'PASS' | 'WARN' | 'FAIL' | 'UNKNOWN';
   explanation: string;
-  rawText: string;
 }
 
 const CRITIC_MAX_RETRIES = 2;
@@ -671,9 +670,12 @@ ${truncatedLog
       });
 
       if (result.text) {
-        const parsed = this.parseCriticVerdict(result.text);
+        const parsed = parseCriticVerdict(result.text);
         printCriticVerdict(result.text);
-        return parsed;
+        return {
+          verdict: parsed.verdict as CriticResult['verdict'],
+          explanation: parsed.explanation,
+        };
       }
 
       return null;
