@@ -624,9 +624,7 @@ describe('REPL /create-task command', () => {
     typeLine('/create-task');
 
     await vi.waitFor(() => {
-      expect(mockProcessInput).toHaveBeenCalledWith(
-        expect.stringContaining('task-'),
-      );
+      expect(mockProcessInput).toHaveBeenCalledWith(expect.stringContaining('task-'));
     });
 
     // Verify the message contains task-specific instructions
