@@ -534,6 +534,148 @@
       </div>
     </section>
 
+    <!-- v0.6.1 -->
+    <section class="version-section" id="v0.6.1">
+      <div class="container">
+        <h2 class="version-heading">
+          v0.6.1
+          <span class="version-date">2026-03-11</span>
+        </h2>
+
+        <!-- Critic Retry Loop -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- arrows-rotate icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <path d="M21 2v6h-6"></path>
+                <path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path>
+                <path d="M3 22v-6h6"></path>
+                <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
+              </svg>
+            </div>
+            <h2>Critic Retry Loop <span class="tag">fix</span></h2>
+          </div>
+          <p>
+            Critic mode now retries up to 2 times when it detects issues, feeding its verdict back
+            to the agent for correction before giving up.
+          </p>
+          <ul>
+            <li>Up to 2 automatic retries when critic returns WARN or FAIL</li>
+            <li>
+              Critic feedback is injected into conversation history so the agent can self-correct
+            </li>
+            <li>Improved verdict parsing using regex-based extraction</li>
+            <li>
+              REPL prompt now shows a diamond symbol instead of <code>[CRITIC]</code> label
+            </li>
+            <li>
+              New <code>parseCriticVerdict</code> utility extracted to output module
+            </li>
+          </ul>
+        </div>
+
+        <!-- /create-task Command -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- wand/plus-square icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <path d="M15 4V2"></path>
+                <path d="M15 16v-2"></path>
+                <path d="M8 9h2"></path>
+                <path d="M20 9h2"></path>
+                <path d="M17.8 11.8l1.4 1.4"></path>
+                <path d="M11.8 6.2l1.4-1.4"></path>
+                <path d="M17.8 6.2l1.4-1.4"></path>
+                <path d="M11.8 11.8l1.4 1.4"></path>
+                <path d="M2 22l6-6"></path>
+                <path d="M15 9l-9 9"></path>
+              </svg>
+            </div>
+            <h2><code>/create-task</code> Command <span class="tag">fix</span></h2>
+          </div>
+          <p>
+            Added <code>/create-task</code> guided creation command and refactored duplicate
+            creation logic.
+          </p>
+          <ul>
+            <li>
+              New <code>/create-task</code> REPL command for guided task routine creation
+            </li>
+            <li>
+              Refactored duplicate guided creation logic into a shared
+              <code>runGuidedCreation</code> helper
+            </li>
+            <li>
+              Help menu now lists <code>/routines</code>, <code>/create-routine</code>, and
+              <code>/create-task</code> commands
+            </li>
+          </ul>
+        </div>
+
+        <!-- Specialist Auto-Dispatch -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- crosshairs/target icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <circle cx="12" cy="12" r="10"></circle>
+                <circle cx="12" cy="12" r="6"></circle>
+                <circle cx="12" cy="12" r="2"></circle>
+                <path d="M12 2v4"></path>
+                <path d="M12 18v4"></path>
+                <path d="M2 12h4"></path>
+                <path d="M18 12h4"></path>
+              </svg>
+            </div>
+            <h2>Specialist Auto-Dispatch <span class="tag">fix</span></h2>
+          </div>
+          <p>
+            Specialists are now automatically matched to user input using keyword scoring, with
+            high-confidence matches auto-dispatched.
+          </p>
+          <ul>
+            <li>Keyword-based scoring matches user input against saved specialists</li>
+            <li>
+              Scores &ge; 0.8 trigger automatic dispatch; 0.4&ndash;0.8 prompt for confirmation
+            </li>
+            <li>
+              Match advisory injected into system prompt so the agent knows which specialists fit
+            </li>
+            <li>Stop-word filtering prevents common words from inflating scores</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
     <!-- v0.6.0 -->
     <section class="version-section" id="v0.6.0">
       <div class="container">
