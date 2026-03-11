@@ -336,15 +336,15 @@ describe('interactiveUpdate', () => {
     });
     expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('Updated to v2.0.0'));
     expect(outputMock.printInfo).toHaveBeenCalledWith(
-      expect.stringContaining("What's new: https://phillt.github.io/bernard/whats-new-2.0.0.html"),
+      expect.stringContaining("What's new: https://phillt.github.io/bernard/releases.html#v2.0.0"),
     );
   });
 });
 
 describe('releaseNotesUrl', () => {
   it('generates correct URL from version string', () => {
-    expect(releaseNotesUrl('0.6.0')).toBe('https://phillt.github.io/bernard/whats-new-0.6.0.html');
-    expect(releaseNotesUrl('2.0.0')).toBe('https://phillt.github.io/bernard/whats-new-2.0.0.html');
+    expect(releaseNotesUrl('0.6.0')).toBe('https://phillt.github.io/bernard/releases.html#v0.6.0');
+    expect(releaseNotesUrl('2.0.0')).toBe('https://phillt.github.io/bernard/releases.html#v2.0.0');
   });
 });
 
@@ -394,7 +394,7 @@ describe('startupUpdateCheck', () => {
     });
     expect(outputMock.printInfo).toHaveBeenCalledWith(expect.stringContaining('Updated bernard'));
     expect(outputMock.printInfo).toHaveBeenCalledWith(
-      expect.stringContaining("What's new: https://phillt.github.io/bernard/whats-new-2.0.0.html"),
+      expect.stringContaining("What's new: https://phillt.github.io/bernard/releases.html#v2.0.0"),
     );
   });
 });
