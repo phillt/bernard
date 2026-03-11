@@ -533,7 +533,12 @@ export class Agent {
           while (retryCount <= CRITIC_MAX_RETRIES) {
             if (this.abortController?.signal.aborted) break;
 
-            const criticResult = await this.runCritic(userInput, result.text, toolCallLog);
+            const criticResult = await this.runCritic(
+              userInput,
+              result.text,
+              toolCallLog,
+              retryCount > 0,
+            );
 
             // null (error) or PASS — stop looping
             if (!criticResult || criticResult.verdict === 'PASS') break;
