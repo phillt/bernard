@@ -457,14 +457,14 @@ export class Agent {
         ),
       };
 
-      const callGenerateText = () =>
+      const callGenerateText = (messages?: CoreMessage[]) =>
         generateText({
           model: getModel(this.config.provider, this.config.model),
           tools,
           maxSteps: 20,
           maxTokens: this.config.maxTokens,
           system: systemPrompt,
-          messages: this.history,
+          messages: messages ?? this.history,
           abortSignal: this.abortController!.signal,
           onStepFinish: ({ text, toolCalls, toolResults, usage }) => {
             if (usage) {
@@ -524,9 +524,54 @@ export class Agent {
 
       // Run critic verification if enabled and tool calls were made
       if (this.config.criticMode && !this.abortController?.signal.aborted) {
-        const toolCallLog = this.extractToolCallLog(result.steps);
+        let toolCallLog = this.extractToolCallLog(result.steps);
         if (toolCallLog.length > 0) {
-          await this.runCritic(userInput, result.text, toolCallLog);
+          let retryCount = 0;
+
+          while (retryCount <= CRITIC_MAX_RETRIES) {
+            if (this.abortController?.signal.aborted) break;
+
+            const criticResult = await this.runCritic(userInput, result.text, toolCallLog);
+
+            // null (error) or PASS — stop looping
+            if (!criticResult || criticResult.verdict === 'PASS') break;
+
+            // Exhausted retries — warn and stop
+            if (retryCount >= CRITIC_MAX_RETRIES) {
+              printInfo('Critic still unsatisfied after maximum retries.');
+              break;
+            }
+
+            retryCount++;
+            printCriticRetry(retryCount, CRITIC_MAX_RETRIES);
+
+            // Build retry messages: history + truncated result messages + critic feedback
+            try {
+              const truncatedResultMessages = truncateToolResults(
+                result.response.messages as CoreMessage[],
+              );
+              const retryMessages: CoreMessage[] = [
+                ...this.history,
+                ...truncatedResultMessages,
+                {
+                  role: 'user' as const,
+                  content: `The critic agent reviewed your work and found issues:\n\nVERDICT: ${criticResult.verdict}\n${criticResult.explanation}\n\nPlease address these issues and try again.`,
+                },
+              ];
+
+              result = await callGenerateText(retryMessages);
+              toolCallLog = this.extractToolCallLog(result.steps);
+
+              // If no tool calls in retry, nothing more to verify
+              if (toolCallLog.length === 0) break;
+            } catch (retryErr) {
+              debugLog(
+                'agent:critic:retry-error',
+                retryErr instanceof Error ? retryErr.message : String(retryErr),
+              );
+              break;
+            }
+          }
         }
       }
 
