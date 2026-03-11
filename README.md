@@ -240,6 +240,7 @@ Features:
 | `/theme`          | Switch color theme                                                        |
 | `/routines`       | List saved routines                                                       |
 | `/create-routine` | Create a routine with guided AI assistance                                |
+| `/create-task`    | Create a task routine (`task-` prefixed) with guided AI assistance        |
 | `/specialists`    | List saved specialists                                                    |
 | `/candidates`     | Review auto-detected specialist suggestions _(v0.6.0+)_                   |
 | `/critic`         | Toggle critic mode for response verification (on/off)                     |

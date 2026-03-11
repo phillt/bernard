@@ -359,6 +359,13 @@ export function printHelp(): void {
   console.log(t.text('  /provider') + t.muted(' — Switch LLM provider'));
   console.log(t.text('  /model') + t.muted('    — Switch model for current provider'));
   console.log(t.text('  /theme') + t.muted('    — Switch color theme'));
+  console.log(t.text('  /routines') + t.muted(' — List saved routines'));
+  console.log(
+    t.text('  /create-routine') + t.muted(' — Create a routine with guided AI assistance'),
+  );
+  console.log(
+    t.text('  /create-task') + t.muted(' — Create a task routine with guided AI assistance'),
+  );
   console.log(t.text('  /specialists') + t.muted(' — List specialist agents'));
   console.log(
     t.text('  /create-specialist') + t.muted(' — Create a specialist with guided AI assistance'),

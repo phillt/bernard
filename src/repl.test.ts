@@ -595,3 +595,87 @@ describe('REPL /candidates command', () => {
     await replPromise.catch(() => {});
   });
 });
+
+describe('REPL /create-task command', () => {
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rlEmitter = makeRl();
+    vi.spyOn(console, 'clear').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('calls agent.processInput with task-prefix instructions', async () => {
+    mockProcessInput.mockResolvedValue(undefined);
+    const { startRepl } = await import('./repl.js');
+
+    const replPromise = startRepl(makeConfig());
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/create-task');
+
+    await vi.waitFor(() => {
+      expect(mockProcessInput).toHaveBeenCalledWith(expect.stringContaining('task-'));
+    });
+
+    // Verify the message contains task-specific instructions
+    const callArg = mockProcessInput.mock.calls[0][0] as string;
+    expect(callArg).toContain('ID MUST start with "task-"');
+    expect(callArg).toContain('task routine');
+
+    // Verify history is saved after processing
+    expect(mockHistorySave).toHaveBeenCalled();
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('re-prompts after create-task completes', async () => {
+    mockProcessInput.mockResolvedValue(undefined);
+    const { startRepl } = await import('./repl.js');
+
+    const replPromise = startRepl(makeConfig());
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    const promptCountBefore = rlEmitter.prompt.mock.calls.length;
+
+    typeLine('/create-task');
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt.mock.calls.length).toBeGreaterThan(promptCountBefore);
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('handles errors from processInput gracefully', async () => {
+    mockProcessInput.mockRejectedValue(new Error('API error'));
+    const { startRepl } = await import('./repl.js');
+
+    const replPromise = startRepl(makeConfig());
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/create-task');
+
+    await vi.waitFor(() => {
+      expect(mockPrintError).toHaveBeenCalledWith('API error');
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+});
