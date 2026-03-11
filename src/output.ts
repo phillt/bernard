@@ -309,17 +309,13 @@ export function printCriticRetry(attempt: number, maxRetries: number): void {
 
 /** Parses a critic response into a structured verdict and explanation. */
 export function parseCriticVerdict(text: string): { verdict: string; explanation: string } {
-  const lines = text.trim().split('\n');
-  const verdictLine = lines.find((l) => l.startsWith('VERDICT:'));
-  const explanation = lines
-    .filter((l) => !l.startsWith('VERDICT:'))
-    .join(' ')
-    .trim();
-
+  const verdictMatch = text.match(/\bVERDICT:\s*(PASS|WARN|FAIL)\b/i);
   let verdict = 'UNKNOWN';
-  if (verdictLine) {
-    const match = verdictLine.match(/VERDICT:\s*(PASS|WARN|FAIL)/i);
-    if (match) verdict = match[1].toUpperCase();
+  let explanation = text.trim();
+
+  if (verdictMatch) {
+    verdict = verdictMatch[1].toUpperCase();
+    explanation = text.replace(/^.*\bVERDICT:\s*(PASS|WARN|FAIL)\b[^\n]*/im, '').trim();
   }
 
   return { verdict, explanation };
