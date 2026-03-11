@@ -406,6 +406,39 @@ export async function startRepl(
     await mcpManager.close();
   };
 
+  async function runGuidedCreation(message: string): Promise<void> {
+    processing = true;
+    interrupted = false;
+    try {
+      const spinnerStats: SpinnerStats = {
+        startTime: Date.now(),
+        totalPromptTokens: 0,
+        totalCompletionTokens: 0,
+        latestPromptTokens: 0,
+        model: config.model,
+        contextWindowOverride: config.tokenWindow || undefined,
+      };
+      agent.setSpinnerStats(spinnerStats);
+      startSpinner(() => buildSpinnerMessage(spinnerStats));
+      await agent.processInput(message);
+      historyStore.save(agent.getHistory());
+    } catch (err: unknown) {
+      if (!interrupted) {
+        const msg = err instanceof Error ? err.message : String(err);
+        printError(msg);
+      }
+    } finally {
+      processing = false;
+      stopSpinner();
+    }
+    if (interrupted) {
+      printInfo('Interrupted.');
+      interrupted = false;
+    }
+    console.log();
+    void prompt();
+  }
+
   const prompt = async () => {
     const { text, pasted } = await readInput();
     let trimmed = text.trim();
@@ -934,36 +967,7 @@ export async function startRepl(
 
 Remember: routine content should be written as clear instructions that Bernard can follow. Think of it like writing a mini system prompt — specific, structured, and actionable.`;
 
-        processing = true;
-        interrupted = false;
-        try {
-          const spinnerStats: SpinnerStats = {
-            startTime: Date.now(),
-            totalPromptTokens: 0,
-            totalCompletionTokens: 0,
-            latestPromptTokens: 0,
-            model: config.model,
-            contextWindowOverride: config.tokenWindow || undefined,
-          };
-          agent.setSpinnerStats(spinnerStats);
-          startSpinner(() => buildSpinnerMessage(spinnerStats));
-          await agent.processInput(message);
-          historyStore.save(agent.getHistory());
-        } catch (err: unknown) {
-          if (!interrupted) {
-            const message = err instanceof Error ? err.message : String(err);
-            printError(message);
-          }
-        } finally {
-          processing = false;
-          stopSpinner();
-        }
-        if (interrupted) {
-          printInfo('Interrupted.');
-          interrupted = false;
-        }
-        console.log();
-        void prompt();
+        await runGuidedCreation(message);
         return;
       }
 
@@ -987,36 +991,7 @@ IMPORTANT: The routine ID MUST start with "task-". When drafting, generate an ID
 
 Remember: routine content should be written as clear instructions that Bernard can follow. Think of it like writing a mini system prompt — specific, structured, and actionable.`;
 
-        processing = true;
-        interrupted = false;
-        try {
-          const spinnerStats: SpinnerStats = {
-            startTime: Date.now(),
-            totalPromptTokens: 0,
-            totalCompletionTokens: 0,
-            latestPromptTokens: 0,
-            model: config.model,
-            contextWindowOverride: config.tokenWindow || undefined,
-          };
-          agent.setSpinnerStats(spinnerStats);
-          startSpinner(() => buildSpinnerMessage(spinnerStats));
-          await agent.processInput(message);
-          historyStore.save(agent.getHistory());
-        } catch (err: unknown) {
-          if (!interrupted) {
-            const message = err instanceof Error ? err.message : String(err);
-            printError(message);
-          }
-        } finally {
-          processing = false;
-          stopSpinner();
-        }
-        if (interrupted) {
-          printInfo('Interrupted.');
-          interrupted = false;
-        }
-        console.log();
-        void prompt();
+        await runGuidedCreation(message);
         return;
       }
 
@@ -1055,36 +1030,7 @@ Remember: routine content should be written as clear instructions that Bernard c
 
 Remember: the systemPrompt should read like a persona definition — who this specialist is, what they care about, how they work. Guidelines are individual rules that can be added/removed independently.`;
 
-        processing = true;
-        interrupted = false;
-        try {
-          const spinnerStats: SpinnerStats = {
-            startTime: Date.now(),
-            totalPromptTokens: 0,
-            totalCompletionTokens: 0,
-            latestPromptTokens: 0,
-            model: config.model,
-            contextWindowOverride: config.tokenWindow || undefined,
-          };
-          agent.setSpinnerStats(spinnerStats);
-          startSpinner(() => buildSpinnerMessage(spinnerStats));
-          await agent.processInput(message);
-          historyStore.save(agent.getHistory());
-        } catch (err: unknown) {
-          if (!interrupted) {
-            const message = err instanceof Error ? err.message : String(err);
-            printError(message);
-          }
-        } finally {
-          processing = false;
-          stopSpinner();
-        }
-        if (interrupted) {
-          printInfo('Interrupted.');
-          interrupted = false;
-        }
-        console.log();
-        void prompt();
+        await runGuidedCreation(message);
         return;
       }
 
