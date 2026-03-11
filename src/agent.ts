@@ -547,21 +547,18 @@ export class Agent {
             retryCount++;
             printCriticRetry(retryCount, CRITIC_MAX_RETRIES);
 
-            // Build retry messages: history + truncated result messages + critic feedback
+            // Push current attempt's messages + critic feedback into history before retrying
             try {
               const truncatedResultMessages = truncateToolResults(
                 result.response.messages as CoreMessage[],
               );
-              const retryMessages: CoreMessage[] = [
-                ...this.history,
-                ...truncatedResultMessages,
-                {
-                  role: 'user' as const,
-                  content: `The critic agent reviewed your work and found issues:\n\nVERDICT: ${criticResult.verdict}\n${criticResult.explanation}\n\nPlease address these issues and try again.`,
-                },
-              ];
+              this.history.push(...truncatedResultMessages);
+              this.history.push({
+                role: 'user' as const,
+                content: `The critic agent reviewed your work and found issues:\n\nVERDICT: ${criticResult.verdict}\n${criticResult.explanation}\n\nPlease address these issues and try again.`,
+              });
 
-              result = await callGenerateText(retryMessages);
+              result = await callGenerateText();
               toolCallLog = this.extractToolCallLog(result.steps);
 
               // If no tool calls in retry, nothing more to verify
