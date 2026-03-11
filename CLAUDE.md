@@ -20,6 +20,7 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - **src/theme.ts** — Color theme definitions (bernard, ocean, forest, synthwave, high-contrast, colorblind)
 - **src/domains.ts** — Memory domain registry (tool-usage, user-preferences, general) with specialized extraction prompts
 - **src/routines.ts** — RoutineStore class: per-file JSON storage for named multi-step workflows
+- **src/specialist-matcher.ts** — Keyword scorer matching user input to saved specialists for auto-dispatch
 - **src/providers/** — `getModel()` factory returning AI SDK `LanguageModel`
 - **src/tools/** — Tool registry; each tool is a separate file using `tool()` from `ai`
 
