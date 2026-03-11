@@ -10,6 +10,7 @@ import {
   printInfo,
   printCriticStart,
   printCriticVerdict,
+  printCriticRetry,
   startSpinner,
   buildSpinnerMessage,
   type SpinnerStats,

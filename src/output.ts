@@ -300,6 +300,13 @@ export function printCriticStart(): void {
   console.log(t.accent('┌─ critic — verifying response...'));
 }
 
+/** Prints a retry indicator when the critic triggers a correction loop. */
+export function printCriticRetry(attempt: number, maxRetries: number): void {
+  stopSpinner();
+  const t = getTheme();
+  console.log(t.warning(`├─ critic — retrying (${attempt}/${maxRetries})...`));
+}
+
 /** Prints the critic's verdict with color based on PASS/WARN/FAIL. */
 export function printCriticVerdict(text: string): void {
   stopSpinner();

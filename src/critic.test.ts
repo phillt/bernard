@@ -26,6 +26,7 @@ vi.mock('./output.js', () => ({
   printInfo: vi.fn(),
   printCriticStart: vi.fn(),
   printCriticVerdict: vi.fn(),
+  printCriticRetry: vi.fn(),
   startSpinner: vi.fn(),
   stopSpinner: vi.fn(),
 }));

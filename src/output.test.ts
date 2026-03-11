@@ -13,6 +13,7 @@ import {
   printSubAgentEnd,
   printCriticStart,
   printCriticVerdict,
+  printCriticRetry,
   startSpinner,
   stopSpinner,
   buildSpinnerMessage,
@@ -533,6 +534,24 @@ describe('output', () => {
       printCriticVerdict('Some text without verdict');
       const output = logSpy.mock.calls[0][0];
       expect(output).toContain('UNKNOWN');
+    });
+  });
+
+  describe('printCriticRetry', () => {
+    it('prints retry indicator with attempt and max', () => {
+      printCriticRetry(1, 2);
+      expect(logSpy).toHaveBeenCalled();
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('├─');
+      expect(output).toContain('critic');
+      expect(output).toContain('retrying');
+      expect(output).toContain('1/2');
+    });
+
+    it('shows correct attempt numbers', () => {
+      printCriticRetry(2, 2);
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('2/2');
     });
   });
 });
