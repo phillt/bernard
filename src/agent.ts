@@ -32,7 +32,7 @@ import type { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import { RoutineStore, type RoutineSummary } from './routines.js';
 import { SpecialistStore, type SpecialistSummary } from './specialists.js';
-import type { CandidateStore } from './specialist-candidates.js';
+import type { CandidateStoreReader } from './specialist-candidates.js';
 import { createSpecialistRunTool } from './tools/specialist-run.js';
 import { matchSpecialists, type SpecialistMatch } from './specialist-matcher.js';
 import { buildMemoryContext } from './memory-context.js';
@@ -302,7 +302,7 @@ export class Agent {
   private spinnerStats: SpinnerStats | null = null;
   private routineStore: RoutineStore;
   private specialistStore: SpecialistStore;
-  private candidateStore?: CandidateStore;
+  private candidateStore?: CandidateStoreReader;
 
   constructor(
     config: BernardConfig,
@@ -315,7 +315,7 @@ export class Agent {
     ragStore?: RAGStore,
     routineStore?: RoutineStore,
     specialistStore?: SpecialistStore,
-    candidateStore?: CandidateStore,
+    candidateStore?: CandidateStoreReader,
   ) {
     this.config = config;
     this.toolOptions = toolOptions;

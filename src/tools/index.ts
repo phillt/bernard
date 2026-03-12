@@ -14,7 +14,7 @@ import type { ToolOptions } from './types.js';
 import type { MemoryStore } from '../memory.js';
 import type { RoutineStore } from '../routines.js';
 import type { SpecialistStore } from '../specialists.js';
-import type { CandidateStore } from '../specialist-candidates.js';
+import type { CandidateStoreReader } from '../specialist-candidates.js';
 
 export type { ToolOptions } from './types.js';
 
@@ -32,7 +32,7 @@ export function createTools(
   mcpTools?: Record<string, any>,
   routineStore?: RoutineStore,
   specialistStore?: SpecialistStore,
-  candidateStore?: CandidateStore,
+  candidateStore?: CandidateStoreReader,
 ): Record<string, any> {
   return {
     shell: createShellTool(options),

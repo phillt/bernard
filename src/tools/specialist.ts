@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { SpecialistStore, type Specialist } from '../specialists.js';
-import type { CandidateStore } from '../specialist-candidates.js';
+import type { CandidateStoreReader } from '../specialist-candidates.js';
 
 /**
  * Creates the specialist management tool for saving and retrieving reusable expert profiles.
@@ -12,7 +12,7 @@ import type { CandidateStore } from '../specialist-candidates.js';
  */
 export function createSpecialistTool(
   specialistStore?: SpecialistStore,
-  candidateStore?: CandidateStore,
+  candidateStore?: CandidateStoreReader,
 ) {
   const store = specialistStore ?? new SpecialistStore();
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createSpecialistTool } from './specialist.js';
-import type { CandidateStore } from '../specialist-candidates.js';
+import type { CandidateStoreReader } from '../specialist-candidates.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
@@ -256,7 +256,7 @@ describe('createSpecialistTool', () => {
             { id: 'cand-uuid-1', draftId: 'email-triage', name: 'Email Triage', status: 'pending' },
           ]),
         updateStatus: vi.fn(),
-      } as unknown as CandidateStore;
+      } as CandidateStoreReader;
 
       const toolWithCandidates = createSpecialistTool(undefined, mockCandidateStore);
 
@@ -283,7 +283,7 @@ describe('createSpecialistTool', () => {
             { id: 'cand-uuid-2', draftId: 'different-id', name: 'Code Review', status: 'pending' },
           ]),
         updateStatus: vi.fn(),
-      } as unknown as CandidateStore;
+      } as CandidateStoreReader;
 
       const toolWithCandidates = createSpecialistTool(undefined, mockCandidateStore);
 
@@ -310,7 +310,7 @@ describe('createSpecialistTool', () => {
             { id: 'cand-uuid-3', draftId: 'other-specialist', name: 'Other', status: 'pending' },
           ]),
         updateStatus: vi.fn(),
-      } as unknown as CandidateStore;
+      } as CandidateStoreReader;
 
       const toolWithCandidates = createSpecialistTool(undefined, mockCandidateStore);
 
