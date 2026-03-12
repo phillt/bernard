@@ -315,7 +315,7 @@ describe('critic mode', () => {
   });
 
   describe('responseText truncation in critic', () => {
-    it('truncates long responseText before sending to critic', async () => {
+    it('truncates long responseText at 4000 chars before sending to critic', async () => {
       const longText = 'x'.repeat(5000);
       mockGenerateText
         .mockResolvedValueOnce({
@@ -344,6 +344,139 @@ describe('critic mode', () => {
       // Should be truncated — not contain the full 5000 chars
       expect(criticMsg).not.toContain('x'.repeat(5000));
       expect(criticMsg).toContain('... (truncated)');
+      // The agent response section should contain at most 4000 x's + truncation marker
+      expect(criticMsg).toContain('x'.repeat(4000));
+    });
+  });
+
+  describe('adaptive tool result truncation', () => {
+    it('gives single tool call full 8000-char budget', async () => {
+      const longResult = 'r'.repeat(8000);
+      mockGenerateText
+        .mockResolvedValueOnce({
+          text: 'Done.',
+          steps: [
+            {
+              toolCalls: [{ toolName: 'shell', args: { command: 'cat big.txt' } }],
+              toolResults: [{ toolName: 'shell', result: longResult }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        .mockResolvedValueOnce({
+          text: 'VERDICT: PASS\nOk.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
+        });
+
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      await agent.processInput('Read big file');
+
+      const criticCall = mockGenerateText.mock.calls[1][0];
+      const criticMsg = criticCall.messages[0].content as string;
+      // Single call should get full 8000 chars
+      expect(criticMsg).toContain('r'.repeat(8000));
+    });
+
+    it('floors at 500 chars per result for many tool calls', async () => {
+      // Create 20 tool calls with 1000-char results
+      const toolCalls = Array.from({ length: 20 }, (_, i) => ({
+        toolName: 'shell',
+        args: { command: `cmd-${i}` },
+      }));
+      const toolResults = Array.from({ length: 20 }, () => ({
+        toolName: 'shell',
+        result: 'a'.repeat(1000),
+      }));
+
+      mockGenerateText
+        .mockResolvedValueOnce({
+          text: 'Done.',
+          steps: [{ toolCalls, toolResults }],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        .mockResolvedValueOnce({
+          text: 'VERDICT: PASS\nOk.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
+        });
+
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      await agent.processInput('Run many commands');
+
+      const criticCall = mockGenerateText.mock.calls[1][0];
+      const criticMsg = criticCall.messages[0].content as string;
+      // With 20 calls: 8000/20 = 400, floored at 500
+      // So each result should be truncated to 500 chars (not the full 1000)
+      expect(criticMsg).not.toContain('a'.repeat(1000));
+      expect(criticMsg).toContain('a'.repeat(500));
+    });
+
+    it('uses 1000-char limit for args', async () => {
+      const longArgs = { command: 'x'.repeat(1500) };
+      mockGenerateText
+        .mockResolvedValueOnce({
+          text: 'Done.',
+          steps: [
+            {
+              toolCalls: [{ toolName: 'shell', args: longArgs }],
+              toolResults: [{ toolName: 'shell', result: 'ok' }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        .mockResolvedValueOnce({
+          text: 'VERDICT: PASS\nOk.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
+        });
+
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      await agent.processInput('Run long command');
+
+      const criticCall = mockGenerateText.mock.calls[1][0];
+      const criticMsg = criticCall.messages[0].content as string;
+      // Full JSON of args is {"command":"x...x"} which is >1500 chars
+      // The truncated version should end with "..." and not contain all 1500 x's
+      const fullArgsJson = JSON.stringify(longArgs);
+      expect(criticMsg).not.toContain(fullArgsJson);
+      expect(criticMsg).toContain('...');
+    });
+  });
+
+  describe('critic system prompt', () => {
+    it('includes truncation awareness guidance', async () => {
+      mockGenerateText
+        .mockResolvedValueOnce({
+          text: 'Done.',
+          steps: [
+            {
+              toolCalls: [{ toolName: 'shell', args: { command: 'echo hi' } }],
+              toolResults: [{ toolName: 'shell', result: 'hi' }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        .mockResolvedValueOnce({
+          text: 'VERDICT: PASS\nOk.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
+        });
+
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      await agent.processInput('Do work');
+
+      const criticCall = mockGenerateText.mock.calls[1][0];
+      expect(criticCall.system).toContain('truncated');
+      expect(criticCall.system).toContain('positive evidence of failure');
     });
   });
 

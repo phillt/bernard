@@ -170,6 +170,7 @@ Your job:
 - Verify that tool calls were actually made for actions the agent claims to have performed.
 - Flag any claims not backed by tool evidence (e.g., "I created the file" but no shell/write tool call).
 - Flag any tool results that suggest failure but were reported as success.
+- Tool results and the agent response may be truncated for context efficiency. If a tool result appears cut off, do not treat the missing portion as evidence of failure. Only flag FAIL when there is positive evidence of failure (e.g., an error message visible in the output), not merely the absence of success confirmation in truncated output.
 - Check if the response addresses the user's original intent.
 
 Output format (plain text, concise):
@@ -645,16 +646,23 @@ export class Agent {
         printCriticStart();
       }
 
+      const CRITIC_TOTAL_RESULT_BUDGET = 8000;
+      const CRITIC_MIN_RESULT_CHARS = 500;
+      const perResultLimit = Math.max(
+        CRITIC_MIN_RESULT_CHARS,
+        Math.floor(CRITIC_TOTAL_RESULT_BUDGET / toolCallLog.length),
+      );
+
       const truncatedLog = toolCallLog.map((entry) => ({
         toolName: entry.toolName,
         args: entry.args,
         result:
           typeof entry.result === 'string'
-            ? entry.result.slice(0, 500)
-            : JSON.stringify(entry.result ?? null).slice(0, 500),
+            ? entry.result.slice(0, perResultLimit)
+            : JSON.stringify(entry.result ?? null).slice(0, perResultLimit),
       }));
 
-      const MAX_RESPONSE_LENGTH = 2000;
+      const MAX_RESPONSE_LENGTH = 4000;
       const truncatedResponse =
         responseText.length > MAX_RESPONSE_LENGTH
           ? responseText.slice(0, MAX_RESPONSE_LENGTH) + '\n... (truncated)'
@@ -669,7 +677,7 @@ ${truncatedResponse}
 ## Tool Call Log (${truncatedLog.length} calls)
 ${truncatedLog
   .map((e, i) => {
-    const MAX_ARGS_LENGTH = 500;
+    const MAX_ARGS_LENGTH = 1000;
     const argsStr = JSON.stringify(e.args);
     const truncatedArgs =
       argsStr.length > MAX_ARGS_LENGTH ? argsStr.slice(0, MAX_ARGS_LENGTH) + '...' : argsStr;
