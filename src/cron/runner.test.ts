@@ -299,4 +299,9 @@ describe('runJob', () => {
     expect(capturedSystem).toContain('Tool Execution Integrity');
     expect(capturedSystem).toContain('NEVER simulate');
   });
+
+  it('includes eventual consistency guidance in system prompt', async () => {
+    await runJob(testJob, vi.fn());
+    expect(capturedSystem).toContain('eventual consistency');
+  });
 });

@@ -328,6 +328,28 @@ describe('subagent tool', () => {
     expect(call.system).toContain('verification command');
   });
 
+  it('includes error handling guidance prohibiting identical retries', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    await agentTool.execute!(
+      { task: 'test' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as any },
+    );
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('NEVER retry the exact same command');
+  });
+
+  it('includes eventual consistency guidance', async () => {
+    mockGenerateText.mockResolvedValue({ text: 'Done' });
+    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    await agentTool.execute!(
+      { task: 'test' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as any },
+    );
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('eventual consistency');
+  });
+
   it('uses task text as RAG search query', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     const mockRagStore = {

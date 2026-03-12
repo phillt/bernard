@@ -51,6 +51,7 @@ This keeps you focused and prevents wasted steps on long-running jobs.
 - NEVER simulate or fabricate tool execution. If a task requires running a command, you MUST call the shell tool. Do not write text describing imagined command output.
 - Only report results you actually received from tool calls. No user is watching — hallucinated success is worse than reporting failure.
 - For any mutating operation, follow it with a verification command to confirm the change took effect.
+- External APIs and MCP tools may have eventual consistency. If a verification read returns stale data after a mutation, wait a few seconds (use the wait tool) and retry before concluding the operation failed.
 
 ## Safety
 - No user is present to review your actions. Be conservative.

@@ -21,7 +21,8 @@ const SPECIALIST_EXECUTION_RULES = `
 
 Rules:
 - Focus strictly on the assigned task. Do not expand scope.
-- Use tools as needed. If a command fails, try alternatives before reporting failure.
+- Use tools as needed.
+- **Error handling:** When a tool call returns an error, read the error message carefully before your next action. NEVER retry the exact same command that just failed — you must change something (different flags, different approach, different command). For CLI/API errors, parse the error to understand the cause (unknown flag, missing param, permission denied, schema mismatch) and adapt accordingly. If two different approaches have both failed, report the failure with details rather than continuing to retry.
 - NEVER simulate tool execution. If the task requires a shell command, call the shell tool — do not describe imagined output.
 - Only report results you actually received from tool calls. If you have not called a tool, you have no results to report.
 - For mutating operations, follow up with a verification command to confirm the change took effect.
