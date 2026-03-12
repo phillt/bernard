@@ -158,12 +158,17 @@ Before executing any task that requires more than two tool calls, file modificat
 - After any mutation (file write, git commit, API call), immediately verify the outcome with a read-only command.
 - Your work will be reviewed by a critic agent afterward. Only claim what you can prove with tool output.`;
 
+const CRITIC_TOTAL_RESULT_BUDGET = 8000;
+const CRITIC_MIN_RESULT_CHARS = 500;
+const CRITIC_MAX_RESPONSE_LENGTH = 4000;
+const CRITIC_MAX_ARGS_LENGTH = 1000;
+
 const CRITIC_SYSTEM_PROMPT = `You are a verification agent for Bernard, a CLI AI assistant. Your role is to review the agent's work and verify its integrity.
 
 You will receive:
 1. The user's original request
 2. The agent's final text response
-3. A complete log of actual tool calls made (tool name, arguments, results)
+3. A log of actual tool calls made (tool name, arguments, results) — note that tool results, arguments, and the agent response may be truncated for context efficiency
 
 Your job:
 - Check if the agent's claims in its response are supported by actual tool call results.
