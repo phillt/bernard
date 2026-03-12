@@ -160,18 +160,24 @@ Before executing any task that requires more than two tool calls, file modificat
 - After any mutation (file write, git commit, API call), immediately verify the outcome with a read-only command.
 - Your work will be reviewed by a critic agent afterward. Only claim what you can prove with tool output.`;
 
+const CRITIC_TOTAL_RESULT_BUDGET = 8000;
+const CRITIC_MIN_RESULT_CHARS = 500;
+const CRITIC_MAX_RESPONSE_LENGTH = 4000;
+const CRITIC_MAX_ARGS_LENGTH = 1000;
+
 const CRITIC_SYSTEM_PROMPT = `You are a verification agent for Bernard, a CLI AI assistant. Your role is to review the agent's work and verify its integrity.
 
 You will receive:
 1. The user's original request
 2. The agent's final text response
-3. A complete log of actual tool calls made (tool name, arguments, results)
+3. A log of actual tool calls made (tool name, arguments, results) — note that tool results, arguments, and the agent response may be truncated for context efficiency
 
 Your job:
 - Check if the agent's claims in its response are supported by actual tool call results.
 - Verify that tool calls were actually made for actions the agent claims to have performed.
 - Flag any claims not backed by tool evidence (e.g., "I created the file" but no shell/write tool call).
 - Flag any tool results that suggest failure but were reported as success.
+- Tool results and the agent response may be truncated for context efficiency. If a tool result appears cut off, do not treat the missing portion as evidence of failure. Only flag FAIL when there is positive evidence of failure (e.g., an error message visible in the output), not merely the absence of success confirmation in truncated output.
 - Check if the response addresses the user's original intent.
 
 Output format (plain text, concise):
@@ -651,19 +657,25 @@ export class Agent {
         printCriticStart();
       }
 
-      const truncatedLog = toolCallLog.map((entry) => ({
-        toolName: entry.toolName,
-        args: entry.args,
-        result:
-          typeof entry.result === 'string'
-            ? entry.result.slice(0, 500)
-            : JSON.stringify(entry.result ?? null).slice(0, 500),
-      }));
+      const perResultLimit = Math.max(
+        CRITIC_MIN_RESULT_CHARS,
+        Math.floor(CRITIC_TOTAL_RESULT_BUDGET / toolCallLog.length),
+      );
 
-      const MAX_RESPONSE_LENGTH = 2000;
+      const truncatedLog = toolCallLog.map((entry) => {
+        const raw =
+          typeof entry.result === 'string' ? entry.result : JSON.stringify(entry.result ?? null);
+        const truncated = raw.length > perResultLimit ? raw.slice(0, perResultLimit) + '...' : raw;
+        return {
+          toolName: entry.toolName,
+          args: entry.args,
+          result: truncated,
+        };
+      });
+
       const truncatedResponse =
-        responseText.length > MAX_RESPONSE_LENGTH
-          ? responseText.slice(0, MAX_RESPONSE_LENGTH) + '\n... (truncated)'
+        responseText.length > CRITIC_MAX_RESPONSE_LENGTH
+          ? responseText.slice(0, CRITIC_MAX_RESPONSE_LENGTH) + '\n... (truncated)'
           : responseText;
 
       const criticMessage = `## Original User Request
@@ -675,10 +687,11 @@ ${truncatedResponse}
 ## Tool Call Log (${truncatedLog.length} calls)
 ${truncatedLog
   .map((e, i) => {
-    const MAX_ARGS_LENGTH = 500;
     const argsStr = JSON.stringify(e.args);
     const truncatedArgs =
-      argsStr.length > MAX_ARGS_LENGTH ? argsStr.slice(0, MAX_ARGS_LENGTH) + '...' : argsStr;
+      argsStr.length > CRITIC_MAX_ARGS_LENGTH
+        ? argsStr.slice(0, CRITIC_MAX_ARGS_LENGTH) + '...'
+        : argsStr;
     return `${i + 1}. ${e.toolName}(${truncatedArgs})\n   Result: ${e.result}`;
   })
   .join('\n\n')}`;
