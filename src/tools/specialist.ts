@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { SpecialistStore, type Specialist } from '../specialists.js';
+import type { CandidateStore } from '../specialist-candidates.js';
 
 /**
  * Creates the specialist management tool for saving and retrieving reusable expert profiles.
@@ -9,7 +10,7 @@ import { SpecialistStore, type Specialist } from '../specialists.js';
  * that shape how a sub-agent approaches work. Unlike routines (procedures), specialists
  * define *how* to work rather than *what* steps to follow.
  */
-export function createSpecialistTool(specialistStore?: SpecialistStore) {
+export function createSpecialistTool(specialistStore?: SpecialistStore, candidateStore?: CandidateStore) {
   const store = specialistStore ?? new SpecialistStore();
 
   return tool({
@@ -69,6 +70,12 @@ export function createSpecialistTool(specialistStore?: SpecialistStore) {
           if (!systemPrompt) return 'Error: systemPrompt is required for create action.';
           try {
             const specialist = store.create(id, name, description, systemPrompt, guidelines ?? []);
+            // Auto-mark matching candidate as accepted
+            if (candidateStore) {
+              const pending = candidateStore.listPending();
+              const match = pending.find(c => c.draftId === id || c.name.toLowerCase() === name.toLowerCase());
+              if (match) candidateStore.updateStatus(match.id, 'accepted');
+            }
             return `Specialist "${specialist.name}" (${specialist.id}) created. Use specialist_run to invoke it.`;
           } catch (err: unknown) {
             return `Error: ${err instanceof Error ? err.message : String(err)}`;
