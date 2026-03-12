@@ -193,6 +193,7 @@ vi.mock('./specialist-candidates.js', () => ({
     listPending: mockListPending,
     acknowledge: mockAcknowledge,
     pruneOld: mockPruneOld,
+    reconcileSaved: vi.fn(() => 0),
     create: mockCandidateCreate,
     list: vi.fn(() => []),
   })),
