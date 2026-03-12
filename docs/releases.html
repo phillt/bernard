@@ -534,6 +534,118 @@
       </div>
     </section>
 
+    <!-- v0.6.2 -->
+    <section class="version-section" id="v0.6.2">
+      <div class="container">
+        <h2 class="version-heading">
+          v0.6.2
+          <span class="version-date">2026-03-12</span>
+        </h2>
+
+        <!-- Critic Visibility — Adaptive Truncation -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- scissors icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <circle cx="6" cy="6" r="3"></circle>
+                <path d="M8.12 8.12 12 12"></path>
+                <path d="M20 4 8.12 15.88"></path>
+                <circle cx="6" cy="18" r="3"></circle>
+                <path d="M14.8 14.8 20 20"></path>
+              </svg>
+            </div>
+            <h2>Critic Visibility &mdash; Adaptive Truncation <span class="tag">fix</span></h2>
+          </div>
+          <p>
+            Tool-result summaries shown to the critic now use an adaptive 8000-char budget instead
+            of a fixed 500-char slice, so the critic sees far more context before judging.
+          </p>
+          <ul>
+            <li>Adaptive 8000-char budget with a 500-char floor per tool result</li>
+            <li>Response truncation raised from 2000 to 4000 chars, args from 500 to 1000</li>
+            <li>Truncation markers (<code>...</code>) added to tool results</li>
+            <li>Critic prompt updated to not treat truncation as failure evidence</li>
+          </ul>
+        </div>
+
+        <!-- Error Handling & Eventual Consistency -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- shield-alert icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <path
+                  d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"
+                ></path>
+                <path d="M12 8v4"></path>
+                <path d="M12 16h.01"></path>
+              </svg>
+            </div>
+            <h2>Error Handling &amp; Eventual Consistency <span class="tag">fix</span></h2>
+          </div>
+          <p>
+            Agents no longer retry the exact same failed command, and external API mutations get a
+            short delay before re-verification to account for eventual consistency.
+          </p>
+          <ul>
+            <li>No retrying the exact same failed command across all agent types and cron jobs</li>
+            <li>Wait 2&ndash;5s before re-verifying external API mutations</li>
+          </ul>
+        </div>
+
+        <!-- Specialist Candidate Filtering -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- filter icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+              </svg>
+            </div>
+            <h2>Specialist Candidate Filtering <span class="tag">fix</span></h2>
+          </div>
+          <p>
+            Candidates that have already been saved as specialists are automatically filtered out of
+            future suggestions.
+          </p>
+          <ul>
+            <li>
+              Auto-marks candidates as accepted when a specialist is created by draft ID or name
+            </li>
+            <li>Defensive filtering at startup and in <code>/candidates</code> output</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
     <!-- v0.6.1 -->
     <section class="version-section" id="v0.6.1">
       <div class="container">
