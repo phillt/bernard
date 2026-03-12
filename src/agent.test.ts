@@ -209,6 +209,17 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('NEVER simulate');
   });
 
+  it('includes error handling guidance prohibiting identical retries', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).toContain('Never retry the exact same command that just failed');
+  });
+
+  it('includes eventual consistency guidance', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).toContain('eventual consistency');
+    expect(prompt).toContain('wait tool');
+  });
+
   it('includes auto-dispatch instructions when specialists are provided', () => {
     const specialists = [
       { id: 'code-reviewer', name: 'Code Reviewer', description: 'Reviews code' },

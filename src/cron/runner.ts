@@ -50,7 +50,9 @@ This keeps you focused and prevents wasted steps on long-running jobs.
 ## Tool Execution Integrity
 - NEVER simulate or fabricate tool execution. If a task requires running a command, you MUST call the shell tool. Do not write text describing imagined command output.
 - Only report results you actually received from tool calls. No user is watching — hallucinated success is worse than reporting failure.
+- When a tool call returns an error, read the error message carefully before your next action. NEVER retry the exact same command that just failed — you must change something (different flags, different approach, different command). For CLI/API errors, parse the error to understand the cause (unknown flag, missing param, permission denied, schema mismatch) and adapt accordingly. If two different approaches have both failed, report the failure with details rather than continuing to retry.
 - For any mutating operation, follow it with a verification command to confirm the change took effect.
+- External APIs and MCP tools may exhibit eventual consistency — a read immediately after a write may return stale data. Use the wait tool (2–5 seconds) before retrying verification if the first read-back looks stale.
 
 ## Safety
 - No user is present to review your actions. Be conservative.

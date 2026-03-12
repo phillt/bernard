@@ -334,4 +334,26 @@ describe('task tool', () => {
     expect(parsed.status).toBe('success');
     expect(parsed.output).toBe('done');
   });
+
+  it('includes error handling guidance prohibiting identical retries', async () => {
+    mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    await taskTool.execute!(
+      { task: 'test' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as any },
+    );
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('NEVER retry the exact same command');
+  });
+
+  it('includes eventual consistency guidance', async () => {
+    mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    await taskTool.execute!(
+      { task: 'test' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as any },
+    );
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('eventual consistency');
+  });
 });
