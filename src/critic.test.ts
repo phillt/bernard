@@ -376,8 +376,40 @@ describe('critic mode', () => {
 
       const criticCall = mockGenerateText.mock.calls[1][0];
       const criticMsg = criticCall.messages[0].content as string;
-      // Single call should get full 8000 chars
+      // Single call should get full 8000 chars (exactly at budget, no truncation marker)
       expect(criticMsg).toContain('r'.repeat(8000));
+      expect(criticMsg).not.toContain('r'.repeat(8000) + '...');
+    });
+
+    it('appends truncation marker when result exceeds budget', async () => {
+      const longResult = 'r'.repeat(8001);
+      mockGenerateText
+        .mockResolvedValueOnce({
+          text: 'Done.',
+          steps: [
+            {
+              toolCalls: [{ toolName: 'shell', args: { command: 'cat big.txt' } }],
+              toolResults: [{ toolName: 'shell', result: longResult }],
+            },
+          ],
+          response: { messages: [] },
+          usage: { promptTokens: 100, completionTokens: 50 },
+        })
+        .mockResolvedValueOnce({
+          text: 'VERDICT: PASS\nOk.',
+          steps: [],
+          response: { messages: [] },
+          usage: { promptTokens: 50, completionTokens: 20 },
+        });
+
+      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      await agent.processInput('Read big file');
+
+      const criticCall = mockGenerateText.mock.calls[1][0];
+      const criticMsg = criticCall.messages[0].content as string;
+      // Should be truncated to 8000 chars with marker
+      expect(criticMsg).toContain('r'.repeat(8000) + '...');
+      expect(criticMsg).not.toContain('r'.repeat(8001));
     });
 
     it('floors at 500 chars per result for many tool calls', async () => {
@@ -414,6 +446,8 @@ describe('critic mode', () => {
       // So each result should be truncated to 500 chars (not the full 1000)
       expect(criticMsg).not.toContain('a'.repeat(1000));
       expect(criticMsg).toContain('a'.repeat(500));
+      // Truncated results should have a marker appended
+      expect(criticMsg).toContain('a'.repeat(500) + '...');
     });
 
     it('uses 1000-char limit for args', async () => {
