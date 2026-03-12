@@ -340,6 +340,7 @@ export async function startRepl(
 
   // Surface pending specialist candidates at session start
   candidateStore.pruneOld();
+  candidateStore.reconcileSaved(specialistStore.list());
   const pendingCandidates = candidateStore.listPending();
   if (pendingCandidates.length > 0) {
     printInfo(
@@ -360,6 +361,7 @@ export async function startRepl(
     ragStore,
     routineStore,
     specialistStore,
+    candidateStore,
   );
 
   let cleanedUp = false;

@@ -18,6 +18,9 @@ export interface SpecialistCandidate {
   status: 'pending' | 'accepted' | 'rejected' | 'dismissed';
 }
 
+/** Narrow interface for consumers that only need read + status update (e.g. specialist tool). */
+export type CandidateStoreReader = Pick<CandidateStore, 'listPending' | 'updateStatus'>;
+
 export const MAX_PENDING_CANDIDATES = 10;
 
 /** Max age in ms before a pending candidate is auto-dismissed (30 days). */
@@ -55,6 +58,24 @@ export class CandidateStore {
   /** Returns only pending candidates. */
   listPending(): SpecialistCandidate[] {
     return this.list().filter((c) => c.status === 'pending');
+  }
+
+  /**
+   * Marks pending candidates that match a saved specialist as `accepted`.
+   * Matches by draftId against specialist ID, or by case-insensitive name.
+   * Returns the number of candidates reconciled.
+   */
+  reconcileSaved(savedSpecialists: { id: string; name: string }[]): number {
+    const ids = new Set(savedSpecialists.map((s) => s.id));
+    const names = new Set(savedSpecialists.map((s) => s.name.toLowerCase()));
+    let reconciled = 0;
+    for (const c of this.listPending()) {
+      if (ids.has(c.draftId) || names.has(c.name.toLowerCase())) {
+        this.updateStatus(c.id, 'accepted');
+        reconciled++;
+      }
+    }
+    return reconciled;
   }
 
   /** Returns a single candidate by ID, or `undefined` if not found. */

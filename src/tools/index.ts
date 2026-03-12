@@ -14,6 +14,7 @@ import type { ToolOptions } from './types.js';
 import type { MemoryStore } from '../memory.js';
 import type { RoutineStore } from '../routines.js';
 import type { SpecialistStore } from '../specialists.js';
+import type { CandidateStoreReader } from '../specialist-candidates.js';
 
 export type { ToolOptions } from './types.js';
 
@@ -31,13 +32,14 @@ export function createTools(
   mcpTools?: Record<string, any>,
   routineStore?: RoutineStore,
   specialistStore?: SpecialistStore,
+  candidateStore?: CandidateStoreReader,
 ): Record<string, any> {
   return {
     shell: createShellTool(options),
     memory: createMemoryTool(memoryStore),
     scratch: createScratchTool(memoryStore),
     routine: createRoutineTool(routineStore),
-    specialist: createSpecialistTool(specialistStore),
+    specialist: createSpecialistTool(specialistStore, candidateStore),
     datetime: createDateTimeTool(),
     ...createCronTools(),
     ...createCronLogTools(),

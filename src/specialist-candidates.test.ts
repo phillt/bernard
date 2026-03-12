@@ -112,6 +112,52 @@ describe('CandidateStore', () => {
     });
   });
 
+  describe('reconcileSaved', () => {
+    it('marks candidate matching by draftId as accepted', () => {
+      const candidate = makeCandidate({ id: 'c1', draftId: 'code-review', name: 'Code Review' });
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(['c1.json'] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(candidate));
+
+      const count = store.reconcileSaved([{ id: 'code-review', name: 'Code Review Specialist' }]);
+      expect(count).toBe(1);
+      const writeCall = vi.mocked(fs.writeFileSync).mock.calls[0];
+      const written = JSON.parse(writeCall[1] as string);
+      expect(written.status).toBe('accepted');
+    });
+
+    it('marks candidate matching by name (case-insensitive) as accepted', () => {
+      const candidate = makeCandidate({ id: 'c1', draftId: 'different-id', name: 'Code Review' });
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(['c1.json'] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(candidate));
+
+      const count = store.reconcileSaved([{ id: 'unrelated', name: 'code review' }]);
+      expect(count).toBe(1);
+    });
+
+    it('does not mark non-matching candidates', () => {
+      const candidate = makeCandidate({ id: 'c1', draftId: 'email-triage', name: 'Email Triage' });
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(['c1.json'] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(candidate));
+
+      const count = store.reconcileSaved([{ id: 'code-review', name: 'Code Review' }]);
+      expect(count).toBe(0);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('returns 0 when no saved specialists', () => {
+      const candidate = makeCandidate({ id: 'c1' });
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(['c1.json'] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(candidate));
+
+      const count = store.reconcileSaved([]);
+      expect(count).toBe(0);
+    });
+  });
+
   describe('get', () => {
     it('returns candidate by id', () => {
       const candidate = makeCandidate();

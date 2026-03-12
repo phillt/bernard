@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createSpecialistTool } from './specialist.js';
+import type { CandidateStoreReader } from '../specialist-candidates.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
@@ -243,6 +244,134 @@ describe('createSpecialistTool', () => {
     it('returns error when no id provided', async () => {
       const result = await tool.execute({ action: 'delete' }, {} as any);
       expect(result).toContain('id is required');
+    });
+  });
+
+  describe('candidateStore integration', () => {
+    it('marks matching candidate as accepted on create by draftId', async () => {
+      const mockCandidateStore = {
+        listPending: vi
+          .fn()
+          .mockReturnValue([
+            { id: 'cand-uuid-1', draftId: 'email-triage', name: 'Email Triage', status: 'pending' },
+          ]),
+        updateStatus: vi.fn(),
+      } as CandidateStoreReader;
+
+      const toolWithCandidates = createSpecialistTool(undefined, mockCandidateStore);
+
+      const result = await toolWithCandidates.execute(
+        {
+          action: 'create',
+          id: 'email-triage',
+          name: 'Email Triage',
+          description: 'Triage emails',
+          systemPrompt: 'You are an email triage specialist.',
+        },
+        {} as any,
+      );
+
+      expect(result).toContain('created');
+      expect(mockCandidateStore.updateStatus).toHaveBeenCalledWith('cand-uuid-1', 'accepted');
+    });
+
+    it('marks matching candidate as accepted on create by name (case-insensitive)', async () => {
+      const mockCandidateStore = {
+        listPending: vi
+          .fn()
+          .mockReturnValue([
+            { id: 'cand-uuid-2', draftId: 'different-id', name: 'Code Review', status: 'pending' },
+          ]),
+        updateStatus: vi.fn(),
+      } as CandidateStoreReader;
+
+      const toolWithCandidates = createSpecialistTool(undefined, mockCandidateStore);
+
+      const result = await toolWithCandidates.execute(
+        {
+          action: 'create',
+          id: 'code-review',
+          name: 'code review',
+          description: 'Review code',
+          systemPrompt: 'You are a code reviewer.',
+        },
+        {} as any,
+      );
+
+      expect(result).toContain('created');
+      expect(mockCandidateStore.updateStatus).toHaveBeenCalledWith('cand-uuid-2', 'accepted');
+    });
+
+    it('does not call updateStatus when no candidate matches', async () => {
+      const mockCandidateStore = {
+        listPending: vi
+          .fn()
+          .mockReturnValue([
+            { id: 'cand-uuid-3', draftId: 'other-specialist', name: 'Other', status: 'pending' },
+          ]),
+        updateStatus: vi.fn(),
+      } as CandidateStoreReader;
+
+      const toolWithCandidates = createSpecialistTool(undefined, mockCandidateStore);
+
+      await toolWithCandidates.execute(
+        {
+          action: 'create',
+          id: 'email-triage',
+          name: 'Email Triage',
+          description: 'Triage',
+          systemPrompt: 'prompt',
+        },
+        {} as any,
+      );
+
+      expect(mockCandidateStore.updateStatus).not.toHaveBeenCalled();
+    });
+
+    it('still returns success when candidateStore.updateStatus throws', async () => {
+      const mockCandidateStore = {
+        listPending: vi
+          .fn()
+          .mockReturnValue([
+            { id: 'cand-uuid-4', draftId: 'email-triage', name: 'Email Triage', status: 'pending' },
+          ]),
+        updateStatus: vi.fn().mockImplementation(() => {
+          throw new Error('disk write failed');
+        }),
+      } as CandidateStoreReader;
+
+      const toolWithCandidates = createSpecialistTool(undefined, mockCandidateStore);
+
+      const result = await toolWithCandidates.execute(
+        {
+          action: 'create',
+          id: 'email-triage',
+          name: 'Email Triage',
+          description: 'Triage emails',
+          systemPrompt: 'You are an email triage specialist.',
+        },
+        {} as any,
+      );
+
+      expect(result).toContain('created');
+      expect(mockCandidateStore.updateStatus).toHaveBeenCalled();
+    });
+
+    it('works without candidateStore (undefined)', async () => {
+      const toolNoCandidates = createSpecialistTool();
+
+      const result = await toolNoCandidates.execute(
+        {
+          action: 'create',
+          id: 'email-triage',
+          name: 'Email Triage',
+          description: 'Triage',
+          systemPrompt: 'prompt',
+        },
+        {} as any,
+      );
+
+      expect(result).toContain('created');
     });
   });
 });
