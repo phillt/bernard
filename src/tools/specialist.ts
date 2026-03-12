@@ -10,7 +10,10 @@ import type { CandidateStore } from '../specialist-candidates.js';
  * that shape how a sub-agent approaches work. Unlike routines (procedures), specialists
  * define *how* to work rather than *what* steps to follow.
  */
-export function createSpecialistTool(specialistStore?: SpecialistStore, candidateStore?: CandidateStore) {
+export function createSpecialistTool(
+  specialistStore?: SpecialistStore,
+  candidateStore?: CandidateStore,
+) {
   const store = specialistStore ?? new SpecialistStore();
 
   return tool({
@@ -73,7 +76,9 @@ export function createSpecialistTool(specialistStore?: SpecialistStore, candidat
             // Auto-mark matching candidate as accepted
             if (candidateStore) {
               const pending = candidateStore.listPending();
-              const match = pending.find(c => c.draftId === id || c.name.toLowerCase() === name.toLowerCase());
+              const match = pending.find(
+                (c) => c.draftId === id || c.name.toLowerCase() === name.toLowerCase(),
+              );
               if (match) candidateStore.updateStatus(match.id, 'accepted');
             }
             return `Specialist "${specialist.name}" (${specialist.id}) created. Use specialist_run to invoke it.`;

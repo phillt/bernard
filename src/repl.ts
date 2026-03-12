@@ -340,8 +340,10 @@ export async function startRepl(
 
   // Surface pending specialist candidates at session start
   candidateStore.pruneOld();
-  const existingSpecialistIds = new Set(specialistStore.list().map(s => s.id));
-  const pendingCandidates = candidateStore.listPending().filter(c => !existingSpecialistIds.has(c.draftId));
+  const existingSpecialistIds = new Set(specialistStore.list().map((s) => s.id));
+  const pendingCandidates = candidateStore
+    .listPending()
+    .filter((c) => !existingSpecialistIds.has(c.draftId));
   if (pendingCandidates.length > 0) {
     printInfo(
       `  ${pendingCandidates.length} specialist suggestion(s) pending. Use /candidates to review.`,
@@ -1037,8 +1039,8 @@ Remember: the systemPrompt should read like a persona definition — who this sp
       }
 
       if (trimmed === '/candidates') {
-        const savedIds = new Set(specialistStore.list().map(s => s.id));
-        const pending = candidateStore.listPending().filter(c => !savedIds.has(c.draftId));
+        const savedIds = new Set(specialistStore.list().map((s) => s.id));
+        const pending = candidateStore.listPending().filter((c) => !savedIds.has(c.draftId));
         if (pending.length === 0) {
           printInfo('No pending specialist suggestions.');
         } else {

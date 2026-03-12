@@ -250,9 +250,11 @@ describe('createSpecialistTool', () => {
   describe('candidateStore integration', () => {
     it('marks matching candidate as accepted on create by draftId', async () => {
       const mockCandidateStore = {
-        listPending: vi.fn().mockReturnValue([
-          { id: 'cand-uuid-1', draftId: 'email-triage', name: 'Email Triage', status: 'pending' },
-        ]),
+        listPending: vi
+          .fn()
+          .mockReturnValue([
+            { id: 'cand-uuid-1', draftId: 'email-triage', name: 'Email Triage', status: 'pending' },
+          ]),
         updateStatus: vi.fn(),
       } as unknown as CandidateStore;
 
@@ -275,9 +277,11 @@ describe('createSpecialistTool', () => {
 
     it('marks matching candidate as accepted on create by name (case-insensitive)', async () => {
       const mockCandidateStore = {
-        listPending: vi.fn().mockReturnValue([
-          { id: 'cand-uuid-2', draftId: 'different-id', name: 'Code Review', status: 'pending' },
-        ]),
+        listPending: vi
+          .fn()
+          .mockReturnValue([
+            { id: 'cand-uuid-2', draftId: 'different-id', name: 'Code Review', status: 'pending' },
+          ]),
         updateStatus: vi.fn(),
       } as unknown as CandidateStore;
 
@@ -300,9 +304,11 @@ describe('createSpecialistTool', () => {
 
     it('does not call updateStatus when no candidate matches', async () => {
       const mockCandidateStore = {
-        listPending: vi.fn().mockReturnValue([
-          { id: 'cand-uuid-3', draftId: 'other-specialist', name: 'Other', status: 'pending' },
-        ]),
+        listPending: vi
+          .fn()
+          .mockReturnValue([
+            { id: 'cand-uuid-3', draftId: 'other-specialist', name: 'Other', status: 'pending' },
+          ]),
         updateStatus: vi.fn(),
       } as unknown as CandidateStore;
 
