@@ -651,26 +651,25 @@ export class Agent {
         printCriticStart();
       }
 
-      const CRITIC_TOTAL_RESULT_BUDGET = 8000;
-      const CRITIC_MIN_RESULT_CHARS = 500;
       const perResultLimit = Math.max(
         CRITIC_MIN_RESULT_CHARS,
         Math.floor(CRITIC_TOTAL_RESULT_BUDGET / toolCallLog.length),
       );
 
-      const truncatedLog = toolCallLog.map((entry) => ({
-        toolName: entry.toolName,
-        args: entry.args,
-        result:
-          typeof entry.result === 'string'
-            ? entry.result.slice(0, perResultLimit)
-            : JSON.stringify(entry.result ?? null).slice(0, perResultLimit),
-      }));
+      const truncatedLog = toolCallLog.map((entry) => {
+        const raw =
+          typeof entry.result === 'string' ? entry.result : JSON.stringify(entry.result ?? null);
+        const truncated = raw.length > perResultLimit ? raw.slice(0, perResultLimit) + '...' : raw;
+        return {
+          toolName: entry.toolName,
+          args: entry.args,
+          result: truncated,
+        };
+      });
 
-      const MAX_RESPONSE_LENGTH = 4000;
       const truncatedResponse =
-        responseText.length > MAX_RESPONSE_LENGTH
-          ? responseText.slice(0, MAX_RESPONSE_LENGTH) + '\n... (truncated)'
+        responseText.length > CRITIC_MAX_RESPONSE_LENGTH
+          ? responseText.slice(0, CRITIC_MAX_RESPONSE_LENGTH) + '\n... (truncated)'
           : responseText;
 
       const criticMessage = `## Original User Request
@@ -682,10 +681,11 @@ ${truncatedResponse}
 ## Tool Call Log (${truncatedLog.length} calls)
 ${truncatedLog
   .map((e, i) => {
-    const MAX_ARGS_LENGTH = 1000;
     const argsStr = JSON.stringify(e.args);
     const truncatedArgs =
-      argsStr.length > MAX_ARGS_LENGTH ? argsStr.slice(0, MAX_ARGS_LENGTH) + '...' : argsStr;
+      argsStr.length > CRITIC_MAX_ARGS_LENGTH
+        ? argsStr.slice(0, CRITIC_MAX_ARGS_LENGTH) + '...'
+        : argsStr;
     return `${i + 1}. ${e.toolName}(${truncatedArgs})\n   Result: ${e.result}`;
   })
   .join('\n\n')}`;
