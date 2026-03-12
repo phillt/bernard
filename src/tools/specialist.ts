@@ -73,13 +73,17 @@ export function createSpecialistTool(
           if (!systemPrompt) return 'Error: systemPrompt is required for create action.';
           try {
             const specialist = store.create(id, name, description, systemPrompt, guidelines ?? []);
-            // Auto-mark matching candidate as accepted
-            if (candidateStore) {
-              const pending = candidateStore.listPending();
-              const match = pending.find(
-                (c) => c.draftId === id || c.name.toLowerCase() === name.toLowerCase(),
-              );
-              if (match) candidateStore.updateStatus(match.id, 'accepted');
+            // Auto-mark matching candidate as accepted (best-effort)
+            try {
+              if (candidateStore) {
+                const pending = candidateStore.listPending();
+                const match = pending.find(
+                  (c) => c.draftId === id || c.name.toLowerCase() === name.toLowerCase(),
+                );
+                if (match) candidateStore.updateStatus(match.id, 'accepted');
+              }
+            } catch {
+              // candidate status update is best-effort; don't block specialist creation
             }
             return `Specialist "${specialist.name}" (${specialist.id}) created. Use specialist_run to invoke it.`;
           } catch (err: unknown) {

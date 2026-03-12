@@ -328,6 +328,35 @@ describe('createSpecialistTool', () => {
       expect(mockCandidateStore.updateStatus).not.toHaveBeenCalled();
     });
 
+    it('still returns success when candidateStore.updateStatus throws', async () => {
+      const mockCandidateStore = {
+        listPending: vi
+          .fn()
+          .mockReturnValue([
+            { id: 'cand-uuid-4', draftId: 'email-triage', name: 'Email Triage', status: 'pending' },
+          ]),
+        updateStatus: vi.fn().mockImplementation(() => {
+          throw new Error('disk write failed');
+        }),
+      } as CandidateStoreReader;
+
+      const toolWithCandidates = createSpecialistTool(undefined, mockCandidateStore);
+
+      const result = await toolWithCandidates.execute(
+        {
+          action: 'create',
+          id: 'email-triage',
+          name: 'Email Triage',
+          description: 'Triage emails',
+          systemPrompt: 'You are an email triage specialist.',
+        },
+        {} as any,
+      );
+
+      expect(result).toContain('created');
+      expect(mockCandidateStore.updateStatus).toHaveBeenCalled();
+    });
+
     it('works without candidateStore (undefined)', async () => {
       const toolNoCandidates = createSpecialistTool();
 
