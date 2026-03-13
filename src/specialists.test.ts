@@ -323,5 +323,91 @@ describe('SpecialistStore', () => {
         { id: 'email-triage', name: 'Email Triage', description: 'Triage emails' },
       ]);
     });
+
+    it('includes provider and model when set', () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        provider: 'xai',
+        model: 'grok-code-fast-1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(['code-review.json'] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+      const summaries = store.getSummaries();
+      expect(summaries).toEqual([
+        { id: 'code-review', name: 'Code Review', description: 'Review code', provider: 'xai', model: 'grok-code-fast-1' },
+      ]);
+    });
+  });
+
+  describe('create with provider/model', () => {
+    it('includes provider and model when specified', () => {
+      mockDirExists();
+      vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+      const specialist = store.create(
+        'code-review',
+        'Code Review',
+        'Review code',
+        'You are a code reviewer.',
+        [],
+        'xai',
+        'grok-code-fast-1',
+      );
+      expect(specialist.provider).toBe('xai');
+      expect(specialist.model).toBe('grok-code-fast-1');
+    });
+
+    it('omits provider and model when not specified', () => {
+      mockDirExists();
+      vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+      const specialist = store.create(
+        'email-triage',
+        'Email Triage',
+        'Triage emails',
+        'You are an email triage specialist.',
+      );
+      expect(specialist.provider).toBeUndefined();
+      expect(specialist.model).toBeUndefined();
+      // Verify the JSON doesn't contain provider/model keys
+      const writeCall = vi.mocked(fs.writeFileSync).mock.calls[0];
+      const written = JSON.parse(writeCall[1] as string);
+      expect('provider' in written).toBe(false);
+      expect('model' in written).toBe(false);
+    });
+  });
+
+  describe('update with provider/model', () => {
+    const original = {
+      id: 'code-review',
+      name: 'Code Review',
+      description: 'Review code',
+      systemPrompt: 'prompt',
+      guidelines: [],
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    it('sets provider and model', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(original));
+      const updated = store.update('code-review', { provider: 'xai', model: 'grok-code-fast-1' });
+      expect(updated!.provider).toBe('xai');
+      expect(updated!.model).toBe('grok-code-fast-1');
+    });
+
+    it('clears provider and model with empty string', () => {
+      const withOverride = { ...original, provider: 'xai', model: 'grok-code-fast-1' };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(withOverride));
+      const updated = store.update('code-review', { provider: '', model: '' });
+      expect(updated!.provider).toBeUndefined();
+      expect(updated!.model).toBeUndefined();
+    });
   });
 });
