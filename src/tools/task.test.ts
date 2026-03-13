@@ -123,6 +123,11 @@ describe('wrapTaskResult', () => {
     });
   });
 
+  it('extracts JSON when extra braces appear after the result', () => {
+    const input = '{"status": "success", "output": "done"}\nExtra context: {key: "value"}';
+    expect(wrapTaskResult(input)).toEqual({ status: 'success', output: 'done' });
+  });
+
   it('preserves non-string output values', () => {
     const input = '{"status": "success", "output": ["file1.ts", "file2.ts"]}';
     const result = wrapTaskResult(input);

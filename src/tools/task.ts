@@ -63,7 +63,7 @@ export function wrapTaskResult(text: string): TaskResult {
   const trimmed = text.trim();
 
   // Try to extract JSON from the text (may have prose before it)
-  const jsonMatch = trimmed.match(/\{[\s\S]*"status"\s*:\s*"(?:success|error)"[\s\S]*\}/);
+  const jsonMatch = trimmed.match(/\{[\s\S]*?"status"\s*:\s*"(?:success|error)"[\s\S]*?\}/);
   if (jsonMatch) {
     try {
       const parsed = JSON.parse(jsonMatch[0]);
