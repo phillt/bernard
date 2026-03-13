@@ -265,20 +265,20 @@ describe('file_edit_lines', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function writeTestFile(name: string, content: string) {
-    const fsMod = require('node:fs');
+  async function writeTestFile(name: string, content: string) {
+    const fsMod = await import('node:fs');
     const filePath = path.join(tmpDir, name);
     fsMod.writeFileSync(filePath, content);
     return filePath;
   }
 
-  function readTestFile(name: string): string {
-    const fsMod = require('node:fs');
+  async function readTestFile(name: string): Promise<string> {
+    const fsMod = await import('node:fs');
     return fsMod.readFileSync(path.join(tmpDir, name), 'utf-8');
   }
 
   it('replaces a line', async () => {
-    const fp = writeTestFile('r.txt', 'aaa\nbbb\nccc\n');
+    const fp = await writeTestFile('r.txt', 'aaa\nbbb\nccc\n');
 
     const result = (await tools.file_edit_lines.execute!(
       { path: fp, edits: [{ action: 'replace', line: 2, content: 'BBB' }] },
@@ -287,12 +287,12 @@ describe('file_edit_lines', () => {
 
     expect(result).not.toHaveProperty('error');
     expect(result.edits_applied).toBe(1);
-    expect(readTestFile('r.txt')).toBe('aaa\nBBB\nccc\n');
+    expect(await readTestFile('r.txt')).toBe('aaa\nBBB\nccc\n');
     expect(result.old_hash).not.toBe(result.new_hash);
   });
 
   it('inserts before a line', async () => {
-    const fp = writeTestFile('i.txt', 'aaa\nbbb\nccc\n');
+    const fp = await writeTestFile('i.txt', 'aaa\nbbb\nccc\n');
 
     const result = (await tools.file_edit_lines.execute!(
       { path: fp, edits: [{ action: 'insert', before: 2, content: 'NEW' }] },
@@ -300,12 +300,12 @@ describe('file_edit_lines', () => {
     )) as any;
 
     expect(result).not.toHaveProperty('error');
-    expect(readTestFile('i.txt')).toBe('aaa\nNEW\nbbb\nccc\n');
+    expect(await readTestFile('i.txt')).toBe('aaa\nNEW\nbbb\nccc\n');
     expect(result.total_lines).toBe(4);
   });
 
   it('deletes specific lines', async () => {
-    const fp = writeTestFile('d.txt', 'aaa\nbbb\nccc\nddd\n');
+    const fp = await writeTestFile('d.txt', 'aaa\nbbb\nccc\nddd\n');
 
     const result = (await tools.file_edit_lines.execute!(
       { path: fp, edits: [{ action: 'delete', lines: [2, 4] }] },
@@ -313,12 +313,12 @@ describe('file_edit_lines', () => {
     )) as any;
 
     expect(result).not.toHaveProperty('error');
-    expect(readTestFile('d.txt')).toBe('aaa\nccc\n');
+    expect(await readTestFile('d.txt')).toBe('aaa\nccc\n');
     expect(result.total_lines).toBe(2);
   });
 
   it('appends to end of file', async () => {
-    const fp = writeTestFile('a.txt', 'aaa\nbbb\n');
+    const fp = await writeTestFile('a.txt', 'aaa\nbbb\n');
 
     const result = (await tools.file_edit_lines.execute!(
       { path: fp, edits: [{ action: 'append', content: 'ccc' }] },
@@ -326,34 +326,34 @@ describe('file_edit_lines', () => {
     )) as any;
 
     expect(result).not.toHaveProperty('error');
-    expect(readTestFile('a.txt')).toBe('aaa\nbbb\nccc\n');
+    expect(await readTestFile('a.txt')).toBe('aaa\nbbb\nccc\n');
     expect(result.total_lines).toBe(3);
   });
 
   it('handles multi-line insert', async () => {
-    const fp = writeTestFile('mi.txt', 'aaa\nbbb\n');
+    const fp = await writeTestFile('mi.txt', 'aaa\nbbb\n');
 
     await tools.file_edit_lines.execute!(
       { path: fp, edits: [{ action: 'insert', before: 2, content: 'x\ny\nz' }] },
       {} as any,
     );
 
-    expect(readTestFile('mi.txt')).toBe('aaa\nx\ny\nz\nbbb\n');
+    expect(await readTestFile('mi.txt')).toBe('aaa\nx\ny\nz\nbbb\n');
   });
 
   it('handles multi-line append', async () => {
-    const fp = writeTestFile('ma.txt', 'aaa\n');
+    const fp = await writeTestFile('ma.txt', 'aaa\n');
 
     await tools.file_edit_lines.execute!(
       { path: fp, edits: [{ action: 'append', content: 'b\nc' }] },
       {} as any,
     );
 
-    expect(readTestFile('ma.txt')).toBe('aaa\nb\nc\n');
+    expect(await readTestFile('ma.txt')).toBe('aaa\nb\nc\n');
   });
 
   it('applies multiple mixed edits bottom-to-top correctly', async () => {
-    const fp = writeTestFile('mix.txt', 'line1\nline2\nline3\nline4\nline5\n');
+    const fp = await writeTestFile('mix.txt', 'line1\nline2\nline3\nline4\nline5\n');
 
     const result = (await tools.file_edit_lines.execute!(
       {
@@ -369,11 +369,11 @@ describe('file_edit_lines', () => {
 
     expect(result).not.toHaveProperty('error');
     expect(result.edits_applied).toBe(3);
-    expect(readTestFile('mix.txt')).toBe('line1\nREPLACED\nline3\nline5\nEND\n');
+    expect(await readTestFile('mix.txt')).toBe('line1\nREPLACED\nline3\nline5\nEND\n');
   });
 
   it('detects conflicting edits and returns error', async () => {
-    const fp = writeTestFile('conflict.txt', 'aaa\nbbb\nccc\n');
+    const fp = await writeTestFile('conflict.txt', 'aaa\nbbb\nccc\n');
 
     const result = await tools.file_edit_lines.execute!(
       {
@@ -389,11 +389,11 @@ describe('file_edit_lines', () => {
     expect(result).toHaveProperty('error');
     expect((result as any).error).toContain('Line 2');
     // File should be unmodified
-    expect(readTestFile('conflict.txt')).toBe('aaa\nbbb\nccc\n');
+    expect(await readTestFile('conflict.txt')).toBe('aaa\nbbb\nccc\n');
   });
 
   it('rejects replace without content', async () => {
-    const fp = writeTestFile('val.txt', 'aaa\n');
+    const fp = await writeTestFile('val.txt', 'aaa\n');
 
     const result = await tools.file_edit_lines.execute!(
       { path: fp, edits: [{ action: 'replace', line: 1 }] },
@@ -405,7 +405,7 @@ describe('file_edit_lines', () => {
   });
 
   it('rejects out-of-bounds line number', async () => {
-    const fp = writeTestFile('oob.txt', 'aaa\nbbb\n');
+    const fp = await writeTestFile('oob.txt', 'aaa\nbbb\n');
 
     const result = await tools.file_edit_lines.execute!(
       { path: fp, edits: [{ action: 'replace', line: 99, content: 'X' }] },
@@ -429,7 +429,7 @@ describe('file_edit_lines', () => {
   });
 
   it('hashes differ after edit', async () => {
-    const fp = writeTestFile('hash.txt', 'aaa\n');
+    const fp = await writeTestFile('hash.txt', 'aaa\n');
 
     const result = (await tools.file_edit_lines.execute!(
       { path: fp, edits: [{ action: 'replace', line: 1, content: 'bbb' }] },
