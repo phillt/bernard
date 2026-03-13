@@ -374,4 +374,169 @@ describe('createSpecialistTool', () => {
       expect(result).toContain('created');
     });
   });
+
+  describe('provider/model support', () => {
+    it('creates specialist with provider and model', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'code-review',
+          name: 'Code Review',
+          description: 'Review code',
+          systemPrompt: 'You are a code reviewer.',
+          provider: 'xai',
+          model: 'grok-code-fast-1',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('returns error for invalid provider on create', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'test-spec',
+          name: 'Test',
+          description: 'Test',
+          systemPrompt: 'prompt',
+          provider: 'invalid-provider',
+        },
+        {} as any,
+      );
+      expect(result).toContain('Error');
+      expect(result).toContain('Unknown provider');
+    });
+
+    it('returns error for invalid model on create', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'test-spec',
+          name: 'Test',
+          description: 'Test',
+          systemPrompt: 'prompt',
+          provider: 'xai',
+          model: 'nonexistent-model',
+        },
+        {} as any,
+      );
+      expect(result).toContain('Error');
+      expect(result).toContain('Unknown model');
+    });
+
+    it('allows provider without model on create', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'test-spec',
+          name: 'Test',
+          description: 'Test',
+          systemPrompt: 'prompt',
+          provider: 'xai',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('updates specialist with provider and model', async () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute(
+        { action: 'update', id: 'code-review', provider: 'xai', model: 'grok-code-fast-1' },
+        {} as any,
+      );
+      expect(result).toContain('updated');
+    });
+
+    it('returns error for invalid provider on update', async () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute(
+        { action: 'update', id: 'code-review', provider: 'bad-provider' },
+        {} as any,
+      );
+      expect(result).toContain('Error');
+      expect(result).toContain('Unknown provider');
+    });
+
+    it('shows model tag in list output', async () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        provider: 'xai',
+        model: 'grok-code-fast-1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(['code-review.json'] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'list' }, {} as any);
+      expect(result).toContain('[xai/grok-code-fast-1]');
+    });
+
+    it('shows model override section in read output', async () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        provider: 'xai',
+        model: 'grok-code-fast-1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'read', id: 'code-review' }, {} as any);
+      expect(result).toContain('Model Override');
+      expect(result).toContain('Provider: xai');
+      expect(result).toContain('Model: grok-code-fast-1');
+    });
+
+    it('does not show model override section when no override set', async () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'read', id: 'code-review' }, {} as any);
+      expect(result).not.toContain('Model Override');
+    });
+  });
 });
