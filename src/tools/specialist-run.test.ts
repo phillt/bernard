@@ -423,6 +423,40 @@ describe('specialist-run tool', () => {
       expect(mockGenerateText).not.toHaveBeenCalled();
     });
 
+    it('uses provider default model when specialist has provider but no model (avoids cross-provider mismatch)', async () => {
+      mockGenerateText.mockResolvedValue({ text: 'Done' });
+      // Specialist overrides provider to xai but has no model set.
+      // Global config has anthropic model. Without the fix, this would try xai/claude-sonnet-4-5-20250929.
+      const specProviderOnly = { ...mockSpecialist, provider: 'xai' };
+      vi.spyOn(specialistStore, 'get').mockReturnValue(specProviderOnly);
+
+      const config = makeConfig({ xaiApiKey: 'xai-test' });
+      const tool = createSpecialistRunTool(config, toolOptions, memoryStore, specialistStore);
+      await tool.execute!(
+        { specialistId: 'email-triage', task: 'test' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      // Should use xai's default model, not anthropic's model
+      const { getDefaultModel } = await import('../config.js');
+      expect(mockGetModel).toHaveBeenCalledWith('xai', getDefaultModel('xai'));
+    });
+
+    it('uses provider default model when invocation overrides provider but not model', async () => {
+      mockGenerateText.mockResolvedValue({ text: 'Done' });
+      vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
+
+      const config = makeConfig({ openaiApiKey: 'sk-openai' });
+      const tool = createSpecialistRunTool(config, toolOptions, memoryStore, specialistStore);
+      await tool.execute!(
+        { specialistId: 'email-triage', task: 'test', provider: 'openai' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const { getDefaultModel } = await import('../config.js');
+      expect(mockGetModel).toHaveBeenCalledWith('openai', getDefaultModel('openai'));
+    });
+
     it('returns error when specialist provider has no API key', async () => {
       const specWithModel = { ...mockSpecialist, provider: 'openai', model: 'gpt-4o-mini' };
       vi.spyOn(specialistStore, 'get').mockReturnValue(specWithModel);
