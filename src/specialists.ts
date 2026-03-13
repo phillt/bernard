@@ -94,6 +94,8 @@ export class SpecialistStore {
     description: string,
     systemPrompt: string,
     guidelines: string[] = [],
+    provider?: string,
+    model?: string,
   ): Specialist {
     const idError = this.validateId(id);
     if (idError) throw new Error(idError);
@@ -109,6 +111,8 @@ export class SpecialistStore {
       description,
       systemPrompt,
       guidelines,
+      ...(provider !== undefined ? { provider } : {}),
+      ...(model !== undefined ? { model } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -122,7 +126,9 @@ export class SpecialistStore {
    */
   update(
     id: string,
-    updates: Partial<Pick<Specialist, 'name' | 'description' | 'systemPrompt' | 'guidelines'>>,
+    updates: Partial<
+      Pick<Specialist, 'name' | 'description' | 'systemPrompt' | 'guidelines' | 'provider' | 'model'>
+    >,
   ): Specialist | undefined {
     if (!ID_PATTERN.test(id)) return undefined;
     const specialist = this.get(id);
@@ -131,6 +137,21 @@ export class SpecialistStore {
     if (updates.description !== undefined) specialist.description = updates.description;
     if (updates.systemPrompt !== undefined) specialist.systemPrompt = updates.systemPrompt;
     if (updates.guidelines !== undefined) specialist.guidelines = updates.guidelines;
+    // Empty string clears the override; undefined means "don't change"
+    if (updates.provider !== undefined) {
+      if (updates.provider === '') {
+        delete specialist.provider;
+      } else {
+        specialist.provider = updates.provider;
+      }
+    }
+    if (updates.model !== undefined) {
+      if (updates.model === '') {
+        delete specialist.model;
+      } else {
+        specialist.model = updates.model;
+      }
+    }
     specialist.updatedAt = new Date().toISOString();
     this.atomicWrite(path.join(SPECIALISTS_DIR, `${id}.json`), JSON.stringify(specialist, null, 2));
     return specialist;
