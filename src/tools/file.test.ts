@@ -440,26 +440,72 @@ describe('file_edit_lines', () => {
   });
 
   it('preserves CRLF line endings', async () => {
-    const fp = writeTestFile('crlf.txt', 'aaa\r\nbbb\r\nccc\r\n');
+    const fp = await writeTestFile('crlf.txt', 'aaa\r\nbbb\r\nccc\r\n');
 
     await tools.file_edit_lines.execute!(
       { path: fp, edits: [{ action: 'replace', line: 2, content: 'BBB' }] },
       {} as any,
     );
 
-    expect(readTestFile('crlf.txt')).toBe('aaa\r\nBBB\r\nccc\r\n');
+    expect(await readTestFile('crlf.txt')).toBe('aaa\r\nBBB\r\nccc\r\n');
   });
 
-  it('cleans up backup file after successful write', async () => {
+  it('cleans up temp file after successful write', async () => {
     const fs = await import('node:fs');
-    const fp = writeTestFile('clean.txt', 'aaa\n');
+    const fp = await writeTestFile('clean.txt', 'aaa\n');
 
     await tools.file_edit_lines.execute!(
       { path: fp, edits: [{ action: 'replace', line: 1, content: 'bbb' }] },
       {} as any,
     );
 
-    expect(fs.existsSync(fp + '.bak')).toBe(false);
-    expect(fs.existsSync(fp + '.tmp')).toBe(false);
+    // Temp files now use unique names (pid + random suffix), so just verify
+    // no .tmp files remain in the directory
+    const tmpFiles = fs.readdirSync(tmpDir).filter((f: string) => f.endsWith('.tmp'));
+    expect(tmpFiles).toHaveLength(0);
+  });
+
+  it('handles multi-line replace content correctly', async () => {
+    const fp = await writeTestFile('mlr.txt', 'aaa\nbbb\nccc\n');
+
+    const result = (await tools.file_edit_lines.execute!(
+      { path: fp, edits: [{ action: 'replace', line: 2, content: 'x\ny\nz' }] },
+      {} as any,
+    )) as any;
+
+    expect(result).not.toHaveProperty('error');
+    expect(await readTestFile('mlr.txt')).toBe('aaa\nx\ny\nz\nccc\n');
+    expect(result.total_lines).toBe(5);
+  });
+
+  it('preserves absence of trailing newline after edit', async () => {
+    const fp = await writeTestFile('notrail.txt', 'aaa\nbbb\nccc');
+
+    await tools.file_edit_lines.execute!(
+      { path: fp, edits: [{ action: 'replace', line: 2, content: 'BBB' }] },
+      {} as any,
+    );
+
+    const content = await readTestFile('notrail.txt');
+    expect(content).toBe('aaa\nBBB\nccc');
+    expect(content.endsWith('\n')).toBe(false);
+  });
+
+  it('applies multiple appends in original order', async () => {
+    const fp = await writeTestFile('multi-append.txt', 'aaa\n');
+
+    const result = (await tools.file_edit_lines.execute!(
+      {
+        path: fp,
+        edits: [
+          { action: 'append', content: 'first' },
+          { action: 'append', content: 'second' },
+        ],
+      },
+      {} as any,
+    )) as any;
+
+    expect(result).not.toHaveProperty('error');
+    expect(await readTestFile('multi-append.txt')).toBe('aaa\nfirst\nsecond\n');
   });
 });
