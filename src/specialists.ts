@@ -9,6 +9,8 @@ export interface Specialist {
   description: string;
   systemPrompt: string;
   guidelines: string[];
+  provider?: string;
+  model?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -17,6 +19,8 @@ export interface SpecialistSummary {
   id: string;
   name: string;
   description: string;
+  provider?: string;
+  model?: string;
 }
 
 const MAX_SPECIALISTS = 50;
@@ -141,9 +145,15 @@ export class SpecialistStore {
     return true;
   }
 
-  /** Returns id + name + description for all specialists, for system prompt injection. */
+  /** Returns id + name + description + optional model info for all specialists, for system prompt injection. */
   getSummaries(): SpecialistSummary[] {
-    return this.list().map(({ id, name, description }) => ({ id, name, description }));
+    return this.list().map(({ id, name, description, provider, model }) => ({
+      id,
+      name,
+      description,
+      ...(provider !== undefined ? { provider } : {}),
+      ...(model !== undefined ? { model } : {}),
+    }));
   }
 
   /** Writes data to a `.tmp` file then renames it into place for crash-safe persistence. */
