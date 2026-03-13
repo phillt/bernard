@@ -12,7 +12,12 @@ import {
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
-import { type BernardConfig, hasProviderKey, getDefaultModel, PROVIDER_ENV_VARS } from '../config.js';
+import {
+  type BernardConfig,
+  hasProviderKey,
+  getDefaultModel,
+  PROVIDER_ENV_VARS,
+} from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
 
@@ -109,20 +114,27 @@ export function createTaskTool(
       provider: z
         .string()
         .optional()
-        .describe('Optional provider override for this task (e.g. "xai"). Falls back to global config.'),
+        .describe(
+          'Optional provider override for this task (e.g. "xai"). Falls back to global config.',
+        ),
       model: z
         .string()
         .optional()
-        .describe('Optional model override for this task (e.g. "grok-code-fast-1"). Falls back to global config.'),
+        .describe(
+          'Optional model override for this task (e.g. "grok-code-fast-1"). Falls back to global config.',
+        ),
     }),
     execute: async ({ task, context, provider, model }, execOptions) => {
       // When the resolved provider differs from config.provider and no explicit model
       // override exists, use the provider's default model to avoid cross-provider mismatches.
       const resolvedProvider = provider ?? config.provider;
-      const resolvedModel = model ?? (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);
+      const resolvedModel =
+        model ??
+        (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);
 
       if (!hasProviderKey(config, resolvedProvider)) {
-        const envVar = PROVIDER_ENV_VARS[resolvedProvider] ?? `${resolvedProvider.toUpperCase()}_API_KEY`;
+        const envVar =
+          PROVIDER_ENV_VARS[resolvedProvider] ?? `${resolvedProvider.toUpperCase()}_API_KEY`;
         return JSON.stringify({
           status: 'error',
           output: `No API key found for provider "${resolvedProvider}". Run: bernard add-key ${resolvedProvider} <your-api-key> or set ${envVar}.`,

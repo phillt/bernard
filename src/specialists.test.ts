@@ -341,7 +341,13 @@ describe('SpecialistStore', () => {
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
       const summaries = store.getSummaries();
       expect(summaries).toEqual([
-        { id: 'code-review', name: 'Code Review', description: 'Review code', provider: 'xai', model: 'grok-code-fast-1' },
+        {
+          id: 'code-review',
+          name: 'Code Review',
+          description: 'Review code',
+          provider: 'xai',
+          model: 'grok-code-fast-1',
+        },
       ]);
     });
   });

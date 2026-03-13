@@ -257,12 +257,13 @@ MCP (Model Context Protocol) servers provide additional tools. Use the mcp_confi
   prompt += '\n\n## Specialists';
   if (specialistSummaries && specialistSummaries.length > 0) {
     prompt += '\n\nAvailable specialist agents you can delegate to via specialist_run:\n';
-    prompt += specialistSummaries.map((s) => {
-      const modelTag = s.provider || s.model
-        ? ` [${s.provider ?? 'default'}/${s.model ?? 'default'}]`
-        : '';
-      return `- ${s.id} — ${s.name}: ${s.description}${modelTag}`;
-    }).join('\n');
+    prompt += specialistSummaries
+      .map((s) => {
+        const modelTag =
+          s.provider || s.model ? ` [${s.provider ?? 'default'}/${s.model ?? 'default'}]` : '';
+        return `- ${s.id} — ${s.name}: ${s.description}${modelTag}`;
+      })
+      .join('\n');
     prompt +=
       "\n\nWhen a user request clearly falls within a saved specialist's domain, delegate to it via specialist_run without asking for permission. If the match is partial or ambiguous, briefly confirm with the user before dispatching.";
     prompt +=

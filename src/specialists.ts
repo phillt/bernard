@@ -127,7 +127,10 @@ export class SpecialistStore {
   update(
     id: string,
     updates: Partial<
-      Pick<Specialist, 'name' | 'description' | 'systemPrompt' | 'guidelines' | 'provider' | 'model'>
+      Pick<
+        Specialist,
+        'name' | 'description' | 'systemPrompt' | 'guidelines' | 'provider' | 'model'
+      >
     >,
   ): Specialist | undefined {
     if (!ID_PATTERN.test(id)) return undefined;

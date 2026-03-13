@@ -222,7 +222,13 @@ describe('buildSystemPrompt', () => {
 
   it('includes model tags for specialists with provider/model overrides', () => {
     const specialists = [
-      { id: 'code-reviewer', name: 'Code Reviewer', description: 'Reviews code', provider: 'xai', model: 'grok-code-fast-1' },
+      {
+        id: 'code-reviewer',
+        name: 'Code Reviewer',
+        description: 'Reviews code',
+        provider: 'xai',
+        model: 'grok-code-fast-1',
+      },
     ];
     const prompt = buildSystemPrompt(
       makeConfig(),

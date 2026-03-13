@@ -68,12 +68,15 @@ export function createSpecialistTool(
         case 'list': {
           const specialists = store.list();
           if (specialists.length === 0) return 'No specialists saved yet.';
-          return `Specialists (${specialists.length}):\n${specialists.map((s) => {
-            const modelTag = s.provider || s.model
-              ? ` [${s.provider ?? 'default'}/${s.model ?? 'default'}]`
-              : '';
-            return `  - ${s.id} — ${s.name}: ${s.description}${modelTag}`;
-          }).join('\n')}`;
+          return `Specialists (${specialists.length}):\n${specialists
+            .map((s) => {
+              const modelTag =
+                s.provider || s.model
+                  ? ` [${s.provider ?? 'default'}/${s.model ?? 'default'}]`
+                  : '';
+              return `  - ${s.id} — ${s.name}: ${s.description}${modelTag}`;
+            })
+            .join('\n')}`;
         }
 
         case 'read': {
@@ -107,7 +110,15 @@ export function createSpecialistTool(
               return `Error: Unknown model "${model}" for provider "${config.provider}". Valid models: ${PROVIDER_MODELS[config.provider].join(', ')}`;
           }
           try {
-            const specialist = store.create(id, name, description, systemPrompt, guidelines ?? [], provider, model);
+            const specialist = store.create(
+              id,
+              name,
+              description,
+              systemPrompt,
+              guidelines ?? [],
+              provider,
+              model,
+            );
             // Auto-mark matching candidate as accepted (best-effort)
             try {
               if (candidateStore) {
@@ -141,7 +152,10 @@ export function createSpecialistTool(
               return `Error: Unknown model "${model}" for provider "${effectiveProvider}". Valid models: ${PROVIDER_MODELS[effectiveProvider]?.join(', ') ?? 'none'}`;
           }
           const updates: Partial<
-            Pick<Specialist, 'name' | 'description' | 'systemPrompt' | 'guidelines' | 'provider' | 'model'>
+            Pick<
+              Specialist,
+              'name' | 'description' | 'systemPrompt' | 'guidelines' | 'provider' | 'model'
+            >
           > = {};
           if (name !== undefined) updates.name = name;
           if (description !== undefined) updates.description = description;
