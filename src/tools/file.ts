@@ -218,20 +218,17 @@ export function createFileTools() {
           }
 
           if (stat.size > MAX_FILE_SIZE) {
-            return { error: `File too large (${stat.size} bytes, max ${MAX_FILE_SIZE}): ${absPath}` };
+            return {
+              error: `File too large (${stat.size} bytes, max ${MAX_FILE_SIZE}): ${absPath}`,
+            };
           }
 
-          // Binary check on first 8KB
-          const fd = fs.openSync(absPath, 'r');
-          const checkBuf = Buffer.alloc(Math.min(8192, stat.size));
-          fs.readSync(fd, checkBuf, 0, checkBuf.length, 0);
-          fs.closeSync(fd);
-
-          if (isBinaryContent(checkBuf)) {
+          // Read once — use buffer for binary check, then decode
+          const rawBuffer = fs.readFileSync(absPath);
+          if (isBinaryContent(rawBuffer)) {
             return { error: `File appears to be binary: ${absPath}` };
           }
-
-          const content = fs.readFileSync(absPath, 'utf-8');
+          const content = rawBuffer.toString('utf-8');
           const allLines = splitLines(content);
           const totalLines = allLines.length;
 
