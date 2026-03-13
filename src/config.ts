@@ -348,6 +348,21 @@ export function getAvailableProviders(config: BernardConfig): string[] {
   return Object.keys(PROVIDER_MODELS).filter((p) => !!keyMap[p]);
 }
 
+/** Returns true if the given provider name is a known provider in PROVIDER_MODELS. */
+export function isValidProvider(provider: string): boolean {
+  return provider in PROVIDER_MODELS;
+}
+
+/** Returns true if the given config has an API key for the specified provider. */
+export function hasProviderKey(config: BernardConfig, provider: string): boolean {
+  const keyMap: Record<string, string | undefined> = {
+    anthropic: config.anthropicApiKey,
+    openai: config.openaiApiKey,
+    xai: config.xaiApiKey,
+  };
+  return !!keyMap[provider];
+}
+
 /**
  * Builds a fully-resolved {@link BernardConfig} by merging (in priority order):
  * CLI overrides, saved preferences, environment variables, and built-in defaults.

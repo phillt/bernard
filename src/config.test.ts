@@ -12,6 +12,8 @@ import {
   resetAllOptions,
   OPTIONS_REGISTRY,
   savePreferences,
+  isValidProvider,
+  hasProviderKey,
 } from './config.js';
 import type { BernardConfig } from './config.js';
 
@@ -626,5 +628,47 @@ describe('loadConfig criticMode from env var', () => {
     });
     const config = loadConfig();
     expect(config.criticMode).toBe(false);
+  });
+});
+
+describe('isValidProvider', () => {
+  it('returns true for known providers', () => {
+    expect(isValidProvider('anthropic')).toBe(true);
+    expect(isValidProvider('openai')).toBe(true);
+    expect(isValidProvider('xai')).toBe(true);
+  });
+
+  it('returns false for unknown providers', () => {
+    expect(isValidProvider('google')).toBe(false);
+    expect(isValidProvider('')).toBe(false);
+    expect(isValidProvider('ANTHROPIC')).toBe(false);
+  });
+});
+
+describe('hasProviderKey', () => {
+  it('returns true when anthropic key is present', () => {
+    const config = { anthropicApiKey: 'sk-test' } as BernardConfig;
+    expect(hasProviderKey(config, 'anthropic')).toBe(true);
+  });
+
+  it('returns true when openai key is present', () => {
+    const config = { openaiApiKey: 'sk-test' } as BernardConfig;
+    expect(hasProviderKey(config, 'openai')).toBe(true);
+  });
+
+  it('returns true when xai key is present', () => {
+    const config = { xaiApiKey: 'xai-test' } as BernardConfig;
+    expect(hasProviderKey(config, 'xai')).toBe(true);
+  });
+
+  it('returns false when key is missing', () => {
+    const config = { anthropicApiKey: 'sk-test' } as BernardConfig;
+    expect(hasProviderKey(config, 'openai')).toBe(false);
+    expect(hasProviderKey(config, 'xai')).toBe(false);
+  });
+
+  it('returns false for unknown provider', () => {
+    const config = { anthropicApiKey: 'sk-test' } as BernardConfig;
+    expect(hasProviderKey(config, 'google')).toBe(false);
   });
 });
