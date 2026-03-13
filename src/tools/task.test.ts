@@ -428,4 +428,84 @@ describe('task tool', () => {
       expect(mockGenerateText).not.toHaveBeenCalled();
     });
   });
+
+  describe('taskId parameter', () => {
+    it('uses saved task content when taskId is provided', async () => {
+      mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+      const routineStore = new RoutineStore();
+      vi.spyOn(routineStore, 'get').mockReturnValue({
+        id: 'task-check-issues',
+        name: 'Check Issues',
+        description: 'Check open issues',
+        content: 'List all open GitHub issues using gh issue list',
+      });
+
+      const taskTool = createTaskTool(
+        makeConfig(),
+        toolOptions,
+        memoryStore,
+        undefined,
+        undefined,
+        routineStore,
+      );
+      await taskTool.execute!(
+        { task: 'task-check-issues', taskId: 'task-check-issues' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.messages[0].content).toContain('List all open GitHub issues');
+    });
+
+    it('returns error when taskId not found', async () => {
+      const routineStore = new RoutineStore();
+      vi.spyOn(routineStore, 'get').mockReturnValue(undefined);
+
+      const taskTool = createTaskTool(
+        makeConfig(),
+        toolOptions,
+        memoryStore,
+        undefined,
+        undefined,
+        routineStore,
+      );
+      const result = await taskTool.execute!(
+        { task: 'task-nonexistent', taskId: 'task-nonexistent' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const parsed = JSON.parse(result);
+      expect(parsed.status).toBe('error');
+      expect(parsed.output).toContain('not found');
+      expect(mockGenerateText).not.toHaveBeenCalled();
+    });
+
+    it('appends task text as additional context when different from taskId', async () => {
+      mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+      const routineStore = new RoutineStore();
+      vi.spyOn(routineStore, 'get').mockReturnValue({
+        id: 'task-check-issues',
+        name: 'Check Issues',
+        description: 'Check open issues',
+        content: 'List all open GitHub issues using gh issue list',
+      });
+
+      const taskTool = createTaskTool(
+        makeConfig(),
+        toolOptions,
+        memoryStore,
+        undefined,
+        undefined,
+        routineStore,
+      );
+      await taskTool.execute!(
+        { task: 'only critical bugs', taskId: 'task-check-issues' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.messages[0].content).toContain('List all open GitHub issues');
+      expect(call.messages[0].content).toContain('only critical bugs');
+    });
+  });
 });

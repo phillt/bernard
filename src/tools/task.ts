@@ -20,6 +20,7 @@ import {
 } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
+import type { RoutineStore } from '../routines.js';
 
 export const TASK_SYSTEM_PROMPT = `You are a task executor for Bernard, a CLI AI assistant. You have been given a focused, isolated task.
 
@@ -106,15 +107,22 @@ export function createTaskTool(
   memoryStore: MemoryStore,
   mcpTools?: Record<string, any>,
   ragStore?: RAGStore,
+  routineStore?: RoutineStore,
 ) {
   return tool({
     description:
-      'Execute a focused, isolated task with structured JSON output {status, output, details?}. Tasks have no conversation history and a 5-step budget. Use when you need a discrete, machine-readable result — especially during routine execution for chaining outcomes.',
+      'Execute a focused, isolated single-step task with structured JSON output {status, output, details?}. Tasks have no conversation history — 1 LLM call + tool use, then structured output. Use when you need a discrete, machine-readable result — especially during routine execution for chaining outcomes.',
     parameters: z.object({
       task: z
         .string()
         .describe(
           'A self-contained task description. Include specific objective, expected output, exact file paths or commands, and success criteria. The task executor has zero prior context.',
+        ),
+      taskId: z
+        .string()
+        .optional()
+        .describe(
+          'ID of a saved task (task-prefixed routine) to execute. Loads stored task content as the primary description.',
         ),
       context: z.string().optional().describe('Optional additional context for the task'),
       provider: z
@@ -130,7 +138,7 @@ export function createTaskTool(
           'Optional model override for this task (e.g. "grok-code-fast-1"). Falls back to global config.',
         ),
     }),
-    execute: async ({ task, context, provider, model }, execOptions) => {
+    execute: async ({ task, taskId, context, provider, model }, execOptions) => {
       // When the resolved provider differs from config.provider and no explicit model
       // override exists, use the provider's default model to avoid cross-provider mismatches.
       const resolvedProvider = provider ?? config.provider;
@@ -158,12 +166,31 @@ export function createTaskTool(
       const id = slot.id;
       const prefix = `task:${id}`;
 
-      printTaskStart(task);
+      // Resolve saved task content if taskId is provided
+      let resolvedTask = task;
+      if (taskId && routineStore) {
+        const routine = routineStore.get(taskId);
+        if (routine) {
+          resolvedTask = routine.content;
+          if (task && task !== taskId) {
+            // Use provided task text as additional context
+            resolvedTask += `\n\nAdditional context: ${task}`;
+          }
+        } else {
+          releaseSlot();
+          return JSON.stringify({
+            status: 'error',
+            output: `Saved task "${taskId}" not found.`,
+          });
+        }
+      }
+
+      printTaskStart(resolvedTask);
 
       try {
         const baseTools = createTools(options, memoryStore, mcpTools);
 
-        let userMessage = `Task: ${task}`;
+        let userMessage = `Task: ${resolvedTask}`;
         if (context) {
           userMessage += `\n\nContext: ${context}`;
         }
