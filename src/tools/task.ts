@@ -112,32 +112,37 @@ export function createTaskTool(
   return tool({
     description:
       'Execute a focused, isolated single-step task with structured JSON output {status, output, details?}. Tasks have no conversation history — 1 LLM call + tool use, then structured output. Use when you need a discrete, machine-readable result — especially during routine execution for chaining outcomes.',
-    parameters: z.object({
-      task: z
-        .string()
-        .describe(
-          'A self-contained task description. Include specific objective, expected output, exact file paths or commands, and success criteria. The task executor has zero prior context.',
-        ),
-      taskId: z
-        .string()
-        .optional()
-        .describe(
-          'ID of a saved task (task-prefixed routine) to execute. Loads stored task content as the primary description.',
-        ),
-      context: z.string().optional().describe('Optional additional context for the task'),
-      provider: z
-        .string()
-        .optional()
-        .describe(
-          'Optional provider override for this task (e.g. "xai"). Falls back to global config.',
-        ),
-      model: z
-        .string()
-        .optional()
-        .describe(
-          'Optional model override for this task (e.g. "grok-code-fast-1"). Falls back to global config.',
-        ),
-    }),
+    parameters: z
+      .object({
+        task: z
+          .string()
+          .optional()
+          .describe(
+            'A self-contained task description. Include specific objective, expected output, exact file paths or commands, and success criteria. The task executor has zero prior context.',
+          ),
+        taskId: z
+          .string()
+          .optional()
+          .describe(
+            'ID of a saved task (task-prefixed routine) to execute. Loads stored task content as the primary description.',
+          ),
+        context: z.string().optional().describe('Optional additional context for the task'),
+        provider: z
+          .string()
+          .optional()
+          .describe(
+            'Optional provider override for this task (e.g. "xai"). Falls back to global config.',
+          ),
+        model: z
+          .string()
+          .optional()
+          .describe(
+            'Optional model override for this task (e.g. "grok-code-fast-1"). Falls back to global config.',
+          ),
+      })
+      .refine((data) => data.task || data.taskId, {
+        message: 'Either task or taskId must be provided',
+      }),
     execute: async ({ task, taskId, context, provider, model }, execOptions) => {
       // When the resolved provider differs from config.provider and no explicit model
       // override exists, use the provider's default model to avoid cross-provider mismatches.
