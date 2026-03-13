@@ -42,7 +42,7 @@ export function isDangerous(command: string): boolean {
 export function createShellTool(options: ToolOptions) {
   return tool({
     description:
-      'Execute a shell command in the current working directory and return its output. Use this for file operations, git commands, running scripts, and any terminal task.',
+      'Execute a shell command in the current working directory and return its output. Use this for git commands, running scripts, and any terminal task. For reading and editing files, prefer file_read_lines and file_edit_lines.',
     parameters: z.object({
       command: z.string().describe('The shell command to execute'),
     }),
