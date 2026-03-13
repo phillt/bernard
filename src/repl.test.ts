@@ -631,7 +631,7 @@ describe('REPL /create-task command', () => {
     // Verify the message contains task-specific instructions
     const callArg = mockProcessInput.mock.calls[0][0] as string;
     expect(callArg).toContain('ID MUST start with "task-"');
-    expect(callArg).toContain('task routine');
+    expect(callArg).toContain('saved task');
 
     // Verify history is saved after processing
     expect(mockHistorySave).toHaveBeenCalled();

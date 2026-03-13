@@ -441,6 +441,103 @@ export async function startRepl(
     void prompt();
   }
 
+  /**
+   * Execute a task in single-step mode (maxSteps: 2) with structured JSON output.
+   * Used by both /task <description> and /task-{id} saved task invocations.
+   */
+  async function executeTask(description: string, context?: string): Promise<void> {
+    processing = true;
+    interrupted = false;
+    taskAbortController = new AbortController();
+    printTaskStart(description);
+    startSpinner('Running task...');
+
+    try {
+      const baseTools = createTools(toolOptions, memoryStore, mcpTools);
+
+      // Optional RAG search for context
+      let ragResults;
+      if (ragStore) {
+        try {
+          ragResults = await ragStore.search(description);
+          if (ragResults.length > 0) {
+            debugLog('repl:task:rag', {
+              query: description.slice(0, 100),
+              results: ragResults.length,
+            });
+          }
+        } catch (err) {
+          debugLog('repl:task:rag:error', err instanceof Error ? err.message : String(err));
+        }
+      }
+
+      const autoContext = `\n\nWorking directory: ${process.cwd()}\nAvailable tools: ${Object.keys(baseTools).join(', ')}`;
+
+      const systemPrompt =
+        TASK_SYSTEM_PROMPT +
+        autoContext +
+        buildMemoryContext({ memoryStore, ragResults, includeScratch: false });
+
+      let userMessage = `Task: ${description}`;
+      if (context) {
+        userMessage += `\n\nAdditional context: ${context}`;
+      }
+
+      const result = await generateText({
+        model: getModel(config.provider, config.model),
+        tools: baseTools,
+        maxSteps: 2,
+        maxTokens: config.maxTokens,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userMessage }],
+        abortSignal: taskAbortController.signal,
+        onStepFinish: ({ text, toolCalls, toolResults }) => {
+          for (const tc of toolCalls) {
+            printToolCall(tc.toolName, tc.args as Record<string, unknown>);
+          }
+          for (const tr of toolResults) {
+            printToolResult(tr.toolName, tr.result);
+          }
+          if (text) {
+            printAssistantText(text);
+          }
+        },
+      });
+
+      stopSpinner();
+      const taskResult = wrapTaskResult(result.text);
+      printTaskEnd(JSON.stringify(taskResult));
+
+      // Print the full output for the user
+      const t = getTheme();
+      const outputStr =
+        typeof taskResult.output === 'string'
+          ? taskResult.output
+          : JSON.stringify(taskResult.output, null, 2);
+      if (taskResult.details) {
+        console.log(t.text(`\n${outputStr}\n${taskResult.details}`));
+      } else {
+        console.log(t.text(`\n${outputStr}`));
+      }
+    } catch (err: unknown) {
+      stopSpinner();
+      if (!interrupted) {
+        const message = err instanceof Error ? err.message : String(err);
+        printTaskEnd(JSON.stringify({ status: 'error', output: message }));
+        printError(message);
+      }
+    } finally {
+      processing = false;
+      taskAbortController = null;
+      stopSpinner();
+    }
+
+    if (interrupted) {
+      printInfo('Interrupted.');
+      interrupted = false;
+    }
+  }
+
   const prompt = async () => {
     const { text, pasted } = await readInput();
     let trimmed = text.trim();
@@ -985,24 +1082,23 @@ Remember: routine content should be written as clear instructions that Bernard c
       }
 
       if (trimmed === '/create-task') {
-        const message = `The user wants to create a new task routine interactively. Task routines are regular routines whose ID is prefixed with "task-". Guide them through the process:
+        const message = `The user wants to create a new saved task interactively. Saved tasks are routines whose ID is prefixed with "task-", but they execute differently from routines: tasks run in a single-step execution model (1 LLM call + tool use → structured JSON output). Guide them through the process:
 
-1. Ask what task they want to save (what's the goal, what steps are involved)
-2. Ask clarifying questions if the instructions are vague or incomplete — e.g., what should happen on errors, are there optional steps, what tools/commands are involved
-3. Once you have enough information, draft the routine by optimizing their raw instructions into a well-structured routine using these prompting best practices:
-   - **Clarity**: use simple, literal language; define terms; state fallback behavior
-   - **Specificity**: specify exact commands, file paths, expected outputs, and decision rules
-   - **Structure**: organize steps logically with clear numbering and section headers
-   - **Constraints**: encode "never do X" + "do Y instead" at boundaries; keep constraints minimal but explicit
-   - **Robustness**: include error handling guidance, edge cases, and "if X then Y" decision points
+1. Ask what task they want to save (what's the goal, what output is expected)
+2. Ask clarifying questions if needed — e.g., what should happen on errors, what tools/commands are involved, what the expected output format is
+3. Once you have enough information, draft the task using these guidelines:
+   - **Single-step**: task content must be achievable in a single LLM call with tool use. If the task needs multiple sequential steps, it should be a routine that chains tasks instead.
+   - **Explicit commands**: specify exact commands, file paths, and expected output format
+   - **Success/error criteria**: define what constitutes success and how errors should be reported
+   - **Output format**: specify what the structured JSON output should contain
    - **Conciseness**: be token-efficient — no filler, no redundant instructions
-4. Present the draft routine (id, name, description, content) to the user for review
+4. Present the draft task (id, name, description, content) to the user for review
 5. Make any requested changes
 6. Use the routine tool to save it once the user approves
 
 IMPORTANT: The routine ID MUST start with "task-". When drafting, generate an ID like "task-deploy-staging" or "task-run-tests". If the user suggests an ID without the prefix, prepend "task-" automatically. The user will invoke this task with /task-{name} in the REPL.
 
-Remember: routine content should be written as clear instructions that Bernard can follow. Think of it like writing a mini system prompt — specific, structured, and actionable.`;
+Remember: task content should describe a single atomic operation with clear success criteria. Unlike routines (multi-step workflows), tasks must complete in one step.`;
 
         await runGuidedCreation(message);
         return;
@@ -1120,85 +1216,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           return;
         }
 
-        processing = true;
-        interrupted = false;
-        taskAbortController = new AbortController();
-        printTaskStart(taskDescription);
-        startSpinner('Running task...');
-
-        try {
-          const baseTools = createTools(toolOptions, memoryStore, mcpTools);
-
-          // Optional RAG search for context
-          let ragResults;
-          if (ragStore) {
-            try {
-              ragResults = await ragStore.search(taskDescription);
-              if (ragResults.length > 0) {
-                debugLog('repl:task:rag', {
-                  query: taskDescription.slice(0, 100),
-                  results: ragResults.length,
-                });
-              }
-            } catch (err) {
-              debugLog('repl:task:rag:error', err instanceof Error ? err.message : String(err));
-            }
-          }
-
-          const systemPrompt =
-            TASK_SYSTEM_PROMPT +
-            buildMemoryContext({ memoryStore, ragResults, includeScratch: false });
-
-          const result = await generateText({
-            model: getModel(config.provider, config.model),
-            tools: baseTools,
-            maxSteps: 5,
-            maxTokens: config.maxTokens,
-            system: systemPrompt,
-            messages: [{ role: 'user', content: `Task: ${taskDescription}` }],
-            abortSignal: taskAbortController.signal,
-            onStepFinish: ({ text, toolCalls, toolResults }) => {
-              for (const tc of toolCalls) {
-                printToolCall(tc.toolName, tc.args as Record<string, unknown>);
-              }
-              for (const tr of toolResults) {
-                printToolResult(tr.toolName, tr.result);
-              }
-              if (text) {
-                printAssistantText(text);
-              }
-            },
-          });
-
-          stopSpinner();
-          const taskResult = wrapTaskResult(result.text);
-          printTaskEnd(JSON.stringify(taskResult));
-
-          // Print the full output for the user
-          const t = getTheme();
-          if (taskResult.details) {
-            console.log(t.text(`\n${taskResult.output}\n${taskResult.details}`));
-          } else {
-            console.log(t.text(`\n${taskResult.output}`));
-          }
-        } catch (err: unknown) {
-          stopSpinner();
-          if (!interrupted) {
-            const message = err instanceof Error ? err.message : String(err);
-            printTaskEnd(JSON.stringify({ status: 'error', output: message }));
-            printError(message);
-          }
-        } finally {
-          processing = false;
-          taskAbortController = null;
-          stopSpinner();
-        }
-
-        if (interrupted) {
-          printInfo('Interrupted.');
-          interrupted = false;
-        }
-
+        await executeTask(taskDescription);
         console.log();
         void prompt();
         return;
@@ -1211,6 +1229,16 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         const routine = routineStore.get(routineId);
         if (routine) {
           const args = parts.slice(1).join(' ');
+
+          // Task-prefixed routines run through single-step task executor
+          if (routineId.startsWith('task-')) {
+            await executeTask(routine.content, args || undefined);
+            console.log();
+            void prompt();
+            return;
+          }
+
+          // Regular routines run through the full agent loop
           let message = `Execute routine "${routine.name}" (/${routine.id}):\n${routine.description}\n\n## Routine Steps\n${routine.content}`;
           if (args) {
             message += `\n\n## Additional Context\n${args}`;
