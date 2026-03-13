@@ -345,15 +345,18 @@ export function createFileTools() {
                   validationErrors.push(
                     `${prefix}: line ${e.line} out of bounds (file has ${totalLines} lines)`,
                   );
-                if (e.content === undefined) validationErrors.push(`${prefix}: "content" is required`);
+                if (e.content === undefined)
+                  validationErrors.push(`${prefix}: "content" is required`);
                 break;
               case 'insert':
-                if (e.before === undefined) validationErrors.push(`${prefix}: "before" is required`);
+                if (e.before === undefined)
+                  validationErrors.push(`${prefix}: "before" is required`);
                 else if (e.before > totalLines + 1)
                   validationErrors.push(
                     `${prefix}: before ${e.before} out of bounds (file has ${totalLines} lines, max ${totalLines + 1})`,
                   );
-                if (e.content === undefined) validationErrors.push(`${prefix}: "content" is required`);
+                if (e.content === undefined)
+                  validationErrors.push(`${prefix}: "content" is required`);
                 break;
               case 'delete':
                 if (!e.lines || e.lines.length === 0)
@@ -370,7 +373,8 @@ export function createFileTools() {
                 }
                 break;
               case 'append':
-                if (e.content === undefined) validationErrors.push(`${prefix}: "content" is required`);
+                if (e.content === undefined)
+                  validationErrors.push(`${prefix}: "content" is required`);
                 break;
             }
           }
