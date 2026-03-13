@@ -12,7 +12,7 @@ import {
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
-import { type BernardConfig, hasProviderKey, PROVIDER_ENV_VARS } from '../config.js';
+import { type BernardConfig, hasProviderKey, getDefaultModel, PROVIDER_ENV_VARS } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
 import type { SpecialistStore } from '../specialists.js';
@@ -83,8 +83,12 @@ export function createSpecialistRunTool(
       }
 
       // 3-tier model resolution: invocation override > specialist config > global config
+      // When the resolved provider differs from config.provider and no explicit model
+      // override exists, use the provider's default model to avoid cross-provider mismatches
+      // (e.g. xai provider with an anthropic model name).
       const resolvedProvider = provider ?? specialist.provider ?? config.provider;
-      const resolvedModel = model ?? specialist.model ?? config.model;
+      const explicitModel = model ?? specialist.model;
+      const resolvedModel = explicitModel ?? (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);
 
       if (!hasProviderKey(config, resolvedProvider)) {
         const envVar = PROVIDER_ENV_VARS[resolvedProvider] ?? `${resolvedProvider.toUpperCase()}_API_KEY`;
