@@ -357,7 +357,9 @@ export function createFileTools() {
                 break;
               case 'delete':
                 if (!e.lines || e.lines.length === 0)
-                  validationErrors.push(`${prefix}: "lines" array is required and must not be empty`);
+                  validationErrors.push(
+                    `${prefix}: "lines" array is required and must not be empty`,
+                  );
                 else {
                   for (const ln of e.lines) {
                     if (ln > totalLines)
