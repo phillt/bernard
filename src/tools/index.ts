@@ -8,6 +8,7 @@ import { createMCPConfigTool } from './mcp.js';
 import { createMCPAddUrlTool } from './mcp-url.js';
 import { createWebReadTool } from './web.js';
 import { createWaitTool } from './wait.js';
+import { createFileTools } from './file.js';
 import { createRoutineTool } from './routine.js';
 import { createSpecialistTool } from './specialist.js';
 import type { ToolOptions } from './types.js';
@@ -48,6 +49,7 @@ export function createTools(
     mcp_add_url: createMCPAddUrlTool(),
     web_read: createWebReadTool(),
     wait: createWaitTool(),
+    ...createFileTools(),
     ...mcpTools,
   };
 }
