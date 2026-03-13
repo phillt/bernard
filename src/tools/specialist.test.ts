@@ -426,6 +426,82 @@ describe('createSpecialistTool', () => {
       expect(result).toContain('Unknown model');
     });
 
+    it('validates model against global config provider when only model is specified on create', async () => {
+      const config: BernardConfig = {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5-20250929',
+        maxTokens: 4096,
+        shellTimeout: 30000,
+        tokenWindow: 0,
+        ragEnabled: true,
+        theme: 'bernard',
+        criticMode: false,
+        anthropicApiKey: 'sk-test',
+      };
+      const toolWithConfig = createSpecialistTool(undefined, undefined, config);
+
+      const result = await toolWithConfig.execute(
+        {
+          action: 'create',
+          id: 'test-spec',
+          name: 'Test',
+          description: 'Test',
+          systemPrompt: 'prompt',
+          model: 'nonexistent-model',
+        },
+        {} as any,
+      );
+      expect(result).toContain('Error');
+      expect(result).toContain('Unknown model');
+      expect(result).toContain('anthropic');
+    });
+
+    it('allows valid model without provider on create when config is provided', async () => {
+      const config: BernardConfig = {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5-20250929',
+        maxTokens: 4096,
+        shellTimeout: 30000,
+        tokenWindow: 0,
+        ragEnabled: true,
+        theme: 'bernard',
+        criticMode: false,
+        anthropicApiKey: 'sk-test',
+      };
+      const toolWithConfig = createSpecialistTool(undefined, undefined, config);
+
+      const result = await toolWithConfig.execute(
+        {
+          action: 'create',
+          id: 'test-spec',
+          name: 'Test',
+          description: 'Test',
+          systemPrompt: 'prompt',
+          model: 'claude-sonnet-4-5-20250929',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('skips model-only validation when config is not provided', async () => {
+      // Tool created without config — model-only should be allowed (validated at runtime)
+      const toolNoConfig = createSpecialistTool();
+
+      const result = await toolNoConfig.execute(
+        {
+          action: 'create',
+          id: 'test-spec',
+          name: 'Test',
+          description: 'Test',
+          systemPrompt: 'prompt',
+          model: 'any-model-name',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
     it('allows provider without model on create', async () => {
       const result = await tool.execute(
         {
@@ -521,6 +597,69 @@ describe('createSpecialistTool', () => {
       expect(result).toContain('Model Override');
       expect(result).toContain('Provider: xai');
       expect(result).toContain('Model: grok-code-fast-1');
+    });
+
+    it('auto-clears model when provider is cleared on update', async () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        provider: 'xai',
+        model: 'grok-code-fast-1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute(
+        { action: 'update', id: 'code-review', provider: '' },
+        {} as any,
+      );
+      expect(result).toContain('updated');
+
+      // Verify the written data has both provider and model cleared (store deletes the keys)
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+      expect(written.provider).toBeUndefined();
+      expect(written.model).toBeUndefined();
+    });
+
+    it('validates model-only update against specialist existing provider', async () => {
+      const config: BernardConfig = {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5-20250929',
+        maxTokens: 4096,
+        shellTimeout: 30000,
+        tokenWindow: 0,
+        ragEnabled: true,
+        theme: 'bernard',
+        criticMode: false,
+        anthropicApiKey: 'sk-test',
+      };
+      const toolWithConfig = createSpecialistTool(undefined, undefined, config);
+
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        provider: 'xai',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await toolWithConfig.execute(
+        { action: 'update', id: 'code-review', model: 'nonexistent-model' },
+        {} as any,
+      );
+      expect(result).toContain('Error');
+      expect(result).toContain('Unknown model');
+      expect(result).toContain('xai');
     });
 
     it('does not show model override section when no override set', async () => {
