@@ -391,9 +391,11 @@ export function createFileTools() {
 
           for (const { original: e } of sorted) {
             switch (e.action) {
-              case 'replace':
-                lines[e.line! - 1] = e.content!;
+              case 'replace': {
+                const newLines = e.content!.split('\n');
+                lines.splice(e.line! - 1, 1, ...newLines);
                 break;
+              }
               case 'insert':
                 lines.splice(e.before! - 1, 0, ...e.content!.split('\n'));
                 break;
