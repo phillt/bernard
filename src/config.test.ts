@@ -644,6 +644,45 @@ describe('isValidProvider', () => {
     expect(isValidProvider('')).toBe(false);
     expect(isValidProvider('ANTHROPIC')).toBe(false);
   });
+
+  it('returns false for Object.prototype properties (prototype chain safety)', () => {
+    expect(isValidProvider('toString')).toBe(false);
+    expect(isValidProvider('constructor')).toBe(false);
+    expect(isValidProvider('hasOwnProperty')).toBe(false);
+  });
+});
+
+describe('getProviderApiKey', () => {
+  it('returns the anthropic key when present', () => {
+    const config = { anthropicApiKey: 'sk-test' } as BernardConfig;
+    expect(getProviderApiKey(config, 'anthropic')).toBe('sk-test');
+  });
+
+  it('returns the openai key when present', () => {
+    const config = { openaiApiKey: 'sk-openai' } as BernardConfig;
+    expect(getProviderApiKey(config, 'openai')).toBe('sk-openai');
+  });
+
+  it('returns the xai key when present', () => {
+    const config = { xaiApiKey: 'xai-test' } as BernardConfig;
+    expect(getProviderApiKey(config, 'xai')).toBe('xai-test');
+  });
+
+  it('returns undefined when key is missing', () => {
+    const config = { anthropicApiKey: 'sk-test' } as BernardConfig;
+    expect(getProviderApiKey(config, 'openai')).toBeUndefined();
+  });
+
+  it('returns undefined for unknown provider', () => {
+    const config = { anthropicApiKey: 'sk-test' } as BernardConfig;
+    expect(getProviderApiKey(config, 'google')).toBeUndefined();
+  });
+
+  it('returns undefined for Object.prototype properties (prototype chain safety)', () => {
+    const config = { anthropicApiKey: 'sk-test' } as BernardConfig;
+    expect(getProviderApiKey(config, 'toString')).toBeUndefined();
+    expect(getProviderApiKey(config, 'constructor')).toBeUndefined();
+  });
 });
 
 describe('hasProviderKey', () => {
@@ -671,5 +710,10 @@ describe('hasProviderKey', () => {
   it('returns false for unknown provider', () => {
     const config = { anthropicApiKey: 'sk-test' } as BernardConfig;
     expect(hasProviderKey(config, 'google')).toBe(false);
+  });
+
+  it('returns false for Object.prototype properties (prototype chain safety)', () => {
+    const config = { anthropicApiKey: 'sk-test' } as BernardConfig;
+    expect(hasProviderKey(config, 'toString')).toBe(false);
   });
 });
