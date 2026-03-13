@@ -51,6 +51,8 @@ import { _resetPool } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 import { SpecialistStore } from '../specialists.js';
 
+const { getModel: mockGetModel } = await import('../providers/index.js');
+
 function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
   return {
     provider: 'anthropic',
@@ -360,5 +362,81 @@ describe('specialist-run tool', () => {
     );
     const call = mockGenerateText.mock.calls[0][0];
     expect(call.system).toContain('eventual consistency');
+  });
+
+  describe('per-agent model selection', () => {
+    it('uses specialist provider/model when set', async () => {
+      mockGenerateText.mockResolvedValue({ text: 'Done' });
+      const specWithModel = { ...mockSpecialist, provider: 'xai', model: 'grok-code-fast-1' };
+      vi.spyOn(specialistStore, 'get').mockReturnValue(specWithModel);
+
+      const config = makeConfig({ xaiApiKey: 'xai-test' });
+      const tool = createSpecialistRunTool(config, toolOptions, memoryStore, specialistStore);
+      await tool.execute!(
+        { specialistId: 'email-triage', task: 'test' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(mockGetModel).toHaveBeenCalledWith('xai', 'grok-code-fast-1');
+    });
+
+    it('invocation override takes priority over specialist config', async () => {
+      mockGenerateText.mockResolvedValue({ text: 'Done' });
+      const specWithModel = { ...mockSpecialist, provider: 'xai', model: 'grok-code-fast-1' };
+      vi.spyOn(specialistStore, 'get').mockReturnValue(specWithModel);
+
+      const config = makeConfig({ openaiApiKey: 'sk-openai', xaiApiKey: 'xai-test' });
+      const tool = createSpecialistRunTool(config, toolOptions, memoryStore, specialistStore);
+      await tool.execute!(
+        { specialistId: 'email-triage', task: 'test', provider: 'openai', model: 'gpt-4o-mini' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(mockGetModel).toHaveBeenCalledWith('openai', 'gpt-4o-mini');
+    });
+
+    it('falls back to global config when no overrides', async () => {
+      mockGenerateText.mockResolvedValue({ text: 'Done' });
+      vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
+
+      const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+      await tool.execute!(
+        { specialistId: 'email-triage', task: 'test' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(mockGetModel).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-5-20250929');
+    });
+
+    it('returns error when resolved provider has no API key', async () => {
+      vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
+
+      const config = makeConfig(); // only has anthropicApiKey
+      const tool = createSpecialistRunTool(config, toolOptions, memoryStore, specialistStore);
+      const result = await tool.execute!(
+        { specialistId: 'email-triage', task: 'test', provider: 'xai' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(result).toContain('No API key found');
+      expect(result).toContain('xai');
+      expect(mockGenerateText).not.toHaveBeenCalled();
+    });
+
+    it('returns error when specialist provider has no API key', async () => {
+      const specWithModel = { ...mockSpecialist, provider: 'openai', model: 'gpt-4o-mini' };
+      vi.spyOn(specialistStore, 'get').mockReturnValue(specWithModel);
+
+      const config = makeConfig(); // only has anthropicApiKey
+      const tool = createSpecialistRunTool(config, toolOptions, memoryStore, specialistStore);
+      const result = await tool.execute!(
+        { specialistId: 'email-triage', task: 'test' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(result).toContain('No API key found');
+      expect(result).toContain('openai');
+      expect(mockGenerateText).not.toHaveBeenCalled();
+    });
   });
 });
