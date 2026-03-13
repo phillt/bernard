@@ -12,7 +12,7 @@ import {
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, _resetPool, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
-import { type BernardConfig, hasProviderKey, PROVIDER_ENV_VARS } from '../config.js';
+import { type BernardConfig, hasProviderKey, getDefaultModel, PROVIDER_ENV_VARS } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
 
@@ -80,8 +80,10 @@ export function createSubAgentTool(
         .describe('Optional model override for this sub-agent (e.g. "grok-code-fast-1"). Falls back to global config.'),
     }),
     execute: async ({ task, context, provider, model }, execOptions) => {
+      // When the resolved provider differs from config.provider and no explicit model
+      // override exists, use the provider's default model to avoid cross-provider mismatches.
       const resolvedProvider = provider ?? config.provider;
-      const resolvedModel = model ?? config.model;
+      const resolvedModel = model ?? (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);
 
       if (!hasProviderKey(config, resolvedProvider)) {
         const envVar = PROVIDER_ENV_VARS[resolvedProvider] ?? `${resolvedProvider.toUpperCase()}_API_KEY`;
