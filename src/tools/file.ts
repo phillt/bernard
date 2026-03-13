@@ -108,7 +108,6 @@ export function detectConflicts(
 /** Generate an LLM-friendly diff summary. */
 export function generateDiffSummary(
   oldLines: string[],
-  _newLines: string[],
   edits: Array<{
     action: 'replace' | 'insert' | 'delete' | 'append';
     line?: number;

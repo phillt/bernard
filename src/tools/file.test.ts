@@ -100,27 +100,29 @@ describe('detectConflicts', () => {
 
 describe('generateDiffSummary', () => {
   it('summarizes replace', () => {
-    const s = generateDiffSummary(['old'], [], [{ action: 'replace', line: 1, content: 'new' }]);
+    const s = generateDiffSummary(['old'], [{ action: 'replace', line: 1, content: 'new' }]);
     expect(s).toContain('"old" → "new"');
   });
 
   it('summarizes delete', () => {
-    const s = generateDiffSummary(['a', 'b'], [], [{ action: 'delete', lines: [2] }]);
+    const s = generateDiffSummary(['a', 'b'], [{ action: 'delete', lines: [2] }]);
     expect(s).toContain('line 2: deleted');
   });
 
   it('summarizes insert', () => {
-    const s = generateDiffSummary(
-      ['a', 'b'],
-      [],
-      [{ action: 'insert', before: 2, content: 'x\ny' }],
-    );
+    const s = generateDiffSummary(['a', 'b'], [{ action: 'insert', before: 2, content: 'x\ny' }]);
     expect(s).toContain('inserted 2 lines');
   });
 
   it('summarizes append', () => {
-    const s = generateDiffSummary([], [], [{ action: 'append', content: 'z' }]);
+    const s = generateDiffSummary([], [{ action: 'append', content: 'z' }]);
     expect(s).toContain('appended 1 line at end');
+  });
+
+  it('says "at beginning of file" when inserting before line 1', () => {
+    const s = generateDiffSummary(['a', 'b'], [{ action: 'insert', before: 1, content: 'x' }]);
+    expect(s).toContain('at beginning of file');
+    expect(s).not.toContain('after line 0');
   });
 });
 
