@@ -160,6 +160,30 @@ export function createTaskTool(
         });
       }
 
+      // Resolve saved task content if taskId is provided (before acquiring slot)
+      let resolvedTask = task ?? '';
+      if (taskId) {
+        if (!routineStore) {
+          return JSON.stringify({
+            status: 'error',
+            output: 'taskId provided but routine store is not available.',
+          });
+        }
+        const routine = routineStore.get(taskId);
+        if (routine) {
+          resolvedTask = routine.content;
+          if (task && task !== taskId) {
+            // Use provided task text as additional context
+            resolvedTask += `\n\nAdditional context: ${task}`;
+          }
+        } else {
+          return JSON.stringify({
+            status: 'error',
+            output: `Saved task "${taskId}" not found.`,
+          });
+        }
+      }
+
       const slot = acquireSlot();
       if (!slot) {
         return JSON.stringify({
@@ -170,25 +194,6 @@ export function createTaskTool(
 
       const id = slot.id;
       const prefix = `task:${id}`;
-
-      // Resolve saved task content if taskId is provided
-      let resolvedTask = task;
-      if (taskId && routineStore) {
-        const routine = routineStore.get(taskId);
-        if (routine) {
-          resolvedTask = routine.content;
-          if (task && task !== taskId) {
-            // Use provided task text as additional context
-            resolvedTask += `\n\nAdditional context: ${task}`;
-          }
-        } else {
-          releaseSlot();
-          return JSON.stringify({
-            status: 'error',
-            output: `Saved task "${taskId}" not found.`,
-          });
-        }
-      }
 
       printTaskStart(resolvedTask);
 
@@ -204,9 +209,12 @@ export function createTaskTool(
         let ragResults;
         if (ragStore) {
           try {
-            ragResults = await ragStore.search(task);
+            ragResults = await ragStore.search(resolvedTask);
             if (ragResults.length > 0) {
-              debugLog('task:rag', { query: task.slice(0, 100), results: ragResults.length });
+              debugLog('task:rag', {
+                query: resolvedTask.slice(0, 100),
+                results: ragResults.length,
+              });
             }
           } catch (err) {
             debugLog('task:rag:error', err instanceof Error ? err.message : String(err));
