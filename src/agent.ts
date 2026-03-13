@@ -463,6 +463,7 @@ export class Agent {
         this.routineStore,
         this.specialistStore,
         this.candidateStore,
+        this.config,
       );
       const tools = {
         ...baseTools,
