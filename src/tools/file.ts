@@ -62,7 +62,8 @@ export function sortEditsDescending(
   });
 
   return normalized.sort((a, b) => {
-    // Appends go last (applied after all positional edits)
+    // Appends go last (applied after all positional edits), preserve original order among appends
+    if (a.action === 'append' && b.action === 'append') return 0;
     if (a.action === 'append' && b.action !== 'append') return 1;
     if (b.action === 'append' && a.action !== 'append') return -1;
     return b.affectedLine - a.affectedLine;

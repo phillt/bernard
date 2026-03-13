@@ -58,6 +58,15 @@ describe('sortEditsDescending', () => {
     expect(sorted[0].action).toBe('replace');
     expect(sorted[1].action).toBe('append');
   });
+
+  it('preserves original order among multiple appends', () => {
+    const sorted = sortEditsDescending([
+      { action: 'append', content: 'first' },
+      { action: 'append', content: 'second' },
+      { action: 'append', content: 'third' },
+    ]);
+    expect(sorted.map((s) => s.original.content)).toEqual(['first', 'second', 'third']);
+  });
 });
 
 describe('detectConflicts', () => {
