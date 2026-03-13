@@ -49,6 +49,7 @@ vi.mock('ai', async (importOriginal) => {
 import { createTaskTool, wrapTaskResult, TASK_SYSTEM_PROMPT } from './task.js';
 import { _resetPool } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
+import { RoutineStore } from '../routines.js';
 
 const { getModel: mockGetModel } = await import('../providers/index.js');
 
@@ -87,23 +88,51 @@ describe('wrapTaskResult', () => {
     expect(wrapTaskResult(input)).toEqual({ status: 'success', output: '3 files found' });
   });
 
-  it('wraps non-JSON text as success', () => {
+  it('returns error for non-JSON text', () => {
     const input = 'Found 3 files in the directory';
-    expect(wrapTaskResult(input)).toEqual({ status: 'success', output: input });
+    expect(wrapTaskResult(input)).toEqual({
+      status: 'error',
+      output: 'Task did not produce valid structured output',
+      details: input,
+    });
   });
 
-  it('wraps invalid JSON as success', () => {
+  it('returns error for invalid JSON', () => {
     const input = '{not valid json}';
-    expect(wrapTaskResult(input)).toEqual({ status: 'success', output: input });
+    expect(wrapTaskResult(input)).toEqual({
+      status: 'error',
+      output: 'Task did not produce valid structured output',
+      details: input,
+    });
   });
 
-  it('handles empty string', () => {
-    expect(wrapTaskResult('')).toEqual({ status: 'success', output: '' });
+  it('returns error for empty string', () => {
+    expect(wrapTaskResult('')).toEqual({
+      status: 'error',
+      output: 'Task did not produce valid structured output',
+      details: '',
+    });
   });
 
-  it('wraps JSON with invalid status value as success', () => {
+  it('returns error for JSON with invalid status value', () => {
     const input = '{"status": "partial", "output": "some data"}';
-    expect(wrapTaskResult(input)).toEqual({ status: 'success', output: input });
+    expect(wrapTaskResult(input)).toEqual({
+      status: 'error',
+      output: 'Task did not produce valid structured output',
+      details: input,
+    });
+  });
+
+  it('extracts JSON when extra braces appear after the result', () => {
+    const input = '{"status": "success", "output": "done"}\nExtra context: {key: "value"}';
+    expect(wrapTaskResult(input)).toEqual({ status: 'success', output: 'done' });
+  });
+
+  it('preserves non-string output values', () => {
+    const input = '{"status": "success", "output": ["file1.ts", "file2.ts"]}';
+    const result = wrapTaskResult(input);
+    expect(result.status).toBe('success');
+    expect(result.output).toEqual(['file1.ts', 'file2.ts']);
   });
 });
 
@@ -126,13 +155,13 @@ describe('task tool', () => {
   it('has correct description and execute function', () => {
     const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
     expect(taskTool).toBeDefined();
-    expect(taskTool.description).toContain('isolated task');
+    expect(taskTool.description).toContain('isolated');
     expect(taskTool.description).toContain('structured JSON');
-    expect(taskTool.description).toContain('5-step');
+    expect(taskTool.description).toContain('single-step');
     expect(taskTool.execute).toBeDefined();
   });
 
-  it('calls generateText with maxSteps=5', async () => {
+  it('calls generateText with maxSteps=2', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
     const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
     await taskTool.execute!(
@@ -141,7 +170,7 @@ describe('task tool', () => {
     );
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
     const call = mockGenerateText.mock.calls[0][0];
-    expect(call.maxSteps).toBe(5);
+    expect(call.maxSteps).toBe(2);
     expect(call.messages[0].content).toContain('List files');
   });
 
@@ -157,7 +186,7 @@ describe('task tool', () => {
     expect(parsed.output).toBe('found 3 files');
   });
 
-  it('wraps non-JSON output as success', async () => {
+  it('returns error for non-JSON output', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Just some plain text response' });
     const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
     const result = await taskTool.execute!(
@@ -165,8 +194,9 @@ describe('task tool', () => {
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
     );
     const parsed = JSON.parse(result);
-    expect(parsed.status).toBe('success');
-    expect(parsed.output).toBe('Just some plain text response');
+    expect(parsed.status).toBe('error');
+    expect(parsed.output).toBe('Task did not produce valid structured output');
+    expect(parsed.details).toBe('Just some plain text response');
   });
 
   it('returns error JSON on API failure (does not throw)', async () => {
@@ -253,7 +283,7 @@ describe('task tool', () => {
     expect(mockPrintTaskEnd).toHaveBeenCalledTimes(1);
   });
 
-  it('uses task-specific system prompt', async () => {
+  it('uses task-specific system prompt with auto-context', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
     const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
     await taskTool.execute!(
@@ -262,8 +292,10 @@ describe('task tool', () => {
     );
     const call = mockGenerateText.mock.calls[0][0];
     expect(call.system).toContain('task executor');
-    expect(call.system).toContain('5-step budget');
+    expect(call.system).toContain('ONE generation');
     expect(call.system).toContain('"status"');
+    expect(call.system).toContain('Working directory:');
+    expect(call.system).toContain('Available tools:');
   });
 
   it('includes RAG context when ragStore is provided', async () => {
@@ -314,6 +346,37 @@ describe('task tool', () => {
     expect(mockRagStore.search).toHaveBeenCalledWith('check disk usage');
   });
 
+  it('uses resolved task content as RAG search query when taskId is provided', async () => {
+    mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([]),
+    };
+    const routineStore = new RoutineStore();
+    vi.spyOn(routineStore, 'get').mockReturnValue({
+      id: 'task-check-issues',
+      name: 'Check Issues',
+      description: 'Check open issues',
+      content: 'List all open GitHub issues using gh issue list',
+    });
+
+    const taskTool = createTaskTool(
+      makeConfig(),
+      toolOptions,
+      memoryStore,
+      undefined,
+      mockRagStore as any,
+      routineStore,
+    );
+    await taskTool.execute!(
+      { taskId: 'task-check-issues' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as any },
+    );
+
+    expect(mockRagStore.search).toHaveBeenCalledWith(
+      'List all open GitHub issues using gh issue list',
+    );
+  });
+
   it('gracefully degrades when RAG search throws', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
     const mockRagStore = {
@@ -337,7 +400,7 @@ describe('task tool', () => {
     expect(parsed.output).toBe('done');
   });
 
-  it('includes error handling guidance prohibiting identical retries', async () => {
+  it('includes error handling guidance', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
     const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
     await taskTool.execute!(
@@ -345,18 +408,8 @@ describe('task tool', () => {
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
     );
     const call = mockGenerateText.mock.calls[0][0];
-    expect(call.system).toContain('NEVER retry the exact same command');
-  });
-
-  it('includes eventual consistency guidance', async () => {
-    mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
-    await taskTool.execute!(
-      { task: 'test' },
-      { toolCallId: '1', messages: [], abortSignal: undefined as any },
-    );
-    const call = mockGenerateText.mock.calls[0][0];
-    expect(call.system).toContain('eventual consistency');
+    expect(call.system).toContain('report the failure');
+    expect(call.system).toContain('do not have budget for retries');
   });
 
   describe('per-invocation model override', () => {
@@ -409,6 +462,126 @@ describe('task tool', () => {
       expect(parsed.output).toContain('No API key found');
       expect(parsed.output).toContain('xai');
       expect(mockGenerateText).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('taskId parameter', () => {
+    it('uses saved task content when taskId is provided', async () => {
+      mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+      const routineStore = new RoutineStore();
+      vi.spyOn(routineStore, 'get').mockReturnValue({
+        id: 'task-check-issues',
+        name: 'Check Issues',
+        description: 'Check open issues',
+        content: 'List all open GitHub issues using gh issue list',
+      });
+
+      const taskTool = createTaskTool(
+        makeConfig(),
+        toolOptions,
+        memoryStore,
+        undefined,
+        undefined,
+        routineStore,
+      );
+      await taskTool.execute!(
+        { task: 'task-check-issues', taskId: 'task-check-issues' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.messages[0].content).toContain('List all open GitHub issues');
+    });
+
+    it('returns error when taskId not found', async () => {
+      const routineStore = new RoutineStore();
+      vi.spyOn(routineStore, 'get').mockReturnValue(undefined);
+
+      const taskTool = createTaskTool(
+        makeConfig(),
+        toolOptions,
+        memoryStore,
+        undefined,
+        undefined,
+        routineStore,
+      );
+      const result = await taskTool.execute!(
+        { task: 'task-nonexistent', taskId: 'task-nonexistent' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const parsed = JSON.parse(result);
+      expect(parsed.status).toBe('error');
+      expect(parsed.output).toContain('not found');
+      expect(mockGenerateText).not.toHaveBeenCalled();
+    });
+
+    it('works with taskId alone (no task parameter)', async () => {
+      mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+      const routineStore = new RoutineStore();
+      vi.spyOn(routineStore, 'get').mockReturnValue({
+        id: 'task-check-issues',
+        name: 'Check Issues',
+        description: 'Check open issues',
+        content: 'List all open GitHub issues using gh issue list',
+      });
+
+      const taskTool = createTaskTool(
+        makeConfig(),
+        toolOptions,
+        memoryStore,
+        undefined,
+        undefined,
+        routineStore,
+      );
+      await taskTool.execute!(
+        { taskId: 'task-check-issues' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.messages[0].content).toContain('List all open GitHub issues');
+    });
+
+    it('returns error when taskId provided but routineStore is missing', async () => {
+      const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+      const result = await taskTool.execute!(
+        { taskId: 'task-check-issues' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const parsed = JSON.parse(result);
+      expect(parsed.status).toBe('error');
+      expect(parsed.output).toContain('routine store is not available');
+      expect(mockGenerateText).not.toHaveBeenCalled();
+    });
+
+    it('appends task text as additional context when different from taskId', async () => {
+      mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+      const routineStore = new RoutineStore();
+      vi.spyOn(routineStore, 'get').mockReturnValue({
+        id: 'task-check-issues',
+        name: 'Check Issues',
+        description: 'Check open issues',
+        content: 'List all open GitHub issues using gh issue list',
+      });
+
+      const taskTool = createTaskTool(
+        makeConfig(),
+        toolOptions,
+        memoryStore,
+        undefined,
+        undefined,
+        routineStore,
+      );
+      await taskTool.execute!(
+        { task: 'only critical bugs', taskId: 'task-check-issues' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.messages[0].content).toContain('List all open GitHub issues');
+      expect(call.messages[0].content).toContain('only critical bugs');
     });
   });
 });

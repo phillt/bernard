@@ -188,13 +188,13 @@ describe('buildSystemPrompt', () => {
   it('includes "no routines" message when empty', () => {
     const prompt = buildSystemPrompt(makeConfig(), store, undefined, undefined, []);
     expect(prompt).toContain('## Routines');
-    expect(prompt).toContain('No routines saved yet');
+    expect(prompt).toContain('No routines or tasks saved yet');
   });
 
   it('includes "no routines" message when undefined', () => {
     const prompt = buildSystemPrompt(makeConfig(), store);
     expect(prompt).toContain('## Routines');
-    expect(prompt).toContain('No routines saved yet');
+    expect(prompt).toContain('No routines or tasks saved yet');
   });
 
   it('includes routine tool in base system prompt', () => {
