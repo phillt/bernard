@@ -338,29 +338,29 @@ export function getDefaultModel(provider: string): string {
   return PROVIDER_MODELS[provider]?.[0] ?? PROVIDER_MODELS[DEFAULT_PROVIDER][0];
 }
 
-/** Returns provider names that have an API key present in the given config. */
-export function getAvailableProviders(config: BernardConfig): string[] {
+/** Returns the API key for the given provider from config, or undefined if not set. */
+export function getProviderApiKey(config: BernardConfig, provider: string): string | undefined {
   const keyMap: Record<string, string | undefined> = {
     anthropic: config.anthropicApiKey,
     openai: config.openaiApiKey,
     xai: config.xaiApiKey,
   };
-  return Object.keys(PROVIDER_MODELS).filter((p) => !!keyMap[p]);
+  return Object.hasOwn(keyMap, provider) ? keyMap[provider] : undefined;
+}
+
+/** Returns provider names that have an API key present in the given config. */
+export function getAvailableProviders(config: BernardConfig): string[] {
+  return Object.keys(PROVIDER_MODELS).filter((p) => !!getProviderApiKey(config, p));
 }
 
 /** Returns true if the given provider name is a known provider in PROVIDER_MODELS. */
 export function isValidProvider(provider: string): boolean {
-  return provider in PROVIDER_MODELS;
+  return Object.hasOwn(PROVIDER_MODELS, provider);
 }
 
 /** Returns true if the given config has an API key for the specified provider. */
 export function hasProviderKey(config: BernardConfig, provider: string): boolean {
-  const keyMap: Record<string, string | undefined> = {
-    anthropic: config.anthropicApiKey,
-    openai: config.openaiApiKey,
-    xai: config.xaiApiKey,
-  };
-  return !!keyMap[provider];
+  return !!getProviderApiKey(config, provider);
 }
 
 /**
@@ -450,13 +450,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
 }
 
 function validateConfig(config: BernardConfig): void {
-  const keyMap: Record<string, string | undefined> = {
-    anthropic: config.anthropicApiKey,
-    openai: config.openaiApiKey,
-    xai: config.xaiApiKey,
-  };
-
-  const key = keyMap[config.provider];
+  const key = getProviderApiKey(config, config.provider);
   if (!key) {
     const envVar = PROVIDER_ENV_VARS[config.provider];
     throw new Error(

@@ -14,6 +14,7 @@ import {
   savePreferences,
   isValidProvider,
   hasProviderKey,
+  getProviderApiKey,
 } from './config.js';
 import type { BernardConfig } from './config.js';
 
