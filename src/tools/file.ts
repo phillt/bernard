@@ -413,35 +413,26 @@ export function createFileTools() {
             }
           }
 
-          // Write atomically: temp file → rename original to .bak → rename temp → remove .bak
-          const newContent = lines.length > 0 ? lines.join(lineEnding) + lineEnding : '';
-          const tmpPath = absPath + '.tmp';
-          const bakPath = absPath + '.bak';
+          // Write atomically: write to temp file, then rename (POSIX rename atomically replaces target)
+          const newContent =
+            lines.length > 0 ? lines.join(lineEnding) + (hadTrailingNewline ? lineEnding : '') : '';
+          const tmpPath = `${absPath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
 
           try {
             fs.writeFileSync(tmpPath, newContent, 'utf-8');
-            fs.renameSync(absPath, bakPath);
             fs.renameSync(tmpPath, absPath);
+          } catch (writeErr: unknown) {
             try {
-              fs.unlinkSync(bakPath);
+              fs.unlinkSync(tmpPath);
             } catch {
               // Best-effort cleanup
-            }
-          } catch (writeErr: unknown) {
-            // Try to restore from backup if rename failed
-            try {
-              if (fs.existsSync(bakPath) && !fs.existsSync(absPath)) {
-                fs.renameSync(bakPath, absPath);
-              }
-            } catch {
-              // Last resort — nothing more we can do
             }
             const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
             return { error: `Write failed: ${msg}` };
           }
 
           const newHash = hashContent(newContent);
-          const diff = generateDiffSummary(oldLines, lines, edits);
+          const diff = generateDiffSummary(oldLines, edits);
 
           return {
             path: absPath,
