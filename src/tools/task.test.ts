@@ -46,7 +46,7 @@ vi.mock('ai', async (importOriginal) => {
   };
 });
 
-import { createTaskTool, wrapTaskResult, TASK_SYSTEM_PROMPT, TaskResultSchema } from './task.js';
+import { createTaskTool, wrapTaskResult, TASK_SYSTEM_PROMPT } from './task.js';
 import { _resetPool } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 import { RoutineStore } from '../routines.js';
@@ -346,6 +346,37 @@ describe('task tool', () => {
     expect(mockRagStore.search).toHaveBeenCalledWith('check disk usage');
   });
 
+  it('uses resolved task content as RAG search query when taskId is provided', async () => {
+    mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([]),
+    };
+    const routineStore = new RoutineStore();
+    vi.spyOn(routineStore, 'get').mockReturnValue({
+      id: 'task-check-issues',
+      name: 'Check Issues',
+      description: 'Check open issues',
+      content: 'List all open GitHub issues using gh issue list',
+    });
+
+    const taskTool = createTaskTool(
+      makeConfig(),
+      toolOptions,
+      memoryStore,
+      undefined,
+      mockRagStore as any,
+      routineStore,
+    );
+    await taskTool.execute!(
+      { taskId: 'task-check-issues' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as any },
+    );
+
+    expect(mockRagStore.search).toHaveBeenCalledWith(
+      'List all open GitHub issues using gh issue list',
+    );
+  });
+
   it('gracefully degrades when RAG search throws', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
     const mockRagStore = {
@@ -482,6 +513,46 @@ describe('task tool', () => {
       const parsed = JSON.parse(result);
       expect(parsed.status).toBe('error');
       expect(parsed.output).toContain('not found');
+      expect(mockGenerateText).not.toHaveBeenCalled();
+    });
+
+    it('works with taskId alone (no task parameter)', async () => {
+      mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+      const routineStore = new RoutineStore();
+      vi.spyOn(routineStore, 'get').mockReturnValue({
+        id: 'task-check-issues',
+        name: 'Check Issues',
+        description: 'Check open issues',
+        content: 'List all open GitHub issues using gh issue list',
+      });
+
+      const taskTool = createTaskTool(
+        makeConfig(),
+        toolOptions,
+        memoryStore,
+        undefined,
+        undefined,
+        routineStore,
+      );
+      await taskTool.execute!(
+        { taskId: 'task-check-issues' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.messages[0].content).toContain('List all open GitHub issues');
+    });
+
+    it('returns error when taskId provided but routineStore is missing', async () => {
+      const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+      const result = await taskTool.execute!(
+        { taskId: 'task-check-issues' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const parsed = JSON.parse(result);
+      expect(parsed.status).toBe('error');
+      expect(parsed.output).toContain('routine store is not available');
       expect(mockGenerateText).not.toHaveBeenCalled();
     });
 
