@@ -2,7 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
