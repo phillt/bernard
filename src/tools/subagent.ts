@@ -12,7 +12,12 @@ import {
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, _resetPool, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
-import type { BernardConfig } from '../config.js';
+import {
+  type BernardConfig,
+  hasProviderKey,
+  getDefaultModel,
+  PROVIDER_ENV_VARS,
+} from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
 
@@ -70,8 +75,33 @@ export function createSubAgentTool(
           'A detailed, self-contained task description. Include: (1) specific objective and expected output format, (2) exact file paths, commands, or URLs, (3) edge cases and what to do if something fails, (4) what "done" looks like. The sub-agent has zero prior context.',
         ),
       context: z.string().optional().describe('Optional additional context to help the sub-agent'),
+      provider: z
+        .string()
+        .optional()
+        .describe(
+          'Optional provider override for this sub-agent (e.g. "xai"). Falls back to global config.',
+        ),
+      model: z
+        .string()
+        .optional()
+        .describe(
+          'Optional model override for this sub-agent (e.g. "grok-code-fast-1"). Falls back to global config.',
+        ),
     }),
-    execute: async ({ task, context }, execOptions) => {
+    execute: async ({ task, context, provider, model }, execOptions) => {
+      // When the resolved provider differs from config.provider and no explicit model
+      // override exists, use the provider's default model to avoid cross-provider mismatches.
+      const resolvedProvider = provider ?? config.provider;
+      const resolvedModel =
+        model ??
+        (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);
+
+      if (!hasProviderKey(config, resolvedProvider)) {
+        const envVar =
+          PROVIDER_ENV_VARS[resolvedProvider] ?? `${resolvedProvider.toUpperCase()}_API_KEY`;
+        return `Error: No API key found for provider "${resolvedProvider}". Run: bernard add-key ${resolvedProvider} <your-api-key> or set ${envVar}.`;
+      }
+
       const slot = acquireSlot();
       if (!slot) {
         return `Error: Maximum concurrent sub-agents (${MAX_CONCURRENT_AGENTS}) reached. Wait for existing sub-agents to finish.`;
@@ -112,7 +142,7 @@ export function createSubAgentTool(
           });
 
         const result = await generateText({
-          model: getModel(config.provider, config.model),
+          model: getModel(resolvedProvider, resolvedModel),
           tools: baseTools,
           maxSteps: 10,
           maxTokens: config.maxTokens,

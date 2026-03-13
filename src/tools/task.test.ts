@@ -50,6 +50,8 @@ import { createTaskTool, wrapTaskResult, TASK_SYSTEM_PROMPT } from './task.js';
 import { _resetPool } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 
+const { getModel: mockGetModel } = await import('../providers/index.js');
+
 function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
   return {
     provider: 'anthropic',
@@ -355,5 +357,58 @@ describe('task tool', () => {
     );
     const call = mockGenerateText.mock.calls[0][0];
     expect(call.system).toContain('eventual consistency');
+  });
+
+  describe('per-invocation model override', () => {
+    it('uses override provider/model when specified', async () => {
+      mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+      const config = makeConfig({ xaiApiKey: 'xai-test' });
+      const taskTool = createTaskTool(config, toolOptions, memoryStore);
+      await taskTool.execute!(
+        { task: 'test', provider: 'xai', model: 'grok-code-fast-1' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(mockGetModel).toHaveBeenCalledWith('xai', 'grok-code-fast-1');
+    });
+
+    it('falls back to global config when no override', async () => {
+      mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+      const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+      await taskTool.execute!(
+        { task: 'test' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(mockGetModel).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-5-20250929');
+    });
+
+    it('uses provider default model when provider overridden but model not (avoids cross-provider mismatch)', async () => {
+      mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
+      const config = makeConfig({ xaiApiKey: 'xai-test' });
+      const taskTool = createTaskTool(config, toolOptions, memoryStore);
+      await taskTool.execute!(
+        { task: 'test', provider: 'xai' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      // Should use xai's default model, not anthropic's model
+      const { getDefaultModel } = await import('../config.js');
+      expect(mockGetModel).toHaveBeenCalledWith('xai', getDefaultModel('xai'));
+    });
+
+    it('returns error JSON when override provider has no API key', async () => {
+      const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+      const result = await taskTool.execute!(
+        { task: 'test', provider: 'xai' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const parsed = JSON.parse(result);
+      expect(parsed.status).toBe('error');
+      expect(parsed.output).toContain('No API key found');
+      expect(parsed.output).toContain('xai');
+      expect(mockGenerateText).not.toHaveBeenCalled();
+    });
   });
 });

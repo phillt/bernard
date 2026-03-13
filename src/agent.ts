@@ -257,9 +257,17 @@ MCP (Model Context Protocol) servers provide additional tools. Use the mcp_confi
   prompt += '\n\n## Specialists';
   if (specialistSummaries && specialistSummaries.length > 0) {
     prompt += '\n\nAvailable specialist agents you can delegate to via specialist_run:\n';
-    prompt += specialistSummaries.map((s) => `- ${s.id} — ${s.name}: ${s.description}`).join('\n');
+    prompt += specialistSummaries
+      .map((s) => {
+        const modelTag =
+          s.provider || s.model ? ` [${s.provider ?? 'default'}/${s.model ?? 'default'}]` : '';
+        return `- ${s.id} — ${s.name}: ${s.description}${modelTag}`;
+      })
+      .join('\n');
     prompt +=
       "\n\nWhen a user request clearly falls within a saved specialist's domain, delegate to it via specialist_run without asking for permission. If the match is partial or ambiguous, briefly confirm with the user before dispatching.";
+    prompt +=
+      '\n\nYou can pass optional `provider` and `model` parameters to specialist_run, agent, and task tools to override the model used for that execution. Specialists with a model override configured will automatically use their specified model.';
 
     if (specialistMatches && specialistMatches.length > 0) {
       prompt +=
@@ -463,6 +471,7 @@ export class Agent {
         this.routineStore,
         this.specialistStore,
         this.candidateStore,
+        this.config,
       );
       const tools = {
         ...baseTools,

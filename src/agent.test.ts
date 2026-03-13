@@ -220,6 +220,58 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('wait tool');
   });
 
+  it('includes model tags for specialists with provider/model overrides', () => {
+    const specialists = [
+      {
+        id: 'code-reviewer',
+        name: 'Code Reviewer',
+        description: 'Reviews code',
+        provider: 'xai',
+        model: 'grok-code-fast-1',
+      },
+    ];
+    const prompt = buildSystemPrompt(
+      makeConfig(),
+      store,
+      undefined,
+      undefined,
+      undefined,
+      specialists,
+    );
+    expect(prompt).toContain('[xai/grok-code-fast-1]');
+  });
+
+  it('shows default tag for partial model overrides', () => {
+    const specialists = [
+      { id: 'code-reviewer', name: 'Code Reviewer', description: 'Reviews code', provider: 'xai' },
+    ];
+    const prompt = buildSystemPrompt(
+      makeConfig(),
+      store,
+      undefined,
+      undefined,
+      undefined,
+      specialists,
+    );
+    expect(prompt).toContain('[xai/default]');
+  });
+
+  it('omits model tag for specialists without overrides', () => {
+    const specialists = [
+      { id: 'code-reviewer', name: 'Code Reviewer', description: 'Reviews code' },
+    ];
+    const prompt = buildSystemPrompt(
+      makeConfig(),
+      store,
+      undefined,
+      undefined,
+      undefined,
+      specialists,
+    );
+    expect(prompt).not.toContain('[');
+    expect(prompt).toContain('code-reviewer');
+  });
+
   it('includes auto-dispatch instructions when specialists are provided', () => {
     const specialists = [
       { id: 'code-reviewer', name: 'Code Reviewer', description: 'Reviews code' },

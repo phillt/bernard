@@ -12,7 +12,12 @@ import {
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
-import type { BernardConfig } from '../config.js';
+import {
+  type BernardConfig,
+  hasProviderKey,
+  getDefaultModel,
+  PROVIDER_ENV_VARS,
+} from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
 import type { SpecialistStore } from '../specialists.js';
@@ -63,11 +68,39 @@ export function createSpecialistRunTool(
           'A detailed, self-contained task description. Include: (1) specific objective and expected output format, (2) exact file paths, commands, or URLs, (3) edge cases and what to do if something fails. The specialist has zero prior context beyond its own profile.',
         ),
       context: z.string().optional().describe('Optional additional context to help the specialist'),
+      provider: z
+        .string()
+        .optional()
+        .describe(
+          'Optional provider override for this invocation (e.g. "xai"). Takes priority over specialist config and global config.',
+        ),
+      model: z
+        .string()
+        .optional()
+        .describe(
+          'Optional model override for this invocation (e.g. "grok-code-fast-1"). Takes priority over specialist config and global config.',
+        ),
     }),
-    execute: async ({ specialistId, task, context }, execOptions) => {
+    execute: async ({ specialistId, task, context, provider, model }, execOptions) => {
       const specialist = specialistStore.get(specialistId);
       if (!specialist) {
         return `Error: No specialist found with id "${specialistId}". Use the specialist tool to list or create specialists.`;
+      }
+
+      // 3-tier model resolution: invocation override > specialist config > global config
+      // When the resolved provider differs from config.provider and no explicit model
+      // override exists, use the provider's default model to avoid cross-provider mismatches
+      // (e.g. xai provider with an anthropic model name).
+      const resolvedProvider = provider ?? specialist.provider ?? config.provider;
+      const explicitModel = model ?? specialist.model;
+      const resolvedModel =
+        explicitModel ??
+        (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);
+
+      if (!hasProviderKey(config, resolvedProvider)) {
+        const envVar =
+          PROVIDER_ENV_VARS[resolvedProvider] ?? `${resolvedProvider.toUpperCase()}_API_KEY`;
+        return `Error: No API key found for provider "${resolvedProvider}". Run: bernard add-key ${resolvedProvider} <your-api-key> or set ${envVar}.`;
       }
 
       const slot = acquireSlot();
@@ -115,7 +148,7 @@ export function createSpecialistRunTool(
         });
 
         const result = await generateText({
-          model: getModel(config.provider, config.model),
+          model: getModel(resolvedProvider, resolvedModel),
           tools: baseTools,
           maxSteps: 10,
           maxTokens: config.maxTokens,

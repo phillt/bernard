@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createSpecialistTool } from './specialist.js';
 import type { CandidateStoreReader } from '../specialist-candidates.js';
+import type { BernardConfig } from '../config.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
@@ -372,6 +373,310 @@ describe('createSpecialistTool', () => {
       );
 
       expect(result).toContain('created');
+    });
+  });
+
+  describe('provider/model support', () => {
+    it('creates specialist with provider and model', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'code-review',
+          name: 'Code Review',
+          description: 'Review code',
+          systemPrompt: 'You are a code reviewer.',
+          provider: 'xai',
+          model: 'grok-code-fast-1',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('returns error for invalid provider on create', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'test-spec',
+          name: 'Test',
+          description: 'Test',
+          systemPrompt: 'prompt',
+          provider: 'invalid-provider',
+        },
+        {} as any,
+      );
+      expect(result).toContain('Error');
+      expect(result).toContain('Unknown provider');
+    });
+
+    it('returns error for invalid model on create', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'test-spec',
+          name: 'Test',
+          description: 'Test',
+          systemPrompt: 'prompt',
+          provider: 'xai',
+          model: 'nonexistent-model',
+        },
+        {} as any,
+      );
+      expect(result).toContain('Error');
+      expect(result).toContain('Unknown model');
+    });
+
+    it('validates model against global config provider when only model is specified on create', async () => {
+      const config: BernardConfig = {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5-20250929',
+        maxTokens: 4096,
+        shellTimeout: 30000,
+        tokenWindow: 0,
+        ragEnabled: true,
+        theme: 'bernard',
+        criticMode: false,
+        anthropicApiKey: 'sk-test',
+      };
+      const toolWithConfig = createSpecialistTool(undefined, undefined, config);
+
+      const result = await toolWithConfig.execute(
+        {
+          action: 'create',
+          id: 'test-spec',
+          name: 'Test',
+          description: 'Test',
+          systemPrompt: 'prompt',
+          model: 'nonexistent-model',
+        },
+        {} as any,
+      );
+      expect(result).toContain('Error');
+      expect(result).toContain('Unknown model');
+      expect(result).toContain('anthropic');
+    });
+
+    it('allows valid model without provider on create when config is provided', async () => {
+      const config: BernardConfig = {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5-20250929',
+        maxTokens: 4096,
+        shellTimeout: 30000,
+        tokenWindow: 0,
+        ragEnabled: true,
+        theme: 'bernard',
+        criticMode: false,
+        anthropicApiKey: 'sk-test',
+      };
+      const toolWithConfig = createSpecialistTool(undefined, undefined, config);
+
+      const result = await toolWithConfig.execute(
+        {
+          action: 'create',
+          id: 'test-spec',
+          name: 'Test',
+          description: 'Test',
+          systemPrompt: 'prompt',
+          model: 'claude-sonnet-4-5-20250929',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('skips model-only validation when config is not provided', async () => {
+      // Tool created without config — model-only should be allowed (validated at runtime)
+      const toolNoConfig = createSpecialistTool();
+
+      const result = await toolNoConfig.execute(
+        {
+          action: 'create',
+          id: 'test-spec',
+          name: 'Test',
+          description: 'Test',
+          systemPrompt: 'prompt',
+          model: 'any-model-name',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('allows provider without model on create', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'test-spec',
+          name: 'Test',
+          description: 'Test',
+          systemPrompt: 'prompt',
+          provider: 'xai',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('updates specialist with provider and model', async () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute(
+        { action: 'update', id: 'code-review', provider: 'xai', model: 'grok-code-fast-1' },
+        {} as any,
+      );
+      expect(result).toContain('updated');
+    });
+
+    it('returns error for invalid provider on update', async () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute(
+        { action: 'update', id: 'code-review', provider: 'bad-provider' },
+        {} as any,
+      );
+      expect(result).toContain('Error');
+      expect(result).toContain('Unknown provider');
+    });
+
+    it('shows model tag in list output', async () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        provider: 'xai',
+        model: 'grok-code-fast-1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(['code-review.json'] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'list' }, {} as any);
+      expect(result).toContain('[xai/grok-code-fast-1]');
+    });
+
+    it('shows model override section in read output', async () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        provider: 'xai',
+        model: 'grok-code-fast-1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'read', id: 'code-review' }, {} as any);
+      expect(result).toContain('Model Override');
+      expect(result).toContain('Provider: xai');
+      expect(result).toContain('Model: grok-code-fast-1');
+    });
+
+    it('auto-clears model when provider is cleared on update', async () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        provider: 'xai',
+        model: 'grok-code-fast-1',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute(
+        { action: 'update', id: 'code-review', provider: '' },
+        {} as any,
+      );
+      expect(result).toContain('updated');
+
+      // Verify the written data has both provider and model cleared (store deletes the keys)
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+      expect(written.provider).toBeUndefined();
+      expect(written.model).toBeUndefined();
+    });
+
+    it('validates model-only update against specialist existing provider', async () => {
+      const config: BernardConfig = {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5-20250929',
+        maxTokens: 4096,
+        shellTimeout: 30000,
+        tokenWindow: 0,
+        ragEnabled: true,
+        theme: 'bernard',
+        criticMode: false,
+        anthropicApiKey: 'sk-test',
+      };
+      const toolWithConfig = createSpecialistTool(undefined, undefined, config);
+
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        provider: 'xai',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await toolWithConfig.execute(
+        { action: 'update', id: 'code-review', model: 'nonexistent-model' },
+        {} as any,
+      );
+      expect(result).toContain('Error');
+      expect(result).toContain('Unknown model');
+      expect(result).toContain('xai');
+    });
+
+    it('does not show model override section when no override set', async () => {
+      const specialist = {
+        id: 'code-review',
+        name: 'Code Review',
+        description: 'Review code',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'read', id: 'code-review' }, {} as any);
+      expect(result).not.toContain('Model Override');
     });
   });
 });

@@ -49,6 +49,8 @@ vi.mock('ai', async (importOriginal) => {
 import { createSubAgentTool, _resetSubAgentState } from './subagent.js';
 import { MemoryStore } from '../memory.js';
 
+const { getModel: mockGetModel } = await import('../providers/index.js');
+
 function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
   return {
     provider: 'anthropic',
@@ -369,5 +371,56 @@ describe('subagent tool', () => {
     );
 
     expect(mockRagStore.search).toHaveBeenCalledWith('check disk usage');
+  });
+
+  describe('per-invocation model override', () => {
+    it('uses override provider/model when specified', async () => {
+      mockGenerateText.mockResolvedValue({ text: 'Done' });
+      const config = makeConfig({ xaiApiKey: 'xai-test' });
+      const agentTool = createSubAgentTool(config, toolOptions, memoryStore);
+      await agentTool.execute!(
+        { task: 'test', provider: 'xai', model: 'grok-code-fast-1' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(mockGetModel).toHaveBeenCalledWith('xai', 'grok-code-fast-1');
+    });
+
+    it('falls back to global config when no override', async () => {
+      mockGenerateText.mockResolvedValue({ text: 'Done' });
+      const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+      await agentTool.execute!(
+        { task: 'test' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(mockGetModel).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-5-20250929');
+    });
+
+    it('uses provider default model when provider overridden but model not (avoids cross-provider mismatch)', async () => {
+      mockGenerateText.mockResolvedValue({ text: 'Done' });
+      const config = makeConfig({ xaiApiKey: 'xai-test' });
+      const agentTool = createSubAgentTool(config, toolOptions, memoryStore);
+      await agentTool.execute!(
+        { task: 'test', provider: 'xai' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      // Should use xai's default model, not anthropic's model
+      const { getDefaultModel } = await import('../config.js');
+      expect(mockGetModel).toHaveBeenCalledWith('xai', getDefaultModel('xai'));
+    });
+
+    it('returns error when override provider has no API key', async () => {
+      const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+      const result = await agentTool.execute!(
+        { task: 'test', provider: 'xai' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(result).toContain('No API key found');
+      expect(result).toContain('xai');
+      expect(mockGenerateText).not.toHaveBeenCalled();
+    });
   });
 });
