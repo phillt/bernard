@@ -12,7 +12,7 @@ import {
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
-import type { BernardConfig } from '../config.js';
+import { type BernardConfig, hasProviderKey, PROVIDER_ENV_VARS } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
 
@@ -106,8 +106,27 @@ export function createTaskTool(
           'A self-contained task description. Include specific objective, expected output, exact file paths or commands, and success criteria. The task executor has zero prior context.',
         ),
       context: z.string().optional().describe('Optional additional context for the task'),
+      provider: z
+        .string()
+        .optional()
+        .describe('Optional provider override for this task (e.g. "xai"). Falls back to global config.'),
+      model: z
+        .string()
+        .optional()
+        .describe('Optional model override for this task (e.g. "grok-code-fast-1"). Falls back to global config.'),
     }),
-    execute: async ({ task, context }, execOptions) => {
+    execute: async ({ task, context, provider, model }, execOptions) => {
+      const resolvedProvider = provider ?? config.provider;
+      const resolvedModel = model ?? config.model;
+
+      if (!hasProviderKey(config, resolvedProvider)) {
+        const envVar = PROVIDER_ENV_VARS[resolvedProvider] ?? `${resolvedProvider.toUpperCase()}_API_KEY`;
+        return JSON.stringify({
+          status: 'error',
+          output: `No API key found for provider "${resolvedProvider}". Run: bernard add-key ${resolvedProvider} <your-api-key> or set ${envVar}.`,
+        });
+      }
+
       const slot = acquireSlot();
       if (!slot) {
         return JSON.stringify({
@@ -151,7 +170,7 @@ export function createTaskTool(
           });
 
         const result = await generateText({
-          model: getModel(config.provider, config.model),
+          model: getModel(resolvedProvider, resolvedModel),
           tools: baseTools,
           maxSteps: 5,
           maxTokens: config.maxTokens,
