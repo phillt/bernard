@@ -127,7 +127,8 @@ export function generateDiffSummary(
       }
       case 'insert': {
         const count = (e.content ?? '').split('\n').length;
-        parts.push(`after line ${e.before! - 1}: inserted ${count} line${count === 1 ? '' : 's'}`);
+        const position = e.before === 1 ? 'at beginning of file' : `after line ${e.before! - 1}`;
+        parts.push(`${position}: inserted ${count} line${count === 1 ? '' : 's'}`);
         break;
       }
       case 'delete': {
