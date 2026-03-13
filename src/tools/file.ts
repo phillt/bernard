@@ -269,22 +269,9 @@ export function createFileTools() {
                 .describe(
                   'replace: replace content at a line number; insert: insert before a line; delete: remove specific lines; append: add to end of file',
                 ),
-              line: z
-                .number()
-                .int()
-                .min(1)
-                .optional()
-                .describe('Line number for replace action'),
-              before: z
-                .number()
-                .int()
-                .min(1)
-                .optional()
-                .describe('Line number to insert before'),
-              lines: z
-                .array(z.number().int().min(1))
-                .optional()
-                .describe('Line numbers to delete'),
+              line: z.number().int().min(1).optional().describe('Line number for replace action'),
+              before: z.number().int().min(1).optional().describe('Line number to insert before'),
+              lines: z.array(z.number().int().min(1)).optional().describe('Line numbers to delete'),
               content: z
                 .string()
                 .optional()
