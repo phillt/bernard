@@ -397,6 +397,20 @@ describe('subagent tool', () => {
       expect(mockGetModel).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-5-20250929');
     });
 
+    it('uses provider default model when provider overridden but model not (avoids cross-provider mismatch)', async () => {
+      mockGenerateText.mockResolvedValue({ text: 'Done' });
+      const config = makeConfig({ xaiApiKey: 'xai-test' });
+      const agentTool = createSubAgentTool(config, toolOptions, memoryStore);
+      await agentTool.execute!(
+        { task: 'test', provider: 'xai' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      // Should use xai's default model, not anthropic's model
+      const { getDefaultModel } = await import('../config.js');
+      expect(mockGetModel).toHaveBeenCalledWith('xai', getDefaultModel('xai'));
+    });
+
     it('returns error when override provider has no API key', async () => {
       const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
       const result = await agentTool.execute!(
