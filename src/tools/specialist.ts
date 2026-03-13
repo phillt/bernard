@@ -2,6 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { SpecialistStore, type Specialist } from '../specialists.js';
 import type { CandidateStoreReader } from '../specialist-candidates.js';
+import { type BernardConfig, PROVIDER_MODELS, isValidProvider } from '../config.js';
 
 /**
  * Creates the specialist management tool for saving and retrieving reusable expert profiles.
@@ -13,6 +14,7 @@ import type { CandidateStoreReader } from '../specialist-candidates.js';
 export function createSpecialistTool(
   specialistStore?: SpecialistStore,
   candidateStore?: CandidateStoreReader,
+  config?: BernardConfig,
 ) {
   const store = specialistStore ?? new SpecialistStore();
 
@@ -39,6 +41,18 @@ export function createSpecialistTool(
         .array(z.string())
         .optional()
         .describe('Short behavioral rules, appended as bullets (optional, defaults to [])'),
+      provider: z
+        .string()
+        .optional()
+        .describe(
+          'Optional LLM provider override for this specialist (e.g. "xai", "openai"). Used with create/update.',
+        ),
+      model: z
+        .string()
+        .optional()
+        .describe(
+          'Optional model override for this specialist (e.g. "grok-code-fast-1"). Used with create/update.',
+        ),
     }),
     execute: async ({
       action,
@@ -47,19 +61,30 @@ export function createSpecialistTool(
       description,
       systemPrompt,
       guidelines,
+      provider,
+      model,
     }): Promise<string> => {
       switch (action) {
         case 'list': {
           const specialists = store.list();
           if (specialists.length === 0) return 'No specialists saved yet.';
-          return `Specialists (${specialists.length}):\n${specialists.map((s) => `  - ${s.id} — ${s.name}: ${s.description}`).join('\n')}`;
+          return `Specialists (${specialists.length}):\n${specialists.map((s) => {
+            const modelTag = s.provider || s.model
+              ? ` [${s.provider ?? 'default'}/${s.model ?? 'default'}]`
+              : '';
+            return `  - ${s.id} — ${s.name}: ${s.description}${modelTag}`;
+          }).join('\n')}`;
         }
 
         case 'read': {
           if (!id) return 'Error: id is required for read action.';
           const specialist = store.get(id);
           if (!specialist) return `No specialist found with id "${id}".`;
-          let output = `# ${specialist.name} (${specialist.id})\n${specialist.description}\n\n## System Prompt\n${specialist.systemPrompt}`;
+          let output = `# ${specialist.name} (${specialist.id})\n${specialist.description}`;
+          if (specialist.provider || specialist.model) {
+            output += `\n\n## Model Override\nProvider: ${specialist.provider ?? 'default'}\nModel: ${specialist.model ?? 'default'}`;
+          }
+          output += `\n\n## System Prompt\n${specialist.systemPrompt}`;
           if (specialist.guidelines.length > 0) {
             output += `\n\n## Guidelines\n${specialist.guidelines.map((g) => `- ${g}`).join('\n')}`;
           }
@@ -71,8 +96,14 @@ export function createSpecialistTool(
           if (!name) return 'Error: name is required for create action.';
           if (!description) return 'Error: description is required for create action.';
           if (!systemPrompt) return 'Error: systemPrompt is required for create action.';
+          if (provider !== undefined) {
+            if (!isValidProvider(provider))
+              return `Error: Unknown provider "${provider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
+            if (model !== undefined && !PROVIDER_MODELS[provider]?.includes(model))
+              return `Error: Unknown model "${model}" for provider "${provider}". Valid models: ${PROVIDER_MODELS[provider].join(', ')}`;
+          }
           try {
-            const specialist = store.create(id, name, description, systemPrompt, guidelines ?? []);
+            const specialist = store.create(id, name, description, systemPrompt, guidelines ?? [], provider, model);
             // Auto-mark matching candidate as accepted (best-effort)
             try {
               if (candidateStore) {
@@ -93,15 +124,23 @@ export function createSpecialistTool(
 
         case 'update': {
           if (!id) return 'Error: id is required for update action.';
+          if (provider !== undefined && provider !== '') {
+            if (!isValidProvider(provider))
+              return `Error: Unknown provider "${provider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
+            if (model !== undefined && model !== '' && !PROVIDER_MODELS[provider]?.includes(model))
+              return `Error: Unknown model "${model}" for provider "${provider}". Valid models: ${PROVIDER_MODELS[provider].join(', ')}`;
+          }
           const updates: Partial<
-            Pick<Specialist, 'name' | 'description' | 'systemPrompt' | 'guidelines'>
+            Pick<Specialist, 'name' | 'description' | 'systemPrompt' | 'guidelines' | 'provider' | 'model'>
           > = {};
           if (name !== undefined) updates.name = name;
           if (description !== undefined) updates.description = description;
           if (systemPrompt !== undefined) updates.systemPrompt = systemPrompt;
           if (guidelines !== undefined) updates.guidelines = guidelines;
+          if (provider !== undefined) updates.provider = provider;
+          if (model !== undefined) updates.model = model;
           if (Object.keys(updates).length === 0)
-            return 'Error: provide at least one field to update (name, description, systemPrompt, or guidelines).';
+            return 'Error: provide at least one field to update (name, description, systemPrompt, guidelines, provider, or model).';
           const updated = store.update(id, updates);
           if (!updated) return `No specialist found with id "${id}".`;
           return `Specialist "${updated.name}" (${updated.id}) updated.`;
