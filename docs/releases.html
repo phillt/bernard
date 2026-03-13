@@ -534,6 +534,142 @@
       </div>
     </section>
 
+    <!-- v0.7.0 -->
+    <section class="version-section" id="v0.7.0">
+      <div class="container">
+        <h2 class="version-heading">
+          v0.7.0
+          <span class="version-date">2026-03-13</span>
+        </h2>
+
+        <!-- File Manipulation Tools -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- file-edit icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                <path
+                  d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"
+                ></path>
+              </svg>
+            </div>
+            <h2>File Manipulation Tools <span class="tag">new</span></h2>
+          </div>
+          <p>
+            Two new tools &mdash; <code>file_read_lines</code> and <code>file_edit_lines</code>
+            &mdash; give Bernard precision file editing without shelling out to
+            <code>sed</code> or <code>awk</code>.
+          </p>
+          <ul>
+            <li>Line-based editing with replace, insert, delete, and append operations</li>
+            <li>Atomic writes &mdash; all edits in a single call succeed or all fail</li>
+            <li>Binary file detection and pagination for large files (50&nbsp;MB cap)</li>
+            <li>
+              <code>file_read_lines</code> supports offset/limit for targeted reads across big files
+            </li>
+          </ul>
+        </div>
+
+        <!-- Per-Agent Model Selection -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- cpu icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+                <rect x="9" y="9" width="6" height="6"></rect>
+                <path d="M15 2v2"></path>
+                <path d="M15 20v2"></path>
+                <path d="M2 15h2"></path>
+                <path d="M2 9h2"></path>
+                <path d="M20 15h2"></path>
+                <path d="M20 9h2"></path>
+                <path d="M9 2v2"></path>
+                <path d="M9 20v2"></path>
+              </svg>
+            </div>
+            <h2>Per-Agent Model Selection <span class="tag">new</span></h2>
+          </div>
+          <p>
+            Override the provider and model for any specialist, sub-agent, or task invocation.
+            Set a default model on specialists at creation time, or pass an override at call time.
+          </p>
+          <ul>
+            <li>
+              Specialists store a default <code>provider</code>/<code>model</code> that is used
+              every time they run
+            </li>
+            <li>Sub-agents and tasks accept per-invocation provider/model overrides</li>
+            <li>
+              Cross-provider safety &mdash; auto-resolves the default model when switching providers
+            </li>
+            <li>Model tags shown in <code>/specialists</code> listings</li>
+          </ul>
+        </div>
+
+        <!-- Deterministic Single-Step Tasks -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- target icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <circle cx="12" cy="12" r="10"></circle>
+                <circle cx="12" cy="12" r="6"></circle>
+                <circle cx="12" cy="12" r="2"></circle>
+              </svg>
+            </div>
+            <h2>Deterministic Single-Step Tasks <span class="tag">enhanced</span></h2>
+          </div>
+          <p>
+            Tasks are now single-step: one LLM call with tool use, then structured output.
+            Saved tasks can be invoked by ID, and the REPL shows tasks and routines separately.
+          </p>
+          <ul>
+            <li>
+              Reduced to <code>maxSteps:&nbsp;2</code> (one tool-use round + structured result)
+            </li>
+            <li>
+              New <code>taskId</code> parameter &mdash; run saved task routines by ID or via
+              <code>/task-{id}</code> in the REPL
+            </li>
+            <li>Separate display for tasks vs routines in the REPL</li>
+            <li>
+              Auto-context injection &mdash; working directory, available tools, memory, and RAG
+              are included automatically
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
     <!-- v0.6.2 -->
     <section class="version-section" id="v0.6.2">
       <div class="container">
