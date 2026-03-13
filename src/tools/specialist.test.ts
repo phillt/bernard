@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createSpecialistTool } from './specialist.js';
 import type { CandidateStoreReader } from '../specialist-candidates.js';
+import type { BernardConfig } from '../config.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),

@@ -101,6 +101,10 @@ export function createSpecialistTool(
               return `Error: Unknown provider "${provider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
             if (model !== undefined && !PROVIDER_MODELS[provider]?.includes(model))
               return `Error: Unknown model "${model}" for provider "${provider}". Valid models: ${PROVIDER_MODELS[provider].join(', ')}`;
+          } else if (model !== undefined && config) {
+            // Validate model against the global config's provider when no explicit provider given
+            if (!PROVIDER_MODELS[config.provider]?.includes(model))
+              return `Error: Unknown model "${model}" for provider "${config.provider}". Valid models: ${PROVIDER_MODELS[config.provider].join(', ')}`;
           }
           try {
             const specialist = store.create(id, name, description, systemPrompt, guidelines ?? [], provider, model);
@@ -129,6 +133,12 @@ export function createSpecialistTool(
               return `Error: Unknown provider "${provider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
             if (model !== undefined && model !== '' && !PROVIDER_MODELS[provider]?.includes(model))
               return `Error: Unknown model "${model}" for provider "${provider}". Valid models: ${PROVIDER_MODELS[provider].join(', ')}`;
+          } else if (model !== undefined && model !== '' && provider === undefined) {
+            // Model-only update: validate against existing specialist's provider or global config
+            const existing = store.get(id);
+            const effectiveProvider = existing?.provider || config?.provider;
+            if (effectiveProvider && !PROVIDER_MODELS[effectiveProvider]?.includes(model))
+              return `Error: Unknown model "${model}" for provider "${effectiveProvider}". Valid models: ${PROVIDER_MODELS[effectiveProvider]?.join(', ') ?? 'none'}`;
           }
           const updates: Partial<
             Pick<Specialist, 'name' | 'description' | 'systemPrompt' | 'guidelines' | 'provider' | 'model'>
@@ -139,6 +149,8 @@ export function createSpecialistTool(
           if (guidelines !== undefined) updates.guidelines = guidelines;
           if (provider !== undefined) updates.provider = provider;
           if (model !== undefined) updates.model = model;
+          // Auto-clear model when provider is cleared and model not explicitly provided
+          if (provider === '' && model === undefined) updates.model = '';
           if (Object.keys(updates).length === 0)
             return 'Error: provide at least one field to update (name, description, systemPrompt, guidelines, provider, or model).';
           const updated = store.update(id, updates);
