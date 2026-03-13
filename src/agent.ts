@@ -245,13 +245,27 @@ MCP (Model Context Protocol) servers provide additional tools. Use the mcp_confi
     prompt += '\n\nNo MCP servers are currently connected.';
   }
 
-  prompt += '\n\n## Routines';
   if (routineSummaries && routineSummaries.length > 0) {
-    prompt += '\n\nSaved routines the user can invoke:\n';
-    prompt += routineSummaries.map((r) => `- /${r.id} — ${r.name}: ${r.description}`).join('\n');
+    const tasks = routineSummaries.filter((r) => r.id.startsWith('task-'));
+    const routines = routineSummaries.filter((r) => !r.id.startsWith('task-'));
+
+    if (tasks.length > 0) {
+      prompt += '\n\n## Tasks (single-step, structured output)\n';
+      prompt += tasks.map((r) => `- /${r.id} — ${r.name}: ${r.description}`).join('\n');
+    }
+
+    prompt += '\n\n## Routines (multi-step workflows)';
+    if (routines.length > 0) {
+      prompt += '\n\nSaved routines the user can invoke:\n';
+      prompt += routines.map((r) => `- /${r.id} — ${r.name}: ${r.description}`).join('\n');
+    } else {
+      prompt +=
+        '\n\nNo multi-step routines saved yet. When a user walks you through a multi-step workflow, suggest saving it as a routine using the routine tool so they can re-invoke it later with /{routine-id}.';
+    }
   } else {
+    prompt += '\n\n## Routines';
     prompt +=
-      '\n\nNo routines saved yet. When a user walks you through a multi-step workflow, suggest saving it as a routine using the routine tool so they can re-invoke it later with /{routine-id}.';
+      '\n\nNo routines or tasks saved yet. When a user walks you through a multi-step workflow, suggest saving it as a routine using the routine tool so they can re-invoke it later with /{routine-id}.';
   }
 
   prompt += '\n\n## Specialists';

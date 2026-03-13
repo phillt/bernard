@@ -937,13 +937,24 @@ export async function startRepl(
       }
 
       if (trimmed === '/routines') {
-        const routines = routineStore.list();
-        if (routines.length === 0) {
+        const allRoutines = routineStore.list();
+        if (allRoutines.length === 0) {
           printInfo('No routines saved. Teach me a workflow and I can save it as a routine.');
         } else {
-          printInfo(`\n  Routines (${routines.length}):`);
-          for (const r of routines) {
-            printInfo(`    /${r.id} — ${r.name}: ${r.description}`);
+          const tasks = allRoutines.filter((r) => r.id.startsWith('task-'));
+          const routines = allRoutines.filter((r) => !r.id.startsWith('task-'));
+
+          if (tasks.length > 0) {
+            printInfo(`\n  Tasks (${tasks.length}) — single-step, structured output:`);
+            for (const r of tasks) {
+              printInfo(`    /${r.id} — ${r.name}: ${r.description}`);
+            }
+          }
+          if (routines.length > 0) {
+            printInfo(`\n  Routines (${routines.length}) — multi-step workflows:`);
+            for (const r of routines) {
+              printInfo(`    /${r.id} — ${r.name}: ${r.description}`);
+            }
           }
           console.log();
         }
