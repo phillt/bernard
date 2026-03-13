@@ -207,8 +207,10 @@ export function createFileTools() {
           let stat: fs.Stats;
           try {
             stat = fs.statSync(absPath);
-          } catch {
-            return { error: `File not found: ${absPath}` };
+          } catch (err: unknown) {
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code === 'ENOENT') return { error: `File not found: ${absPath}` };
+            return { error: `Cannot access ${absPath}: ${(err as Error).message}` };
           }
 
           if (stat.isDirectory()) {
@@ -316,26 +318,31 @@ export function createFileTools() {
           let stat: fs.Stats;
           try {
             stat = fs.statSync(absPath);
-          } catch {
-            return { error: `File not found: ${absPath}` };
+          } catch (err: unknown) {
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code === 'ENOENT') return { error: `File not found: ${absPath}` };
+            return { error: `Cannot access ${absPath}: ${(err as Error).message}` };
           }
 
           if (stat.isDirectory()) {
             return { error: `Path is a directory, not a file: ${absPath}` };
           }
 
-          // Binary check
-          const fd = fs.openSync(absPath, 'r');
-          const checkBuf = Buffer.alloc(Math.min(8192, stat.size));
-          fs.readSync(fd, checkBuf, 0, checkBuf.length, 0);
-          fs.closeSync(fd);
-
-          if (isBinaryContent(checkBuf)) {
-            return { error: `File appears to be binary: ${absPath}` };
+          if (stat.size > MAX_FILE_SIZE) {
+            return {
+              error: `File too large (${stat.size} bytes, max ${MAX_FILE_SIZE}): ${absPath}`,
+            };
           }
 
-          const rawContent = fs.readFileSync(absPath, 'utf-8');
+          // Read once — use buffer for binary check, then decode
+          const rawBuffer = fs.readFileSync(absPath);
+          if (isBinaryContent(rawBuffer)) {
+            return { error: `File appears to be binary: ${absPath}` };
+          }
+          const rawContent = rawBuffer.toString('utf-8');
           const lineEnding = detectLineEnding(rawContent);
+          const hadTrailingNewline =
+            rawContent.length > 0 && (rawContent.endsWith('\n') || rawContent.endsWith('\r\n'));
           const oldLines = splitLines(rawContent);
           const totalLines = oldLines.length;
           const oldHash = hashContent(rawContent);
