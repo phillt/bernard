@@ -19,6 +19,7 @@ A local CLI AI agent that executes terminal commands, manages scheduled tasks, r
 - [Tools](#tools)
   - [Shell Execution](#shell-execution)
   - [Web Reading](#web-reading)
+  - [File Editing](#file-editing)
   - [Memory (Persistent)](#memory-persistent)
   - [Scratch Notes (Session)](#scratch-notes-session)
   - [Date and Time](#date-and-time)
@@ -289,6 +290,22 @@ Here's a summary of the API docs: ...
 
 Supports an optional CSS selector to target specific content (e.g., `article`, `main`, `.post-body`). Strips scripts, styles, navigation, footers, and other non-content elements.
 
+### File Editing
+
+Read and edit files with precision using `file_read_lines` and `file_edit_lines` — no need to shell out to `sed` or `awk`.
+
+```
+bernard> show me lines 10-20 of src/config.ts
+  ▶ file_read_lines: src/config.ts (lines 10–20)
+  ...
+
+bernard> replace line 15 with "const timeout = 5000;"
+  ▶ file_edit_lines: src/config.ts [replace line 15]
+  Done — 1 edit applied.
+```
+
+`file_edit_lines` supports replace, insert, delete, and append operations. All edits in a single call are atomic — they all succeed or all fail. Binary files are detected and rejected. Files up to 50 MB are supported, with pagination for large reads.
+
 ### Memory (Persistent)
 
 Long-term memory that persists across sessions. Stored as markdown files in `~/.bernard/memory/`.
@@ -344,7 +361,7 @@ bernard> check the disk usage on /, look up the weather in Austin, and count lin
   ...
 ```
 
-Up to 4 concurrent sub-agents. Each gets 10 max steps. Color-coded output in the terminal.
+Up to 4 concurrent sub-agents. Each gets 10 max steps. Color-coded output in the terminal. Sub-agents accept per-invocation provider/model overrides to use a different LLM than the main session.
 
 ### Tasks _(v0.6.0+)_
 
@@ -361,8 +378,10 @@ Found 23 .ts files
 
 Key differences from sub-agents:
 
-- **5-step budget** (vs. 10 for sub-agents) — tasks are meant to be quick and focused
+- **Single-step budget** (`maxSteps: 2` — one tool-use round + structured result) — tasks are meant to be quick and deterministic
 - **Structured JSON output** — always returns `{status: "success"|"error", output: string, details?: string}`
+- **Saved tasks** — create task routines with `/create-task`, then invoke them by ID via `/task-{id}` or programmatically with the `taskId` parameter
+- **Auto-context injection** — working directory, available tools, memory, and RAG context are included automatically
 - **No conversation history** — completely isolated from the current session
 - **Available as both a tool and a command** — the agent can call `task` during routines for chaining, or users can run `/task` directly from the REPL
 - **Shared concurrency pool** — tasks and sub-agents share the same 4-slot limit
@@ -428,7 +447,7 @@ bernard> /code-reviewer review the changes in src/agent.ts
 └─ spec:1 done
 ```
 
-Each specialist run gets its own `generateText` loop with a 10-step budget, using the specialist's system prompt and guidelines as its persona. Specialists share the concurrency pool with sub-agents and tasks (4 slots max).
+Each specialist run gets its own `generateText` loop with a 10-step budget, using the specialist's system prompt and guidelines as its persona. Specialists can have per-specialist model overrides — set a default provider/model at creation time, and it will be used every time that specialist runs. Specialists share the concurrency pool with sub-agents and tasks (4 slots max).
 
 Manage specialists:
 
@@ -827,6 +846,7 @@ src/
 │   ├── cron-logs.ts      # Cron execution logs
 │   ├── mcp.ts            # MCP config (stdio)
 │   ├── mcp-url.ts        # MCP config (URL-based)
+│   ├── file.ts           # File reading and line-based editing
 │   ├── routine.ts        # Routine management tool
 │   ├── specialist.ts     # Specialist management tool
 │   ├── specialist-run.ts # Specialist execution (sub-agent with custom persona)
