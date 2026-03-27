@@ -246,6 +246,7 @@ Features:
 | `/candidates`     | Review auto-detected specialist suggestions _(v0.6.0+)_                   |
 | `/critic`         | Toggle critic mode for response verification (on/off)                     |
 | `/options`        | View and modify runtime options (max-tokens, shell-timeout, token-window) |
+| `/debug`          | Print a diagnostic report for troubleshooting (no secrets leaked)         |
 | `/exit`           | Quit Bernard (also: `exit`, `quit`)                                       |
 
 Type `/{routine-id}` or `/{specialist-id}` to invoke a saved routine or specialist directly (e.g., `/deploy-staging`).
@@ -697,6 +698,8 @@ Bernard automatically compresses conversation history when it approaches 75% of 
 
 Summarization and domain-specific fact extraction run in parallel. Scratch notes survive compression, so multi-step task progress is never lost.
 
+**Auto-continue on truncation:** If a response hits the `max-tokens` limit and is cut off, Bernard automatically continues where it left off (up to 3 continuations). After completing, it shows a recommended `max-tokens` value based on actual usage. If the response is still incomplete after 3 continuations, a warning is shown with instructions to increase the limit via `/options max-tokens <value>`.
+
 When critic mode is enabled (`/critic on`), Bernard writes plans to scratch before complex tasks and verifies outcomes after tool use. See [Critic Mode](#critic-mode).
 
 ### RAG Memory
@@ -796,6 +799,10 @@ BERNARD_DEBUG=1 bernard
 
 Logs are written to `.logs/YYYY-MM-DD.log` in JSON format, covering agent processing, RAG operations, context compression, tool execution, and MCP operations.
 
+### Diagnostic Report
+
+Use `/debug` in the REPL to print a diagnostic report useful for troubleshooting. The report includes runtime info (Bernard version, Node.js version, OS), LLM configuration, API key status (configured/not set — keys are never shown), MCP server status, RAG/memory/cron state, conversation stats, active settings, and file paths. No secrets are included in the output.
+
 ### Adding a New Provider
 
 1. Install the AI SDK provider package (e.g., `npm install @ai-sdk/google`)
@@ -883,7 +890,7 @@ Found a bug? Please [open an issue](https://github.com/phillt/bernard/issues/new
 
 - Steps to reproduce the problem
 - Expected vs. actual behavior
-- Your environment (OS, Node version, Bernard version, provider/model)
+- Your environment — run `/debug` in the REPL and paste the output
 - Any relevant logs (run with `BERNARD_DEBUG=1` for verbose output)
 
 ## Third-Party Licenses

@@ -191,6 +191,12 @@ export function printInfo(message: string): void {
   console.log(getTheme().muted(message));
 }
 
+/** Prints a warning message in the theme's warning color. */
+export function printWarning(message: string): void {
+  stopSpinner();
+  console.log(getTheme().warning(message));
+}
+
 /**
  * Prints a dimmed summary of a prior conversation for session-resume context.
  *
@@ -379,6 +385,7 @@ export function printHelp(): void {
       t.muted('  — View and set options (max-tokens, shell-timeout, token-window)'),
   );
   console.log(t.text('  /update') + t.muted('   — Check for and install updates'));
+  console.log(t.text('  /debug') + t.muted('    — Print diagnostic report for troubleshooting'));
   console.log(t.text('  exit') + t.muted('      — Quit Bernard'));
   console.log();
 }

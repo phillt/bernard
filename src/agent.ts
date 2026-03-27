@@ -8,6 +8,7 @@ import {
   printToolCall,
   printToolResult,
   printInfo,
+  printWarning,
   printCriticStart,
   printCriticVerdict,
   printCriticRetry,
@@ -570,6 +571,54 @@ export class Agent {
           result = await callGenerateText();
         } else {
           throw apiErr;
+        }
+      }
+
+      // Auto-continue when the model hit the maxTokens limit mid-response
+      const MAX_CONTINUATIONS = 3;
+      let continuations = 0;
+      let continuationTokens = 0;
+
+      while (result.finishReason === 'length' && continuations < MAX_CONTINUATIONS) {
+        if (this.abortController?.signal.aborted) break;
+        continuationTokens += result.usage?.completionTokens ?? 0;
+        continuations++;
+
+        printWarning(
+          `Response truncated (hit ${this.config.maxTokens} token limit). Auto-continuing... (${continuations}/${MAX_CONTINUATIONS})`,
+        );
+
+        // Append partial response to history so continuation has context
+        const partialMessages = truncateToolResults(result.response.messages as CoreMessage[]);
+        this.history.push(...partialMessages);
+        this.history.push({
+          role: 'user' as const,
+          content:
+            '[Your previous response was cut off. Please continue exactly where you left off.]',
+        });
+
+        // Restart spinner for the continuation call
+        if (this.spinnerStats) {
+          startSpinner(() => buildSpinnerMessage(this.spinnerStats!));
+        }
+
+        result = await callGenerateText();
+      }
+
+      if (continuations > 0) {
+        const totalCompletionTokens = continuationTokens + (result.usage?.completionTokens ?? 0);
+        const recommended = Math.ceil((totalCompletionTokens * 1.25) / 1024) * 1024;
+
+        if (result.finishReason === 'length') {
+          printWarning(
+            `Response still incomplete after ${MAX_CONTINUATIONS} continuations. ` +
+              `Increase the token limit: /options max-tokens ${recommended}`,
+          );
+        } else {
+          printInfo(
+            `Tip: Response needed ~${totalCompletionTokens} tokens (limit: ${this.config.maxTokens}). ` +
+              `To avoid future truncation: /options max-tokens ${recommended}`,
+          );
         }
       }
 
