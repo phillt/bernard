@@ -1,11 +1,14 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 
+/** Regex matching the [ISO-8601] prefix produced by timestampUserMessage. */
+const TIMESTAMP_PREFIX_RE = /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] /;
+
 /** Creates a tool that returns the current local date and time as a human-readable string. */
 export function createDateTimeTool() {
   return tool({
     description:
-      'Get the current date and time including hours and minutes. Use this when the user asks for the current time or when you need a precise timestamp.',
+      'Get the current date and time including hours and minutes. Timestamps are automatically attached to user messages, so use this only when you need a precise mid-turn timestamp (e.g., after a long-running tool call).',
     parameters: z.object({}),
     execute: async (): Promise<string> => {
       const now = new Date();
@@ -56,5 +59,5 @@ export function timestampUserMessage(userInput: string): string {
 
 /** Strips a leading [ISO-timestamp] prefix from a message string. */
 export function stripTimestamp(text: string): string {
-  return text.replace(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\]\s*/, '');
+  return text.replace(TIMESTAMP_PREFIX_RE, '');
 }
