@@ -393,7 +393,8 @@ export class Agent {
    * @throws Error wrapping the underlying API error if generation fails for non-abort, non-overflow reasons
    */
   async processInput(userInput: string): Promise<void> {
-    this.history.push({ role: 'user', content: timestampUserMessage(userInput) });
+    const timestamped = timestampUserMessage(userInput);
+    this.history.push({ role: 'user', content: timestamped });
 
     this.abortController = new AbortController();
     this.lastStepPromptTokens = 0;
@@ -401,7 +402,7 @@ export class Agent {
 
     try {
       // Check if context compression is needed
-      const newMessageEstimate = Math.ceil(userInput.length / 4);
+      const newMessageEstimate = Math.ceil(timestamped.length / 4);
       if (
         shouldCompress(
           this.lastPromptTokens,
