@@ -393,7 +393,7 @@ export class Agent {
    * @throws Error wrapping the underlying API error if generation fails for non-abort, non-overflow reasons
    */
   async processInput(userInput: string): Promise<void> {
-    this.history.push({ role: 'user', content: userInput });
+    this.history.push({ role: 'user', content: timestampUserMessage(userInput) });
 
     this.abortController = new AbortController();
     this.lastStepPromptTokens = 0;
