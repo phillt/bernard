@@ -2,6 +2,7 @@ import type { CoreMessage } from 'ai';
 import { extractText } from './context.js';
 import type { RAGSearchResult } from './rag.js';
 import { DEFAULT_TOP_K_PER_DOMAIN, DEFAULT_MAX_RESULTS } from './rag.js';
+import { stripTimestamp } from './tools/datetime.js';
 
 /** Number of recent user messages (beyond the current input) to include in the RAG query. */
 export const DEFAULT_WINDOW_SIZE = 2;
@@ -37,7 +38,7 @@ export function extractRecentUserTexts(
     // Skip system-injected boundary messages
     if (BOUNDARY_PREFIXES.some((prefix) => text.startsWith(prefix))) continue;
 
-    texts.push(text);
+    texts.push(stripTimestamp(text));
   }
 
   // Reverse to chronological order (oldest first)
