@@ -99,10 +99,12 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('You are Bernard');
   });
 
-  it("includes today's date", () => {
+  it('includes current date and time', () => {
     const prompt = buildSystemPrompt(makeConfig(), store);
-    // Should contain a date-like string
+    expect(prompt).toContain('Current date and time:');
+    // Should contain a year and time pattern
     expect(prompt).toMatch(/\d{4}/);
+    expect(prompt).toMatch(/\d{1,2}:\d{2}/);
   });
 
   it('includes provider and model', () => {
@@ -378,7 +380,7 @@ describe('Agent', () => {
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
   });
 
-  it('processInput passes user message in history', async () => {
+  it('processInput passes timestamped user message in history', async () => {
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
       usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
@@ -386,7 +388,10 @@ describe('Agent', () => {
     const agent = new Agent(makeConfig(), toolOptions, store);
     await agent.processInput('Hello');
     const call = mockGenerateText.mock.calls[0][0];
-    expect(call.messages).toEqual(expect.arrayContaining([{ role: 'user', content: 'Hello' }]));
+    const userMsg = call.messages.find((m: any) => m.role === 'user');
+    expect(userMsg.content).toMatch(
+      /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] Hello$/,
+    );
   });
 
   it('appends response messages to history', async () => {

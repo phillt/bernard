@@ -85,6 +85,7 @@ vi.mock('../tools/memory.js', () => ({
 
 vi.mock('../tools/datetime.js', () => ({
   createDateTimeTool: vi.fn().mockReturnValue({ type: 'mock-datetime' }),
+  formatCurrentDateTime: vi.fn().mockReturnValue('Friday, March 27, 2026 at 10:00 AM EDT'),
 }));
 
 vi.mock('../tools/web.js', () => ({
@@ -276,14 +277,15 @@ describe('runJob', () => {
     expect(capturedTools).toHaveProperty('time_range_total');
   });
 
-  it("includes today's date in system prompt", async () => {
+  it('includes current date and time in system prompt', async () => {
     await runJob(testJob, vi.fn());
 
-    // The prompt should contain a formatted date string
+    // The prompt should contain a formatted date+time string
     const today = new Date();
     const year = today.getFullYear().toString();
-    expect(capturedSystem).toContain("Today's date:");
+    expect(capturedSystem).toContain('Current date and time:');
     expect(capturedSystem).toContain(year);
+    expect(capturedSystem).toMatch(/\d{1,2}:\d{2}/);
   });
 
   it('includes connected MCP server names in system prompt', async () => {
