@@ -193,6 +193,7 @@ export function printInfo(message: string): void {
 
 /** Prints a warning message in the theme's warning color. */
 export function printWarning(message: string): void {
+  stopSpinner();
   console.log(getTheme().warning(message));
 }
 

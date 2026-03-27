@@ -522,7 +522,7 @@ export class Agent {
           system: systemPrompt,
           messages: messages ?? this.history,
           abortSignal: this.abortController!.signal,
-          onStepFinish: ({ text, toolCalls, toolResults, usage, finishReason }) => {
+          onStepFinish: ({ text, toolCalls, toolResults, usage }) => {
             if (usage) {
               this.lastStepPromptTokens = usage.promptTokens;
               if (this.spinnerStats) {
@@ -577,9 +577,11 @@ export class Agent {
       // Auto-continue when the model hit the maxTokens limit mid-response
       const MAX_CONTINUATIONS = 3;
       let continuations = 0;
+      let continuationTokens = 0;
 
       while (result.finishReason === 'length' && continuations < MAX_CONTINUATIONS) {
         if (this.abortController?.signal.aborted) break;
+        continuationTokens += result.usage?.completionTokens ?? 0;
         continuations++;
 
         printWarning(
@@ -604,9 +606,8 @@ export class Agent {
       }
 
       if (continuations > 0) {
-        const lastCallTokens = result.usage?.completionTokens ?? 0;
-        const estimatedTotal = continuations * this.config.maxTokens + lastCallTokens;
-        const recommended = Math.ceil((estimatedTotal * 1.25) / 1024) * 1024;
+        const totalCompletionTokens = continuationTokens + (result.usage?.completionTokens ?? 0);
+        const recommended = Math.ceil((totalCompletionTokens * 1.25) / 1024) * 1024;
 
         if (result.finishReason === 'length') {
           printWarning(
@@ -615,7 +616,7 @@ export class Agent {
           );
         } else {
           printInfo(
-            `Tip: Response needed ~${estimatedTotal} tokens (limit: ${this.config.maxTokens}). ` +
+            `Tip: Response needed ~${totalCompletionTokens} tokens (limit: ${this.config.maxTokens}). ` +
               `To avoid future truncation: /options max-tokens ${recommended}`,
           );
         }

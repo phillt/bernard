@@ -4,7 +4,15 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import * as os from 'node:os';
-import { RAG_DIR, MCP_CONFIG_PATH, CONFIG_DIR, DATA_DIR, CACHE_DIR, STATE_DIR } from './paths.js';
+import {
+  RAG_DIR,
+  MCP_CONFIG_PATH,
+  CONFIG_DIR,
+  DATA_DIR,
+  CACHE_DIR,
+  STATE_DIR,
+  CRON_JOBS_FILE,
+} from './paths.js';
 import { Agent } from './agent.js';
 import { MemoryStore } from './memory.js';
 import { RAGStore, type RAGSearchResult } from './rag.js';
@@ -495,7 +503,7 @@ export async function startRepl(
         system: systemPrompt,
         messages: [{ role: 'user', content: userMessage }],
         abortSignal: taskAbortController.signal,
-        onStepFinish: ({ text, toolCalls, toolResults, finishReason }) => {
+        onStepFinish: ({ text, toolCalls, toolResults }) => {
           for (const tc of toolCalls) {
             printToolCall(tc.toolName, tc.args as Record<string, unknown>);
           }
@@ -1234,9 +1242,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         console.log(t.muted(`    Model: ${config.model}`));
         console.log(t.muted(`    maxTokens: ${config.maxTokens}`));
         console.log(t.muted(`    shellTimeout: ${config.shellTimeout}ms`));
-        console.log(
-          t.muted(`    tokenWindow: ${config.tokenWindow || 'auto-detect'}`),
-        );
+        console.log(t.muted(`    tokenWindow: ${config.tokenWindow || 'auto-detect'}`));
 
         console.log(t.text('\n  API Keys:'));
         for (const { provider, hasKey } of getProviderKeyStatus()) {
@@ -1266,11 +1272,16 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         console.log(t.text('\n  Memory:'));
         console.log(t.muted(`    Persistent memories: ${memoryStore.listMemory().length}`));
 
-        const debugCronStore = new CronStore();
-        const debugJobs = debugCronStore.loadJobs();
         console.log(t.text('\n  Cron:'));
         console.log(t.muted(`    Daemon: ${isDaemonRunning() ? 'running' : 'stopped'}`));
-        console.log(t.muted(`    Jobs: ${debugJobs.length}`));
+        let debugJobCount = 0;
+        try {
+          const raw = fs.readFileSync(CRON_JOBS_FILE, 'utf-8');
+          debugJobCount = JSON.parse(raw).length;
+        } catch {
+          // jobs.json doesn't exist yet — that's fine
+        }
+        console.log(t.muted(`    Jobs: ${debugJobCount}`));
 
         console.log(t.text('\n  Conversation:'));
         console.log(t.muted(`    Messages: ${agent.getHistory().length}`));
