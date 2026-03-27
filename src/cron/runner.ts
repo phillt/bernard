@@ -10,7 +10,7 @@ import { buildMemoryContext } from '../memory-context.js';
 import { debugLog } from '../logger.js';
 import { createShellTool } from '../tools/shell.js';
 import { createMemoryTool, createScratchTool } from '../tools/memory.js';
-import { createDateTimeTool } from '../tools/datetime.js';
+import { createDateTimeTool, formatCurrentDateTime } from '../tools/datetime.js';
 import { createWebReadTool } from '../tools/web.js';
 import { createWaitTool } from '../tools/wait.js';
 import { createTimeTools } from '../tools/time.js';
@@ -201,14 +201,8 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         includeScratch: true,
       });
 
-    // Append current date so the agent knows "today"
-    const todayStr = new Date().toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
-    enrichedPrompt += `\n\nToday's date: ${todayStr}`;
+    // Append current date and time so the agent knows "now"
+    enrichedPrompt += `\n\nCurrent date and time: ${formatCurrentDateTime()}`;
 
     // Append connected MCP server names so the agent knows what's available
     if (serverNames.length > 0) {

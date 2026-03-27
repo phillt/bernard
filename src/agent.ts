@@ -42,6 +42,7 @@ import {
   buildRAGQuery,
   applyStickiness,
 } from './rag-query.js';
+import { formatCurrentDateTime, timestampUserMessage } from './tools/datetime.js';
 
 const BASE_SYSTEM_PROMPT = `# Identity
 
@@ -222,13 +223,7 @@ export function buildSystemPrompt(
   specialistSummaries?: SpecialistSummary[],
   specialistMatches?: SpecialistMatch[],
 ): string {
-  const today = new Date().toLocaleDateString('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
-  let prompt = BASE_SYSTEM_PROMPT + `\n\nToday's date is ${today}.`;
+  let prompt = BASE_SYSTEM_PROMPT + `\n\nCurrent date and time: ${formatCurrentDateTime()}.`;
   prompt += `\nYou are running as provider: ${config.provider}, model: ${config.model}. The user can switch with /provider and /model.`;
 
   if (config.criticMode) {
@@ -398,7 +393,8 @@ export class Agent {
    * @throws Error wrapping the underlying API error if generation fails for non-abort, non-overflow reasons
    */
   async processInput(userInput: string): Promise<void> {
-    this.history.push({ role: 'user', content: userInput });
+    const timestamped = timestampUserMessage(userInput);
+    this.history.push({ role: 'user', content: timestamped });
 
     this.abortController = new AbortController();
     this.lastStepPromptTokens = 0;
@@ -406,7 +402,7 @@ export class Agent {
 
     try {
       // Check if context compression is needed
-      const newMessageEstimate = Math.ceil(userInput.length / 4);
+      const newMessageEstimate = Math.ceil(timestamped.length / 4);
       if (
         shouldCompress(
           this.lastPromptTokens,

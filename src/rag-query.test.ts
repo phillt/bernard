@@ -86,6 +86,15 @@ describe('extractRecentUserTexts', () => {
     expect(extractRecentUserTexts(history, 2)).toEqual(['hello world']);
   });
 
+  it('strips timestamp prefixes from user messages', () => {
+    const history: CoreMessage[] = [
+      { role: 'user', content: '[2025-03-27T14:30:00-04:00] first question' },
+      { role: 'assistant', content: 'answer' },
+      { role: 'user', content: '[2025-03-27T14:31:00-04:00] second question' },
+    ];
+    expect(extractRecentUserTexts(history, 2)).toEqual(['first question', 'second question']);
+  });
+
   it('returns in chronological order (oldest first)', () => {
     const history: CoreMessage[] = [
       { role: 'user', content: 'oldest' },
