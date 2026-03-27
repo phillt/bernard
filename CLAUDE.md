@@ -14,7 +14,7 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 
 - **src/index.ts** — CLI entry point (Commander, shebang)
 - **src/repl.ts** — Interactive REPL loop (readline)
-- **src/agent.ts** — Agent loop using AI SDK `generateText` + `maxSteps` + optional critic verification
+- **src/agent.ts** — Agent loop using AI SDK `generateText` + `maxSteps` + auto-continue on truncation + optional critic verification
 - **src/config.ts** — .env loading, defaults, validation
 - **src/output.ts** — Chalk-based terminal formatting
 - **src/theme.ts** — Color theme definitions (bernard, ocean, forest, synthwave, high-contrast, colorblind)
