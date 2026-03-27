@@ -3,7 +3,8 @@ import * as childProcess from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
-import { RAG_DIR, MCP_CONFIG_PATH } from './paths.js';
+import * as os from 'node:os';
+import { RAG_DIR, MCP_CONFIG_PATH, CONFIG_DIR, DATA_DIR, CACHE_DIR, STATE_DIR } from './paths.js';
 import { Agent } from './agent.js';
 import { MemoryStore } from './memory.js';
 import { RAGStore, type RAGSearchResult } from './rag.js';
@@ -28,6 +29,7 @@ import {
   savePreferences,
   OPTIONS_REGISTRY,
   saveOption,
+  getProviderKeyStatus,
   type BernardConfig,
 } from './config.js';
 import { getTheme, setTheme, getThemeKeys, getActiveThemeKey, THEMES } from './theme.js';
@@ -56,6 +58,7 @@ import {
   printToolCall,
   printToolResult,
   printAssistantText,
+  printWarning,
 } from './output.js';
 import { buildMemoryContext } from './memory-context.js';
 import { debugLog } from './logger.js';
@@ -97,6 +100,7 @@ export async function startRepl(
     { command: '/create-specialist', description: 'Create a specialist with guided AI assistance' },
     { command: '/candidates', description: 'Review specialist suggestions' },
     { command: '/critic', description: 'Toggle critic mode for response verification' },
+    { command: '/debug', description: 'Print diagnostic report for troubleshooting' },
     { command: '/exit', description: 'Quit Bernard' },
   ];
 
@@ -1211,6 +1215,83 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         } else {
           printInfo(`Critic mode: ${config.criticMode ? 'ON' : 'OFF'}. Usage: /critic on|off`);
         }
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/debug') {
+        const t = getTheme();
+        console.log(t.accent('\n  Bernard Diagnostic Report'));
+        console.log(t.accent('  ' + '─'.repeat(40)));
+
+        console.log(t.text('\n  Runtime:'));
+        console.log(t.muted(`    Bernard version: ${getLocalVersion()}`));
+        console.log(t.muted(`    Node.js version: ${process.version}`));
+        console.log(t.muted(`    OS: ${process.platform} ${process.arch} (${os.release()})`));
+
+        console.log(t.text('\n  LLM:'));
+        console.log(t.muted(`    Provider: ${config.provider}`));
+        console.log(t.muted(`    Model: ${config.model}`));
+        console.log(t.muted(`    maxTokens: ${config.maxTokens}`));
+        console.log(t.muted(`    shellTimeout: ${config.shellTimeout}ms`));
+        console.log(
+          t.muted(`    tokenWindow: ${config.tokenWindow || 'auto-detect'}`),
+        );
+
+        console.log(t.text('\n  API Keys:'));
+        for (const { provider, hasKey } of getProviderKeyStatus()) {
+          console.log(t.muted(`    ${provider}: ${hasKey ? 'configured' : 'not set'}`));
+        }
+
+        const debugStatuses = mcpManager.getServerStatuses();
+        console.log(t.text('\n  MCP Servers:'));
+        if (debugStatuses.length === 0) {
+          console.log(t.muted('    (none configured)'));
+        } else {
+          for (const s of debugStatuses) {
+            if (s.connected) {
+              console.log(t.muted(`    ${s.name}: connected (${s.toolCount} tools)`));
+            } else {
+              console.log(t.muted(`    ${s.name}: failed — ${s.error}`));
+            }
+          }
+        }
+
+        console.log(t.text('\n  RAG:'));
+        console.log(t.muted(`    Enabled: ${config.ragEnabled}`));
+        if (ragStore) {
+          console.log(t.muted(`    Facts: ${ragStore.count()}`));
+        }
+
+        console.log(t.text('\n  Memory:'));
+        console.log(t.muted(`    Persistent memories: ${memoryStore.listMemory().length}`));
+
+        const debugCronStore = new CronStore();
+        const debugJobs = debugCronStore.loadJobs();
+        console.log(t.text('\n  Cron:'));
+        console.log(t.muted(`    Daemon: ${isDaemonRunning() ? 'running' : 'stopped'}`));
+        console.log(t.muted(`    Jobs: ${debugJobs.length}`));
+
+        console.log(t.text('\n  Conversation:'));
+        console.log(t.muted(`    Messages: ${agent.getHistory().length}`));
+
+        console.log(t.text('\n  Settings:'));
+        console.log(t.muted(`    Theme: ${getActiveThemeKey()}`));
+        console.log(t.muted(`    Critic mode: ${config.criticMode ? 'on' : 'off'}`));
+        const debugEnabled =
+          process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
+        console.log(t.muted(`    Debug mode: ${debugEnabled ? 'on' : 'off'}`));
+
+        console.log(t.text('\n  Paths:'));
+        if (process.env.BERNARD_HOME) {
+          console.log(t.muted(`    BERNARD_HOME: ${process.env.BERNARD_HOME}`));
+        }
+        console.log(t.muted(`    Config: ${CONFIG_DIR}`));
+        console.log(t.muted(`    Data: ${DATA_DIR}`));
+        console.log(t.muted(`    Cache: ${CACHE_DIR}`));
+        console.log(t.muted(`    State: ${STATE_DIR}`));
+
+        console.log();
         void prompt();
         return;
       }

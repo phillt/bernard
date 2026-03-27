@@ -384,6 +384,7 @@ export function printHelp(): void {
       t.muted('  — View and set options (max-tokens, shell-timeout, token-window)'),
   );
   console.log(t.text('  /update') + t.muted('   — Check for and install updates'));
+  console.log(t.text('  /debug') + t.muted('    — Print diagnostic report for troubleshooting'));
   console.log(t.text('  exit') + t.muted('      — Quit Bernard'));
   console.log();
 }
