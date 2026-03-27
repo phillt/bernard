@@ -491,7 +491,7 @@ export async function startRepl(
         system: systemPrompt,
         messages: [{ role: 'user', content: userMessage }],
         abortSignal: taskAbortController.signal,
-        onStepFinish: ({ text, toolCalls, toolResults }) => {
+        onStepFinish: ({ text, toolCalls, toolResults, finishReason }) => {
           for (const tc of toolCalls) {
             printToolCall(tc.toolName, tc.args as Record<string, unknown>);
           }
@@ -503,6 +503,14 @@ export async function startRepl(
           }
         },
       });
+
+      if (result.finishReason === 'length') {
+        const recommended = Math.ceil((config.maxTokens * 2) / 1024) * 1024;
+        printWarning(
+          `Task response was truncated (hit ${config.maxTokens} token limit). ` +
+            `Consider increasing: /options max-tokens ${recommended}`,
+        );
+      }
 
       stopSpinner();
       const taskResult = wrapTaskResult(result.text);
