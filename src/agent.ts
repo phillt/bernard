@@ -8,6 +8,7 @@ import {
   printToolCall,
   printToolResult,
   printInfo,
+  printWarning,
   printCriticStart,
   printCriticVerdict,
   printCriticRetry,

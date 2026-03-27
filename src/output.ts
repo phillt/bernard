@@ -191,6 +191,11 @@ export function printInfo(message: string): void {
   console.log(getTheme().muted(message));
 }
 
+/** Prints a warning message in the theme's warning color. */
+export function printWarning(message: string): void {
+  console.log(getTheme().warning(message));
+}
+
 /**
  * Prints a dimmed summary of a prior conversation for session-resume context.
  *
