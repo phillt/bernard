@@ -64,6 +64,14 @@ You exist only while processing a user message. Each response is a single turn: 
 - When uncertain about intent, ask a clarifying question rather than guessing.
 - If a request is ambiguous or risky, state your assumptions before acting.
 
+## Planning
+Before executing any task that requires more than two tool calls:
+1. Briefly outline your plan in your response text — what steps you intend to take and in what order.
+2. Execute the plan step by step. If the approach needs to change, state the revised plan before continuing.
+3. After completion, summarize what was done and the outcome.
+
+This makes your reasoning visible and reduces errors on multi-step tasks. For simple tasks (1-2 tool calls), skip the plan and act directly.
+
 ## Tool Execution Integrity
 - NEVER simulate, fabricate, or narrate tool execution. If a task requires running a command, you MUST call the shell tool — do not write prose describing what a command "would return" or pretend you already ran it.
 - Your text output can only describe results you actually received from a tool call in this conversation. If you have not called a tool, you have no results to report.
@@ -142,10 +150,10 @@ const CRITIC_MODE_PROMPT = `## Reliability Mode (Active)
 
 You are operating with enhanced reliability. Follow these additional rules:
 
-### Planning
-Before executing any task that requires more than two tool calls, file modifications, git operations, or multi-step research:
-1. Write a brief plan to scratch (key: "plan") listing the steps you intend to take and the expected outcomes.
-2. Reference this plan during execution. Update it if the approach changes.
+### Enhanced Planning (Scratch-Based)
+In addition to stating your plan in text, persist it to scratch for reliability:
+1. Write your plan to scratch (key: "plan") listing steps and expected outcomes.
+2. Reference and update the scratch plan during execution.
 3. After completion, delete the plan from scratch to keep it clean.
 
 ### Proactive Scratch Usage
@@ -287,6 +295,8 @@ export class Agent {
   private routineStore: RoutineStore;
   private specialistStore: SpecialistStore;
   private candidateStore?: CandidateStoreReader;
+  private stepLimitHitCount: number = 0;
+  private lastStepLimitHit: boolean = false;
 
   constructor(
     config: BernardConfig,
@@ -332,6 +342,12 @@ export class Agent {
     this.abortController?.abort();
   }
 
+  /** Returns step limit hit info from last processInput, or null if limit wasn't hit. */
+  getStepLimitHit(): { currentLimit: number; hitCount: number } | null {
+    if (!this.lastStepLimitHit) return null;
+    return { currentLimit: this.config.maxSteps, hitCount: this.stepLimitHitCount };
+  }
+
   /** Attaches a spinner stats object that will be updated with token usage during generation. */
   setSpinnerStats(stats: SpinnerStats): void {
     this.spinnerStats = stats;
@@ -351,6 +367,8 @@ export class Agent {
    * @throws Error wrapping the underlying API error if generation fails for non-abort, non-overflow reasons
    */
   async processInput(userInput: string): Promise<void> {
+    this.lastStepLimitHit = false;
+
     const timestamped = timestampUserMessage(userInput);
     this.history.push({ role: 'user', content: timestamped });
 
@@ -474,7 +492,7 @@ export class Agent {
         generateText({
           model: getModel(this.config.provider, this.config.model),
           tools,
-          maxSteps: 20,
+          maxSteps: this.config.maxSteps,
           maxTokens: this.config.maxTokens,
           system: systemPrompt,
           messages: messages ?? this.history,
@@ -579,8 +597,23 @@ export class Agent {
         }
       }
 
+      // Detect maxSteps exhaustion
+      if (result.finishReason === 'tool-calls' && result.steps.length >= this.config.maxSteps) {
+        this.lastStepLimitHit = true;
+        this.stepLimitHitCount++;
+        const msg =
+          this.stepLimitHitCount >= 2
+            ? `Stopped at loop limit of ${this.config.maxSteps}. Use /options max-steps to adjust permanently.`
+            : `Stopped at loop limit of ${this.config.maxSteps}.`;
+        printWarning(msg);
+      }
+
       // Run critic verification if enabled and tool calls were made
-      if (this.config.criticMode && !this.abortController?.signal.aborted) {
+      if (
+        this.config.criticMode &&
+        !this.abortController?.signal.aborted &&
+        !this.lastStepLimitHit
+      ) {
         let toolLog = extractToolCallLog(result.steps);
         if (toolLog.length > 0) {
           let retryCount = 0;
@@ -670,5 +703,7 @@ export class Agent {
     this.memoryStore.clearScratch();
     this.previousRAGFacts = new Set();
     this.lastRAGResults = [];
+    this.stepLimitHitCount = 0;
+    this.lastStepLimitHit = false;
   }
 }

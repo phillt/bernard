@@ -386,7 +386,7 @@ export function printHelp(): void {
   );
   console.log(
     t.text('  /options') +
-      t.muted('  — View and set options (max-tokens, shell-timeout, token-window)'),
+      t.muted('  — View and set options (max-tokens, max-steps, shell-timeout, token-window)'),
   );
   console.log(
     t.text('  /agent-options') + t.muted(' — Configure auto-creation for specialist agents'),

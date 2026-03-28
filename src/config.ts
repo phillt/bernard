@@ -19,6 +19,8 @@ export interface BernardConfig {
   ragEnabled: boolean;
   /** Color theme name for terminal output. */
   theme: string;
+  /** Maximum number of sequential LLM calls (steps) per agent loop. */
+  maxSteps: number;
   /** Whether critic mode (planning + verification) is active. */
   criticMode: boolean;
   /** Whether to auto-create specialists above the confidence threshold. */
@@ -37,6 +39,7 @@ const DEFAULT_PROVIDER = 'anthropic';
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_SHELL_TIMEOUT = 30000;
 const DEFAULT_TOKEN_WINDOW = 0;
+const DEFAULT_MAX_STEPS = 25;
 const DEFAULT_AUTO_CREATE_SPECIALISTS = false;
 const DEFAULT_AUTO_CREATE_THRESHOLD = 0.8;
 
@@ -56,7 +59,7 @@ export const PROVIDER_ENV_VARS: Record<string, string> = {
 export const OPTIONS_REGISTRY: Record<
   string,
   {
-    configKey: 'maxTokens' | 'shellTimeout' | 'tokenWindow';
+    configKey: 'maxTokens' | 'shellTimeout' | 'tokenWindow' | 'maxSteps';
     default: number;
     description: string;
     envVar: string;
@@ -80,6 +83,12 @@ export const OPTIONS_REGISTRY: Record<
     description: 'Context window size for compression (0 = auto-detect from model)',
     envVar: 'BERNARD_TOKEN_WINDOW',
   },
+  'max-steps': {
+    configKey: 'maxSteps',
+    default: DEFAULT_MAX_STEPS,
+    description: 'Maximum agent loop iterations per request (controls tool call chain length)',
+    envVar: 'BERNARD_MAX_STEPS',
+  },
 };
 
 /**
@@ -93,6 +102,7 @@ export function savePreferences(prefs: {
   maxTokens?: number;
   shellTimeout?: number;
   tokenWindow?: number;
+  maxSteps?: number;
   theme?: string;
   autoUpdate?: boolean;
   criticMode?: boolean;
@@ -107,6 +117,7 @@ export function savePreferences(prefs: {
   if (prefs.maxTokens !== undefined) data.maxTokens = prefs.maxTokens;
   if (prefs.shellTimeout !== undefined) data.shellTimeout = prefs.shellTimeout;
   if (prefs.tokenWindow !== undefined) data.tokenWindow = prefs.tokenWindow;
+  if (prefs.maxSteps !== undefined) data.maxSteps = prefs.maxSteps;
   if (prefs.theme !== undefined) data.theme = prefs.theme;
   if (prefs.criticMode !== undefined) data.criticMode = prefs.criticMode;
   if (prefs.autoCreateSpecialists !== undefined)
@@ -128,6 +139,21 @@ export function savePreferences(prefs: {
   }
   if (prefs.criticMode === undefined && existing && typeof existing.criticMode === 'boolean') {
     data.criticMode = existing.criticMode;
+  }
+
+  // Preserve numeric options from existing prefs when callers don't pass them.
+  // Use 'in' to distinguish "key absent" (preserve) from "key explicitly set to undefined" (reset).
+  if (!('maxSteps' in prefs) && existing && typeof existing.maxSteps === 'number') {
+    data.maxSteps = existing.maxSteps;
+  }
+  if (!('maxTokens' in prefs) && existing && typeof existing.maxTokens === 'number') {
+    data.maxTokens = existing.maxTokens;
+  }
+  if (!('shellTimeout' in prefs) && existing && typeof existing.shellTimeout === 'number') {
+    data.shellTimeout = existing.shellTimeout;
+  }
+  if (!('tokenWindow' in prefs) && existing && typeof existing.tokenWindow === 'number') {
+    data.tokenWindow = existing.tokenWindow;
   }
   if (
     prefs.autoCreateSpecialists === undefined &&
@@ -157,6 +183,7 @@ export function loadPreferences(): {
   maxTokens?: number;
   shellTimeout?: number;
   tokenWindow?: number;
+  maxSteps?: number;
   theme?: string;
   autoUpdate?: boolean;
   criticMode?: boolean;
@@ -172,6 +199,7 @@ export function loadPreferences(): {
       maxTokens: typeof parsed.maxTokens === 'number' ? parsed.maxTokens : undefined,
       shellTimeout: typeof parsed.shellTimeout === 'number' ? parsed.shellTimeout : undefined,
       tokenWindow: typeof parsed.tokenWindow === 'number' ? parsed.tokenWindow : undefined,
+      maxSteps: typeof parsed.maxSteps === 'number' ? parsed.maxSteps : undefined,
       theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
       autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
       criticMode: typeof parsed.criticMode === 'boolean' ? parsed.criticMode : undefined,
@@ -269,6 +297,7 @@ export function saveOption(name: string, value: number): void {
     maxTokens: prefs.maxTokens,
     shellTimeout: prefs.shellTimeout,
     tokenWindow: prefs.tokenWindow,
+    maxSteps: prefs.maxSteps,
     theme: prefs.theme,
   });
 }
@@ -293,6 +322,7 @@ export function resetOption(name: string): void {
     maxTokens: prefs.maxTokens,
     shellTimeout: prefs.shellTimeout,
     tokenWindow: prefs.tokenWindow,
+    maxSteps: prefs.maxSteps,
     theme: prefs.theme,
   });
 }
@@ -300,12 +330,13 @@ export function resetOption(name: string): void {
 /** Resets all numeric options to their defaults by removing them from preferences. */
 export function resetAllOptions(): void {
   const prefs = loadPreferences();
-  delete (prefs as Record<string, unknown>).maxTokens;
-  delete (prefs as Record<string, unknown>).shellTimeout;
-  delete (prefs as Record<string, unknown>).tokenWindow;
   savePreferences({
     provider: prefs.provider || 'anthropic',
     model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
+    maxTokens: undefined,
+    shellTimeout: undefined,
+    tokenWindow: undefined,
+    maxSteps: undefined,
     theme: prefs.theme,
   });
 }
@@ -457,6 +488,10 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
   const tokenWindow =
     prefs.tokenWindow ??
     (parseInt(process.env.BERNARD_TOKEN_WINDOW || '', 10) || DEFAULT_TOKEN_WINDOW);
+  const rawMaxSteps =
+    prefs.maxSteps ?? (parseInt(process.env.BERNARD_MAX_STEPS || '', 10) || DEFAULT_MAX_STEPS);
+  const maxSteps =
+    Number.isFinite(rawMaxSteps) && rawMaxSteps >= 1 ? Math.floor(rawMaxSteps) : DEFAULT_MAX_STEPS;
 
   const ragEnabled = process.env.BERNARD_RAG_ENABLED !== 'false';
   const theme = prefs.theme || 'bernard';
@@ -484,6 +519,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     maxTokens,
     shellTimeout,
     tokenWindow,
+    maxSteps,
     ragEnabled,
     theme,
     criticMode,

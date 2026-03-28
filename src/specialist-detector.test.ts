@@ -35,6 +35,7 @@ function makeConfig() {
     maxTokens: 4096,
     shellTimeout: 30000,
     tokenWindow: 0,
+    maxSteps: 25,
     ragEnabled: true,
     theme: 'bernard',
     criticMode: false,

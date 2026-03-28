@@ -98,7 +98,7 @@ export async function startRepl(
     { command: '/theme', description: 'Switch color theme' },
     {
       command: '/options',
-      description: 'View and set options (max-tokens, shell-timeout, token-window)',
+      description: 'View and set options (max-tokens, max-steps, shell-timeout, token-window)',
     },
     { command: '/update', description: 'Check for and install updates' },
     { command: '/task', description: 'Run an isolated task (no history, structured output)' },
@@ -1484,6 +1484,25 @@ Remember: the systemPrompt should read like a persona definition — who this sp
     if (interrupted) {
       printInfo('Interrupted.');
       interrupted = false;
+    }
+
+    // Offer to double the loop limit when the agent exhausts its step budget
+    const stepHit = agent.getStepLimitHit();
+    if (stepHit) {
+      const doubled = stepHit.currentLimit * 2;
+      const hint = stepHit.hitCount >= 2 ? ' (Tip: /options max-steps to set permanently)' : '';
+      rl.question(
+        getTheme().warning(`Double to ${doubled} for this session?${hint} (y/N): `),
+        (answer) => {
+          if (answer.trim().toLowerCase() === 'y') {
+            config.maxSteps = doubled;
+            printInfo(`Loop limit doubled to ${doubled} for this session.`);
+          }
+          console.log();
+          void prompt();
+        },
+      );
+      return;
     }
 
     console.log(); // blank line between turns

@@ -89,6 +89,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     maxTokens: 4096,
     shellTimeout: 30000,
     tokenWindow: 0,
+    maxSteps: 25,
     ragEnabled: true,
     theme: 'bernard',
     criticMode: false,
@@ -117,7 +118,7 @@ describe('critic mode', () => {
     it('includes Reliability Mode prompt when criticMode is true', () => {
       const prompt = buildSystemPrompt(makeConfig({ criticMode: true }), store);
       expect(prompt).toContain('Reliability Mode (Active)');
-      expect(prompt).toContain('### Planning');
+      expect(prompt).toContain('### Enhanced Planning (Scratch-Based)');
       expect(prompt).toContain('### Proactive Scratch Usage');
       expect(prompt).toContain('### Verification');
     });

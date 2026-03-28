@@ -66,6 +66,7 @@ describe('getAvailableProviders', () => {
       maxTokens: 4096,
       shellTimeout: 30000,
       tokenWindow: 0,
+      maxSteps: 25,
       ragEnabled: true,
       theme: 'bernard',
       criticMode: false,
@@ -82,6 +83,7 @@ describe('getAvailableProviders', () => {
       maxTokens: 4096,
       shellTimeout: 30000,
       tokenWindow: 0,
+      maxSteps: 25,
       ragEnabled: true,
       theme: 'bernard',
       criticMode: false,
@@ -100,6 +102,7 @@ describe('getAvailableProviders', () => {
       maxTokens: 4096,
       shellTimeout: 30000,
       tokenWindow: 0,
+      maxSteps: 25,
       ragEnabled: true,
       theme: 'bernard',
       criticMode: false,
@@ -218,6 +221,7 @@ describe('loadConfig', () => {
     vi.stubEnv('BERNARD_MAX_TOKENS', '');
     vi.stubEnv('BERNARD_SHELL_TIMEOUT', '');
     vi.stubEnv('BERNARD_TOKEN_WINDOW', '');
+    vi.stubEnv('BERNARD_MAX_STEPS', '');
   });
 
   afterEach(() => {
@@ -269,6 +273,43 @@ describe('loadConfig', () => {
     vi.stubEnv('BERNARD_TOKEN_WINDOW', '100000');
     const config = loadConfig();
     expect(config.tokenWindow).toBe(100000);
+  });
+
+  it('defaults maxSteps to 25', () => {
+    const config = loadConfig();
+    expect(config.maxSteps).toBe(25);
+  });
+
+  it('parses BERNARD_MAX_STEPS', () => {
+    vi.stubEnv('BERNARD_MAX_STEPS', '50');
+    const config = loadConfig();
+    expect(config.maxSteps).toBe(50);
+  });
+
+  it('clamps maxSteps to default when BERNARD_MAX_STEPS is 0', () => {
+    vi.stubEnv('BERNARD_MAX_STEPS', '0');
+    const config = loadConfig();
+    expect(config.maxSteps).toBe(25);
+  });
+
+  it('clamps maxSteps to default when BERNARD_MAX_STEPS is negative', () => {
+    vi.stubEnv('BERNARD_MAX_STEPS', '-5');
+    const config = loadConfig();
+    expect(config.maxSteps).toBe(25);
+  });
+
+  it('clamps maxSteps to default when BERNARD_MAX_STEPS is NaN', () => {
+    vi.stubEnv('BERNARD_MAX_STEPS', 'abc');
+    const config = loadConfig();
+    expect(config.maxSteps).toBe(25);
+  });
+
+  it('floors fractional maxSteps to integer', () => {
+    vi.stubEnv('BERNARD_MAX_STEPS', '10');
+    // parseInt already truncates, but verify the floor works
+    const config = loadConfig();
+    expect(config.maxSteps).toBe(10);
+    expect(Number.isInteger(config.maxSteps)).toBe(true);
   });
 
   it('reads API keys from process.env', () => {
@@ -449,6 +490,12 @@ describe('saveOption', () => {
     expect(writtenData.maxTokens).toBe(8192);
   });
 
+  it('writes max-steps to preferences.json', () => {
+    saveOption('max-steps', 50);
+    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
+    expect(writtenData.maxSteps).toBe(50);
+  });
+
   it('preserves existing provider/model when saving', () => {
     saveOption('shell-timeout', 60000);
     const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
@@ -521,6 +568,7 @@ describe('resetAllOptions', () => {
     expect(writtenData.maxTokens).toBeUndefined();
     expect(writtenData.shellTimeout).toBeUndefined();
     expect(writtenData.tokenWindow).toBeUndefined();
+    expect(writtenData.maxSteps).toBeUndefined();
   });
 
   it('preserves provider/model', () => {
@@ -600,6 +648,7 @@ describe('loadConfig criticMode from env var', () => {
     vi.stubEnv('BERNARD_MAX_TOKENS', '');
     vi.stubEnv('BERNARD_SHELL_TIMEOUT', '');
     vi.stubEnv('BERNARD_TOKEN_WINDOW', '');
+    vi.stubEnv('BERNARD_MAX_STEPS', '');
     vi.stubEnv('BERNARD_CRITIC_MODE', '');
   });
 

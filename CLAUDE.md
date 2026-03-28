@@ -61,6 +61,7 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_MAX_TOKENS` — Response token limit (default: 4096)
 - `BERNARD_SHELL_TIMEOUT` — Shell command timeout ms (default: 30000)
 - `BERNARD_TOKEN_WINDOW` — Context window size for compression, 0 = auto-detect (default: 0)
+- `BERNARD_MAX_STEPS` — Max agent loop iterations per request (default: 25)
 - `BERNARD_HOME` — Override all XDG directories with a single flat path
 - `BERNARD_CRITIC_MODE` — Enable critic mode for verification (default: false)
 - `BERNARD_AUTO_CREATE_SPECIALISTS` — Auto-create specialists above confidence threshold (default: false)

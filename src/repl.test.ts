@@ -45,6 +45,7 @@ const mockAbort = vi.fn();
 const mockGetLastRAGResults = vi.fn(() => []);
 const mockCompactHistory = vi.fn();
 const mockSetAlertContext = vi.fn();
+const mockGetStepLimitHit = vi.fn(() => null);
 
 vi.mock('./agent.js', () => ({
   Agent: vi.fn(() => ({
@@ -56,6 +57,7 @@ vi.mock('./agent.js', () => ({
     getLastRAGResults: mockGetLastRAGResults,
     compactHistory: mockCompactHistory,
     setAlertContext: mockSetAlertContext,
+    getStepLimitHit: mockGetStepLimitHit,
   })),
 }));
 
@@ -140,6 +142,7 @@ vi.mock('./theme.js', () => ({
     ansi: { prompt: '', reset: '', warning: '', hintCmd: '', hintDesc: '' },
     text: (s: string) => s,
     muted: (s: string) => s,
+    warning: (s: string) => s,
   })),
   setTheme: vi.fn(),
   getThemeKeys: vi.fn(() => []),
@@ -215,6 +218,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     maxTokens: 4096,
     shellTimeout: 30000,
     tokenWindow: 0,
+    maxSteps: 25,
     ragEnabled: false,
     theme: 'bernard',
     criticMode: false,
@@ -677,6 +681,114 @@ describe('REPL /create-task command', () => {
     await vi.waitFor(() => {
       expect(mockPrintError).toHaveBeenCalledWith('API error');
     });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+});
+
+describe('REPL step-limit doubling prompt', () => {
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rlEmitter = makeRl();
+    vi.spyOn(console, 'clear').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('prompts to double loop limit when step limit is hit and doubles on "y"', async () => {
+    mockProcessInput.mockResolvedValue(undefined);
+    mockGetStepLimitHit.mockReturnValue({ currentLimit: 25, hitCount: 1 });
+
+    const { startRepl } = await import('./repl.js');
+    const config = makeConfig({ maxSteps: 25 });
+    const replPromise = startRepl(config);
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    // Type a normal message to trigger processInput
+    typeLine('do something complex');
+
+    // Wait for rl.question to be called with the doubling prompt
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalledWith(
+        expect.stringContaining('50'),
+        expect.any(Function),
+      );
+    });
+
+    // Simulate user answering "y"
+    const questionCallback = rlEmitter.question.mock.calls[0][1] as (answer: string) => void;
+    questionCallback('y');
+
+    // Config should now be doubled
+    expect(config.maxSteps).toBe(50);
+    expect(mockPrintInfo).toHaveBeenCalledWith('Loop limit doubled to 50 for this session.');
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('does not double when user answers "n"', async () => {
+    mockProcessInput.mockResolvedValue(undefined);
+    mockGetStepLimitHit.mockReturnValue({ currentLimit: 25, hitCount: 1 });
+
+    const { startRepl } = await import('./repl.js');
+    const config = makeConfig({ maxSteps: 25 });
+    const replPromise = startRepl(config);
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('do something complex');
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+
+    const questionCallback = rlEmitter.question.mock.calls[0][1] as (answer: string) => void;
+    questionCallback('n');
+
+    // Config should remain unchanged
+    expect(config.maxSteps).toBe(25);
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('includes permanent tip when hitCount >= 2', async () => {
+    mockProcessInput.mockResolvedValue(undefined);
+    mockGetStepLimitHit.mockReturnValue({ currentLimit: 25, hitCount: 2 });
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig());
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('do something');
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalledWith(
+        expect.stringContaining('/options max-steps'),
+        expect.any(Function),
+      );
+    });
+
+    // Answer to prevent hanging
+    const questionCallback = rlEmitter.question.mock.calls[0][1] as (answer: string) => void;
+    questionCallback('n');
 
     rlEmitter.emit('close');
     await replPromise.catch(() => {});

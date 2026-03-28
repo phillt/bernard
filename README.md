@@ -136,6 +136,7 @@ Bernard loads `.env` from the current directory first, then falls back to `~/.be
 | `BERNARD_MAX_TOKENS`              | Max response tokens                                      | `4096`                    |
 | `BERNARD_SHELL_TIMEOUT`           | Shell command timeout (ms)                               | `30000`                   |
 | `BERNARD_TOKEN_WINDOW`            | Context window size for compression (0 = auto-detect)    | `0`                       |
+| `BERNARD_MAX_STEPS`               | Max agent loop iterations per request                    | `25`                      |
 | `BERNARD_RAG_ENABLED`             | Enable the RAG memory system                             | `true`                    |
 | `BERNARD_CRITIC_MODE`             | Enable critic mode for response verification             | `false`                   |
 | `BERNARD_AUTO_CREATE_SPECIALISTS` | Auto-create specialists above confidence threshold       | `false`                   |
@@ -159,11 +160,12 @@ You can switch providers and models at any time during a session with `/provider
 
 Options can be changed during a session with `/options` or persisted to `~/.bernard/preferences.json`:
 
-| Option          | Default | Description                                           |
-| --------------- | ------- | ----------------------------------------------------- |
-| `max-tokens`    | `4096`  | Maximum tokens per AI response                        |
-| `shell-timeout` | `30000` | Shell command timeout in milliseconds                 |
-| `token-window`  | `0`     | Context window size for compression (0 = auto-detect) |
+| Option          | Default | Description                                                  |
+| --------------- | ------- | ------------------------------------------------------------ |
+| `max-tokens`    | `4096`  | Maximum tokens per AI response                               |
+| `max-steps`     | `25`    | Maximum agent loop iterations per request (tool call chains) |
+| `shell-timeout` | `30000` | Shell command timeout in milliseconds                        |
+| `token-window`  | `0`     | Context window size for compression (0 = auto-detect)        |
 
 From the CLI:
 
@@ -227,30 +229,30 @@ Features:
 
 ### REPL Slash Commands
 
-| Command           | Description                                                               |
-| ----------------- | ------------------------------------------------------------------------- |
-| `/help`           | Show available commands                                                   |
-| `/clear`          | Clear conversation history and scratch notes                              |
-| `/compact`        | Compress conversation history in-place                                    |
-| `/task`           | Run an isolated task (no history, structured output)                      |
-| `/memory`         | List all persistent memories                                              |
-| `/scratch`        | List session scratch notes                                                |
-| `/mcp`            | List connected MCP servers and their tools                                |
-| `/cron`           | Show cron jobs and daemon status                                          |
-| `/rag`            | Show RAG memory stats and recent facts                                    |
-| `/provider`       | Switch LLM provider interactively                                         |
-| `/model`          | Switch model for the current provider                                     |
-| `/theme`          | Switch color theme                                                        |
-| `/routines`       | List saved routines                                                       |
-| `/create-routine` | Create a routine with guided AI assistance                                |
-| `/create-task`    | Create a task routine (`task-` prefixed) with guided AI assistance        |
-| `/specialists`    | List saved specialists                                                    |
-| `/candidates`     | Review auto-detected specialist suggestions _(v0.6.0+)_                   |
-| `/critic`         | Toggle critic mode for response verification (on/off)                     |
-| `/agent-options`  | Configure auto-creation for specialist agents                             |
-| `/options`        | View and modify runtime options (max-tokens, shell-timeout, token-window) |
-| `/debug`          | Print a diagnostic report for troubleshooting (no secrets leaked)         |
-| `/exit`           | Quit Bernard (also: `exit`, `quit`)                                       |
+| Command           | Description                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| `/help`           | Show available commands                                                              |
+| `/clear`          | Clear conversation history and scratch notes                                         |
+| `/compact`        | Compress conversation history in-place                                               |
+| `/task`           | Run an isolated task (no history, structured output)                                 |
+| `/memory`         | List all persistent memories                                                         |
+| `/scratch`        | List session scratch notes                                                           |
+| `/mcp`            | List connected MCP servers and their tools                                           |
+| `/cron`           | Show cron jobs and daemon status                                                     |
+| `/rag`            | Show RAG memory stats and recent facts                                               |
+| `/provider`       | Switch LLM provider interactively                                                    |
+| `/model`          | Switch model for the current provider                                                |
+| `/theme`          | Switch color theme                                                                   |
+| `/routines`       | List saved routines                                                                  |
+| `/create-routine` | Create a routine with guided AI assistance                                           |
+| `/create-task`    | Create a task routine (`task-` prefixed) with guided AI assistance                   |
+| `/specialists`    | List saved specialists                                                               |
+| `/candidates`     | Review auto-detected specialist suggestions _(v0.6.0+)_                              |
+| `/critic`         | Toggle critic mode for response verification (on/off)                                |
+| `/agent-options`  | Configure auto-creation for specialist agents                                        |
+| `/options`        | View and modify runtime options (max-tokens, max-steps, shell-timeout, token-window) |
+| `/debug`          | Print a diagnostic report for troubleshooting (no secrets leaked)                    |
+| `/exit`           | Quit Bernard (also: `exit`, `quit`)                                                  |
 
 Type `/{routine-id}` or `/{specialist-id}` to invoke a saved routine or specialist directly (e.g., `/deploy-staging`).
 
@@ -365,7 +367,7 @@ bernard> check the disk usage on /, look up the weather in Austin, and count lin
   ...
 ```
 
-Up to 4 concurrent sub-agents. Each gets 10 max steps. Color-coded output in the terminal. Sub-agents accept per-invocation provider/model overrides to use a different LLM than the main session.
+Up to 4 concurrent sub-agents. Each gets 50% of the main agent's step budget (e.g. 13 steps when `max-steps` is 25). Color-coded output in the terminal. Sub-agents accept per-invocation provider/model overrides to use a different LLM than the main session.
 
 ### Tasks _(v0.6.0+)_
 
