@@ -768,17 +768,17 @@ Storage: `~/.bernard/conversation-history.json`
 
 ## File Structure
 
-Bernard stores all data in `~/.bernard/`:
+Bernard follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/latest/), splitting files across four standard directories:
 
 ```
-~/.bernard/
-├── keys.json                    # API keys (mode 0600)
+~/.config/bernard/               # Config (XDG_CONFIG_HOME)
 ├── preferences.json             # Provider, model, options
+├── keys.json                    # API keys (mode 0600)
 ├── .env                         # Fallback environment config
-├── mcp.json                     # MCP server configuration
-├── conversation-history.json    # Last session (for --resume)
+└── mcp.json                     # MCP server configuration
+
+~/.local/share/bernard/          # Data (XDG_DATA_HOME)
 ├── memory/                      # Persistent memories (*.md)
-├── models/                      # Embedding model cache (fastembed)
 ├── routines/                    # Saved routines (*.json)
 ├── specialists/                 # Saved specialist profiles (*.json)
 ├── specialist-candidates/       # Auto-detected specialist suggestions (*.json)
@@ -786,11 +786,21 @@ Bernard stores all data in `~/.bernard/`:
 │   └── memories.json            # RAG fact embeddings
 └── cron/
     ├── jobs.json                # Scheduled jobs
-    ├── daemon.pid               # Daemon process ID
-    ├── daemon.log               # Daemon output (rotates at 1MB)
     ├── logs/                    # Per-job execution logs
     └── alerts/                  # Cron alert files
+
+~/.cache/bernard/                # Cache (XDG_CACHE_HOME)
+├── models/                      # Embedding model cache (fastembed)
+└── update-check.json            # Update check state
+
+~/.local/state/bernard/          # State (XDG_STATE_HOME)
+├── conversation-history.json    # Last session (for --resume)
+├── logs/                        # Debug log files (*.jsonl)
+├── cron-daemon.pid              # Daemon process ID
+└── cron-daemon.log              # Daemon output (rotates at 1MB)
 ```
+
+Override all directories with a single flat path: `BERNARD_HOME=/path`. On first run, files are auto-migrated from legacy `~/.bernard/` to XDG locations.
 
 ---
 
@@ -846,6 +856,7 @@ src/
 ├── repl.ts               # Interactive REPL loop
 ├── agent.ts              # Agent class (generateText loop)
 ├── config.ts             # Config loading and validation
+├── critic.ts             # Critic agent for response verification
 ├── output.ts             # Terminal formatting (Chalk)
 ├── theme.ts              # Color theme definitions and switching
 ├── memory.ts             # MemoryStore (persistent + scratch)
@@ -857,7 +868,11 @@ src/
 ├── specialists.ts        # SpecialistStore (reusable expert profiles)
 ├── specialist-candidates.ts  # CandidateStore (auto-detected suggestions)
 ├── specialist-detector.ts    # LLM-based specialist pattern detection
+├── specialist-matcher.ts    # Keyword scorer for specialist auto-dispatch
 ├── mcp.ts                # MCP server manager
+├── overlap-checker.ts    # Token-based Jaccard overlap for specialist dedup
+├── pac.ts                # Plan-Act-Critic loop wrapper
+├── paths.ts              # Centralized XDG file path resolution
 ├── rag-worker.ts         # Background RAG fact extraction + candidate detection
 ├── setup.ts              # First-time setup wizard
 ├── history.ts            # Conversation save/load

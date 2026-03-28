@@ -703,6 +703,24 @@
               <li><a href="#specialists-auto-dispatch">Auto-Dispatch</a></li>
               <li><a href="#specialists-managing">Managing Specialists</a></li>
               <li><a href="#specialist-suggestions">Specialist Suggestions</a></li>
+              <li><a href="#specialist-overlap">Overlap Detection</a></li>
+              <li><a href="#specialist-auto-create">Auto-Creation</a></li>
+            </ul>
+          </li>
+          <li>
+            <a href="#critic">Critic Mode</a>
+            <ul class="toc-sub">
+              <li><a href="#critic-pac">PAC System</a></li>
+              <li><a href="#critic-verdicts">Verdicts</a></li>
+            </ul>
+          </li>
+          <li>
+            <a href="#context">Context Management</a>
+            <ul class="toc-sub">
+              <li><a href="#context-auto-continue">Auto-Continue</a></li>
+              <li><a href="#context-loop-limits">Loop Limits</a></li>
+              <li><a href="#context-timestamps">Timestamps</a></li>
+              <li><a href="#context-diagnostics">Diagnostics</a></li>
             </ul>
           </li>
           <li>
@@ -880,9 +898,29 @@
                 <td><code>0</code></td>
               </tr>
               <tr>
+                <td><code>BERNARD_MAX_STEPS</code></td>
+                <td>Max agent loop iterations per request</td>
+                <td><code>25</code></td>
+              </tr>
+              <tr>
                 <td><code>BERNARD_RAG_ENABLED</code></td>
                 <td>Enable/disable RAG memory</td>
                 <td><code>true</code></td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_CRITIC_MODE</code></td>
+                <td>Enable critic mode for response verification</td>
+                <td><code>false</code></td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_AUTO_CREATE_SPECIALISTS</code></td>
+                <td>Auto-create specialists above confidence threshold</td>
+                <td><code>false</code></td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_AUTO_CREATE_THRESHOLD</code></td>
+                <td>Confidence threshold for auto-creating specialists (0&ndash;1)</td>
+                <td><code>0.8</code></td>
               </tr>
               <tr>
                 <td><code>ANTHROPIC_API_KEY</code></td>
@@ -1196,6 +1234,25 @@
                 <td>Review auto-detected specialist suggestions</td>
               </tr>
               <tr>
+                <td><code>/critic</code></td>
+                <td>Toggle critic mode for response verification (on/off)</td>
+              </tr>
+              <tr>
+                <td><code>/agent-options</code></td>
+                <td>Configure auto-creation for specialist agents</td>
+              </tr>
+              <tr>
+                <td><code>/options</code></td>
+                <td>
+                  View and modify runtime options (max-tokens, max-steps, shell-timeout,
+                  token-window)
+                </td>
+              </tr>
+              <tr>
+                <td><code>/debug</code></td>
+                <td>Print a diagnostic report for troubleshooting (no secrets leaked)</td>
+              </tr>
+              <tr>
                 <td><code>/{routine-id}</code></td>
                 <td>Execute a saved routine (with optional arguments)</td>
               </tr>
@@ -1295,7 +1352,10 @@
         </p>
         <ul>
           <li>Up to <strong>4 concurrent</strong> sub-agents</li>
-          <li>Each sub-agent gets up to <strong>10 tool steps</strong></li>
+          <li>
+            Each sub-agent gets <strong>50% of the main agent&rsquo;s step budget</strong> (e.g. 13
+            steps when <code>max-steps</code> is 25)
+          </li>
           <li>Task descriptions must be self-contained &mdash; sub-agents have no prior context</li>
           <li>Sub-agents can access RAG memory and persistent memory for context</li>
         </ul>
@@ -1314,7 +1374,10 @@
           machine-readable results, routine chaining, and conditional branching.
         </p>
         <ul>
-          <li><strong>5-step budget</strong> (vs. 10 for sub-agents) &mdash; quick and focused</li>
+          <li>
+            <strong>Single-step budget</strong> (<code>maxSteps:&nbsp;2</code> &mdash; one tool-use
+            round + structured result) &mdash; quick and deterministic
+          </li>
           <li>
             <strong>Structured JSON output</strong> &mdash; always returns
             <code>{status: "success"|"error", output, details?}</code>
@@ -1574,8 +1637,169 @@
           <code>~/.local/share/bernard/specialist-candidates/</code>.
         </div>
 
-        <!-- ═══════════════ 8. Cron Jobs ═══════════════ -->
-        <h2 id="cron">8. Cron Jobs</h2>
+        <h3 id="specialist-overlap">Overlap Detection <span class="vtag">v0.8.0+</span></h3>
+        <p>
+          Before suggesting a new specialist, Bernard computes a token-based similarity score
+          against all existing specialists and pending candidates using weighted Jaccard similarity
+          across four fields: name (30%), description (30%), system prompt (20%), and guidelines
+          (20%).
+        </p>
+        <ul>
+          <li>Candidates with <strong>&gt;60% overlap</strong> are suppressed entirely</li>
+          <li>
+            Partial overlaps prompt a suggestion to enhance the existing specialist instead of
+            creating a new one
+          </li>
+          <li>Prevents specialist bloat by catching near-duplicates before they are saved</li>
+        </ul>
+
+        <h3 id="specialist-auto-create">Auto-Creation <span class="vtag">v0.8.0+</span></h3>
+        <p>
+          Enable automatic specialist creation so high-confidence candidates are saved without
+          manual review. Configure via the <code>/agent-options</code> command or environment
+          variables.
+        </p>
+        <pre><code><span class="accent">bernard&gt;</span> /agent-options auto-create on       <span class="dim"># Enable auto-creation</span>
+<span class="accent">bernard&gt;</span> /agent-options auto-create off      <span class="dim"># Disable auto-creation</span>
+<span class="accent">bernard&gt;</span> /agent-options threshold 0.85       <span class="dim"># Set confidence threshold (0-1)</span>
+<span class="accent">bernard&gt;</span> /agent-options                      <span class="dim"># Show current settings</span></code></pre>
+        <p>
+          Or via environment variables: <code>BERNARD_AUTO_CREATE_SPECIALISTS=true</code> and
+          <code>BERNARD_AUTO_CREATE_THRESHOLD=0.85</code>.
+        </p>
+
+        <!-- ═══════════════ 8. Critic Mode ═══════════════ -->
+        <h2 id="critic">8. Critic Mode <span class="vtag">v0.8.0+</span></h2>
+        <p>
+          Critic mode adds planning, proactive scratch/memory usage, and post-response verification.
+          Toggle it during a session:
+        </p>
+        <pre><code><span class="accent">bernard&gt;</span> /critic on     <span class="dim"># Enable critic mode</span>
+<span class="accent">bernard&gt;</span> /critic off    <span class="dim"># Disable critic mode</span>
+<span class="accent">bernard&gt;</span> /critic        <span class="dim"># Show current status</span></code></pre>
+        <p>When enabled:</p>
+        <ul>
+          <li>
+            <strong>Planning</strong> &mdash; Bernard writes a plan to scratch before multi-step
+            tasks
+          </li>
+          <li>
+            <strong>Proactive scratch</strong> &mdash; Accumulates findings in scratch during
+            complex work
+          </li>
+          <li>
+            <strong>Verification</strong> &mdash; After tool-using responses, a critic agent reviews
+            the work and prints a verdict (PASS/WARN/FAIL)
+          </li>
+        </ul>
+        <p>
+          The critic checks that claimed actions match actual tool calls and flags any
+          discrepancies. It adds one extra LLM call after tool-using responses. Simple knowledge
+          answers are not verified.
+        </p>
+        <p>
+          Enable via <code>/critic on</code> in the REPL or set
+          <code>BERNARD_CRITIC_MODE=true</code>
+          in your environment. Recommended for high-stakes work (deployments, git operations,
+          multi-file edits).
+        </p>
+
+        <h3 id="critic-pac">PAC System (Plan-Act-Critic)</h3>
+        <p>
+          When critic mode is enabled, sub-agents and specialists also get critic verification via a
+          reusable PAC loop. The PAC loop runs the critic after each sub-agent/specialist execution,
+          and if the critic finds issues, it retries the task with feedback (up to 2 retries). This
+          applies to:
+        </p>
+        <ul>
+          <li>Sub-agents (<code>agent</code> tool)</li>
+          <li>Specialist runs (<code>specialist_run</code> tool)</li>
+          <li>Cron job executions (daemon mode)</li>
+        </ul>
+
+        <h3 id="critic-verdicts">Verdicts</h3>
+        <p>The critic prints a verdict after each verified response:</p>
+        <ul>
+          <li>
+            <strong>PASS</strong> &mdash; Displayed as a compact single-line badge (e.g.,
+            <code>&boxur;&mdash; critic PASS</code>)
+          </li>
+          <li>
+            <strong>WARN</strong> &mdash; Also compact single-line; treated as a pass (no retry)
+          </li>
+          <li>
+            <strong>FAIL</strong> &mdash; Full multi-line explanation with details about what went
+            wrong
+          </li>
+        </ul>
+        <p>
+          PASS and WARN are kept brief to reduce terminal noise, while FAIL always shows the full
+          explanation so you can understand what needs attention.
+        </p>
+
+        <!-- ═══════════════ 9. Context Management ═══════════════ -->
+        <h2 id="context">9. Context Management <span class="vtag">v0.8.0+</span></h2>
+        <p>
+          Bernard automatically manages conversation context to keep within model token limits and
+          provide temporal awareness throughout your sessions.
+        </p>
+
+        <h3 id="context-auto-continue">Auto-Continue on Truncation</h3>
+        <p>
+          If a response hits the <code>max-tokens</code> limit and is cut off, Bernard automatically
+          continues where it left off &mdash; up to 3 continuations. After completing, it shows a
+          recommended <code>max-tokens</code> value based on actual usage (calculated as 1.25&times;
+          the total tokens used).
+        </p>
+        <p>
+          If the response is still incomplete after 3 continuations, a warning is shown with
+          instructions to increase the limit via <code>/options max-tokens &lt;value&gt;</code>.
+        </p>
+
+        <h3 id="context-loop-limits">Configurable Loop Limits</h3>
+        <p>
+          Control the maximum number of tool-call iterations per request with the
+          <code>BERNARD_MAX_STEPS</code> environment variable (default: 25). You can also change it
+          at runtime with <code>/options max-steps &lt;value&gt;</code>.
+        </p>
+        <ul>
+          <li>
+            Sub-agents automatically receive <strong>50%</strong> of the main agent&rsquo;s step
+            budget
+          </li>
+          <li>
+            When the step limit is hit, Bernard offers to <strong>double it</strong> for the current
+            session
+          </li>
+          <li>Step budget resets at the start of each new request</li>
+        </ul>
+
+        <h3 id="context-timestamps">Timestamp Awareness</h3>
+        <p>
+          Every user message is prefixed with an ISO&nbsp;8601 timestamp, giving Bernard precise
+          temporal context throughout multi-turn conversations. The system prompt includes the
+          current date <em>and</em> time (not just the date), and the <code>time</code> tool output
+          includes seconds and timezone information.
+        </p>
+
+        <h3 id="context-diagnostics">Diagnostics</h3>
+        <p>
+          Use <code>/debug</code> in the REPL to print a diagnostic report useful for
+          troubleshooting. The report includes:
+        </p>
+        <ul>
+          <li>Runtime info (Bernard version, Node.js version, OS)</li>
+          <li>LLM configuration (provider, model, max tokens, max steps)</li>
+          <li>API key status (configured/not set &mdash; keys are never shown)</li>
+          <li>MCP server status</li>
+          <li>RAG/memory/cron state</li>
+          <li>Conversation stats and active settings</li>
+          <li>File paths</li>
+        </ul>
+        <p>No secrets are included in the output.</p>
+
+        <!-- ═══════════════ 10. Cron Jobs ═══════════════ -->
+        <h2 id="cron">10. Cron Jobs</h2>
         <p>
           Bernard can schedule recurring tasks that run in the background on a timer. Cron jobs
           execute an AI prompt through the agent on each run, with access to all tools.
@@ -1734,8 +1958,8 @@
           </table>
         </div>
 
-        <!-- ═══════════════ 9. MCP ═══════════════ -->
-        <h2 id="mcp">9. MCP (Model Context Protocol)</h2>
+        <!-- ═══════════════ 11. MCP ═══════════════ -->
+        <h2 id="mcp">11. MCP (Model Context Protocol)</h2>
         <p>
           Bernard supports the
           <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener noreferrer"
@@ -1878,8 +2102,8 @@
           restart when adding or removing servers.
         </div>
 
-        <!-- ═══════════════ 10. RAG Memory ═══════════════ -->
-        <h2 id="rag">10. RAG Memory</h2>
+        <!-- ═══════════════ 12. RAG Memory ═══════════════ -->
+        <h2 id="rag">12. RAG Memory</h2>
         <p>
           Bernard automatically builds a long-term knowledge base from your conversations using
           local embeddings and retrieval-augmented generation (RAG). No data leaves your machine.
@@ -2008,8 +2232,8 @@
           <li>Disable RAG entirely by setting <code>BERNARD_RAG_ENABLED=false</code></li>
         </ul>
 
-        <!-- ═══════════════ 11. Auto-Updates ═══════════════ -->
-        <h2 id="updates">11. Auto-Updates <span class="vtag">v0.3.0+</span></h2>
+        <!-- ═══════════════ 13. Auto-Updates ═══════════════ -->
+        <h2 id="updates">13. Auto-Updates <span class="vtag">v0.3.0+</span></h2>
         <p>
           Bernard can check for new versions on npm and install them for you. Update checks are
           cached for 24 hours.

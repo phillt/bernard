@@ -534,6 +534,237 @@
       </div>
     </section>
 
+    <!-- v0.8.0 -->
+    <section class="version-section" id="v0.8.0">
+      <div class="container">
+        <h2 class="version-heading">
+          v0.8.0
+          <span class="version-date">2026-03-27</span>
+        </h2>
+
+        <!-- Per-Agent Plan-Act-Critic System -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- shield-check icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                <path d="m9 12 2 2 4-4"></path>
+              </svg>
+            </div>
+            <h2>Per-Agent Plan-Act-Critic System <span class="tag">new</span></h2>
+          </div>
+          <p>
+            A reusable Plan-Act-Critic (PAC) loop now wraps sub-agents, specialists, and cron job
+            executions when critic mode is enabled. The critic verifies each agent&rsquo;s work and
+            retries on failure with targeted feedback.
+          </p>
+          <ul>
+            <li>
+              Extracted <code>pac.ts</code> module with <code>runPACLoop()</code> for consistent
+              critic integration
+            </li>
+            <li>
+              Sub-agents, specialists, and cron jobs all use the same PAC pipeline automatically
+            </li>
+            <li>
+              On a FAIL verdict, the task is retried with the critic&rsquo;s feedback (up to 2
+              retries)
+            </li>
+            <li>
+              Compact critic verdicts &mdash; PASS and WARN are now single-line inline, reducing
+              terminal noise while keeping full detail for FAIL
+            </li>
+          </ul>
+        </div>
+
+        <!-- Auto-Continue on Truncation -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- fast-forward icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <polygon points="13 19 22 12 13 5 13 19"></polygon>
+                <polygon points="2 19 11 12 2 5 2 19"></polygon>
+              </svg>
+            </div>
+            <h2>Auto-Continue on Truncation <span class="tag">new</span></h2>
+          </div>
+          <p>
+            When a response hits the <code>max-tokens</code> limit and is cut off, Bernard
+            automatically continues where it left off &mdash; up to 3 continuations &mdash; then
+            recommends an optimal token limit based on actual usage.
+          </p>
+          <ul>
+            <li>Seamless auto-continuation with no user intervention required</li>
+            <li>
+              Post-completion recommendation of the ideal <code>max-tokens</code> value (1.25&times;
+              actual usage)
+            </li>
+            <li>
+              Warning with <code>/options max-tokens</code> instructions if still incomplete after 3
+              continuations
+            </li>
+            <li>
+              New <code>/debug</code> command &mdash; prints a diagnostic report (runtime, config,
+              API key status, MCP servers, RAG stats) with no secrets leaked
+            </li>
+          </ul>
+        </div>
+
+        <!-- Specialist Overlap Detection & Auto-Creation -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- layers icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                <polyline points="2 17 12 22 22 17"></polyline>
+                <polyline points="2 12 12 17 22 12"></polyline>
+              </svg>
+            </div>
+            <h2>Specialist Overlap Detection &amp; Auto-Creation <span class="tag">new</span></h2>
+          </div>
+          <p>
+            Smarter specialist suggestions powered by token-based similarity scoring, plus a new
+            auto-creation mode that saves high-confidence candidates without manual review.
+          </p>
+          <ul>
+            <li>
+              Jaccard similarity across name, description, system prompt, and guidelines (weighted)
+            </li>
+            <li>
+              Candidates with &gt;60% overlap are suppressed; partial overlaps suggest enhancing the
+              existing specialist
+            </li>
+            <li>
+              New <code>/agent-options</code> command to toggle auto-creation and set confidence
+              threshold at runtime
+            </li>
+            <li>
+              <code>BERNARD_AUTO_CREATE_SPECIALISTS</code> and
+              <code>BERNARD_AUTO_CREATE_THRESHOLD</code> environment variables
+            </li>
+          </ul>
+        </div>
+
+        <!-- Configurable Loop Limit & Default Planning -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- sliders icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <line x1="4" y1="21" x2="4" y2="14"></line>
+                <line x1="4" y1="10" x2="4" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12" y2="3"></line>
+                <line x1="20" y1="21" x2="20" y2="16"></line>
+                <line x1="20" y1="12" x2="20" y2="3"></line>
+                <line x1="1" y1="14" x2="7" y2="14"></line>
+                <line x1="9" y1="8" x2="15" y2="8"></line>
+                <line x1="17" y1="16" x2="23" y2="16"></line>
+              </svg>
+            </div>
+            <h2>
+              Configurable Loop Limit &amp; Default Planning <span class="tag">enhanced</span>
+            </h2>
+          </div>
+          <p>
+            Control how many tool-call iterations the agent can take per request, and benefit from
+            step-by-step planning in every conversation &mdash; not just critic mode.
+          </p>
+          <ul>
+            <li>
+              <code>BERNARD_MAX_STEPS</code> environment variable (default&nbsp;25) with runtime
+              override via <code>/options max-steps</code>
+            </li>
+            <li>Sub-agents automatically receive 50% of the main agent&rsquo;s step budget</li>
+            <li>When the step limit is hit, Bernard offers to double it for the current session</li>
+            <li>
+              System prompt now includes a planning section by default, improving multi-step task
+              execution
+            </li>
+          </ul>
+        </div>
+
+        <!-- Timestamp Awareness -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- clock icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+            </div>
+            <h2>Timestamp Awareness <span class="tag">enhanced</span></h2>
+          </div>
+          <p>
+            Bernard now has full temporal context &mdash; every user message carries an
+            ISO&nbsp;8601 timestamp, and the system prompt includes the current date
+            <em>and</em> time.
+          </p>
+          <ul>
+            <li>ISO 8601 timestamp prefixes on every user message for precise time context</li>
+            <li>
+              System prompt upgraded from &ldquo;Today&rsquo;s date&rdquo; to &ldquo;Current date
+              and time&rdquo;
+            </li>
+            <li><code>time</code> tool output now includes seconds and timezone</li>
+            <li>
+              Bug fix: MCP URL transport correctly uses HTTP for non-SSE endpoints (was always
+              defaulting to SSE)
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
     <!-- v0.7.0 -->
     <section class="version-section" id="v0.7.0">
       <div class="container">
