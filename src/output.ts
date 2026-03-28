@@ -382,7 +382,7 @@ export function printHelp(): void {
   );
   console.log(
     t.text('  /options') +
-      t.muted('  — View and set options (max-tokens, shell-timeout, token-window)'),
+      t.muted('  — View and set options (max-tokens, max-steps, shell-timeout, token-window)'),
   );
   console.log(t.text('  /update') + t.muted('   — Check for and install updates'));
   console.log(t.text('  /debug') + t.muted('    — Print diagnostic report for troubleshooting'));

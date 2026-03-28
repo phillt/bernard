@@ -19,6 +19,8 @@ export interface BernardConfig {
   ragEnabled: boolean;
   /** Color theme name for terminal output. */
   theme: string;
+  /** Maximum number of sequential LLM calls (steps) per agent loop. */
+  maxSteps: number;
   /** Whether critic mode (planning + verification) is active. */
   criticMode: boolean;
   /** Anthropic API key, if available. */
@@ -33,6 +35,7 @@ const DEFAULT_PROVIDER = 'anthropic';
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_SHELL_TIMEOUT = 30000;
 const DEFAULT_TOKEN_WINDOW = 0;
+const DEFAULT_MAX_STEPS = 25;
 
 /** Maps each provider name to the environment variable that holds its API key. */
 export const PROVIDER_ENV_VARS: Record<string, string> = {
@@ -50,7 +53,7 @@ export const PROVIDER_ENV_VARS: Record<string, string> = {
 export const OPTIONS_REGISTRY: Record<
   string,
   {
-    configKey: 'maxTokens' | 'shellTimeout' | 'tokenWindow';
+    configKey: 'maxTokens' | 'shellTimeout' | 'tokenWindow' | 'maxSteps';
     default: number;
     description: string;
     envVar: string;
@@ -74,6 +77,12 @@ export const OPTIONS_REGISTRY: Record<
     description: 'Context window size for compression (0 = auto-detect from model)',
     envVar: 'BERNARD_TOKEN_WINDOW',
   },
+  'max-steps': {
+    configKey: 'maxSteps',
+    default: DEFAULT_MAX_STEPS,
+    description: 'Maximum agent loop iterations per request (controls tool call chain length)',
+    envVar: 'BERNARD_MAX_STEPS',
+  },
 };
 
 /**
@@ -87,6 +96,7 @@ export function savePreferences(prefs: {
   maxTokens?: number;
   shellTimeout?: number;
   tokenWindow?: number;
+  maxSteps?: number;
   theme?: string;
   autoUpdate?: boolean;
   criticMode?: boolean;
@@ -99,6 +109,7 @@ export function savePreferences(prefs: {
   if (prefs.maxTokens !== undefined) data.maxTokens = prefs.maxTokens;
   if (prefs.shellTimeout !== undefined) data.shellTimeout = prefs.shellTimeout;
   if (prefs.tokenWindow !== undefined) data.tokenWindow = prefs.tokenWindow;
+  if (prefs.maxSteps !== undefined) data.maxSteps = prefs.maxSteps;
   if (prefs.theme !== undefined) data.theme = prefs.theme;
   if (prefs.criticMode !== undefined) data.criticMode = prefs.criticMode;
 
@@ -132,6 +143,7 @@ export function loadPreferences(): {
   maxTokens?: number;
   shellTimeout?: number;
   tokenWindow?: number;
+  maxSteps?: number;
   theme?: string;
   autoUpdate?: boolean;
   criticMode?: boolean;
@@ -145,6 +157,7 @@ export function loadPreferences(): {
       maxTokens: typeof parsed.maxTokens === 'number' ? parsed.maxTokens : undefined,
       shellTimeout: typeof parsed.shellTimeout === 'number' ? parsed.shellTimeout : undefined,
       tokenWindow: typeof parsed.tokenWindow === 'number' ? parsed.tokenWindow : undefined,
+      maxSteps: typeof parsed.maxSteps === 'number' ? parsed.maxSteps : undefined,
       theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
       autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
       criticMode: typeof parsed.criticMode === 'boolean' ? parsed.criticMode : undefined,
@@ -236,6 +249,7 @@ export function saveOption(name: string, value: number): void {
     maxTokens: prefs.maxTokens,
     shellTimeout: prefs.shellTimeout,
     tokenWindow: prefs.tokenWindow,
+    maxSteps: prefs.maxSteps,
     theme: prefs.theme,
   });
 }
@@ -260,6 +274,7 @@ export function resetOption(name: string): void {
     maxTokens: prefs.maxTokens,
     shellTimeout: prefs.shellTimeout,
     tokenWindow: prefs.tokenWindow,
+    maxSteps: prefs.maxSteps,
     theme: prefs.theme,
   });
 }
@@ -270,6 +285,7 @@ export function resetAllOptions(): void {
   delete (prefs as Record<string, unknown>).maxTokens;
   delete (prefs as Record<string, unknown>).shellTimeout;
   delete (prefs as Record<string, unknown>).tokenWindow;
+  delete (prefs as Record<string, unknown>).maxSteps;
   savePreferences({
     provider: prefs.provider || 'anthropic',
     model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
@@ -424,6 +440,8 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
   const tokenWindow =
     prefs.tokenWindow ??
     (parseInt(process.env.BERNARD_TOKEN_WINDOW || '', 10) || DEFAULT_TOKEN_WINDOW);
+  const maxSteps =
+    prefs.maxSteps ?? (parseInt(process.env.BERNARD_MAX_STEPS || '', 10) || DEFAULT_MAX_STEPS);
 
   const ragEnabled = process.env.BERNARD_RAG_ENABLED !== 'false';
   const theme = prefs.theme || 'bernard';
@@ -437,6 +455,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     maxTokens,
     shellTimeout,
     tokenWindow,
+    maxSteps,
     ragEnabled,
     theme,
     criticMode,

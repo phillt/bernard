@@ -144,7 +144,7 @@ export function createSubAgentTool(
         const result = await generateText({
           model: getModel(resolvedProvider, resolvedModel),
           tools: baseTools,
-          maxSteps: 10,
+          maxSteps: Math.ceil(config.maxSteps * 0.5),
           maxTokens: config.maxTokens,
           system: enrichedPrompt,
           messages: [{ role: 'user', content: userMessage }],

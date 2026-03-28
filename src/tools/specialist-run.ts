@@ -150,7 +150,7 @@ export function createSpecialistRunTool(
         const result = await generateText({
           model: getModel(resolvedProvider, resolvedModel),
           tools: baseTools,
-          maxSteps: 10,
+          maxSteps: Math.ceil(config.maxSteps * 0.5),
           maxTokens: config.maxTokens,
           system: systemPrompt,
           messages: [{ role: 'user', content: userMessage }],

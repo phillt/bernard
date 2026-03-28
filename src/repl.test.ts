@@ -215,6 +215,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     maxTokens: 4096,
     shellTimeout: 30000,
     tokenWindow: 0,
+    maxSteps: 25,
     ragEnabled: false,
     theme: 'bernard',
     criticMode: false,

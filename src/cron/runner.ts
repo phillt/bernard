@@ -212,7 +212,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     const result = await generateText({
       model: getModel(config.provider, config.model),
       tools,
-      maxSteps: 20,
+      maxSteps: config.maxSteps,
       maxTokens: config.maxTokens,
       system: enrichedPrompt,
       messages: [{ role: 'user', content: job.prompt }],

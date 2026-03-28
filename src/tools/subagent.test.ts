@@ -58,6 +58,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     maxTokens: 4096,
     shellTimeout: 30000,
     tokenWindow: 0,
+    maxSteps: 25,
     ragEnabled: true,
     theme: 'bernard',
     criticMode: false,
@@ -90,7 +91,7 @@ describe('subagent tool', () => {
     expect(agentTool.execute).toBeDefined();
   });
 
-  it('calls generateText with task in messages and maxSteps=10', async () => {
+  it('calls generateText with task in messages and proportional maxSteps', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
     await agentTool.execute!(
@@ -99,7 +100,7 @@ describe('subagent tool', () => {
     );
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
     const call = mockGenerateText.mock.calls[0][0];
-    expect(call.maxSteps).toBe(10);
+    expect(call.maxSteps).toBe(13); // Math.ceil(25 * 0.5)
     expect(call.messages[0].content).toContain('List files');
   });
 
