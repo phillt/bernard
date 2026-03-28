@@ -18,7 +18,7 @@ export function createMCPAddUrlTool() {
     }),
     execute: async ({ key, url }): Promise<string> => {
       try {
-        const type = url.endsWith('/sse') ? ('sse' as const) : ('sse' as const);
+        const type = url.endsWith('/sse') ? ('sse' as const) : ('http' as const);
         addMCPUrlServer(key, url, type);
         return `MCP server added:\n  Key: ${key}\n  URL: ${url}\n  Transport: ${type}\n\nRestart Bernard for the server to connect.`;
       } catch (err: unknown) {
