@@ -336,7 +336,7 @@ export function printCriticVerdict(text: string): void {
 
   if (verdict === 'PASS' || verdict === 'WARN') {
     // Compact badge; include explanation only if single-line
-    const isSingleLine = explanation && !explanation.includes('\n');
+    const isSingleLine = !!explanation && !explanation.includes('\n');
     const suffix = isSingleLine ? `: ${explanation}` : '';
     console.log(colorFn(`└─ critic ${verdict}${suffix}`));
   } else {
