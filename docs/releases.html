@@ -569,10 +569,21 @@
             retries on failure with targeted feedback.
           </p>
           <ul>
-            <li>Extracted <code>pac.ts</code> module with <code>runPACLoop()</code> for consistent critic integration</li>
-            <li>Sub-agents, specialists, and cron jobs all use the same PAC pipeline automatically</li>
-            <li>On a FAIL verdict, the task is retried with the critic&rsquo;s feedback (up to 2 retries)</li>
-            <li>Compact critic verdicts &mdash; PASS and WARN are now single-line inline, reducing terminal noise while keeping full detail for FAIL</li>
+            <li>
+              Extracted <code>pac.ts</code> module with <code>runPACLoop()</code> for consistent
+              critic integration
+            </li>
+            <li>
+              Sub-agents, specialists, and cron jobs all use the same PAC pipeline automatically
+            </li>
+            <li>
+              On a FAIL verdict, the task is retried with the critic&rsquo;s feedback (up to 2
+              retries)
+            </li>
+            <li>
+              Compact critic verdicts &mdash; PASS and WARN are now single-line inline, reducing
+              terminal noise while keeping full detail for FAIL
+            </li>
           </ul>
         </div>
 
@@ -604,9 +615,18 @@
           </p>
           <ul>
             <li>Seamless auto-continuation with no user intervention required</li>
-            <li>Post-completion recommendation of the ideal <code>max-tokens</code> value (1.25&times; actual usage)</li>
-            <li>Warning with <code>/options max-tokens</code> instructions if still incomplete after 3 continuations</li>
-            <li>New <code>/debug</code> command &mdash; prints a diagnostic report (runtime, config, API key status, MCP servers, RAG stats) with no secrets leaked</li>
+            <li>
+              Post-completion recommendation of the ideal <code>max-tokens</code> value (1.25&times;
+              actual usage)
+            </li>
+            <li>
+              Warning with <code>/options max-tokens</code> instructions if still incomplete after 3
+              continuations
+            </li>
+            <li>
+              New <code>/debug</code> command &mdash; prints a diagnostic report (runtime, config,
+              API key status, MCP servers, RAG stats) with no secrets leaked
+            </li>
           </ul>
         </div>
 
@@ -637,10 +657,21 @@
             auto-creation mode that saves high-confidence candidates without manual review.
           </p>
           <ul>
-            <li>Jaccard similarity across name, description, system prompt, and guidelines (weighted)</li>
-            <li>Candidates with &gt;60% overlap are suppressed; partial overlaps suggest enhancing the existing specialist</li>
-            <li>New <code>/agent-options</code> command to toggle auto-creation and set confidence threshold at runtime</li>
-            <li><code>BERNARD_AUTO_CREATE_SPECIALISTS</code> and <code>BERNARD_AUTO_CREATE_THRESHOLD</code> environment variables</li>
+            <li>
+              Jaccard similarity across name, description, system prompt, and guidelines (weighted)
+            </li>
+            <li>
+              Candidates with &gt;60% overlap are suppressed; partial overlaps suggest enhancing the
+              existing specialist
+            </li>
+            <li>
+              New <code>/agent-options</code> command to toggle auto-creation and set confidence
+              threshold at runtime
+            </li>
+            <li>
+              <code>BERNARD_AUTO_CREATE_SPECIALISTS</code> and
+              <code>BERNARD_AUTO_CREATE_THRESHOLD</code> environment variables
+            </li>
           </ul>
         </div>
 
@@ -670,17 +701,25 @@
                 <line x1="17" y1="16" x2="23" y2="16"></line>
               </svg>
             </div>
-            <h2>Configurable Loop Limit &amp; Default Planning <span class="tag">enhanced</span></h2>
+            <h2>
+              Configurable Loop Limit &amp; Default Planning <span class="tag">enhanced</span>
+            </h2>
           </div>
           <p>
             Control how many tool-call iterations the agent can take per request, and benefit from
             step-by-step planning in every conversation &mdash; not just critic mode.
           </p>
           <ul>
-            <li><code>BERNARD_MAX_STEPS</code> environment variable (default&nbsp;25) with runtime override via <code>/options max-steps</code></li>
+            <li>
+              <code>BERNARD_MAX_STEPS</code> environment variable (default&nbsp;25) with runtime
+              override via <code>/options max-steps</code>
+            </li>
             <li>Sub-agents automatically receive 50% of the main agent&rsquo;s step budget</li>
             <li>When the step limit is hit, Bernard offers to double it for the current session</li>
-            <li>System prompt now includes a planning section by default, improving multi-step task execution</li>
+            <li>
+              System prompt now includes a planning section by default, improving multi-step task
+              execution
+            </li>
           </ul>
         </div>
 
@@ -706,14 +745,21 @@
             <h2>Timestamp Awareness <span class="tag">enhanced</span></h2>
           </div>
           <p>
-            Bernard now has full temporal context &mdash; every user message carries an ISO&nbsp;8601
-            timestamp, and the system prompt includes the current date <em>and</em> time.
+            Bernard now has full temporal context &mdash; every user message carries an
+            ISO&nbsp;8601 timestamp, and the system prompt includes the current date
+            <em>and</em> time.
           </p>
           <ul>
             <li>ISO 8601 timestamp prefixes on every user message for precise time context</li>
-            <li>System prompt upgraded from &ldquo;Today&rsquo;s date&rdquo; to &ldquo;Current date and time&rdquo;</li>
+            <li>
+              System prompt upgraded from &ldquo;Today&rsquo;s date&rdquo; to &ldquo;Current date
+              and time&rdquo;
+            </li>
             <li><code>time</code> tool output now includes seconds and timezone</li>
-            <li>Bug fix: MCP URL transport correctly uses HTTP for non-SSE endpoints (was always defaulting to SSE)</li>
+            <li>
+              Bug fix: MCP URL transport correctly uses HTTP for non-SSE endpoints (was always
+              defaulting to SSE)
+            </li>
           </ul>
         </div>
       </div>
