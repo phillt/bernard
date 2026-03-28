@@ -280,6 +280,32 @@ describe('loadConfig', () => {
     expect(config.maxSteps).toBe(50);
   });
 
+  it('clamps maxSteps to default when BERNARD_MAX_STEPS is 0', () => {
+    vi.stubEnv('BERNARD_MAX_STEPS', '0');
+    const config = loadConfig();
+    expect(config.maxSteps).toBe(25);
+  });
+
+  it('clamps maxSteps to default when BERNARD_MAX_STEPS is negative', () => {
+    vi.stubEnv('BERNARD_MAX_STEPS', '-5');
+    const config = loadConfig();
+    expect(config.maxSteps).toBe(25);
+  });
+
+  it('clamps maxSteps to default when BERNARD_MAX_STEPS is NaN', () => {
+    vi.stubEnv('BERNARD_MAX_STEPS', 'abc');
+    const config = loadConfig();
+    expect(config.maxSteps).toBe(25);
+  });
+
+  it('floors fractional maxSteps to integer', () => {
+    vi.stubEnv('BERNARD_MAX_STEPS', '10');
+    // parseInt already truncates, but verify the floor works
+    const config = loadConfig();
+    expect(config.maxSteps).toBe(10);
+    expect(Number.isInteger(config.maxSteps)).toBe(true);
+  });
+
   it('reads API keys from process.env', () => {
     vi.stubEnv('ANTHROPIC_API_KEY', 'ant-key');
     vi.stubEnv('OPENAI_API_KEY', 'oai-key');

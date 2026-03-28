@@ -129,6 +129,21 @@ export function savePreferences(prefs: {
   if (prefs.criticMode === undefined && existing && typeof existing.criticMode === 'boolean') {
     data.criticMode = existing.criticMode;
   }
+
+  // Preserve numeric options from existing prefs when callers don't pass them.
+  // Use 'in' to distinguish "key absent" (preserve) from "key explicitly set to undefined" (reset).
+  if (!('maxSteps' in prefs) && existing && typeof existing.maxSteps === 'number') {
+    data.maxSteps = existing.maxSteps;
+  }
+  if (!('maxTokens' in prefs) && existing && typeof existing.maxTokens === 'number') {
+    data.maxTokens = existing.maxTokens;
+  }
+  if (!('shellTimeout' in prefs) && existing && typeof existing.shellTimeout === 'number') {
+    data.shellTimeout = existing.shellTimeout;
+  }
+  if (!('tokenWindow' in prefs) && existing && typeof existing.tokenWindow === 'number') {
+    data.tokenWindow = existing.tokenWindow;
+  }
   fs.writeFileSync(PREFS_PATH, JSON.stringify(data, null, 2) + '\n');
 }
 
@@ -282,13 +297,13 @@ export function resetOption(name: string): void {
 /** Resets all numeric options to their defaults by removing them from preferences. */
 export function resetAllOptions(): void {
   const prefs = loadPreferences();
-  delete (prefs as Record<string, unknown>).maxTokens;
-  delete (prefs as Record<string, unknown>).shellTimeout;
-  delete (prefs as Record<string, unknown>).tokenWindow;
-  delete (prefs as Record<string, unknown>).maxSteps;
   savePreferences({
     provider: prefs.provider || 'anthropic',
     model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
+    maxTokens: undefined,
+    shellTimeout: undefined,
+    tokenWindow: undefined,
+    maxSteps: undefined,
     theme: prefs.theme,
   });
 }
@@ -440,8 +455,10 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
   const tokenWindow =
     prefs.tokenWindow ??
     (parseInt(process.env.BERNARD_TOKEN_WINDOW || '', 10) || DEFAULT_TOKEN_WINDOW);
-  const maxSteps =
+  const rawMaxSteps =
     prefs.maxSteps ?? (parseInt(process.env.BERNARD_MAX_STEPS || '', 10) || DEFAULT_MAX_STEPS);
+  const maxSteps =
+    Number.isFinite(rawMaxSteps) && rawMaxSteps >= 1 ? Math.floor(rawMaxSteps) : DEFAULT_MAX_STEPS;
 
   const ragEnabled = process.env.BERNARD_RAG_ENABLED !== 'false';
   const theme = prefs.theme || 'bernard';

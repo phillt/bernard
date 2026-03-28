@@ -1417,8 +1417,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
     const stepHit = agent.getStepLimitHit();
     if (stepHit) {
       const doubled = stepHit.currentLimit * 2;
-      const hint =
-        stepHit.hitCount >= 2 ? ' (Tip: /options max-steps to set permanently)' : '';
+      const hint = stepHit.hitCount >= 2 ? ' (Tip: /options max-steps to set permanently)' : '';
       rl.question(
         getTheme().warning(`Double to ${doubled} for this session?${hint} (y/N): `),
         (answer) => {

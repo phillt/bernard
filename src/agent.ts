@@ -410,6 +410,8 @@ export class Agent {
    * @throws Error wrapping the underlying API error if generation fails for non-abort, non-overflow reasons
    */
   async processInput(userInput: string): Promise<void> {
+    this.lastStepLimitHit = false;
+
     const timestamped = timestampUserMessage(userInput);
     this.history.push({ role: 'user', content: timestamped });
 
@@ -639,7 +641,6 @@ export class Agent {
       }
 
       // Detect maxSteps exhaustion
-      this.lastStepLimitHit = false;
       if (result.finishReason === 'tool-calls' && result.steps.length >= this.config.maxSteps) {
         this.lastStepLimitHit = true;
         this.stepLimitHitCount++;
@@ -651,7 +652,11 @@ export class Agent {
       }
 
       // Run critic verification if enabled and tool calls were made
-      if (this.config.criticMode && !this.abortController?.signal.aborted) {
+      if (
+        this.config.criticMode &&
+        !this.abortController?.signal.aborted &&
+        !this.lastStepLimitHit
+      ) {
         let toolCallLog = this.extractToolCallLog(result.steps);
         if (toolCallLog.length > 0) {
           let retryCount = 0;
@@ -839,5 +844,7 @@ ${truncatedLog
     this.memoryStore.clearScratch();
     this.previousRAGFacts = new Set();
     this.lastRAGResults = [];
+    this.stepLimitHitCount = 0;
+    this.lastStepLimitHit = false;
   }
 }
