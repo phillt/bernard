@@ -335,10 +335,18 @@ export function printCriticVerdict(text: string, prefix?: string): void {
   const t = getTheme();
   const label = formatPrefix(prefix);
   const { verdict, explanation } = parseCriticVerdict(text);
-
   const colorFn = verdict === 'PASS' ? t.accent : verdict === 'WARN' ? t.warning : t.error;
-  const suffix = explanation ? `: ${explanation}` : '';
-  console.log(label + colorFn(`└─ critic ${verdict}${suffix}`));
+
+  if (verdict === 'PASS' || verdict === 'WARN') {
+    // Compact badge; include explanation only if single-line
+    const isSingleLine = !!explanation && !explanation.includes('\n');
+    const suffix = isSingleLine ? `: ${explanation}` : '';
+    console.log(label + colorFn(`└─ critic ${verdict}${suffix}`));
+  } else {
+    // FAIL/UNKNOWN: always show full explanation
+    const suffix = explanation ? `: ${explanation}` : '';
+    console.log(label + colorFn(`└─ critic ${verdict}${suffix}`));
+  }
 }
 
 /** Prints a re-verify indicator when the critic re-checks after a retry. */
