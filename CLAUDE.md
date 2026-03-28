@@ -21,6 +21,9 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - **src/domains.ts** — Memory domain registry (tool-usage, user-preferences, general) with specialized extraction prompts
 - **src/routines.ts** — RoutineStore class: per-file JSON storage for named multi-step workflows
 - **src/specialist-matcher.ts** — Keyword scorer matching user input to saved specialists for auto-dispatch
+- **src/critic.ts** — Standalone critic functions: `extractToolCallLog`, `runCritic`, and critic constants/types
+- **src/pac.ts** — Plan-Act-Critic loop wrapper (`runPACLoop`) for sub-agents and specialists
+- **src/overlap-checker.ts** — Token-based Jaccard overlap detection for specialist candidates
 - **src/providers/** — `getModel()` factory returning AI SDK `LanguageModel`
 - **src/tools/** — Tool registry; each tool is a separate file using `tool()` from `ai`
 
@@ -60,4 +63,6 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_TOKEN_WINDOW` — Context window size for compression, 0 = auto-detect (default: 0)
 - `BERNARD_HOME` — Override all XDG directories with a single flat path
 - `BERNARD_CRITIC_MODE` — Enable critic mode for verification (default: false)
+- `BERNARD_AUTO_CREATE_SPECIALISTS` — Auto-create specialists above confidence threshold (default: false)
+- `BERNARD_AUTO_CREATE_THRESHOLD` — Confidence threshold for auto-creating specialists, 0-1 (default: 0.8)
 - `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `XAI_API_KEY` — Provider API keys
