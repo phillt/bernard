@@ -69,6 +69,8 @@ describe('getAvailableProviders', () => {
       ragEnabled: true,
       theme: 'bernard',
       criticMode: false,
+      autoCreateSpecialists: false,
+      autoCreateThreshold: 0.8,
     };
     expect(getAvailableProviders(config)).toEqual([]);
   });
@@ -83,6 +85,8 @@ describe('getAvailableProviders', () => {
       ragEnabled: true,
       theme: 'bernard',
       criticMode: false,
+      autoCreateSpecialists: false,
+      autoCreateThreshold: 0.8,
       anthropicApiKey: 'sk-ant-test',
       openaiApiKey: 'sk-openai-test',
     };
@@ -99,6 +103,8 @@ describe('getAvailableProviders', () => {
       ragEnabled: true,
       theme: 'bernard',
       criticMode: false,
+      autoCreateSpecialists: false,
+      autoCreateThreshold: 0.8,
       anthropicApiKey: 'sk-ant-test',
       openaiApiKey: 'sk-openai-test',
       xaiApiKey: 'xai-test',

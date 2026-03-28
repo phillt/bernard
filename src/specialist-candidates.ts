@@ -16,6 +16,19 @@ export interface SpecialistCandidate {
   source: 'exit' | 'clear-save';
   acknowledged: boolean;
   status: 'pending' | 'accepted' | 'rejected' | 'dismissed';
+  /** Overlap score with the closest existing specialist or candidate (0-1). */
+  overlapScore?: number;
+  /** ID of the specialist or candidate this overlaps with most. */
+  overlapsWithId?: string;
+  /** Enhancement suggestion when this candidate overlaps with an existing specialist. */
+  enhancement?: {
+    existingSpecialistId: string;
+    mergedGuidelines: string[];
+    mergedDescription?: string;
+    reasoning: string;
+  };
+  /** Whether this candidate was auto-created (above the confidence threshold). */
+  autoCreated?: boolean;
 }
 
 /** Narrow interface for consumers that only need read + status update (e.g. specialist tool). */

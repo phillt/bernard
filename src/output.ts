@@ -300,17 +300,19 @@ export function printTaskEnd(result: string): void {
 }
 
 /** Prints a colored top-border line when the critic starts verifying. */
-export function printCriticStart(): void {
+export function printCriticStart(prefix?: string): void {
   stopSpinner();
   const t = getTheme();
-  console.log(t.accent('┌─ critic — verifying response...'));
+  const label = formatPrefix(prefix);
+  console.log(label + t.accent('┌─ critic — verifying response...'));
 }
 
 /** Prints a retry indicator when the critic triggers a correction loop. */
-export function printCriticRetry(attempt: number, maxRetries: number): void {
+export function printCriticRetry(attempt: number, maxRetries: number, prefix?: string): void {
   stopSpinner();
   const t = getTheme();
-  console.log(t.warning(`├─ critic — retrying (${attempt}/${maxRetries})...`));
+  const label = formatPrefix(prefix);
+  console.log(label + t.warning(`├─ critic — retrying (${attempt}/${maxRetries})...`));
 }
 
 /** Parses a critic response into a structured verdict and explanation. */
@@ -328,21 +330,23 @@ export function parseCriticVerdict(text: string): { verdict: string; explanation
 }
 
 /** Prints the critic's verdict with color based on PASS/WARN/FAIL. */
-export function printCriticVerdict(text: string): void {
+export function printCriticVerdict(text: string, prefix?: string): void {
   stopSpinner();
   const t = getTheme();
+  const label = formatPrefix(prefix);
   const { verdict, explanation } = parseCriticVerdict(text);
 
   const colorFn = verdict === 'PASS' ? t.accent : verdict === 'WARN' ? t.warning : t.error;
   const suffix = explanation ? `: ${explanation}` : '';
-  console.log(colorFn(`└─ critic ${verdict}${suffix}`));
+  console.log(label + colorFn(`└─ critic ${verdict}${suffix}`));
 }
 
 /** Prints a re-verify indicator when the critic re-checks after a retry. */
-export function printCriticReVerify(): void {
+export function printCriticReVerify(prefix?: string): void {
   stopSpinner();
   const t = getTheme();
-  console.log(t.accent('├─ critic — re-verifying response...'));
+  const label = formatPrefix(prefix);
+  console.log(label + t.accent('├─ critic — re-verifying response...'));
 }
 
 /** Prints the REPL help menu listing all available slash commands. */
@@ -383,6 +387,9 @@ export function printHelp(): void {
   console.log(
     t.text('  /options') +
       t.muted('  — View and set options (max-tokens, shell-timeout, token-window)'),
+  );
+  console.log(
+    t.text('  /agent-options') + t.muted(' — Configure auto-creation for specialist agents'),
   );
   console.log(t.text('  /update') + t.muted('   — Check for and install updates'));
   console.log(t.text('  /debug') + t.muted('    — Print diagnostic report for troubleshooting'));

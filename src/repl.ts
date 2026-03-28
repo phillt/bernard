@@ -35,6 +35,7 @@ import {
   getAvailableProviders,
   getDefaultModel,
   savePreferences,
+  loadPreferences,
   OPTIONS_REGISTRY,
   saveOption,
   getProviderKeyStatus,
@@ -108,6 +109,7 @@ export async function startRepl(
     { command: '/create-specialist', description: 'Create a specialist with guided AI assistance' },
     { command: '/candidates', description: 'Review specialist suggestions' },
     { command: '/critic', description: 'Toggle critic mode for response verification' },
+    { command: '/agent-options', description: 'Configure auto-creation for specialist agents' },
     { command: '/debug', description: 'Print diagnostic report for troubleshooting' },
     { command: '/exit', description: 'Quit Bernard' },
   ];
@@ -666,10 +668,34 @@ export async function startRepl(
 
               if (candidateResult) {
                 try {
-                  candidateStore.create(candidateResult, 'clear-save');
-                  printInfo(
-                    `Specialist suggestion detected: "${candidateResult.name}". Use /candidates to review.`,
-                  );
+                  if (candidateResult.type === 'new-candidate') {
+                    const created = candidateStore.create(candidateResult.candidate, 'clear-save');
+                    if (
+                      config.autoCreateSpecialists &&
+                      candidateResult.candidate.confidence >= config.autoCreateThreshold
+                    ) {
+                      // Auto-create the specialist
+                      specialistStore.create(
+                        candidateResult.candidate.draftId,
+                        candidateResult.candidate.name,
+                        candidateResult.candidate.description,
+                        candidateResult.candidate.systemPrompt,
+                        candidateResult.candidate.guidelines,
+                      );
+                      candidateStore.updateStatus(created.id, 'accepted');
+                      printInfo(
+                        `Specialist auto-created: "${candidateResult.candidate.name}" (confidence: ${Math.round(candidateResult.candidate.confidence * 100)}%). Use /specialists to view.`,
+                      );
+                    } else {
+                      printInfo(
+                        `Specialist suggestion detected: "${candidateResult.candidate.name}". Use /candidates to review.`,
+                      );
+                    }
+                  } else if (candidateResult.type === 'enhance-existing') {
+                    printInfo(
+                      `Enhancement suggested for specialist "${candidateResult.enhancement.existingSpecialistId}": ${candidateResult.enhancement.reasoning}`,
+                    );
+                  }
                 } catch {
                   // Silent — candidate storage failure is non-critical
                 }
@@ -1222,6 +1248,51 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           printInfo('[CRITIC:OFF] Critic mode disabled.');
         } else {
           printInfo(`Critic mode: ${config.criticMode ? 'ON' : 'OFF'}. Usage: /critic on|off`);
+        }
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/agent-options' || trimmed.startsWith('/agent-options ')) {
+        const args = trimmed.slice('/agent-options'.length).trim();
+        if (!args) {
+          // Display current settings
+          printInfo(`Auto-create specialists: ${config.autoCreateSpecialists ? 'on' : 'off'}`);
+          printInfo(`Auto-create threshold: ${config.autoCreateThreshold}`);
+        } else if (args === 'auto-create on') {
+          config.autoCreateSpecialists = true;
+          savePreferences({
+            ...loadPreferences(),
+            autoCreateSpecialists: true,
+            provider: config.provider,
+            model: config.model,
+          });
+          printInfo('Auto-create specialists: on');
+        } else if (args === 'auto-create off') {
+          config.autoCreateSpecialists = false;
+          savePreferences({
+            ...loadPreferences(),
+            autoCreateSpecialists: false,
+            provider: config.provider,
+            model: config.model,
+          });
+          printInfo('Auto-create specialists: off');
+        } else if (args.startsWith('threshold ')) {
+          const val = parseFloat(args.slice('threshold '.length));
+          if (isNaN(val) || val < 0 || val > 1) {
+            printError('Threshold must be a number between 0 and 1');
+          } else {
+            config.autoCreateThreshold = val;
+            savePreferences({
+              ...loadPreferences(),
+              autoCreateThreshold: val,
+              provider: config.provider,
+              model: config.model,
+            });
+            printInfo(`Auto-create threshold: ${val}`);
+          }
+        } else {
+          printError('Usage: /agent-options [auto-create on|off] [threshold <0-1>]');
         }
         void prompt();
         return;

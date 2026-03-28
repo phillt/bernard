@@ -436,6 +436,8 @@ describe('createSpecialistTool', () => {
         ragEnabled: true,
         theme: 'bernard',
         criticMode: false,
+        autoCreateSpecialists: false,
+        autoCreateThreshold: 0.8,
         anthropicApiKey: 'sk-test',
       };
       const toolWithConfig = createSpecialistTool(undefined, undefined, config);
@@ -466,6 +468,8 @@ describe('createSpecialistTool', () => {
         ragEnabled: true,
         theme: 'bernard',
         criticMode: false,
+        autoCreateSpecialists: false,
+        autoCreateThreshold: 0.8,
         anthropicApiKey: 'sk-test',
       };
       const toolWithConfig = createSpecialistTool(undefined, undefined, config);
@@ -636,6 +640,8 @@ describe('createSpecialistTool', () => {
         ragEnabled: true,
         theme: 'bernard',
         criticMode: false,
+        autoCreateSpecialists: false,
+        autoCreateThreshold: 0.8,
         anthropicApiKey: 'sk-test',
       };
       const toolWithConfig = createSpecialistTool(undefined, undefined, config);

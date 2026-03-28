@@ -71,7 +71,9 @@ async function main(): Promise<void> {
         specialistStore.getSummaries(),
         candidateStore.listPending(),
       );
-      if (candidate) candidateStore.create(candidate, 'exit');
+      if (candidate && candidate.type === 'new-candidate') {
+        candidateStore.create(candidate.candidate, 'exit');
+      }
     }
   } catch {
     // Silent — detection failure must not block anything
