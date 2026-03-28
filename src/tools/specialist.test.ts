@@ -433,9 +433,12 @@ describe('createSpecialistTool', () => {
         maxTokens: 4096,
         shellTimeout: 30000,
         tokenWindow: 0,
+        maxSteps: 25,
         ragEnabled: true,
         theme: 'bernard',
         criticMode: false,
+        autoCreateSpecialists: false,
+        autoCreateThreshold: 0.8,
         anthropicApiKey: 'sk-test',
       };
       const toolWithConfig = createSpecialistTool(undefined, undefined, config);
@@ -463,9 +466,12 @@ describe('createSpecialistTool', () => {
         maxTokens: 4096,
         shellTimeout: 30000,
         tokenWindow: 0,
+        maxSteps: 25,
         ragEnabled: true,
         theme: 'bernard',
         criticMode: false,
+        autoCreateSpecialists: false,
+        autoCreateThreshold: 0.8,
         anthropicApiKey: 'sk-test',
       };
       const toolWithConfig = createSpecialistTool(undefined, undefined, config);
@@ -633,9 +639,12 @@ describe('createSpecialistTool', () => {
         maxTokens: 4096,
         shellTimeout: 30000,
         tokenWindow: 0,
+        maxSteps: 25,
         ragEnabled: true,
         theme: 'bernard',
         criticMode: false,
+        autoCreateSpecialists: false,
+        autoCreateThreshold: 0.8,
         anthropicApiKey: 'sk-test',
       };
       const toolWithConfig = createSpecialistTool(undefined, undefined, config);

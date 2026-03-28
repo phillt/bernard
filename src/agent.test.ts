@@ -24,6 +24,7 @@ vi.mock('./output.js', () => ({
   printToolCall: vi.fn(),
   printToolResult: vi.fn(),
   printInfo: vi.fn(),
+  printWarning: vi.fn(),
   startSpinner: vi.fn(),
   stopSpinner: vi.fn(),
 }));
@@ -74,9 +75,12 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     maxTokens: 4096,
     shellTimeout: 30000,
     tokenWindow: 0,
+    maxSteps: 25,
     ragEnabled: true,
     theme: 'bernard',
     criticMode: false,
+    autoCreateSpecialists: false,
+    autoCreateThreshold: 0.8,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };
@@ -1122,5 +1126,96 @@ describe('Agent', () => {
     await agent.processInput('Hello again');
     // After clearHistory, previousRAGFacts should be empty again
     expect(mockApplyStickiness).toHaveBeenCalledWith(ragResults, new Set());
+  });
+
+  describe('step-limit exhaustion detection', () => {
+    it('getStepLimitHit returns non-null when generateText exhausts maxSteps with tool-calls', async () => {
+      const config = makeConfig({ maxSteps: 3 });
+      mockGenerateText.mockResolvedValue({
+        finishReason: 'tool-calls',
+        steps: [{}, {}, {}], // length === maxSteps
+        response: { messages: [{ role: 'assistant', content: 'Partial' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(config, toolOptions, store);
+      await agent.processInput('Do many things');
+      const hit = agent.getStepLimitHit();
+      expect(hit).not.toBeNull();
+      expect(hit!.currentLimit).toBe(3);
+      expect(hit!.hitCount).toBe(1);
+    });
+
+    it('getStepLimitHit returns null on normal completion', async () => {
+      mockGenerateText.mockResolvedValue({
+        finishReason: 'stop',
+        steps: [{}],
+        response: { messages: [{ role: 'assistant', content: 'Done' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(makeConfig(), toolOptions, store);
+      await agent.processInput('Hello');
+      expect(agent.getStepLimitHit()).toBeNull();
+    });
+
+    it('hitCount increments across multiple exhaustion calls', async () => {
+      const config = makeConfig({ maxSteps: 2 });
+      mockGenerateText.mockResolvedValue({
+        finishReason: 'tool-calls',
+        steps: [{}, {}],
+        response: { messages: [{ role: 'assistant', content: 'Partial' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(config, toolOptions, store);
+
+      await agent.processInput('First');
+      expect(agent.getStepLimitHit()!.hitCount).toBe(1);
+
+      await agent.processInput('Second');
+      expect(agent.getStepLimitHit()!.hitCount).toBe(2);
+    });
+
+    it('clearHistory resets step limit hit state', async () => {
+      const config = makeConfig({ maxSteps: 2 });
+      mockGenerateText.mockResolvedValue({
+        finishReason: 'tool-calls',
+        steps: [{}, {}],
+        response: { messages: [{ role: 'assistant', content: 'Partial' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(config, toolOptions, store);
+
+      await agent.processInput('First');
+      expect(agent.getStepLimitHit()).not.toBeNull();
+
+      agent.clearHistory();
+      expect(agent.getStepLimitHit()).toBeNull();
+    });
+
+    it('lastStepLimitHit resets at start of processInput (not stale from previous call)', async () => {
+      const config = makeConfig({ maxSteps: 2 });
+
+      // First call: hits the limit
+      mockGenerateText.mockResolvedValueOnce({
+        finishReason: 'tool-calls',
+        steps: [{}, {}],
+        response: { messages: [{ role: 'assistant', content: 'Partial' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+
+      const agent = new Agent(config, toolOptions, store);
+      await agent.processInput('First');
+      expect(agent.getStepLimitHit()).not.toBeNull();
+
+      // Second call: completes normally
+      mockGenerateText.mockResolvedValueOnce({
+        finishReason: 'stop',
+        steps: [{}],
+        response: { messages: [{ role: 'assistant', content: 'Done' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+
+      await agent.processInput('Second');
+      expect(agent.getStepLimitHit()).toBeNull();
+    });
   });
 });

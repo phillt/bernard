@@ -9,16 +9,13 @@ import {
   printToolResult,
   printInfo,
   printWarning,
-  printCriticStart,
-  printCriticVerdict,
   printCriticRetry,
-  printCriticReVerify,
-  parseCriticVerdict,
   startSpinner,
   buildSpinnerMessage,
   type SpinnerStats,
 } from './output.js';
 import { debugLog } from './logger.js';
+import { extractToolCallLog, runCritic, CRITIC_MAX_RETRIES } from './critic.js';
 import {
   shouldCompress,
   compressHistory,
@@ -66,6 +63,14 @@ You exist only while processing a user message. Each response is a single turn: 
 - If a command fails, read the error message carefully, explain the cause, and try an alternative approach. Never retry the exact same command that just failed.
 - When uncertain about intent, ask a clarifying question rather than guessing.
 - If a request is ambiguous or risky, state your assumptions before acting.
+
+## Planning
+Before executing any task that requires more than two tool calls:
+1. Briefly outline your plan in your response text — what steps you intend to take and in what order.
+2. Execute the plan step by step. If the approach needs to change, state the revised plan before continuing.
+3. After completion, summarize what was done and the outcome.
+
+This makes your reasoning visible and reduces errors on multi-step tasks. For simple tasks (1-2 tool calls), skip the plan and act directly.
 
 ## Tool Execution Integrity
 - NEVER simulate, fabricate, or narrate tool execution. If a task requires running a command, you MUST call the shell tool — do not write prose describing what a command "would return" or pretend you already ran it.
@@ -145,10 +150,10 @@ const CRITIC_MODE_PROMPT = `## Reliability Mode (Active)
 
 You are operating with enhanced reliability. Follow these additional rules:
 
-### Planning
-Before executing any task that requires more than two tool calls, file modifications, git operations, or multi-step research:
-1. Write a brief plan to scratch (key: "plan") listing the steps you intend to take and the expected outcomes.
-2. Reference this plan during execution. Update it if the approach changes.
+### Enhanced Planning (Scratch-Based)
+In addition to stating your plan in text, persist it to scratch for reliability:
+1. Write your plan to scratch (key: "plan") listing steps and expected outcomes.
+2. Reference and update the scratch plan during execution.
 3. After completion, delete the plan from scratch to keep it clean.
 
 ### Proactive Scratch Usage
@@ -163,46 +168,6 @@ Before executing any task that requires more than two tool calls, file modificat
 ### Verification
 - After any mutation (file write, git commit, API call), immediately verify the outcome with a read-only command.
 - Your work will be reviewed by a critic agent afterward. Only claim what you can prove with tool output.`;
-
-const CRITIC_TOTAL_RESULT_BUDGET = 8000;
-const CRITIC_MIN_RESULT_CHARS = 500;
-const CRITIC_MAX_RESPONSE_LENGTH = 4000;
-const CRITIC_MAX_ARGS_LENGTH = 1000;
-
-const CRITIC_SYSTEM_PROMPT = `You are a verification agent for Bernard, a CLI AI assistant. Your role is to review the agent's work and verify its integrity.
-
-You will receive:
-1. The user's original request
-2. The agent's final text response
-3. A log of actual tool calls made (tool name, arguments, results) — note that tool results, arguments, and the agent response may be truncated for context efficiency
-
-Your job:
-- Check if the agent's claims in its response are supported by actual tool call results.
-- Verify that tool calls were actually made for actions the agent claims to have performed.
-- Flag any claims not backed by tool evidence (e.g., "I created the file" but no shell/write tool call).
-- Flag any tool results that suggest failure but were reported as success.
-- Tool results and the agent response may be truncated for context efficiency. If a tool result appears cut off, do not treat the missing portion as evidence of failure. Only flag FAIL when there is positive evidence of failure (e.g., an error message visible in the output), not merely the absence of success confirmation in truncated output.
-- Check if the response addresses the user's original intent.
-
-Output format (plain text, concise):
-VERDICT: PASS | WARN | FAIL
-[1-3 sentence explanation]
-[If WARN/FAIL: specific issues found]
-
-Be strict but fair. Not every response needs tool calls — knowledge answers are fine. Focus on cases where the agent *claims* to have done something via tools.`;
-
-interface CriticResult {
-  verdict: 'PASS' | 'WARN' | 'FAIL' | 'UNKNOWN';
-  explanation: string;
-}
-
-const CRITIC_MAX_RETRIES = 2;
-
-interface CriticToolEntry {
-  toolName: string;
-  args: unknown;
-  result: unknown;
-}
 
 /**
  * Assembles the full system prompt including base instructions, memory context, and MCP status.
@@ -330,6 +295,8 @@ export class Agent {
   private routineStore: RoutineStore;
   private specialistStore: SpecialistStore;
   private candidateStore?: CandidateStoreReader;
+  private stepLimitHitCount: number = 0;
+  private lastStepLimitHit: boolean = false;
 
   constructor(
     config: BernardConfig,
@@ -375,6 +342,12 @@ export class Agent {
     this.abortController?.abort();
   }
 
+  /** Returns step limit hit info from last processInput, or null if limit wasn't hit. */
+  getStepLimitHit(): { currentLimit: number; hitCount: number } | null {
+    if (!this.lastStepLimitHit) return null;
+    return { currentLimit: this.config.maxSteps, hitCount: this.stepLimitHitCount };
+  }
+
   /** Attaches a spinner stats object that will be updated with token usage during generation. */
   setSpinnerStats(stats: SpinnerStats): void {
     this.spinnerStats = stats;
@@ -394,6 +367,8 @@ export class Agent {
    * @throws Error wrapping the underlying API error if generation fails for non-abort, non-overflow reasons
    */
   async processInput(userInput: string): Promise<void> {
+    this.lastStepLimitHit = false;
+
     const timestamped = timestampUserMessage(userInput);
     this.history.push({ role: 'user', content: timestamped });
 
@@ -517,7 +492,7 @@ export class Agent {
         generateText({
           model: getModel(this.config.provider, this.config.model),
           tools,
-          maxSteps: 20,
+          maxSteps: this.config.maxSteps,
           maxTokens: this.config.maxTokens,
           system: systemPrompt,
           messages: messages ?? this.history,
@@ -622,21 +597,34 @@ export class Agent {
         }
       }
 
+      // Detect maxSteps exhaustion
+      if (result.finishReason === 'tool-calls' && result.steps.length >= this.config.maxSteps) {
+        this.lastStepLimitHit = true;
+        this.stepLimitHitCount++;
+        const msg =
+          this.stepLimitHitCount >= 2
+            ? `Stopped at loop limit of ${this.config.maxSteps}. Use /options max-steps to adjust permanently.`
+            : `Stopped at loop limit of ${this.config.maxSteps}.`;
+        printWarning(msg);
+      }
+
       // Run critic verification if enabled and tool calls were made
-      if (this.config.criticMode && !this.abortController?.signal.aborted) {
-        let toolCallLog = this.extractToolCallLog(result.steps);
-        if (toolCallLog.length > 0) {
+      if (
+        this.config.criticMode &&
+        !this.abortController?.signal.aborted &&
+        !this.lastStepLimitHit
+      ) {
+        let toolLog = extractToolCallLog(result.steps);
+        if (toolLog.length > 0) {
           let retryCount = 0;
 
           while (retryCount <= CRITIC_MAX_RETRIES) {
             if (this.abortController?.signal.aborted) break;
 
-            const criticResult = await this.runCritic(
-              userInput,
-              result.text,
-              toolCallLog,
-              retryCount > 0,
-            );
+            const criticResult = await runCritic(this.config, userInput, result.text, toolLog, {
+              isRetry: retryCount > 0,
+              abortSignal: this.abortController?.signal,
+            });
 
             // null (error) or PASS — stop looping
             if (!criticResult || criticResult.verdict === 'PASS') break;
@@ -662,10 +650,10 @@ export class Agent {
               });
 
               result = await callGenerateText();
-              toolCallLog = this.extractToolCallLog(result.steps);
+              toolLog = extractToolCallLog(result.steps);
 
               // If no tool calls in retry, nothing more to verify
-              if (toolCallLog.length === 0) break;
+              if (toolLog.length === 0) break;
             } catch (retryErr) {
               debugLog(
                 'agent:critic:retry-error',
@@ -696,102 +684,6 @@ export class Agent {
     }
   }
 
-  /** Extracts a structured log of tool calls from generateText step results. */
-  private extractToolCallLog(steps: { toolCalls: any[]; toolResults: any[] }[]): CriticToolEntry[] {
-    const entries: CriticToolEntry[] = [];
-    for (const step of steps) {
-      // AI SDK guarantees toolResults[i] corresponds to toolCalls[i] within each step
-      for (let i = 0; i < step.toolCalls.length; i++) {
-        const tc = step.toolCalls[i];
-        const tr = step.toolResults[i];
-        entries.push({
-          toolName: tc.toolName,
-          args: tc.args,
-          result: tr?.result,
-        });
-      }
-    }
-    return entries;
-  }
-
-  /** Runs the critic agent to verify the main agent's response against actual tool calls. */
-  private async runCritic(
-    userInput: string,
-    responseText: string,
-    toolCallLog: CriticToolEntry[],
-    isRetry: boolean = false,
-  ): Promise<CriticResult | null> {
-    try {
-      if (isRetry) {
-        printCriticReVerify();
-      } else {
-        printCriticStart();
-      }
-
-      const perResultLimit = Math.max(
-        CRITIC_MIN_RESULT_CHARS,
-        Math.floor(CRITIC_TOTAL_RESULT_BUDGET / toolCallLog.length),
-      );
-
-      const truncatedLog = toolCallLog.map((entry) => {
-        const raw =
-          typeof entry.result === 'string' ? entry.result : JSON.stringify(entry.result ?? null);
-        const truncated = raw.length > perResultLimit ? raw.slice(0, perResultLimit) + '...' : raw;
-        return {
-          toolName: entry.toolName,
-          args: entry.args,
-          result: truncated,
-        };
-      });
-
-      const truncatedResponse =
-        responseText.length > CRITIC_MAX_RESPONSE_LENGTH
-          ? responseText.slice(0, CRITIC_MAX_RESPONSE_LENGTH) + '\n... (truncated)'
-          : responseText;
-
-      const criticMessage = `## Original User Request
-${userInput}
-
-## Agent Response
-${truncatedResponse}
-
-## Tool Call Log (${truncatedLog.length} calls)
-${truncatedLog
-  .map((e, i) => {
-    const argsStr = JSON.stringify(e.args);
-    const truncatedArgs =
-      argsStr.length > CRITIC_MAX_ARGS_LENGTH
-        ? argsStr.slice(0, CRITIC_MAX_ARGS_LENGTH) + '...'
-        : argsStr;
-    return `${i + 1}. ${e.toolName}(${truncatedArgs})\n   Result: ${e.result}`;
-  })
-  .join('\n\n')}`;
-
-      const result = await generateText({
-        model: getModel(this.config.provider, this.config.model),
-        system: CRITIC_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: criticMessage }],
-        maxSteps: 1,
-        maxTokens: 1024,
-        abortSignal: this.abortController?.signal,
-      });
-
-      if (result.text) {
-        const parsed = parseCriticVerdict(result.text);
-        printCriticVerdict(result.text);
-        return {
-          verdict: parsed.verdict as CriticResult['verdict'],
-          explanation: parsed.explanation,
-        };
-      }
-
-      return null;
-    } catch (err) {
-      debugLog('agent:critic:error', err instanceof Error ? err.message : String(err));
-      return null;
-    }
-  }
-
   /** Compresses conversation history in-place, returning token usage stats. */
   async compactHistory(): Promise<CompactResult> {
     const tokensBefore = estimateHistoryTokens(this.history);
@@ -811,5 +703,7 @@ ${truncatedLog
     this.memoryStore.clearScratch();
     this.previousRAGFacts = new Set();
     this.lastRAGResults = [];
+    this.stepLimitHitCount = 0;
+    this.lastStepLimitHit = false;
   }
 }

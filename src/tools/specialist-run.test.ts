@@ -60,9 +60,12 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     maxTokens: 4096,
     shellTimeout: 30000,
     tokenWindow: 0,
+    maxSteps: 25,
     ragEnabled: true,
     theme: 'bernard',
     criticMode: false,
+    autoCreateSpecialists: false,
+    autoCreateThreshold: 0.8,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };
@@ -127,7 +130,7 @@ describe('specialist-run tool', () => {
 
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
     const call = mockGenerateText.mock.calls[0][0];
-    expect(call.maxSteps).toBe(10);
+    expect(call.maxSteps).toBe(13); // Math.ceil(25 * 0.5)
     expect(call.system).toContain('email triage specialist');
     expect(call.system).toContain('Always flag VIP senders');
     expect(call.system).toContain('Use urgency levels');

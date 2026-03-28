@@ -60,9 +60,12 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     maxTokens: 4096,
     shellTimeout: 30000,
     tokenWindow: 0,
+    maxSteps: 25,
     ragEnabled: true,
     theme: 'bernard',
     criticMode: false,
+    autoCreateSpecialists: false,
+    autoCreateThreshold: 0.8,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };

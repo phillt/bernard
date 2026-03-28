@@ -20,6 +20,7 @@ import {
 } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
+import { runPACLoop } from '../pac.js';
 
 const SUB_AGENT_SYSTEM_PROMPT = `You are a sub-agent of Bernard, a CLI AI assistant. You have been delegated a specific, scoped task.
 
@@ -141,26 +142,53 @@ export function createSubAgentTool(
             includeScratch: true,
           });
 
+        const onStepFinish = ({ text, toolCalls, toolResults }: any) => {
+          for (const tc of toolCalls ?? []) {
+            printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
+          }
+          for (const tr of toolResults ?? []) {
+            printToolResult(tr.toolName, tr.result, prefix);
+          }
+          if (text) {
+            printAssistantText(text, prefix);
+          }
+        };
+
         const result = await generateText({
           model: getModel(resolvedProvider, resolvedModel),
           tools: baseTools,
-          maxSteps: 10,
+          maxSteps: Math.ceil(config.maxSteps * 0.5),
           maxTokens: config.maxTokens,
           system: enrichedPrompt,
           messages: [{ role: 'user', content: userMessage }],
           abortSignal: execOptions.abortSignal,
-          onStepFinish: ({ text, toolCalls, toolResults }) => {
-            for (const tc of toolCalls) {
-              printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
-            }
-            for (const tr of toolResults) {
-              printToolResult(tr.toolName, tr.result, prefix);
-            }
-            if (text) {
-              printAssistantText(text, prefix);
-            }
-          },
+          onStepFinish,
         });
+
+        if (config.criticMode) {
+          const pacResult = await runPACLoop({
+            config,
+            userInput: userMessage,
+            initialResult: result,
+            regenerate: async (extraMessages) => {
+              return generateText({
+                model: getModel(resolvedProvider, resolvedModel),
+                tools: baseTools,
+                maxSteps: 10,
+                maxTokens: config.maxTokens,
+                system: enrichedPrompt,
+                messages: [{ role: 'user', content: userMessage }, ...extraMessages],
+                abortSignal: execOptions.abortSignal,
+                onStepFinish,
+              });
+            },
+            prefix,
+            abortSignal: execOptions.abortSignal,
+          });
+
+          printSubAgentEnd(id);
+          return pacResult.finalText;
+        }
 
         printSubAgentEnd(id);
         return result.text;

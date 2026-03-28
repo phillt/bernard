@@ -133,7 +133,7 @@ export function tokenize(text: string): string[] {
  * Stem-prefix match: exact match for any length, prefix matching requires both tokens >= 3 chars.
  * This means 2-char tokens like "pr" only match exactly, while "review" can prefix-match "reviewer".
  */
-function stemMatch(a: string, b: string): boolean {
+export function stemMatch(a: string, b: string): boolean {
   if (a === b) return true;
   const minLen = 3;
   if (a.length < minLen || b.length < minLen) return false;
