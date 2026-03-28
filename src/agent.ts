@@ -9,16 +9,13 @@ import {
   printToolResult,
   printInfo,
   printWarning,
-  printCriticStart,
-  printCriticVerdict,
   printCriticRetry,
-  printCriticReVerify,
-  parseCriticVerdict,
   startSpinner,
   buildSpinnerMessage,
   type SpinnerStats,
 } from './output.js';
 import { debugLog } from './logger.js';
+import { extractToolCallLog, runCritic, CRITIC_MAX_RETRIES } from './critic.js';
 import {
   shouldCompress,
   compressHistory,
@@ -171,46 +168,6 @@ In addition to stating your plan in text, persist it to scratch for reliability:
 ### Verification
 - After any mutation (file write, git commit, API call), immediately verify the outcome with a read-only command.
 - Your work will be reviewed by a critic agent afterward. Only claim what you can prove with tool output.`;
-
-const CRITIC_TOTAL_RESULT_BUDGET = 8000;
-const CRITIC_MIN_RESULT_CHARS = 500;
-const CRITIC_MAX_RESPONSE_LENGTH = 4000;
-const CRITIC_MAX_ARGS_LENGTH = 1000;
-
-const CRITIC_SYSTEM_PROMPT = `You are a verification agent for Bernard, a CLI AI assistant. Your role is to review the agent's work and verify its integrity.
-
-You will receive:
-1. The user's original request
-2. The agent's final text response
-3. A log of actual tool calls made (tool name, arguments, results) — note that tool results, arguments, and the agent response may be truncated for context efficiency
-
-Your job:
-- Check if the agent's claims in its response are supported by actual tool call results.
-- Verify that tool calls were actually made for actions the agent claims to have performed.
-- Flag any claims not backed by tool evidence (e.g., "I created the file" but no shell/write tool call).
-- Flag any tool results that suggest failure but were reported as success.
-- Tool results and the agent response may be truncated for context efficiency. If a tool result appears cut off, do not treat the missing portion as evidence of failure. Only flag FAIL when there is positive evidence of failure (e.g., an error message visible in the output), not merely the absence of success confirmation in truncated output.
-- Check if the response addresses the user's original intent.
-
-Output format (plain text, concise):
-VERDICT: PASS | WARN | FAIL
-[1-3 sentence explanation]
-[If WARN/FAIL: specific issues found]
-
-Be strict but fair. Not every response needs tool calls — knowledge answers are fine. Focus on cases where the agent *claims* to have done something via tools.`;
-
-interface CriticResult {
-  verdict: 'PASS' | 'WARN' | 'FAIL' | 'UNKNOWN';
-  explanation: string;
-}
-
-const CRITIC_MAX_RETRIES = 2;
-
-interface CriticToolEntry {
-  toolName: string;
-  args: unknown;
-  result: unknown;
-}
 
 /**
  * Assembles the full system prompt including base instructions, memory context, and MCP status.
@@ -657,19 +614,17 @@ export class Agent {
         !this.abortController?.signal.aborted &&
         !this.lastStepLimitHit
       ) {
-        let toolCallLog = this.extractToolCallLog(result.steps);
-        if (toolCallLog.length > 0) {
+        let toolLog = extractToolCallLog(result.steps);
+        if (toolLog.length > 0) {
           let retryCount = 0;
 
           while (retryCount <= CRITIC_MAX_RETRIES) {
             if (this.abortController?.signal.aborted) break;
 
-            const criticResult = await this.runCritic(
-              userInput,
-              result.text,
-              toolCallLog,
-              retryCount > 0,
-            );
+            const criticResult = await runCritic(this.config, userInput, result.text, toolLog, {
+              isRetry: retryCount > 0,
+              abortSignal: this.abortController?.signal,
+            });
 
             // null (error) or PASS — stop looping
             if (!criticResult || criticResult.verdict === 'PASS') break;
@@ -695,10 +650,10 @@ export class Agent {
               });
 
               result = await callGenerateText();
-              toolCallLog = this.extractToolCallLog(result.steps);
+              toolLog = extractToolCallLog(result.steps);
 
               // If no tool calls in retry, nothing more to verify
-              if (toolCallLog.length === 0) break;
+              if (toolLog.length === 0) break;
             } catch (retryErr) {
               debugLog(
                 'agent:critic:retry-error',
@@ -726,102 +681,6 @@ export class Agent {
     } finally {
       this.abortController = null;
       this.spinnerStats = null;
-    }
-  }
-
-  /** Extracts a structured log of tool calls from generateText step results. */
-  private extractToolCallLog(steps: { toolCalls: any[]; toolResults: any[] }[]): CriticToolEntry[] {
-    const entries: CriticToolEntry[] = [];
-    for (const step of steps) {
-      // AI SDK guarantees toolResults[i] corresponds to toolCalls[i] within each step
-      for (let i = 0; i < step.toolCalls.length; i++) {
-        const tc = step.toolCalls[i];
-        const tr = step.toolResults[i];
-        entries.push({
-          toolName: tc.toolName,
-          args: tc.args,
-          result: tr?.result,
-        });
-      }
-    }
-    return entries;
-  }
-
-  /** Runs the critic agent to verify the main agent's response against actual tool calls. */
-  private async runCritic(
-    userInput: string,
-    responseText: string,
-    toolCallLog: CriticToolEntry[],
-    isRetry: boolean = false,
-  ): Promise<CriticResult | null> {
-    try {
-      if (isRetry) {
-        printCriticReVerify();
-      } else {
-        printCriticStart();
-      }
-
-      const perResultLimit = Math.max(
-        CRITIC_MIN_RESULT_CHARS,
-        Math.floor(CRITIC_TOTAL_RESULT_BUDGET / toolCallLog.length),
-      );
-
-      const truncatedLog = toolCallLog.map((entry) => {
-        const raw =
-          typeof entry.result === 'string' ? entry.result : JSON.stringify(entry.result ?? null);
-        const truncated = raw.length > perResultLimit ? raw.slice(0, perResultLimit) + '...' : raw;
-        return {
-          toolName: entry.toolName,
-          args: entry.args,
-          result: truncated,
-        };
-      });
-
-      const truncatedResponse =
-        responseText.length > CRITIC_MAX_RESPONSE_LENGTH
-          ? responseText.slice(0, CRITIC_MAX_RESPONSE_LENGTH) + '\n... (truncated)'
-          : responseText;
-
-      const criticMessage = `## Original User Request
-${userInput}
-
-## Agent Response
-${truncatedResponse}
-
-## Tool Call Log (${truncatedLog.length} calls)
-${truncatedLog
-  .map((e, i) => {
-    const argsStr = JSON.stringify(e.args);
-    const truncatedArgs =
-      argsStr.length > CRITIC_MAX_ARGS_LENGTH
-        ? argsStr.slice(0, CRITIC_MAX_ARGS_LENGTH) + '...'
-        : argsStr;
-    return `${i + 1}. ${e.toolName}(${truncatedArgs})\n   Result: ${e.result}`;
-  })
-  .join('\n\n')}`;
-
-      const result = await generateText({
-        model: getModel(this.config.provider, this.config.model),
-        system: CRITIC_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: criticMessage }],
-        maxSteps: 1,
-        maxTokens: 1024,
-        abortSignal: this.abortController?.signal,
-      });
-
-      if (result.text) {
-        const parsed = parseCriticVerdict(result.text);
-        printCriticVerdict(result.text);
-        return {
-          verdict: parsed.verdict as CriticResult['verdict'],
-          explanation: parsed.explanation,
-        };
-      }
-
-      return null;
-    } catch (err) {
-      debugLog('agent:critic:error', err instanceof Error ? err.message : String(err));
-      return null;
     }
   }
 

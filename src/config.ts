@@ -23,6 +23,10 @@ export interface BernardConfig {
   maxSteps: number;
   /** Whether critic mode (planning + verification) is active. */
   criticMode: boolean;
+  /** Whether to auto-create specialists above the confidence threshold. */
+  autoCreateSpecialists: boolean;
+  /** Confidence threshold for auto-creating specialists (0-1). */
+  autoCreateThreshold: number;
   /** Anthropic API key, if available. */
   anthropicApiKey?: string;
   /** OpenAI API key, if available. */
@@ -36,6 +40,8 @@ const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_SHELL_TIMEOUT = 30000;
 const DEFAULT_TOKEN_WINDOW = 0;
 const DEFAULT_MAX_STEPS = 25;
+const DEFAULT_AUTO_CREATE_SPECIALISTS = false;
+const DEFAULT_AUTO_CREATE_THRESHOLD = 0.8;
 
 /** Maps each provider name to the environment variable that holds its API key. */
 export const PROVIDER_ENV_VARS: Record<string, string> = {
@@ -100,6 +106,8 @@ export function savePreferences(prefs: {
   theme?: string;
   autoUpdate?: boolean;
   criticMode?: boolean;
+  autoCreateSpecialists?: boolean;
+  autoCreateThreshold?: number;
 }): void {
   const dir = path.dirname(PREFS_PATH);
   if (!fs.existsSync(dir)) {
@@ -112,8 +120,11 @@ export function savePreferences(prefs: {
   if (prefs.maxSteps !== undefined) data.maxSteps = prefs.maxSteps;
   if (prefs.theme !== undefined) data.theme = prefs.theme;
   if (prefs.criticMode !== undefined) data.criticMode = prefs.criticMode;
+  if (prefs.autoCreateSpecialists !== undefined)
+    data.autoCreateSpecialists = prefs.autoCreateSpecialists;
+  if (prefs.autoCreateThreshold !== undefined) data.autoCreateThreshold = prefs.autoCreateThreshold;
 
-  // Preserve autoUpdate and criticMode from existing prefs when callers don't pass them
+  // Preserve autoUpdate, criticMode, and auto-create settings from existing prefs when callers don't pass them
   let existing: Record<string, unknown> | undefined;
   try {
     existing = JSON.parse(fs.readFileSync(PREFS_PATH, 'utf-8'));
@@ -144,6 +155,20 @@ export function savePreferences(prefs: {
   if (!('tokenWindow' in prefs) && existing && typeof existing.tokenWindow === 'number') {
     data.tokenWindow = existing.tokenWindow;
   }
+  if (
+    prefs.autoCreateSpecialists === undefined &&
+    existing &&
+    typeof existing.autoCreateSpecialists === 'boolean'
+  ) {
+    data.autoCreateSpecialists = existing.autoCreateSpecialists;
+  }
+  if (
+    prefs.autoCreateThreshold === undefined &&
+    existing &&
+    typeof existing.autoCreateThreshold === 'number'
+  ) {
+    data.autoCreateThreshold = existing.autoCreateThreshold;
+  }
   fs.writeFileSync(PREFS_PATH, JSON.stringify(data, null, 2) + '\n');
 }
 
@@ -162,6 +187,8 @@ export function loadPreferences(): {
   theme?: string;
   autoUpdate?: boolean;
   criticMode?: boolean;
+  autoCreateSpecialists?: boolean;
+  autoCreateThreshold?: number;
 } {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
@@ -176,6 +203,12 @@ export function loadPreferences(): {
       theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
       autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
       criticMode: typeof parsed.criticMode === 'boolean' ? parsed.criticMode : undefined,
+      autoCreateSpecialists:
+        typeof parsed.autoCreateSpecialists === 'boolean'
+          ? parsed.autoCreateSpecialists
+          : undefined,
+      autoCreateThreshold:
+        typeof parsed.autoCreateThreshold === 'number' ? parsed.autoCreateThreshold : undefined,
     };
   } catch {
     return {};
@@ -466,6 +499,20 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     prefs.criticMode ??
     (process.env.BERNARD_CRITIC_MODE === 'true' || process.env.BERNARD_CRITIC_MODE === '1');
 
+  const autoCreateSpecialists =
+    prefs.autoCreateSpecialists ??
+    (process.env.BERNARD_AUTO_CREATE_SPECIALISTS === 'true' ||
+    process.env.BERNARD_AUTO_CREATE_SPECIALISTS === '1'
+      ? true
+      : DEFAULT_AUTO_CREATE_SPECIALISTS);
+
+  const envAutoCreateThreshold = parseFloat(process.env.BERNARD_AUTO_CREATE_THRESHOLD ?? '');
+  const autoCreateThreshold =
+    prefs.autoCreateThreshold ??
+    (Number.isFinite(envAutoCreateThreshold)
+      ? envAutoCreateThreshold
+      : DEFAULT_AUTO_CREATE_THRESHOLD);
+
   const config: BernardConfig = {
     provider,
     model,
@@ -476,6 +523,8 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     ragEnabled,
     theme,
     criticMode,
+    autoCreateSpecialists,
+    autoCreateThreshold,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     xaiApiKey: process.env.XAI_API_KEY,

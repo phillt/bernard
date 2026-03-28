@@ -129,20 +129,22 @@ bernard providers
 
 Bernard loads `.env` from the current directory first, then falls back to `~/.bernard/.env`.
 
-| Variable                | Description                                           | Default                   |
-| ----------------------- | ----------------------------------------------------- | ------------------------- |
-| `BERNARD_PROVIDER`      | LLM provider (`anthropic`, `openai`, `xai`)           | `anthropic`               |
-| `BERNARD_MODEL`         | Model name                                            | Provider-specific default |
-| `BERNARD_MAX_TOKENS`    | Max response tokens                                   | `4096`                    |
-| `BERNARD_SHELL_TIMEOUT` | Shell command timeout (ms)                            | `30000`                   |
-| `BERNARD_TOKEN_WINDOW`  | Context window size for compression (0 = auto-detect) | `0`                       |
-| `BERNARD_MAX_STEPS`     | Max agent loop iterations per request                 | `25`                      |
-| `BERNARD_RAG_ENABLED`   | Enable the RAG memory system                          | `true`                    |
-| `BERNARD_CRITIC_MODE`   | Enable critic mode for response verification          | `false`                   |
-| `BERNARD_DEBUG`         | Enable debug logging                                  | unset                     |
-| `ANTHROPIC_API_KEY`     | Anthropic API key                                     | —                         |
-| `OPENAI_API_KEY`        | OpenAI API key                                        | —                         |
-| `XAI_API_KEY`           | xAI API key                                           | —                         |
+| Variable                          | Description                                              | Default                   |
+| --------------------------------- | -------------------------------------------------------- | ------------------------- |
+| `BERNARD_PROVIDER`                | LLM provider (`anthropic`, `openai`, `xai`)              | `anthropic`               |
+| `BERNARD_MODEL`                   | Model name                                               | Provider-specific default |
+| `BERNARD_MAX_TOKENS`              | Max response tokens                                      | `4096`                    |
+| `BERNARD_SHELL_TIMEOUT`           | Shell command timeout (ms)                               | `30000`                   |
+| `BERNARD_TOKEN_WINDOW`            | Context window size for compression (0 = auto-detect)    | `0`                       |
+| `BERNARD_MAX_STEPS`               | Max agent loop iterations per request                    | `25`                      |
+| `BERNARD_RAG_ENABLED`             | Enable the RAG memory system                             | `true`                    |
+| `BERNARD_CRITIC_MODE`             | Enable critic mode for response verification             | `false`                   |
+| `BERNARD_AUTO_CREATE_SPECIALISTS` | Auto-create specialists above confidence threshold       | `false`                   |
+| `BERNARD_AUTO_CREATE_THRESHOLD`   | Confidence threshold for auto-creating specialists (0-1) | `0.8`                     |
+| `BERNARD_DEBUG`                   | Enable debug logging                                     | unset                     |
+| `ANTHROPIC_API_KEY`               | Anthropic API key                                        | —                         |
+| `OPENAI_API_KEY`                  | OpenAI API key                                           | —                         |
+| `XAI_API_KEY`                     | xAI API key                                              | —                         |
 
 ### Providers and Models
 
@@ -247,6 +249,7 @@ Features:
 | `/specialists`    | List saved specialists                                                               |
 | `/candidates`     | Review auto-detected specialist suggestions _(v0.6.0+)_                              |
 | `/critic`         | Toggle critic mode for response verification (on/off)                                |
+| `/agent-options`  | Configure auto-creation for specialist agents                                        |
 | `/options`        | View and modify runtime options (max-tokens, max-steps, shell-timeout, token-window) |
 | `/debug`          | Print a diagnostic report for troubleshooting (no secrets leaked)                    |
 | `/exit`           | Quit Bernard (also: `exit`, `quit`)                                                  |
@@ -484,6 +487,19 @@ When candidates are detected, you'll see a notification at the start of your nex
 
 Use `/candidates` to see pending suggestions with their name, description, confidence score, and reasoning. You can then accept or reject candidates conversationally (e.g., "accept the code-review candidate"), and Bernard will create the specialist for you.
 
+**Overlap detection** — Before suggesting a new specialist, Bernard computes a token-based similarity score against all existing specialists and pending candidates. If the overlap exceeds 60%, the candidate is suppressed. When a candidate partially overlaps with an existing specialist, Bernard may suggest enhancing the existing specialist instead.
+
+**Auto-creation** — You can enable automatic specialist creation for high-confidence candidates:
+
+```bash
+/agent-options auto-create on       # Enable auto-creation
+/agent-options auto-create off      # Disable auto-creation
+/agent-options threshold 0.85       # Set confidence threshold (0-1)
+/agent-options                      # Show current settings
+```
+
+Or via environment variables: `BERNARD_AUTO_CREATE_SPECIALISTS=true` and `BERNARD_AUTO_CREATE_THRESHOLD=0.85`.
+
 Candidates are auto-dismissed after 30 days if not reviewed. Up to 10 pending candidates are stored at a time.
 
 Storage: one JSON file per candidate in `~/.local/share/bernard/specialist-candidates/`.
@@ -505,6 +521,12 @@ When enabled:
 - **Verification** — After tool-using responses, a critic agent reviews the work and prints a verdict (PASS/WARN/FAIL)
 
 The critic checks that claimed actions match actual tool calls and flags any discrepancies. It adds one extra LLM call after tool-using responses. Simple knowledge answers are not verified.
+
+**PAC System (Plan-Act-Critic)** — When critic mode is enabled, sub-agents and specialists also get critic verification via a reusable PAC loop. The PAC loop runs the critic after each sub-agent/specialist execution, and if the critic finds issues, it retries the task with feedback (up to 2 retries). This applies to:
+
+- Sub-agents (`agent` tool)
+- Specialist runs (`specialist_run` tool)
+- Cron job executions (daemon mode)
 
 Default: off. Recommended for high-stakes work (deployments, git operations, multi-file edits).
 

@@ -21,6 +21,7 @@ import {
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
 import type { SpecialistStore } from '../specialists.js';
+import { runPACLoop } from '../pac.js';
 
 const SPECIALIST_EXECUTION_RULES = `
 
@@ -147,6 +148,18 @@ export function createSpecialistRunTool(
           includeScratch: true,
         });
 
+        const onStepFinish = ({ text, toolCalls, toolResults }: any) => {
+          for (const tc of toolCalls ?? []) {
+            printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
+          }
+          for (const tr of toolResults ?? []) {
+            printToolResult(tr.toolName, tr.result, prefix);
+          }
+          if (text) {
+            printAssistantText(text, prefix);
+          }
+        };
+
         const result = await generateText({
           model: getModel(resolvedProvider, resolvedModel),
           tools: baseTools,
@@ -155,18 +168,33 @@ export function createSpecialistRunTool(
           system: systemPrompt,
           messages: [{ role: 'user', content: userMessage }],
           abortSignal: execOptions.abortSignal,
-          onStepFinish: ({ text, toolCalls, toolResults }) => {
-            for (const tc of toolCalls) {
-              printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
-            }
-            for (const tr of toolResults) {
-              printToolResult(tr.toolName, tr.result, prefix);
-            }
-            if (text) {
-              printAssistantText(text, prefix);
-            }
-          },
+          onStepFinish,
         });
+
+        if (config.criticMode) {
+          const pacResult = await runPACLoop({
+            config,
+            userInput: userMessage,
+            initialResult: result,
+            regenerate: async (extraMessages) => {
+              return generateText({
+                model: getModel(resolvedProvider, resolvedModel),
+                tools: baseTools,
+                maxSteps: 10,
+                maxTokens: config.maxTokens,
+                system: systemPrompt,
+                messages: [{ role: 'user', content: userMessage }, ...extraMessages],
+                abortSignal: execOptions.abortSignal,
+                onStepFinish,
+              });
+            },
+            prefix,
+            abortSignal: execOptions.abortSignal,
+          });
+
+          printSpecialistEnd(id);
+          return pacResult.finalText;
+        }
 
         printSpecialistEnd(id);
         return result.text;

@@ -93,6 +93,8 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     ragEnabled: true,
     theme: 'bernard',
     criticMode: false,
+    autoCreateSpecialists: false,
+    autoCreateThreshold: 0.8,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };
@@ -545,7 +547,7 @@ describe('critic mode', () => {
       const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('list files');
 
-      expect(mockVerdict).toHaveBeenCalledWith('VERDICT: PASS\nAll good.');
+      expect(mockVerdict).toHaveBeenCalledWith('VERDICT: PASS\nAll good.', undefined);
     });
   });
 
@@ -739,5 +741,114 @@ describe('critic mode', () => {
       // 3 calls: main + critic(WARN) + retry(no tools, loop exits)
       expect(mockGenerateText).toHaveBeenCalledTimes(3);
     });
+  });
+});
+
+describe('standalone extractToolCallLog', () => {
+  it('extracts entries correctly from multiple steps', async () => {
+    const { extractToolCallLog } = await import('./critic.js');
+
+    const steps = [
+      {
+        toolCalls: [
+          { toolName: 'shell', args: { command: 'ls' } },
+          { toolName: 'memory', args: { action: 'read' } },
+        ],
+        toolResults: [
+          { toolName: 'shell', result: 'file.txt' },
+          { toolName: 'memory', result: 'data' },
+        ],
+      },
+      {
+        toolCalls: [{ toolName: 'shell', args: { command: 'cat file.txt' } }],
+        toolResults: [{ toolName: 'shell', result: 'contents' }],
+      },
+    ];
+
+    const entries = extractToolCallLog(steps);
+    expect(entries).toHaveLength(3);
+    expect(entries[0]).toEqual({ toolName: 'shell', args: { command: 'ls' }, result: 'file.txt' });
+    expect(entries[1]).toEqual({ toolName: 'memory', args: { action: 'read' }, result: 'data' });
+    expect(entries[2]).toEqual({
+      toolName: 'shell',
+      args: { command: 'cat file.txt' },
+      result: 'contents',
+    });
+  });
+
+  it('handles empty steps', async () => {
+    const { extractToolCallLog } = await import('./critic.js');
+    const entries = extractToolCallLog([]);
+    expect(entries).toHaveLength(0);
+  });
+
+  it('handles missing toolResults gracefully', async () => {
+    const { extractToolCallLog } = await import('./critic.js');
+
+    const steps = [
+      {
+        toolCalls: [{ toolName: 'shell', args: { command: 'ls' } }],
+        toolResults: [],
+      },
+    ];
+
+    const entries = extractToolCallLog(steps);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].result).toBeUndefined();
+  });
+});
+
+describe('standalone runCritic', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGenerateText.mockReset();
+  });
+
+  it('returns PASS result for a passing verdict', async () => {
+    const { runCritic } = await import('./critic.js');
+
+    mockGenerateText.mockResolvedValueOnce({
+      text: 'VERDICT: PASS\nAll claims verified.',
+      steps: [],
+      response: { messages: [] },
+      usage: { promptTokens: 50, completionTokens: 20 },
+    });
+
+    const result = await runCritic(makeConfig(), 'Do something', 'I did it.', [
+      { toolName: 'shell', args: { command: 'echo hi' }, result: 'hi' },
+    ]);
+
+    expect(result).not.toBeNull();
+    expect(result!.verdict).toBe('PASS');
+  });
+
+  it('returns FAIL result for a failing verdict', async () => {
+    const { runCritic } = await import('./critic.js');
+
+    mockGenerateText.mockResolvedValueOnce({
+      text: 'VERDICT: FAIL\nClaim not supported.',
+      steps: [],
+      response: { messages: [] },
+      usage: { promptTokens: 50, completionTokens: 20 },
+    });
+
+    const result = await runCritic(makeConfig(), 'Create file', 'I created the file.', [
+      { toolName: 'shell', args: { command: 'echo hi' }, result: 'hi' },
+    ]);
+
+    expect(result).not.toBeNull();
+    expect(result!.verdict).toBe('FAIL');
+  });
+
+  it('returns null on error', async () => {
+    const { runCritic } = await import('./critic.js');
+
+    mockGenerateText.mockRejectedValueOnce(new Error('API error'));
+
+    const result = await runCritic(makeConfig(), 'Do something', 'Done.', [
+      { toolName: 'shell', args: { command: 'echo hi' }, result: 'hi' },
+    ]);
+
+    expect(result).toBeNull();
   });
 });

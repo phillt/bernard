@@ -39,6 +39,8 @@ function makeConfig() {
     ragEnabled: true,
     theme: 'bernard',
     criticMode: false,
+    autoCreateSpecialists: false,
+    autoCreateThreshold: 0.8,
     anthropicApiKey: 'sk-test',
   };
 }
@@ -165,10 +167,14 @@ describe('detectSpecialistCandidate', () => {
     const longText = 'x'.repeat(600);
     const result = await detectSpecialistCandidate(longText, makeConfig(), [], []);
     expect(result).not.toBeNull();
-    expect(result!.draftId).toBe('code-review');
-    expect(result!.name).toBe('Code Review Specialist');
-    expect(result!.confidence).toBe(0.9);
-    expect(result!.guidelines).toEqual(['Check for bugs', 'Verify test coverage']);
+    expect(result!.type).toBe('new-candidate');
+    if (result!.type === 'new-candidate') {
+      expect(result!.candidate.draftId).toBe('code-review');
+      expect(result!.candidate.name).toBe('Code Review Specialist');
+      // Confidence is now composite (not raw LLM confidence)
+      expect(result!.candidate.confidence).toBeGreaterThan(0);
+      expect(result!.candidate.guidelines).toEqual(['Check for bugs', 'Verify test coverage']);
+    }
   });
 
   it('handles markdown-fenced JSON response', async () => {
@@ -193,7 +199,10 @@ describe('detectSpecialistCandidate', () => {
     const longText = 'x'.repeat(600);
     const result = await detectSpecialistCandidate(longText, makeConfig(), [], []);
     expect(result).not.toBeNull();
-    expect(result!.draftId).toBe('data-analyst');
+    expect(result!.type).toBe('new-candidate');
+    if (result!.type === 'new-candidate') {
+      expect(result!.candidate.draftId).toBe('data-analyst');
+    }
   });
 
   it('returns null for malformed JSON', async () => {

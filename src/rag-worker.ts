@@ -68,10 +68,12 @@ async function main(): Promise<void> {
       const candidate = await detectSpecialistCandidate(
         payload.serialized,
         config,
-        specialistStore.getSummaries(),
+        specialistStore.list(),
         candidateStore.listPending(),
       );
-      if (candidate) candidateStore.create(candidate, 'exit');
+      if (candidate && candidate.type === 'new-candidate') {
+        candidateStore.create(candidate.candidate, 'exit');
+      }
     }
   } catch {
     // Silent — detection failure must not block anything

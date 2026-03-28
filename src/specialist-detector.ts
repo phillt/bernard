@@ -2,8 +2,9 @@ import { generateText } from 'ai';
 import { getModel } from './providers/index.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
-import type { SpecialistSummary } from './specialists.js';
+import type { Specialist, SpecialistSummary } from './specialists.js';
 import type { SpecialistCandidate } from './specialist-candidates.js';
+import { checkOverlaps, computeConfidence, OVERLAP_THRESHOLD } from './overlap-checker.js';
 
 /** Minimum conversation length (chars) to bother analyzing. */
 const MIN_CONVERSATION_LENGTH = 500;
@@ -26,9 +27,15 @@ Do NOT suggest a specialist for:
 - Simple tool usage without behavioral customization
 - Patterns already covered by an existing specialist
 
+If a candidate significantly overlaps with an existing specialist:
+- Set shouldCreate to false and shouldEnhance to true
+- In enhancementTarget, specify which specialist to enhance and what to add
+- Include merged guidelines that combine the existing specialist's strengths with the new pattern
+
 Respond with a JSON object (no markdown fences):
 {
   "shouldCreate": boolean,
+  "shouldEnhance": boolean,
   "candidate": {
     "draftId": "kebab-case-id",
     "name": "Display Name",
@@ -37,6 +44,12 @@ Respond with a JSON object (no markdown fences):
     "guidelines": ["Rule 1", "Rule 2"],
     "confidence": 0.0-1.0,
     "reasoning": "Why this specialist was proposed"
+  } | null,
+  "enhancementTarget": {
+    "existingSpecialistId": "string",
+    "mergedGuidelines": ["rule1", "rule2"],
+    "mergedDescription": "enhanced description",
+    "reasoning": "Why this should be merged"
   } | null
 }
 
@@ -56,22 +69,48 @@ interface DetectedCandidate {
   reasoning: string;
 }
 
+interface EnhancementTarget {
+  existingSpecialistId: string;
+  mergedGuidelines: string[];
+  mergedDescription?: string;
+  reasoning: string;
+}
+
+/**
+ * Result of specialist detection — either a new candidate, an enhancement suggestion,
+ * or null if nothing was detected.
+ */
+export type DetectionResult =
+  | {
+      type: 'new-candidate';
+      candidate: Omit<
+        SpecialistCandidate,
+        'id' | 'detectedAt' | 'acknowledged' | 'status' | 'source'
+      >;
+    }
+  | {
+      type: 'enhance-existing';
+      enhancement: {
+        existingSpecialistId: string;
+        mergedGuidelines: string[];
+        mergedDescription?: string;
+        reasoning: string;
+      };
+    }
+  | null;
+
 /**
  * Analyze a serialized conversation for recurring delegation patterns
  * that would benefit from a saved specialist agent.
  *
- * Returns a candidate draft ready for `CandidateStore.create()`, or `null`
- * if no strong pattern was detected.
+ * Returns a discriminated union: a new candidate, an enhancement suggestion, or null.
  */
 export async function detectSpecialistCandidate(
   serializedText: string,
   config: BernardConfig,
-  existingSpecialists: SpecialistSummary[],
+  existingSpecialists: (SpecialistSummary | Specialist)[],
   pendingCandidates: SpecialistCandidate[],
-): Promise<Omit<
-  SpecialistCandidate,
-  'id' | 'detectedAt' | 'acknowledged' | 'status' | 'source'
-> | null> {
+): Promise<DetectionResult> {
   // Skip trivial conversations
   if (serializedText.length < MIN_CONVERSATION_LENGTH) return null;
 
@@ -105,8 +144,27 @@ export async function detectSpecialistCandidate(
     const jsonStr = text.replace(/^```(?:json)?\s*/m, '').replace(/\s*```$/m, '');
     const parsed = JSON.parse(jsonStr) as {
       shouldCreate: boolean;
+      shouldEnhance?: boolean;
       candidate: DetectedCandidate | null;
+      enhancementTarget?: EnhancementTarget | null;
     };
+
+    // Handle enhancement suggestion
+    if (parsed.shouldEnhance && parsed.enhancementTarget) {
+      const { existingSpecialistId, mergedGuidelines, mergedDescription, reasoning } =
+        parsed.enhancementTarget;
+      if (existingSpecialistId && Array.isArray(mergedGuidelines)) {
+        return {
+          type: 'enhance-existing',
+          enhancement: {
+            existingSpecialistId,
+            mergedGuidelines,
+            mergedDescription,
+            reasoning: reasoning || '',
+          },
+        };
+      }
+    }
 
     if (!parsed.shouldCreate || !parsed.candidate) return null;
     if (parsed.candidate.confidence < MIN_CONFIDENCE) return null;
@@ -117,7 +175,40 @@ export async function detectSpecialistCandidate(
     // Validate required fields
     if (!draftId || !name || !systemPrompt) return null;
 
-    // Duplicate check against existing specialists
+    // Run overlap check against existing specialists and pending candidates
+    const overlapResult = checkOverlaps(
+      {
+        name,
+        description: description || '',
+        systemPrompt,
+        guidelines: Array.isArray(guidelines) ? guidelines : [],
+      },
+      existingSpecialists.map((s) => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        systemPrompt: 'systemPrompt' in s ? (s as Specialist).systemPrompt : undefined,
+        guidelines: 'guidelines' in s ? (s as Specialist).guidelines : undefined,
+      })),
+      pendingCandidates.map((c) => ({
+        draftId: c.draftId,
+        name: c.name,
+        description: c.description,
+        systemPrompt: c.systemPrompt,
+        guidelines: c.guidelines,
+      })),
+    );
+
+    // If overlap exceeds threshold, reject the candidate
+    if (overlapResult.maxScore > OVERLAP_THRESHOLD) {
+      debugLog(
+        'specialist-detector',
+        `Overlap detected: "${draftId}" overlaps with ${overlapResult.details} (score: ${overlapResult.maxScore.toFixed(2)} > threshold ${OVERLAP_THRESHOLD})`,
+      );
+      return null;
+    }
+
+    // Duplicate check against existing specialists (strict ID/name match)
     const normalizedName = name.toLowerCase();
     const normalizedDraftId = draftId.toLowerCase();
 
@@ -153,14 +244,32 @@ export async function detectSpecialistCandidate(
       }
     }
 
-    return {
-      draftId,
-      name,
-      description: description || '',
-      systemPrompt,
-      guidelines: Array.isArray(guidelines) ? guidelines : [],
+    // Compute composite confidence using overlap data
+    const compositeConfidence = computeConfidence(
       confidence,
-      reasoning: reasoning || '',
+      overlapResult.maxScore,
+      {
+        systemPrompt,
+        guidelines: Array.isArray(guidelines) ? guidelines : [],
+        description: description || '',
+        draftId,
+      },
+      serializedText.length,
+    );
+
+    return {
+      type: 'new-candidate',
+      candidate: {
+        draftId,
+        name,
+        description: description || '',
+        systemPrompt,
+        guidelines: Array.isArray(guidelines) ? guidelines : [],
+        confidence: compositeConfidence,
+        reasoning: reasoning || '',
+        overlapScore: overlapResult.maxScore,
+        overlapsWithId: overlapResult.bestMatch?.id,
+      },
     };
   } catch (err) {
     debugLog(

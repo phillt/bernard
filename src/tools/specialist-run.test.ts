@@ -64,6 +64,8 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     ragEnabled: true,
     theme: 'bernard',
     criticMode: false,
+    autoCreateSpecialists: false,
+    autoCreateThreshold: 0.8,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };
