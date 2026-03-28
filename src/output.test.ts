@@ -537,6 +537,37 @@ describe('output', () => {
       const output = logSpy.mock.calls[0][0];
       expect(output).toContain('UNKNOWN');
     });
+
+    it('PASS with multi-line explanation shows only badge', () => {
+      printCriticVerdict('VERDICT: PASS\nLine one.\nLine two.');
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('PASS');
+      expect(output).not.toContain('Line one');
+      expect(output).not.toContain('Line two');
+    });
+
+    it('WARN with multi-line explanation shows only badge', () => {
+      printCriticVerdict('VERDICT: WARN\nIssue one.\nIssue two.');
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('WARN');
+      expect(output).not.toContain('Issue one');
+      expect(output).not.toContain('Issue two');
+    });
+
+    it('FAIL with multi-line explanation shows full output', () => {
+      printCriticVerdict('VERDICT: FAIL\nProblem one.\nProblem two.');
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('FAIL');
+      expect(output).toContain('Problem one');
+      expect(output).toContain('Problem two');
+    });
+
+    it('PASS with single-line explanation includes it', () => {
+      printCriticVerdict('VERDICT: PASS\nAll good.');
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('PASS');
+      expect(output).toContain('All good.');
+    });
   });
 
   describe('printCriticRetry', () => {
