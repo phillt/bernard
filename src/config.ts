@@ -471,9 +471,12 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
       ? true
       : DEFAULT_AUTO_CREATE_SPECIALISTS);
 
+  const envAutoCreateThreshold = parseFloat(process.env.BERNARD_AUTO_CREATE_THRESHOLD ?? '');
   const autoCreateThreshold =
     prefs.autoCreateThreshold ??
-    (parseFloat(process.env.BERNARD_AUTO_CREATE_THRESHOLD || '') || DEFAULT_AUTO_CREATE_THRESHOLD);
+    (Number.isFinite(envAutoCreateThreshold)
+      ? envAutoCreateThreshold
+      : DEFAULT_AUTO_CREATE_THRESHOLD);
 
   const config: BernardConfig = {
     provider,

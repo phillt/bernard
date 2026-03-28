@@ -1292,7 +1292,9 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             printInfo(`Auto-create threshold: ${val}`);
           }
         } else {
-          printError('Usage: /agent-options [auto-create on|off] [threshold <0-1>]');
+          printError(
+            'Usage: /agent-options auto-create on|off  OR  /agent-options threshold <0-1>',
+          );
         }
         void prompt();
         return;

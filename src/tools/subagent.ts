@@ -143,10 +143,10 @@ export function createSubAgentTool(
           });
 
         const onStepFinish = ({ text, toolCalls, toolResults }: any) => {
-          for (const tc of toolCalls) {
+          for (const tc of toolCalls ?? []) {
             printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
           }
-          for (const tr of toolResults) {
+          for (const tr of toolResults ?? []) {
             printToolResult(tr.toolName, tr.result, prefix);
           }
           if (text) {
@@ -168,7 +168,7 @@ export function createSubAgentTool(
         if (config.criticMode) {
           const pacResult = await runPACLoop({
             config,
-            userInput: task,
+            userInput: userMessage,
             initialResult: result,
             regenerate: async (extraMessages) => {
               return generateText({

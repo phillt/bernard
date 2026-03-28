@@ -70,7 +70,9 @@ export async function runPACLoop(opts: {
       result = await opts.regenerate(feedbackMessages);
       toolCallLog = extractToolCallLog(result.steps);
 
-      if (toolCallLog.length === 0) break;
+      if (toolCallLog.length === 0) {
+        return { finalText: result.text, criticPassed: true, retriesUsed };
+      }
 
       const retryCriticResult = await runCritic(config, userInput, result.text, toolCallLog, {
         isRetry: true,
