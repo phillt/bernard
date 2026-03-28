@@ -63,10 +63,7 @@ describe('createMCPAddUrlTool', () => {
     vi.mocked(addMCPUrlServer).mockImplementation(() => {
       throw new Error('Server "dup" already exists. Remove it first, then add again.');
     });
-    const result = await tool.execute(
-      { key: 'dup', url: 'http://localhost:6288/sse' },
-      {} as any,
-    );
+    const result = await tool.execute({ key: 'dup', url: 'http://localhost:6288/sse' }, {} as any);
     expect(result).toContain('Error adding server:');
     expect(result).toContain('already exists');
   });
