@@ -68,7 +68,7 @@ async function main(): Promise<void> {
       const candidate = await detectSpecialistCandidate(
         payload.serialized,
         config,
-        specialistStore.getSummaries(),
+        specialistStore.list(),
         candidateStore.listPending(),
       );
       if (candidate && candidate.type === 'new-candidate') {

@@ -46,11 +46,11 @@ export async function runPACLoop(opts: {
     abortSignal,
   });
 
-  if (!criticResult || criticResult.verdict === 'PASS') {
+  if (!criticResult || criticResult.verdict === 'PASS' || criticResult.verdict === 'WARN') {
     return { finalText: result.text, criticPassed: true, retriesUsed: 0 };
   }
 
-  // WARN or FAIL — retry loop
+  // FAIL — retry loop
   let lastCriticResult = criticResult;
   while (retriesUsed < maxRetries) {
     if (abortSignal?.aborted) break;
@@ -80,7 +80,11 @@ export async function runPACLoop(opts: {
         abortSignal,
       });
 
-      if (!retryCriticResult || retryCriticResult.verdict === 'PASS') {
+      if (
+        !retryCriticResult ||
+        retryCriticResult.verdict === 'PASS' ||
+        retryCriticResult.verdict === 'WARN'
+      ) {
         return { finalText: result.text, criticPassed: true, retriesUsed };
       }
 

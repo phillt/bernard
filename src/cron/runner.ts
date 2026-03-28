@@ -210,8 +210,20 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       enrichedPrompt += `\nConnected MCP servers: ${serverNames.join(', ')}`;
     }
 
-    const onStepFinish = ({ text, toolCalls, toolResults, usage, finishReason }: any) => {
-      const truncatedResults = (toolResults || []).map((tr: any) => ({
+    const onStepFinish = ({
+      text,
+      toolCalls,
+      toolResults,
+      usage,
+      finishReason,
+    }: {
+      text: string;
+      toolCalls: { toolName: string; toolCallId: string; args: unknown }[];
+      toolResults: { toolName: string; toolCallId: string; result: unknown }[];
+      usage?: { promptTokens: number; completionTokens: number };
+      finishReason?: string;
+    }) => {
+      const truncatedResults = (toolResults ?? []).map((tr) => ({
         toolName: tr.toolName,
         toolCallId: tr.toolCallId,
         result: truncateResult(tr.result, 10240),
@@ -220,7 +232,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         stepIndex: stepIndex++,
         timestamp: new Date().toISOString(),
         text: text || '',
-        toolCalls: (toolCalls || []).map((tc: any) => ({
+        toolCalls: (toolCalls ?? []).map((tc) => ({
           toolName: tc.toolName,
           toolCallId: tc.toolCallId,
           args: tc.args as Record<string, unknown>,

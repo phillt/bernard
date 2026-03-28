@@ -629,7 +629,7 @@ export async function startRepl(
                 detectSpecialistCandidate(
                   serialized,
                   config,
-                  specialistStore.getSummaries(),
+                  specialistStore.list(),
                   candidateStore.listPending(),
                 ).catch(() => null),
               ]);

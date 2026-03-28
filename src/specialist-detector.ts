@@ -2,7 +2,7 @@ import { generateText } from 'ai';
 import { getModel } from './providers/index.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
-import type { SpecialistSummary } from './specialists.js';
+import type { Specialist, SpecialistSummary } from './specialists.js';
 import type { SpecialistCandidate } from './specialist-candidates.js';
 import { checkOverlaps, computeConfidence, OVERLAP_THRESHOLD } from './overlap-checker.js';
 
@@ -108,7 +108,7 @@ export type DetectionResult =
 export async function detectSpecialistCandidate(
   serializedText: string,
   config: BernardConfig,
-  existingSpecialists: SpecialistSummary[],
+  existingSpecialists: (SpecialistSummary | Specialist)[],
   pendingCandidates: SpecialistCandidate[],
 ): Promise<DetectionResult> {
   // Skip trivial conversations
@@ -187,6 +187,8 @@ export async function detectSpecialistCandidate(
         id: s.id,
         name: s.name,
         description: s.description,
+        systemPrompt: 'systemPrompt' in s ? (s as Specialist).systemPrompt : undefined,
+        guidelines: 'guidelines' in s ? (s as Specialist).guidelines : undefined,
       })),
       pendingCandidates.map((c) => ({
         draftId: c.draftId,

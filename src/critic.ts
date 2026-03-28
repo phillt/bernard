@@ -9,10 +9,10 @@ import {
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 
-export const CRITIC_TOTAL_RESULT_BUDGET = 8000;
-export const CRITIC_MIN_RESULT_CHARS = 500;
-export const CRITIC_MAX_RESPONSE_LENGTH = 4000;
-export const CRITIC_MAX_ARGS_LENGTH = 1000;
+const CRITIC_TOTAL_RESULT_BUDGET = 8000;
+const CRITIC_MIN_RESULT_CHARS = 500;
+const CRITIC_MAX_RESPONSE_LENGTH = 4000;
+const CRITIC_MAX_ARGS_LENGTH = 1000;
 
 export const CRITIC_SYSTEM_PROMPT = `You are a verification agent for Bernard, a CLI AI assistant. Your role is to review the agent's work and verify its integrity.
 
