@@ -46,7 +46,14 @@ vi.mock('ai', async (importOriginal) => {
   };
 });
 
-import { createTaskTool, wrapTaskResult, TASK_SYSTEM_PROMPT } from './task.js';
+import {
+  createTaskTool,
+  wrapTaskResult,
+  TASK_SYSTEM_PROMPT,
+  TASK_STEP_RATIO,
+  getTaskMaxSteps,
+  makeLastStepTextOnly,
+} from './task.js';
 import { _resetPool } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 import { RoutineStore } from '../routines.js';
@@ -137,6 +144,35 @@ describe('wrapTaskResult', () => {
     expect(result.status).toBe('success');
     expect(result.output).toEqual(['file1.ts', 'file2.ts']);
   });
+
+  it('handles nested JSON objects in output', () => {
+    const input = '{"status": "success", "output": {"key": "value", "nested": {"deep": true}}}';
+    const result = wrapTaskResult(input);
+    expect(result.status).toBe('success');
+    expect(result.output).toEqual({ key: 'value', nested: { deep: true } });
+  });
+
+  it('handles nested JSON with prose before it', () => {
+    const input =
+      'Here is the result:\n{"status": "success", "output": {"files": ["a.ts", "b.ts"]}}';
+    const result = wrapTaskResult(input);
+    expect(result.status).toBe('success');
+    expect(result.output).toEqual({ files: ['a.ts', 'b.ts'] });
+  });
+
+  it('handles JSON with escaped quotes in strings', () => {
+    const input = '{"status": "success", "output": "said \\"hello\\""}';
+    const result = wrapTaskResult(input);
+    expect(result.status).toBe('success');
+    expect(result.output).toBe('said "hello"');
+  });
+
+  it('skips non-matching JSON blocks to find the task result', () => {
+    const input = 'Tool returned: {"key": "val"}\n{"status": "success", "output": "done"}';
+    const result = wrapTaskResult(input);
+    expect(result.status).toBe('success');
+    expect(result.output).toBe('done');
+  });
 });
 
 describe('task tool', () => {
@@ -160,11 +196,11 @@ describe('task tool', () => {
     expect(taskTool).toBeDefined();
     expect(taskTool.description).toContain('isolated');
     expect(taskTool.description).toContain('structured JSON');
-    expect(taskTool.description).toContain('single-step');
+    expect(taskTool.description).toContain('limited step budget');
     expect(taskTool.execute).toBeDefined();
   });
 
-  it('calls generateText with maxSteps=2', async () => {
+  it('calls generateText with proportional maxSteps and prepareStep', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
     const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
     await taskTool.execute!(
@@ -173,8 +209,22 @@ describe('task tool', () => {
     );
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
     const call = mockGenerateText.mock.calls[0][0];
-    expect(call.maxSteps).toBe(2);
+    expect(call.maxSteps).toBe(Math.ceil(25 * TASK_STEP_RATIO)); // 10
     expect(call.messages[0].content).toContain('List files');
+    expect(call.experimental_prepareStep).toBeDefined();
+  });
+
+  it('prepareStep forces toolChoice none on the final step', async () => {
+    const taskMaxSteps = getTaskMaxSteps(makeConfig({ maxSteps: 25 }));
+    const prepareStep = makeLastStepTextOnly(taskMaxSteps);
+
+    // Non-final step: should return undefined (no override)
+    const midResult = await prepareStep({ stepNumber: 1 });
+    expect(midResult).toBeUndefined();
+
+    // Final step: should force toolChoice 'none'
+    const lastResult = await prepareStep({ stepNumber: taskMaxSteps });
+    expect(lastResult).toEqual({ toolChoice: 'none' });
   });
 
   it('returns structured JSON on success', async () => {
@@ -295,7 +345,7 @@ describe('task tool', () => {
     );
     const call = mockGenerateText.mock.calls[0][0];
     expect(call.system).toContain('task executor');
-    expect(call.system).toContain('ONE generation');
+    expect(call.system).toContain('limited step budget');
     expect(call.system).toContain('"status"');
     expect(call.system).toContain('Working directory:');
     expect(call.system).toContain('Available tools:');
@@ -412,7 +462,7 @@ describe('task tool', () => {
     );
     const call = mockGenerateText.mock.calls[0][0];
     expect(call.system).toContain('report the failure');
-    expect(call.system).toContain('do not have budget for retries');
+    expect(call.system).toContain('rather than retrying indefinitely');
   });
 
   describe('per-invocation model override', () => {
