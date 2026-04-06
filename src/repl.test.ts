@@ -133,8 +133,10 @@ vi.mock('./config.js', () => ({
   getAvailableProviders: vi.fn(() => ['anthropic']),
   getDefaultModel: vi.fn(() => 'claude-sonnet-4-5-20250929'),
   savePreferences: vi.fn(),
+  loadPreferences: vi.fn(() => ({})),
   OPTIONS_REGISTRY: {},
   saveOption: vi.fn(),
+  normalizeThreshold: vi.fn((v: number) => (v > 1 ? v / 100 : Math.max(0, Math.min(1, v)))),
 }));
 
 vi.mock('./theme.js', () => ({
@@ -178,11 +180,13 @@ vi.mock('./routines.js', () => ({
   })),
 }));
 
+const mockSpecialistCreate = vi.fn();
 vi.mock('./specialists.js', () => ({
   SpecialistStore: vi.fn(() => ({
     list: vi.fn(() => []),
     get: vi.fn(),
     getSummaries: vi.fn(() => []),
+    create: mockSpecialistCreate,
   })),
 }));
 
@@ -190,6 +194,7 @@ const mockListPending = vi.fn(() => []);
 const mockAcknowledge = vi.fn(() => true);
 const mockPruneOld = vi.fn(() => 0);
 const mockCandidateCreate = vi.fn();
+const mockCandidateUpdateStatus = vi.fn(() => true);
 
 vi.mock('./specialist-candidates.js', () => ({
   CandidateStore: vi.fn(() => ({
@@ -198,6 +203,7 @@ vi.mock('./specialist-candidates.js', () => ({
     pruneOld: mockPruneOld,
     reconcileSaved: vi.fn(() => 0),
     create: mockCandidateCreate,
+    updateStatus: mockCandidateUpdateStatus,
     list: vi.fn(() => []),
   })),
   MAX_PENDING_CANDIDATES: 10,
