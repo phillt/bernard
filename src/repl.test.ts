@@ -802,15 +802,13 @@ describe('REPL step-limit doubling prompt', () => {
 });
 
 describe('REPL /agent-options threshold normalization', () => {
-  let exitSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
     vi.clearAllMocks();
     rlEmitter = makeRl();
     vi.spyOn(console, 'clear').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+    vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
   });
 
   afterEach(() => {
@@ -829,9 +827,7 @@ describe('REPL /agent-options threshold normalization', () => {
     typeLine('/agent-options threshold 80');
 
     await vi.waitFor(() => {
-      expect(mockPrintInfo).toHaveBeenCalledWith(
-        expect.stringContaining('0.8'),
-      );
+      expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining('0.8'));
     });
 
     expect(config.autoCreateThreshold).toBe(0.8);
@@ -852,9 +848,7 @@ describe('REPL /agent-options threshold normalization', () => {
     typeLine('/agent-options threshold 0.75');
 
     await vi.waitFor(() => {
-      expect(mockPrintInfo).toHaveBeenCalledWith(
-        expect.stringContaining('0.75'),
-      );
+      expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining('0.75'));
     });
 
     expect(config.autoCreateThreshold).toBe(0.75);
@@ -875,9 +869,7 @@ describe('REPL /agent-options threshold normalization', () => {
     typeLine('/agent-options threshold 150');
 
     await vi.waitFor(() => {
-      expect(mockPrintError).toHaveBeenCalledWith(
-        expect.stringContaining('between 0 and 100'),
-      );
+      expect(mockPrintError).toHaveBeenCalledWith(expect.stringContaining('between 0 and 100'));
     });
 
     rlEmitter.emit('close');
@@ -886,15 +878,13 @@ describe('REPL /agent-options threshold normalization', () => {
 });
 
 describe('REPL /agent-options auto-create re-evaluation', () => {
-  let exitSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
     vi.clearAllMocks();
     rlEmitter = makeRl();
     vi.spyOn(console, 'clear').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+    vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
   });
 
   afterEach(() => {
@@ -981,6 +971,50 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
 
     expect(mockSpecialistCreate).not.toHaveBeenCalled();
     expect(mockCandidateUpdateStatus).not.toHaveBeenCalled();
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('re-evaluates pending candidates when threshold is lowered with auto-create already on', async () => {
+    const { startRepl } = await import('./repl.js');
+    const config = makeConfig({ autoCreateSpecialists: true, autoCreateThreshold: 0.9 });
+
+    mockListPending.mockReturnValue([
+      {
+        id: 'cand-3',
+        draftId: 'test-writer',
+        name: 'Test Writer',
+        description: 'Writes tests',
+        systemPrompt: 'You write tests',
+        guidelines: ['Cover edge cases'],
+        confidence: 0.85,
+        reasoning: 'Detected pattern',
+        status: 'pending',
+        detectedAt: new Date().toISOString(),
+      },
+    ]);
+
+    const replPromise = startRepl(config);
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    // Lower threshold from 0.9 to 0.8 — candidate at 0.85 should now qualify
+    typeLine('/agent-options threshold 0.8');
+
+    await vi.waitFor(() => {
+      expect(mockSpecialistCreate).toHaveBeenCalledWith(
+        'test-writer',
+        'Test Writer',
+        'Writes tests',
+        'You write tests',
+        ['Cover edge cases'],
+      );
+    });
+
+    expect(mockCandidateUpdateStatus).toHaveBeenCalledWith('cand-3', 'accepted');
 
     rlEmitter.emit('close');
     await replPromise.catch(() => {});

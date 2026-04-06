@@ -519,9 +519,9 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
   const envAutoCreateThreshold = parseFloat(process.env.BERNARD_AUTO_CREATE_THRESHOLD ?? '');
   const autoCreateThreshold = normalizeThreshold(
     prefs.autoCreateThreshold ??
-    (Number.isFinite(envAutoCreateThreshold)
-      ? envAutoCreateThreshold
-      : DEFAULT_AUTO_CREATE_THRESHOLD),
+      (Number.isFinite(envAutoCreateThreshold)
+        ? envAutoCreateThreshold
+        : DEFAULT_AUTO_CREATE_THRESHOLD),
   );
 
   const config: BernardConfig = {

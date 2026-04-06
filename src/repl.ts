@@ -58,7 +58,7 @@ import {
 import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
 import { SpecialistStore } from './specialists.js';
-import { CandidateStore } from './specialist-candidates.js';
+import { CandidateStore, type SpecialistCandidate } from './specialist-candidates.js';
 import { detectSpecialistCandidate } from './specialist-detector.js';
 import { TASK_SYSTEM_PROMPT, wrapTaskResult } from './tools/task.js';
 import { createTools } from './tools/index.js';
@@ -75,7 +75,10 @@ import { debugLog } from './logger.js';
 
 /** Promote a pending candidate to a full specialist, updating status and logging. */
 function promoteCandidate(
-  candidate: { id: string; draftId: string; name: string; description: string; systemPrompt: string; guidelines: string[]; confidence: number },
+  candidate: Pick<
+    SpecialistCandidate,
+    'id' | 'draftId' | 'name' | 'description' | 'systemPrompt' | 'guidelines' | 'confidence'
+  >,
   specialistStore: SpecialistStore,
   candidateStore: CandidateStore,
   threshold: number,
@@ -96,6 +99,31 @@ function promoteCandidate(
   printInfo(
     `Specialist auto-created: "${candidate.name}" (confidence: ${Math.round(candidate.confidence * 100)}%). Use /specialists to view.`,
   );
+}
+
+/** Re-evaluate all pending candidates and auto-create those meeting the threshold. */
+function promotePendingCandidates(
+  candidateStore: CandidateStore,
+  specialistStore: SpecialistStore,
+  threshold: number,
+): void {
+  const pending = candidateStore.listPending();
+  for (const c of pending) {
+    if (c.confidence >= threshold) {
+      try {
+        promoteCandidate(c, specialistStore, candidateStore, threshold);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        debugLog('repl:auto-create', {
+          action: 're-evaluate-failed',
+          candidate: c.name,
+          confidence: c.confidence,
+          error: errorMessage,
+        });
+        printWarning(`Failed to auto-create specialist "${c.name}": ${errorMessage}`);
+      }
+    }
+  }
 }
 
 /**
@@ -1285,7 +1313,9 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         if (!args) {
           // Display current settings
           printInfo(`Auto-create specialists: ${config.autoCreateSpecialists ? 'on' : 'off'}`);
-          printInfo(`Auto-create threshold: ${config.autoCreateThreshold} (${Math.round(config.autoCreateThreshold * 100)}%)`);
+          printInfo(
+            `Auto-create threshold: ${config.autoCreateThreshold} (${Math.round(config.autoCreateThreshold * 100)}%)`,
+          );
         } else if (args === 'auto-create on') {
           config.autoCreateSpecialists = true;
           savePreferences({
@@ -1295,21 +1325,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             model: config.model,
           });
           printInfo('Auto-create specialists: on');
-          // Re-evaluate pending candidates against current threshold
-          const pending = candidateStore.listPending();
-          for (const c of pending) {
-            if (c.confidence >= config.autoCreateThreshold) {
-              try {
-                promoteCandidate(c, specialistStore, candidateStore, config.autoCreateThreshold);
-              } catch {
-                debugLog('repl:auto-create', {
-                  action: 're-evaluate-failed',
-                  candidate: c.name,
-                  confidence: c.confidence,
-                });
-              }
-            }
-          }
+          promotePendingCandidates(candidateStore, specialistStore, config.autoCreateThreshold);
         } else if (args === 'auto-create off') {
           config.autoCreateSpecialists = false;
           savePreferences({
@@ -1333,6 +1349,9 @@ Remember: the systemPrompt should read like a persona definition — who this sp
               model: config.model,
             });
             printInfo(`Auto-create threshold: ${normalized} (${Math.round(normalized * 100)}%)`);
+            if (config.autoCreateSpecialists) {
+              promotePendingCandidates(candidateStore, specialistStore, config.autoCreateThreshold);
+            }
           }
         } else {
           printError(
