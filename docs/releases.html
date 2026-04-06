@@ -534,6 +534,114 @@
       </div>
     </section>
 
+    <!-- v0.8.1 -->
+    <section class="version-section" id="v0.8.1">
+      <div class="container">
+        <h2 class="version-heading">
+          v0.8.1
+          <span class="version-date">2026-04-06</span>
+        </h2>
+
+        <!-- Proportional Task Step Budget -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- sliders icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <line x1="4" y1="21" x2="4" y2="14"></line>
+                <line x1="4" y1="10" x2="4" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12" y2="3"></line>
+                <line x1="20" y1="21" x2="20" y2="16"></line>
+                <line x1="20" y1="12" x2="20" y2="3"></line>
+                <line x1="1" y1="14" x2="7" y2="14"></line>
+                <line x1="9" y1="8" x2="15" y2="8"></line>
+                <line x1="17" y1="16" x2="23" y2="16"></line>
+              </svg>
+            </div>
+            <h2>Proportional Task Step Budget <span class="tag">fix</span></h2>
+          </div>
+          <p>
+            Tasks now receive a proportional fraction of the available step budget instead of a
+            fixed step count, and the final step forces text-only output to guarantee structured
+            JSON results.
+          </p>
+          <ul>
+            <li>
+              Introduced <code>TASK_STEP_RATIO</code>, <code>getTaskMaxSteps</code>, and
+              <code>makeLastStepTextOnly</code> utilities in <code>task.ts</code>
+            </li>
+            <li>
+              Overhauled <code>wrapTaskResult</code> to robustly extract and validate JSON from
+              arbitrary output, handling nested objects, escaped quotes, and multiple JSON blocks
+            </li>
+            <li>
+              Updated REPL and task tool to pass correct <code>maxSteps</code> and
+              <code>experimental_prepareStep</code> options
+            </li>
+            <li>
+              Expanded test coverage for result extraction edge cases
+            </li>
+          </ul>
+        </div>
+
+        <!-- Threshold Normalization -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- percent icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <line x1="19" y1="5" x2="5" y2="19"></line>
+                <circle cx="6.5" cy="6.5" r="2.5"></circle>
+                <circle cx="17.5" cy="17.5" r="2.5"></circle>
+              </svg>
+            </div>
+            <h2>Threshold Normalization for Auto-Create Agents <span class="tag">fix</span></h2>
+          </div>
+          <p>
+            The auto-create threshold now accepts both fractional (0&ndash;1) and percentage
+            (1&ndash;100) values, and pending specialist candidates are re-evaluated automatically
+            when settings change.
+          </p>
+          <ul>
+            <li>
+              Added <code>normalizeThreshold</code> utility in <code>config.ts</code> that clamps
+              values to the [0,&thinsp;1] range regardless of input format
+            </li>
+            <li>
+              Updated <code>/agent-options threshold</code> command to display both normalized and
+              percentage values
+            </li>
+            <li>
+              Refactored auto-creation logic into a reusable <code>promoteCandidate</code> helper
+            </li>
+            <li>
+              Enabling auto-create now re-evaluates and promotes pending candidates above the
+              threshold
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
     <!-- v0.8.0 -->
     <section class="version-section" id="v0.8.0">
       <div class="container">
