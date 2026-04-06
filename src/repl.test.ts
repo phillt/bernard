@@ -800,3 +800,189 @@ describe('REPL step-limit doubling prompt', () => {
     await replPromise.catch(() => {});
   });
 });
+
+describe('REPL /agent-options threshold normalization', () => {
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rlEmitter = makeRl();
+    vi.spyOn(console, 'clear').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('/agent-options threshold 80 normalizes to 0.8', async () => {
+    const { startRepl } = await import('./repl.js');
+    const config = makeConfig();
+    const replPromise = startRepl(config);
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/agent-options threshold 80');
+
+    await vi.waitFor(() => {
+      expect(mockPrintInfo).toHaveBeenCalledWith(
+        expect.stringContaining('0.8'),
+      );
+    });
+
+    expect(config.autoCreateThreshold).toBe(0.8);
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('/agent-options threshold 0.75 stays as 0.75', async () => {
+    const { startRepl } = await import('./repl.js');
+    const config = makeConfig();
+    const replPromise = startRepl(config);
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/agent-options threshold 0.75');
+
+    await vi.waitFor(() => {
+      expect(mockPrintInfo).toHaveBeenCalledWith(
+        expect.stringContaining('0.75'),
+      );
+    });
+
+    expect(config.autoCreateThreshold).toBe(0.75);
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('/agent-options threshold rejects values over 100', async () => {
+    const { startRepl } = await import('./repl.js');
+    const config = makeConfig();
+    const replPromise = startRepl(config);
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/agent-options threshold 150');
+
+    await vi.waitFor(() => {
+      expect(mockPrintError).toHaveBeenCalledWith(
+        expect.stringContaining('between 0 and 100'),
+      );
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+});
+
+describe('REPL /agent-options auto-create re-evaluation', () => {
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rlEmitter = makeRl();
+    vi.spyOn(console, 'clear').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('auto-creates pending candidates above threshold when enabling auto-create', async () => {
+    const { startRepl } = await import('./repl.js');
+    const config = makeConfig({ autoCreateSpecialists: false, autoCreateThreshold: 0.8 });
+
+    // Set up a pending candidate above threshold
+    mockListPending.mockReturnValue([
+      {
+        id: 'cand-1',
+        draftId: 'code-reviewer',
+        name: 'Code Reviewer',
+        description: 'Reviews code',
+        systemPrompt: 'You review code',
+        guidelines: ['Be thorough'],
+        confidence: 0.85,
+        reasoning: 'Detected pattern',
+        status: 'pending',
+        detectedAt: new Date().toISOString(),
+      },
+    ]);
+
+    const replPromise = startRepl(config);
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/agent-options auto-create on');
+
+    await vi.waitFor(() => {
+      expect(mockSpecialistCreate).toHaveBeenCalledWith(
+        'code-reviewer',
+        'Code Reviewer',
+        'Reviews code',
+        'You review code',
+        ['Be thorough'],
+      );
+    });
+
+    expect(mockCandidateUpdateStatus).toHaveBeenCalledWith('cand-1', 'accepted');
+    expect(mockPrintInfo).toHaveBeenCalledWith(
+      expect.stringContaining('Specialist auto-created: "Code Reviewer"'),
+    );
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('does not auto-create pending candidates below threshold', async () => {
+    const { startRepl } = await import('./repl.js');
+    const config = makeConfig({ autoCreateSpecialists: false, autoCreateThreshold: 0.8 });
+
+    mockListPending.mockReturnValue([
+      {
+        id: 'cand-2',
+        draftId: 'doc-writer',
+        name: 'Doc Writer',
+        description: 'Writes docs',
+        systemPrompt: 'You write docs',
+        guidelines: [],
+        confidence: 0.7,
+        reasoning: 'Detected pattern',
+        status: 'pending',
+        detectedAt: new Date().toISOString(),
+      },
+    ]);
+
+    const replPromise = startRepl(config);
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    typeLine('/agent-options auto-create on');
+
+    await vi.waitFor(() => {
+      expect(mockPrintInfo).toHaveBeenCalledWith('Auto-create specialists: on');
+    });
+
+    expect(mockSpecialistCreate).not.toHaveBeenCalled();
+    expect(mockCandidateUpdateStatus).not.toHaveBeenCalled();
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+});
