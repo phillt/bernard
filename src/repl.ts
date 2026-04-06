@@ -60,7 +60,12 @@ import { RoutineStore } from './routines.js';
 import { SpecialistStore } from './specialists.js';
 import { CandidateStore, type SpecialistCandidate } from './specialist-candidates.js';
 import { detectSpecialistCandidate } from './specialist-detector.js';
-import { TASK_SYSTEM_PROMPT, wrapTaskResult } from './tools/task.js';
+import {
+  TASK_SYSTEM_PROMPT,
+  wrapTaskResult,
+  getTaskMaxSteps,
+  makeLastStepTextOnly,
+} from './tools/task.js';
 import { createTools } from './tools/index.js';
 import {
   printTaskStart,
@@ -509,10 +514,7 @@ export async function startRepl(
     void prompt();
   }
 
-  /**
-   * Execute a task in single-step mode (maxSteps: 2) with structured JSON output.
-   * Used by both /task <description> and /task-{id} saved task invocations.
-   */
+  /** Execute a task with structured JSON output. Used by /task and /task-{id}. */
   async function executeTask(description: string, context?: string): Promise<void> {
     processing = true;
     interrupted = false;
@@ -551,14 +553,16 @@ export async function startRepl(
         userMessage += `\n\nAdditional context: ${context}`;
       }
 
+      const taskMaxSteps = getTaskMaxSteps(config);
       const result = await generateText({
         model: getModel(config.provider, config.model),
         tools: baseTools,
-        maxSteps: 2,
+        maxSteps: taskMaxSteps,
         maxTokens: config.maxTokens,
         system: systemPrompt,
         messages: [{ role: 'user', content: userMessage }],
         abortSignal: taskAbortController.signal,
+        experimental_prepareStep: makeLastStepTextOnly(taskMaxSteps),
         onStepFinish: ({ text, toolCalls, toolResults }) => {
           for (const tc of toolCalls) {
             printToolCall(tc.toolName, tc.args as Record<string, unknown>);
