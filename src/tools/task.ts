@@ -115,21 +115,30 @@ function extractJsonBlock(text: string, start: number): string | undefined {
 export function wrapTaskResult(text: string): TaskResult {
   const trimmed = text.trim();
 
-  // Try to extract JSON from the text (may have prose before it)
-  const jsonMatch = trimmed.match(/\{[\s\S]*?"status"\s*:\s*"(?:success|error)"[\s\S]*?\}/);
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      const result = TaskResultSchema.safeParse(parsed);
-      if (result.success) {
-        return {
-          status: result.data.status,
-          output: result.data.output,
-          ...(result.data.details !== undefined ? { details: result.data.details } : {}),
-        };
+  // 1. Try direct JSON.parse on the full text (cleanest case)
+  try {
+    const parsed = JSON.parse(trimmed);
+    const valid = validateTaskResult(parsed);
+    if (valid) return valid;
+  } catch {
+    // Not clean JSON — try extraction below
+  }
+
+  // 2. Scan forward for each top-level '{' and try bracket-counted extraction
+  for (let i = 0; i < trimmed.length; i++) {
+    if (trimmed[i] === '{') {
+      const block = extractJsonBlock(trimmed, i);
+      if (block) {
+        try {
+          const parsed = JSON.parse(block);
+          const valid = validateTaskResult(parsed);
+          if (valid) return valid;
+        } catch {
+          // Not valid JSON — try next block
+        }
+        // Skip past this block to avoid re-scanning the same '{' chars inside it
+        i += block.length - 1;
       }
-    } catch {
-      // Fall through to error
     }
   }
 
