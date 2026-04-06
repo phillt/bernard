@@ -288,14 +288,16 @@ export function createTaskTool(
             includeScratch: false,
           });
 
+        const taskMaxSteps = getTaskMaxSteps(config);
         const result = await generateText({
           model: getModel(resolvedProvider, resolvedModel),
           tools: baseTools,
-          maxSteps: 2,
+          maxSteps: taskMaxSteps,
           maxTokens: config.maxTokens,
           system: enrichedPrompt,
           messages: [{ role: 'user', content: userMessage }],
           abortSignal: execOptions.abortSignal,
+          experimental_prepareStep: makeLastStepTextOnly(taskMaxSteps),
           onStepFinish: ({ text, toolCalls, toolResults }) => {
             for (const tc of toolCalls) {
               printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
