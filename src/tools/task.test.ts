@@ -214,6 +214,12 @@ describe('task tool', () => {
     expect(call.experimental_prepareStep).toBeDefined();
   });
 
+  it('clamps maxSteps to at least 2 for low config.maxSteps values', () => {
+    expect(getTaskMaxSteps(makeConfig({ maxSteps: 2 }))).toBe(2);
+    expect(getTaskMaxSteps(makeConfig({ maxSteps: 3 }))).toBe(2);
+    expect(getTaskMaxSteps(makeConfig({ maxSteps: 1 }))).toBe(2);
+  });
+
   it('prepareStep forces toolChoice none on the final step', async () => {
     const taskMaxSteps = getTaskMaxSteps(makeConfig({ maxSteps: 25 }));
     const prepareStep = makeLastStepTextOnly(taskMaxSteps);

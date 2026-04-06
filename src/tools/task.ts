@@ -58,7 +58,7 @@ export const TaskResultSchema = z.object({
 export const TASK_STEP_RATIO = 0.4;
 
 export function getTaskMaxSteps(config: BernardConfig): number {
-  return Math.ceil(config.maxSteps * TASK_STEP_RATIO);
+  return Math.max(2, Math.ceil(config.maxSteps * TASK_STEP_RATIO));
 }
 
 /** Returns an `experimental_prepareStep` callback that forces text-only output on the final step. */
