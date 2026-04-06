@@ -39,6 +39,7 @@ import {
   OPTIONS_REGISTRY,
   saveOption,
   getProviderKeyStatus,
+  normalizeThreshold,
   type BernardConfig,
 } from './config.js';
 import { getTheme, setTheme, getThemeKeys, getActiveThemeKey, THEMES } from './theme.js';
@@ -71,6 +72,31 @@ import {
 } from './output.js';
 import { buildMemoryContext } from './memory-context.js';
 import { debugLog } from './logger.js';
+
+/** Promote a pending candidate to a full specialist, updating status and logging. */
+function promoteCandidate(
+  candidate: { id: string; draftId: string; name: string; description: string; systemPrompt: string; guidelines: string[]; confidence: number },
+  specialistStore: SpecialistStore,
+  candidateStore: CandidateStore,
+  threshold: number,
+): void {
+  specialistStore.create(
+    candidate.draftId,
+    candidate.name,
+    candidate.description,
+    candidate.systemPrompt,
+    candidate.guidelines,
+  );
+  candidateStore.updateStatus(candidate.id, 'accepted');
+  debugLog('repl:auto-create', {
+    candidate: candidate.name,
+    confidence: candidate.confidence,
+    threshold,
+  });
+  printInfo(
+    `Specialist auto-created: "${candidate.name}" (confidence: ${Math.round(candidate.confidence * 100)}%). Use /specialists to view.`,
+  );
+}
 
 /**
  * Launch the interactive REPL, wiring up readline, MCP servers, memory stores, and the agent loop.
@@ -674,19 +700,20 @@ export async function startRepl(
                       config.autoCreateSpecialists &&
                       candidateResult.candidate.confidence >= config.autoCreateThreshold
                     ) {
-                      // Auto-create the specialist
-                      specialistStore.create(
-                        candidateResult.candidate.draftId,
-                        candidateResult.candidate.name,
-                        candidateResult.candidate.description,
-                        candidateResult.candidate.systemPrompt,
-                        candidateResult.candidate.guidelines,
-                      );
-                      candidateStore.updateStatus(created.id, 'accepted');
-                      printInfo(
-                        `Specialist auto-created: "${candidateResult.candidate.name}" (confidence: ${Math.round(candidateResult.candidate.confidence * 100)}%). Use /specialists to view.`,
+                      promoteCandidate(
+                        { ...candidateResult.candidate, id: created.id },
+                        specialistStore,
+                        candidateStore,
+                        config.autoCreateThreshold,
                       );
                     } else {
+                      debugLog('repl:auto-create', {
+                        action: 'skipped',
+                        candidate: candidateResult.candidate.name,
+                        confidence: candidateResult.candidate.confidence,
+                        threshold: config.autoCreateThreshold,
+                        autoCreateEnabled: config.autoCreateSpecialists,
+                      });
                       printInfo(
                         `Specialist suggestion detected: "${candidateResult.candidate.name}". Use /candidates to review.`,
                       );
@@ -1258,7 +1285,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         if (!args) {
           // Display current settings
           printInfo(`Auto-create specialists: ${config.autoCreateSpecialists ? 'on' : 'off'}`);
-          printInfo(`Auto-create threshold: ${config.autoCreateThreshold}`);
+          printInfo(`Auto-create threshold: ${config.autoCreateThreshold} (${Math.round(config.autoCreateThreshold * 100)}%)`);
         } else if (args === 'auto-create on') {
           config.autoCreateSpecialists = true;
           savePreferences({
@@ -1268,6 +1295,21 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             model: config.model,
           });
           printInfo('Auto-create specialists: on');
+          // Re-evaluate pending candidates against current threshold
+          const pending = candidateStore.listPending();
+          for (const c of pending) {
+            if (c.confidence >= config.autoCreateThreshold) {
+              try {
+                promoteCandidate(c, specialistStore, candidateStore, config.autoCreateThreshold);
+              } catch {
+                debugLog('repl:auto-create', {
+                  action: 're-evaluate-failed',
+                  candidate: c.name,
+                  confidence: c.confidence,
+                });
+              }
+            }
+          }
         } else if (args === 'auto-create off') {
           config.autoCreateSpecialists = false;
           savePreferences({
@@ -1279,21 +1321,22 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           printInfo('Auto-create specialists: off');
         } else if (args.startsWith('threshold ')) {
           const val = parseFloat(args.slice('threshold '.length));
-          if (isNaN(val) || val < 0 || val > 1) {
-            printError('Threshold must be a number between 0 and 1');
+          if (isNaN(val) || val < 0 || val > 100) {
+            printError('Threshold must be a number between 0 and 100 (e.g. 0.8 or 80)');
           } else {
-            config.autoCreateThreshold = val;
+            const normalized = normalizeThreshold(val);
+            config.autoCreateThreshold = normalized;
             savePreferences({
               ...loadPreferences(),
-              autoCreateThreshold: val,
+              autoCreateThreshold: normalized,
               provider: config.provider,
               model: config.model,
             });
-            printInfo(`Auto-create threshold: ${val}`);
+            printInfo(`Auto-create threshold: ${normalized} (${Math.round(normalized * 100)}%)`);
           }
         } else {
           printError(
-            'Usage: /agent-options auto-create on|off  OR  /agent-options threshold <0-1>',
+            'Usage: /agent-options auto-create on|off  OR  /agent-options threshold <0-100>',
           );
         }
         void prompt();
