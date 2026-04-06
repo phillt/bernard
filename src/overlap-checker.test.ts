@@ -312,6 +312,27 @@ describe('computeConfidence', () => {
     // Difference should be within the evidence component range (max 0.1)
     expect(long - short).toBeLessThanOrEqual(0.1);
   });
+
+  it('produces exactly 0.8 at the auto-create threshold boundary', () => {
+    // LLM: 0.75 * 0.4 = 0.30
+    // Overlap inverse: (1 - 0) * 0.3 = 0.30
+    // Completeness: (0.4 + 0.3 + 0.2 + 0.1) * 0.2 = 0.20
+    // Evidence: min(1, 0/2000) * 0.1 = 0.00
+    // Total: 0.30 + 0.30 + 0.20 + 0.00 = 0.80
+    const score = computeConfidence(
+      0.75,
+      0.0,
+      {
+        systemPrompt: 'You are a specialist',
+        guidelines: ['Rule 1', 'Rule 2'],
+        description: 'A detailed description here',
+        draftId: 'my-specialist',
+      },
+      0,
+    );
+
+    expect(score).toBeCloseTo(0.8, 10);
+  });
 });
 
 describe('OVERLAP_THRESHOLD', () => {

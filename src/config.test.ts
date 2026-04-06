@@ -15,6 +15,7 @@ import {
   isValidProvider,
   hasProviderKey,
   getProviderApiKey,
+  normalizeThreshold,
 } from './config.js';
 import type { BernardConfig } from './config.js';
 
@@ -770,5 +771,35 @@ describe('hasProviderKey', () => {
   it('returns false for Object.prototype properties (prototype chain safety)', () => {
     const config = { anthropicApiKey: 'sk-test' } as BernardConfig;
     expect(hasProviderKey(config, 'toString')).toBe(false);
+  });
+});
+
+describe('normalizeThreshold', () => {
+  it('keeps fractional values in 0-1 range unchanged', () => {
+    expect(normalizeThreshold(0.8)).toBe(0.8);
+    expect(normalizeThreshold(0.5)).toBe(0.5);
+    expect(normalizeThreshold(0.75)).toBe(0.75);
+  });
+
+  it('converts percentage values >1 to 0-1', () => {
+    expect(normalizeThreshold(80)).toBeCloseTo(0.8);
+    expect(normalizeThreshold(50)).toBeCloseTo(0.5);
+    expect(normalizeThreshold(100)).toBeCloseTo(1.0);
+  });
+
+  it('handles boundary value 1 as fractional (100%)', () => {
+    expect(normalizeThreshold(1)).toBe(1);
+  });
+
+  it('handles 0', () => {
+    expect(normalizeThreshold(0)).toBe(0);
+  });
+
+  it('clamps negative values to 0', () => {
+    expect(normalizeThreshold(-5)).toBe(0);
+  });
+
+  it('clamps values over 100 to 1', () => {
+    expect(normalizeThreshold(150)).toBe(1);
   });
 });

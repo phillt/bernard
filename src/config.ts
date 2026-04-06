@@ -43,6 +43,16 @@ const DEFAULT_MAX_STEPS = 25;
 const DEFAULT_AUTO_CREATE_SPECIALISTS = false;
 const DEFAULT_AUTO_CREATE_THRESHOLD = 0.8;
 
+/**
+ * Normalizes a threshold value to the 0-1 range.
+ * Accepts both 0-1 (fractional) and >1-100 (percentage) inputs.
+ * Values >1 are divided by 100. Result is clamped to [0, 1].
+ */
+export function normalizeThreshold(value: number): number {
+  const normalized = value > 1 ? value / 100 : value;
+  return Math.max(0, Math.min(1, normalized));
+}
+
 /** Maps each provider name to the environment variable that holds its API key. */
 export const PROVIDER_ENV_VARS: Record<string, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
@@ -507,11 +517,12 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
       : DEFAULT_AUTO_CREATE_SPECIALISTS);
 
   const envAutoCreateThreshold = parseFloat(process.env.BERNARD_AUTO_CREATE_THRESHOLD ?? '');
-  const autoCreateThreshold =
+  const autoCreateThreshold = normalizeThreshold(
     prefs.autoCreateThreshold ??
-    (Number.isFinite(envAutoCreateThreshold)
-      ? envAutoCreateThreshold
-      : DEFAULT_AUTO_CREATE_THRESHOLD);
+      (Number.isFinite(envAutoCreateThreshold)
+        ? envAutoCreateThreshold
+        : DEFAULT_AUTO_CREATE_THRESHOLD),
+  );
 
   const config: BernardConfig = {
     provider,
