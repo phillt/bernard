@@ -369,9 +369,7 @@ export function printHelp(): void {
   console.log(
     t.text('  /task') + t.muted('    — Run an isolated task (no history, structured output)'),
   );
-  console.log(
-    t.text('  /image') + t.muted('   — Attach an image: /image <path> [prompt]'),
-  );
+  console.log(t.text('  /image') + t.muted('   — Attach an image: /image <path> [prompt]'));
   console.log(t.text('  /memory') + t.muted('  — List persistent memories'));
   console.log(t.text('  /scratch') + t.muted(' — List session scratch notes'));
   console.log(t.text('  /mcp') + t.muted('      — List MCP servers and tools'));

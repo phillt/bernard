@@ -1076,7 +1076,9 @@ describe('REPL /image command', () => {
     typeLine('/image /tmp/test.png');
 
     await vi.waitFor(() => {
-      expect(mockPrintError).toHaveBeenCalledWith(expect.stringContaining('does not support image'));
+      expect(mockPrintError).toHaveBeenCalledWith(
+        expect.stringContaining('does not support image'),
+      );
     });
     expect(mockLoadImage).not.toHaveBeenCalled();
 
@@ -1086,7 +1088,9 @@ describe('REPL /image command', () => {
 
   it('/image with bad file path shows error', async () => {
     mockIsVisionCapableModel.mockReturnValue(true);
-    mockLoadImage.mockImplementation(() => { throw new Error('Image file not found: /tmp/nope.png'); });
+    mockLoadImage.mockImplementation(() => {
+      throw new Error('Image file not found: /tmp/nope.png');
+    });
     const { startRepl } = await import('./repl.js');
     const replPromise = startRepl(makeConfig());
 
@@ -1102,7 +1106,11 @@ describe('REPL /image command', () => {
   });
 
   it('/image with valid file calls processInput with attachment', async () => {
-    const mockAttachment = { path: '/tmp/test.png', mimeType: 'image/png', data: Buffer.from('data') };
+    const mockAttachment = {
+      path: '/tmp/test.png',
+      mimeType: 'image/png',
+      data: Buffer.from('data'),
+    };
     mockIsVisionCapableModel.mockReturnValue(true);
     mockLoadImage.mockReturnValue(mockAttachment);
     mockProcessInput.mockResolvedValue(undefined);
@@ -1123,7 +1131,11 @@ describe('REPL /image command', () => {
   });
 
   it('/image without prompt text defaults to "Describe this image."', async () => {
-    const mockAttachment = { path: '/tmp/test.png', mimeType: 'image/png', data: Buffer.from('data') };
+    const mockAttachment = {
+      path: '/tmp/test.png',
+      mimeType: 'image/png',
+      data: Buffer.from('data'),
+    };
     mockIsVisionCapableModel.mockReturnValue(true);
     mockLoadImage.mockReturnValue(mockAttachment);
     mockProcessInput.mockResolvedValue(undefined);
@@ -1135,6 +1147,56 @@ describe('REPL /image command', () => {
     typeLine('/image /tmp/test.png');
 
     await vi.waitFor(() => {
+      expect(mockProcessInput).toHaveBeenCalledWith('Describe this image.', [mockAttachment]);
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('/image with double-quoted path containing spaces', async () => {
+    const mockAttachment = {
+      path: '/tmp/my screenshot.png',
+      mimeType: 'image/png',
+      data: Buffer.from('data'),
+    };
+    mockIsVisionCapableModel.mockReturnValue(true);
+    mockLoadImage.mockReturnValue(mockAttachment);
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig());
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('/image "/tmp/my screenshot.png" What is this?');
+
+    await vi.waitFor(() => {
+      expect(mockLoadImage).toHaveBeenCalledWith('/tmp/my screenshot.png');
+      expect(mockProcessInput).toHaveBeenCalledWith('What is this?', [mockAttachment]);
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('/image with single-quoted path containing spaces', async () => {
+    const mockAttachment = {
+      path: '/tmp/my photo.jpg',
+      mimeType: 'image/jpeg',
+      data: Buffer.from('data'),
+    };
+    mockIsVisionCapableModel.mockReturnValue(true);
+    mockLoadImage.mockReturnValue(mockAttachment);
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig());
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine("/image '/tmp/my photo.jpg'");
+
+    await vi.waitFor(() => {
+      expect(mockLoadImage).toHaveBeenCalledWith('/tmp/my photo.jpg');
       expect(mockProcessInput).toHaveBeenCalledWith('Describe this image.', [mockAttachment]);
     });
 
@@ -1160,7 +1222,11 @@ describe('REPL inline image detection', () => {
   });
 
   it('attaches image when path found in text and model supports vision', async () => {
-    const mockAttachment = { path: '/tmp/test.png', mimeType: 'image/png', data: Buffer.from('data') };
+    const mockAttachment = {
+      path: '/tmp/test.png',
+      mimeType: 'image/png',
+      data: Buffer.from('data'),
+    };
     mockExtractImagePaths.mockReturnValue(['/tmp/test.png']);
     mockIsVisionCapableModel.mockReturnValue(true);
     mockTryLoadImage.mockReturnValue(mockAttachment);
@@ -1192,7 +1258,9 @@ describe('REPL inline image detection', () => {
     typeLine('describe /tmp/test.png');
 
     await vi.waitFor(() => {
-      expect(mockPrintWarning).toHaveBeenCalledWith(expect.stringContaining('does not support vision'));
+      expect(mockPrintWarning).toHaveBeenCalledWith(
+        expect.stringContaining('does not support vision'),
+      );
     });
     // Should still call processInput but without images
     await vi.waitFor(() => {

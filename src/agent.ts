@@ -42,7 +42,11 @@ import {
   buildRAGQuery,
   applyStickiness,
 } from './rag-query.js';
-import { formatCurrentDateTime, timestampUserMessage, timestampUserContent } from './tools/datetime.js';
+import {
+  formatCurrentDateTime,
+  timestampUserMessage,
+  timestampUserContent,
+} from './tools/datetime.js';
 import { ToolProfileStore, buildToolProfilesPrompt } from './tool-profiles.js';
 import { augmentTools } from './tools/augment.js';
 import { type ImageAttachment, IMAGE_TOKEN_ESTIMATE } from './image.js';

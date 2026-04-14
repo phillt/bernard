@@ -523,20 +523,24 @@ export async function startRepl(
     await mcpManager.close();
   };
 
+  function initSpinner(): void {
+    const spinnerStats: SpinnerStats = {
+      startTime: Date.now(),
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      latestPromptTokens: 0,
+      model: config.model,
+      contextWindowOverride: config.tokenWindow || undefined,
+    };
+    agent.setSpinnerStats(spinnerStats);
+    startSpinner(() => buildSpinnerMessage(spinnerStats));
+  }
+
   async function runGuidedCreation(message: string): Promise<void> {
     processing = true;
     interrupted = false;
     try {
-      const spinnerStats: SpinnerStats = {
-        startTime: Date.now(),
-        totalPromptTokens: 0,
-        totalCompletionTokens: 0,
-        latestPromptTokens: 0,
-        model: config.model,
-        contextWindowOverride: config.tokenWindow || undefined,
-      };
-      agent.setSpinnerStats(spinnerStats);
-      startSpinner(() => buildSpinnerMessage(spinnerStats));
+      initSpinner();
       await agent.processInput(message);
       historyStore.save(agent.getHistory());
     } catch (err: unknown) {
@@ -1508,14 +1512,27 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         if (!args) {
           printError('Usage: /image <path> [prompt]');
           printInfo('  Example: /image ~/screenshot.png What is on the screen?');
-          printInfo('  Tip: you can also paste image paths inline, e.g. "describe ~/screenshot.png"');
+          printInfo(
+            '  Tip: you can also paste image paths inline, e.g. "describe ~/screenshot.png"',
+          );
           void prompt();
           return;
         }
 
-        const spaceIdx = args.indexOf(' ');
-        const imagePath = spaceIdx === -1 ? args : args.slice(0, spaceIdx);
-        const userText = spaceIdx === -1 ? 'Describe this image.' : args.slice(spaceIdx + 1).trim() || 'Describe this image.';
+        let imagePath: string;
+        let userText: string;
+        const quoteMatch = args.match(/^(["'])(.+?)\1(?:\s+(.*))?$/);
+        if (quoteMatch) {
+          imagePath = quoteMatch[2];
+          userText = quoteMatch[3]?.trim() || 'Describe this image.';
+        } else {
+          const spaceIdx = args.indexOf(' ');
+          imagePath = spaceIdx === -1 ? args : args.slice(0, spaceIdx);
+          userText =
+            spaceIdx === -1
+              ? 'Describe this image.'
+              : args.slice(spaceIdx + 1).trim() || 'Describe this image.';
+        }
 
         if (!isVisionCapableModel(config.provider, config.model)) {
           printError(
@@ -1540,16 +1557,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         processing = true;
         interrupted = false;
         try {
-          const spinnerStats: SpinnerStats = {
-            startTime: Date.now(),
-            totalPromptTokens: 0,
-            totalCompletionTokens: 0,
-            latestPromptTokens: 0,
-            model: config.model,
-            contextWindowOverride: config.tokenWindow || undefined,
-          };
-          agent.setSpinnerStats(spinnerStats);
-          startSpinner(() => buildSpinnerMessage(spinnerStats));
+          initSpinner();
           await agent.processInput(userText, [attachment]);
           historyStore.save(agent.getHistory());
         } catch (err: unknown) {
@@ -1598,16 +1606,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           processing = true;
           interrupted = false;
           try {
-            const spinnerStats: SpinnerStats = {
-              startTime: Date.now(),
-              totalPromptTokens: 0,
-              totalCompletionTokens: 0,
-              latestPromptTokens: 0,
-              model: config.model,
-              contextWindowOverride: config.tokenWindow || undefined,
-            };
-            agent.setSpinnerStats(spinnerStats);
-            startSpinner(() => buildSpinnerMessage(spinnerStats));
+            initSpinner();
             await agent.processInput(message);
             historyStore.save(agent.getHistory());
           } catch (err: unknown) {
@@ -1657,16 +1656,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
     processing = true;
     interrupted = false;
     try {
-      const spinnerStats: SpinnerStats = {
-        startTime: Date.now(),
-        totalPromptTokens: 0,
-        totalCompletionTokens: 0,
-        latestPromptTokens: 0,
-        model: config.model,
-        contextWindowOverride: config.tokenWindow || undefined,
-      };
-      agent.setSpinnerStats(spinnerStats);
-      startSpinner(() => buildSpinnerMessage(spinnerStats));
+      initSpinner();
       await agent.processInput(trimmed, inlineImages);
       historyStore.save(agent.getHistory());
     } catch (err: unknown) {

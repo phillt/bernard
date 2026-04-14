@@ -35,7 +35,8 @@ export const IMAGE_TOKEN_ESTIMATE = 1000;
  * Regex matching tokens that look like file paths ending in a supported image extension.
  * Handles absolute paths, relative paths, `~` home-dir expansion, and quoted paths.
  */
-const IMAGE_PATH_RE = /(?:"([^"]+\.(?:png|jpe?g|gif|webp))"|'([^']+\.(?:png|jpe?g|gif|webp))'|((?:[~.]?\/|\.\.\/)?[\w.\-\/]+\.(?:png|jpe?g|gif|webp)))/gi;
+const IMAGE_PATH_RE =
+  /(?:"([^"]+\.(?:png|jpe?g|gif|webp))"|'([^']+\.(?:png|jpe?g|gif|webp))'|((?:[~.]?\/|\.\.\/)?[\w.\-\/]+\.(?:png|jpe?g|gif|webp)))/gi;
 
 /** Returns the MIME type for a file path based on its extension, or `null` if unsupported. */
 export function detectMimeType(filePath: string): string | null {
@@ -135,9 +136,10 @@ export function isVisionCapableModel(provider: string, model: string): boolean {
     case 'openai': {
       const m = model.toLowerCase();
       // GPT-4o, GPT-4.1, GPT-4-turbo, GPT-5 families support vision
-      if (m.startsWith('gpt-4o') || m.startsWith('gpt-4.1') || m.startsWith('gpt-4-turbo')) return true;
+      if (m.startsWith('gpt-4o') || m.startsWith('gpt-4.1') || m.startsWith('gpt-4-turbo'))
+        return true;
       if (m.startsWith('gpt-5')) return true;
-      // o3, o3-mini, o4-mini support vision
+      // o3, o4 families support vision
       if (m.startsWith('o3') || m.startsWith('o4')) return true;
       return false;
     }
@@ -166,7 +168,7 @@ export function estimateContentPartTokens(part: unknown): number {
     return Math.ceil(JSON.stringify(part).length / 3.6);
   }
   const typed = part as { type: string; text?: string };
-  if (typed.type === 'image') {
+  if (typed.type === 'image' || typed.type === 'file') {
     return IMAGE_TOKEN_ESTIMATE;
   }
   if (typed.type === 'text' && typeof typed.text === 'string') {

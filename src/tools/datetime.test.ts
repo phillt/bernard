@@ -105,9 +105,7 @@ describe('timestampUserContent', () => {
   it('inserts text part when array has no text parts', () => {
     vi.useFakeTimers();
     vi.setSystemTime(FIXED_DATE);
-    const input = [
-      { type: 'image' as const, image: Buffer.from('data'), mimeType: 'image/png' },
-    ];
+    const input = [{ type: 'image' as const, image: Buffer.from('data'), mimeType: 'image/png' }];
     const result = timestampUserContent(input);
     const parts = result as Array<{ type: string; text?: string }>;
     expect(parts).toHaveLength(2);

@@ -228,6 +228,11 @@ describe('estimateContentPartTokens', () => {
     const large = { type: 'image', image: Buffer.alloc(5_000_000), mimeType: 'image/png' };
     expect(estimateContentPartTokens(small)).toBe(estimateContentPartTokens(large));
   });
+
+  it('returns flat estimate for file parts', () => {
+    const part = { type: 'file', data: Buffer.alloc(2_000_000), mimeType: 'application/pdf' };
+    expect(estimateContentPartTokens(part)).toBe(IMAGE_TOKEN_ESTIMATE);
+  });
 });
 
 /* ---------- stripImagesFromHistory ---------- */
