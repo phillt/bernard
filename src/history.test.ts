@@ -80,6 +80,25 @@ describe('HistoryStore', () => {
         expect.stringContaining('conversation-history.json'),
       );
     });
+
+    it('strips image parts before writing to disk', () => {
+      const messages = [
+        {
+          role: 'user' as const,
+          content: [
+            { type: 'text', text: 'Describe this' },
+            { type: 'image', image: Buffer.from('binary-data'), mimeType: 'image/png' },
+          ],
+        },
+      ];
+      store.save(messages as any);
+
+      const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
+      const parsed = JSON.parse(written);
+      expect(parsed[0].content[1]).toEqual({ type: 'text', text: '[Image attached]' });
+      expect(parsed[0].content[0]).toEqual({ type: 'text', text: 'Describe this' });
+      expect(written).not.toContain('binary-data');
+    });
   });
 
   describe('clear', () => {
