@@ -36,7 +36,7 @@ import { appendReasoningLog } from '../reasoning-log.js';
 const TOOL_WRAPPER_STEP_RATIO = 0.5;
 
 /** Formats good/bad examples as a markdown block appended to the child's system prompt. */
-function formatExamples(specialist: Specialist): string {
+export function formatExamples(specialist: Specialist): string {
   const parts: string[] = [];
   const good = specialist.goodExamples ?? [];
   const bad = specialist.badExamples ?? [];
@@ -66,7 +66,7 @@ function formatExamples(specialist: Specialist): string {
  * `targetTools` that include dispatch tools (specialist, tool_wrapper_run)
  * for recursive orchestration.
  */
-function buildChildTools(
+export function buildChildTools(
   specialist: Specialist,
   fullRegistry: Record<string, any>,
 ): Record<string, any> {
@@ -86,7 +86,7 @@ function buildChildTools(
  * Captures the last tool call observed in a `generateText` result.
  * Used to populate `attemptedCall` on correction candidates.
  */
-function captureLastToolCall(steps: any[] | undefined): string {
+export function captureLastToolCall(steps: any[] | undefined): string {
   if (!steps || steps.length === 0) return '(no tool call)';
   for (let i = steps.length - 1; i >= 0; i--) {
     const step = steps[i];
@@ -106,7 +106,7 @@ function captureLastToolCall(steps: any[] | undefined): string {
 /**
  * Builds a compact record of tool calls for the reasoning log.
  */
-function captureToolCalls(steps: any[] | undefined): Array<{
+export function captureToolCalls(steps: any[] | undefined): Array<{
   tool: string;
   args: unknown;
   resultPreview: string;
