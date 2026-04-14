@@ -1,8 +1,27 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { SpecialistStore, type Specialist } from '../specialists.js';
+import {
+  SpecialistStore,
+  type SpecialistUpdates,
+  type SpecialistExample,
+  type SpecialistBadExample,
+} from '../specialists.js';
 import type { CandidateStoreReader } from '../specialist-candidates.js';
 import { type BernardConfig, PROVIDER_MODELS, isValidProvider } from '../config.js';
+
+const goodExampleSchema = z.object({
+  input: z.string(),
+  call: z.string(),
+  note: z.string().optional(),
+});
+
+const badExampleSchema = z.object({
+  input: z.string(),
+  call: z.string(),
+  note: z.string().optional(),
+  error: z.string(),
+  fix: z.string(),
+});
 
 /**
  * Creates the specialist management tool for saving and retrieving reusable expert profiles.
@@ -53,6 +72,36 @@ export function createSpecialistTool(
         .describe(
           'Optional model override for this specialist (e.g. "grok-code-fast-1"). Used with create/update.',
         ),
+      kind: z
+        .enum(['persona', 'tool-wrapper', 'meta'])
+        .optional()
+        .describe(
+          'Specialist category. "persona" (default) is the historical role-based specialist. "tool-wrapper" fronts a concrete tool or CLI and is invoked via tool_wrapper_run. "meta" specialists operate on other specialists (e.g. specialist-creator).',
+        ),
+      targetTools: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'For tool-wrapper or meta specialists: the tool names exposed to the child agent (e.g. ["shell"] or ["specialist", "tool_wrapper_run"]). Isolates the specialist from unrelated tools.',
+        ),
+      goodExamples: z
+        .array(goodExampleSchema)
+        .optional()
+        .describe(
+          'Few-shot examples of correct tool usage. Each entry: {input, call, note?}. Used by tool-wrapper specialists.',
+        ),
+      badExamples: z
+        .array(badExampleSchema)
+        .optional()
+        .describe(
+          'Few-shot examples of incorrect tool usage with their corrections. Each entry: {input, call, error, fix, note?}.',
+        ),
+      structuredOutput: z
+        .boolean()
+        .optional()
+        .describe(
+          'When true, the specialist must emit JSON {status, result, error?, reasoning?} as its final message. Default: false.',
+        ),
     }),
     execute: async ({
       action,
@@ -63,6 +112,11 @@ export function createSpecialistTool(
       guidelines,
       provider,
       model,
+      kind,
+      targetTools,
+      goodExamples,
+      badExamples,
+      structuredOutput,
     }): Promise<string> => {
       switch (action) {
         case 'list': {
@@ -84,12 +138,35 @@ export function createSpecialistTool(
           const specialist = store.get(id);
           if (!specialist) return `No specialist found with id "${id}".`;
           let output = `# ${specialist.name} (${specialist.id})\n${specialist.description}`;
+          if (specialist.kind && specialist.kind !== 'persona') {
+            output += `\n\nKind: ${specialist.kind}`;
+          }
+          if (specialist.targetTools && specialist.targetTools.length > 0) {
+            output += `\nTarget tools: ${specialist.targetTools.join(', ')}`;
+          }
+          if (specialist.structuredOutput) {
+            output += `\nStructured output: true`;
+          }
           if (specialist.provider || specialist.model) {
             output += `\n\n## Model Override\nProvider: ${specialist.provider ?? 'default'}\nModel: ${specialist.model ?? 'default'}`;
           }
           output += `\n\n## System Prompt\n${specialist.systemPrompt}`;
           if (specialist.guidelines.length > 0) {
             output += `\n\n## Guidelines\n${specialist.guidelines.map((g) => `- ${g}`).join('\n')}`;
+          }
+          if (specialist.goodExamples && specialist.goodExamples.length > 0) {
+            output += `\n\n## Good Examples`;
+            for (const ex of specialist.goodExamples) {
+              output += `\n- input: ${ex.input}\n  call: ${ex.call}`;
+              if (ex.note) output += `\n  note: ${ex.note}`;
+            }
+          }
+          if (specialist.badExamples && specialist.badExamples.length > 0) {
+            output += `\n\n## Bad Examples`;
+            for (const ex of specialist.badExamples) {
+              output += `\n- input: ${ex.input}\n  call: ${ex.call}\n  error: ${ex.error}\n  fix: ${ex.fix}`;
+              if (ex.note) output += `\n  note: ${ex.note}`;
+            }
           }
           return output;
         }
@@ -110,15 +187,20 @@ export function createSpecialistTool(
               return `Error: Unknown model "${model}" for provider "${config.provider}". Valid models: ${PROVIDER_MODELS[config.provider].join(', ')}`;
           }
           try {
-            const specialist = store.create(
+            const specialist = store.createFull({
               id,
               name,
               description,
               systemPrompt,
-              guidelines ?? [],
+              guidelines: guidelines ?? [],
               provider,
               model,
-            );
+              kind,
+              targetTools,
+              goodExamples: goodExamples as SpecialistExample[] | undefined,
+              badExamples: badExamples as SpecialistBadExample[] | undefined,
+              structuredOutput,
+            });
             // Auto-mark matching candidate as accepted (best-effort)
             try {
               if (candidateStore) {
@@ -151,22 +233,24 @@ export function createSpecialistTool(
             if (effectiveProvider && !PROVIDER_MODELS[effectiveProvider]?.includes(model))
               return `Error: Unknown model "${model}" for provider "${effectiveProvider}". Valid models: ${PROVIDER_MODELS[effectiveProvider]?.join(', ') ?? 'none'}`;
           }
-          const updates: Partial<
-            Pick<
-              Specialist,
-              'name' | 'description' | 'systemPrompt' | 'guidelines' | 'provider' | 'model'
-            >
-          > = {};
+          const updates: SpecialistUpdates = {};
           if (name !== undefined) updates.name = name;
           if (description !== undefined) updates.description = description;
           if (systemPrompt !== undefined) updates.systemPrompt = systemPrompt;
           if (guidelines !== undefined) updates.guidelines = guidelines;
           if (provider !== undefined) updates.provider = provider;
           if (model !== undefined) updates.model = model;
+          if (kind !== undefined) updates.kind = kind;
+          if (targetTools !== undefined) updates.targetTools = targetTools;
+          if (goodExamples !== undefined)
+            updates.goodExamples = goodExamples as SpecialistExample[];
+          if (badExamples !== undefined)
+            updates.badExamples = badExamples as SpecialistBadExample[];
+          if (structuredOutput !== undefined) updates.structuredOutput = structuredOutput;
           // Auto-clear model when provider is cleared and model not explicitly provided
           if (provider === '' && model === undefined) updates.model = '';
           if (Object.keys(updates).length === 0)
-            return 'Error: provide at least one field to update (name, description, systemPrompt, guidelines, provider, or model).';
+            return 'Error: provide at least one field to update (name, description, systemPrompt, guidelines, provider, model, kind, targetTools, goodExamples, badExamples, or structuredOutput).';
           const updated = store.update(id, updates);
           if (!updated) return `No specialist found with id "${id}".`;
           return `Specialist "${updated.name}" (${updated.id}) updated.`;
