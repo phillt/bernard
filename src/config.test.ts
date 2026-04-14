@@ -803,3 +803,51 @@ describe('normalizeThreshold', () => {
     expect(normalizeThreshold(150)).toBe(1);
   });
 });
+
+describe('loadConfig correctionEnabled from env var', () => {
+  beforeEach(() => {
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    vi.stubEnv('OPENAI_API_KEY', '');
+    vi.stubEnv('XAI_API_KEY', '');
+    vi.stubEnv('BERNARD_PROVIDER', '');
+    vi.stubEnv('BERNARD_MODEL', '');
+    vi.stubEnv('BERNARD_MAX_TOKENS', '');
+    vi.stubEnv('BERNARD_SHELL_TIMEOUT', '');
+    vi.stubEnv('BERNARD_TOKEN_WINDOW', '');
+    vi.stubEnv('BERNARD_MAX_STEPS', '');
+    vi.stubEnv('BERNARD_CRITIC_MODE', '');
+    vi.stubEnv('BERNARD_CORRECTION_ENABLED', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('defaults correctionEnabled to true when env var is unset', () => {
+    const config = loadConfig();
+    expect(config.correctionEnabled).toBe(true);
+  });
+
+  it('disables correctionEnabled when BERNARD_CORRECTION_ENABLED is "false"', () => {
+    vi.stubEnv('BERNARD_CORRECTION_ENABLED', 'false');
+    const config = loadConfig();
+    expect(config.correctionEnabled).toBe(false);
+  });
+
+  it('disables correctionEnabled when BERNARD_CORRECTION_ENABLED is "0"', () => {
+    vi.stubEnv('BERNARD_CORRECTION_ENABLED', '0');
+    const config = loadConfig();
+    expect(config.correctionEnabled).toBe(false);
+  });
+
+  it('enables correctionEnabled when BERNARD_CORRECTION_ENABLED is "true"', () => {
+    vi.stubEnv('BERNARD_CORRECTION_ENABLED', 'true');
+    const config = loadConfig();
+    expect(config.correctionEnabled).toBe(true);
+  });
+});
