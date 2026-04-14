@@ -929,10 +929,7 @@ describe('buildToolProfilesPrompt', () => {
       guidelines: ['small guideline that should be excluded'],
       errorCount: 1,
     });
-    vi.mocked(fs.readdirSync).mockReturnValue([
-      'shell.git.json',
-      'web_read.json',
-    ] as any);
+    vi.mocked(fs.readdirSync).mockReturnValue(['shell.git.json', 'web_read.json'] as any);
     vi.mocked(fs.readFileSync)
       .mockReturnValueOnce(JSON.stringify(bigProfile))
       .mockReturnValueOnce(JSON.stringify(smallProfile));
@@ -952,9 +949,7 @@ describe('buildToolProfilesPrompt', () => {
         errorCount: 30 - i,
       }),
     );
-    vi.mocked(fs.readdirSync).mockReturnValue(
-      profiles.map((_, i) => `tool-${i}.json`) as any,
-    );
+    vi.mocked(fs.readdirSync).mockReturnValue(profiles.map((_, i) => `tool-${i}.json`) as any);
     let callIdx = 0;
     vi.mocked(fs.readFileSync).mockImplementation(() => {
       const result = JSON.stringify(profiles[callIdx] ?? profiles[0]);
