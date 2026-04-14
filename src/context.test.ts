@@ -629,6 +629,22 @@ describe('estimateHistoryTokens', () => {
     const largeTokens = estimateHistoryTokens(large);
     expect(largeTokens).toBeGreaterThan(smallTokens * 100);
   });
+
+  it('uses flat estimate for image parts instead of serializing buffer', () => {
+    const imageMsg: CoreMessage[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Describe this' },
+          { type: 'image', image: Buffer.alloc(5_000_000), mimeType: 'image/png' },
+        ],
+      },
+    ];
+    const tokens = estimateHistoryTokens(imageMsg);
+    // Should be ~1000 (image) + ~4 (text), NOT millions from base64 serialization
+    expect(tokens).toBeGreaterThan(900);
+    expect(tokens).toBeLessThan(1200);
+  });
 });
 
 describe('emergencyTruncate', () => {
