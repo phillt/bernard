@@ -27,6 +27,8 @@ export interface BernardConfig {
   autoCreateSpecialists: boolean;
   /** Confidence threshold for auto-creating specialists (0-1). */
   autoCreateThreshold: number;
+  /** Whether the correction agent runs at session close to learn from tool-wrapper failures. */
+  correctionEnabled: boolean;
   /** Anthropic API key, if available. */
   anthropicApiKey?: string;
   /** OpenAI API key, if available. */
@@ -524,6 +526,11 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
         : DEFAULT_AUTO_CREATE_THRESHOLD),
   );
 
+  // Correction agent runs by default; users can opt out with BERNARD_CORRECTION_ENABLED=false.
+  const rawCorrection = process.env.BERNARD_CORRECTION_ENABLED;
+  const correctionEnabled =
+    rawCorrection === undefined ? true : !(rawCorrection === 'false' || rawCorrection === '0');
+
   const config: BernardConfig = {
     provider,
     model,
@@ -536,6 +543,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     criticMode,
     autoCreateSpecialists,
     autoCreateThreshold,
+    correctionEnabled,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     xaiApiKey: process.env.XAI_API_KEY,
