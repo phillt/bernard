@@ -28,19 +28,12 @@ describe('atomicWriteFileSync', () => {
 
   it('writes to filePath + .tmp', () => {
     atomicWriteFileSync('/some/dir/file.json', 'data');
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      '/some/dir/file.json.tmp',
-      'data',
-      'utf-8',
-    );
+    expect(fs.writeFileSync).toHaveBeenCalledWith('/some/dir/file.json.tmp', 'data', 'utf-8');
   });
 
   it('renames tmp to the original filePath', () => {
     atomicWriteFileSync('/some/dir/file.json', 'data');
-    expect(fs.renameSync).toHaveBeenCalledWith(
-      '/some/dir/file.json.tmp',
-      '/some/dir/file.json',
-    );
+    expect(fs.renameSync).toHaveBeenCalledWith('/some/dir/file.json.tmp', '/some/dir/file.json');
   });
 
   it('passes utf-8 encoding to writeFileSync', () => {
@@ -57,11 +50,7 @@ describe('atomicWriteFileSync', () => {
   });
 
   it('tmp path is always filePath + ".tmp" for various inputs', () => {
-    const cases = [
-      '/a/b/c.json',
-      '/no-extension',
-      '/path/with.dots/file.json',
-    ];
+    const cases = ['/a/b/c.json', '/no-extension', '/path/with.dots/file.json'];
     for (const filePath of cases) {
       vi.clearAllMocks();
       atomicWriteFileSync(filePath, 'x');

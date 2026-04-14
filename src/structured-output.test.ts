@@ -131,7 +131,11 @@ describe('WrapperResultSchema', () => {
   });
 
   it('rejects when reasoning is not an array of strings', () => {
-    const r = WrapperResultSchema.safeParse({ status: 'ok', result: 'x', reasoning: 'flat string' });
+    const r = WrapperResultSchema.safeParse({
+      status: 'ok',
+      result: 'x',
+      reasoning: 'flat string',
+    });
     expect(r.success).toBe(false);
   });
 });

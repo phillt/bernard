@@ -37,10 +37,7 @@ describe('appendReasoningLog', () => {
   it('creates LOGS_DIR on first call', async () => {
     const { appendReasoningLog } = await import('./reasoning-log.js');
     appendReasoningLog(makeEntry());
-    expect(fs.mkdirSync).toHaveBeenCalledWith(
-      expect.stringContaining('logs'),
-      { recursive: true },
-    );
+    expect(fs.mkdirSync).toHaveBeenCalledWith(expect.stringContaining('logs'), { recursive: true });
   });
 
   it('does not create LOGS_DIR on subsequent calls within the same module instance', async () => {
@@ -113,7 +110,10 @@ describe('readReasoningLog', () => {
 
   it('respects the limit parameter and returns the tail', async () => {
     const entries = Array.from({ length: 10 }, (_, i) =>
-      makeEntry({ specialistId: `sp-${i}`, ts: `2024-01-${String(i + 1).padStart(2, '0')}T00:00:00.000Z` }),
+      makeEntry({
+        specialistId: `sp-${i}`,
+        ts: `2024-01-${String(i + 1).padStart(2, '0')}T00:00:00.000Z`,
+      }),
     );
     const content = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
     vi.mocked(fs.existsSync).mockReturnValue(true);
@@ -183,9 +183,7 @@ describe('rotateReasoningLog', () => {
   });
 
   it('keeps only the last N entries', async () => {
-    const entries = Array.from({ length: 10 }, (_, i) =>
-      makeEntry({ specialistId: `sp-${i}` }),
-    );
+    const entries = Array.from({ length: 10 }, (_, i) => makeEntry({ specialistId: `sp-${i}` }));
     const content = entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue(content);
@@ -198,7 +196,11 @@ describe('rotateReasoningLog', () => {
       'utf-8',
     );
     // The retained content should contain the last 3 entries
-    const [, writtenContent] = vi.mocked(fs.writeFileSync).mock.calls[0] as [string, string, string];
+    const [, writtenContent] = vi.mocked(fs.writeFileSync).mock.calls[0] as [
+      string,
+      string,
+      string,
+    ];
     expect(writtenContent).toContain('sp-9');
     expect(writtenContent).not.toContain('sp-6');
   });

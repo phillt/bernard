@@ -137,5 +137,4 @@ export class CorrectionCandidateStore {
       return false;
     }
   }
-
 }

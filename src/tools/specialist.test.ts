@@ -760,7 +760,9 @@ describe('createSpecialistTool', () => {
           name: 'Bad Example Wrapper',
           description: 'Has bad examples',
           systemPrompt: 'prompt',
-          badExamples: [{ input: 'bad cmd', call: 'rm -rf /', error: 'dangerous', fix: 'use safe path' }],
+          badExamples: [
+            { input: 'bad cmd', call: 'rm -rf /', error: 'dangerous', fix: 'use safe path' },
+          ],
         },
         {} as any,
       );
@@ -968,7 +970,15 @@ describe('createSpecialistTool', () => {
         description: 'Has bad examples',
         systemPrompt: 'prompt',
         guidelines: [],
-        badExamples: [{ input: 'bad cmd', call: 'rm -rf /', error: 'dangerous', fix: 'use safe path', note: 'never do this' }],
+        badExamples: [
+          {
+            input: 'bad cmd',
+            call: 'rm -rf /',
+            error: 'dangerous',
+            fix: 'use safe path',
+            note: 'never do this',
+          },
+        ],
         createdAt: '2024-01-01T00:00:00.000Z',
         updatedAt: '2024-01-01T00:00:00.000Z',
       };

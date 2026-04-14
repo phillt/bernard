@@ -479,7 +479,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     specialistStore.get.mockReturnValue(undefined);
 
     const toolDef = createToolWrapperRunTool(
-      config, options, memoryStore, specialistStore, correctionStore,
+      config,
+      options,
+      memoryStore,
+      specialistStore,
+      correctionStore,
     );
     const result = await toolDef.execute(
       { specialistId: 'missing', input: 'do something' },
@@ -498,7 +502,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     specialistStore.get.mockReturnValue(makeToolWrapperSpecialist({ kind: 'persona' }));
 
     const toolDef = createToolWrapperRunTool(
-      config, options, memoryStore, specialistStore, correctionStore,
+      config,
+      options,
+      memoryStore,
+      specialistStore,
+      correctionStore,
     );
     const result = await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'do something' },
@@ -516,7 +524,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     specialistStore.get.mockReturnValue(noKindSpec);
 
     const toolDef = createToolWrapperRunTool(
-      config, options, memoryStore, specialistStore, correctionStore,
+      config,
+      options,
+      memoryStore,
+      specialistStore,
+      correctionStore,
     );
     const result = await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'do something' },
@@ -535,7 +547,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     vi.mocked(hasProviderKey).mockReturnValue(false);
 
     const toolDef = createToolWrapperRunTool(
-      config, options, memoryStore, specialistStore, correctionStore,
+      config,
+      options,
+      memoryStore,
+      specialistStore,
+      correctionStore,
     );
     const result = await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'do something' },
@@ -555,7 +571,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     vi.mocked(acquireSlot).mockReturnValue(null);
 
     const toolDef = createToolWrapperRunTool(
-      config, options, memoryStore, specialistStore, correctionStore,
+      config,
+      options,
+      memoryStore,
+      specialistStore,
+      correctionStore,
     );
     const result = await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'do something' },
@@ -578,7 +598,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     } as any);
 
     const toolDef = createToolWrapperRunTool(
-      config, options, memoryStore, specialistStore, correctionStore,
+      config,
+      options,
+      memoryStore,
+      specialistStore,
+      correctionStore,
     );
     const result = await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'list files' },
@@ -611,7 +635,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     } as any);
 
     const toolDef = createToolWrapperRunTool(
-      config, options, memoryStore, specialistStore, correctionStore,
+      config,
+      options,
+      memoryStore,
+      specialistStore,
+      correctionStore,
     );
     await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'run bad command' },
@@ -639,7 +667,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     } as any);
 
     const toolDef = createToolWrapperRunTool(
-      config, options, memoryStore, specialistStore, correctionStore,
+      config,
+      options,
+      memoryStore,
+      specialistStore,
+      correctionStore,
     );
     await toolDef.execute(
       { specialistId: 'specialist-creator', input: 'create something' },
@@ -656,7 +688,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     vi.mocked(generateText).mockRejectedValue(new Error('network timeout'));
 
     const toolDef = createToolWrapperRunTool(
-      config, options, memoryStore, specialistStore, correctionStore,
+      config,
+      options,
+      memoryStore,
+      specialistStore,
+      correctionStore,
     );
     const result = await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'do something' },
@@ -677,7 +713,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     vi.mocked(generateText).mockRejectedValue(new Error('api crash'));
 
     const toolDef = createToolWrapperRunTool(
-      config, options, memoryStore, specialistStore, correctionStore,
+      config,
+      options,
+      memoryStore,
+      specialistStore,
+      correctionStore,
     );
     await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'do something' },
@@ -700,12 +740,13 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     } as any);
 
     const toolDef = createToolWrapperRunTool(
-      config, options, memoryStore, specialistStore, correctionStore,
+      config,
+      options,
+      memoryStore,
+      specialistStore,
+      correctionStore,
     );
-    await toolDef.execute(
-      { specialistId: 'shell-wrapper', input: 'list' },
-      DEFAULT_EXEC_OPTIONS,
-    );
+    await toolDef.execute({ specialistId: 'shell-wrapper', input: 'list' }, DEFAULT_EXEC_OPTIONS);
 
     expect(vi.mocked(releaseSlot)).toHaveBeenCalledTimes(1);
   });
@@ -719,7 +760,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
       steps: [],
     } as any);
     const toolDef = createToolWrapperRunTool(
-      config, options, memoryStore, specialistStore, correctionStore,
+      config,
+      options,
+      memoryStore,
+      specialistStore,
+      correctionStore,
     );
     await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'success run' },

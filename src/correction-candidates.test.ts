@@ -49,10 +49,9 @@ describe('CorrectionCandidateStore', () => {
   });
 
   it('constructor creates directory', () => {
-    expect(fs.mkdirSync).toHaveBeenCalledWith(
-      expect.stringContaining('correction-candidates'),
-      { recursive: true },
-    );
+    expect(fs.mkdirSync).toHaveBeenCalledWith(expect.stringContaining('correction-candidates'), {
+      recursive: true,
+    });
   });
 
   describe('list', () => {
@@ -102,9 +101,12 @@ describe('CorrectionCandidateStore', () => {
       const rejected = makeCandidate({ id: 'p3', status: 'rejected' });
       const invalid = makeCandidate({ id: 'p4', status: 'invalid' });
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readdirSync).mockReturnValue(
-        ['p1.json', 'p2.json', 'p3.json', 'p4.json'] as any,
-      );
+      vi.mocked(fs.readdirSync).mockReturnValue([
+        'p1.json',
+        'p2.json',
+        'p3.json',
+        'p4.json',
+      ] as any);
       vi.mocked(fs.readFileSync)
         .mockReturnValueOnce(JSON.stringify(pending))
         .mockReturnValueOnce(JSON.stringify(applied))
@@ -241,9 +243,7 @@ describe('CorrectionCandidateStore', () => {
     it('calls unlinkSync with the correct path and returns true', () => {
       vi.mocked(fs.unlinkSync).mockReturnValue(undefined);
       expect(store.delete('test-uuid-1234')).toBe(true);
-      expect(fs.unlinkSync).toHaveBeenCalledWith(
-        expect.stringContaining('test-uuid-1234.json'),
-      );
+      expect(fs.unlinkSync).toHaveBeenCalledWith(expect.stringContaining('test-uuid-1234.json'));
     });
 
     it('returns false when unlinkSync throws (file missing)', () => {

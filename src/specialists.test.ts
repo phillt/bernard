@@ -432,9 +432,7 @@ describe('SpecialistStore', () => {
       });
       expect(specialist.kind).toBe('tool-wrapper');
       expect(vi.mocked(fsUtils.atomicWriteFileSync)).toHaveBeenCalled();
-      const written = JSON.parse(
-        vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string,
-      );
+      const written = JSON.parse(vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string);
       expect(written.kind).toBe('tool-wrapper');
     });
 
@@ -449,9 +447,7 @@ describe('SpecialistStore', () => {
         targetTools: ['shell'],
       });
       expect(specialist.targetTools).toEqual(['shell']);
-      const written = JSON.parse(
-        vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string,
-      );
+      const written = JSON.parse(vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string);
       expect(written.targetTools).toEqual(['shell']);
     });
 
@@ -459,7 +455,12 @@ describe('SpecialistStore', () => {
       mockDirExists();
       vi.mocked(fs.readdirSync).mockReturnValue([] as any);
       const goodEx = { input: 'list files', call: 'ls -la' };
-      const badEx = { input: 'bad cmd', call: 'rm -rf /', error: 'dangerous', fix: 'use safe path' };
+      const badEx = {
+        input: 'bad cmd',
+        call: 'rm -rf /',
+        error: 'dangerous',
+        fix: 'use safe path',
+      };
       const specialist = store.createFull({
         id: 'ex-wrapper',
         name: 'Ex',
@@ -470,9 +471,7 @@ describe('SpecialistStore', () => {
       });
       expect(specialist.goodExamples).toEqual([goodEx]);
       expect(specialist.badExamples).toEqual([badEx]);
-      const written = JSON.parse(
-        vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string,
-      );
+      const written = JSON.parse(vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string);
       expect(written.goodExamples).toEqual([goodEx]);
       expect(written.badExamples).toEqual([badEx]);
     });
@@ -488,9 +487,7 @@ describe('SpecialistStore', () => {
         structuredOutput: true,
       });
       expect(specialist.structuredOutput).toBe(true);
-      const written = JSON.parse(
-        vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string,
-      );
+      const written = JSON.parse(vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string);
       expect(written.structuredOutput).toBe(true);
     });
 
@@ -503,9 +500,7 @@ describe('SpecialistStore', () => {
         description: 'D',
         systemPrompt: 'S',
       });
-      const written = JSON.parse(
-        vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string,
-      );
+      const written = JSON.parse(vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string);
       expect('kind' in written).toBe(false);
       expect('targetTools' in written).toBe(false);
       expect('goodExamples' in written).toBe(false);

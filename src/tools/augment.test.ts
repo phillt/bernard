@@ -14,16 +14,13 @@ vi.mock('../logger.js', () => ({
   debugLog: vi.fn(),
 }));
 
-vi.mock('../theme.js', () => ({
-  getTheme: vi.fn(() => ({
-    muted: (s: string) => s,
-    accent: (s: string) => s,
-  })),
+vi.mock('../output.js', () => ({
+  printInfo: vi.fn(),
 }));
 
 const { classifyShellCommand, detectToolError } = await import('../tool-profiles.js');
 const { debugLog } = await import('../logger.js');
-const { getTheme } = await import('../theme.js');
+const { printInfo } = await import('../output.js');
 
 function createMockStore() {
   return {
@@ -117,12 +114,14 @@ describe('augmentTools', () => {
     it('when tool returns an error result, recordBadExample is called with correct profileKey and args', async () => {
       vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: 'permission denied' });
 
-      const tools = { shell: { execute: vi.fn(async () => ({ output: 'error', is_error: true })) } };
+      const tools = {
+        shell: { execute: vi.fn(async () => ({ output: 'error', is_error: true })) },
+      };
       const args = { command: 'cat /root/secret' };
 
       const augmented = augmentTools(tools, store);
       await augmented.shell.execute(args, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.recordBadExample).toHaveBeenCalledWith(
         'shell.general',
@@ -132,14 +131,19 @@ describe('augmentTools', () => {
     });
 
     it('shell git commands get shell.git profile key', async () => {
-      vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: 'fatal: not a git repo' });
+      vi.mocked(detectToolError).mockReturnValue({
+        isError: true,
+        snippet: 'fatal: not a git repo',
+      });
 
-      const tools = { shell: { execute: vi.fn(async () => ({ output: 'error', is_error: true })) } };
+      const tools = {
+        shell: { execute: vi.fn(async () => ({ output: 'error', is_error: true })) },
+      };
       const args = { command: 'git status' };
 
       const augmented = augmentTools(tools, store);
       await augmented.shell.execute(args, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.recordBadExample).toHaveBeenCalledWith(
         'shell.git',
@@ -151,12 +155,14 @@ describe('augmentTools', () => {
     it('shell gh commands get shell.gh profile key', async () => {
       vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: 'not authenticated' });
 
-      const tools = { shell: { execute: vi.fn(async () => ({ output: 'error', is_error: true })) } };
+      const tools = {
+        shell: { execute: vi.fn(async () => ({ output: 'error', is_error: true })) },
+      };
       const args = { command: 'gh pr list' };
 
       const augmented = augmentTools(tools, store);
       await augmented.shell.execute(args, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.recordBadExample).toHaveBeenCalledWith(
         'shell.gh',
@@ -168,12 +174,14 @@ describe('augmentTools', () => {
     it('shell general commands get shell.general profile key', async () => {
       vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: 'error occurred' });
 
-      const tools = { shell: { execute: vi.fn(async () => ({ output: 'error', is_error: true })) } };
+      const tools = {
+        shell: { execute: vi.fn(async () => ({ output: 'error', is_error: true })) },
+      };
       const args = { command: 'unknown-command --flag' };
 
       const augmented = augmentTools(tools, store);
       await augmented.shell.execute(args, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.recordBadExample).toHaveBeenCalledWith(
         'shell.general',
@@ -186,12 +194,12 @@ describe('augmentTools', () => {
       vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: 'mcp error' });
 
       const tools = {
-        'myServer__myTool': { execute: vi.fn(async () => ({ error: 'mcp error' })) },
+        myServer__myTool: { execute: vi.fn(async () => ({ error: 'mcp error' })) },
       };
 
       const augmented = augmentTools(tools, store);
       await augmented['myServer__myTool'].execute({ input: 'test' }, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.recordBadExample).toHaveBeenCalledWith(
         'mcp.myServer__myTool',
@@ -207,7 +215,7 @@ describe('augmentTools', () => {
 
       const augmented = augmentTools(tools, store);
       await augmented.web_read.execute({ url: 'https://example.com' }, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.recordBadExample).toHaveBeenCalledWith(
         'web_read',
@@ -216,19 +224,18 @@ describe('augmentTools', () => {
       );
     });
 
-    it('console.log is called with error message for user visibility', async () => {
+    it('printInfo is called with error message for user visibility', async () => {
       vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: 'some error' });
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-      const tools = { shell: { execute: vi.fn(async () => ({ output: 'error', is_error: true })) } };
+      const tools = {
+        shell: { execute: vi.fn(async () => ({ output: 'error', is_error: true })) },
+      };
 
       const augmented = augmentTools(tools, store);
       await augmented.shell.execute({ command: 'bad-cmd' }, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('recorded error'));
-
-      consoleSpy.mockRestore();
+      expect(printInfo).toHaveBeenCalledWith(expect.stringContaining('recorded error'));
     });
   });
 
@@ -237,16 +244,22 @@ describe('augmentTools', () => {
       vi.mocked(detectToolError).mockReturnValue({ isError: false });
       store.get.mockReturnValue({
         badExamples: [
-          { args: '{"command":"old-cmd"}', errorSnippet: 'error', fix: '(awaiting successful retry)' },
+          {
+            args: '{"command":"old-cmd"}',
+            errorSnippet: 'error',
+            fix: '(awaiting successful retry)',
+          },
         ],
       });
 
-      const tools = { shell: { execute: vi.fn(async () => ({ output: 'success', is_error: false })) } };
+      const tools = {
+        shell: { execute: vi.fn(async () => ({ output: 'success', is_error: false })) },
+      };
       const args = { command: 'git status' };
 
       const augmented = augmentTools(tools, store);
       await augmented.shell.execute(args, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.patchLastBadWithFix).toHaveBeenCalledWith('shell.git', JSON.stringify(args));
     });
@@ -259,11 +272,13 @@ describe('augmentTools', () => {
         ],
       });
 
-      const tools = { shell: { execute: vi.fn(async () => ({ output: 'success', is_error: false })) } };
+      const tools = {
+        shell: { execute: vi.fn(async () => ({ output: 'success', is_error: false })) },
+      };
 
       const augmented = augmentTools(tools, store);
       await augmented.shell.execute({ command: 'git status' }, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.patchLastBadWithFix).not.toHaveBeenCalled();
     });
@@ -272,11 +287,13 @@ describe('augmentTools', () => {
       vi.mocked(detectToolError).mockReturnValue({ isError: false });
       store.get.mockReturnValue({ badExamples: [] });
 
-      const tools = { shell: { execute: vi.fn(async () => ({ output: 'success', is_error: false })) } };
+      const tools = {
+        shell: { execute: vi.fn(async () => ({ output: 'success', is_error: false })) },
+      };
 
       const augmented = augmentTools(tools, store);
       await augmented.shell.execute({ command: 'git status' }, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.patchLastBadWithFix).not.toHaveBeenCalled();
     });
@@ -285,33 +302,34 @@ describe('augmentTools', () => {
       vi.mocked(detectToolError).mockReturnValue({ isError: false });
       store.get.mockReturnValue(undefined);
 
-      const tools = { shell: { execute: vi.fn(async () => ({ output: 'success', is_error: false })) } };
+      const tools = {
+        shell: { execute: vi.fn(async () => ({ output: 'success', is_error: false })) },
+      };
 
       const augmented = augmentTools(tools, store);
       await augmented.shell.execute({ command: 'git status' }, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.patchLastBadWithFix).not.toHaveBeenCalled();
     });
 
-    it('console.log is called with fix message for user visibility', async () => {
+    it('printInfo is called with fix message for user visibility', async () => {
       vi.mocked(detectToolError).mockReturnValue({ isError: false });
       store.get.mockReturnValue({
         badExamples: [
           { args: '{"command":"old"}', errorSnippet: 'error', fix: '(awaiting successful retry)' },
         ],
       });
-      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-      const tools = { shell: { execute: vi.fn(async () => ({ output: 'success', is_error: false })) } };
+      const tools = {
+        shell: { execute: vi.fn(async () => ({ output: 'success', is_error: false })) },
+      };
 
       const augmented = augmentTools(tools, store);
       await augmented.shell.execute({ command: 'git status' }, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('learned fix'));
-
-      consoleSpy.mockRestore();
+      expect(printInfo).toHaveBeenCalledWith(expect.stringContaining('learned fix'));
     });
   });
 
@@ -347,7 +365,7 @@ describe('augmentTools', () => {
       } catch {
         // expected
       }
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.recordBadExample).not.toHaveBeenCalled();
     });
@@ -405,7 +423,7 @@ describe('augmentTools', () => {
 
       // Should not throw even though detectToolError throws inside setImmediate
       const result = await augmented.myTool.execute({}, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(result).toBe('ok');
     });
@@ -435,20 +453,20 @@ describe('augmentTools', () => {
       expect(result).toBe('result');
 
       // After flushing the event loop, detectToolError should have been called
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
       expect(callOrder).toEqual(['execute-returned', 'detectToolError']);
     });
 
-    it('getTheme is called inside setImmediate (not during augmentTools setup)', async () => {
+    it('printInfo is called inside setImmediate (not during augmentTools setup)', async () => {
       vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: 'err' });
 
       const tools = { myTool: { execute: vi.fn(async () => 'result') } };
 
-      vi.mocked(getTheme).mockClear();
+      vi.mocked(printInfo).mockClear();
       augmentTools(tools, store);
 
-      // getTheme should NOT have been called during augmentTools setup
-      expect(getTheme).not.toHaveBeenCalled();
+      // printInfo should NOT have been called during augmentTools setup
+      expect(printInfo).not.toHaveBeenCalled();
     });
 
     it('store.recordBadExample is not called synchronously — only after setImmediate', async () => {
@@ -462,7 +480,7 @@ describe('augmentTools', () => {
       // Before flushing: not yet called
       expect(store.recordBadExample).not.toHaveBeenCalled();
 
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       // After flushing: called
       expect(store.recordBadExample).toHaveBeenCalled();
@@ -477,14 +495,10 @@ describe('augmentTools', () => {
       // Pass args where command is not a string
       const augmented = augmentTools(tools, store);
       await augmented.shell.execute({ command: 42 }, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       // With non-string command, resolveProfileKey returns 'shell' (the tool name)
-      expect(store.recordBadExample).toHaveBeenCalledWith(
-        'shell',
-        expect.any(String),
-        'err',
-      );
+      expect(store.recordBadExample).toHaveBeenCalledWith('shell', expect.any(String), 'err');
     });
 
     it('shell tool with no args object falls back to tool name', async () => {
@@ -493,24 +507,20 @@ describe('augmentTools', () => {
       const tools = { shell: { execute: vi.fn(async () => 'result') } };
       const augmented = augmentTools(tools, store);
       await augmented.shell.execute(null, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
-      expect(store.recordBadExample).toHaveBeenCalledWith(
-        'shell',
-        expect.any(String),
-        'err',
-      );
+      expect(store.recordBadExample).toHaveBeenCalledWith('shell', expect.any(String), 'err');
     });
 
     it('tool name with __ uses mcp. prefix regardless of shell classification', async () => {
       vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: 'mcp err' });
 
       const tools = {
-        'server__shell': { execute: vi.fn(async () => 'result') },
+        server__shell: { execute: vi.fn(async () => 'result') },
       };
       const augmented = augmentTools(tools, store);
       await augmented['server__shell'].execute({ command: 'git status' }, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       // __ check runs before shell classification
       expect(store.recordBadExample).toHaveBeenCalledWith(
@@ -529,7 +539,7 @@ describe('augmentTools', () => {
       const tools = { myTool: { execute: vi.fn(async () => 'result') } };
       const augmented = augmentTools(tools, store);
       await augmented.myTool.execute({ key: longValue }, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       const calledArgs = store.recordBadExample.mock.calls[0][1] as string;
       expect(calledArgs.length).toBeLessThanOrEqual(300);
@@ -547,7 +557,7 @@ describe('augmentTools', () => {
 
       // Should not throw
       await augmented.myTool.execute(circular, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       const calledArgs = store.recordBadExample.mock.calls[0][1] as string;
       expect(typeof calledArgs).toBe('string');
@@ -576,7 +586,7 @@ describe('augmentTools', () => {
       await augmented.tool1.execute({}, {});
       await augmented.tool2.execute({}, {});
       await augmented.tool3.execute({}, {});
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.recordBadExample).toHaveBeenCalledTimes(3);
     });

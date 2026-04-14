@@ -79,17 +79,19 @@ export async function runCorrectionAgent(
   }
 
   const batch = pending.slice(0, MAX_CANDIDATES_PER_RUN);
-  const toolWrapperRun = deps.toolWrapperRun ?? createToolWrapperRunTool(
-    deps.config,
-    deps.toolOptions,
-    deps.memoryStore,
-    deps.specialistStore,
-    deps.correctionStore,
-    deps.mcpTools,
-    deps.ragStore,
-    deps.routineStore,
-    deps.candidateStore,
-  );
+  const toolWrapperRun =
+    deps.toolWrapperRun ??
+    createToolWrapperRunTool(
+      deps.config,
+      deps.toolOptions,
+      deps.memoryStore,
+      deps.specialistStore,
+      deps.correctionStore,
+      deps.mcpTools,
+      deps.ragStore,
+      deps.routineStore,
+      deps.candidateStore,
+    );
 
   let applied = 0;
   let processed = 0;

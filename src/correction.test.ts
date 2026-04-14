@@ -157,9 +157,9 @@ describe('runCorrectionAgent', () => {
 
   it('uses prefetchedPending instead of calling store.listPending', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi.fn().mockResolvedValue(
-      '{"status":"ok","result":{"validated":true,"applied":true}}',
-    );
+    const mockExecute = vi
+      .fn()
+      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
     deps.toolWrapperRun = { execute: mockExecute };
 
     await runCorrectionAgent(deps, [createCandidate('x')]);
@@ -179,9 +179,9 @@ describe('runCorrectionAgent', () => {
 
   it('processes at most 5 candidates (MAX_CANDIDATES_PER_RUN) when given 7', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi.fn().mockResolvedValue(
-      '{"status":"ok","result":{"validated":true,"applied":true}}',
-    );
+    const mockExecute = vi
+      .fn()
+      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
     deps.toolWrapperRun = { execute: mockExecute };
 
     const candidates = Array.from({ length: 7 }, (_, i) => createCandidate(`c${i}`));
@@ -194,9 +194,9 @@ describe('runCorrectionAgent', () => {
 
   it('processes all candidates when count is below the batch limit', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi.fn().mockResolvedValue(
-      '{"status":"ok","result":{"validated":true,"applied":true}}',
-    );
+    const mockExecute = vi
+      .fn()
+      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
     deps.toolWrapperRun = { execute: mockExecute };
 
     const candidates = [createCandidate('a'), createCandidate('b'), createCandidate('c')];
@@ -212,9 +212,11 @@ describe('runCorrectionAgent', () => {
 
   it('marks candidate as "applied" when outcome has applied:true', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi.fn().mockResolvedValue(
-      '{"status":"ok","result":{"validated":true,"applied":true,"notes":"fixed"}}',
-    );
+    const mockExecute = vi
+      .fn()
+      .mockResolvedValue(
+        '{"status":"ok","result":{"validated":true,"applied":true,"notes":"fixed"}}',
+      );
     deps.toolWrapperRun = { execute: mockExecute };
 
     const candidate = createCandidate('id-applied');
@@ -230,9 +232,9 @@ describe('runCorrectionAgent', () => {
 
   it('increments applied counter correctly', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi.fn().mockResolvedValue(
-      '{"status":"ok","result":{"validated":true,"applied":true}}',
-    );
+    const mockExecute = vi
+      .fn()
+      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
     deps.toolWrapperRun = { execute: mockExecute };
 
     const result = await runCorrectionAgent(deps, [createCandidate('a'), createCandidate('b')]);
@@ -246,9 +248,9 @@ describe('runCorrectionAgent', () => {
 
   it('marks candidate as "rejected" when outcome has validated:true but applied:false', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi.fn().mockResolvedValue(
-      '{"status":"ok","result":{"validated":true,"applied":false}}',
-    );
+    const mockExecute = vi
+      .fn()
+      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":false}}');
     deps.toolWrapperRun = { execute: mockExecute };
 
     const candidate = createCandidate('id-rejected');
@@ -264,9 +266,11 @@ describe('runCorrectionAgent', () => {
 
   it('uses provided notes in rejected update when present', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi.fn().mockResolvedValue(
-      '{"status":"ok","result":{"validated":true,"applied":false,"notes":"No changes needed"}}',
-    );
+    const mockExecute = vi
+      .fn()
+      .mockResolvedValue(
+        '{"status":"ok","result":{"validated":true,"applied":false,"notes":"No changes needed"}}',
+      );
     deps.toolWrapperRun = { execute: mockExecute };
 
     const candidate = createCandidate('id-rejected-notes');
@@ -285,9 +289,7 @@ describe('runCorrectionAgent', () => {
 
   it('marks candidate as "invalid" when wrapper returns status "error"', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi.fn().mockResolvedValue(
-      '{"status":"error","result":"failed"}',
-    );
+    const mockExecute = vi.fn().mockResolvedValue('{"status":"error","result":"failed"}');
     deps.toolWrapperRun = { execute: mockExecute };
 
     const candidate = createCandidate('id-invalid');
@@ -353,11 +355,10 @@ describe('runCorrectionAgent', () => {
 
   it('continues processing remaining candidates after one throws', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi.fn()
+    const mockExecute = vi
+      .fn()
       .mockRejectedValueOnce(new Error('first fails'))
-      .mockResolvedValueOnce(
-        '{"status":"ok","result":{"validated":true,"applied":true}}',
-      );
+      .mockResolvedValueOnce('{"status":"ok","result":{"validated":true,"applied":true}}');
     deps.toolWrapperRun = { execute: mockExecute };
 
     const candidates = [createCandidate('a'), createCandidate('b')];
@@ -374,16 +375,13 @@ describe('runCorrectionAgent', () => {
 
   it('processes 3 candidates with mixed outcomes and updates each correctly', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi.fn()
+    const mockExecute = vi
+      .fn()
       .mockResolvedValueOnce(
         '{"status":"ok","result":{"validated":true,"applied":true,"notes":"applied-note"}}',
       )
-      .mockResolvedValueOnce(
-        '{"status":"ok","result":{"validated":true,"applied":false}}',
-      )
-      .mockResolvedValueOnce(
-        '{"status":"error","result":"bad"}',
-      );
+      .mockResolvedValueOnce('{"status":"ok","result":{"validated":true,"applied":false}}')
+      .mockResolvedValueOnce('{"status":"error","result":"bad"}');
     deps.toolWrapperRun = { execute: mockExecute };
 
     const candidates = [createCandidate('c1'), createCandidate('c2'), createCandidate('c3')];
@@ -415,9 +413,9 @@ describe('runCorrectionAgent', () => {
 
   it('uses the injected toolWrapperRun.execute instead of the factory', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const injectedExecute = vi.fn().mockResolvedValue(
-      '{"status":"ok","result":{"validated":true,"applied":true}}',
-    );
+    const injectedExecute = vi
+      .fn()
+      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
     deps.toolWrapperRun = { execute: injectedExecute };
 
     await runCorrectionAgent(deps, [createCandidate('inj')]);
@@ -427,9 +425,9 @@ describe('runCorrectionAgent', () => {
 
   it('calls toolWrapperRun.execute with the correction-agent specialistId', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const injectedExecute = vi.fn().mockResolvedValue(
-      '{"status":"ok","result":{"validated":true,"applied":true}}',
-    );
+    const injectedExecute = vi
+      .fn()
+      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
     deps.toolWrapperRun = { execute: injectedExecute };
 
     await runCorrectionAgent(deps, [createCandidate('chk')]);
@@ -440,9 +438,9 @@ describe('runCorrectionAgent', () => {
 
   it('passes a toolCallId containing the candidate id to execute', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const injectedExecute = vi.fn().mockResolvedValue(
-      '{"status":"ok","result":{"validated":true,"applied":true}}',
-    );
+    const injectedExecute = vi
+      .fn()
+      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
     deps.toolWrapperRun = { execute: injectedExecute };
 
     await runCorrectionAgent(deps, [createCandidate('my-id')]);
@@ -480,24 +478,21 @@ describe('runCorrectionAgent', () => {
 
   it('returns correct processed count matching batch size', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const injectedExecute = vi.fn().mockResolvedValue(
-      '{"status":"ok","result":{"validated":true,"applied":false}}',
-    );
+    const injectedExecute = vi
+      .fn()
+      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":false}}');
     deps.toolWrapperRun = { execute: injectedExecute };
 
-    const result = await runCorrectionAgent(
-      deps,
-      [createCandidate('p1'), createCandidate('p2')],
-    );
+    const result = await runCorrectionAgent(deps, [createCandidate('p1'), createCandidate('p2')]);
 
     expect(result).toMatchObject({ processed: 2, applied: 0, skipped: 0 });
   });
 
   it('skipped equals total minus batch when list exceeds MAX_CANDIDATES_PER_RUN', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const injectedExecute = vi.fn().mockResolvedValue(
-      '{"status":"ok","result":{"validated":false,"applied":false}}',
-    );
+    const injectedExecute = vi
+      .fn()
+      .mockResolvedValue('{"status":"ok","result":{"validated":false,"applied":false}}');
     deps.toolWrapperRun = { execute: injectedExecute };
 
     const candidates = Array.from({ length: 6 }, (_, i) => createCandidate(`s${i}`));

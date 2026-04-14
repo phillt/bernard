@@ -289,9 +289,13 @@ export class SpecialistStore {
     if (updates.targetTools !== undefined) specialist.targetTools = updates.targetTools;
     if (updates.goodExamples !== undefined) specialist.goodExamples = updates.goodExamples;
     if (updates.badExamples !== undefined) specialist.badExamples = updates.badExamples;
-    if (updates.structuredOutput !== undefined) specialist.structuredOutput = updates.structuredOutput;
+    if (updates.structuredOutput !== undefined)
+      specialist.structuredOutput = updates.structuredOutput;
     specialist.updatedAt = new Date().toISOString();
-    atomicWriteFileSync(path.join(SPECIALISTS_DIR, `${id}.json`), JSON.stringify(specialist, null, 2));
+    atomicWriteFileSync(
+      path.join(SPECIALISTS_DIR, `${id}.json`),
+      JSON.stringify(specialist, null, 2),
+    );
     return specialist;
   }
 
@@ -341,5 +345,4 @@ export class SpecialistStore {
       ...(kind !== undefined ? { kind } : {}),
     }));
   }
-
 }

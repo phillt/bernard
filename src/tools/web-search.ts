@@ -139,7 +139,9 @@ export function createWebSearchTool() {
     description:
       'Search the web and return a ranked list of {title, url, snippet} results. Use before web_read when you do not yet know the right URL. Provider chain: Brave → Tavily → DuckDuckGo (no API key required for the fallback).',
     parameters: z.object({
-      query: z.string().describe('The search query. Prefer specific phrasing over generic keywords.'),
+      query: z
+        .string()
+        .describe('The search query. Prefer specific phrasing over generic keywords.'),
       limit: z
         .number()
         .int()

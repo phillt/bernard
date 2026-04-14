@@ -141,9 +141,7 @@ describe('os-info', () => {
   describe('detectOsRelease on linux', () => {
     it('uses PRETTY_NAME from /etc/os-release when present', () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        'PRETTY_NAME="Ubuntu 22.04 LTS"\nNAME="Ubuntu"\n',
-      );
+      vi.mocked(fs.readFileSync).mockReturnValue('PRETTY_NAME="Ubuntu 22.04 LTS"\nNAME="Ubuntu"\n');
       const info = getOsInfo();
       expect(info.osRelease).toBe('Ubuntu 22.04 LTS');
     });
