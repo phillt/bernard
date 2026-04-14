@@ -11,7 +11,10 @@ vi.mock('node:fs', () => ({
   renameSync: vi.fn(),
 }));
 
+vi.mock('./fs-utils.js', () => ({ atomicWriteFileSync: vi.fn() }));
+
 const fs = await import('node:fs');
+const fsUtils = await import('./fs-utils.js');
 
 /** Mock existsSync to return true for directory checks, false for file checks. */
 function mockDirExists(): void {
@@ -185,8 +188,7 @@ describe('SpecialistStore', () => {
       expect(specialist.guidelines).toEqual(['Prioritize urgent emails']);
       expect(specialist.createdAt).toBeTruthy();
       expect(specialist.updatedAt).toBe(specialist.createdAt);
-      expect(fs.writeFileSync).toHaveBeenCalled();
-      expect(fs.renameSync).toHaveBeenCalled();
+      expect(vi.mocked(fsUtils.atomicWriteFileSync)).toHaveBeenCalled();
     });
 
     it('defaults guidelines to empty array', () => {
@@ -381,7 +383,7 @@ describe('SpecialistStore', () => {
       expect(specialist.provider).toBeUndefined();
       expect(specialist.model).toBeUndefined();
       // Verify the JSON doesn't contain provider/model keys
-      const writeCall = vi.mocked(fs.writeFileSync).mock.calls[0];
+      const writeCall = vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0];
       const written = JSON.parse(writeCall[1] as string);
       expect('provider' in written).toBe(false);
       expect('model' in written).toBe(false);
@@ -414,6 +416,214 @@ describe('SpecialistStore', () => {
       const updated = store.update('code-review', { provider: '', model: '' });
       expect(updated!.provider).toBeUndefined();
       expect(updated!.model).toBeUndefined();
+    });
+  });
+
+  describe('createFull', () => {
+    it('creates specialist with kind field', () => {
+      mockDirExists();
+      vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+      const specialist = store.createFull({
+        id: 'test-wrapper',
+        name: 'Test',
+        description: 'D',
+        systemPrompt: 'S',
+        kind: 'tool-wrapper',
+      });
+      expect(specialist.kind).toBe('tool-wrapper');
+      expect(vi.mocked(fsUtils.atomicWriteFileSync)).toHaveBeenCalled();
+      const written = JSON.parse(vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string);
+      expect(written.kind).toBe('tool-wrapper');
+    });
+
+    it('creates specialist with targetTools', () => {
+      mockDirExists();
+      vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+      const specialist = store.createFull({
+        id: 'shell-wrapper',
+        name: 'Shell',
+        description: 'D',
+        systemPrompt: 'S',
+        targetTools: ['shell'],
+      });
+      expect(specialist.targetTools).toEqual(['shell']);
+      const written = JSON.parse(vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string);
+      expect(written.targetTools).toEqual(['shell']);
+    });
+
+    it('creates specialist with goodExamples and badExamples', () => {
+      mockDirExists();
+      vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+      const goodEx = { input: 'list files', call: 'ls -la' };
+      const badEx = {
+        input: 'bad cmd',
+        call: 'rm -rf /',
+        error: 'dangerous',
+        fix: 'use safe path',
+      };
+      const specialist = store.createFull({
+        id: 'ex-wrapper',
+        name: 'Ex',
+        description: 'D',
+        systemPrompt: 'S',
+        goodExamples: [goodEx],
+        badExamples: [badEx],
+      });
+      expect(specialist.goodExamples).toEqual([goodEx]);
+      expect(specialist.badExamples).toEqual([badEx]);
+      const written = JSON.parse(vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string);
+      expect(written.goodExamples).toEqual([goodEx]);
+      expect(written.badExamples).toEqual([badEx]);
+    });
+
+    it('creates specialist with structuredOutput', () => {
+      mockDirExists();
+      vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+      const specialist = store.createFull({
+        id: 'structured-wrapper',
+        name: 'Structured',
+        description: 'D',
+        systemPrompt: 'S',
+        structuredOutput: true,
+      });
+      expect(specialist.structuredOutput).toBe(true);
+      const written = JSON.parse(vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string);
+      expect(written.structuredOutput).toBe(true);
+    });
+
+    it('omits optional fields when not provided', () => {
+      mockDirExists();
+      vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+      store.createFull({
+        id: 'plain-spec',
+        name: 'Plain',
+        description: 'D',
+        systemPrompt: 'S',
+      });
+      const written = JSON.parse(vi.mocked(fsUtils.atomicWriteFileSync).mock.calls[0][1] as string);
+      expect('kind' in written).toBe(false);
+      expect('targetTools' in written).toBe(false);
+      expect('goodExamples' in written).toBe(false);
+      expect('badExamples' in written).toBe(false);
+      expect('structuredOutput' in written).toBe(false);
+    });
+  });
+
+  describe('appendExamples', () => {
+    it('appends good and bad examples', () => {
+      const base = {
+        id: 'shell-wrapper',
+        name: 'Shell',
+        description: 'D',
+        systemPrompt: 'S',
+        guidelines: [],
+        goodExamples: [{ input: 'existing', call: 'echo hi' }],
+        badExamples: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(base));
+      const newGood = { input: 'new good', call: 'ls' };
+      const newBad = { input: 'new bad', call: 'bad', error: 'err', fix: 'fixed' };
+      const updated = store.appendExamples('shell-wrapper', newGood, newBad);
+      expect(updated).toBeDefined();
+      expect(updated!.goodExamples).toHaveLength(2);
+      expect(updated!.goodExamples![1]).toEqual(newGood);
+      expect(updated!.badExamples).toHaveLength(1);
+      expect(updated!.badExamples![0]).toEqual(newBad);
+    });
+
+    it('caps at MAX_EXAMPLES_PER_LIST', () => {
+      const tenGoodExamples = Array.from({ length: 10 }, (_, i) => ({
+        input: `input${i}`,
+        call: `cmd${i}`,
+      }));
+      const base = {
+        id: 'shell-wrapper',
+        name: 'Shell',
+        description: 'D',
+        systemPrompt: 'S',
+        guidelines: [],
+        goodExamples: tenGoodExamples,
+        badExamples: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(base));
+      const newGood = { input: 'overflow', call: 'extra' };
+      const updated = store.appendExamples('shell-wrapper', newGood);
+      expect(updated).toBeDefined();
+      expect(updated!.goodExamples).toHaveLength(10);
+      // Oldest was dropped; last entry is the new one
+      expect(updated!.goodExamples![9]).toEqual(newGood);
+      // First entry is no longer input0
+      expect(updated!.goodExamples![0].input).toBe('input1');
+    });
+
+    it('handles missing specialist', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      const result = store.appendExamples('nonexistent', { input: 'x', call: 'y' });
+      expect(result).toBeUndefined();
+    });
+
+    it('handles undefined existing examples', () => {
+      const base = {
+        id: 'shell-wrapper',
+        name: 'Shell',
+        description: 'D',
+        systemPrompt: 'S',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(base));
+      const newGood = { input: 'first good', call: 'echo ok' };
+      const updated = store.appendExamples('shell-wrapper', newGood);
+      expect(updated).toBeDefined();
+      expect(updated!.goodExamples).toHaveLength(1);
+      expect(updated!.goodExamples![0]).toEqual(newGood);
+    });
+  });
+
+  describe('getSummaries with kind', () => {
+    it('includes kind in summary when present', () => {
+      const specialist = {
+        id: 'shell-wrapper',
+        name: 'Shell Wrapper',
+        description: 'Wraps shell',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        kind: 'tool-wrapper',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(['shell-wrapper.json'] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+      const summaries = store.getSummaries();
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0].kind).toBe('tool-wrapper');
+    });
+
+    it('omits kind from summary when not present', () => {
+      const specialist = {
+        id: 'email-triage',
+        name: 'Email Triage',
+        description: 'Triage emails',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(['email-triage.json'] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+      const summaries = store.getSummaries();
+      expect(summaries).toHaveLength(1);
+      expect('kind' in summaries[0]).toBe(false);
     });
   });
 });

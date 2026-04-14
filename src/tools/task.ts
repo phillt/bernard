@@ -2,6 +2,7 @@ import { generateText, tool } from 'ai';
 import { z } from 'zod';
 import { getModel } from '../providers/index.js';
 import { createTools, type ToolOptions } from './index.js';
+import { extractJsonBlock } from '../structured-output.js';
 import {
   printTaskStart,
   printTaskEnd,
@@ -76,35 +77,6 @@ function validateTaskResult(parsed: unknown): TaskResult | undefined {
   if (!result.success) return undefined;
   const { status, output, details } = result.data;
   return details !== undefined ? { status, output, details } : { status, output };
-}
-
-function extractJsonBlock(text: string, start: number): string | undefined {
-  if (text[start] !== '{') return undefined;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (ch === '\\' && inString) {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) continue;
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-  return undefined;
 }
 
 /**

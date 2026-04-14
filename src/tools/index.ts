@@ -7,6 +7,7 @@ import { createTimeTools } from './time.js';
 import { createMCPConfigTool } from './mcp.js';
 import { createMCPAddUrlTool } from './mcp-url.js';
 import { createWebReadTool } from './web.js';
+import { createWebSearchTool } from './web-search.js';
 import { createWaitTool } from './wait.js';
 import { createFileTools } from './file.js';
 import { createRoutineTool } from './routine.js';
@@ -51,6 +52,7 @@ export function createTools(
     mcp_config: createMCPConfigTool(),
     mcp_add_url: createMCPAddUrlTool(),
     web_read: createWebReadTool(),
+    web_search: createWebSearchTool(),
     wait: createWaitTool(),
     ...createFileTools(),
     ...mcpTools,

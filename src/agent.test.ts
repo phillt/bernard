@@ -274,8 +274,11 @@ describe('buildSystemPrompt', () => {
       undefined,
       specialists,
     );
-    expect(prompt).not.toContain('[');
     expect(prompt).toContain('code-reviewer');
+    // The specialist listing line itself should not include a model/kind tag.
+    const listingLine = prompt.split('\n').find((l) => l.startsWith('- code-reviewer'));
+    expect(listingLine).toBeDefined();
+    expect(listingLine).not.toContain('[');
   });
 
   it('includes auto-dispatch instructions when specialists are provided', () => {
@@ -439,7 +442,8 @@ describe('Agent', () => {
     await agent.processInput('Hello');
     const call = mockGenerateText.mock.calls[0][0];
     expect(call.tools).toHaveProperty('agent');
-    expect(call.tools.agent).toBe(mockSubAgentTool);
+    // augmentTools wraps execute, so check description rather than reference identity
+    expect(call.tools.agent.description).toBe(mockSubAgentTool.description);
   });
 
   it('system prompt contains sub-agent guidance text', async () => {

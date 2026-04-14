@@ -32,6 +32,8 @@ import { RoutineStore, type RoutineSummary } from './routines.js';
 import { SpecialistStore, type SpecialistSummary } from './specialists.js';
 import type { CandidateStoreReader } from './specialist-candidates.js';
 import { createSpecialistRunTool } from './tools/specialist-run.js';
+import { createToolWrapperRunTool } from './tools/tool-wrapper-run.js';
+import { CorrectionCandidateStore } from './correction-candidates.js';
 import { matchSpecialists, type SpecialistMatch } from './specialist-matcher.js';
 import { buildMemoryContext } from './memory-context.js';
 import {
@@ -41,6 +43,8 @@ import {
   applyStickiness,
 } from './rag-query.js';
 import { formatCurrentDateTime, timestampUserMessage } from './tools/datetime.js';
+import { ToolProfileStore, buildToolProfilesPrompt } from './tool-profiles.js';
+import { augmentTools } from './tools/augment.js';
 
 const BASE_SYSTEM_PROMPT = `# Identity
 
@@ -233,18 +237,23 @@ MCP (Model Context Protocol) servers provide additional tools. Use the mcp_confi
 
   prompt += '\n\n## Specialists';
   if (specialistSummaries && specialistSummaries.length > 0) {
-    prompt += '\n\nAvailable specialist agents you can delegate to via specialist_run:\n';
+    prompt += '\n\nAvailable specialist agents:\n';
     prompt += specialistSummaries
       .map((s) => {
         const modelTag =
           s.provider || s.model ? ` [${s.provider ?? 'default'}/${s.model ?? 'default'}]` : '';
-        return `- ${s.id} — ${s.name}: ${s.description}${modelTag}`;
+        const kindTag = s.kind && s.kind !== 'persona' ? ` [${s.kind}]` : '';
+        return `- ${s.id} — ${s.name}: ${s.description}${kindTag}${modelTag}`;
       })
       .join('\n');
     prompt +=
       "\n\nWhen a user request clearly falls within a saved specialist's domain, delegate to it via specialist_run without asking for permission. If the match is partial or ambiguous, briefly confirm with the user before dispatching.";
     prompt +=
-      '\n\nYou can pass optional `provider` and `model` parameters to specialist_run, agent, and task tools to override the model used for that execution. Specialists with a model override configured will automatically use their specified model.';
+      '\n\nFor specialists tagged [tool-wrapper] or [meta], use `tool_wrapper_run` instead of `specialist_run`. They return strict JSON {status, result, error?, reasoning?} and expose a scoped tool set with domain-specific examples. Prefer them for tool-heavy operations (shell, file edits, web research) where safe examples and error handling reduce misuse.';
+    prompt +=
+      '\n\nIf the user asks for help with a tool or CLI for which no tool-wrapper specialist exists, dispatch `tool_wrapper_run` with `specialistId: "specialist-creator"` and a description of the target tool. It will research (man/--help/web) and create a validated wrapper for future use. If the user asks you to "create a specialist for X", use specialist-creator.';
+    prompt +=
+      '\n\nYou can pass optional `provider` and `model` parameters to specialist_run, tool_wrapper_run, agent, and task tools to override the model used for that execution. Specialists with a model override configured will automatically use their specified model.';
 
     if (specialistMatches && specialistMatches.length > 0) {
       prompt +=
@@ -295,6 +304,8 @@ export class Agent {
   private routineStore: RoutineStore;
   private specialistStore: SpecialistStore;
   private candidateStore?: CandidateStoreReader;
+  private correctionStore: CorrectionCandidateStore;
+  private toolProfileStore: ToolProfileStore;
   private stepLimitHitCount: number = 0;
   private lastStepLimitHit: boolean = false;
 
@@ -310,6 +321,7 @@ export class Agent {
     routineStore?: RoutineStore,
     specialistStore?: SpecialistStore,
     candidateStore?: CandidateStoreReader,
+    correctionStore?: CorrectionCandidateStore,
   ) {
     this.config = config;
     this.toolOptions = toolOptions;
@@ -321,6 +333,8 @@ export class Agent {
     this.routineStore = routineStore ?? new RoutineStore();
     this.specialistStore = specialistStore ?? new SpecialistStore();
     this.candidateStore = candidateStore;
+    this.correctionStore = correctionStore ?? new CorrectionCandidateStore();
+    this.toolProfileStore = new ToolProfileStore();
     if (initialHistory) {
       this.history = [...initialHistory];
       this.lastPromptTokens = Math.ceil(JSON.stringify(initialHistory).length / 4);
@@ -330,6 +344,16 @@ export class Agent {
   /** Returns the current conversation message history. */
   getHistory(): CoreMessage[] {
     return this.history;
+  }
+
+  /** Returns the store that queues tool-wrapper correction candidates for this session. */
+  getCorrectionStore(): CorrectionCandidateStore {
+    return this.correctionStore;
+  }
+
+  /** Returns the specialist store used by this agent. */
+  getSpecialistStore(): SpecialistStore {
+    return this.specialistStore;
   }
 
   /** Returns the RAG search results from the most recent `processInput` call. */
@@ -438,6 +462,12 @@ export class Agent {
         systemPrompt += '\n\n' + this.alertContext;
       }
 
+      // Inject tool usage profiles (guidelines + observed bad examples)
+      const profilesBlock = buildToolProfilesPrompt(this.toolProfileStore);
+      if (profilesBlock) {
+        systemPrompt += '\n\n' + profilesBlock;
+      }
+
       // Pre-flight token guard: emergency truncate if estimated tokens exceed 90% of context window
       const HARD_LIMIT_RATIO = 0.9;
       const contextWindow = getContextWindow(this.config.model, this.config.tokenWindow);
@@ -486,12 +516,26 @@ export class Agent {
           this.mcpTools,
           this.ragStore,
         ),
+        tool_wrapper_run: createToolWrapperRunTool(
+          this.config,
+          this.toolOptions,
+          this.memoryStore,
+          this.specialistStore,
+          this.correctionStore,
+          this.mcpTools,
+          this.ragStore,
+          this.routineStore,
+          this.candidateStore,
+        ),
       };
+
+      // Wrap every tool's execute to observe errors and record profiles
+      const augmentedTools = augmentTools(tools, this.toolProfileStore);
 
       const callGenerateText = (messages?: CoreMessage[]) =>
         generateText({
           model: getModel(this.config.provider, this.config.model),
-          tools,
+          tools: augmentedTools,
           maxSteps: this.config.maxSteps,
           maxTokens: this.config.maxTokens,
           system: systemPrompt,

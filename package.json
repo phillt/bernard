@@ -7,7 +7,7 @@
     "bernard": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').cpSync('src/builtin-specialists','dist/builtin-specialists',{recursive:true})\"",
     "dev": "BERNARD_DEBUG=1 tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
