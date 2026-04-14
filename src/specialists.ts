@@ -2,6 +2,26 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { SPECIALISTS_DIR } from './paths.js';
 import { RESERVED_NAMES } from './reserved-names.js';
+import { atomicWriteFileSync } from './fs-utils.js';
+
+/** Specialist category. `persona` is the historical default; `tool-wrapper` specialists front a concrete tool or CLI; `meta` specialists operate on other specialists (e.g. specialist-creator, correction-agent). */
+export type SpecialistKind = 'persona' | 'tool-wrapper' | 'meta';
+
+export interface SpecialistExample {
+  /** User-facing request or scenario that triggered this call. */
+  input: string;
+  /** The tool invocation that was made (stringified for readability, e.g. `shell { command: "ls -la" }`). */
+  call: string;
+  /** Optional short note explaining why this is a good/bad example. */
+  note?: string;
+}
+
+export interface SpecialistBadExample extends SpecialistExample {
+  /** The error or misbehavior observed when the call ran. */
+  error: string;
+  /** The corrected call or approach that should be taken instead. */
+  fix: string;
+}
 
 export interface Specialist {
   id: string;
@@ -13,6 +33,16 @@ export interface Specialist {
   model?: string;
   createdAt: string;
   updatedAt: string;
+  /** Optional. Defaults to 'persona' for back-compat. */
+  kind?: SpecialistKind;
+  /** For tool-wrapper/meta specialists, the tool names exposed to the child agent. */
+  targetTools?: string[];
+  /** Correct usage patterns used for few-shot priming. */
+  goodExamples?: SpecialistExample[];
+  /** Failed usage patterns with their corrected form. */
+  badExamples?: SpecialistBadExample[];
+  /** When true, the child agent must emit a JSON `{status, result, error?, reasoning?}` object as its final message. */
+  structuredOutput?: boolean;
 }
 
 export interface SpecialistSummary {
@@ -21,11 +51,66 @@ export interface SpecialistSummary {
   description: string;
   provider?: string;
   model?: string;
+  kind?: SpecialistKind;
 }
+
+/** Maximum examples retained per list (oldest drop-off during correction updates). */
+export const MAX_EXAMPLES_PER_LIST = 10;
+
+export interface CreateSpecialistInput {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  guidelines?: string[];
+  provider?: string;
+  model?: string;
+  kind?: SpecialistKind;
+  targetTools?: string[];
+  goodExamples?: SpecialistExample[];
+  badExamples?: SpecialistBadExample[];
+  structuredOutput?: boolean;
+}
+
+export type SpecialistUpdates = Partial<
+  Pick<
+    Specialist,
+    | 'name'
+    | 'description'
+    | 'systemPrompt'
+    | 'guidelines'
+    | 'provider'
+    | 'model'
+    | 'kind'
+    | 'targetTools'
+    | 'goodExamples'
+    | 'badExamples'
+    | 'structuredOutput'
+  >
+>;
 
 const MAX_SPECIALISTS = 50;
 
 const ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/;
+
+/** Marker file that prevents re-seeding bundled specialists on every start. */
+const SEED_MARKER = '.seeded-v1';
+
+/**
+ * Locates the bundled `builtin-specialists` directory sitting next to the
+ * compiled/loaded `specialists.js` (or `.ts` under tsx). Returns `null` when
+ * running in an environment where the bundle was not deployed (e.g. certain
+ * test harnesses).
+ */
+function findBuiltinSpecialistsDir(): string | null {
+  const candidate = path.join(__dirname, 'builtin-specialists');
+  try {
+    if (fs.statSync(candidate).isDirectory()) return candidate;
+  } catch {
+    // fall through
+  }
+  return null;
+}
 
 /**
  * Disk-backed store for named specialists (reusable expert profiles).
@@ -36,6 +121,42 @@ const ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/;
 export class SpecialistStore {
   constructor() {
     fs.mkdirSync(SPECIALISTS_DIR, { recursive: true });
+    this.seedBundledSpecialists();
+  }
+
+  /**
+   * Copies bundled specialists (shell-wrapper, file-wrapper, web-wrapper,
+   * correction-agent, specialist-creator) from the packaged `builtin-specialists`
+   * directory into the user's specialists dir on first run. A `.seeded-v1`
+   * marker prevents re-seeding on subsequent runs, so users can freely edit or
+   * delete the seeded files. Existing files with the same id are never
+   * overwritten.
+   */
+  private seedBundledSpecialists(): void {
+    const markerPath = path.join(SPECIALISTS_DIR, SEED_MARKER);
+    if (fs.existsSync(markerPath)) return;
+    const bundledDir = findBuiltinSpecialistsDir();
+    if (!bundledDir) return;
+
+    try {
+      const files = fs.readdirSync(bundledDir).filter((f) => f.endsWith('.json'));
+      for (const file of files) {
+        const src = path.join(bundledDir, file);
+        const dest = path.join(SPECIALISTS_DIR, file);
+        if (fs.existsSync(dest)) continue; // never overwrite user-edited copies
+        try {
+          const raw = fs.readFileSync(src, 'utf-8');
+          // Parse once to catch obviously corrupt bundle files before seeding.
+          JSON.parse(raw);
+          atomicWriteFileSync(dest, raw);
+        } catch {
+          // skip individual bad files; continue seeding the rest
+        }
+      }
+      fs.writeFileSync(markerPath, new Date().toISOString(), 'utf-8');
+    } catch {
+      // seed is best-effort; never block startup
+    }
   }
 
   /**
@@ -97,26 +218,43 @@ export class SpecialistStore {
     provider?: string,
     model?: string,
   ): Specialist {
-    const idError = this.validateId(id);
+    return this.createFull({ id, name, description, systemPrompt, guidelines, provider, model });
+  }
+
+  /**
+   * Creates a new specialist from a full input object, supporting tool-wrapper
+   * fields (kind, targetTools, good/bad examples, structuredOutput).
+   * @throws {Error} If the ID is invalid, reserved, already taken, or the max limit is reached.
+   */
+  createFull(input: CreateSpecialistInput): Specialist {
+    const idError = this.validateId(input.id);
     if (idError) throw new Error(idError);
-    if (this.exists(id)) throw new Error(`Specialist "${id}" already exists.`);
+    if (this.exists(input.id)) throw new Error(`Specialist "${input.id}" already exists.`);
     const count = this.list().length;
     if (count >= MAX_SPECIALISTS)
       throw new Error(`Maximum of ${MAX_SPECIALISTS} specialists reached.`);
 
     const now = new Date().toISOString();
     const specialist: Specialist = {
-      id,
-      name,
-      description,
-      systemPrompt,
-      guidelines,
-      ...(provider !== undefined ? { provider } : {}),
-      ...(model !== undefined ? { model } : {}),
+      id: input.id,
+      name: input.name,
+      description: input.description,
+      systemPrompt: input.systemPrompt,
+      guidelines: input.guidelines ?? [],
+      ...(input.provider !== undefined ? { provider: input.provider } : {}),
+      ...(input.model !== undefined ? { model: input.model } : {}),
+      ...(input.kind !== undefined ? { kind: input.kind } : {}),
+      ...(input.targetTools !== undefined ? { targetTools: input.targetTools } : {}),
+      ...(input.goodExamples !== undefined ? { goodExamples: input.goodExamples } : {}),
+      ...(input.badExamples !== undefined ? { badExamples: input.badExamples } : {}),
+      ...(input.structuredOutput !== undefined ? { structuredOutput: input.structuredOutput } : {}),
       createdAt: now,
       updatedAt: now,
     };
-    this.atomicWrite(path.join(SPECIALISTS_DIR, `${id}.json`), JSON.stringify(specialist, null, 2));
+    atomicWriteFileSync(
+      path.join(SPECIALISTS_DIR, `${input.id}.json`),
+      JSON.stringify(specialist, null, 2),
+    );
     return specialist;
   }
 
@@ -124,15 +262,7 @@ export class SpecialistStore {
    * Updates an existing specialist with partial fields.
    * @returns The updated specialist, or `undefined` if not found.
    */
-  update(
-    id: string,
-    updates: Partial<
-      Pick<
-        Specialist,
-        'name' | 'description' | 'systemPrompt' | 'guidelines' | 'provider' | 'model'
-      >
-    >,
-  ): Specialist | undefined {
+  update(id: string, updates: SpecialistUpdates): Specialist | undefined {
     if (!ID_PATTERN.test(id)) return undefined;
     const specialist = this.get(id);
     if (!specialist) return undefined;
@@ -155,9 +285,40 @@ export class SpecialistStore {
         specialist.model = updates.model;
       }
     }
+    if (updates.kind !== undefined) specialist.kind = updates.kind;
+    if (updates.targetTools !== undefined) specialist.targetTools = updates.targetTools;
+    if (updates.goodExamples !== undefined) specialist.goodExamples = updates.goodExamples;
+    if (updates.badExamples !== undefined) specialist.badExamples = updates.badExamples;
+    if (updates.structuredOutput !== undefined) specialist.structuredOutput = updates.structuredOutput;
     specialist.updatedAt = new Date().toISOString();
-    this.atomicWrite(path.join(SPECIALISTS_DIR, `${id}.json`), JSON.stringify(specialist, null, 2));
+    atomicWriteFileSync(path.join(SPECIALISTS_DIR, `${id}.json`), JSON.stringify(specialist, null, 2));
     return specialist;
+  }
+
+  /**
+   * Appends one good and one bad example to a specialist, dropping the oldest
+   * entries once the list exceeds {@link MAX_EXAMPLES_PER_LIST}. Used by the
+   * correction agent after a validated fix.
+   * @returns The updated specialist, or `undefined` if not found.
+   */
+  appendExamples(
+    id: string,
+    good?: SpecialistExample,
+    bad?: SpecialistBadExample,
+  ): Specialist | undefined {
+    const specialist = this.get(id);
+    if (!specialist) return undefined;
+    const goodList = [...(specialist.goodExamples ?? [])];
+    const badList = [...(specialist.badExamples ?? [])];
+    if (good) {
+      goodList.push(good);
+      while (goodList.length > MAX_EXAMPLES_PER_LIST) goodList.shift();
+    }
+    if (bad) {
+      badList.push(bad);
+      while (badList.length > MAX_EXAMPLES_PER_LIST) badList.shift();
+    }
+    return this.update(id, { goodExamples: goodList, badExamples: badList });
   }
 
   /** Removes a specialist by ID. Returns `true` if it existed and was deleted. */
@@ -171,19 +332,14 @@ export class SpecialistStore {
 
   /** Returns id + name + description + optional model info for all specialists, for system prompt injection. */
   getSummaries(): SpecialistSummary[] {
-    return this.list().map(({ id, name, description, provider, model }) => ({
+    return this.list().map(({ id, name, description, provider, model, kind }) => ({
       id,
       name,
       description,
       ...(provider !== undefined ? { provider } : {}),
       ...(model !== undefined ? { model } : {}),
+      ...(kind !== undefined ? { kind } : {}),
     }));
   }
 
-  /** Writes data to a `.tmp` file then renames it into place for crash-safe persistence. */
-  private atomicWrite(filePath: string, data: string): void {
-    const tmp = filePath + '.tmp';
-    fs.writeFileSync(tmp, data, 'utf-8');
-    fs.renameSync(tmp, filePath);
-  }
 }
