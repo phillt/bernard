@@ -38,6 +38,8 @@ export interface RunCorrectionDeps {
   routineStore?: RoutineStore;
   candidateStore?: CandidateStoreReader;
   mcpTools?: Record<string, any>;
+  /** Optional pre-built tool for testing. Falls back to createToolWrapperRunTool(...) when absent. */
+  toolWrapperRun?: { execute: (args: any, opts: any) => Promise<any> };
 }
 
 /**
@@ -77,7 +79,7 @@ export async function runCorrectionAgent(
   }
 
   const batch = pending.slice(0, MAX_CANDIDATES_PER_RUN);
-  const toolWrapperRun = createToolWrapperRunTool(
+  const toolWrapperRun = deps.toolWrapperRun ?? createToolWrapperRunTool(
     deps.config,
     deps.toolOptions,
     deps.memoryStore,
@@ -159,7 +161,7 @@ function formatCandidatePrompt(candidate: CorrectionCandidate): string {
   ].join('\n');
 }
 
-function extractOutcome(text: string): CorrectionOutcome | undefined {
+export function extractOutcome(text: string): CorrectionOutcome | undefined {
   // The correction-agent returns the WrapperResult shape; its .result field is what we care about.
   const wrapper = parseStructuredOutput(text, WrapperResultSchema);
   if (wrapper && wrapper.status === 'ok') {
