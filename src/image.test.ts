@@ -148,9 +148,14 @@ describe('extractImagePaths', () => {
     expect(result).toEqual(['/tmp/a.png', '/tmp/b.jpeg']);
   });
 
-  it('handles quoted paths', () => {
+  it('handles double-quoted paths', () => {
     const result = extractImagePaths('look at "/tmp/my file.png" please');
     expect(result).toEqual(['/tmp/my file.png']);
+  });
+
+  it('handles single-quoted paths', () => {
+    const result = extractImagePaths("check '/tmp/my file.jpg' now");
+    expect(result).toEqual(['/tmp/my file.jpg']);
   });
 
   it('returns empty array when no images found', () => {
