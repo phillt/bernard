@@ -1,4 +1,4 @@
-import { tool } from 'ai';
+import { tool, type UserContent } from 'ai';
 import { z } from 'zod';
 
 /** Regex matching the [ISO-8601] prefix produced by timestampUserMessage. */
@@ -43,8 +43,8 @@ export function formatCurrentDateTime(): string {
   return `${date} at ${time}`;
 }
 
-/** Wraps user input with a local ISO 8601 timestamp prefix. */
-export function timestampUserMessage(userInput: string): string {
+/** Generates a `[ISO-8601]` prefix string for the current moment. */
+function makeTimestampPrefix(): string {
   const now = new Date();
   const tzOffset = -now.getTimezoneOffset();
   const sign = tzOffset >= 0 ? '+' : '-';
@@ -54,7 +54,36 @@ export function timestampUserMessage(userInput: string): string {
     `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}` +
     `T${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}` +
     `${sign}${hh}:${mm}`;
-  return `[${localISO}] ${userInput}`;
+  return `[${localISO}] `;
+}
+
+/** Wraps user input with a local ISO 8601 timestamp prefix. */
+export function timestampUserMessage(userInput: string): string {
+  return makeTimestampPrefix() + userInput;
+}
+
+/**
+ * Timestamps a `UserContent` value (string or content-part array).
+ * For strings, delegates to `timestampUserMessage`.
+ * For arrays, prepends the timestamp to the first text part, or inserts a new one.
+ */
+export function timestampUserContent(content: UserContent): UserContent {
+  if (typeof content === 'string') {
+    return timestampUserMessage(content);
+  }
+
+  const prefix = makeTimestampPrefix();
+  const parts = [...content];
+  const firstTextIdx = parts.findIndex(
+    (p) => typeof p === 'object' && p !== null && 'type' in p && p.type === 'text',
+  );
+  if (firstTextIdx >= 0) {
+    const tp = parts[firstTextIdx] as { type: 'text'; text: string };
+    parts[firstTextIdx] = { type: 'text', text: prefix + tp.text };
+  } else {
+    parts.unshift({ type: 'text', text: prefix.trim() });
+  }
+  return parts;
 }
 
 /** Strips a leading [ISO-timestamp] prefix from a message string. */
