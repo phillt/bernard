@@ -688,4 +688,299 @@ describe('createSpecialistTool', () => {
       expect(result).not.toContain('Model Override');
     });
   });
+
+  describe('create action with new schema fields', () => {
+    it('creates specialist with kind tool-wrapper', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'shell-wrapper',
+          name: 'Shell Wrapper',
+          description: 'Wraps shell tool',
+          systemPrompt: 'You are a shell wrapper.',
+          kind: 'tool-wrapper',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+      expect(result).toContain('shell-wrapper');
+    });
+
+    it('creates specialist with kind meta', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'meta-spec',
+          name: 'Meta Specialist',
+          description: 'Operates on other specialists',
+          systemPrompt: 'You are a meta specialist.',
+          kind: 'meta',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('creates specialist with targetTools', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'file-wrapper',
+          name: 'File Wrapper',
+          description: 'Wraps file tools',
+          systemPrompt: 'You are a file wrapper.',
+          kind: 'tool-wrapper',
+          targetTools: ['file_read_lines', 'file_edit_lines'],
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('creates specialist with goodExamples', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'ex-wrapper',
+          name: 'Example Wrapper',
+          description: 'Has examples',
+          systemPrompt: 'prompt',
+          goodExamples: [{ input: 'list files', call: 'ls -la' }],
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('creates specialist with badExamples', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'bad-ex-wrapper',
+          name: 'Bad Example Wrapper',
+          description: 'Has bad examples',
+          systemPrompt: 'prompt',
+          badExamples: [{ input: 'bad cmd', call: 'rm -rf /', error: 'dangerous', fix: 'use safe path' }],
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+
+    it('creates specialist with structuredOutput', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'structured-wrapper',
+          name: 'Structured Wrapper',
+          description: 'Returns structured JSON',
+          systemPrompt: 'Return JSON always.',
+          structuredOutput: true,
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+    });
+  });
+
+  describe('update action with new schema fields', () => {
+    const baseSpecialist = {
+      id: 'shell-wrapper',
+      name: 'Shell Wrapper',
+      description: 'Wraps shell',
+      systemPrompt: 'prompt',
+      guidelines: [],
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    };
+
+    it('updates kind field', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(baseSpecialist));
+
+      const result = await tool.execute(
+        { action: 'update', id: 'shell-wrapper', kind: 'tool-wrapper' },
+        {} as any,
+      );
+      expect(result).toContain('updated');
+    });
+
+    it('updates targetTools field', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(baseSpecialist));
+
+      const result = await tool.execute(
+        { action: 'update', id: 'shell-wrapper', targetTools: ['shell'] },
+        {} as any,
+      );
+      expect(result).toContain('updated');
+    });
+
+    it('updates goodExamples field', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(baseSpecialist));
+
+      const result = await tool.execute(
+        {
+          action: 'update',
+          id: 'shell-wrapper',
+          goodExamples: [{ input: 'list files', call: 'ls -la' }],
+        },
+        {} as any,
+      );
+      expect(result).toContain('updated');
+    });
+
+    it('updates badExamples field', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(baseSpecialist));
+
+      const result = await tool.execute(
+        {
+          action: 'update',
+          id: 'shell-wrapper',
+          badExamples: [{ input: 'bad', call: 'bad', error: 'err', fix: 'fixed' }],
+        },
+        {} as any,
+      );
+      expect(result).toContain('updated');
+    });
+
+    it('updates structuredOutput field', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(baseSpecialist));
+
+      const result = await tool.execute(
+        { action: 'update', id: 'shell-wrapper', structuredOutput: true },
+        {} as any,
+      );
+      expect(result).toContain('updated');
+    });
+
+    it('returns error when only unrecognised fields are provided on update', async () => {
+      // No id provided — should return error before hitting the store
+      const result = await tool.execute({ action: 'update' }, {} as any);
+      expect(result).toContain('id is required');
+    });
+  });
+
+  describe('read action with new schema fields', () => {
+    it('shows Kind section for tool-wrapper kind', async () => {
+      const specialist = {
+        id: 'shell-wrapper',
+        name: 'Shell Wrapper',
+        description: 'Wraps shell',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        kind: 'tool-wrapper',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'read', id: 'shell-wrapper' }, {} as any);
+      expect(result).toContain('Kind: tool-wrapper');
+    });
+
+    it('does not show Kind section for persona kind', async () => {
+      const specialist = {
+        id: 'persona-spec',
+        name: 'Persona Spec',
+        description: 'A persona',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        kind: 'persona',
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'read', id: 'persona-spec' }, {} as any);
+      expect(result).not.toContain('Kind:');
+    });
+
+    it('shows Target tools section when targetTools are set', async () => {
+      const specialist = {
+        id: 'file-wrapper',
+        name: 'File Wrapper',
+        description: 'Wraps file tools',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        kind: 'tool-wrapper',
+        targetTools: ['file_read_lines', 'file_edit_lines'],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'read', id: 'file-wrapper' }, {} as any);
+      expect(result).toContain('Target tools:');
+      expect(result).toContain('file_read_lines');
+      expect(result).toContain('file_edit_lines');
+    });
+
+    it('shows Structured output section when structuredOutput is true', async () => {
+      const specialist = {
+        id: 'structured-wrapper',
+        name: 'Structured Wrapper',
+        description: 'Returns structured JSON',
+        systemPrompt: 'Return JSON always.',
+        guidelines: [],
+        structuredOutput: true,
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'read', id: 'structured-wrapper' }, {} as any);
+      expect(result).toContain('Structured output: true');
+    });
+
+    it('shows Good Examples section when goodExamples are set', async () => {
+      const specialist = {
+        id: 'ex-wrapper',
+        name: 'Example Wrapper',
+        description: 'Has examples',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        goodExamples: [{ input: 'list files', call: 'ls -la', note: 'basic listing' }],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'read', id: 'ex-wrapper' }, {} as any);
+      expect(result).toContain('Good Examples');
+      expect(result).toContain('list files');
+      expect(result).toContain('ls -la');
+      expect(result).toContain('basic listing');
+    });
+
+    it('shows Bad Examples section when badExamples are set', async () => {
+      const specialist = {
+        id: 'bad-ex-wrapper',
+        name: 'Bad Example Wrapper',
+        description: 'Has bad examples',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        badExamples: [{ input: 'bad cmd', call: 'rm -rf /', error: 'dangerous', fix: 'use safe path', note: 'never do this' }],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+
+      const result = await tool.execute({ action: 'read', id: 'bad-ex-wrapper' }, {} as any);
+      expect(result).toContain('Bad Examples');
+      expect(result).toContain('bad cmd');
+      expect(result).toContain('dangerous');
+      expect(result).toContain('use safe path');
+      expect(result).toContain('never do this');
+    });
+  });
 });
