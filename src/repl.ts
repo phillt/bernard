@@ -58,6 +58,7 @@ import {
 import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
 import { SpecialistStore } from './specialists.js';
+import { runCorrectionAgent } from './correction.js';
 import { CandidateStore, type SpecialistCandidate } from './specialist-candidates.js';
 import { detectSpecialistCandidate } from './specialist-detector.js';
 import {
@@ -476,6 +477,39 @@ export async function startRepl(
       }
     } catch {
       // Silent failure — don't block exit
+    }
+
+    // Run the correction agent over any tool-wrapper failures queued this
+    // session. Best-effort; never block shutdown on errors.
+    if (config.correctionEnabled) {
+      try {
+        const correctionStore = agent.getCorrectionStore();
+        const pending = correctionStore.listPending();
+        if (pending.length > 0) {
+          printInfo(`Reviewing ${pending.length} tool-wrapper failure(s) for learning...`);
+          const result = await runCorrectionAgent(
+            {
+              config,
+              toolOptions,
+              memoryStore,
+              specialistStore: agent.getSpecialistStore(),
+              correctionStore,
+              ragStore,
+              routineStore,
+              candidateStore,
+              mcpTools,
+            },
+            pending,
+          );
+          if (result.applied > 0) {
+            printInfo(
+              `  Learned from ${result.applied}/${result.processed} failure(s); examples updated.`,
+            );
+          }
+        }
+      } catch (err) {
+        debugLog('correction:error', err instanceof Error ? err.message : String(err));
+      }
     }
 
     await mcpManager.close();
