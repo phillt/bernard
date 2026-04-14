@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { formatCurrentDateTime, timestampUserMessage, stripTimestamp } from './datetime.js';
+import {
+  formatCurrentDateTime,
+  timestampUserMessage,
+  timestampUserContent,
+  stripTimestamp,
+} from './datetime.js';
 
 const FIXED_DATE = new Date('2025-06-15T14:30:00-04:00');
 
@@ -65,6 +70,61 @@ describe('timestampUserMessage', () => {
     expect(result).toMatch(
       /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] \[test\] message$/,
     );
+  });
+});
+
+describe('timestampUserContent', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('delegates to timestampUserMessage for string input', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_DATE);
+    const result = timestampUserContent('Hello');
+    expect(typeof result).toBe('string');
+    expect(result).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] Hello$/);
+  });
+
+  it('prepends timestamp to first text part in array', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_DATE);
+    const input = [
+      { type: 'text' as const, text: 'Describe this' },
+      { type: 'image' as const, image: Buffer.from('data'), mimeType: 'image/png' },
+    ];
+    const result = timestampUserContent(input);
+    expect(Array.isArray(result)).toBe(true);
+    const parts = result as Array<{ type: string; text?: string }>;
+    expect(parts).toHaveLength(2);
+    expect(parts[0].type).toBe('text');
+    expect(parts[0].text).toMatch(
+      /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] Describe this$/,
+    );
+    expect(parts[1].type).toBe('image');
+  });
+
+  it('inserts text part when array has no text parts', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_DATE);
+    const input = [{ type: 'image' as const, image: Buffer.from('data'), mimeType: 'image/png' }];
+    const result = timestampUserContent(input);
+    const parts = result as Array<{ type: string; text?: string }>;
+    expect(parts).toHaveLength(2);
+    expect(parts[0].type).toBe('text');
+    expect(parts[0].text).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\]$/);
+    expect(parts[1].type).toBe('image');
+  });
+
+  it('does not mutate the original array', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_DATE);
+    const original = [
+      { type: 'text' as const, text: 'original text' },
+      { type: 'image' as const, image: Buffer.from('data'), mimeType: 'image/png' },
+    ];
+    const originalText = original[0].text;
+    timestampUserContent(original);
+    expect(original[0].text).toBe(originalText);
+    expect(original).toHaveLength(2);
   });
 });
 

@@ -1,4 +1,4 @@
-import { generateText, type CoreMessage } from 'ai';
+import { generateText, type CoreMessage, type UserContent } from 'ai';
 import { getModel } from './providers/index.js';
 import { createTools, type ToolOptions } from './tools/index.js';
 import { createSubAgentTool } from './tools/subagent.js';
@@ -42,9 +42,14 @@ import {
   buildRAGQuery,
   applyStickiness,
 } from './rag-query.js';
-import { formatCurrentDateTime, timestampUserMessage } from './tools/datetime.js';
+import {
+  formatCurrentDateTime,
+  timestampUserMessage,
+  timestampUserContent,
+} from './tools/datetime.js';
 import { ToolProfileStore, buildToolProfilesPrompt } from './tool-profiles.js';
 import { augmentTools } from './tools/augment.js';
+import { type ImageAttachment, IMAGE_TOKEN_ESTIMATE } from './image.js';
 
 const BASE_SYSTEM_PROMPT = `# Identity
 
@@ -390,11 +395,22 @@ export class Agent {
    * @param userInput - The raw text from the user's REPL input
    * @throws Error wrapping the underlying API error if generation fails for non-abort, non-overflow reasons
    */
-  async processInput(userInput: string): Promise<void> {
+  async processInput(userInput: string, images?: ImageAttachment[]): Promise<void> {
     this.lastStepLimitHit = false;
 
-    const timestamped = timestampUserMessage(userInput);
-    this.history.push({ role: 'user', content: timestamped });
+    if (images && images.length > 0) {
+      const contentParts: UserContent = [
+        { type: 'text', text: userInput },
+        ...images.map((img) => ({
+          type: 'image' as const,
+          image: img.data,
+          mimeType: img.mimeType,
+        })),
+      ];
+      this.history.push({ role: 'user', content: timestampUserContent(contentParts) });
+    } else {
+      this.history.push({ role: 'user', content: timestampUserMessage(userInput) });
+    }
 
     this.abortController = new AbortController();
     this.lastStepPromptTokens = 0;
@@ -402,7 +418,10 @@ export class Agent {
 
     try {
       // Check if context compression is needed
-      const newMessageEstimate = Math.ceil(timestamped.length / 4);
+      const timestampOverhead = 30; // [YYYY-MM-DDTHH:MM:SS+HH:MM] prefix
+      const imageTokens = images ? images.length * IMAGE_TOKEN_ESTIMATE : 0;
+      const newMessageEstimate =
+        Math.ceil((userInput.length + timestampOverhead) / 4) + imageTokens;
       if (
         shouldCompress(
           this.lastPromptTokens,

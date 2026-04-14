@@ -4,6 +4,7 @@ import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 import type { RAGStore } from './rag.js';
 import { DOMAIN_REGISTRY, getDomainIds } from './domains.js';
+import { estimateContentPartTokens } from './image.js';
 
 /** Model name → context window size in tokens */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
@@ -352,17 +353,32 @@ export function truncateToolResults(
   });
 }
 
+/** Estimates token count for a single message's content. */
+function estimateMessageTokens(msg: CoreMessage): number {
+  if (typeof msg.content === 'string') {
+    return Math.ceil(msg.content.length / 3.6);
+  }
+  if (Array.isArray(msg.content)) {
+    let tokens = 0;
+    for (const part of msg.content) {
+      tokens += estimateContentPartTokens(part);
+    }
+    return tokens;
+  }
+  return Math.ceil(JSON.stringify(msg.content).length / 3.6);
+}
+
 /**
  * Rough-but-safe token estimator for pre-flight checks.
  * Uses 3.6 chars/token (instead of 4) for a ~10% safety margin,
  * since tool-result tokens can be denser than natural language.
  */
 export function estimateHistoryTokens(history: CoreMessage[]): number {
-  let chars = 0;
+  let tokens = 0;
   for (const msg of history) {
-    chars += JSON.stringify(msg.content).length;
+    tokens += estimateMessageTokens(msg);
   }
-  return Math.ceil(chars / 3.6);
+  return tokens;
 }
 
 /**
@@ -400,7 +416,7 @@ export function emergencyTruncate(
   let accumulated = 0;
   let cutoff = history.length;
   for (let i = history.length - 1; i >= 0; i--) {
-    const msgTokens = Math.ceil(JSON.stringify(history[i].content).length / 3.6);
+    const msgTokens = estimateMessageTokens(history[i]);
     if (accumulated + msgTokens > historyBudget) {
       cutoff = i + 1;
       break;

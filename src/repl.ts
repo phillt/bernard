@@ -78,6 +78,13 @@ import {
 } from './output.js';
 import { buildMemoryContext } from './memory-context.js';
 import { debugLog } from './logger.js';
+import {
+  loadImage,
+  tryLoadImage,
+  extractImagePaths,
+  isVisionCapableModel,
+  type ImageAttachment,
+} from './image.js';
 
 /** Promote a pending candidate to a full specialist, updating status and logging. */
 function promoteCandidate(
@@ -170,6 +177,7 @@ export async function startRepl(
     { command: '/candidates', description: 'Review specialist suggestions' },
     { command: '/critic', description: 'Toggle critic mode for response verification' },
     { command: '/agent-options', description: 'Configure auto-creation for specialist agents' },
+    { command: '/image', description: 'Attach an image: /image <path> [prompt]' },
     { command: '/debug', description: 'Print diagnostic report for troubleshooting' },
     { command: '/exit', description: 'Quit Bernard' },
   ];
@@ -515,20 +523,24 @@ export async function startRepl(
     await mcpManager.close();
   };
 
+  function initSpinner(): void {
+    const spinnerStats: SpinnerStats = {
+      startTime: Date.now(),
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      latestPromptTokens: 0,
+      model: config.model,
+      contextWindowOverride: config.tokenWindow || undefined,
+    };
+    agent.setSpinnerStats(spinnerStats);
+    startSpinner(() => buildSpinnerMessage(spinnerStats));
+  }
+
   async function runGuidedCreation(message: string): Promise<void> {
     processing = true;
     interrupted = false;
     try {
-      const spinnerStats: SpinnerStats = {
-        startTime: Date.now(),
-        totalPromptTokens: 0,
-        totalCompletionTokens: 0,
-        latestPromptTokens: 0,
-        model: config.model,
-        contextWindowOverride: config.tokenWindow || undefined,
-      };
-      agent.setSpinnerStats(spinnerStats);
-      startSpinner(() => buildSpinnerMessage(spinnerStats));
+      initSpinner();
       await agent.processInput(message);
       historyStore.save(agent.getHistory());
     } catch (err: unknown) {
@@ -1495,6 +1507,78 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         return;
       }
 
+      if (trimmed === '/image' || trimmed.startsWith('/image ')) {
+        const args = trimmed.slice('/image'.length).trim();
+        if (!args) {
+          printError('Usage: /image <path> [prompt]');
+          printInfo('  Example: /image ~/screenshot.png What is on the screen?');
+          printInfo(
+            '  Tip: you can also paste image paths inline, e.g. "describe ~/screenshot.png"',
+          );
+          void prompt();
+          return;
+        }
+
+        let imagePath: string;
+        let userText: string;
+        const quoteMatch = args.match(/^(["'])(.+?)\1(?:\s+(.*))?$/);
+        if (quoteMatch) {
+          imagePath = quoteMatch[2];
+          userText = quoteMatch[3]?.trim() || 'Describe this image.';
+        } else {
+          const spaceIdx = args.indexOf(' ');
+          imagePath = spaceIdx === -1 ? args : args.slice(0, spaceIdx);
+          userText =
+            spaceIdx === -1
+              ? 'Describe this image.'
+              : args.slice(spaceIdx + 1).trim() || 'Describe this image.';
+        }
+
+        if (!isVisionCapableModel(config.provider, config.model)) {
+          printError(
+            `Model "${config.model}" does not support image input. Switch to a vision-capable model with /model.`,
+          );
+          void prompt();
+          return;
+        }
+
+        let attachment: ImageAttachment;
+        try {
+          attachment = loadImage(imagePath);
+        } catch (err: unknown) {
+          printError(err instanceof Error ? err.message : String(err));
+          void prompt();
+          return;
+        }
+
+        printInfo(`  Attaching image: ${attachment.path}`);
+        printInfo(`  Image will be sent to ${config.provider}/${config.model}`);
+
+        processing = true;
+        interrupted = false;
+        try {
+          initSpinner();
+          await agent.processInput(userText, [attachment]);
+          historyStore.save(agent.getHistory());
+        } catch (err: unknown) {
+          if (!interrupted) {
+            printError(err instanceof Error ? err.message : String(err));
+          }
+        } finally {
+          processing = false;
+          stopSpinner();
+        }
+
+        if (interrupted) {
+          printInfo('Interrupted.');
+          interrupted = false;
+        }
+
+        console.log();
+        void prompt();
+        return;
+      }
+
       // Dynamic routine invocation: /{routine-id} [args...]
       {
         const parts = trimmed.slice(1).split(/\s+/);
@@ -1522,16 +1606,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           processing = true;
           interrupted = false;
           try {
-            const spinnerStats: SpinnerStats = {
-              startTime: Date.now(),
-              totalPromptTokens: 0,
-              totalCompletionTokens: 0,
-              latestPromptTokens: 0,
-              model: config.model,
-              contextWindowOverride: config.tokenWindow || undefined,
-            };
-            agent.setSpinnerStats(spinnerStats);
-            startSpinner(() => buildSpinnerMessage(spinnerStats));
+            initSpinner();
             await agent.processInput(message);
             historyStore.save(agent.getHistory());
           } catch (err: unknown) {
@@ -1556,20 +1631,33 @@ Remember: the systemPrompt should read like a persona definition — who this sp
       }
     } // end slash command handling
 
+    let inlineImages: ImageAttachment[] | undefined;
+    const candidatePaths = extractImagePaths(trimmed);
+    if (candidatePaths.length > 0) {
+      if (isVisionCapableModel(config.provider, config.model)) {
+        const loaded: ImageAttachment[] = [];
+        for (const p of candidatePaths) {
+          const img = tryLoadImage(p);
+          if (img) loaded.push(img);
+        }
+        if (loaded.length > 0) {
+          for (const img of loaded) {
+            printInfo(`  Attaching image: ${img.path}`);
+          }
+          inlineImages = loaded;
+        }
+      } else {
+        printWarning(
+          `Image(s) detected but model "${config.model}" does not support vision. Sending as text only.`,
+        );
+      }
+    }
+
     processing = true;
     interrupted = false;
     try {
-      const spinnerStats: SpinnerStats = {
-        startTime: Date.now(),
-        totalPromptTokens: 0,
-        totalCompletionTokens: 0,
-        latestPromptTokens: 0,
-        model: config.model,
-        contextWindowOverride: config.tokenWindow || undefined,
-      };
-      agent.setSpinnerStats(spinnerStats);
-      startSpinner(() => buildSpinnerMessage(spinnerStats));
-      await agent.processInput(trimmed);
+      initSpinner();
+      await agent.processInput(trimmed, inlineImages);
       historyStore.save(agent.getHistory());
     } catch (err: unknown) {
       if (!interrupted) {

@@ -1222,4 +1222,82 @@ describe('Agent', () => {
       expect(agent.getStepLimitHit()).toBeNull();
     });
   });
+
+  describe('image attachments', () => {
+    const mockImageAttachment = {
+      path: '/tmp/test.png',
+      mimeType: 'image/png',
+      data: Buffer.from('fake-png-data'),
+    };
+
+    it('processInput with images builds multipart UserContent', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'I see an image.' }] },
+        usage: { promptTokens: 200, completionTokens: 50, totalTokens: 250 },
+      });
+      const agent = new Agent(makeConfig(), toolOptions, store);
+      await agent.processInput('Describe this', [mockImageAttachment]);
+
+      const call = mockGenerateText.mock.calls[0][0];
+      const userMsg = call.messages.find((m: any) => m.role === 'user');
+      // Content should be an array with text + image parts
+      expect(Array.isArray(userMsg.content)).toBe(true);
+      expect(userMsg.content).toHaveLength(2);
+      expect(userMsg.content[0].type).toBe('text');
+      expect(userMsg.content[1].type).toBe('image');
+      expect(userMsg.content[1].mimeType).toBe('image/png');
+    });
+
+    it('processInput with images timestamps the text part', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Done' }] },
+        usage: { promptTokens: 200, completionTokens: 50, totalTokens: 250 },
+      });
+      const agent = new Agent(makeConfig(), toolOptions, store);
+      await agent.processInput('What is this?', [mockImageAttachment]);
+
+      const call = mockGenerateText.mock.calls[0][0];
+      const userMsg = call.messages.find((m: any) => m.role === 'user');
+      // The text part should have a timestamp prefix
+      expect(userMsg.content[0].text).toMatch(
+        /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] What is this\?$/,
+      );
+    });
+
+    it('processInput without images still sends a string', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(makeConfig(), toolOptions, store);
+      await agent.processInput('Hello');
+
+      const call = mockGenerateText.mock.calls[0][0];
+      const userMsg = call.messages.find((m: any) => m.role === 'user');
+      expect(typeof userMsg.content).toBe('string');
+    });
+
+    it('processInput with multiple images attaches all of them', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'I see two images.' }] },
+        usage: { promptTokens: 300, completionTokens: 50, totalTokens: 350 },
+      });
+      const secondImage = {
+        path: '/tmp/photo.jpg',
+        mimeType: 'image/jpeg',
+        data: Buffer.from('fake-jpg-data'),
+      };
+      const agent = new Agent(makeConfig(), toolOptions, store);
+      await agent.processInput('Compare these', [mockImageAttachment, secondImage]);
+
+      const call = mockGenerateText.mock.calls[0][0];
+      const userMsg = call.messages.find((m: any) => m.role === 'user');
+      expect(Array.isArray(userMsg.content)).toBe(true);
+      expect(userMsg.content).toHaveLength(3); // 1 text + 2 images
+      expect(userMsg.content[0].type).toBe('text');
+      expect(userMsg.content[1].type).toBe('image');
+      expect(userMsg.content[2].type).toBe('image');
+      expect(userMsg.content[2].mimeType).toBe('image/jpeg');
+    });
+  });
 });

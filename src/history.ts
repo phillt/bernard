@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import type { CoreMessage } from 'ai';
 import { STATE_DIR, HISTORY_FILE } from './paths.js';
+import { stripImagesFromHistory } from './image.js';
 
 /**
  * Manages persistence of conversation history.
@@ -25,8 +26,9 @@ export class HistoryStore {
   /** Atomically writes the conversation history to disk. */
   save(messages: CoreMessage[]): void {
     fs.mkdirSync(STATE_DIR, { recursive: true });
+    const stripped = stripImagesFromHistory(messages);
     const tmp = HISTORY_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(messages, null, 2), 'utf-8');
+    fs.writeFileSync(tmp, JSON.stringify(stripped, null, 2), 'utf-8');
     fs.renameSync(tmp, HISTORY_FILE);
   }
 
