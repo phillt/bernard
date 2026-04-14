@@ -139,7 +139,8 @@ export function captureToolCalls(steps: any[] | undefined): Array<{
  *   - restricts the child's tool set to the specialist's `targetTools`
  *   - injects OS context + good/bad examples + structured-output rules
  *   - forces a JSON final message via `experimental_prepareStep`
- *   - parses through a Zod schema and logs every run to the reasoning log
+ *   - parses through a Zod schema and logs runs that reach `generateText`
+ *     to the reasoning log (guard failures return early without logging)
  *   - enqueues a correction candidate on error for end-of-session learning
  */
 export function createToolWrapperRunTool(
@@ -159,7 +160,9 @@ export function createToolWrapperRunTool(
     parameters: z.object({
       specialistId: z
         .string()
-        .describe('The ID of the tool-wrapper or meta specialist to invoke (e.g. "shell-wrapper").'),
+        .describe(
+          'The ID of the tool-wrapper or meta specialist to invoke (e.g. "shell-wrapper").',
+        ),
       input: z
         .string()
         .describe(
@@ -169,10 +172,7 @@ export function createToolWrapperRunTool(
         .string()
         .optional()
         .describe('Optional additional context (file paths, prior findings, constraints).'),
-      provider: z
-        .string()
-        .optional()
-        .describe('Optional provider override for this invocation.'),
+      provider: z.string().optional().describe('Optional provider override for this invocation.'),
       model: z.string().optional().describe('Optional model override for this invocation.'),
     }),
     execute: async ({ specialistId, input, context, provider, model }, execOptions) => {

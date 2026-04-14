@@ -1,10 +1,6 @@
-import {
-  type ToolProfileStore,
-  classifyShellCommand,
-  detectToolError,
-} from '../tool-profiles.js';
+import { type ToolProfileStore, classifyShellCommand, detectToolError } from '../tool-profiles.js';
 import { debugLog } from '../logger.js';
-import { getTheme } from '../theme.js';
+import { printInfo } from '../output.js';
 
 /**
  * Returns the profile key for a given tool invocation. Shell commands are
@@ -34,10 +30,18 @@ function safeSerialize(args: unknown): string {
 
 /**
  * Wraps every tool's `execute` function to observe results and record
- * good/bad examples to the profile store. The recording is fire-and-forget
- * via `setImmediate` so it never adds latency to tool execution.
+ * error examples to the profile store, and patch fixes when the model
+ * retries successfully. The recording is fire-and-forget via `setImmediate`
+ * so it never adds latency to tool execution.
  *
  * Does NOT modify tool descriptions, parameters, or any other field.
+ */
+/**
+ * Uses `Record<string, any>` intentionally — this is a generic wrapper across
+ * heterogeneous tool types (built-in, MCP, dispatch) whose parameter types are
+ * erased at this boundary. The SDK's `ToolSet` type is `Record<string, Tool>`
+ * but `Tool`'s generic parameters make it impossible to write a single wrapper
+ * without `any`.
  */
 export function augmentTools(
   tools: Record<string, any>,
@@ -80,8 +84,7 @@ export function augmentTools(
             if (errorInfo.isError) {
               profileStore.recordBadExample(profileKey, argsSnippet, errorInfo.snippet);
               debugLog(`augment:${toolName}:error`, { profileKey, snippet: errorInfo.snippet });
-              const t = getTheme();
-              console.log(t.muted(`  ~ profile ${profileKey} — recorded error`));
+              printInfo(`  ~ profile ${profileKey} — recorded error`);
             } else {
               // On success, check if we should patch the last unfixed bad example
               const profile = profileStore.get(profileKey);
@@ -92,8 +95,7 @@ export function augmentTools(
               ) {
                 profileStore.patchLastBadWithFix(profileKey, argsSnippet);
                 debugLog(`augment:${toolName}:patched`, { profileKey });
-                const t = getTheme();
-                console.log(t.accent(`  ~ profile ${profileKey} — learned fix`));
+                printInfo(`  ~ profile ${profileKey} — learned fix`);
               }
             }
           } catch {

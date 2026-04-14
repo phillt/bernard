@@ -100,7 +100,7 @@ export function createSpecialistTool(
         .boolean()
         .optional()
         .describe(
-          'When true, the specialist must emit JSON {status, result, error?, reasoning?} as its final message. Default: false.',
+          'When true, the specialist must emit JSON {status, result, error?, reasoning?} as its final message. Default: true for tool-wrapper kind, false otherwise.',
         ),
     }),
     execute: async ({

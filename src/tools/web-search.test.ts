@@ -193,7 +193,7 @@ describe('createWebSearchTool', () => {
       expect(result).toContain('https://example.com');
     });
 
-    it('includes the Brave API key in the Tavily request body', async () => {
+    it('includes the Tavily API key in the Tavily request body', async () => {
       vi.stubEnv('BRAVE_API_KEY', 'brave-key');
       vi.stubEnv('TAVILY_API_KEY', 'tavily-secret');
       const mockFetch = createMockFetch({
@@ -730,8 +730,7 @@ describe('createWebSearchTool', () => {
       vi.stubGlobal(
         'fetch',
         createMockFetch({
-          'api.search.brave.com': () =>
-            jsonResponse({ web: { results: manyResults } }),
+          'api.search.brave.com': () => jsonResponse({ web: { results: manyResults } }),
         }),
       );
 
@@ -818,10 +817,14 @@ describe('createWebSearchTool', () => {
         createMockFetch({
           'api.search.brave.com': () =>
             jsonResponse({
-              web: { results: [{ title: 'Brave Result', url: 'https://brave.com', description: 'D' }] },
+              web: {
+                results: [{ title: 'Brave Result', url: 'https://brave.com', description: 'D' }],
+              },
             }),
           'api.tavily.com': () =>
-            jsonResponse({ results: [{ title: 'Tavily Result', url: 'https://tavily.com', content: 'C' }] }),
+            jsonResponse({
+              results: [{ title: 'Tavily Result', url: 'https://tavily.com', content: 'C' }],
+            }),
         }),
       );
 
@@ -836,7 +839,9 @@ describe('createWebSearchTool', () => {
       vi.stubEnv('TAVILY_API_KEY', 'tavily-key');
       const mockFetch = createMockFetch({
         'api.tavily.com': () =>
-          jsonResponse({ results: [{ title: 'Tavily Result', url: 'https://t.com', content: 'C' }] }),
+          jsonResponse({
+            results: [{ title: 'Tavily Result', url: 'https://t.com', content: 'C' }],
+          }),
         'html.duckduckgo.com': () => htmlResponse(DDG_HTML_WITH_RESULT),
       });
       vi.stubGlobal('fetch', mockFetch);

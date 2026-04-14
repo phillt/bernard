@@ -46,7 +46,10 @@ const SHELL_CATEGORIES: Array<{ pattern: RegExp; category: string }> = [
   { pattern: /^\s*gh\b/, category: 'gh' },
   { pattern: /^\s*(docker|docker-compose)\b/, category: 'docker' },
   { pattern: /^\s*(npm|yarn|pnpm|bun)\b/, category: 'npm' },
-  { pattern: /^\s*(ls|find|cp|mv|mkdir|rm|cat|head|tail|stat|chmod|chown|ln|du|df|wc)\b/, category: 'fs' },
+  {
+    pattern: /^\s*(ls|find|cp|mv|mkdir|rm|cat|head|tail|stat|chmod|chown|ln|du|df|wc)\b/,
+    category: 'fs',
+  },
   { pattern: /^\s*(curl|wget)\b/, category: 'http' },
   { pattern: /^\s*(systemctl|service|journalctl)\b/, category: 'systemd' },
   { pattern: /^\s*(python3?|node|ruby|perl|tsx|ts-node)\b/, category: 'runtime' },
@@ -82,9 +85,17 @@ export function detectToolError(toolName: string, result: unknown): ToolErrorInf
     return { isError: false };
   }
 
-  // web_read, web_search: returns string starting with "Error:"
-  if ((toolName === 'web_read' || toolName === 'web_search') && typeof result === 'string') {
+  // web_read: returns string starting with "Error:"
+  if (toolName === 'web_read' && typeof result === 'string') {
     if (result.startsWith('Error:')) {
+      return { isError: true, snippet: result.slice(0, 200) };
+    }
+    return { isError: false };
+  }
+
+  // web_search: provider failures / no-result diagnostics are returned as strings
+  if (toolName === 'web_search' && typeof result === 'string') {
+    if (result.startsWith('web_search returned no results')) {
       return { isError: true, snippet: result.slice(0, 200) };
     }
     return { isError: false };
@@ -292,9 +303,7 @@ export class ToolProfileStore {
         .flatMap((f) => {
           try {
             return [
-              JSON.parse(
-                fs.readFileSync(path.join(TOOL_PROFILES_DIR, f), 'utf-8'),
-              ) as ToolProfile,
+              JSON.parse(fs.readFileSync(path.join(TOOL_PROFILES_DIR, f), 'utf-8')) as ToolProfile,
             ];
           } catch {
             return [];
@@ -337,43 +346,62 @@ export class ToolProfileStore {
 // ---------------------------------------------------------------------------
 
 /**
+ * Approximate character budget for the rendered profiles block. At ~4 chars/token
+ * this gives ~1000 tokens — enough for guidance without crowding the context.
+ * Profiles are sorted by error count (highest first) so the most valuable
+ * guidance survives when the budget is tight.
+ */
+export const MAX_PROFILE_PROMPT_CHARS = 4000;
+
+/**
  * Renders tool profiles into a compact system-prompt block. Only profiles with
  * at least one guideline or bad example are included. At most 2 bad examples
- * shown per tool to stay within token budget (~800 tokens worst case).
+ * shown per tool. Profiles are sorted by error count (most errors first) and
+ * the total output is capped at {@link MAX_PROFILE_PROMPT_CHARS}.
  */
 export function buildToolProfilesPrompt(store: ToolProfileStore): string {
   const profiles = store
     .list()
-    .filter((p) => p.guidelines.length > 0 || p.badExamples.length > 0);
+    .filter((p) => p.guidelines.length > 0 || p.badExamples.length > 0)
+    .sort((a, b) => b.errorCount - a.errorCount);
 
   if (profiles.length === 0) return '';
 
-  const lines: string[] = ['## Tool Usage Profiles', ''];
-  lines.push('The following notes apply when calling these tools:\n');
+  const header = '## Tool Usage Profiles\n\nThe following notes apply when calling these tools:\n';
+  let totalChars = header.length;
+  const sections: string[] = [header];
 
   for (const profile of profiles) {
     const label = profile.toolName.startsWith('shell.')
       ? `shell (${profile.toolName.slice(6)} commands)`
       : profile.toolName;
-    lines.push(`### ${label}`);
+    const sectionLines: string[] = [`### ${label}`];
 
     for (const g of profile.guidelines) {
-      lines.push(`- ${g}`);
+      sectionLines.push(`- ${g}`);
     }
 
     const shownBad = profile.badExamples.slice(-2);
     if (shownBad.length > 0) {
-      lines.push('');
-      lines.push('Avoid these patterns (observed errors):');
+      sectionLines.push('');
+      sectionLines.push('Avoid these patterns (observed errors):');
       for (const b of shownBad) {
-        lines.push(`- BAD: ${b.args} -> Error: ${b.errorSnippet}`);
+        sectionLines.push(`- BAD: ${b.args} -> Error: ${b.errorSnippet}`);
         if (b.fix && b.fix !== '(awaiting successful retry)') {
-          lines.push(`  FIX: ${b.fix}`);
+          sectionLines.push(`  FIX: ${b.fix}`);
         }
       }
     }
-    lines.push('');
+    sectionLines.push('');
+
+    const section = sectionLines.join('\n');
+    if (totalChars + section.length > MAX_PROFILE_PROMPT_CHARS) break;
+    totalChars += section.length;
+    sections.push(section);
   }
 
-  return lines.join('\n');
+  // Only the header — nothing fit the budget (unlikely but safe)
+  if (sections.length <= 1) return '';
+
+  return sections.join('\n');
 }

@@ -5,6 +5,7 @@ import {
   ToolProfileStore,
   buildToolProfilesPrompt,
   MAX_PROFILE_EXAMPLES,
+  MAX_PROFILE_PROMPT_CHARS,
   type ToolProfile,
 } from './tool-profiles.js';
 
@@ -199,13 +200,22 @@ describe('detectToolError', () => {
   });
 
   describe('web_search tool', () => {
-    it('returns error when result starts with "Error:"', () => {
-      const result = detectToolError('web_search', 'Error: API key invalid');
-      expect(result).toEqual({ isError: true, snippet: 'Error: API key invalid' });
+    it('returns error when result starts with "web_search returned no results"', () => {
+      const msg = 'web_search returned no results (tried: brave, tavily, duckduckgo).';
+      const result = detectToolError('web_search', msg);
+      expect(result).toEqual({ isError: true, snippet: msg });
     });
 
-    it('returns isError: false for successful results', () => {
-      const result = detectToolError('web_search', '[{"title":"Result","url":"https://example.com"}]');
+    it('returns isError: false for successful provider results', () => {
+      const result = detectToolError(
+        'web_search',
+        'Provider: brave\n\n1. Result\n   https://example.com',
+      );
+      expect(result).toEqual({ isError: false });
+    });
+
+    it('returns isError: false for non-string results', () => {
+      const result = detectToolError('web_search', { results: [] });
       expect(result).toEqual({ isError: false });
     });
   });
@@ -576,9 +586,7 @@ describe('ToolProfileStore', () => {
       const saved = JSON.parse(
         vi.mocked(fsUtils.atomicWriteFileSync).mock.calls.at(-1)![1] as string,
       );
-      expect(saved.badExamples[0].fix).toBe(
-        'Use instead: {"command":"git push origin main"}',
-      );
+      expect(saved.badExamples[0].fix).toBe('Use instead: {"command":"git push origin main"}');
     });
 
     it('does not patch when last bad example already has a non-awaiting fix', () => {
@@ -882,5 +890,79 @@ describe('buildToolProfilesPrompt', () => {
     const output = buildToolProfilesPrompt(store);
     expect(output).toContain('shell (git commands)');
     expect(output).toContain('shell (npm commands)');
+  });
+
+  it('sorts profiles by errorCount descending (most errors first)', () => {
+    const lowErrors = makeProfile({
+      toolName: 'shell.fs',
+      guidelines: ['fs tip'],
+      errorCount: 1,
+    });
+    const highErrors = makeProfile({
+      toolName: 'shell.git',
+      guidelines: ['git tip'],
+      errorCount: 10,
+    });
+    vi.mocked(fs.readdirSync).mockReturnValue(['shell.fs.json', 'shell.git.json'] as any);
+    vi.mocked(fs.readFileSync)
+      .mockReturnValueOnce(JSON.stringify(lowErrors))
+      .mockReturnValueOnce(JSON.stringify(highErrors));
+
+    const output = buildToolProfilesPrompt(store);
+    const gitPos = output.indexOf('shell (git commands)');
+    const fsPos = output.indexOf('shell (fs commands)');
+    expect(gitPos).toBeLessThan(fsPos);
+  });
+
+  it('stops adding profiles when character budget is exceeded', () => {
+    // First profile: large enough to consume most of the budget but still fits
+    // Header is ~76 chars, so leave enough for it but not a second profile
+    const paddedGuideline = 'x'.repeat(MAX_PROFILE_PROMPT_CHARS - 150);
+    const bigProfile = makeProfile({
+      toolName: 'shell.git',
+      guidelines: [paddedGuideline],
+      errorCount: 10,
+    });
+    // Second profile: even a small one shouldn't fit now
+    const smallProfile = makeProfile({
+      toolName: 'web_read',
+      guidelines: ['small guideline that should be excluded'],
+      errorCount: 1,
+    });
+    vi.mocked(fs.readdirSync).mockReturnValue([
+      'shell.git.json',
+      'web_read.json',
+    ] as any);
+    vi.mocked(fs.readFileSync)
+      .mockReturnValueOnce(JSON.stringify(bigProfile))
+      .mockReturnValueOnce(JSON.stringify(smallProfile));
+
+    const output = buildToolProfilesPrompt(store);
+    expect(output).toContain('shell (git commands)');
+    // web_read should be excluded — budget exhausted by the big profile
+    expect(output).not.toContain('web_read');
+  });
+
+  it('output never exceeds MAX_PROFILE_PROMPT_CHARS', () => {
+    // Create many profiles
+    const profiles = Array.from({ length: 30 }, (_, i) =>
+      makeProfile({
+        toolName: `tool-${i}`,
+        guidelines: [`guideline for tool ${i} with some extra text to pad it out a bit`],
+        errorCount: 30 - i,
+      }),
+    );
+    vi.mocked(fs.readdirSync).mockReturnValue(
+      profiles.map((_, i) => `tool-${i}.json`) as any,
+    );
+    let callIdx = 0;
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      const result = JSON.stringify(profiles[callIdx] ?? profiles[0]);
+      callIdx++;
+      return result;
+    });
+
+    const output = buildToolProfilesPrompt(store);
+    expect(output.length).toBeLessThanOrEqual(MAX_PROFILE_PROMPT_CHARS);
   });
 });
