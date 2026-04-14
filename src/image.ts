@@ -48,8 +48,11 @@ export function detectMimeType(filePath: string): string | null {
  * Expands `~` at the start of a path to the user's home directory.
  */
 function expandHome(filePath: string): string {
-  if (filePath.startsWith('~/') || filePath === '~') {
-    return path.join(os.homedir(), filePath.slice(1));
+  if (filePath === '~') {
+    return os.homedir();
+  }
+  if (filePath.startsWith('~/')) {
+    return path.join(os.homedir(), filePath.slice(2));
   }
   return filePath;
 }
@@ -121,34 +124,30 @@ export function extractImagePaths(text: string): string[] {
 }
 
 /**
- * Checks whether the given provider/model combination supports image input.
+ * Heuristic check for whether the given provider/model combination supports image input.
  *
- * - Anthropic: all models in the list are Claude 3+ and support vision.
- * - OpenAI: gpt-4o, gpt-4.1, gpt-4-turbo, gpt-5 families support vision. o3/o3-mini do not.
- * - xAI: only `grok-*-vision-*` models support vision; none of the current defaults do.
+ * - Anthropic: all models are treated as vision-capable (all current models are Claude 3+).
+ * - OpenAI: gpt-4o, gpt-4.1, gpt-4-turbo, gpt-5, o3, and o4 families are treated as vision-capable.
+ * - xAI: models containing `vision` in the name, plus grok-4 family, are treated as vision-capable.
+ * - Unknown providers: optimistically allowed (the API will reject if unsupported).
  */
 export function isVisionCapableModel(provider: string, model: string): boolean {
   switch (provider) {
     case 'anthropic':
-      // All Claude 3+ models support vision
       return true;
 
     case 'openai': {
       const m = model.toLowerCase();
-      // GPT-4o, GPT-4.1, GPT-4-turbo, GPT-5 families support vision
       if (m.startsWith('gpt-4o') || m.startsWith('gpt-4.1') || m.startsWith('gpt-4-turbo'))
         return true;
       if (m.startsWith('gpt-5')) return true;
-      // o3, o4 families support vision
       if (m.startsWith('o3') || m.startsWith('o4')) return true;
       return false;
     }
 
     case 'xai': {
       const m = model.toLowerCase();
-      // Only grok-vision models support image input
       if (m.includes('vision')) return true;
-      // Grok-4 models support vision
       if (m.startsWith('grok-4')) return true;
       return false;
     }

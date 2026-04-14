@@ -135,7 +135,8 @@ describe('extractImagePaths', () => {
 
   it('finds home-dir paths and expands ~', () => {
     const result = extractImagePaths('describe ~/photos/cat.jpg');
-    expect(result).toEqual([path.join(os.homedir(), '/photos/cat.jpg')]);
+    expect(result).toEqual([path.join(os.homedir(), 'photos', 'cat.jpg')]);
+    expect(result[0]).not.toBe('/photos/cat.jpg');
   });
 
   it('finds relative paths', () => {

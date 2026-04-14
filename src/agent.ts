@@ -418,8 +418,10 @@ export class Agent {
 
     try {
       // Check if context compression is needed
+      const timestampOverhead = 30; // [YYYY-MM-DDTHH:MM:SS+HH:MM] prefix
       const imageTokens = images ? images.length * IMAGE_TOKEN_ESTIMATE : 0;
-      const newMessageEstimate = Math.ceil(userInput.length / 4) + imageTokens;
+      const newMessageEstimate =
+        Math.ceil((userInput.length + timestampOverhead) / 4) + imageTokens;
       if (
         shouldCompress(
           this.lastPromptTokens,
