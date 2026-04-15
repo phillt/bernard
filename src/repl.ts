@@ -85,6 +85,14 @@ import {
   isVisionCapableModel,
   type ImageAttachment,
 } from './image.js';
+import {
+  printMenuList,
+  selectFromMenu,
+  promptValue,
+  type MenuEntry,
+  type SelectResult,
+  type ValueResult,
+} from './menu.js';
 
 /** Promote a pending candidate to a full specialist, updating status and logging. */
 function promoteCandidate(
@@ -175,8 +183,8 @@ export async function startRepl(
     { command: '/specialists', description: 'List specialist agents' },
     { command: '/create-specialist', description: 'Create a specialist with guided AI assistance' },
     { command: '/candidates', description: 'Review specialist suggestions' },
-    { command: '/critic', description: 'Toggle critic mode for response verification' },
-    { command: '/agent-options', description: 'Configure auto-creation for specialist agents' },
+    { command: '/critic', description: 'Toggle critic mode' },
+    { command: '/agent-options', description: 'Configure specialist auto-creation settings' },
     { command: '/image', description: 'Attach an image: /image <path> [prompt]' },
     { command: '/debug', description: 'Print diagnostic report for troubleshooting' },
     { command: '/exit', description: 'Quit Bernard' },
@@ -270,9 +278,24 @@ export async function startRepl(
   let processing = false;
   let interrupted = false;
   let taskAbortController: AbortController | null = null;
+  let menuAbortController: AbortController | null = null;
+
+  function createMenuSignal(): AbortSignal {
+    menuAbortController = new AbortController();
+    return menuAbortController.signal;
+  }
+
+  function clearMenuSignal(): void {
+    menuAbortController = null;
+  }
 
   process.stdin.on('keypress', (_str: string, key: any) => {
     if (!key) return;
+
+    if (key.name === 'escape' && menuAbortController) {
+      menuAbortController.abort();
+      return;
+    }
 
     if (key.name === 'escape' && processing) {
       if (taskAbortController) {
@@ -1017,16 +1040,16 @@ export async function startRepl(
           void prompt();
           return;
         }
+        const entries: MenuEntry[] = available.map((p) => ({ label: p }));
         printInfo(`\n  Current: ${config.provider} (${config.model})\n`);
         printInfo('  Available providers:');
-        for (let i = 0; i < available.length; i++) {
-          printInfo(`    ${i + 1}. ${available[i]}`);
-        }
+        printMenuList(entries);
         console.log();
-        rl.question(`  Select [1-${available.length}]: `, (answer) => {
-          const num = parseInt(answer.trim(), 10);
-          if (num >= 1 && num <= available.length) {
-            config.provider = available[num - 1];
+        const signal = createMenuSignal();
+        try {
+          const result = await selectFromMenu(rl, entries, {}, signal);
+          if (!result.cancelled) {
+            config.provider = available[result.index];
             config.model = getDefaultModel(config.provider);
             savePreferences({
               provider: config.provider,
@@ -1037,12 +1060,12 @@ export async function startRepl(
               theme: config.theme,
             });
             printInfo(`  Switched to ${config.provider} (${config.model})`);
-          } else {
-            printInfo('  Cancelled.');
           }
-          console.log();
-          void prompt();
-        });
+        } finally {
+          clearMenuSignal();
+        }
+        console.log();
+        void prompt();
         return;
       }
 
@@ -1053,16 +1076,16 @@ export async function startRepl(
           void prompt();
           return;
         }
+        const entries: MenuEntry[] = models.map((m) => ({ label: m }));
         printInfo(`\n  Current: ${config.provider} / ${config.model}\n`);
         printInfo('  Available models:');
-        for (let i = 0; i < models.length; i++) {
-          printInfo(`    ${i + 1}. ${models[i]}`);
-        }
+        printMenuList(entries);
         console.log();
-        rl.question(`  Select [1-${models.length}]: `, (answer) => {
-          const num = parseInt(answer.trim(), 10);
-          if (num >= 1 && num <= models.length) {
-            config.model = models[num - 1];
+        const signal = createMenuSignal();
+        try {
+          const result = await selectFromMenu(rl, entries, {}, signal);
+          if (!result.cancelled) {
+            config.model = models[result.index];
             savePreferences({
               provider: config.provider,
               model: config.model,
@@ -1072,12 +1095,12 @@ export async function startRepl(
               theme: config.theme,
             });
             printInfo(`  Switched to ${config.model}`);
-          } else {
-            printInfo('  Cancelled.');
           }
-          console.log();
-          void prompt();
-        });
+        } finally {
+          clearMenuSignal();
+        }
+        console.log();
+        void prompt();
         return;
       }
 
@@ -1087,27 +1110,30 @@ export async function startRepl(
         const regularKeys = allKeys.filter((k) => k !== 'high-contrast' && k !== 'colorblind');
         const a11yKeys = allKeys.filter((k) => k === 'high-contrast' || k === 'colorblind');
 
+        const entries: MenuEntry[] = [
+          ...regularKeys.map((k) => ({
+            label: THEMES[k].name,
+            active: k === currentKey,
+            value: k,
+          })),
+          { type: 'section' as const, title: 'Accessibility:' },
+          ...a11yKeys.map((k) => ({
+            label: THEMES[k].name,
+            active: k === currentKey,
+            value: k,
+          })),
+        ];
+
         printInfo(`\n  Current theme: ${THEMES[currentKey].name}\n`);
         printInfo('  Themes:');
-        let idx = 1;
-        for (const k of regularKeys) {
-          const marker = k === currentKey ? ' (active)' : '';
-          printInfo(`    ${idx}. ${THEMES[k].name}${marker}`);
-          idx++;
-        }
-        printInfo('\n  Accessibility:');
-        for (const k of a11yKeys) {
-          const marker = k === currentKey ? ' (active)' : '';
-          printInfo(`    ${idx}. ${THEMES[k].name}${marker}`);
-          idx++;
-        }
+        printMenuList(entries);
         console.log();
 
-        const ordered = [...regularKeys, ...a11yKeys];
-        rl.question(`  Select [1-${ordered.length}]: `, (answer) => {
-          const num = parseInt(answer.trim(), 10);
-          if (num >= 1 && num <= ordered.length) {
-            const chosen = ordered[num - 1];
+        const signal = createMenuSignal();
+        try {
+          const result = await selectFromMenu(rl, entries, {}, signal);
+          if (!result.cancelled) {
+            const chosen = result.item.value as string;
             setTheme(chosen);
             config.theme = chosen;
             savePreferences({
@@ -1119,62 +1145,77 @@ export async function startRepl(
               theme: chosen,
             });
             printInfo(`  Switched to ${THEMES[chosen].name} theme.`);
-          } else {
-            printInfo('  Cancelled.');
           }
-          console.log();
-          void prompt();
-        });
+        } finally {
+          clearMenuSignal();
+        }
+        console.log();
+        void prompt();
         return;
       }
 
       if (trimmed === '/options') {
-        const entries = Object.entries(OPTIONS_REGISTRY);
-        printInfo('\n  Options:');
-        for (let i = 0; i < entries.length; i++) {
-          const [name, opt] = entries[i];
+        const optEntries = Object.entries(OPTIONS_REGISTRY);
+        const menuEntries: MenuEntry[] = optEntries.map(([name, opt]) => {
           const current = config[opt.configKey];
-          const isDefault = current === opt.default;
-          const label = isDefault ? '(default)' : '(custom)';
-          printInfo(`    ${i + 1}. ${name} = ${current} ${label}`);
-          printInfo(`       ${opt.description}`);
+          const tag = current === opt.default ? '(default)' : '(custom)';
+          return {
+            label: name,
+            annotation: `= ${current} ${tag}`,
+            description: opt.description,
+          };
+        });
+        printInfo('\n  Options:');
+        printMenuList(menuEntries);
+        console.log();
+
+        const signal1 = createMenuSignal();
+        let optResult: SelectResult;
+        try {
+          optResult = await selectFromMenu(
+            rl,
+            menuEntries,
+            { promptLabel: 'Select option' },
+            signal1,
+          );
+        } finally {
+          clearMenuSignal();
+        }
+
+        if (!optResult.cancelled) {
+          const [name, opt] = optEntries[optResult.index];
+          const signal2 = createMenuSignal();
+          let valResult: ValueResult;
+          try {
+            valResult = await promptValue(rl, { label: `New value for ${name}` }, signal2);
+          } finally {
+            clearMenuSignal();
+          }
+
+          if (!valResult.cancelled) {
+            const val = parseInt(valResult.raw, 10);
+            const minVal = opt.default === 0 ? 0 : 1;
+            if (!isNaN(val) && val >= minVal) {
+              saveOption(name, val);
+              config[opt.configKey] = val;
+              printInfo(`  ${name} set to ${val}`);
+              if (name === 'token-window') {
+                const modelWindow = getContextWindow(config.model);
+                if (val > modelWindow) {
+                  printInfo(
+                    `  Warning: ${val} exceeds ${config.model}'s context window (${modelWindow})`,
+                  );
+                }
+              }
+            } else {
+              printError(
+                `  Invalid value. Must be ${minVal === 0 ? 'a non-negative integer' : 'a positive integer'}.`,
+              );
+            }
+          }
         }
         console.log();
-        rl.question(`  Select option [1-${entries.length}] (Enter to cancel): `, (answer) => {
-          const num = parseInt(answer.trim(), 10);
-          if (num >= 1 && num <= entries.length) {
-            const [name, opt] = entries[num - 1];
-            rl.question(`  New value for ${name} (Enter to cancel): `, (valAnswer) => {
-              const val = parseInt(valAnswer.trim(), 10);
-              const minVal = opt.default === 0 ? 0 : 1;
-              if (!isNaN(val) && val >= minVal) {
-                saveOption(name, val);
-                config[opt.configKey] = val;
-                printInfo(`  ${name} set to ${val}`);
-                if (name === 'token-window') {
-                  const modelWindow = getContextWindow(config.model);
-                  if (val > modelWindow) {
-                    printInfo(
-                      `  Warning: ${val} exceeds ${config.model}'s context window (${modelWindow})`,
-                    );
-                  }
-                }
-              } else if (valAnswer.trim() === '') {
-                printInfo('  Cancelled.');
-              } else {
-                printError(
-                  `  Invalid value. Must be ${minVal === 0 ? 'a non-negative integer' : 'a positive integer'}.`,
-                );
-              }
-              console.log();
-              void prompt();
-            });
-          } else {
-            printInfo('  Cancelled.');
-            console.log();
-            void prompt();
-          }
-        });
+        void prompt();
         return;
       }
 
@@ -1325,89 +1366,136 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         return;
       }
 
-      if (trimmed === '/critic' || trimmed.startsWith('/critic ')) {
-        const arg = trimmed.slice('/critic'.length).trim().toLowerCase();
-        if (arg === 'on') {
-          config.criticMode = true;
-          savePreferences({
-            provider: config.provider,
-            model: config.model,
-            maxTokens: config.maxTokens,
-            shellTimeout: config.shellTimeout,
-            tokenWindow: config.tokenWindow,
-            theme: config.theme,
-            criticMode: true,
-          });
-          printInfo('[CRITIC:ON] Responses will be planned and verified.');
-        } else if (arg === 'off') {
-          config.criticMode = false;
-          savePreferences({
-            provider: config.provider,
-            model: config.model,
-            maxTokens: config.maxTokens,
-            shellTimeout: config.shellTimeout,
-            tokenWindow: config.tokenWindow,
-            theme: config.theme,
-            criticMode: false,
-          });
-          printInfo('[CRITIC:OFF] Critic mode disabled.');
-        } else {
-          printInfo(`Critic mode: ${config.criticMode ? 'ON' : 'OFF'}. Usage: /critic on|off`);
+      if (trimmed === '/critic') {
+        const entries: MenuEntry[] = [
+          { label: 'On', active: config.criticMode === true },
+          { label: 'Off', active: config.criticMode === false },
+        ];
+        printInfo(`\n  Critic mode: ${config.criticMode ? 'ON' : 'OFF'}\n`);
+        printMenuList(entries);
+        console.log();
+        const signal = createMenuSignal();
+        try {
+          const result = await selectFromMenu(rl, entries, {}, signal);
+          if (!result.cancelled) {
+            config.criticMode = result.index === 0;
+            savePreferences({
+              provider: config.provider,
+              model: config.model,
+              maxTokens: config.maxTokens,
+              shellTimeout: config.shellTimeout,
+              tokenWindow: config.tokenWindow,
+              theme: config.theme,
+              criticMode: config.criticMode,
+            });
+            printInfo(
+              config.criticMode
+                ? '  [CRITIC:ON] Responses will be planned and verified.'
+                : '  [CRITIC:OFF] Critic mode disabled.',
+            );
+          }
+        } finally {
+          clearMenuSignal();
         }
+        console.log();
         void prompt();
         return;
       }
 
-      if (trimmed === '/agent-options' || trimmed.startsWith('/agent-options ')) {
-        const args = trimmed.slice('/agent-options'.length).trim();
-        if (!args) {
-          // Display current settings
-          printInfo(`Auto-create specialists: ${config.autoCreateSpecialists ? 'on' : 'off'}`);
-          printInfo(
-            `Auto-create threshold: ${config.autoCreateThreshold} (${Math.round(config.autoCreateThreshold * 100)}%)`,
-          );
-        } else if (args === 'auto-create on') {
-          config.autoCreateSpecialists = true;
-          savePreferences({
-            ...loadPreferences(),
-            autoCreateSpecialists: true,
-            provider: config.provider,
-            model: config.model,
-          });
-          printInfo('Auto-create specialists: on');
-          promotePendingCandidates(candidateStore, specialistStore, config.autoCreateThreshold);
-        } else if (args === 'auto-create off') {
-          config.autoCreateSpecialists = false;
-          savePreferences({
-            ...loadPreferences(),
-            autoCreateSpecialists: false,
-            provider: config.provider,
-            model: config.model,
-          });
-          printInfo('Auto-create specialists: off');
-        } else if (args.startsWith('threshold ')) {
-          const val = parseFloat(args.slice('threshold '.length));
-          if (isNaN(val) || val < 0 || val > 100) {
-            printError('Threshold must be a number between 0 and 100 (e.g. 0.8 or 80)');
+      if (trimmed === '/agent-options') {
+        const topEntries: MenuEntry[] = [
+          {
+            label: 'Auto-create specialists',
+            annotation: `= ${config.autoCreateSpecialists ? 'on' : 'off'}`,
+          },
+          {
+            label: 'Auto-create threshold',
+            annotation: `= ${config.autoCreateThreshold} (${Math.round(config.autoCreateThreshold * 100)}%)`,
+          },
+        ];
+        printInfo('\n  Agent Options:\n');
+        printMenuList(topEntries);
+        console.log();
+
+        const signal1 = createMenuSignal();
+        let topResult: SelectResult;
+        try {
+          topResult = await selectFromMenu(rl, topEntries, {}, signal1);
+        } finally {
+          clearMenuSignal();
+        }
+
+        if (!topResult.cancelled) {
+          if (topResult.index === 0) {
+            // Sub-menu: on/off for auto-create
+            const subEntries: MenuEntry[] = [
+              { label: 'On', active: config.autoCreateSpecialists },
+              { label: 'Off', active: !config.autoCreateSpecialists },
+            ];
+            printInfo('\n  Auto-create specialists:\n');
+            printMenuList(subEntries);
+            console.log();
+            const signal2 = createMenuSignal();
+            try {
+              const sub = await selectFromMenu(rl, subEntries, {}, signal2);
+              if (!sub.cancelled) {
+                config.autoCreateSpecialists = sub.index === 0;
+                savePreferences({
+                  ...loadPreferences(),
+                  autoCreateSpecialists: config.autoCreateSpecialists,
+                  provider: config.provider,
+                  model: config.model,
+                });
+                printInfo(
+                  `  Auto-create specialists: ${config.autoCreateSpecialists ? 'on' : 'off'}`,
+                );
+                if (config.autoCreateSpecialists) {
+                  promotePendingCandidates(
+                    candidateStore,
+                    specialistStore,
+                    config.autoCreateThreshold,
+                  );
+                }
+              }
+            } finally {
+              clearMenuSignal();
+            }
           } else {
-            const normalized = normalizeThreshold(val);
-            config.autoCreateThreshold = normalized;
-            savePreferences({
-              ...loadPreferences(),
-              autoCreateThreshold: normalized,
-              provider: config.provider,
-              model: config.model,
-            });
-            printInfo(`Auto-create threshold: ${normalized} (${Math.round(normalized * 100)}%)`);
-            if (config.autoCreateSpecialists) {
-              promotePendingCandidates(candidateStore, specialistStore, config.autoCreateThreshold);
+            // Sub-menu: threshold numeric input
+            const signal2 = createMenuSignal();
+            try {
+              const val = await promptValue(rl, { label: 'New threshold (0-100)' }, signal2);
+              if (!val.cancelled) {
+                const parsed = parseFloat(val.raw);
+                if (isNaN(parsed) || parsed < 0 || parsed > 100) {
+                  printError('Threshold must be a number between 0 and 100 (e.g. 0.8 or 80)');
+                } else {
+                  const normalized = normalizeThreshold(parsed);
+                  config.autoCreateThreshold = normalized;
+                  savePreferences({
+                    ...loadPreferences(),
+                    autoCreateThreshold: normalized,
+                    provider: config.provider,
+                    model: config.model,
+                  });
+                  printInfo(
+                    `  Auto-create threshold: ${normalized} (${Math.round(normalized * 100)}%)`,
+                  );
+                  if (config.autoCreateSpecialists) {
+                    promotePendingCandidates(
+                      candidateStore,
+                      specialistStore,
+                      config.autoCreateThreshold,
+                    );
+                  }
+                }
+              }
+            } finally {
+              clearMenuSignal();
             }
           }
-        } else {
-          printError(
-            'Usage: /agent-options auto-create on|off  OR  /agent-options threshold <0-100>',
-          );
         }
+        console.log();
         void prompt();
         return;
       }

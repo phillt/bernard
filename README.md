@@ -248,8 +248,8 @@ Features:
 | `/create-task`    | Create a task routine (`task-` prefixed) with guided AI assistance                   |
 | `/specialists`    | List saved specialists                                                               |
 | `/candidates`     | Review auto-detected specialist suggestions _(v0.6.0+)_                              |
-| `/critic`         | Toggle critic mode for response verification (on/off)                                |
-| `/agent-options`  | Configure auto-creation for specialist agents                                        |
+| `/critic`         | Toggle critic mode                                                                   |
+| `/agent-options`  | Configure specialist auto-creation settings                                          |
 | `/options`        | View and modify runtime options (max-tokens, max-steps, shell-timeout, token-window) |
 | `/debug`          | Print a diagnostic report for troubleshooting (no secrets leaked)                    |
 | `/exit`           | Quit Bernard (also: `exit`, `quit`)                                                  |
@@ -492,10 +492,7 @@ Use `/candidates` to see pending suggestions with their name, description, confi
 **Auto-creation** — You can enable automatic specialist creation for high-confidence candidates:
 
 ```bash
-/agent-options auto-create on       # Enable auto-creation
-/agent-options auto-create off      # Disable auto-creation
-/agent-options threshold 0.85       # Set confidence threshold (0-1)
-/agent-options                      # Show current settings
+/agent-options    # Interactive menu to configure auto-create on/off and threshold
 ```
 
 Or via environment variables: `BERNARD_AUTO_CREATE_SPECIALISTS=true` and `BERNARD_AUTO_CREATE_THRESHOLD=0.85`.
@@ -509,9 +506,7 @@ Storage: one JSON file per candidate in `~/.local/share/bernard/specialist-candi
 Critic mode adds planning, proactive scratch/memory usage, and post-response verification. Toggle it during a session:
 
 ```bash
-/critic on    # Enable critic mode
-/critic off   # Disable critic mode
-/critic       # Show current status
+/critic    # Interactive menu to toggle on/off
 ```
 
 When enabled:
@@ -858,6 +853,7 @@ src/
 ├── config.ts             # Config loading and validation
 ├── critic.ts             # Critic agent for response verification
 ├── output.ts             # Terminal formatting (Chalk)
+├── menu.ts               # Reusable numbered-list selection UI
 ├── theme.ts              # Color theme definitions and switching
 ├── memory.ts             # MemoryStore (persistent + scratch)
 ├── context.ts            # Context compression + domain fact extraction
