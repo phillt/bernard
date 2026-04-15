@@ -137,7 +137,7 @@ export async function selectFromMenu(
   const items = entries.filter((e) => !isSection(e)) as MenuItem[];
   const label = options?.promptLabel ?? 'Select';
   const { ansi } = getTheme();
-  const promptStr = `  ${ansi.prompt}${label} [1-${items.length}]${ansi.reset} (Enter to cancel): `;
+  const promptStr = `  ${ansi.prompt}${label} [1-${items.length}]${ansi.reset} (Enter or Esc to cancel): `;
 
   const answer = await questionWithSignal(rl, promptStr, signal);
   if (answer === null || answer.trim() === '') {
@@ -164,7 +164,7 @@ export async function promptValue(
   signal?: AbortSignal,
 ): Promise<ValueResult> {
   const { ansi } = getTheme();
-  const promptStr = `  ${ansi.prompt}${options.label}${ansi.reset} (Enter to cancel): `;
+  const promptStr = `  ${ansi.prompt}${options.label}${ansi.reset} (Enter or Esc to cancel): `;
 
   const answer = await questionWithSignal(rl, promptStr, signal);
   if (answer === null || answer.trim() === '') {

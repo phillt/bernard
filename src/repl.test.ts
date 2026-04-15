@@ -260,12 +260,15 @@ function typeLine(text: string): void {
 }
 
 /**
- * Extract the callback from the most recent rl.question() call that was
- * made with an AbortSignal: rl.question(prompt, {signal}, cb) — callback at index 2.
- * Menu functions always pass a signal, so this is the correct index for menu prompts.
+ * Extract the callback from the most recent rl.question() call.
+ * Supports both rl.question(prompt, cb) and rl.question(prompt, {signal}, cb).
  */
 function getMenuQuestionCallback(): (answer: string) => void {
-  return rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+  const call = rlEmitter.question.mock.calls.at(-1);
+  if (!call) throw new Error('Expected rl.question() to have been called');
+  const callback = call[call.length - 1];
+  if (typeof callback !== 'function') throw new Error('Expected the last rl.question() argument to be a callback');
+  return callback as (answer: string) => void;
 }
 
 // ── Tests ──────────────────────────────────────────────
