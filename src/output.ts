@@ -390,9 +390,7 @@ export function printHelp(): void {
     t.text('  /create-specialist') + t.muted(' — Create a specialist with guided AI assistance'),
   );
   console.log(t.text('  /candidates') + t.muted(' — Review specialist suggestions'));
-  console.log(
-    t.text('  /critic') + t.muted('   — Toggle critic mode'),
-  );
+  console.log(t.text('  /critic') + t.muted('   — Toggle critic mode'));
   console.log(
     t.text('  /options') +
       t.muted('  — View and set options (max-tokens, max-steps, shell-timeout, token-window)'),

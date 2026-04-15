@@ -1172,7 +1172,12 @@ export async function startRepl(
         const signal1 = createMenuSignal();
         let optResult: SelectResult;
         try {
-          optResult = await selectFromMenu(rl, menuEntries, { promptLabel: 'Select option' }, signal1);
+          optResult = await selectFromMenu(
+            rl,
+            menuEntries,
+            { promptLabel: 'Select option' },
+            signal1,
+          );
         } finally {
           clearMenuSignal();
         }
@@ -1459,11 +1464,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             // Sub-menu: threshold numeric input
             const signal2 = createMenuSignal();
             try {
-              const val = await promptValue(
-                rl,
-                { label: 'New threshold (0-100)' },
-                signal2,
-              );
+              const val = await promptValue(rl, { label: 'New threshold (0-100)' }, signal2);
               if (!val.cancelled) {
                 const parsed = parseFloat(val.raw);
                 if (isNaN(parsed) || parsed < 0 || parsed > 100) {

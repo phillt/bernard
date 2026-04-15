@@ -267,7 +267,8 @@ function getMenuQuestionCallback(): (answer: string) => void {
   const call = rlEmitter.question.mock.calls.at(-1);
   if (!call) throw new Error('Expected rl.question() to have been called');
   const callback = call[call.length - 1];
-  if (typeof callback !== 'function') throw new Error('Expected the last rl.question() argument to be a callback');
+  if (typeof callback !== 'function')
+    throw new Error('Expected the last rl.question() argument to be a callback');
   return callback as (answer: string) => void;
 }
 

@@ -32,11 +32,7 @@ function makeRl() {
 
 // ── Test data ────────────────────────────────────────────
 
-const simpleEntries: MenuEntry[] = [
-  { label: 'Alpha' },
-  { label: 'Beta' },
-  { label: 'Gamma' },
-];
+const simpleEntries: MenuEntry[] = [{ label: 'Alpha' }, { label: 'Beta' }, { label: 'Gamma' }];
 
 const groupedEntries: MenuEntry[] = [
   { label: 'Red', active: true, value: 'r' },

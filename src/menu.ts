@@ -39,7 +39,9 @@ export interface ValuePromptOptions {
 }
 
 /** Result from selectFromMenu(). */
-export type SelectResult = { cancelled: true } | { cancelled: false; index: number; item: MenuItem };
+export type SelectResult =
+  | { cancelled: true }
+  | { cancelled: false; index: number; item: MenuItem };
 
 /** Result from promptValue(). */
 export type ValueResult = { cancelled: true } | { cancelled: false; raw: string };
