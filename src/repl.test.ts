@@ -837,7 +837,22 @@ describe('REPL /agent-options threshold normalization', () => {
       expect(rlEmitter.prompt).toHaveBeenCalled();
     });
 
-    typeLine('/agent-options threshold 80');
+    typeLine('/agent-options');
+
+    // First question: top-level menu — select "2" for threshold
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const topCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    rlEmitter.question.mockClear();
+    topCb('2');
+
+    // Second question: value prompt — enter "80"
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const valCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    valCb('80');
 
     await vi.waitFor(() => {
       expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining('0.8'));
@@ -858,7 +873,22 @@ describe('REPL /agent-options threshold normalization', () => {
       expect(rlEmitter.prompt).toHaveBeenCalled();
     });
 
-    typeLine('/agent-options threshold 0.75');
+    typeLine('/agent-options');
+
+    // First question: top-level menu — select "2" for threshold
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const topCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    rlEmitter.question.mockClear();
+    topCb('2');
+
+    // Second question: value prompt — enter "0.75"
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const valCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    valCb('0.75');
 
     await vi.waitFor(() => {
       expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining('0.75'));
@@ -879,7 +909,22 @@ describe('REPL /agent-options threshold normalization', () => {
       expect(rlEmitter.prompt).toHaveBeenCalled();
     });
 
-    typeLine('/agent-options threshold 150');
+    typeLine('/agent-options');
+
+    // First question: top-level menu — select "2" for threshold
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const topCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    rlEmitter.question.mockClear();
+    topCb('2');
+
+    // Second question: value prompt — enter "150"
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const valCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    valCb('150');
 
     await vi.waitFor(() => {
       expect(mockPrintError).toHaveBeenCalledWith(expect.stringContaining('between 0 and 100'));
@@ -930,7 +975,22 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
       expect(rlEmitter.prompt).toHaveBeenCalled();
     });
 
-    typeLine('/agent-options auto-create on');
+    typeLine('/agent-options');
+
+    // First question: top-level menu — select "1" for auto-create
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const topCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    rlEmitter.question.mockClear();
+    topCb('1');
+
+    // Second question: sub-menu — select "1" for On
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const subCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    subCb('1');
 
     await vi.waitFor(() => {
       expect(mockSpecialistCreate).toHaveBeenCalledWith(
@@ -976,10 +1036,27 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
       expect(rlEmitter.prompt).toHaveBeenCalled();
     });
 
-    typeLine('/agent-options auto-create on');
+    typeLine('/agent-options');
+
+    // First question: top-level menu — select "1" for auto-create
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const topCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    rlEmitter.question.mockClear();
+    topCb('1');
+
+    // Second question: sub-menu — select "1" for On
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const subCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    subCb('1');
 
     await vi.waitFor(() => {
-      expect(mockPrintInfo).toHaveBeenCalledWith('Auto-create specialists: on');
+      expect(mockPrintInfo).toHaveBeenCalledWith(
+        expect.stringContaining('Auto-create specialists: on'),
+      );
     });
 
     expect(mockSpecialistCreate).not.toHaveBeenCalled();
@@ -1014,8 +1091,23 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
       expect(rlEmitter.prompt).toHaveBeenCalled();
     });
 
-    // Lower threshold from 0.9 to 0.8 — candidate at 0.85 should now qualify
-    typeLine('/agent-options threshold 0.8');
+    // Lower threshold from 0.9 to 0.8
+    typeLine('/agent-options');
+
+    // First question: top-level menu — select "2" for threshold
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const topCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    rlEmitter.question.mockClear();
+    topCb('2');
+
+    // Second question: value prompt — enter "0.8"
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const valCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    valCb('0.8');
 
     await vi.waitFor(() => {
       expect(mockSpecialistCreate).toHaveBeenCalledWith(
