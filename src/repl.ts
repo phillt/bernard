@@ -90,6 +90,8 @@ import {
   selectFromMenu,
   promptValue,
   type MenuEntry,
+  type SelectResult,
+  type ValueResult,
 } from './menu.js';
 
 /** Promote a pending candidate to a full specialist, updating status and logging. */
@@ -276,24 +278,21 @@ export async function startRepl(
   let processing = false;
   let interrupted = false;
   let taskAbortController: AbortController | null = null;
-  let menuActive = false;
   let menuAbortController: AbortController | null = null;
 
   function createMenuSignal(): AbortSignal {
     menuAbortController = new AbortController();
-    menuActive = true;
     return menuAbortController.signal;
   }
 
   function clearMenuSignal(): void {
     menuAbortController = null;
-    menuActive = false;
   }
 
   process.stdin.on('keypress', (_str: string, key: any) => {
     if (!key) return;
 
-    if (key.name === 'escape' && menuActive && menuAbortController) {
+    if (key.name === 'escape' && menuAbortController) {
       menuAbortController.abort();
       return;
     }
@@ -1110,7 +1109,6 @@ export async function startRepl(
         const currentKey = getActiveThemeKey();
         const regularKeys = allKeys.filter((k) => k !== 'high-contrast' && k !== 'colorblind');
         const a11yKeys = allKeys.filter((k) => k === 'high-contrast' || k === 'colorblind');
-        const ordered = [...regularKeys, ...a11yKeys];
 
         const entries: MenuEntry[] = [
           ...regularKeys.map((k) => ({
@@ -1135,7 +1133,7 @@ export async function startRepl(
         try {
           const result = await selectFromMenu(rl, entries, {}, signal);
           if (!result.cancelled) {
-            const chosen = ordered[result.index];
+            const chosen = result.item.value as string;
             setTheme(chosen);
             config.theme = chosen;
             savePreferences({
@@ -1172,7 +1170,7 @@ export async function startRepl(
         console.log();
 
         const signal1 = createMenuSignal();
-        let optResult: Awaited<ReturnType<typeof selectFromMenu>>;
+        let optResult: SelectResult;
         try {
           optResult = await selectFromMenu(rl, menuEntries, { promptLabel: 'Select option' }, signal1);
         } finally {
@@ -1182,7 +1180,7 @@ export async function startRepl(
         if (!optResult.cancelled) {
           const [name, opt] = optEntries[optResult.index];
           const signal2 = createMenuSignal();
-          let valResult: Awaited<ReturnType<typeof promptValue>>;
+          let valResult: ValueResult;
           try {
             valResult = await promptValue(rl, { label: `New value for ${name}` }, signal2);
           } finally {
@@ -1415,7 +1413,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         console.log();
 
         const signal1 = createMenuSignal();
-        let topResult: Awaited<ReturnType<typeof selectFromMenu>>;
+        let topResult: SelectResult;
         try {
           topResult = await selectFromMenu(rl, topEntries, {}, signal1);
         } finally {

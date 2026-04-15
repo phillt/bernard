@@ -134,10 +134,10 @@ export async function selectFromMenu(
   options?: MenuOptions,
   signal?: AbortSignal,
 ): Promise<SelectResult> {
-  const count = countMenuItems(entries);
+  const items = entries.filter((e) => !isSection(e)) as MenuItem[];
   const label = options?.promptLabel ?? 'Select';
   const { ansi } = getTheme();
-  const promptStr = `  ${ansi.prompt}${label} [1-${count}]${ansi.reset} (Enter to cancel): `;
+  const promptStr = `  ${ansi.prompt}${label} [1-${items.length}]${ansi.reset} (Enter to cancel): `;
 
   const answer = await questionWithSignal(rl, promptStr, signal);
   if (answer === null || answer.trim() === '') {
@@ -146,9 +146,8 @@ export async function selectFromMenu(
   }
 
   const num = parseInt(answer.trim(), 10);
-  if (num >= 1 && num <= count) {
-    const item = getMenuItem(entries, num - 1)!;
-    return { cancelled: false, index: num - 1, item };
+  if (num >= 1 && num <= items.length) {
+    return { cancelled: false, index: num - 1, item: items[num - 1] };
   }
 
   printInfo('  Cancelled.');

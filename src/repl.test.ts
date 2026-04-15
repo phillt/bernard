@@ -259,6 +259,14 @@ function typeLine(text: string): void {
   process.nextTick(() => rlEmitter.emit('line', text));
 }
 
+/**
+ * Extract the callback from the most recent rl.question() call.
+ * With AbortSignal the signature is rl.question(prompt, {signal}, cb) — callback at index 2.
+ */
+function getQuestionCallback(): (answer: string) => void {
+  return rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+}
+
 // ── Tests ──────────────────────────────────────────────
 
 describe('REPL /clear command', () => {
@@ -843,7 +851,7 @@ describe('REPL /agent-options threshold normalization', () => {
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const topCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    const topCb = getQuestionCallback();
     rlEmitter.question.mockClear();
     topCb('2');
 
@@ -851,7 +859,7 @@ describe('REPL /agent-options threshold normalization', () => {
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const valCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    const valCb = getQuestionCallback();
     valCb('80');
 
     await vi.waitFor(() => {
@@ -879,7 +887,7 @@ describe('REPL /agent-options threshold normalization', () => {
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const topCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    const topCb = getQuestionCallback();
     rlEmitter.question.mockClear();
     topCb('2');
 
@@ -887,7 +895,7 @@ describe('REPL /agent-options threshold normalization', () => {
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const valCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    const valCb = getQuestionCallback();
     valCb('0.75');
 
     await vi.waitFor(() => {
@@ -915,7 +923,7 @@ describe('REPL /agent-options threshold normalization', () => {
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const topCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    const topCb = getQuestionCallback();
     rlEmitter.question.mockClear();
     topCb('2');
 
@@ -923,7 +931,7 @@ describe('REPL /agent-options threshold normalization', () => {
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const valCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    const valCb = getQuestionCallback();
     valCb('150');
 
     await vi.waitFor(() => {
@@ -981,7 +989,7 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const topCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    const topCb = getQuestionCallback();
     rlEmitter.question.mockClear();
     topCb('1');
 
@@ -989,7 +997,7 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const subCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    const subCb = getQuestionCallback();
     subCb('1');
 
     await vi.waitFor(() => {
@@ -1042,7 +1050,7 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const topCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    const topCb = getQuestionCallback();
     rlEmitter.question.mockClear();
     topCb('1');
 
@@ -1050,7 +1058,7 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const subCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    const subCb = getQuestionCallback();
     subCb('1');
 
     await vi.waitFor(() => {
@@ -1098,7 +1106,7 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const topCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    const topCb = getQuestionCallback();
     rlEmitter.question.mockClear();
     topCb('2');
 
@@ -1106,7 +1114,7 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const valCb = rlEmitter.question.mock.calls[0][2] as (answer: string) => void;
+    const valCb = getQuestionCallback();
     valCb('0.8');
 
     await vi.waitFor(() => {
