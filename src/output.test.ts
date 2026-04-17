@@ -704,10 +704,14 @@ describe('output', () => {
     });
 
     function renderedLines(): string[] {
+      // Pinned-region cursor control: CSI ? A (move-up-N) and `\r\x1b[J` (erase-to-end).
+      const pinnedControl = /^(?:\x1b\[\d*A|\r\x1b\[J)+$/;
+      const ansiColor = /\x1b\[[0-9;]*m/g;
       return stdoutWriteSpy.mock.calls
         .map((c) => String(c[0]))
-        .filter((s) => !s.startsWith('\x1b') && s !== '\r\x1b[J')
+        .filter((s) => !pinnedControl.test(s))
         .flatMap((s) => s.split('\n'))
+        .map((s) => s.replace(ansiColor, ''))
         .filter((s) => s.length > 0);
     }
 

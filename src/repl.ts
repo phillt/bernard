@@ -302,6 +302,7 @@ export async function startRepl(
     label: string,
     onMsg: string,
     offMsg: string,
+    onToggle?: (value: boolean) => void,
   ): Promise<void> {
     const entries: MenuEntry[] = [
       { label: 'On', active: config[key] === true },
@@ -321,7 +322,7 @@ export async function startRepl(
           model: config.model,
           [key]: config[key],
         });
-        if (key === 'toolDetails') setToolDetailsVisible(config[key]);
+        onToggle?.(config[key]);
         printInfo(config[key] ? onMsg : offMsg);
       }
     } finally {
@@ -1435,6 +1436,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           'Tool details',
           '  [TOOL-DETAILS:ON] Full tool call args and results will be shown.',
           '  [TOOL-DETAILS:OFF] Only tool names shown; args and results hidden.',
+          setToolDetailsVisible,
         );
         void prompt();
         return;

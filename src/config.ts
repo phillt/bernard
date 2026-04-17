@@ -25,7 +25,7 @@ export interface BernardConfig {
   criticMode: boolean;
   /** Whether coordinator (ReAct) mode is active for iterative reasoning with subagent delegation. */
   reactMode: boolean;
-  /** Whether full tool result output is shown in the terminal. Tool call lines are always shown. */
+  /** Whether tool-call arguments and full tool result output are shown in the terminal. Tool names and call lines are always shown. */
   toolDetails: boolean;
   /** Whether to auto-create specialists above the confidence threshold. */
   autoCreateSpecialists: boolean;
@@ -138,6 +138,7 @@ export function savePreferences(prefs: {
   if (prefs.tokenWindow !== undefined) data.tokenWindow = prefs.tokenWindow;
   if (prefs.maxSteps !== undefined) data.maxSteps = prefs.maxSteps;
   if (prefs.theme !== undefined) data.theme = prefs.theme;
+  if (prefs.autoUpdate !== undefined) data.autoUpdate = prefs.autoUpdate;
   if (prefs.criticMode !== undefined) data.criticMode = prefs.criticMode;
   if (prefs.reactMode !== undefined) data.reactMode = prefs.reactMode;
   if (prefs.toolDetails !== undefined) data.toolDetails = prefs.toolDetails;
@@ -153,19 +154,11 @@ export function savePreferences(prefs: {
     /* ignore */
   }
 
-  if (prefs.autoUpdate !== undefined) {
-    data.autoUpdate = prefs.autoUpdate;
-  } else if (existing && typeof existing.autoUpdate === 'boolean') {
-    data.autoUpdate = existing.autoUpdate;
-  }
-  if (prefs.criticMode === undefined && existing && typeof existing.criticMode === 'boolean') {
-    data.criticMode = existing.criticMode;
-  }
-  if (prefs.reactMode === undefined && existing && typeof existing.reactMode === 'boolean') {
-    data.reactMode = existing.reactMode;
-  }
-  if (prefs.toolDetails === undefined && existing && typeof existing.toolDetails === 'boolean') {
-    data.toolDetails = existing.toolDetails;
+  const booleanKeys = ['autoUpdate', 'criticMode', 'reactMode', 'toolDetails'] as const;
+  for (const k of booleanKeys) {
+    if (prefs[k] === undefined && existing && typeof existing[k] === 'boolean') {
+      data[k] = existing[k];
+    }
   }
 
   // Preserve numeric options from existing prefs when callers don't pass them.

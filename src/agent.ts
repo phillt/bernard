@@ -687,11 +687,9 @@ export class Agent {
               }
             }
             for (const tc of toolCalls) {
-              debugLog(`onStepFinish:toolCall:${tc.toolName}`, tc.args);
               printToolCall(tc.toolName, tc.args as Record<string, unknown>);
             }
             for (const tr of toolResults) {
-              debugLog(`onStepFinish:toolResult:${tr.toolName}`, tr.result);
               printToolResult(tr.toolName, tr.result);
             }
             if (text) {
@@ -907,6 +905,7 @@ export class Agent {
     } finally {
       this.abortController = null;
       this.spinnerStats = null;
+      clearPinnedRegion('plan');
     }
   }
 

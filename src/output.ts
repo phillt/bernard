@@ -2,13 +2,17 @@ import type { CoreMessage } from 'ai';
 import { getContextWindow, COMPRESSION_THRESHOLD } from './context.js';
 import { getTheme } from './theme.js';
 import type { Step, StepStatus } from './plan-store.js';
+import { debugLog } from './logger.js';
 
 const MAX_TOOL_OUTPUT_LENGTH = 2000;
 const MAX_REPLAY_LENGTH = 200;
 
 let toolDetailsVisible = false;
 
-/** Enables or disables printing of tool result bodies. Calls are always shown. */
+/**
+ * Enables or disables printing of tool-call arguments and tool result bodies.
+ * Tool names and call lines (▶ toolName) are always shown regardless.
+ */
 export function setToolDetailsVisible(enabled: boolean): void {
   toolDetailsVisible = enabled;
 }
@@ -226,6 +230,9 @@ export function printToolCall(
   prefix?: string,
 ): void {
   stopSpinner();
+  // Debug log fires regardless of visibility so `.logs/<date>.log` keeps
+  // full tool args even when tool-details are hidden (see issue #116).
+  debugLog(`onStepFinish:toolCall:${toolName}`, args);
   if (silentTools.has(toolName)) return;
   const label = formatPrefix(prefix);
   if (!toolDetailsVisible) {
@@ -243,6 +250,7 @@ export function printToolCall(
  */
 export function printToolResult(toolName: string, result: unknown, prefix?: string): void {
   stopSpinner();
+  debugLog(`onStepFinish:toolResult:${toolName}`, result);
   if (silentTools.has(toolName)) return;
   if (!toolDetailsVisible) return;
   const label = formatPrefix(prefix);
@@ -501,49 +509,37 @@ export function printCriticReVerify(prefix?: string): void {
 /** Prints the REPL help menu listing all available slash commands. */
 export function printHelp(): void {
   const t = getTheme();
-  console.log(t.accent('\nCommands:'));
-  console.log(t.text('  /help') + t.muted('    — Show this help'));
-  console.log(
+  const lines = [
+    t.accent('\nCommands:'),
+    t.text('  /help') + t.muted('    — Show this help'),
     t.text('  /clear') + t.muted('   — Clear conversation (--save/-s to summarize first)'),
-  );
-  console.log(t.text('  /compact') + t.muted(' — Compress conversation history in-place'));
-  console.log(
+    t.text('  /compact') + t.muted(' — Compress conversation history in-place'),
     t.text('  /task') + t.muted('    — Run an isolated task (no history, structured output)'),
-  );
-  console.log(t.text('  /image') + t.muted('   — Attach an image: /image <path> [prompt]'));
-  console.log(t.text('  /memory') + t.muted('  — List persistent memories'));
-  console.log(t.text('  /scratch') + t.muted(' — List session scratch notes'));
-  console.log(t.text('  /mcp') + t.muted('      — List MCP servers and tools'));
-  console.log(t.text('  /cron') + t.muted('     — Show cron jobs and daemon status'));
-  console.log(t.text('  /facts') + t.muted('    — Show RAG facts in current context window'));
-  console.log(t.text('  /provider') + t.muted(' — Switch LLM provider'));
-  console.log(t.text('  /model') + t.muted('    — Switch model for current provider'));
-  console.log(t.text('  /theme') + t.muted('    — Switch color theme'));
-  console.log(t.text('  /routines') + t.muted(' — List saved routines'));
-  console.log(
+    t.text('  /image') + t.muted('   — Attach an image: /image <path> [prompt]'),
+    t.text('  /memory') + t.muted('  — List persistent memories'),
+    t.text('  /scratch') + t.muted(' — List session scratch notes'),
+    t.text('  /mcp') + t.muted('      — List MCP servers and tools'),
+    t.text('  /cron') + t.muted('     — Show cron jobs and daemon status'),
+    t.text('  /facts') + t.muted('    — Show RAG facts in current context window'),
+    t.text('  /provider') + t.muted(' — Switch LLM provider'),
+    t.text('  /model') + t.muted('    — Switch model for current provider'),
+    t.text('  /theme') + t.muted('    — Switch color theme'),
+    t.text('  /routines') + t.muted(' — List saved routines'),
     t.text('  /create-routine') + t.muted(' — Create a routine with guided AI assistance'),
-  );
-  console.log(
     t.text('  /create-task') + t.muted(' — Create a task routine with guided AI assistance'),
-  );
-  console.log(t.text('  /specialists') + t.muted(' — List specialist agents'));
-  console.log(
+    t.text('  /specialists') + t.muted(' — List specialist agents'),
     t.text('  /create-specialist') + t.muted(' — Create a specialist with guided AI assistance'),
-  );
-  console.log(t.text('  /candidates') + t.muted(' — Review specialist suggestions'));
-  console.log(t.text('  /critic') + t.muted('   — Toggle critic mode'));
-  console.log(
-    t.text('  /tool-details') + t.muted(' — Toggle visibility of tool call args and result output'),
-  );
-  console.log(
+    t.text('  /candidates') + t.muted(' — Review specialist suggestions'),
+    t.text('  /critic') + t.muted('   — Toggle critic mode'),
+    t.text('  /tool-details') +
+      t.muted(' — Toggle visibility of tool call args and result output'),
     t.text('  /options') +
       t.muted('  — View and set options (max-tokens, max-steps, shell-timeout, token-window)'),
-  );
-  console.log(
     t.text('  /agent-options') + t.muted(' — Configure specialist auto-creation settings'),
-  );
-  console.log(t.text('  /update') + t.muted('   — Check for and install updates'));
-  console.log(t.text('  /debug') + t.muted('    — Print diagnostic report for troubleshooting'));
-  console.log(t.text('  exit') + t.muted('      — Quit Bernard'));
-  console.log();
+    t.text('  /update') + t.muted('   — Check for and install updates'),
+    t.text('  /debug') + t.muted('    — Print diagnostic report for troubleshooting'),
+    t.text('  exit') + t.muted('      — Quit Bernard'),
+    '',
+  ];
+  emit(lines.join('\n'));
 }
