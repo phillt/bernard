@@ -25,6 +25,8 @@ export interface BernardConfig {
   criticMode: boolean;
   /** Whether coordinator (ReAct) mode is active for iterative reasoning with subagent delegation. */
   reactMode: boolean;
+  /** Whether full tool result output is shown in the terminal. Tool call lines are always shown. */
+  toolDetails: boolean;
   /** Whether to auto-create specialists above the confidence threshold. */
   autoCreateSpecialists: boolean;
   /** Confidence threshold for auto-creating specialists (0-1). */
@@ -122,6 +124,7 @@ export function savePreferences(prefs: {
   autoUpdate?: boolean;
   criticMode?: boolean;
   reactMode?: boolean;
+  toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
 }): void {
@@ -137,6 +140,7 @@ export function savePreferences(prefs: {
   if (prefs.theme !== undefined) data.theme = prefs.theme;
   if (prefs.criticMode !== undefined) data.criticMode = prefs.criticMode;
   if (prefs.reactMode !== undefined) data.reactMode = prefs.reactMode;
+  if (prefs.toolDetails !== undefined) data.toolDetails = prefs.toolDetails;
   if (prefs.autoCreateSpecialists !== undefined)
     data.autoCreateSpecialists = prefs.autoCreateSpecialists;
   if (prefs.autoCreateThreshold !== undefined) data.autoCreateThreshold = prefs.autoCreateThreshold;
@@ -159,6 +163,9 @@ export function savePreferences(prefs: {
   }
   if (prefs.reactMode === undefined && existing && typeof existing.reactMode === 'boolean') {
     data.reactMode = existing.reactMode;
+  }
+  if (prefs.toolDetails === undefined && existing && typeof existing.toolDetails === 'boolean') {
+    data.toolDetails = existing.toolDetails;
   }
 
   // Preserve numeric options from existing prefs when callers don't pass them.
@@ -208,6 +215,7 @@ export function loadPreferences(): {
   autoUpdate?: boolean;
   criticMode?: boolean;
   reactMode?: boolean;
+  toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
 } {
@@ -225,6 +233,7 @@ export function loadPreferences(): {
       autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
       criticMode: typeof parsed.criticMode === 'boolean' ? parsed.criticMode : undefined,
       reactMode: typeof parsed.reactMode === 'boolean' ? parsed.reactMode : undefined,
+      toolDetails: typeof parsed.toolDetails === 'boolean' ? parsed.toolDetails : undefined,
       autoCreateSpecialists:
         typeof parsed.autoCreateSpecialists === 'boolean'
           ? parsed.autoCreateSpecialists
@@ -525,6 +534,10 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     prefs.reactMode ??
     (process.env.BERNARD_REACT_MODE === 'true' || process.env.BERNARD_REACT_MODE === '1');
 
+  const toolDetails =
+    prefs.toolDetails ??
+    (process.env.BERNARD_TOOL_DETAILS === 'true' || process.env.BERNARD_TOOL_DETAILS === '1');
+
   const autoCreateSpecialists =
     prefs.autoCreateSpecialists ??
     (process.env.BERNARD_AUTO_CREATE_SPECIALISTS === 'true' ||
@@ -556,6 +569,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     theme,
     criticMode,
     reactMode,
+    toolDetails,
     autoCreateSpecialists,
     autoCreateThreshold,
     correctionEnabled,
