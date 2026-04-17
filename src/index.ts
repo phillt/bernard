@@ -43,6 +43,7 @@ program
   .option('-m, --model <model>', 'Model name')
   .option('-r, --resume', 'Resume the previous conversation')
   .option('--alert <id>', 'Open with cron alert context')
+  .option('--tool-details', 'Show full tool call args and result output (default: hidden)')
   .action(async (opts) => {
     try {
       await runFirstTimeSetup();
@@ -51,6 +52,8 @@ program
         provider: opts.provider,
         model: opts.model,
       });
+
+      if (opts.toolDetails) config.toolDetails = true;
 
       if (!setTheme(config.theme)) {
         config.theme = DEFAULT_THEME;

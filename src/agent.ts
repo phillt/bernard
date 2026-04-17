@@ -12,6 +12,7 @@ import {
   printCriticRetry,
   startSpinner,
   buildSpinnerMessage,
+  clearPinnedRegion,
   type SpinnerStats,
 } from './output.js';
 import { debugLog } from './logger.js';
@@ -497,6 +498,7 @@ export class Agent {
   async processInput(userInput: string, images?: ImageAttachment[]): Promise<void> {
     this.lastStepLimitHit = false;
     this.planStore.clear();
+    clearPinnedRegion('plan');
 
     if (images && images.length > 0) {
       const contentParts: UserContent = [
@@ -685,11 +687,9 @@ export class Agent {
               }
             }
             for (const tc of toolCalls) {
-              debugLog(`onStepFinish:toolCall:${tc.toolName}`, tc.args);
               printToolCall(tc.toolName, tc.args as Record<string, unknown>);
             }
             for (const tr of toolResults) {
-              debugLog(`onStepFinish:toolResult:${tr.toolName}`, tr.result);
               printToolResult(tr.toolName, tr.result);
             }
             if (text) {
@@ -905,6 +905,7 @@ export class Agent {
     } finally {
       this.abortController = null;
       this.spinnerStats = null;
+      clearPinnedRegion('plan');
     }
   }
 

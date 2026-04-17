@@ -22,6 +22,7 @@ import {
   startSpinner,
   stopSpinner,
   buildSpinnerMessage,
+  setToolDetailsVisible,
   type SpinnerStats,
 } from './output.js';
 import type { Step } from './plan-store.js';
@@ -37,6 +38,11 @@ describe('output', () => {
     stdoutWriteSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     stopSpinner(); // ensure clean state
     stdoutWriteSpy.mockClear();
+    setToolDetailsVisible(true);
+  });
+
+  afterEach(() => {
+    setToolDetailsVisible(false);
   });
 
   describe('printAssistantText', () => {
@@ -68,6 +74,22 @@ describe('output', () => {
       expect(output).toContain('memory');
       expect(output).toContain('"action"');
     });
+
+    it('omits args when tool details are hidden', () => {
+      setToolDetailsVisible(false);
+      printToolCall('shell', { command: 'ls -la' });
+      expect(logSpy).toHaveBeenCalled();
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('shell');
+      expect(output).not.toContain('ls -la');
+    });
+
+    it('prints nothing for silent tools (plan, think, evaluate)', () => {
+      printToolCall('plan', { action: 'view' });
+      printToolCall('think', { thought: 'x' });
+      printToolCall('evaluate', { evaluation: 'y' });
+      expect(logSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('printToolResult', () => {
@@ -98,6 +120,12 @@ describe('output', () => {
       expect(logSpy).toHaveBeenCalled();
       const output = logSpy.mock.calls[0][0];
       expect(output).toContain('truncated');
+    });
+
+    it('prints nothing when tool details are hidden', () => {
+      setToolDetailsVisible(false);
+      printToolResult('shell', 'file contents here');
+      expect(logSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -659,6 +687,34 @@ describe('output', () => {
   });
 
   describe('printPlan', () => {
+    // printPlan renders through the pinned-region system, which writes to
+    // process.stdout.write in TTY mode and no-ops otherwise. Force TTY so the
+    // writes are observable via stdoutWriteSpy.
+    let originalIsTTY: boolean | undefined;
+    beforeEach(() => {
+      originalIsTTY = process.stdout.isTTY;
+      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+      stdoutWriteSpy.mockClear();
+    });
+    afterEach(() => {
+      Object.defineProperty(process.stdout, 'isTTY', {
+        value: originalIsTTY,
+        configurable: true,
+      });
+    });
+
+    function renderedLines(): string[] {
+      // Pinned-region cursor control: CSI ? A (move-up-N) and `\r\x1b[J` (erase-to-end).
+      const pinnedControl = /^(?:\x1b\[\d*A|\r\x1b\[J)+$/;
+      const ansiColor = /\x1b\[[0-9;]*m/g;
+      return stdoutWriteSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((s) => !pinnedControl.test(s))
+        .flatMap((s) => s.split('\n'))
+        .map((s) => s.replace(ansiColor, ''))
+        .filter((s) => s.length > 0);
+    }
+
     it('prints a header line and one line per step with the right icons and notes', () => {
       const steps: Step[] = [
         { id: 1, description: 'gather data', status: 'done', note: 'got it' },
@@ -666,7 +722,7 @@ describe('output', () => {
         { id: 3, description: 'report', status: 'pending' },
       ];
       printPlan(steps);
-      const lines = logSpy.mock.calls.map((c) => String(c[0]));
+      const lines = renderedLines();
       expect(lines[0]).toContain('Plan:');
       expect(lines[1]).toContain('\u2713');
       expect(lines[1]).toContain('1. gather data');
@@ -684,7 +740,7 @@ describe('output', () => {
         { id: 2, description: 'unachievable', status: 'error', note: 'no permission' },
       ];
       printPlan(steps);
-      const lines = logSpy.mock.calls.map((c) => String(c[0]));
+      const lines = renderedLines();
       expect(lines[1]).toContain('\u2298');
       expect(lines[1]).toContain('user pivoted');
       expect(lines[2]).toContain('\u2717');
@@ -693,10 +749,10 @@ describe('output', () => {
   });
 
   describe('printThought', () => {
-    it('prints the thought with a thought-bubble marker', () => {
+    it('prints the thought text', () => {
       printThought('Next I will check deps.');
       const output = String(logSpy.mock.calls[0][0]);
-      expect(output).toContain('\uD83D\uDCAD');
+      expect(output).not.toContain('\uD83D\uDCAD');
       expect(output).toContain('Next I will check deps.');
     });
   });

@@ -32,8 +32,11 @@ vi.mock('./output.js', () => ({
   printToolResult: vi.fn(),
   printInfo: vi.fn(),
   printWarning: vi.fn(),
+  printCriticRetry: vi.fn(),
   startSpinner: vi.fn(),
   stopSpinner: vi.fn(),
+  buildSpinnerMessage: vi.fn(() => ''),
+  clearPinnedRegion: vi.fn(),
 }));
 
 vi.mock('./context.js', () => ({

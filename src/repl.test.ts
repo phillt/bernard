@@ -124,6 +124,7 @@ vi.mock('./output.js', () => ({
   stopSpinner: (...args: any[]) => mockStopSpinner(...args),
   buildSpinnerMessage: (...args: any[]) => mockBuildSpinnerMessage(...args),
   formatTokenCount: (n: number) => String(n),
+  setToolDetailsVisible: vi.fn(),
 }));
 
 vi.mock('./providers/index.js', () => ({

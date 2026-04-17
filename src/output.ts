@@ -2,9 +2,91 @@ import type { CoreMessage } from 'ai';
 import { getContextWindow, COMPRESSION_THRESHOLD } from './context.js';
 import { getTheme } from './theme.js';
 import type { Step, StepStatus } from './plan-store.js';
+import { debugLog } from './logger.js';
 
 const MAX_TOOL_OUTPUT_LENGTH = 2000;
 const MAX_REPLAY_LENGTH = 200;
+
+let toolDetailsVisible = false;
+
+/**
+ * Enables or disables printing of tool-call arguments and tool result bodies.
+ * Tool names and call lines (▶ toolName) are always shown regardless.
+ */
+export function setToolDetailsVisible(enabled: boolean): void {
+  toolDetailsVisible = enabled;
+}
+
+// Tools rendered through dedicated channels (printPlan, printThought,
+// printEvaluation) — their generic call/result lines would be duplicate noise.
+const silentTools = new Set<string>(['plan', 'think', 'evaluate']);
+
+// Pinned regions: a generic persistent-footer mechanism. Each region is a
+// block of lines keyed by id that stays anchored just above the prompt.
+// Only active when stdout is a TTY; in pipe/test mode the regions are stored
+// but never rendered, so chat output stays clean.
+
+const pinnedRegions = new Map<string, string[]>();
+let pinnedLineCount = 0;
+
+function pinSupported(): boolean {
+  return !!process.stdout.isTTY;
+}
+
+function erasePinnedRegions(): void {
+  if (!pinSupported() || pinnedLineCount === 0) return;
+  process.stdout.write(`\x1b[${pinnedLineCount}A`);
+  process.stdout.write(`\r\x1b[J`);
+  pinnedLineCount = 0;
+}
+
+function renderPinnedRegions(): void {
+  if (!pinSupported() || pinnedRegions.size === 0) return;
+  let count = 0;
+  for (const lines of pinnedRegions.values()) {
+    for (const line of lines) {
+      process.stdout.write(line + '\n');
+      count++;
+    }
+  }
+  pinnedLineCount = count;
+}
+
+function sameLines(a: string[] | undefined, b: string[]): boolean {
+  if (!a || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/**
+ * Pins or updates a named region of lines above the prompt.
+ * Passing an empty array removes the region. No-op when the new content
+ * matches what is already pinned under that id.
+ */
+export function setPinnedRegion(id: string, lines: string[]): void {
+  if (lines.length === 0) {
+    if (!pinnedRegions.has(id)) return;
+    erasePinnedRegions();
+    pinnedRegions.delete(id);
+    renderPinnedRegions();
+    return;
+  }
+  if (sameLines(pinnedRegions.get(id), lines)) return;
+  erasePinnedRegions();
+  pinnedRegions.set(id, lines);
+  renderPinnedRegions();
+}
+
+/** Removes a named pinned region. */
+export function clearPinnedRegion(id: string): void {
+  setPinnedRegion(id, []);
+}
+
+function emit(message: string): void {
+  erasePinnedRegions();
+  console.log(message);
+  renderPinnedRegions();
+}
 
 /** Cumulative token-usage statistics displayed alongside the thinking spinner. */
 export interface SpinnerStats {
@@ -132,7 +214,7 @@ export function printAssistantText(text: string, prefix?: string): void {
   stopSpinner();
   if (text.trim()) {
     const label = formatPrefix(prefix);
-    console.log(label + getTheme().text(text));
+    emit(label + getTheme().text(text));
   }
 }
 
@@ -148,9 +230,17 @@ export function printToolCall(
   prefix?: string,
 ): void {
   stopSpinner();
+  // Debug log fires regardless of visibility so `.logs/<date>.log` keeps
+  // full tool args even when tool-details are hidden (see issue #116).
+  debugLog(`onStepFinish:toolCall:${toolName}`, args);
+  if (silentTools.has(toolName)) return;
   const label = formatPrefix(prefix);
+  if (!toolDetailsVisible) {
+    emit(label + getTheme().toolCall(`  ▶ ${toolName}`));
+    return;
+  }
   const argsStr = toolName === 'shell' ? String(args.command || '') : JSON.stringify(args);
-  console.log(label + getTheme().toolCall(`  ▶ ${toolName}`) + getTheme().muted(`: ${argsStr}`));
+  emit(label + getTheme().toolCall(`  ▶ ${toolName}`) + getTheme().muted(`: ${argsStr}`));
 }
 
 /**
@@ -160,6 +250,9 @@ export function printToolCall(
  */
 export function printToolResult(toolName: string, result: unknown, prefix?: string): void {
   stopSpinner();
+  debugLog(`onStepFinish:toolResult:${toolName}`, result);
+  if (silentTools.has(toolName)) return;
+  if (!toolDetailsVisible) return;
   const label = formatPrefix(prefix);
   let output: string;
   if (typeof result === 'string') {
@@ -178,7 +271,7 @@ export function printToolResult(toolName: string, result: unknown, prefix?: stri
     .split('\n')
     .map((line) => label + getTheme().muted(`  ${line}`))
     .join('\n');
-  console.log(lines);
+  emit(lines);
 }
 
 /** Prints an error message to stderr in the theme's error color. */
@@ -189,13 +282,13 @@ export function printError(message: string): void {
 
 /** Prints an informational message in the theme's muted color. */
 export function printInfo(message: string): void {
-  console.log(getTheme().muted(message));
+  emit(getTheme().muted(message));
 }
 
 /** Prints a warning message in the theme's warning color. */
 export function printWarning(message: string): void {
   stopSpinner();
-  console.log(getTheme().warning(message));
+  emit(getTheme().warning(message));
 }
 
 /**
@@ -262,25 +355,36 @@ function iconForStatus(status: StepStatus): string {
   }
 }
 
-/** Prints the current plan as a bulleted, status-decorated list. */
+/**
+ * Pins the current plan as a bulleted, status-decorated list above the prompt.
+ *
+ * Uses the generic pinned-region mechanism keyed by `'plan'`, so the block
+ * stays anchored while other chat-flow output scrolls above it.
+ * Passing no steps removes the pinned plan.
+ */
 export function printPlan(steps: Step[], prefix?: string): void {
   stopSpinner();
+  if (steps.length === 0) {
+    clearPinnedRegion('plan');
+    return;
+  }
   const t = getTheme();
   const label = formatPrefix(prefix);
-  console.log(label + t.accent('  \u25C6 Plan:'));
+  const lines: string[] = [label + t.accent('  \u25C6 Plan:')];
   for (const s of steps) {
     const icon = iconForStatus(s.status);
     const note = s.note ? t.muted(` \u2014 ${s.note}`) : '';
-    console.log(label + t.muted(`    ${icon} ${s.id}. ${s.description}`) + note);
+    lines.push(label + t.muted(`    ${icon} ${s.id}. ${s.description}`) + note);
   }
+  setPinnedRegion('plan', lines);
 }
 
-/** Prints a visible thought line prefixed with a thought bubble. */
+/** Prints a visible thought line. */
 export function printThought(thought: string, prefix?: string): void {
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  console.log(label + t.accent(`  \uD83D\uDCAD ${thought}`));
+  emit(label + t.accent(`  ${thought}`));
 }
 
 /** Prints a visible post-action self-evaluation prefixed with a magnifying glass. */
@@ -288,7 +392,7 @@ export function printEvaluation(evaluation: string, prefix?: string): void {
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  console.log(label + t.warning(`  \uD83D\uDD0D ${evaluation}`));
+  emit(label + t.warning(`  \uD83D\uDD0D ${evaluation}`));
 }
 
 /** Prints a colored top-border line when a sub-agent begins executing a task. */
@@ -296,14 +400,14 @@ export function printSubAgentStart(id: number, task: string): void {
   const prefixColors = getTheme().prefixColors;
   const colorFn = prefixColors[(id - 1) % prefixColors.length];
   const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
-  console.log(colorFn(`┌─ sub:${id} — ${displayTask}`));
+  emit(colorFn(`┌─ sub:${id} — ${displayTask}`));
 }
 
 /** Prints a colored bottom-border line when a sub-agent finishes. */
 export function printSubAgentEnd(id: number): void {
   const prefixColors = getTheme().prefixColors;
   const colorFn = prefixColors[(id - 1) % prefixColors.length];
-  console.log(colorFn(`└─ sub:${id} done`));
+  emit(colorFn(`└─ sub:${id} done`));
 }
 
 /** Prints a colored top-border line when a specialist begins executing a task. */
@@ -311,21 +415,21 @@ export function printSpecialistStart(id: number, specialistName: string, task: s
   const prefixColors = getTheme().prefixColors;
   const colorFn = prefixColors[(id - 1) % prefixColors.length];
   const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
-  console.log(colorFn(`┌─ spec:${id} [${specialistName}] — ${displayTask}`));
+  emit(colorFn(`┌─ spec:${id} [${specialistName}] — ${displayTask}`));
 }
 
 /** Prints a colored bottom-border line when a specialist finishes. */
 export function printSpecialistEnd(id: number): void {
   const prefixColors = getTheme().prefixColors;
   const colorFn = prefixColors[(id - 1) % prefixColors.length];
-  console.log(colorFn(`└─ spec:${id} done`));
+  emit(colorFn(`└─ spec:${id} done`));
 }
 
 /** Prints a colored top-border line when a task begins executing. */
 export function printTaskStart(task: string): void {
   const t = getTheme();
   const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
-  console.log(t.accent(`┌─ task — ${displayTask}`));
+  emit(t.accent(`┌─ task — ${displayTask}`));
 }
 
 /** Prints a colored bottom-border line when a task finishes, showing structured result. */
@@ -338,9 +442,9 @@ export function printTaskEnd(result: string): void {
     const output = parsed.output
       ? `: ${parsed.output.length > MAX_TASK_OUTPUT_LENGTH ? parsed.output.slice(0, MAX_TASK_OUTPUT_LENGTH) + '…' : parsed.output}`
       : '';
-    console.log(statusColor(`└─ task ${parsed.status}${output}`));
+    emit(statusColor(`└─ task ${parsed.status}${output}`));
   } catch {
-    console.log(t.accent(`└─ task done`));
+    emit(t.accent(`└─ task done`));
   }
 }
 
@@ -349,7 +453,7 @@ export function printCriticStart(prefix?: string): void {
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  console.log(label + t.accent('┌─ critic — verifying response...'));
+  emit(label + t.accent('┌─ critic — verifying response...'));
 }
 
 /** Prints a retry indicator when the critic triggers a correction loop. */
@@ -357,7 +461,7 @@ export function printCriticRetry(attempt: number, maxRetries: number, prefix?: s
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  console.log(label + t.warning(`├─ critic — retrying (${attempt}/${maxRetries})...`));
+  emit(label + t.warning(`├─ critic — retrying (${attempt}/${maxRetries})...`));
 }
 
 /** Parses a critic response into a structured verdict and explanation. */
@@ -386,11 +490,11 @@ export function printCriticVerdict(text: string, prefix?: string): void {
     // Compact badge; include explanation only if single-line
     const isSingleLine = !!explanation && !explanation.includes('\n');
     const suffix = isSingleLine ? `: ${explanation}` : '';
-    console.log(label + colorFn(`└─ critic ${verdict}${suffix}`));
+    emit(label + colorFn(`└─ critic ${verdict}${suffix}`));
   } else {
     // FAIL/UNKNOWN: always show full explanation
     const suffix = explanation ? `: ${explanation}` : '';
-    console.log(label + colorFn(`└─ critic ${verdict}${suffix}`));
+    emit(label + colorFn(`└─ critic ${verdict}${suffix}`));
   }
 }
 
@@ -399,52 +503,42 @@ export function printCriticReVerify(prefix?: string): void {
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  console.log(label + t.accent('├─ critic — re-verifying response...'));
+  emit(label + t.accent('├─ critic — re-verifying response...'));
 }
 
 /** Prints the REPL help menu listing all available slash commands. */
 export function printHelp(): void {
   const t = getTheme();
-  console.log(t.accent('\nCommands:'));
-  console.log(t.text('  /help') + t.muted('    — Show this help'));
-  console.log(
+  const lines = [
+    t.accent('\nCommands:'),
+    t.text('  /help') + t.muted('    — Show this help'),
     t.text('  /clear') + t.muted('   — Clear conversation (--save/-s to summarize first)'),
-  );
-  console.log(t.text('  /compact') + t.muted(' — Compress conversation history in-place'));
-  console.log(
+    t.text('  /compact') + t.muted(' — Compress conversation history in-place'),
     t.text('  /task') + t.muted('    — Run an isolated task (no history, structured output)'),
-  );
-  console.log(t.text('  /image') + t.muted('   — Attach an image: /image <path> [prompt]'));
-  console.log(t.text('  /memory') + t.muted('  — List persistent memories'));
-  console.log(t.text('  /scratch') + t.muted(' — List session scratch notes'));
-  console.log(t.text('  /mcp') + t.muted('      — List MCP servers and tools'));
-  console.log(t.text('  /cron') + t.muted('     — Show cron jobs and daemon status'));
-  console.log(t.text('  /facts') + t.muted('    — Show RAG facts in current context window'));
-  console.log(t.text('  /provider') + t.muted(' — Switch LLM provider'));
-  console.log(t.text('  /model') + t.muted('    — Switch model for current provider'));
-  console.log(t.text('  /theme') + t.muted('    — Switch color theme'));
-  console.log(t.text('  /routines') + t.muted(' — List saved routines'));
-  console.log(
+    t.text('  /image') + t.muted('   — Attach an image: /image <path> [prompt]'),
+    t.text('  /memory') + t.muted('  — List persistent memories'),
+    t.text('  /scratch') + t.muted(' — List session scratch notes'),
+    t.text('  /mcp') + t.muted('      — List MCP servers and tools'),
+    t.text('  /cron') + t.muted('     — Show cron jobs and daemon status'),
+    t.text('  /facts') + t.muted('    — Show RAG facts in current context window'),
+    t.text('  /provider') + t.muted(' — Switch LLM provider'),
+    t.text('  /model') + t.muted('    — Switch model for current provider'),
+    t.text('  /theme') + t.muted('    — Switch color theme'),
+    t.text('  /routines') + t.muted(' — List saved routines'),
     t.text('  /create-routine') + t.muted(' — Create a routine with guided AI assistance'),
-  );
-  console.log(
     t.text('  /create-task') + t.muted(' — Create a task routine with guided AI assistance'),
-  );
-  console.log(t.text('  /specialists') + t.muted(' — List specialist agents'));
-  console.log(
+    t.text('  /specialists') + t.muted(' — List specialist agents'),
     t.text('  /create-specialist') + t.muted(' — Create a specialist with guided AI assistance'),
-  );
-  console.log(t.text('  /candidates') + t.muted(' — Review specialist suggestions'));
-  console.log(t.text('  /critic') + t.muted('   — Toggle critic mode'));
-  console.log(
+    t.text('  /candidates') + t.muted(' — Review specialist suggestions'),
+    t.text('  /critic') + t.muted('   — Toggle critic mode'),
+    t.text('  /tool-details') + t.muted(' — Toggle visibility of tool call args and result output'),
     t.text('  /options') +
       t.muted('  — View and set options (max-tokens, max-steps, shell-timeout, token-window)'),
-  );
-  console.log(
     t.text('  /agent-options') + t.muted(' — Configure specialist auto-creation settings'),
-  );
-  console.log(t.text('  /update') + t.muted('   — Check for and install updates'));
-  console.log(t.text('  /debug') + t.muted('    — Print diagnostic report for troubleshooting'));
-  console.log(t.text('  exit') + t.muted('      — Quit Bernard'));
-  console.log();
+    t.text('  /update') + t.muted('   — Check for and install updates'),
+    t.text('  /debug') + t.muted('    — Print diagnostic report for troubleshooting'),
+    t.text('  exit') + t.muted('      — Quit Bernard'),
+    '',
+  ];
+  emit(lines.join('\n'));
 }

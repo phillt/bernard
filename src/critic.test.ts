@@ -40,6 +40,9 @@ vi.mock('./output.js', () => ({
   }),
   startSpinner: vi.fn(),
   stopSpinner: vi.fn(),
+  buildSpinnerMessage: vi.fn(() => ''),
+  printWarning: vi.fn(),
+  clearPinnedRegion: vi.fn(),
 }));
 
 vi.mock('./context.js', () => ({
