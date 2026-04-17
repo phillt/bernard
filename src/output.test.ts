@@ -22,6 +22,7 @@ import {
   startSpinner,
   stopSpinner,
   buildSpinnerMessage,
+  setToolDetailsVisible,
   type SpinnerStats,
 } from './output.js';
 import type { Step } from './plan-store.js';
@@ -37,6 +38,11 @@ describe('output', () => {
     stdoutWriteSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     stopSpinner(); // ensure clean state
     stdoutWriteSpy.mockClear();
+    setToolDetailsVisible(true);
+  });
+
+  afterEach(() => {
+    setToolDetailsVisible(false);
   });
 
   describe('printAssistantText', () => {
@@ -68,6 +74,22 @@ describe('output', () => {
       expect(output).toContain('memory');
       expect(output).toContain('"action"');
     });
+
+    it('omits args when tool details are hidden', () => {
+      setToolDetailsVisible(false);
+      printToolCall('shell', { command: 'ls -la' });
+      expect(logSpy).toHaveBeenCalled();
+      const output = logSpy.mock.calls[0][0];
+      expect(output).toContain('shell');
+      expect(output).not.toContain('ls -la');
+    });
+
+    it('prints nothing for silent tools (plan, think, evaluate)', () => {
+      printToolCall('plan', { action: 'view' });
+      printToolCall('think', { thought: 'x' });
+      printToolCall('evaluate', { evaluation: 'y' });
+      expect(logSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('printToolResult', () => {
@@ -98,6 +120,12 @@ describe('output', () => {
       expect(logSpy).toHaveBeenCalled();
       const output = logSpy.mock.calls[0][0];
       expect(output).toContain('truncated');
+    });
+
+    it('prints nothing when tool details are hidden', () => {
+      setToolDetailsVisible(false);
+      printToolResult('shell', 'file contents here');
+      expect(logSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -693,10 +721,10 @@ describe('output', () => {
   });
 
   describe('printThought', () => {
-    it('prints the thought with a thought-bubble marker', () => {
+    it('prints the thought text', () => {
       printThought('Next I will check deps.');
       const output = String(logSpy.mock.calls[0][0]);
-      expect(output).toContain('\uD83D\uDCAD');
+      expect(output).not.toContain('\uD83D\uDCAD');
       expect(output).toContain('Next I will check deps.');
     });
   });
