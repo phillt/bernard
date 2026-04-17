@@ -373,25 +373,36 @@ function iconForStatus(status: StepStatus): string {
   }
 }
 
-/** Prints the current plan as a bulleted, status-decorated list. */
+/**
+ * Pins the current plan as a bulleted, status-decorated list above the prompt.
+ *
+ * Uses the generic pinned-region mechanism keyed by `'plan'`, so the block
+ * stays anchored while other chat-flow output scrolls above it.
+ * Passing no steps removes the pinned plan.
+ */
 export function printPlan(steps: Step[], prefix?: string): void {
   stopSpinner();
+  if (steps.length === 0) {
+    clearPinnedRegion('plan');
+    return;
+  }
   const t = getTheme();
   const label = formatPrefix(prefix);
-  console.log(label + t.accent('  \u25C6 Plan:'));
+  const lines: string[] = [label + t.accent('  \u25C6 Plan:')];
   for (const s of steps) {
     const icon = iconForStatus(s.status);
     const note = s.note ? t.muted(` \u2014 ${s.note}`) : '';
-    console.log(label + t.muted(`    ${icon} ${s.id}. ${s.description}`) + note);
+    lines.push(label + t.muted(`    ${icon} ${s.id}. ${s.description}`) + note);
   }
+  setPinnedRegion('plan', lines);
 }
 
-/** Prints a visible thought line prefixed with a thought bubble. */
+/** Prints a visible thought line. */
 export function printThought(thought: string, prefix?: string): void {
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  console.log(label + t.accent(`  \uD83D\uDCAD ${thought}`));
+  emit(label + t.accent(`  ${thought}`));
 }
 
 /** Prints a visible post-action self-evaluation prefixed with a magnifying glass. */
@@ -547,6 +558,9 @@ export function printHelp(): void {
   );
   console.log(t.text('  /candidates') + t.muted(' — Review specialist suggestions'));
   console.log(t.text('  /critic') + t.muted('   — Toggle critic mode'));
+  console.log(
+    t.text('  /tool-details') + t.muted(' — Toggle visibility of tool call args and result output'),
+  );
   console.log(
     t.text('  /options') +
       t.muted('  — View and set options (max-tokens, max-steps, shell-timeout, token-window)'),
