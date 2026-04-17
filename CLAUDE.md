@@ -73,6 +73,7 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_MAX_STEPS` — Max agent loop iterations per request (default: 25)
 - `BERNARD_HOME` — Override all XDG directories with a single flat path
 - `BERNARD_CRITIC_MODE` — Enable critic mode for verification (default: false)
+- `BERNARD_REACT_MODE` — Enable coordinator (ReAct) mode for iterative reasoning with subagent delegation (default: false)
 - `BERNARD_AUTO_CREATE_SPECIALISTS` — Auto-create specialists above confidence threshold (default: false)
 - `BERNARD_AUTO_CREATE_THRESHOLD` — Confidence threshold for auto-creating specialists, 0-1 (default: 0.8)
 - `BERNARD_CORRECTION_ENABLED` — Run the correction agent at session close to learn from tool-wrapper failures (default: true)

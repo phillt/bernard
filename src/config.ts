@@ -23,6 +23,8 @@ export interface BernardConfig {
   maxSteps: number;
   /** Whether critic mode (planning + verification) is active. */
   criticMode: boolean;
+  /** Whether coordinator (ReAct) mode is active for iterative reasoning with subagent delegation. */
+  reactMode: boolean;
   /** Whether to auto-create specialists above the confidence threshold. */
   autoCreateSpecialists: boolean;
   /** Confidence threshold for auto-creating specialists (0-1). */
@@ -98,7 +100,8 @@ export const OPTIONS_REGISTRY: Record<
   'max-steps': {
     configKey: 'maxSteps',
     default: DEFAULT_MAX_STEPS,
-    description: 'Maximum agent loop iterations per request (controls tool call chain length)',
+    description:
+      'Maximum agent loop iterations per request (tripled automatically in coordinator / ReAct mode)',
     envVar: 'BERNARD_MAX_STEPS',
   },
 };
@@ -118,6 +121,7 @@ export function savePreferences(prefs: {
   theme?: string;
   autoUpdate?: boolean;
   criticMode?: boolean;
+  reactMode?: boolean;
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
 }): void {
@@ -132,6 +136,7 @@ export function savePreferences(prefs: {
   if (prefs.maxSteps !== undefined) data.maxSteps = prefs.maxSteps;
   if (prefs.theme !== undefined) data.theme = prefs.theme;
   if (prefs.criticMode !== undefined) data.criticMode = prefs.criticMode;
+  if (prefs.reactMode !== undefined) data.reactMode = prefs.reactMode;
   if (prefs.autoCreateSpecialists !== undefined)
     data.autoCreateSpecialists = prefs.autoCreateSpecialists;
   if (prefs.autoCreateThreshold !== undefined) data.autoCreateThreshold = prefs.autoCreateThreshold;
@@ -151,6 +156,9 @@ export function savePreferences(prefs: {
   }
   if (prefs.criticMode === undefined && existing && typeof existing.criticMode === 'boolean') {
     data.criticMode = existing.criticMode;
+  }
+  if (prefs.reactMode === undefined && existing && typeof existing.reactMode === 'boolean') {
+    data.reactMode = existing.reactMode;
   }
 
   // Preserve numeric options from existing prefs when callers don't pass them.
@@ -199,6 +207,7 @@ export function loadPreferences(): {
   theme?: string;
   autoUpdate?: boolean;
   criticMode?: boolean;
+  reactMode?: boolean;
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
 } {
@@ -215,6 +224,7 @@ export function loadPreferences(): {
       theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
       autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
       criticMode: typeof parsed.criticMode === 'boolean' ? parsed.criticMode : undefined,
+      reactMode: typeof parsed.reactMode === 'boolean' ? parsed.reactMode : undefined,
       autoCreateSpecialists:
         typeof parsed.autoCreateSpecialists === 'boolean'
           ? parsed.autoCreateSpecialists
@@ -511,6 +521,10 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     prefs.criticMode ??
     (process.env.BERNARD_CRITIC_MODE === 'true' || process.env.BERNARD_CRITIC_MODE === '1');
 
+  const reactMode =
+    prefs.reactMode ??
+    (process.env.BERNARD_REACT_MODE === 'true' || process.env.BERNARD_REACT_MODE === '1');
+
   const autoCreateSpecialists =
     prefs.autoCreateSpecialists ??
     (process.env.BERNARD_AUTO_CREATE_SPECIALISTS === 'true' ||
@@ -541,6 +555,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     ragEnabled,
     theme,
     criticMode,
+    reactMode,
     autoCreateSpecialists,
     autoCreateThreshold,
     correctionEnabled,
