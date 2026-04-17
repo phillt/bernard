@@ -6,6 +6,110 @@ import type { Step, StepStatus } from './plan-store.js';
 const MAX_TOOL_OUTPUT_LENGTH = 2000;
 const MAX_REPLAY_LENGTH = 200;
 
+let toolDetailsVisible = false;
+
+/** Enables or disables printing of tool result bodies. Calls are always shown. */
+export function setToolDetailsVisible(enabled: boolean): void {
+  toolDetailsVisible = enabled;
+}
+
+/** Returns whether tool result bodies are currently printed to the terminal. */
+export function getToolDetailsVisible(): boolean {
+  return toolDetailsVisible;
+}
+
+// Tools whose call and result lines are suppressed from the chat flow.
+// Their output is rendered through dedicated channels (printPlan, printThought,
+// printEvaluation), so the generic ▶ toolName / result body would be duplicate
+// noise. Extend this set to mute additional tools.
+const silentTools = new Set<string>(['plan', 'think', 'evaluate']);
+
+/** Adds or removes a tool from the silent list. */
+export function setSilentTool(toolName: string, silent: boolean): void {
+  if (silent) silentTools.add(toolName);
+  else silentTools.delete(toolName);
+}
+
+/** Returns true when the given tool's call/result lines are suppressed. */
+export function isSilentTool(toolName: string): boolean {
+  return silentTools.has(toolName);
+}
+
+// ─── Pinned regions ──────────────────────────────────────────────────────────
+// A generic persistent-footer mechanism: each region is a block of lines
+// keyed by a string id that stays anchored just above the prompt (or above
+// the spinner while the agent is thinking). Adding or updating a region
+// repaints it in place via ANSI cursor control; chat-flow prints flow past
+// it by erasing the block, printing, then re-rendering.
+//
+// Fall back to plain console.log when stdout is not a TTY so output remains
+// intact under pipes / in tests.
+
+const pinnedRegions = new Map<string, string[]>();
+let pinnedLineCount = 0;
+
+function pinSupported(): boolean {
+  return !!process.stdout.isTTY;
+}
+
+function erasePinnedRegions(): void {
+  if (!pinSupported() || pinnedLineCount === 0) return;
+  process.stdout.write(`\x1b[${pinnedLineCount}A`);
+  process.stdout.write(`\r\x1b[J`);
+  pinnedLineCount = 0;
+}
+
+function renderPinnedRegions(): void {
+  if (pinnedRegions.size === 0) return;
+  let count = 0;
+  for (const lines of pinnedRegions.values()) {
+    for (const line of lines) {
+      if (pinSupported()) {
+        process.stdout.write(line + '\n');
+      } else {
+        console.log(line);
+      }
+      count++;
+    }
+  }
+  if (pinSupported()) pinnedLineCount = count;
+}
+
+/**
+ * Pins or updates a named region of lines above the prompt.
+ * Passing an empty array removes the region.
+ */
+export function setPinnedRegion(id: string, lines: string[]): void {
+  erasePinnedRegions();
+  if (lines.length === 0) {
+    pinnedRegions.delete(id);
+  } else {
+    pinnedRegions.set(id, lines);
+  }
+  renderPinnedRegions();
+}
+
+/** Removes a named pinned region. */
+export function clearPinnedRegion(id: string): void {
+  setPinnedRegion(id, []);
+}
+
+/** Clears every pinned region. */
+export function clearAllPinnedRegions(): void {
+  erasePinnedRegions();
+  pinnedRegions.clear();
+}
+
+/**
+ * Emits a line to the chat flow while preserving pinned regions below it.
+ * Used internally by chat-flow print* functions.
+ */
+function emit(message: string): void {
+  erasePinnedRegions();
+  console.log(message);
+  renderPinnedRegions();
+}
+
 /** Cumulative token-usage statistics displayed alongside the thinking spinner. */
 export interface SpinnerStats {
   /** Epoch timestamp (ms) when the current agent step began. */
