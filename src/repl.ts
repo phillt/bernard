@@ -75,6 +75,7 @@ import {
   printToolResult,
   printAssistantText,
   printWarning,
+  setToolDetailsVisible,
 } from './output.js';
 import { buildMemoryContext } from './memory-context.js';
 import { debugLog } from './logger.js';
@@ -158,6 +159,7 @@ export async function startRepl(
   alertContext?: string,
   resume?: boolean,
 ): Promise<void> {
+  setToolDetailsVisible(config.toolDetails);
   const SLASH_COMMANDS = [
     { command: '/help', description: 'Show this help' },
     { command: '/clear', description: 'Clear conversation (--save/-s to summarize first)' },
@@ -185,6 +187,10 @@ export async function startRepl(
     { command: '/candidates', description: 'Review specialist suggestions' },
     { command: '/critic', description: 'Toggle critic mode' },
     { command: '/react', description: 'Toggle coordinator (ReAct) mode' },
+    {
+      command: '/tool-details',
+      description: 'Toggle visibility of tool call args and result output',
+    },
     { command: '/agent-options', description: 'Configure specialist auto-creation settings' },
     { command: '/image', description: 'Attach an image: /image <path> [prompt]' },
     { command: '/debug', description: 'Print diagnostic report for troubleshooting' },
@@ -292,7 +298,7 @@ export async function startRepl(
   }
 
   async function toggleBooleanPref(
-    key: 'criticMode' | 'reactMode',
+    key: 'criticMode' | 'reactMode' | 'toolDetails',
     label: string,
     onMsg: string,
     offMsg: string,
@@ -315,6 +321,7 @@ export async function startRepl(
           model: config.model,
           [key]: config[key],
         });
+        if (key === 'toolDetails') setToolDetailsVisible(config[key]);
         printInfo(config[key] ? onMsg : offMsg);
       }
     } finally {
@@ -1422,6 +1429,17 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         return;
       }
 
+      if (trimmed === '/tool-details') {
+        await toggleBooleanPref(
+          'toolDetails',
+          'Tool details',
+          '  [TOOL-DETAILS:ON] Full tool call args and results will be shown.',
+          '  [TOOL-DETAILS:OFF] Only tool names shown; args and results hidden.',
+        );
+        void prompt();
+        return;
+      }
+
       if (trimmed === '/agent-options') {
         const topEntries: MenuEntry[] = [
           {
@@ -1583,6 +1601,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         console.log(t.muted(`    Theme: ${getActiveThemeKey()}`));
         console.log(t.muted(`    Critic mode: ${config.criticMode ? 'on' : 'off'}`));
         console.log(t.muted(`    Coordinator mode: ${config.reactMode ? 'on' : 'off'}`));
+        console.log(t.muted(`    Tool details: ${config.toolDetails ? 'on' : 'off'}`));
         const debugEnabled =
           process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
         console.log(t.muted(`    Debug mode: ${debugEnabled ? 'on' : 'off'}`));
