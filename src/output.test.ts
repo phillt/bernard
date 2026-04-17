@@ -687,6 +687,30 @@ describe('output', () => {
   });
 
   describe('printPlan', () => {
+    // printPlan renders through the pinned-region system, which writes to
+    // process.stdout.write in TTY mode and no-ops otherwise. Force TTY so the
+    // writes are observable via stdoutWriteSpy.
+    let originalIsTTY: boolean | undefined;
+    beforeEach(() => {
+      originalIsTTY = process.stdout.isTTY;
+      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+      stdoutWriteSpy.mockClear();
+    });
+    afterEach(() => {
+      Object.defineProperty(process.stdout, 'isTTY', {
+        value: originalIsTTY,
+        configurable: true,
+      });
+    });
+
+    function renderedLines(): string[] {
+      return stdoutWriteSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((s) => !s.startsWith('\x1b') && s !== '\r\x1b[J')
+        .flatMap((s) => s.split('\n'))
+        .filter((s) => s.length > 0);
+    }
+
     it('prints a header line and one line per step with the right icons and notes', () => {
       const steps: Step[] = [
         { id: 1, description: 'gather data', status: 'done', note: 'got it' },
@@ -694,7 +718,7 @@ describe('output', () => {
         { id: 3, description: 'report', status: 'pending' },
       ];
       printPlan(steps);
-      const lines = logSpy.mock.calls.map((c) => String(c[0]));
+      const lines = renderedLines();
       expect(lines[0]).toContain('Plan:');
       expect(lines[1]).toContain('\u2713');
       expect(lines[1]).toContain('1. gather data');
@@ -712,7 +736,7 @@ describe('output', () => {
         { id: 2, description: 'unachievable', status: 'error', note: 'no permission' },
       ];
       printPlan(steps);
-      const lines = logSpy.mock.calls.map((c) => String(c[0]));
+      const lines = renderedLines();
       expect(lines[1]).toContain('\u2298');
       expect(lines[1]).toContain('user pivoted');
       expect(lines[2]).toContain('\u2717');

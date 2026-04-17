@@ -13,37 +13,14 @@ export function setToolDetailsVisible(enabled: boolean): void {
   toolDetailsVisible = enabled;
 }
 
-/** Returns whether tool result bodies are currently printed to the terminal. */
-export function getToolDetailsVisible(): boolean {
-  return toolDetailsVisible;
-}
-
-// Tools whose call and result lines are suppressed from the chat flow.
-// Their output is rendered through dedicated channels (printPlan, printThought,
-// printEvaluation), so the generic ▶ toolName / result body would be duplicate
-// noise. Extend this set to mute additional tools.
+// Tools rendered through dedicated channels (printPlan, printThought,
+// printEvaluation) — their generic call/result lines would be duplicate noise.
 const silentTools = new Set<string>(['plan', 'think', 'evaluate']);
 
-/** Adds or removes a tool from the silent list. */
-export function setSilentTool(toolName: string, silent: boolean): void {
-  if (silent) silentTools.add(toolName);
-  else silentTools.delete(toolName);
-}
-
-/** Returns true when the given tool's call/result lines are suppressed. */
-export function isSilentTool(toolName: string): boolean {
-  return silentTools.has(toolName);
-}
-
-// ─── Pinned regions ──────────────────────────────────────────────────────────
-// A generic persistent-footer mechanism: each region is a block of lines
-// keyed by a string id that stays anchored just above the prompt (or above
-// the spinner while the agent is thinking). Adding or updating a region
-// repaints it in place via ANSI cursor control; chat-flow prints flow past
-// it by erasing the block, printing, then re-rendering.
-//
-// Fall back to plain console.log when stdout is not a TTY so output remains
-// intact under pipes / in tests.
+// Pinned regions: a generic persistent-footer mechanism. Each region is a
+// block of lines keyed by id that stays anchored just above the prompt.
+// Only active when stdout is a TTY; in pipe/test mode the regions are stored
+// but never rendered, so chat output stays clean.
 
 const pinnedRegions = new Map<string, string[]>();
 let pinnedLineCount = 0;
@@ -60,32 +37,39 @@ function erasePinnedRegions(): void {
 }
 
 function renderPinnedRegions(): void {
-  if (pinnedRegions.size === 0) return;
+  if (!pinSupported() || pinnedRegions.size === 0) return;
   let count = 0;
   for (const lines of pinnedRegions.values()) {
     for (const line of lines) {
-      if (pinSupported()) {
-        process.stdout.write(line + '\n');
-      } else {
-        console.log(line);
-      }
+      process.stdout.write(line + '\n');
       count++;
     }
   }
-  if (pinSupported()) pinnedLineCount = count;
+  pinnedLineCount = count;
+}
+
+function sameLines(a: string[] | undefined, b: string[]): boolean {
+  if (!a || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 /**
  * Pins or updates a named region of lines above the prompt.
- * Passing an empty array removes the region.
+ * Passing an empty array removes the region. No-op when the new content
+ * matches what is already pinned under that id.
  */
 export function setPinnedRegion(id: string, lines: string[]): void {
-  erasePinnedRegions();
   if (lines.length === 0) {
+    if (!pinnedRegions.has(id)) return;
+    erasePinnedRegions();
     pinnedRegions.delete(id);
-  } else {
-    pinnedRegions.set(id, lines);
+    renderPinnedRegions();
+    return;
   }
+  if (sameLines(pinnedRegions.get(id), lines)) return;
+  erasePinnedRegions();
+  pinnedRegions.set(id, lines);
   renderPinnedRegions();
 }
 
@@ -94,16 +78,6 @@ export function clearPinnedRegion(id: string): void {
   setPinnedRegion(id, []);
 }
 
-/** Clears every pinned region. */
-export function clearAllPinnedRegions(): void {
-  erasePinnedRegions();
-  pinnedRegions.clear();
-}
-
-/**
- * Emits a line to the chat flow while preserving pinned regions below it.
- * Used internally by chat-flow print* functions.
- */
 function emit(message: string): void {
   erasePinnedRegions();
   console.log(message);
@@ -300,7 +274,7 @@ export function printError(message: string): void {
 
 /** Prints an informational message in the theme's muted color. */
 export function printInfo(message: string): void {
-  console.log(getTheme().muted(message));
+  emit(getTheme().muted(message));
 }
 
 /** Prints a warning message in the theme's warning color. */
