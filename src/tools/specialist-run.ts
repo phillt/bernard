@@ -22,6 +22,7 @@ import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
 import type { SpecialistStore } from '../specialists.js';
 import { runPACLoop } from '../pac.js';
+import { capSubagentResult } from './result-cap.js';
 
 const SPECIALIST_EXECUTION_RULES = `
 
@@ -193,11 +194,11 @@ export function createSpecialistRunTool(
           });
 
           printSpecialistEnd(id);
-          return pacResult.finalText;
+          return capSubagentResult(pacResult.finalText);
         }
 
         printSpecialistEnd(id);
-        return result.text;
+        return capSubagentResult(result.text);
       } catch (err: unknown) {
         printSpecialistEnd(id);
         const message = err instanceof Error ? err.message : String(err);

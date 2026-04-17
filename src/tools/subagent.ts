@@ -21,6 +21,7 @@ import {
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
 import { runPACLoop } from '../pac.js';
+import { capSubagentResult } from './result-cap.js';
 
 const SUB_AGENT_SYSTEM_PROMPT = `You are a sub-agent of Bernard, a CLI AI assistant. You have been delegated a specific, scoped task.
 
@@ -187,11 +188,11 @@ export function createSubAgentTool(
           });
 
           printSubAgentEnd(id);
-          return pacResult.finalText;
+          return capSubagentResult(pacResult.finalText);
         }
 
         printSubAgentEnd(id);
-        return result.text;
+        return capSubagentResult(result.text);
       } catch (err: unknown) {
         printSubAgentEnd(id);
         const message = err instanceof Error ? err.message : String(err);
