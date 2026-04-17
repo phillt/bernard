@@ -50,6 +50,10 @@ import {
 import { ToolProfileStore, buildToolProfilesPrompt } from './tool-profiles.js';
 import { augmentTools } from './tools/augment.js';
 import { type ImageAttachment, IMAGE_TOKEN_ESTIMATE } from './image.js';
+import { PlanStore } from './plan-store.js';
+import { createPlanTool } from './tools/plan.js';
+import { createThinkTool } from './tools/think.js';
+import { createEvaluateTool } from './tools/evaluate.js';
 
 const BASE_SYSTEM_PROMPT = `# Identity
 
@@ -374,6 +378,7 @@ export class Agent {
   private toolProfileStore: ToolProfileStore;
   private stepLimitHitCount: number = 0;
   private lastStepLimitHit: boolean = false;
+  private planStore: PlanStore = new PlanStore();
 
   constructor(
     config: BernardConfig,
@@ -458,6 +463,7 @@ export class Agent {
    */
   async processInput(userInput: string, images?: ImageAttachment[]): Promise<void> {
     this.lastStepLimitHit = false;
+    this.planStore.clear();
 
     if (images && images.length > 0) {
       const contentParts: UserContent = [
@@ -607,16 +613,29 @@ export class Agent {
           this.routineStore,
           this.candidateStore,
         ),
+        ...(this.config.reactMode
+          ? {
+              plan: createPlanTool(this.planStore),
+              think: createThinkTool(),
+              evaluate: createEvaluateTool(),
+            }
+          : {}),
       };
 
       // Wrap every tool's execute to observe errors and record profiles
       const augmentedTools = augmentTools(tools, this.toolProfileStore);
 
+      // Coordinator (ReAct) mode triples the step budget for the main agent.
+      // Subagents are unaffected — they keep their own step budgets.
+      const effectiveMaxSteps = this.config.reactMode
+        ? this.config.maxSteps * 3
+        : this.config.maxSteps;
+
       const callGenerateText = (messages?: CoreMessage[]) =>
         generateText({
           model: getModel(this.config.provider, this.config.model),
           tools: augmentedTools,
-          maxSteps: this.config.maxSteps,
+          maxSteps: effectiveMaxSteps,
           maxTokens: this.config.maxTokens,
           system: systemPrompt,
           messages: messages ?? this.history,
@@ -647,6 +666,27 @@ export class Agent {
             }
           },
         });
+
+      // Shared retry path for critic and ReAct enforcement loops: truncate the
+      // last tool results, push them + a feedback message into history, and
+      // re-invoke the model. Returns null when the retry itself errors.
+      const pushAndRetry = async (
+        previousResult: Awaited<ReturnType<typeof callGenerateText>>,
+        feedback: string,
+        debugTag: string,
+      ): Promise<Awaited<ReturnType<typeof callGenerateText>> | null> => {
+        try {
+          const truncatedResultMessages = truncateToolResults(
+            previousResult.response.messages as CoreMessage[],
+          );
+          this.history.push(...truncatedResultMessages);
+          this.history.push({ role: 'user' as const, content: feedback });
+          return await callGenerateText();
+        } catch (retryErr) {
+          debugLog(debugTag, retryErr instanceof Error ? retryErr.message : String(retryErr));
+          return null;
+        }
+      };
 
       let result;
       try {
@@ -722,13 +762,13 @@ export class Agent {
       }
 
       // Detect maxSteps exhaustion
-      if (result.finishReason === 'tool-calls' && result.steps.length >= this.config.maxSteps) {
+      if (result.finishReason === 'tool-calls' && result.steps.length >= effectiveMaxSteps) {
         this.lastStepLimitHit = true;
         this.stepLimitHitCount++;
         const msg =
           this.stepLimitHitCount >= 2
-            ? `Stopped at loop limit of ${this.config.maxSteps}. Use /options max-steps to adjust permanently.`
-            : `Stopped at loop limit of ${this.config.maxSteps}.`;
+            ? `Stopped at loop limit of ${effectiveMaxSteps}. Use /options max-steps to adjust permanently.`
+            : `Stopped at loop limit of ${effectiveMaxSteps}.`;
         printWarning(msg);
       }
 
@@ -762,30 +802,53 @@ export class Agent {
             retryCount++;
             printCriticRetry(retryCount, CRITIC_MAX_RETRIES);
 
-            // Push current attempt's messages + critic feedback into history before retrying
-            try {
-              const truncatedResultMessages = truncateToolResults(
-                result.response.messages as CoreMessage[],
-              );
-              this.history.push(...truncatedResultMessages);
-              this.history.push({
-                role: 'user' as const,
-                content: `The critic agent reviewed your work and found issues:\n\nVERDICT: ${criticResult.verdict}\n${criticResult.explanation}\n\nPlease address these issues and try again.`,
-              });
+            const retryResult = await pushAndRetry(
+              result,
+              `The critic agent reviewed your work and found issues:\n\nVERDICT: ${criticResult.verdict}\n${criticResult.explanation}\n\nPlease address these issues and try again.`,
+              'agent:critic:retry-error',
+            );
+            if (!retryResult) break;
+            result = retryResult;
+            toolLog = extractToolCallLog(result.steps);
 
-              result = await callGenerateText();
-              toolLog = extractToolCallLog(result.steps);
-
-              // If no tool calls in retry, nothing more to verify
-              if (toolLog.length === 0) break;
-            } catch (retryErr) {
-              debugLog(
-                'agent:critic:retry-error',
-                retryErr instanceof Error ? retryErr.message : String(retryErr),
-              );
-              break;
-            }
+            // If no tool calls in retry, nothing more to verify
+            if (toolLog.length === 0) break;
           }
+        }
+      }
+
+      // Coordinator (ReAct) plan enforcement — re-prompt when steps are still
+      // pending/in_progress. Bounded retries mirror the critic loop.
+      const REACT_ENFORCEMENT_MAX_RETRIES = 2;
+      if (
+        this.config.reactMode &&
+        !this.abortController?.signal.aborted &&
+        !this.lastStepLimitHit &&
+        this.planStore.view().length > 0
+      ) {
+        let enforcementAttempts = 0;
+        while (
+          !this.planStore.isComplete() &&
+          enforcementAttempts < REACT_ENFORCEMENT_MAX_RETRIES
+        ) {
+          if (this.abortController?.signal.aborted) break;
+          enforcementAttempts++;
+          printWarning(
+            `Plan has ${this.planStore.unresolvedCount()} unresolved step(s). Prompting to resolve... (${enforcementAttempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`,
+          );
+
+          const retryResult = await pushAndRetry(
+            result,
+            `Your plan still has unresolved steps:\n\n${this.planStore.render()}\n\n` +
+              `Resolve each remaining step: complete it (plan update -> done), mark it cancelled with a note if the user's intent changed or the step is no longer needed, or mark it error with a note if it is genuinely unachievable. Do not leave steps pending or in_progress.`,
+            'agent:react:enforcement-error',
+          );
+          if (!retryResult) break;
+          result = retryResult;
+        }
+
+        if (!this.planStore.isComplete()) {
+          printInfo('Plan still incomplete after enforcement retries; continuing anyway.');
         }
       }
 
