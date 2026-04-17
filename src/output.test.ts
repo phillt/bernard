@@ -16,11 +16,15 @@ import {
   printCriticRetry,
   printCriticReVerify,
   parseCriticVerdict,
+  printPlan,
+  printThought,
+  printEvaluation,
   startSpinner,
   stopSpinner,
   buildSpinnerMessage,
   type SpinnerStats,
 } from './output.js';
+import type { Step } from './plan-store.js';
 
 describe('output', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
@@ -651,6 +655,58 @@ describe('output', () => {
       expect(output).toContain('├─');
       expect(output).toContain('critic');
       expect(output).toContain('re-verifying');
+    });
+  });
+
+  describe('printPlan', () => {
+    it('prints a header line and one line per step with the right icons and notes', () => {
+      const steps: Step[] = [
+        { id: 1, description: 'gather data', status: 'done', note: 'got it' },
+        { id: 2, description: 'summarize', status: 'in_progress' },
+        { id: 3, description: 'report', status: 'pending' },
+      ];
+      printPlan(steps);
+      const lines = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(lines[0]).toContain('Plan:');
+      expect(lines[1]).toContain('\u2713');
+      expect(lines[1]).toContain('1. gather data');
+      expect(lines[1]).toContain('got it');
+      expect(lines[2]).toContain('\u25D0');
+      expect(lines[2]).toContain('2. summarize');
+      expect(lines[3]).toContain('\u25CB');
+      expect(lines[3]).toContain('3. report');
+      expect(lines[3]).not.toContain('\u2014');
+    });
+
+    it('shows cancelled and error icons for terminal statuses', () => {
+      const steps: Step[] = [
+        { id: 1, description: 'abandoned', status: 'cancelled', note: 'user pivoted' },
+        { id: 2, description: 'unachievable', status: 'error', note: 'no permission' },
+      ];
+      printPlan(steps);
+      const lines = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(lines[1]).toContain('\u2298');
+      expect(lines[1]).toContain('user pivoted');
+      expect(lines[2]).toContain('\u2717');
+      expect(lines[2]).toContain('no permission');
+    });
+  });
+
+  describe('printThought', () => {
+    it('prints the thought with a thought-bubble marker', () => {
+      printThought('Next I will check deps.');
+      const output = String(logSpy.mock.calls[0][0]);
+      expect(output).toContain('\uD83D\uDCAD');
+      expect(output).toContain('Next I will check deps.');
+    });
+  });
+
+  describe('printEvaluation', () => {
+    it('prints the evaluation with a magnifying-glass marker', () => {
+      printEvaluation('That result was empty; retrying with a wider glob.');
+      const output = String(logSpy.mock.calls[0][0]);
+      expect(output).toContain('\uD83D\uDD0D');
+      expect(output).toContain('That result was empty');
     });
   });
 });

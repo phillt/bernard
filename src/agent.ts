@@ -240,6 +240,21 @@ When all plan steps are in terminal states and you are ready to respond to the u
 4. Skip this synthesis step only for trivial work where no plan was created.`;
 
 /**
+ * Pure predicate: should the ReAct plan-enforcement loop run after the main
+ * generateText call? Extracted so the gating logic can be unit-tested in
+ * isolation from `Agent` internals.
+ * @internal Exported for testing only.
+ */
+export function shouldEnforcePlan(args: {
+  reactMode: boolean;
+  aborted: boolean;
+  stepLimitHit: boolean;
+  hasSteps: boolean;
+}): boolean {
+  return args.reactMode && !args.aborted && !args.stepLimitHit && args.hasSteps;
+}
+
+/**
  * Assembles the full system prompt including base instructions, memory context, and MCP status.
  * @internal Exported for testing only.
  * @param config - Active Bernard configuration (provider, model, etc.)
@@ -821,10 +836,12 @@ export class Agent {
       // pending/in_progress. Bounded retries mirror the critic loop.
       const REACT_ENFORCEMENT_MAX_RETRIES = 2;
       if (
-        this.config.reactMode &&
-        !this.abortController?.signal.aborted &&
-        !this.lastStepLimitHit &&
-        this.planStore.view().length > 0
+        shouldEnforcePlan({
+          reactMode: this.config.reactMode,
+          aborted: this.abortController?.signal.aborted === true,
+          stepLimitHit: this.lastStepLimitHit,
+          hasSteps: this.planStore.view().length > 0,
+        })
       ) {
         let enforcementAttempts = 0;
         while (
