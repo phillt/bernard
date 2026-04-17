@@ -531,8 +531,7 @@ export function printHelp(): void {
     t.text('  /create-specialist') + t.muted(' — Create a specialist with guided AI assistance'),
     t.text('  /candidates') + t.muted(' — Review specialist suggestions'),
     t.text('  /critic') + t.muted('   — Toggle critic mode'),
-    t.text('  /tool-details') +
-      t.muted(' — Toggle visibility of tool call args and result output'),
+    t.text('  /tool-details') + t.muted(' — Toggle visibility of tool call args and result output'),
     t.text('  /options') +
       t.muted('  — View and set options (max-tokens, max-steps, shell-timeout, token-window)'),
     t.text('  /agent-options') + t.muted(' — Configure specialist auto-creation settings'),
