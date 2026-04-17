@@ -79,6 +79,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     ragEnabled: true,
     theme: 'bernard',
     criticMode: false,
+    reactMode: false,
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
     anthropicApiKey: 'sk-test',
@@ -362,6 +363,43 @@ describe('buildSystemPrompt', () => {
       specialists,
     );
     expect(prompt).not.toContain('Specialist Match Advisory');
+  });
+
+  it('includes coordinator prompt when reactMode is true', () => {
+    const prompt = buildSystemPrompt(makeConfig({ reactMode: true }), store);
+    expect(prompt).toContain('Coordinator Mode (Active)');
+    expect(prompt).toContain('Delegate scoped work');
+    expect(prompt).toContain('Reason before acting');
+  });
+
+  it('coordinator prompt mandates plan, think, and evaluate tools', () => {
+    const prompt = buildSystemPrompt(makeConfig({ reactMode: true }), store);
+    expect(prompt).toContain('`plan`');
+    expect(prompt).toContain('`think`');
+    expect(prompt).toContain('`evaluate`');
+    expect(prompt).toContain('terminal state');
+    expect(prompt).toContain('cancelled');
+    expect(prompt).toContain('error');
+  });
+
+  it('coordinator prompt describes the think -> act -> evaluate -> decide loop', () => {
+    const prompt = buildSystemPrompt(makeConfig({ reactMode: true }), store);
+    expect(prompt).toContain('think \u2192 act \u2192 evaluate \u2192 decide');
+    expect(prompt).toContain('Stop and evaluate');
+    expect(prompt).toContain('course-correct');
+  });
+
+  it('coordinator prompt mandates reflective scratch notes and final synthesis', () => {
+    const prompt = buildSystemPrompt(makeConfig({ reactMode: true }), store);
+    expect(prompt).toContain('reflective notes in `scratch`');
+    expect(prompt).toContain('step-{id}');
+    expect(prompt).toContain('Synthesize the final response from scratch');
+    expect(prompt).toContain('not from the conversation tail');
+  });
+
+  it('excludes coordinator prompt when reactMode is false', () => {
+    const prompt = buildSystemPrompt(makeConfig({ reactMode: false }), store);
+    expect(prompt).not.toContain('Coordinator Mode');
   });
 });
 
@@ -1220,6 +1258,56 @@ describe('Agent', () => {
 
       await agent.processInput('Second');
       expect(agent.getStepLimitHit()).toBeNull();
+    });
+  });
+
+  describe('coordinator (ReAct) mode', () => {
+    it('omits plan, think, and evaluate tools when reactMode is false', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(makeConfig({ reactMode: false }), toolOptions, store);
+      await agent.processInput('Hello');
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.tools).not.toHaveProperty('plan');
+      expect(call.tools).not.toHaveProperty('think');
+      expect(call.tools).not.toHaveProperty('evaluate');
+    });
+
+    it('includes plan, think, and evaluate tools when reactMode is true', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(makeConfig({ reactMode: true }), toolOptions, store);
+      await agent.processInput('Hello');
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.tools).toHaveProperty('plan');
+      expect(call.tools).toHaveProperty('think');
+      expect(call.tools).toHaveProperty('evaluate');
+    });
+
+    it('triples maxSteps when reactMode is true', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(makeConfig({ reactMode: true, maxSteps: 10 }), toolOptions, store);
+      await agent.processInput('Hello');
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.maxSteps).toBe(30);
+    });
+
+    it('uses base maxSteps when reactMode is false', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(makeConfig({ reactMode: false, maxSteps: 10 }), toolOptions, store);
+      await agent.processInput('Hello');
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.maxSteps).toBe(10);
     });
   });
 
