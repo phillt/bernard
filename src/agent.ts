@@ -12,6 +12,7 @@ import {
   printCriticRetry,
   startSpinner,
   buildSpinnerMessage,
+  clearPinnedRegion,
   type SpinnerStats,
 } from './output.js';
 import { debugLog } from './logger.js';
@@ -497,6 +498,7 @@ export class Agent {
   async processInput(userInput: string, images?: ImageAttachment[]): Promise<void> {
     this.lastStepLimitHit = false;
     this.planStore.clear();
+    clearPinnedRegion('plan');
 
     if (images && images.length > 0) {
       const contentParts: UserContent = [
