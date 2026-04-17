@@ -50,6 +50,10 @@ import {
 import { ToolProfileStore, buildToolProfilesPrompt } from './tool-profiles.js';
 import { augmentTools } from './tools/augment.js';
 import { type ImageAttachment, IMAGE_TOKEN_ESTIMATE } from './image.js';
+import { PlanStore } from './plan-store.js';
+import { createPlanTool } from './tools/plan.js';
+import { createThinkTool } from './tools/think.js';
+import { createEvaluateTool } from './tools/evaluate.js';
 
 const BASE_SYSTEM_PROMPT = `# Identity
 
@@ -153,7 +157,7 @@ Good: "Run \`curl -s http://localhost:3000/health\` and report: (a) HTTP status 
 
 Do NOT use sub-agents for tasks that are sequential or depend on each other's results — handle those yourself step by step. Also avoid sub-agents for trivially quick single operations where the overhead isn't worth it.
 
-**agent vs. task** — Use \`agent\` for open-ended work where you need a narrative report. Use \`task\` when you need a discrete, machine-readable JSON result — tasks are truly single-step/atomic (1 LLM call + tools), return Zod-validated structured JSON, and are ideal for routine chaining where you need to branch on success/error. Both share the same concurrency pool.`;
+**agent vs. task** — Use \`agent\` for open-ended work where you need a narrative report. Use \`task\` when you need a discrete, machine-readable JSON result — tasks are truly single-step/atomic (1 LLM call + tools), return Zod-validated structured JSON, and are ideal for routine chaining where you need to branch on success/error. Tasks are the preferred delegation mechanism when you need a discrete, verifiable result. Both share the same concurrency pool.`;
 
 const CRITIC_MODE_PROMPT = `## Reliability Mode (Active)
 
@@ -177,6 +181,96 @@ In addition to stating your plan in text, persist it to scratch for reliability:
 ### Verification
 - After any mutation (file write, git commit, API call), immediately verify the outcome with a read-only command.
 - Your work will be reviewed by a critic agent afterward. Only claim what you can prove with tool output.`;
+
+const REACT_COORDINATOR_PROMPT = `## Coordinator Mode (Active)
+
+You are operating as a coordinator, not a sole executor. Your primary role is to decompose, delegate, and synthesize — not to do all work yourself.
+
+### Reason before acting
+Before each tool call or batch of parallel calls, state in 1-3 sentences:
+- What you know so far
+- What gap this action fills
+- What success looks like
+
+### Delegate scoped work
+Prefer delegation for any work that can be expressed as a self-contained scope:
+- Information gathering (shell commands, file reads, web research) → agent or task
+- Structured data extraction or transformation → task
+- Domain-specific work matching a specialist → specialist_run or tool_wrapper_run
+
+Do the work yourself only when:
+- It requires conversation history a sub-agent cannot have
+- It is trivially small (1-2 tool calls) and delegation overhead is not worth it
+- You need intermediate results before deciding the next step
+
+### Treat subagent outputs as observations
+When a sub-agent returns, interpret the result — do not echo it. Extract the signal, discard the noise, and state what it means for the task. If a sub-agent returns 500 lines, your synthesis should be 2-5 sentences.
+
+### Context discipline
+Do not accumulate long chains of raw tool output in your reasoning. Once you have gathered sufficient information, synthesize it and move forward. Do not re-list everything you know — refer to prior findings and build on them.
+
+### The think → act → evaluate → decide loop
+Every step follows the same rhythm. Do not skip stages.
+
+1. **Think** — call \`think\` with a 1-3 sentence statement of what you know, what gap the next action fills, and what success looks like.
+2. **Act** — make the tool call (or batch of parallel calls).
+3. **Stop and evaluate** — call \`evaluate\` immediately after the action completes. State in 1-3 sentences whether the result matched expectations, whether any surprise / error / risk was revealed, and whether to continue or course-correct. Be willing to catch yourself — "Actually, that's not right because..." or "Wait — this might make things worse, let me take a different approach" is exactly what evaluate is for.
+4. **Decide** — based on the evaluation, either continue to the next think/act or go back and try a different approach. If you course-correct, say so before acting.
+
+Skip this full cycle only for trivially small work (1-2 tool calls). For any non-trivial step, all four stages happen.
+
+### Use the \`plan\` tool
+- At the start of any multi-step work, call \`plan\` with action \`create\` and an ordered list of steps. Revise with \`add\` or \`update\` as the situation evolves.
+- Before starting a step, call \`plan\` with action \`update\` and status \`in_progress\`. After completing it, \`update\` it to \`done\` with a \`note\` summarizing what was accomplished and the key result.
+- If a step becomes unnecessary because the user pivoted or the work is no longer needed, mark it \`cancelled\` with a \`note\` explaining why. If a step is genuinely unachievable (permission denied, resource missing, tool unavailable), mark it \`error\` with a \`note\`.
+- Every step must reach a terminal state (\`done\`, \`cancelled\`, or \`error\`) before you finish. Every terminal transition requires a \`note\`. Unresolved steps will trigger a re-prompt.
+- Skip the \`plan\` tool only for trivially small work (1-2 tool calls) where planning overhead is not worth it.
+
+### Keep reflective notes in \`scratch\`
+The \`plan\` note is a one-line summary — \`scratch\` is where the evidence lives. For any non-trivial step:
+- After a substantive tool call, sub-agent return, or batch of parallel calls, write a scratch entry with key \`step-{id}\` (or \`findings-{topic}\` for cross-cutting observations) containing: what you did, the concrete result (command output excerpts, file paths, numeric values, URLs — facts, not vibes), and any follow-ups this uncovered.
+- Update the same key as you learn more within a single step; do not spawn a new key per tool call.
+- Treat scratch as your working record. When you need to recall what happened several steps ago, read from scratch rather than scrolling back through tool results.
+
+### Synthesize the final response from scratch
+When all plan steps are in terminal states and you are ready to respond to the user:
+1. Call \`scratch\` with action \`list\` to see what you captured.
+2. Call \`scratch\` with action \`read\` for the relevant keys.
+3. Compose the response from those notes — not from the conversation tail. Conversation history is noisy and can include stale intermediate state; your scratch notes are the curated record of what actually happened.
+4. Skip this synthesis step only for trivial work where no plan was created.`;
+
+/**
+ * Pure predicate: should the ReAct plan-enforcement loop run after the main
+ * generateText call? Extracted so the gating logic can be unit-tested in
+ * isolation from `Agent` internals.
+ * @internal Exported for testing only.
+ */
+export function shouldEnforcePlan(args: {
+  reactMode: boolean;
+  aborted: boolean;
+  stepLimitHit: boolean;
+  hasSteps: boolean;
+}): boolean {
+  return args.reactMode && !args.aborted && !args.stepLimitHit && args.hasSteps;
+}
+
+/**
+ * Upper ceiling on the per-turn step budget when reactMode triples maxSteps.
+ * Prevents pathological cost amplification when a user has set a high
+ * BERNARD_MAX_STEPS for the non-react path.
+ */
+export const REACT_MAX_STEPS_CEILING = 150;
+
+/**
+ * Returns the per-turn step budget for the main agent loop. In reactMode the
+ * base budget is tripled (deliberation + delegation + synthesis), then clamped
+ * to {@link REACT_MAX_STEPS_CEILING} so a high `maxSteps` cannot blow up.
+ * @internal Exported for testing only.
+ */
+export function computeEffectiveMaxSteps(maxSteps: number, reactMode: boolean): number {
+  if (!reactMode) return maxSteps;
+  return Math.min(maxSteps * 3, REACT_MAX_STEPS_CEILING);
+}
 
 /**
  * Assembles the full system prompt including base instructions, memory context, and MCP status.
@@ -203,6 +297,10 @@ export function buildSystemPrompt(
 
   if (config.criticMode) {
     prompt += '\n\n' + CRITIC_MODE_PROMPT;
+  }
+
+  if (config.reactMode) {
+    prompt += '\n\n' + REACT_COORDINATOR_PROMPT;
   }
 
   prompt += buildMemoryContext({ memoryStore, ragResults, includeScratch: true });
@@ -313,6 +411,7 @@ export class Agent {
   private toolProfileStore: ToolProfileStore;
   private stepLimitHitCount: number = 0;
   private lastStepLimitHit: boolean = false;
+  private planStore: PlanStore = new PlanStore();
 
   constructor(
     config: BernardConfig,
@@ -397,6 +496,7 @@ export class Agent {
    */
   async processInput(userInput: string, images?: ImageAttachment[]): Promise<void> {
     this.lastStepLimitHit = false;
+    this.planStore.clear();
 
     if (images && images.length > 0) {
       const contentParts: UserContent = [
@@ -546,16 +646,31 @@ export class Agent {
           this.routineStore,
           this.candidateStore,
         ),
+        ...(this.config.reactMode
+          ? {
+              plan: createPlanTool(this.planStore),
+              think: createThinkTool(),
+              evaluate: createEvaluateTool(),
+            }
+          : {}),
       };
 
       // Wrap every tool's execute to observe errors and record profiles
       const augmentedTools = augmentTools(tools, this.toolProfileStore);
 
+      // Coordinator (ReAct) mode triples the step budget for the main agent,
+      // clamped to REACT_MAX_STEPS_CEILING to bound worst-case cost.
+      // Subagents are unaffected — they keep their own step budgets.
+      const effectiveMaxSteps = computeEffectiveMaxSteps(
+        this.config.maxSteps,
+        this.config.reactMode,
+      );
+
       const callGenerateText = (messages?: CoreMessage[]) =>
         generateText({
           model: getModel(this.config.provider, this.config.model),
           tools: augmentedTools,
-          maxSteps: this.config.maxSteps,
+          maxSteps: effectiveMaxSteps,
           maxTokens: this.config.maxTokens,
           system: systemPrompt,
           messages: messages ?? this.history,
@@ -586,6 +701,27 @@ export class Agent {
             }
           },
         });
+
+      // Shared retry path for critic and ReAct enforcement loops: truncate the
+      // last tool results, push them + a feedback message into history, and
+      // re-invoke the model. Returns null when the retry itself errors.
+      const pushAndRetry = async (
+        previousResult: Awaited<ReturnType<typeof callGenerateText>>,
+        feedback: string,
+        debugTag: string,
+      ): Promise<Awaited<ReturnType<typeof callGenerateText>> | null> => {
+        try {
+          const truncatedResultMessages = truncateToolResults(
+            previousResult.response.messages as CoreMessage[],
+          );
+          this.history.push(...truncatedResultMessages);
+          this.history.push({ role: 'user' as const, content: feedback });
+          return await callGenerateText();
+        } catch (retryErr) {
+          debugLog(debugTag, retryErr instanceof Error ? retryErr.message : String(retryErr));
+          return null;
+        }
+      };
 
       let result;
       try {
@@ -661,13 +797,13 @@ export class Agent {
       }
 
       // Detect maxSteps exhaustion
-      if (result.finishReason === 'tool-calls' && result.steps.length >= this.config.maxSteps) {
+      if (result.finishReason === 'tool-calls' && result.steps.length >= effectiveMaxSteps) {
         this.lastStepLimitHit = true;
         this.stepLimitHitCount++;
         const msg =
           this.stepLimitHitCount >= 2
-            ? `Stopped at loop limit of ${this.config.maxSteps}. Use /options max-steps to adjust permanently.`
-            : `Stopped at loop limit of ${this.config.maxSteps}.`;
+            ? `Stopped at loop limit of ${effectiveMaxSteps}. Use /options max-steps to adjust permanently.`
+            : `Stopped at loop limit of ${effectiveMaxSteps}.`;
         printWarning(msg);
       }
 
@@ -701,30 +837,55 @@ export class Agent {
             retryCount++;
             printCriticRetry(retryCount, CRITIC_MAX_RETRIES);
 
-            // Push current attempt's messages + critic feedback into history before retrying
-            try {
-              const truncatedResultMessages = truncateToolResults(
-                result.response.messages as CoreMessage[],
-              );
-              this.history.push(...truncatedResultMessages);
-              this.history.push({
-                role: 'user' as const,
-                content: `The critic agent reviewed your work and found issues:\n\nVERDICT: ${criticResult.verdict}\n${criticResult.explanation}\n\nPlease address these issues and try again.`,
-              });
+            const retryResult = await pushAndRetry(
+              result,
+              `The critic agent reviewed your work and found issues:\n\nVERDICT: ${criticResult.verdict}\n${criticResult.explanation}\n\nPlease address these issues and try again.`,
+              'agent:critic:retry-error',
+            );
+            if (!retryResult) break;
+            result = retryResult;
+            toolLog = extractToolCallLog(result.steps);
 
-              result = await callGenerateText();
-              toolLog = extractToolCallLog(result.steps);
-
-              // If no tool calls in retry, nothing more to verify
-              if (toolLog.length === 0) break;
-            } catch (retryErr) {
-              debugLog(
-                'agent:critic:retry-error',
-                retryErr instanceof Error ? retryErr.message : String(retryErr),
-              );
-              break;
-            }
+            // If no tool calls in retry, nothing more to verify
+            if (toolLog.length === 0) break;
           }
+        }
+      }
+
+      // Coordinator (ReAct) plan enforcement — re-prompt when steps are still
+      // pending/in_progress. Bounded retries mirror the critic loop.
+      const REACT_ENFORCEMENT_MAX_RETRIES = 2;
+      if (
+        shouldEnforcePlan({
+          reactMode: this.config.reactMode,
+          aborted: this.abortController?.signal.aborted === true,
+          stepLimitHit: this.lastStepLimitHit,
+          hasSteps: this.planStore.view().length > 0,
+        })
+      ) {
+        let enforcementAttempts = 0;
+        while (
+          !this.planStore.isComplete() &&
+          enforcementAttempts < REACT_ENFORCEMENT_MAX_RETRIES
+        ) {
+          if (this.abortController?.signal.aborted) break;
+          enforcementAttempts++;
+          printWarning(
+            `Plan has ${this.planStore.unresolvedCount()} unresolved step(s). Prompting to resolve... (${enforcementAttempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`,
+          );
+
+          const retryResult = await pushAndRetry(
+            result,
+            `Your plan still has unresolved steps:\n\n${this.planStore.render()}\n\n` +
+              `Resolve each remaining step: complete it (plan update -> done), mark it cancelled with a note if the user's intent changed or the step is no longer needed, or mark it error with a note if it is genuinely unachievable. Do not leave steps pending or in_progress.`,
+            'agent:react:enforcement-error',
+          );
+          if (!retryResult) break;
+          result = retryResult;
+        }
+
+        if (!this.planStore.isComplete()) {
+          printInfo('Plan still incomplete after enforcement retries; continuing anyway.');
         }
       }
 

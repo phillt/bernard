@@ -184,6 +184,7 @@ export async function startRepl(
     { command: '/create-specialist', description: 'Create a specialist with guided AI assistance' },
     { command: '/candidates', description: 'Review specialist suggestions' },
     { command: '/critic', description: 'Toggle critic mode' },
+    { command: '/react', description: 'Toggle coordinator (ReAct) mode' },
     { command: '/agent-options', description: 'Configure specialist auto-creation settings' },
     { command: '/image', description: 'Attach an image: /image <path> [prompt]' },
     { command: '/debug', description: 'Print diagnostic report for troubleshooting' },
@@ -232,7 +233,8 @@ export async function startRepl(
   function getPromptStr(): string {
     const { ansi } = getTheme();
     const criticLabel = config.criticMode ? `${ansi.warning}\u25C6${ansi.reset} ` : '';
-    return `${criticLabel}${ansi.prompt}bernard>${ansi.reset} `;
+    const reactLabel = config.reactMode ? `${ansi.prompt}\u25B7${ansi.reset} ` : '';
+    return `${criticLabel}${reactLabel}${ansi.prompt}bernard>${ansi.reset} `;
   }
 
   if (process.stdin.isTTY) {
@@ -287,6 +289,38 @@ export async function startRepl(
 
   function clearMenuSignal(): void {
     menuAbortController = null;
+  }
+
+  async function toggleBooleanPref(
+    key: 'criticMode' | 'reactMode',
+    label: string,
+    onMsg: string,
+    offMsg: string,
+  ): Promise<void> {
+    const entries: MenuEntry[] = [
+      { label: 'On', active: config[key] === true },
+      { label: 'Off', active: config[key] === false },
+    ];
+    printInfo(`\n  ${label}: ${config[key] ? 'ON' : 'OFF'}\n`);
+    printMenuList(entries);
+    console.log();
+    const signal = createMenuSignal();
+    try {
+      const result = await selectFromMenu(rl, entries, {}, signal);
+      if (!result.cancelled) {
+        config[key] = result.index === 0;
+        savePreferences({
+          ...loadPreferences(),
+          provider: config.provider,
+          model: config.model,
+          [key]: config[key],
+        });
+        printInfo(config[key] ? onMsg : offMsg);
+      }
+    } finally {
+      clearMenuSignal();
+    }
+    console.log();
   }
 
   process.stdin.on('keypress', (_str: string, key: any) => {
@@ -1367,37 +1401,23 @@ Remember: the systemPrompt should read like a persona definition — who this sp
       }
 
       if (trimmed === '/critic') {
-        const entries: MenuEntry[] = [
-          { label: 'On', active: config.criticMode === true },
-          { label: 'Off', active: config.criticMode === false },
-        ];
-        printInfo(`\n  Critic mode: ${config.criticMode ? 'ON' : 'OFF'}\n`);
-        printMenuList(entries);
-        console.log();
-        const signal = createMenuSignal();
-        try {
-          const result = await selectFromMenu(rl, entries, {}, signal);
-          if (!result.cancelled) {
-            config.criticMode = result.index === 0;
-            savePreferences({
-              provider: config.provider,
-              model: config.model,
-              maxTokens: config.maxTokens,
-              shellTimeout: config.shellTimeout,
-              tokenWindow: config.tokenWindow,
-              theme: config.theme,
-              criticMode: config.criticMode,
-            });
-            printInfo(
-              config.criticMode
-                ? '  [CRITIC:ON] Responses will be planned and verified.'
-                : '  [CRITIC:OFF] Critic mode disabled.',
-            );
-          }
-        } finally {
-          clearMenuSignal();
-        }
-        console.log();
+        await toggleBooleanPref(
+          'criticMode',
+          'Critic mode',
+          '  [CRITIC:ON] Responses will be planned and verified.',
+          '  [CRITIC:OFF] Critic mode disabled.',
+        );
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/react') {
+        await toggleBooleanPref(
+          'reactMode',
+          'Coordinator (ReAct) mode',
+          '  [REACT:ON] Operating as coordinator with iterative reasoning and delegation.',
+          '  [REACT:OFF] Coordinator mode disabled.',
+        );
         void prompt();
         return;
       }
@@ -1562,6 +1582,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         console.log(t.text('\n  Settings:'));
         console.log(t.muted(`    Theme: ${getActiveThemeKey()}`));
         console.log(t.muted(`    Critic mode: ${config.criticMode ? 'on' : 'off'}`));
+        console.log(t.muted(`    Coordinator mode: ${config.reactMode ? 'on' : 'off'}`));
         const debugEnabled =
           process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
         console.log(t.muted(`    Debug mode: ${debugEnabled ? 'on' : 'off'}`));

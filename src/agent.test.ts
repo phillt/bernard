@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { buildSystemPrompt, Agent } from './agent.js';
+import {
+  buildSystemPrompt,
+  Agent,
+  shouldEnforcePlan,
+  computeEffectiveMaxSteps,
+  REACT_MAX_STEPS_CEILING,
+} from './agent.js';
 import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
+import { printWarning, printInfo } from './output.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
@@ -79,6 +86,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     ragEnabled: true,
     theme: 'bernard',
     criticMode: false,
+    reactMode: false,
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
     anthropicApiKey: 'sk-test',
@@ -362,6 +370,90 @@ describe('buildSystemPrompt', () => {
       specialists,
     );
     expect(prompt).not.toContain('Specialist Match Advisory');
+  });
+
+  it('includes coordinator prompt when reactMode is true', () => {
+    const prompt = buildSystemPrompt(makeConfig({ reactMode: true }), store);
+    expect(prompt).toContain('Coordinator Mode (Active)');
+    expect(prompt).toContain('Delegate scoped work');
+    expect(prompt).toContain('Reason before acting');
+  });
+
+  it('coordinator prompt mandates plan, think, and evaluate tools', () => {
+    const prompt = buildSystemPrompt(makeConfig({ reactMode: true }), store);
+    expect(prompt).toContain('`plan`');
+    expect(prompt).toContain('`think`');
+    expect(prompt).toContain('`evaluate`');
+    expect(prompt).toContain('terminal state');
+    expect(prompt).toContain('cancelled');
+    expect(prompt).toContain('error');
+  });
+
+  it('coordinator prompt describes the think -> act -> evaluate -> decide loop', () => {
+    const prompt = buildSystemPrompt(makeConfig({ reactMode: true }), store);
+    expect(prompt).toContain('think \u2192 act \u2192 evaluate \u2192 decide');
+    expect(prompt).toContain('Stop and evaluate');
+    expect(prompt).toContain('course-correct');
+  });
+
+  it('coordinator prompt mandates reflective scratch notes and final synthesis', () => {
+    const prompt = buildSystemPrompt(makeConfig({ reactMode: true }), store);
+    expect(prompt).toContain('reflective notes in `scratch`');
+    expect(prompt).toContain('step-{id}');
+    expect(prompt).toContain('Synthesize the final response from scratch');
+    expect(prompt).toContain('not from the conversation tail');
+  });
+
+  it('excludes coordinator prompt when reactMode is false', () => {
+    const prompt = buildSystemPrompt(makeConfig({ reactMode: false }), store);
+    expect(prompt).not.toContain('Coordinator Mode');
+  });
+});
+
+describe('shouldEnforcePlan', () => {
+  const base = { reactMode: true, aborted: false, stepLimitHit: false, hasSteps: true };
+
+  it('returns true when all gates pass', () => {
+    expect(shouldEnforcePlan(base)).toBe(true);
+  });
+
+  it('returns false when reactMode is off', () => {
+    expect(shouldEnforcePlan({ ...base, reactMode: false })).toBe(false);
+  });
+
+  it('returns false when aborted', () => {
+    expect(shouldEnforcePlan({ ...base, aborted: true })).toBe(false);
+  });
+
+  it('returns false when step-limit was hit', () => {
+    expect(shouldEnforcePlan({ ...base, stepLimitHit: true })).toBe(false);
+  });
+
+  it('returns false when the plan has no steps', () => {
+    expect(shouldEnforcePlan({ ...base, hasSteps: false })).toBe(false);
+  });
+});
+
+describe('computeEffectiveMaxSteps', () => {
+  it('returns maxSteps unchanged when reactMode is off', () => {
+    expect(computeEffectiveMaxSteps(25, false)).toBe(25);
+    expect(computeEffectiveMaxSteps(500, false)).toBe(500);
+  });
+
+  it('triples maxSteps when reactMode is on and below the ceiling', () => {
+    expect(computeEffectiveMaxSteps(25, true)).toBe(75);
+    expect(computeEffectiveMaxSteps(10, true)).toBe(30);
+  });
+
+  it('clamps to REACT_MAX_STEPS_CEILING when triple would exceed it', () => {
+    expect(computeEffectiveMaxSteps(100, true)).toBe(REACT_MAX_STEPS_CEILING);
+    expect(computeEffectiveMaxSteps(1000, true)).toBe(REACT_MAX_STEPS_CEILING);
+  });
+
+  it('triple exactly at ceiling is unchanged', () => {
+    expect(computeEffectiveMaxSteps(REACT_MAX_STEPS_CEILING / 3, true)).toBe(
+      REACT_MAX_STEPS_CEILING,
+    );
   });
 });
 
@@ -1220,6 +1312,147 @@ describe('Agent', () => {
 
       await agent.processInput('Second');
       expect(agent.getStepLimitHit()).toBeNull();
+    });
+  });
+
+  describe('coordinator (ReAct) mode', () => {
+    it('omits plan, think, and evaluate tools when reactMode is false', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(makeConfig({ reactMode: false }), toolOptions, store);
+      await agent.processInput('Hello');
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.tools).not.toHaveProperty('plan');
+      expect(call.tools).not.toHaveProperty('think');
+      expect(call.tools).not.toHaveProperty('evaluate');
+    });
+
+    it('includes plan, think, and evaluate tools when reactMode is true', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(makeConfig({ reactMode: true }), toolOptions, store);
+      await agent.processInput('Hello');
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.tools).toHaveProperty('plan');
+      expect(call.tools).toHaveProperty('think');
+      expect(call.tools).toHaveProperty('evaluate');
+    });
+
+    it('triples maxSteps when reactMode is true', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(makeConfig({ reactMode: true, maxSteps: 10 }), toolOptions, store);
+      await agent.processInput('Hello');
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.maxSteps).toBe(30);
+    });
+
+    it('uses base maxSteps when reactMode is false', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = new Agent(makeConfig({ reactMode: false, maxSteps: 10 }), toolOptions, store);
+      await agent.processInput('Hello');
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.maxSteps).toBe(10);
+    });
+
+    describe('plan-enforcement loop', () => {
+      const baseResult = {
+        finishReason: 'stop',
+        steps: [],
+        response: { messages: [{ role: 'assistant', content: 'ok' }] },
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+      };
+
+      it('re-prompts once when plan still has unresolved steps, then exits when resolved', async () => {
+        const agent = new Agent(makeConfig({ reactMode: true }), toolOptions, store);
+        const planStore = (agent as unknown as { planStore: any }).planStore;
+        let call = 0;
+        mockGenerateText.mockImplementation(async () => {
+          call++;
+          if (call === 1) planStore.create(['gather', 'summarize']);
+          else {
+            planStore.update(1, 'done', 'got data');
+            planStore.update(2, 'done', 'wrote summary');
+          }
+          return baseResult;
+        });
+        await agent.processInput('do stuff');
+        expect(mockGenerateText).toHaveBeenCalledTimes(2);
+        expect(vi.mocked(printWarning)).toHaveBeenCalledWith(
+          expect.stringContaining('Plan has 2 unresolved step'),
+        );
+      });
+
+      it('does not re-prompt when plan is already complete', async () => {
+        const agent = new Agent(makeConfig({ reactMode: true }), toolOptions, store);
+        const planStore = (agent as unknown as { planStore: any }).planStore;
+        mockGenerateText.mockImplementation(async () => {
+          if (planStore.view().length === 0) {
+            planStore.create(['only step']);
+            planStore.update(1, 'done', 'finished');
+          }
+          return baseResult;
+        });
+        await agent.processInput('hi');
+        expect(mockGenerateText).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not re-prompt when no plan was created', async () => {
+        const agent = new Agent(makeConfig({ reactMode: true }), toolOptions, store);
+        mockGenerateText.mockResolvedValue(baseResult);
+        await agent.processInput('trivial');
+        expect(mockGenerateText).toHaveBeenCalledTimes(1);
+      });
+
+      it('stops re-prompting when abort fires mid-loop', async () => {
+        const agent = new Agent(makeConfig({ reactMode: true }), toolOptions, store);
+        const planStore = (agent as unknown as { planStore: any }).planStore;
+        let call = 0;
+        mockGenerateText.mockImplementation(async () => {
+          call++;
+          if (call === 1) {
+            planStore.create(['never resolved']);
+            agent.abort();
+          }
+          return baseResult;
+        });
+        await agent.processInput('x');
+        expect(mockGenerateText).toHaveBeenCalledTimes(1);
+      });
+
+      it('exhausts retries and emits incomplete-after-retries info when plan never resolves', async () => {
+        const agent = new Agent(makeConfig({ reactMode: true }), toolOptions, store);
+        const planStore = (agent as unknown as { planStore: any }).planStore;
+        mockGenerateText.mockImplementation(async () => {
+          if (planStore.view().length === 0) planStore.create(['stuck']);
+          return baseResult;
+        });
+        await agent.processInput('try');
+        expect(mockGenerateText).toHaveBeenCalledTimes(3);
+        expect(vi.mocked(printInfo)).toHaveBeenCalledWith(
+          expect.stringContaining('Plan still incomplete'),
+        );
+      });
+
+      it('does not re-prompt when reactMode is false even with unresolved steps', async () => {
+        const agent = new Agent(makeConfig({ reactMode: false }), toolOptions, store);
+        const planStore = (agent as unknown as { planStore: any }).planStore;
+        mockGenerateText.mockImplementation(async () => {
+          if (planStore.view().length === 0) planStore.create(['unresolved']);
+          return baseResult;
+        });
+        await agent.processInput('hi');
+        expect(mockGenerateText).toHaveBeenCalledTimes(1);
+      });
     });
   });
 
