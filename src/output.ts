@@ -236,7 +236,7 @@ export function printAssistantText(text: string, prefix?: string): void {
   stopSpinner();
   if (text.trim()) {
     const label = formatPrefix(prefix);
-    console.log(label + getTheme().text(text));
+    emit(label + getTheme().text(text));
   }
 }
 
@@ -252,9 +252,14 @@ export function printToolCall(
   prefix?: string,
 ): void {
   stopSpinner();
+  if (silentTools.has(toolName)) return;
   const label = formatPrefix(prefix);
+  if (!toolDetailsVisible) {
+    emit(label + getTheme().toolCall(`  ▶ ${toolName}`));
+    return;
+  }
   const argsStr = toolName === 'shell' ? String(args.command || '') : JSON.stringify(args);
-  console.log(label + getTheme().toolCall(`  ▶ ${toolName}`) + getTheme().muted(`: ${argsStr}`));
+  emit(label + getTheme().toolCall(`  ▶ ${toolName}`) + getTheme().muted(`: ${argsStr}`));
 }
 
 /**
@@ -264,6 +269,8 @@ export function printToolCall(
  */
 export function printToolResult(toolName: string, result: unknown, prefix?: string): void {
   stopSpinner();
+  if (silentTools.has(toolName)) return;
+  if (!toolDetailsVisible) return;
   const label = formatPrefix(prefix);
   let output: string;
   if (typeof result === 'string') {
@@ -282,7 +289,7 @@ export function printToolResult(toolName: string, result: unknown, prefix?: stri
     .split('\n')
     .map((line) => label + getTheme().muted(`  ${line}`))
     .join('\n');
-  console.log(lines);
+  emit(lines);
 }
 
 /** Prints an error message to stderr in the theme's error color. */
@@ -299,7 +306,7 @@ export function printInfo(message: string): void {
 /** Prints a warning message in the theme's warning color. */
 export function printWarning(message: string): void {
   stopSpinner();
-  console.log(getTheme().warning(message));
+  emit(getTheme().warning(message));
 }
 
 /**
@@ -392,7 +399,7 @@ export function printEvaluation(evaluation: string, prefix?: string): void {
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  console.log(label + t.warning(`  \uD83D\uDD0D ${evaluation}`));
+  emit(label + t.warning(`  \uD83D\uDD0D ${evaluation}`));
 }
 
 /** Prints a colored top-border line when a sub-agent begins executing a task. */
@@ -400,14 +407,14 @@ export function printSubAgentStart(id: number, task: string): void {
   const prefixColors = getTheme().prefixColors;
   const colorFn = prefixColors[(id - 1) % prefixColors.length];
   const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
-  console.log(colorFn(`┌─ sub:${id} — ${displayTask}`));
+  emit(colorFn(`┌─ sub:${id} — ${displayTask}`));
 }
 
 /** Prints a colored bottom-border line when a sub-agent finishes. */
 export function printSubAgentEnd(id: number): void {
   const prefixColors = getTheme().prefixColors;
   const colorFn = prefixColors[(id - 1) % prefixColors.length];
-  console.log(colorFn(`└─ sub:${id} done`));
+  emit(colorFn(`└─ sub:${id} done`));
 }
 
 /** Prints a colored top-border line when a specialist begins executing a task. */
@@ -415,21 +422,21 @@ export function printSpecialistStart(id: number, specialistName: string, task: s
   const prefixColors = getTheme().prefixColors;
   const colorFn = prefixColors[(id - 1) % prefixColors.length];
   const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
-  console.log(colorFn(`┌─ spec:${id} [${specialistName}] — ${displayTask}`));
+  emit(colorFn(`┌─ spec:${id} [${specialistName}] — ${displayTask}`));
 }
 
 /** Prints a colored bottom-border line when a specialist finishes. */
 export function printSpecialistEnd(id: number): void {
   const prefixColors = getTheme().prefixColors;
   const colorFn = prefixColors[(id - 1) % prefixColors.length];
-  console.log(colorFn(`└─ spec:${id} done`));
+  emit(colorFn(`└─ spec:${id} done`));
 }
 
 /** Prints a colored top-border line when a task begins executing. */
 export function printTaskStart(task: string): void {
   const t = getTheme();
   const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
-  console.log(t.accent(`┌─ task — ${displayTask}`));
+  emit(t.accent(`┌─ task — ${displayTask}`));
 }
 
 /** Prints a colored bottom-border line when a task finishes, showing structured result. */
@@ -442,9 +449,9 @@ export function printTaskEnd(result: string): void {
     const output = parsed.output
       ? `: ${parsed.output.length > MAX_TASK_OUTPUT_LENGTH ? parsed.output.slice(0, MAX_TASK_OUTPUT_LENGTH) + '…' : parsed.output}`
       : '';
-    console.log(statusColor(`└─ task ${parsed.status}${output}`));
+    emit(statusColor(`└─ task ${parsed.status}${output}`));
   } catch {
-    console.log(t.accent(`└─ task done`));
+    emit(t.accent(`└─ task done`));
   }
 }
 
@@ -453,7 +460,7 @@ export function printCriticStart(prefix?: string): void {
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  console.log(label + t.accent('┌─ critic — verifying response...'));
+  emit(label + t.accent('┌─ critic — verifying response...'));
 }
 
 /** Prints a retry indicator when the critic triggers a correction loop. */
@@ -461,7 +468,7 @@ export function printCriticRetry(attempt: number, maxRetries: number, prefix?: s
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  console.log(label + t.warning(`├─ critic — retrying (${attempt}/${maxRetries})...`));
+  emit(label + t.warning(`├─ critic — retrying (${attempt}/${maxRetries})...`));
 }
 
 /** Parses a critic response into a structured verdict and explanation. */
@@ -490,11 +497,11 @@ export function printCriticVerdict(text: string, prefix?: string): void {
     // Compact badge; include explanation only if single-line
     const isSingleLine = !!explanation && !explanation.includes('\n');
     const suffix = isSingleLine ? `: ${explanation}` : '';
-    console.log(label + colorFn(`└─ critic ${verdict}${suffix}`));
+    emit(label + colorFn(`└─ critic ${verdict}${suffix}`));
   } else {
     // FAIL/UNKNOWN: always show full explanation
     const suffix = explanation ? `: ${explanation}` : '';
-    console.log(label + colorFn(`└─ critic ${verdict}${suffix}`));
+    emit(label + colorFn(`└─ critic ${verdict}${suffix}`));
   }
 }
 
@@ -503,7 +510,7 @@ export function printCriticReVerify(prefix?: string): void {
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  console.log(label + t.accent('├─ critic — re-verifying response...'));
+  emit(label + t.accent('├─ critic — re-verifying response...'));
 }
 
 /** Prints the REPL help menu listing all available slash commands. */
