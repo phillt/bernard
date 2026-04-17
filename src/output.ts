@@ -1,6 +1,7 @@
 import type { CoreMessage } from 'ai';
 import { getContextWindow, COMPRESSION_THRESHOLD } from './context.js';
 import { getTheme } from './theme.js';
+import type { Step, StepStatus } from './plan-store.js';
 
 const MAX_TOOL_OUTPUT_LENGTH = 2000;
 const MAX_REPLAY_LENGTH = 200;
@@ -244,6 +245,50 @@ function extractText(msg: CoreMessage): string | null {
     .map((p) => p.text);
 
   return textParts.length > 0 ? textParts.join(' ') : null;
+}
+
+function iconForStatus(status: StepStatus): string {
+  switch (status) {
+    case 'done':
+      return '\u2713';
+    case 'in_progress':
+      return '\u25D0';
+    case 'cancelled':
+      return '\u2298';
+    case 'error':
+      return '\u2717';
+    case 'pending':
+      return '\u25CB';
+  }
+}
+
+/** Prints the current plan as a bulleted, status-decorated list. */
+export function printPlan(steps: Step[], prefix?: string): void {
+  stopSpinner();
+  const t = getTheme();
+  const label = formatPrefix(prefix);
+  console.log(label + t.accent('  \u25C6 Plan:'));
+  for (const s of steps) {
+    const icon = iconForStatus(s.status);
+    const note = s.note ? t.muted(` \u2014 ${s.note}`) : '';
+    console.log(label + t.muted(`    ${icon} ${s.id}. ${s.description}`) + note);
+  }
+}
+
+/** Prints a visible thought line prefixed with a thought bubble. */
+export function printThought(thought: string, prefix?: string): void {
+  stopSpinner();
+  const t = getTheme();
+  const label = formatPrefix(prefix);
+  console.log(label + t.accent(`  \uD83D\uDCAD ${thought}`));
+}
+
+/** Prints a visible post-action self-evaluation prefixed with a magnifying glass. */
+export function printEvaluation(evaluation: string, prefix?: string): void {
+  stopSpinner();
+  const t = getTheme();
+  const label = formatPrefix(prefix);
+  console.log(label + t.warning(`  \uD83D\uDD0D ${evaluation}`));
 }
 
 /** Prints a colored top-border line when a sub-agent begins executing a task. */
