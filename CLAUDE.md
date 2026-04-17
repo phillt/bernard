@@ -73,7 +73,8 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_MAX_STEPS` — Max agent loop iterations per request (default: 25)
 - `BERNARD_HOME` — Override all XDG directories with a single flat path
 - `BERNARD_CRITIC_MODE` — Enable critic mode for verification (default: false)
-- `BERNARD_REACT_MODE` — Enable coordinator (ReAct) mode for iterative reasoning with subagent delegation (default: false)
+- `BERNARD_REACT_MODE` — Enable coordinator (ReAct) mode for iterative reasoning with subagent delegation (default: false). When on, the per-turn step budget is `min(BERNARD_MAX_STEPS * 3, 150)` to accommodate the think → act → evaluate → decide loop, and an enforcement loop may re-prompt up to 2 extra times if the plan still has unresolved steps. Worst-case step count per turn is therefore `effectiveMaxSteps * 3`. Subagent budgets are unaffected.
+- `BERNARD_SUBAGENT_RESULT_MAX_CHARS` — Max characters returned from a sub-agent / specialist into the parent agent's context, default 4000. The user still sees full output in the terminal.
 - `BERNARD_AUTO_CREATE_SPECIALISTS` — Auto-create specialists above confidence threshold (default: false)
 - `BERNARD_AUTO_CREATE_THRESHOLD` — Confidence threshold for auto-creating specialists, 0-1 (default: 0.8)
 - `BERNARD_CORRECTION_ENABLED` — Run the correction agent at session close to learn from tool-wrapper failures (default: true)

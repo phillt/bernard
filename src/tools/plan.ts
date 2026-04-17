@@ -11,6 +11,17 @@ import { printPlan } from '../output.js';
  * prints the updated plan to the user.
  */
 export function createPlanTool(planStore: PlanStore) {
+  // Suppress redundant re-renders: the model often calls `view` repeatedly
+  // (and may also re-issue an `update` that produces no visible change).
+  // Compare against the last rendered string and skip printing when identical.
+  let lastRendered: string | null = null;
+  const printIfChanged = () => {
+    const rendered = planStore.render();
+    if (rendered === lastRendered) return;
+    lastRendered = rendered;
+    printPlan(planStore.view());
+  };
+
   return tool({
     description:
       "Track and manage a structured plan for the current turn. Required in coordinator mode. Actions: 'create' seeds a new plan (pass `steps` — an array of step descriptions), 'add' appends a step, 'update' transitions a step's status (pending -> in_progress -> done/cancelled/error), 'view' shows the current plan. Mark a step 'cancelled' when the user pivots or the step becomes unnecessary; mark it 'error' when the step is genuinely unachievable. Always pass `note` explaining the reason for cancelled/error. The plan is visible to the user — use it to show your intended work before acting.",
@@ -40,13 +51,13 @@ export function createPlanTool(planStore: PlanStore) {
             return 'Error: steps is required for create action and must be non-empty.';
           }
           const created = planStore.create(steps);
-          printPlan(created);
+          printIfChanged();
           return `Plan created with ${created.length} step${created.length === 1 ? '' : 's'}.`;
         }
         case 'add': {
           if (!step) return 'Error: step is required for add action.';
           const added = planStore.add(step);
-          printPlan(planStore.view());
+          printIfChanged();
           return `Step ${added.id} added.`;
         }
         case 'update': {
@@ -58,13 +69,13 @@ export function createPlanTool(planStore: PlanStore) {
           }
           const updated = planStore.update(id, status, note);
           if (!updated) return `Error: no step found with id ${id}.`;
-          printPlan(planStore.view());
+          printIfChanged();
           return `Step ${id} -> ${status}.`;
         }
         case 'view': {
           const current = planStore.view();
           if (current.length === 0) return 'No plan in progress. Use create to start one.';
-          printPlan(current);
+          printIfChanged();
           return `Plan: ${current.length} step${current.length === 1 ? '' : 's'}, ${planStore.unresolvedCount()} unresolved.`;
         }
         default:

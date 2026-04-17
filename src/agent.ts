@@ -255,6 +255,24 @@ export function shouldEnforcePlan(args: {
 }
 
 /**
+ * Upper ceiling on the per-turn step budget when reactMode triples maxSteps.
+ * Prevents pathological cost amplification when a user has set a high
+ * BERNARD_MAX_STEPS for the non-react path.
+ */
+export const REACT_MAX_STEPS_CEILING = 150;
+
+/**
+ * Returns the per-turn step budget for the main agent loop. In reactMode the
+ * base budget is tripled (deliberation + delegation + synthesis), then clamped
+ * to {@link REACT_MAX_STEPS_CEILING} so a high `maxSteps` cannot blow up.
+ * @internal Exported for testing only.
+ */
+export function computeEffectiveMaxSteps(maxSteps: number, reactMode: boolean): number {
+  if (!reactMode) return maxSteps;
+  return Math.min(maxSteps * 3, REACT_MAX_STEPS_CEILING);
+}
+
+/**
  * Assembles the full system prompt including base instructions, memory context, and MCP status.
  * @internal Exported for testing only.
  * @param config - Active Bernard configuration (provider, model, etc.)
@@ -640,11 +658,13 @@ export class Agent {
       // Wrap every tool's execute to observe errors and record profiles
       const augmentedTools = augmentTools(tools, this.toolProfileStore);
 
-      // Coordinator (ReAct) mode triples the step budget for the main agent.
+      // Coordinator (ReAct) mode triples the step budget for the main agent,
+      // clamped to REACT_MAX_STEPS_CEILING to bound worst-case cost.
       // Subagents are unaffected — they keep their own step budgets.
-      const effectiveMaxSteps = this.config.reactMode
-        ? this.config.maxSteps * 3
-        : this.config.maxSteps;
+      const effectiveMaxSteps = computeEffectiveMaxSteps(
+        this.config.maxSteps,
+        this.config.reactMode,
+      );
 
       const callGenerateText = (messages?: CoreMessage[]) =>
         generateText({

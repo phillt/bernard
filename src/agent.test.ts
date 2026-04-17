@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { buildSystemPrompt, Agent, shouldEnforcePlan } from './agent.js';
+import {
+  buildSystemPrompt,
+  Agent,
+  shouldEnforcePlan,
+  computeEffectiveMaxSteps,
+  REACT_MAX_STEPS_CEILING,
+} from './agent.js';
 import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
 import { printWarning, printInfo } from './output.js';
@@ -425,6 +431,29 @@ describe('shouldEnforcePlan', () => {
 
   it('returns false when the plan has no steps', () => {
     expect(shouldEnforcePlan({ ...base, hasSteps: false })).toBe(false);
+  });
+});
+
+describe('computeEffectiveMaxSteps', () => {
+  it('returns maxSteps unchanged when reactMode is off', () => {
+    expect(computeEffectiveMaxSteps(25, false)).toBe(25);
+    expect(computeEffectiveMaxSteps(500, false)).toBe(500);
+  });
+
+  it('triples maxSteps when reactMode is on and below the ceiling', () => {
+    expect(computeEffectiveMaxSteps(25, true)).toBe(75);
+    expect(computeEffectiveMaxSteps(10, true)).toBe(30);
+  });
+
+  it('clamps to REACT_MAX_STEPS_CEILING when triple would exceed it', () => {
+    expect(computeEffectiveMaxSteps(100, true)).toBe(REACT_MAX_STEPS_CEILING);
+    expect(computeEffectiveMaxSteps(1000, true)).toBe(REACT_MAX_STEPS_CEILING);
+  });
+
+  it('triple exactly at ceiling is unchanged', () => {
+    expect(computeEffectiveMaxSteps(REACT_MAX_STEPS_CEILING / 3, true)).toBe(
+      REACT_MAX_STEPS_CEILING,
+    );
   });
 });
 
