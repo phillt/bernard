@@ -893,7 +893,16 @@ export class Agent {
         }
 
         if (!this.planStore.isComplete()) {
-          printInfo('Plan still incomplete after enforcement retries; continuing anyway.');
+          for (const step of this.planStore.view()) {
+            if (step.status === 'pending' || step.status === 'in_progress') {
+              this.planStore.update(
+                step.id,
+                'cancelled',
+                'auto-cancelled: enforcement retries exhausted',
+              );
+            }
+          }
+          printInfo('Auto-cancelled unresolved plan steps after enforcement retries.');
         }
       }
 
