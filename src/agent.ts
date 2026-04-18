@@ -1,5 +1,5 @@
 import { generateText, type CoreMessage, type UserContent } from 'ai';
-import { getModel } from './providers/index.js';
+import { getModel, getModelProfile } from './providers/index.js';
 import { createTools, type ToolOptions } from './tools/index.js';
 import { createSubAgentTool } from './tools/subagent.js';
 import { createTaskTool } from './tools/task.js';
@@ -500,9 +500,12 @@ export class Agent {
     this.planStore.clear();
     clearPinnedRegion('plan');
 
+    const profile = getModelProfile(this.config.provider, this.config.model);
+    const wrappedInput = profile.wrapUserMessage(userInput);
+
     if (images && images.length > 0) {
       const contentParts: UserContent = [
-        { type: 'text', text: userInput },
+        { type: 'text', text: wrappedInput },
         ...images.map((img) => ({
           type: 'image' as const,
           image: img.data,
@@ -511,7 +514,7 @@ export class Agent {
       ];
       this.history.push({ role: 'user', content: timestampUserContent(contentParts) });
     } else {
-      this.history.push({ role: 'user', content: timestampUserMessage(userInput) });
+      this.history.push({ role: 'user', content: timestampUserMessage(wrappedInput) });
     }
 
     this.abortController = new AbortController();
@@ -581,6 +584,11 @@ export class Agent {
       );
       if (this.alertContext) {
         systemPrompt += '\n\n' + this.alertContext;
+      }
+
+      // Model-specific advisory block (XML usage notes for Claude, strip-CoT for reasoning, etc.)
+      if (profile.systemSuffix) {
+        systemPrompt += '\n\n' + profile.systemSuffix;
       }
 
       // Inject tool usage profiles (guidelines + observed bad examples)
