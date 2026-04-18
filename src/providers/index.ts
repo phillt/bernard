@@ -4,7 +4,7 @@ import { xai } from '@ai-sdk/xai';
 import type { LanguageModel } from 'ai';
 
 export { getModelProfile } from './profiles.js';
-export type { ModelProfile, ModelFormat } from './profiles.js';
+export type { ModelProfile } from './profiles.js';
 
 /**
  * Return an AI SDK `LanguageModel` instance for the given provider and model name.

@@ -37,9 +37,7 @@ describe('getModelProfile — resolution', () => {
 
   it('routes xai explicit non-reasoning variants to xai-grok-standard', () => {
     expect(getModelProfile('xai', 'grok-4-fast-non-reasoning').family).toBe('xai-grok-standard');
-    expect(getModelProfile('xai', 'grok-4-1-fast-non-reasoning').family).toBe(
-      'xai-grok-standard',
-    );
+    expect(getModelProfile('xai', 'grok-4-1-fast-non-reasoning').family).toBe('xai-grok-standard');
   });
 
   it('routes older xai grok-3 and grok-code to xai-grok-standard', () => {
@@ -122,6 +120,5 @@ describe('systemSuffix — per family', () => {
     const p = getModelProfile('unknown', 'mystery-model');
     expect(p.systemSuffix).toBe('');
     expect(p.wrapUserMessage('hi')).toBe('hi');
-    expect(p.stripCoTLanguage).toBe(false);
   });
 });

@@ -68,6 +68,19 @@ export class PlanStore {
     return this.steps.filter((s) => !TERMINAL_STATUSES.has(s.status)).length;
   }
 
+  /** Cancels every non-terminal step with the given note. Returns the count cancelled. */
+  cancelAllUnresolved(note: string): number {
+    let count = 0;
+    for (const step of this.steps) {
+      if (!TERMINAL_STATUSES.has(step.status)) {
+        step.status = 'cancelled';
+        step.note = note;
+        count++;
+      }
+    }
+    return count;
+  }
+
   /** Renders the plan as a human-readable bulleted list for re-prompts. */
   render(): string {
     if (this.steps.length === 0) return '(no plan)';

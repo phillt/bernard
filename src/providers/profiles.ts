@@ -4,26 +4,15 @@
  * Each provider + model family has a {@link ModelProfile} that adjusts how a user
  * message is wrapped and what short advisory block is appended to the system
  * prompt. Profiles are resolved once per turn and applied deterministically —
- * no extra LLM call. This mirrors the "static ModelSettings" pattern used by
- * Aider and is cache-safe (the system-prompt suffix depends only on the
+ * no extra LLM call. Cache-safe: the system-prompt suffix depends only on the
  * selected model, not on the user's input, so the KV-cache prefix stays stable
- * across a session with a fixed model).
- *
- * See plan at {@link file://../../best-practices-system-prompt.md} and the
- * prompting-guide links at the bottom of this file.
+ * across a session with a fixed model.
  */
-
-/** Preferred structural format for this model family. Informational for now; may drive future behavior. */
-export type ModelFormat = 'xml' | 'markdown' | 'minimal';
 
 /** Static per-model settings applied at the agent-loop boundary. */
 export interface ModelProfile {
   /** Stable identifier — useful in logs and tests. */
   readonly family: string;
-  /** Primary structural format this family responds to best. */
-  readonly preferredFormat: ModelFormat;
-  /** True for reasoning models (o-series, grok-4 reasoning) where CoT prompting hurts. */
-  readonly stripCoTLanguage: boolean;
   /** Wraps the raw user input. Applied before the timestamp prefix is added. */
   wrapUserMessage(message: string): string;
   /** Short advisory block appended to the system prompt. Empty string = no-op. */
@@ -48,48 +37,36 @@ This model reasons internally. Do not narrate chain-of-thought ("think step by s
 
 const DEFAULT_PROFILE: ModelProfile = {
   family: 'default',
-  preferredFormat: 'minimal',
-  stripCoTLanguage: false,
   wrapUserMessage: (msg) => msg,
   systemSuffix: '',
 };
 
 const ANTHROPIC_PROFILE: ModelProfile = {
   family: 'anthropic-claude',
-  preferredFormat: 'xml',
-  stripCoTLanguage: false,
   wrapUserMessage: (msg) => `<user_request>\n${msg}\n</user_request>`,
   systemSuffix: ANTHROPIC_SUFFIX,
 };
 
 const OPENAI_REASONING_PROFILE: ModelProfile = {
   family: 'openai-reasoning',
-  preferredFormat: 'minimal',
-  stripCoTLanguage: true,
   wrapUserMessage: (msg) => msg,
   systemSuffix: OPENAI_REASONING_SUFFIX,
 };
 
 const OPENAI_STANDARD_PROFILE: ModelProfile = {
   family: 'openai-standard',
-  preferredFormat: 'markdown',
-  stripCoTLanguage: false,
   wrapUserMessage: (msg) => `# Request\n${msg}`,
   systemSuffix: OPENAI_STANDARD_SUFFIX,
 };
 
 const XAI_REASONING_PROFILE: ModelProfile = {
   family: 'xai-grok-reasoning',
-  preferredFormat: 'minimal',
-  stripCoTLanguage: true,
   wrapUserMessage: (msg) => msg,
   systemSuffix: XAI_REASONING_SUFFIX,
 };
 
 const XAI_STANDARD_PROFILE: ModelProfile = {
   family: 'xai-grok-standard',
-  preferredFormat: 'markdown',
-  stripCoTLanguage: false,
   wrapUserMessage: (msg) => `# Request\n${msg}`,
   systemSuffix: '',
 };
