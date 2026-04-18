@@ -45,6 +45,7 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - **src/paths.ts** centralizes all file paths using XDG Base Directory Specification
 - CommonJS (no `"type": "module"` in package.json) for chalk v4 compatibility
 - TypeScript with `module: "Node16"` and `.js` extensions in imports
+- Agent system prompt includes a context-gathering protocol (follow threads, search memory, flag inferred numbers, ask when uncertain). See the `## Context Gathering` section in `BASE_SYSTEM_PROMPT` (src/agent.ts).
 
 ## File Locations (XDG Base Directory)
 
