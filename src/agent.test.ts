@@ -9,6 +9,7 @@ import {
 import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
 import { printWarning, printInfo } from './output.js';
+import { getModelProfile } from './providers/index.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
@@ -499,6 +500,39 @@ describe('Agent', () => {
     expect(userMsg.content).toMatch(
       /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] Hello$/,
     );
+  });
+
+  it('wraps the user message via the resolved model profile before pushing to history', async () => {
+    vi.mocked(getModelProfile).mockReturnValueOnce({
+      family: 'custom',
+      wrapUserMessage: (m: string) => `<wrap>${m}</wrap>`,
+      systemSuffix: '',
+    });
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'ok' }] },
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    });
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('hello');
+    const call = mockGenerateText.mock.calls[0][0];
+    const userMsg = call.messages.find((m: any) => m.role === 'user');
+    expect(userMsg.content).toContain('<wrap>hello</wrap>');
+  });
+
+  it('appends the model profile systemSuffix to the system prompt', async () => {
+    vi.mocked(getModelProfile).mockReturnValueOnce({
+      family: 'custom',
+      wrapUserMessage: (m: string) => m,
+      systemSuffix: 'CUSTOM_MODEL_SUFFIX_TOKEN',
+    });
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'ok' }] },
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    });
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('hello');
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('CUSTOM_MODEL_SUFFIX_TOKEN');
   });
 
   it('appends response messages to history', async () => {

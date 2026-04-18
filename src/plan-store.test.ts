@@ -85,6 +85,26 @@ describe('PlanStore', () => {
     expect(store.unresolvedCount()).toBe(0);
   });
 
+  it('cancelAllUnresolved cancels non-terminal steps and leaves terminal ones alone', () => {
+    store.create(['a', 'b', 'c', 'd', 'e']);
+    store.update(1, 'done', 'finished');
+    store.update(2, 'error', 'blocked');
+    store.update(3, 'in_progress');
+    // 4 stays pending; 5 already cancelled with its own note
+    store.update(5, 'cancelled', 'user pivoted');
+
+    const cancelled = store.cancelAllUnresolved('retries exhausted');
+    expect(cancelled).toBe(2);
+
+    const steps = store.view();
+    expect(steps[0]).toMatchObject({ status: 'done', note: 'finished' });
+    expect(steps[1]).toMatchObject({ status: 'error', note: 'blocked' });
+    expect(steps[2]).toMatchObject({ status: 'cancelled', note: 'retries exhausted' });
+    expect(steps[3]).toMatchObject({ status: 'cancelled', note: 'retries exhausted' });
+    expect(steps[4]).toMatchObject({ status: 'cancelled', note: 'user pivoted' });
+    expect(store.isComplete()).toBe(true);
+  });
+
   it('render produces a readable status list', () => {
     store.create(['first', 'second']);
     store.update(1, 'done');
