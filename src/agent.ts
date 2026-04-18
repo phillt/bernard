@@ -46,7 +46,6 @@ import {
 import {
   formatCurrentDateTime,
   timestampUserMessage,
-  timestampUserContent,
 } from './tools/datetime.js';
 import { ToolProfileStore, buildToolProfilesPrompt } from './tool-profiles.js';
 import { augmentTools } from './tools/augment.js';
@@ -508,7 +507,9 @@ export class Agent {
     clearPinnedRegion('plan');
 
     const profile = getModelProfile(this.config.provider, this.config.model);
-    const wrappedInput = profile.wrapUserMessage(userInput);
+    // Wrap is outermost so `<user_request>` / `# Request` opens the text at position 0;
+    // the timestamp prefix lives inside the wrapper.
+    const wrappedInput = profile.wrapUserMessage(timestampUserMessage(userInput));
 
     if (images && images.length > 0) {
       const contentParts: UserContent = [
@@ -519,9 +520,9 @@ export class Agent {
           mimeType: img.mimeType,
         })),
       ];
-      this.history.push({ role: 'user', content: timestampUserContent(contentParts) });
+      this.history.push({ role: 'user', content: contentParts });
     } else {
-      this.history.push({ role: 'user', content: timestampUserMessage(wrappedInput) });
+      this.history.push({ role: 'user', content: wrappedInput });
     }
 
     this.abortController = new AbortController();
@@ -530,10 +531,8 @@ export class Agent {
 
     try {
       // Check if context compression is needed
-      const timestampOverhead = 30; // [YYYY-MM-DDTHH:MM:SS+HH:MM] prefix
       const imageTokens = images ? images.length * IMAGE_TOKEN_ESTIMATE : 0;
-      const newMessageEstimate =
-        Math.ceil((userInput.length + timestampOverhead) / 4) + imageTokens;
+      const newMessageEstimate = Math.ceil(wrappedInput.length / 4) + imageTokens;
       if (
         shouldCompress(
           this.lastPromptTokens,

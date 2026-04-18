@@ -502,7 +502,7 @@ describe('Agent', () => {
     );
   });
 
-  it('wraps the user message via the resolved model profile before pushing to history', async () => {
+  it('wraps the user message via the resolved model profile with the timestamp inside the wrapper', async () => {
     vi.mocked(getModelProfile).mockReturnValueOnce({
       family: 'custom',
       wrapUserMessage: (m: string) => `<wrap>${m}</wrap>`,
@@ -516,7 +516,10 @@ describe('Agent', () => {
     await agent.processInput('hello');
     const call = mockGenerateText.mock.calls[0][0];
     const userMsg = call.messages.find((m: any) => m.role === 'user');
-    expect(userMsg.content).toContain('<wrap>hello</wrap>');
+    // Wrapper is the outermost structure; the timestamp lives inside.
+    expect(userMsg.content).toMatch(
+      /^<wrap>\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] hello<\/wrap>$/,
+    );
   });
 
   it('appends the model profile systemSuffix to the system prompt', async () => {

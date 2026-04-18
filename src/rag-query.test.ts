@@ -95,6 +95,18 @@ describe('extractRecentUserTexts', () => {
     expect(extractRecentUserTexts(history, 2)).toEqual(['first question', 'second question']);
   });
 
+  it('strips model-profile wrappers (Claude XML and OpenAI heading) along with timestamps', () => {
+    const history: CoreMessage[] = [
+      {
+        role: 'user',
+        content: '<user_request>\n[2025-03-27T14:30:00-04:00] claude style\n</user_request>',
+      },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: '# Request\n[2025-03-27T14:31:00-04:00] openai style' },
+    ];
+    expect(extractRecentUserTexts(history, 2)).toEqual(['claude style', 'openai style']);
+  });
+
   it('returns in chronological order (oldest first)', () => {
     const history: CoreMessage[] = [
       { role: 'user', content: 'oldest' },

@@ -18,6 +18,19 @@ const BOUNDARY_PREFIXES = [
 ];
 
 /**
+ * Strip model-profile wrappers applied by `wrapUserMessage` (XML tag for Claude,
+ * `# Request` heading for standard OpenAI/xAI). Passthrough profiles are no-ops.
+ * Kept in sync with `src/providers/profiles.ts` by shape, not import, to avoid
+ * cycling the providers module into RAG.
+ */
+function stripProfileWrapper(text: string): string {
+  const xmlMatch = text.match(/^<user_request>\n([\s\S]*)\n<\/user_request>$/);
+  if (xmlMatch) return xmlMatch[1];
+  if (text.startsWith('# Request\n')) return text.slice('# Request\n'.length);
+  return text;
+}
+
+/**
  * Walk history backward and collect up to `maxMessages` user-role text strings.
  * Skips system-injected boundary messages (context summaries, session markers).
  * Returns texts in chronological order (oldest first).
@@ -38,7 +51,7 @@ export function extractRecentUserTexts(
     // Skip system-injected boundary messages
     if (BOUNDARY_PREFIXES.some((prefix) => text.startsWith(prefix))) continue;
 
-    texts.push(stripTimestamp(text));
+    texts.push(stripTimestamp(stripProfileWrapper(text)));
   }
 
   // Reverse to chronological order (oldest first)
