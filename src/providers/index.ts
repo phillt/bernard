@@ -3,6 +3,9 @@ import { openai } from '@ai-sdk/openai';
 import { xai } from '@ai-sdk/xai';
 import type { LanguageModel } from 'ai';
 
+export { getModelProfile } from './profiles.js';
+export type { ModelProfile, ModelFormat } from './profiles.js';
+
 /**
  * Return an AI SDK `LanguageModel` instance for the given provider and model name.
  * @param provider - One of `"anthropic"`, `"openai"`, or `"xai"`.
