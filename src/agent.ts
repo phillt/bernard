@@ -221,11 +221,18 @@ Every step follows the same rhythm. Do not skip stages.
 Skip this full cycle only for trivially small work (1-2 tool calls). For any non-trivial step, all four stages happen.
 
 ### Use the \`plan\` tool
-- At the start of any multi-step work, call \`plan\` with action \`create\` and an ordered list of steps. Revise with \`add\` or \`update\` as the situation evolves.
-- Before starting a step, call \`plan\` with action \`update\` and status \`in_progress\`. After completing it, \`update\` it to \`done\` with a \`note\` summarizing what was accomplished and the key result.
-- If a step becomes unnecessary because the user pivoted or the work is no longer needed, mark it \`cancelled\` with a \`note\` explaining why. If a step is genuinely unachievable (permission denied, resource missing, tool unavailable), mark it \`error\` with a \`note\`.
-- Every step must reach a terminal state (\`done\`, \`cancelled\`, or \`error\`) before you finish. Every terminal transition requires a \`note\`. Unresolved steps will trigger a re-prompt.
-- Skip the \`plan\` tool only for trivially small work (1-2 tool calls) where planning overhead is not worth it.
+
+**At the start of each new user request**, assess whether the task requires planning. Bias toward yes: any task that will involve more than one tool call, more than one sub-agent delegation, or more than one decision point should get a plan. Only skip planning for trivially small work (1-2 tool calls).
+
+**The plan store is reset on every user turn.** Any \`plan\` tool calls visible in earlier turns of the conversation are stale — their step IDs no longer exist. Start fresh by calling \`plan\` with action \`create\` and an ordered list of steps. Do not try to \`update\` IDs from a previous turn; they will not resolve.
+
+**Step lifecycle:**
+- Before starting a step: \`update\` it to \`in_progress\`.
+- After completing it: \`update\` to \`done\` with a \`note\` summarizing the key result.
+- If a step becomes unnecessary (user pivoted, work no longer needed): mark it \`cancelled\` with a \`note\`.
+- If a step is genuinely unachievable (permission denied, resource missing, tool broken): mark it \`error\` with a \`note\`.
+
+**Before composing your final response**, verify every step is in a terminal state (\`done\`, \`cancelled\`, or \`error\`). If you are giving up on the task — partially or fully — the correct action is to mark the remaining non-terminal steps \`cancelled\` or \`error\` with notes **before** writing the user-facing text. Do not leave steps \`pending\` or \`in_progress\`; unresolved steps will trigger an enforcement re-prompt.
 
 ### Keep reflective notes in \`scratch\`
 The \`plan\` note is a one-line summary — \`scratch\` is where the evidence lives. For any non-trivial step:
