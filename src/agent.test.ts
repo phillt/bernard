@@ -188,6 +188,32 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('auto-retrieved hints');
   });
 
+  it('includes the context-gathering protocol', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).toContain('## Context Gathering');
+    expect(prompt).toContain('Follow the thread');
+    expect(prompt).toContain('Flag implicit numbers');
+    expect(prompt).toContain('Ask when uncertainty remains');
+    expect(prompt).toContain('Show the work when it matters');
+  });
+
+  it('context-gathering protocol cites the memory tool and Recalled Context explicitly', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).toContain('`memory` tool');
+    expect(prompt).toContain('Recalled Context');
+    // Guards against the old "memory/RAG lookups" wording that implied a non-existent RAG tool.
+    expect(prompt).not.toMatch(/memory\/RAG lookups/);
+  });
+
+  it('context-gathering protocol includes worked examples with bundled tools', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).toContain('### Examples');
+    expect(prompt).toContain('PR comment triage');
+    expect(prompt).toContain('Time-windowed count');
+    expect(prompt).toContain('gh pr view');
+    expect(prompt).toContain('git log');
+  });
+
   it('separates Persistent Memory and Recalled Context in instruction hierarchy', () => {
     const prompt = buildSystemPrompt(makeConfig(), store);
     expect(prompt).toContain('3. Persistent Memory');
