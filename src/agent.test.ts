@@ -9,6 +9,7 @@ import {
 import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
 import { printWarning, printInfo } from './output.js';
+import { getModelProfile } from './providers/index.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
@@ -24,6 +25,11 @@ const fs = await import('node:fs');
 
 vi.mock('./providers/index.js', () => ({
   getModel: vi.fn(() => ({ modelId: 'mock' })),
+  getModelProfile: vi.fn(() => ({
+    family: 'test',
+    wrapUserMessage: (m: string) => m,
+    systemSuffix: '',
+  })),
 }));
 
 vi.mock('./output.js', () => ({
@@ -494,6 +500,42 @@ describe('Agent', () => {
     expect(userMsg.content).toMatch(
       /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] Hello$/,
     );
+  });
+
+  it('wraps the user message via the resolved model profile with the timestamp inside the wrapper', async () => {
+    vi.mocked(getModelProfile).mockReturnValueOnce({
+      family: 'custom',
+      wrapUserMessage: (m: string) => `<wrap>${m}</wrap>`,
+      systemSuffix: '',
+    });
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'ok' }] },
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    });
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('hello');
+    const call = mockGenerateText.mock.calls[0][0];
+    const userMsg = call.messages.find((m: any) => m.role === 'user');
+    // Wrapper is the outermost structure; the timestamp lives inside.
+    expect(userMsg.content).toMatch(
+      /^<wrap>\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] hello<\/wrap>$/,
+    );
+  });
+
+  it('appends the model profile systemSuffix to the system prompt', async () => {
+    vi.mocked(getModelProfile).mockReturnValueOnce({
+      family: 'custom',
+      wrapUserMessage: (m: string) => m,
+      systemSuffix: 'CUSTOM_MODEL_SUFFIX_TOKEN',
+    });
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'ok' }] },
+      usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+    });
+    const agent = new Agent(makeConfig(), toolOptions, store);
+    await agent.processInput('hello');
+    const call = mockGenerateText.mock.calls[0][0];
+    expect(call.system).toContain('CUSTOM_MODEL_SUFFIX_TOKEN');
   });
 
   it('appends response messages to history', async () => {
@@ -1432,7 +1474,7 @@ describe('Agent', () => {
         expect(mockGenerateText).toHaveBeenCalledTimes(1);
       });
 
-      it('exhausts retries and emits incomplete-after-retries info when plan never resolves', async () => {
+      it('exhausts retries, auto-cancels remaining steps, and emits info when plan never resolves', async () => {
         const agent = new Agent(makeConfig({ reactMode: true }), toolOptions, store);
         const planStore = (agent as unknown as { planStore: any }).planStore;
         mockGenerateText.mockImplementation(async () => {
@@ -1442,8 +1484,11 @@ describe('Agent', () => {
         await agent.processInput('try');
         expect(mockGenerateText).toHaveBeenCalledTimes(3);
         expect(vi.mocked(printInfo)).toHaveBeenCalledWith(
-          expect.stringContaining('Plan still incomplete'),
+          expect.stringContaining('Auto-cancelled'),
         );
+        const steps = planStore.view();
+        expect(steps.every((s: { status: string }) => s.status === 'cancelled')).toBe(true);
+        expect(steps[0].note).toContain('enforcement retries exhausted');
       });
 
       it('does not re-prompt when reactMode is false even with unresolved steps', async () => {
