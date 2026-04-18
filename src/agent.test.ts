@@ -24,6 +24,13 @@ const fs = await import('node:fs');
 
 vi.mock('./providers/index.js', () => ({
   getModel: vi.fn(() => ({ modelId: 'mock' })),
+  getModelProfile: vi.fn(() => ({
+    family: 'test',
+    preferredFormat: 'minimal',
+    stripCoTLanguage: false,
+    wrapUserMessage: (m: string) => m,
+    systemSuffix: '',
+  })),
 }));
 
 vi.mock('./output.js', () => ({
@@ -1432,7 +1439,7 @@ describe('Agent', () => {
         expect(mockGenerateText).toHaveBeenCalledTimes(1);
       });
 
-      it('exhausts retries and emits incomplete-after-retries info when plan never resolves', async () => {
+      it('exhausts retries, auto-cancels remaining steps, and emits info when plan never resolves', async () => {
         const agent = new Agent(makeConfig({ reactMode: true }), toolOptions, store);
         const planStore = (agent as unknown as { planStore: any }).planStore;
         mockGenerateText.mockImplementation(async () => {
@@ -1442,8 +1449,11 @@ describe('Agent', () => {
         await agent.processInput('try');
         expect(mockGenerateText).toHaveBeenCalledTimes(3);
         expect(vi.mocked(printInfo)).toHaveBeenCalledWith(
-          expect.stringContaining('Plan still incomplete'),
+          expect.stringContaining('Auto-cancelled'),
         );
+        const steps = planStore.view();
+        expect(steps.every((s: { status: string }) => s.status === 'cancelled')).toBe(true);
+        expect(steps[0].note).toContain('enforcement retries exhausted');
       });
 
       it('does not re-prompt when reactMode is false even with unresolved steps', async () => {

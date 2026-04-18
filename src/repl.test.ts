@@ -129,6 +129,13 @@ vi.mock('./output.js', () => ({
 
 vi.mock('./providers/index.js', () => ({
   getModel: vi.fn(() => ({ modelId: 'mock' })),
+  getModelProfile: vi.fn(() => ({
+    family: 'test',
+    preferredFormat: 'minimal',
+    stripCoTLanguage: false,
+    wrapUserMessage: (m: string) => m,
+    systemSuffix: '',
+  })),
 }));
 
 vi.mock('./config.js', () => ({
