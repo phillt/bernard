@@ -154,12 +154,15 @@ vi.mock('./providers/index.js', () => ({
   })),
 }));
 
+const mockSavePreferences = vi.fn();
+const mockLoadPreferences = vi.fn(() => ({}));
+
 vi.mock('./config.js', () => ({
   PROVIDER_MODELS: { anthropic: ['claude-sonnet-4-5-20250929'] },
   getAvailableProviders: vi.fn(() => ['anthropic']),
   getDefaultModel: vi.fn(() => 'claude-sonnet-4-5-20250929'),
-  savePreferences: vi.fn(),
-  loadPreferences: vi.fn(() => ({})),
+  savePreferences: (...args: any[]) => mockSavePreferences(...args),
+  loadPreferences: (...args: any[]) => mockLoadPreferences(...args),
   OPTIONS_REGISTRY: {},
   saveOption: vi.fn(),
   normalizeThreshold: vi.fn((v: number) => (v > 1 ? v / 100 : Math.max(0, Math.min(1, v)))),
@@ -265,6 +268,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     ragEnabled: false,
     theme: 'bernard',
     criticMode: false,
+    reactMode: false,
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
     anthropicApiKey: 'sk-test',
@@ -1161,6 +1165,145 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
     rlEmitter.emit('close');
     await replPromise.catch(() => {});
   });
+});
+
+describe('REPL /critic and /react toggle flows', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rlEmitter = makeRl();
+    vi.spyOn(console, 'clear').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const cases = [
+    {
+      cmd: '/critic',
+      key: 'criticMode' as const,
+      onFragment: '[CRITIC:ON]',
+      offFragment: '[CRITIC:OFF]',
+    },
+    {
+      cmd: '/react',
+      key: 'reactMode' as const,
+      onFragment: '[REACT:ON]',
+      offFragment: '[REACT:OFF]',
+    },
+  ];
+
+  it.each(cases)(
+    '$cmd OFF → ON updates config and persists the new value',
+    async ({ cmd, key, onFragment }) => {
+      const { startRepl } = await import('./repl.js');
+      const config = makeConfig({ [key]: false } as Partial<BernardConfig>);
+      const replPromise = startRepl(config);
+
+      await vi.waitFor(() => {
+        expect(rlEmitter.prompt).toHaveBeenCalled();
+      });
+      mockSavePreferences.mockClear();
+      mockPrintInfo.mockClear();
+
+      typeLine(cmd);
+
+      await vi.waitFor(() => {
+        expect(rlEmitter.question).toHaveBeenCalled();
+      });
+      const cb = getMenuQuestionCallback();
+      cb('1');
+
+      await vi.waitFor(() => {
+        expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining(onFragment));
+      });
+
+      expect(config[key]).toBe(true);
+      expect(mockSavePreferences).toHaveBeenCalledWith(
+        expect.objectContaining({
+          [key]: true,
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-5-20250929',
+        }),
+      );
+
+      rlEmitter.emit('close');
+      await replPromise.catch(() => {});
+    },
+  );
+
+  it.each(cases)(
+    '$cmd ON → OFF updates config and persists the new value',
+    async ({ cmd, key, offFragment }) => {
+      const { startRepl } = await import('./repl.js');
+      const config = makeConfig({ [key]: true } as Partial<BernardConfig>);
+      const replPromise = startRepl(config);
+
+      await vi.waitFor(() => {
+        expect(rlEmitter.prompt).toHaveBeenCalled();
+      });
+      mockSavePreferences.mockClear();
+      mockPrintInfo.mockClear();
+
+      typeLine(cmd);
+
+      await vi.waitFor(() => {
+        expect(rlEmitter.question).toHaveBeenCalled();
+      });
+      const cb = getMenuQuestionCallback();
+      cb('2');
+
+      await vi.waitFor(() => {
+        expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining(offFragment));
+      });
+
+      expect(config[key]).toBe(false);
+      expect(mockSavePreferences).toHaveBeenCalledWith(
+        expect.objectContaining({ [key]: false, provider: 'anthropic' }),
+      );
+
+      rlEmitter.emit('close');
+      await replPromise.catch(() => {});
+    },
+  );
+
+  it.each(cases)(
+    '$cmd cancel leaves config unchanged and does not persist',
+    async ({ cmd, key, onFragment, offFragment }) => {
+      const { startRepl } = await import('./repl.js');
+      const config = makeConfig({ [key]: false } as Partial<BernardConfig>);
+      const replPromise = startRepl(config);
+
+      await vi.waitFor(() => {
+        expect(rlEmitter.prompt).toHaveBeenCalled();
+      });
+      mockSavePreferences.mockClear();
+      mockPrintInfo.mockClear();
+
+      typeLine(cmd);
+
+      await vi.waitFor(() => {
+        expect(rlEmitter.question).toHaveBeenCalled();
+      });
+      const cb = getMenuQuestionCallback();
+      cb('');
+
+      await vi.waitFor(() => {
+        expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining('Cancelled'));
+      });
+
+      expect(config[key]).toBe(false);
+      expect(mockSavePreferences).not.toHaveBeenCalled();
+      expect(mockPrintInfo).not.toHaveBeenCalledWith(expect.stringContaining(onFragment));
+      expect(mockPrintInfo).not.toHaveBeenCalledWith(expect.stringContaining(offFragment));
+
+      rlEmitter.emit('close');
+      await replPromise.catch(() => {});
+    },
+  );
 });
 
 describe('REPL /image command', () => {
