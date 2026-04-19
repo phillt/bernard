@@ -59,8 +59,19 @@ export class CronNotesStore {
         jobId: parsed.jobId ?? safeId,
         entries: Array.isArray(parsed.entries) ? parsed.entries : [],
       };
-    } catch {
-      return { jobId: safeId, entries: [] };
+    } catch (error: unknown) {
+      if (error instanceof SyntaxError) {
+        return { jobId: safeId, entries: [] };
+      }
+      if (
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error &&
+        (error as { code: string }).code === 'ENOENT'
+      ) {
+        return { jobId: safeId, entries: [] };
+      }
+      throw error;
     }
   }
 

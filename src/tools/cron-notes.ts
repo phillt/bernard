@@ -32,7 +32,7 @@ export function createCronNotesTools() {
   return {
     cron_notes_read: tool({
       description:
-        'Read all persistent notes for a cron job. Returns structured output of every note entry (timestamp, optional runId, text). Notes persist across daemon restarts and record actions prior runs took.',
+        'Read all persistent notes for a cron job. Returns a human-readable formatted list of note entries including timestamp, optional runId, and text. Notes persist across daemon restarts and record actions prior runs took.',
       parameters: z.object({
         job_id: z.string().describe('Job ID to read notes for'),
       }),
@@ -54,7 +54,11 @@ export function createCronNotesTools() {
         'Append a persistent note to a cron job. Use short factual entries recording significant actions (e.g. "Sent email to user@example.com", "Created issue #123"). Notes persist across daemon restarts.',
       parameters: z.object({
         job_id: z.string().describe('Job ID to attach the note to'),
-        text: z.string().min(1).describe('Short factual description of the action'),
+        text: z
+          .string()
+          .min(1)
+          .max(MAX_NOTE_LENGTH)
+          .describe('Short factual description of the action'),
       }),
       execute: async ({ job_id, text }): Promise<string> => {
         debugLog('cron_notes_write:execute', { job_id, text });
