@@ -36,6 +36,7 @@ import {
   resolveReferences,
   renderResolvedBlock,
   shouldSkipResolver,
+  deriveKeyFromReference,
   type ResolvedEntry,
 } from './reference-resolver.js';
 import { MemoryStore } from './memory.js';
@@ -67,9 +68,27 @@ function makeStore(contents: Record<string, string>): MemoryStore {
   return store;
 }
 
+describe('deriveKeyFromReference', () => {
+  it('strips leading possessive', () => {
+    expect(deriveKeyFromReference('my brother')).toBe('brother');
+  });
+
+  it('strips leading demonstrative', () => {
+    expect(deriveKeyFromReference('the car')).toBe('car');
+  });
+
+  it('joins multi-word names with dashes', () => {
+    expect(deriveKeyFromReference('my brother Tom')).toBe('brother-tom');
+  });
+
+  it('sanitizes special characters', () => {
+    expect(deriveKeyFromReference("my brother's car")).toBe('brothers-car');
+  });
+});
+
 describe('shouldSkipResolver', () => {
-  it('skips when memory is empty', () => {
-    expect(shouldSkipResolver('order my daughter sandwich', [])).toBe(true);
+  it('runs even when memory is empty if prompt has reference tokens (resolver may return unknown)', () => {
+    expect(shouldSkipResolver('order my daughter sandwich', [])).toBe(false);
   });
 
   it('skips when prompt has no reference tokens', () => {
@@ -107,11 +126,14 @@ describe('resolveReferences', () => {
     generateTextMock.mockReset();
   });
 
-  it('returns noop when memory is empty', async () => {
+  it('calls the resolver when memory is empty but prompt has references (may return unknown)', async () => {
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({ status: 'unknown', reference: 'my brother' }),
+    });
     const store = makeStore({});
-    const result = await resolveReferences('order my daughter sandwich', store, makeConfig());
-    expect(result).toEqual({ status: 'noop' });
-    expect(generateTextMock).not.toHaveBeenCalled();
+    const result = await resolveReferences('did my brother email me', store, makeConfig());
+    expect(result.status).toBe('unknown');
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
   });
 
   it('returns noop when prompt has no reference patterns', async () => {
@@ -119,6 +141,31 @@ describe('resolveReferences', () => {
     const result = await resolveReferences('calculate 2+2', store, makeConfig());
     expect(result).toEqual({ status: 'noop' });
     expect(generateTextMock).not.toHaveBeenCalled();
+  });
+
+  it('returns unknown when named reference has no memory match', async () => {
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({ status: 'unknown', reference: 'my brother' }),
+    });
+    const store = makeStore({ 'daughter-allyson': 'Allyson, 8' });
+    const result = await resolveReferences(
+      'can you see if my brother emailed me',
+      store,
+      makeConfig(),
+    );
+    expect(result.status).toBe('unknown');
+    if (result.status === 'unknown') {
+      expect(result.reference).toBe('my brother');
+    }
+  });
+
+  it('rejects unknown with empty reference', async () => {
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({ status: 'unknown', reference: '' }),
+    });
+    const store = makeStore({ 'x': 'y' });
+    const result = await resolveReferences('call my mother', store, makeConfig());
+    expect(result).toEqual({ status: 'noop' });
   });
 
   it('returns resolved entries on unambiguous case', async () => {

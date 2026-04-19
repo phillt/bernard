@@ -18,6 +18,7 @@ import { MemoryStore, loadRewriterHints, saveRewriterHint } from './memory.js';
 import {
   resolveReferences,
   renderResolvedBlock,
+  deriveKeyFromReference,
   type ResolvedEntry,
   type Candidate,
 } from './reference-resolver.js';
@@ -397,6 +398,43 @@ export async function startRepl(
           sourceKey: chosen.sourceKey,
         },
         remember: true,
+      };
+    } finally {
+      clearMenuSignal();
+    }
+  }
+
+  type UnknownReferenceOutcome = { entry: ResolvedEntry | null };
+
+  async function promptUnknownReference(
+    reference: string,
+    store: MemoryStore,
+  ): Promise<UnknownReferenceOutcome> {
+    printInfo(
+      `\n  I don't have memory for "${reference}". Tell me about them and I'll remember.\n  (Enter or Esc skips — the agent will run without this resolved.)`,
+    );
+    const signal = createMenuSignal();
+    try {
+      const result = await promptValue(
+        rl,
+        { label: `"${reference}" is` },
+        signal,
+      );
+      if (result.cancelled) return { entry: null };
+      const baseKey = deriveKeyFromReference(reference) || 'entity';
+      let key = baseKey;
+      let suffix = 2;
+      while (store.readMemory(key) !== null) {
+        key = `${baseKey}-${suffix++}`;
+      }
+      store.writeMemory(key, result.raw);
+      printInfo(`  Saved as memory: ${key}`);
+      return {
+        entry: {
+          phrase: reference,
+          resolvedTo: result.raw,
+          sourceKey: key,
+        },
       };
     } finally {
       clearMenuSignal();
@@ -1898,6 +1936,12 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             );
           }
         }
+      } else if (resolveResult.status === 'unknown') {
+        const outcome = await promptUnknownReference(
+          resolveResult.reference,
+          memoryStore,
+        );
+        if (outcome.entry) resolvedEntries = [outcome.entry];
       }
 
       if (resolvedEntries.length > 0) {
