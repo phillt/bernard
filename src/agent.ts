@@ -48,6 +48,7 @@ import { ToolProfileStore, buildToolProfilesPrompt } from './tool-profiles.js';
 import { augmentTools } from './tools/augment.js';
 import { type ImageAttachment, IMAGE_TOKEN_ESTIMATE } from './image.js';
 import { PlanStore } from './plan-store.js';
+import { renderResolvedBlock, type ResolvedEntry } from './reference-resolver.js';
 import { createPlanTool } from './tools/plan.js';
 import { createThinkTool } from './tools/think.js';
 import { createEvaluateTool } from './tools/evaluate.js';
@@ -320,6 +321,7 @@ export function buildSystemPrompt(
   routineSummaries?: RoutineSummary[],
   specialistSummaries?: SpecialistSummary[],
   specialistMatches?: SpecialistMatch[],
+  resolvedReferences?: ResolvedEntry[],
 ): string {
   let prompt = BASE_SYSTEM_PROMPT + `\n\nCurrent date and time: ${formatCurrentDateTime()}.`;
   prompt += `\nYou are running as provider: ${config.provider}, model: ${config.model}. The user can switch with /provider and /model.`;
@@ -333,6 +335,10 @@ export function buildSystemPrompt(
   }
 
   prompt += buildMemoryContext({ memoryStore, ragResults, includeScratch: true });
+
+  if (resolvedReferences && resolvedReferences.length > 0) {
+    prompt += '\n\n' + renderResolvedBlock(resolvedReferences);
+  }
 
   prompt += `\n\n## MCP Servers
 
@@ -523,7 +529,11 @@ export class Agent {
    * @param userInput - The raw text from the user's REPL input
    * @throws Error wrapping the underlying API error if generation fails for non-abort, non-overflow reasons
    */
-  async processInput(userInput: string, images?: ImageAttachment[]): Promise<void> {
+  async processInput(
+    userInput: string,
+    images?: ImageAttachment[],
+    resolvedReferences?: ResolvedEntry[],
+  ): Promise<void> {
     this.lastStepLimitHit = false;
     this.planStore.clear();
     clearPinnedRegion('plan');
@@ -609,6 +619,7 @@ export class Agent {
         routineSummaries,
         specialistSummaries,
         specialistMatches,
+        resolvedReferences,
       );
       if (this.alertContext) {
         systemPrompt += '\n\n' + this.alertContext;

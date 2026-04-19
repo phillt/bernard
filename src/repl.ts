@@ -14,7 +14,15 @@ import {
   CRON_JOBS_FILE,
 } from './paths.js';
 import { Agent } from './agent.js';
-import { MemoryStore } from './memory.js';
+import { MemoryStore, loadRewriterHints, saveRewriterHint } from './memory.js';
+import {
+  resolveReferences,
+  renderResolvedBlock,
+  deriveKeyFromReference,
+  shouldSkipResolver,
+  type ResolvedEntry,
+  type Candidate,
+} from './reference-resolver.js';
 import { RAGStore, type RAGSearchResult } from './rag.js';
 import { MCPManager } from './mcp.js';
 import {
@@ -329,6 +337,153 @@ export async function startRepl(
       clearMenuSignal();
     }
     console.log();
+  }
+
+  type DisambiguationOutcome =
+    | { cancelled: true }
+    | { cancelled: false; passAsIs: true }
+    | { cancelled: false; passAsIs: false; entry: ResolvedEntry; remember: boolean };
+
+  async function promptDisambiguation(
+    reference: string,
+    candidates: Candidate[],
+  ): Promise<DisambiguationOutcome> {
+    const entries: MenuEntry[] = [];
+    for (const c of candidates) {
+      entries.push({ label: c.label, description: c.preview });
+    }
+    entries.push({ label: 'Pass as-is (do not resolve)' });
+    for (const c of candidates) {
+      entries.push({ label: `Remember: "${reference}" → ${c.label}` });
+    }
+
+    printInfo(`\n  Ambiguous reference: "${reference}"\n`);
+    printMenuList(entries);
+    console.log();
+
+    const signal = createMenuSignal();
+    try {
+      const result = await selectFromMenu(rl, entries, { promptLabel: 'Resolve to' }, signal);
+      if (result.cancelled) return { cancelled: true };
+
+      const idx = result.index;
+      if (idx < candidates.length) {
+        const chosen = candidates[idx];
+        return {
+          cancelled: false,
+          passAsIs: false,
+          entry: {
+            phrase: reference,
+            resolvedTo: chosen.label,
+            sourceKey: chosen.sourceKey,
+          },
+          remember: false,
+        };
+      }
+      if (idx === candidates.length) {
+        return { cancelled: false, passAsIs: true };
+      }
+      const rememberIdx = idx - candidates.length - 1;
+      const chosen = candidates[rememberIdx];
+      return {
+        cancelled: false,
+        passAsIs: false,
+        entry: {
+          phrase: reference,
+          resolvedTo: chosen.label,
+          sourceKey: chosen.sourceKey,
+        },
+        remember: true,
+      };
+    } finally {
+      clearMenuSignal();
+    }
+  }
+
+  type UnknownReferenceOutcome = { entry: ResolvedEntry | null };
+
+  async function promptUnknownReference(
+    reference: string,
+    store: MemoryStore,
+  ): Promise<UnknownReferenceOutcome> {
+    printInfo(
+      `\n  I don't have memory for "${reference}". Tell me about them and I'll remember.\n  (Enter or Esc skips — the agent will run without this resolved.)`,
+    );
+    console.log();
+    const signal = createMenuSignal();
+    try {
+      const result = await promptValue(rl, { label: `"${reference}" is` }, signal);
+      if (result.cancelled) return { entry: null };
+      if (!result.raw.trim()) return { entry: null };
+      const baseKey = deriveKeyFromReference(reference) || 'entity';
+      const existing = new Set(store.listMemory());
+      let key = baseKey;
+      let suffix = 2;
+      while (existing.has(key)) {
+        key = `${baseKey}-${suffix++}`;
+      }
+      store.writeMemory(key, result.raw);
+      printInfo(`  Saved as memory: ${key}`);
+      return {
+        entry: {
+          phrase: reference,
+          resolvedTo: result.raw,
+          sourceKey: key,
+        },
+      };
+    } finally {
+      clearMenuSignal();
+    }
+  }
+
+  async function runReferenceResolver(trimmed: string): Promise<ResolvedEntry[]> {
+    if (shouldSkipResolver(trimmed)) return [];
+    try {
+      const hints = loadRewriterHints(memoryStore);
+      const resolveSignal = createMenuSignal();
+      let resolveResult;
+      startSpinner();
+      try {
+        resolveResult = await resolveReferences(trimmed, memoryStore, config, hints, resolveSignal);
+      } finally {
+        stopSpinner();
+        clearMenuSignal();
+      }
+
+      let entries: ResolvedEntry[] = [];
+      if (resolveResult.status === 'resolved') {
+        entries = resolveResult.entries;
+      } else if (resolveResult.status === 'ambiguous') {
+        const outcome = await promptDisambiguation(
+          resolveResult.reference,
+          resolveResult.candidates,
+        );
+        // Esc/Enter is treated as "pass as-is" — the agent still runs with the original
+        // prompt, consistent with the unknown-reference skip behavior.
+        if (!outcome.cancelled && !outcome.passAsIs) {
+          entries = [outcome.entry];
+          if (outcome.remember) {
+            saveRewriterHint(memoryStore, outcome.entry.phrase, outcome.entry.sourceKey);
+            printInfo(`  Remembered: "${outcome.entry.phrase}" → ${outcome.entry.sourceKey}`);
+          }
+        }
+      } else if (resolveResult.status === 'unknown') {
+        const outcome = await promptUnknownReference(resolveResult.reference, memoryStore);
+        if (outcome.entry) entries = [outcome.entry];
+      }
+
+      if (entries.length > 0) {
+        debugLog('repl:resolved-references', {
+          prompt: trimmed,
+          entries,
+          injectedBlock: renderResolvedBlock(entries),
+        });
+      }
+      return entries;
+    } catch (err: unknown) {
+      debugLog('repl:resolve-references', err instanceof Error ? err.message : String(err));
+      return [];
+    }
   }
 
   process.stdin.on('keypress', (_str: string, key: any) => {
@@ -1783,11 +1938,13 @@ Remember: the systemPrompt should read like a persona definition — who this sp
       }
     }
 
+    const resolvedEntries = await runReferenceResolver(trimmed);
+
     processing = true;
     interrupted = false;
     try {
       initSpinner();
-      await agent.processInput(trimmed, inlineImages);
+      await agent.processInput(trimmed, inlineImages, resolvedEntries);
       historyStore.save(agent.getHistory());
     } catch (err: unknown) {
       if (!interrupted) {

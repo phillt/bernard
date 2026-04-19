@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { sanitizeKey, MemoryStore } from './memory.js';
+import { sanitizeKey, MemoryStore, loadRewriterHints, saveRewriterHint } from './memory.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
@@ -111,7 +111,11 @@ describe('MemoryStore', () => {
     });
 
     it('readMemory returns null for missing file', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        const err: any = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      });
       expect(store.readMemory('missing')).toBeNull();
     });
 
@@ -143,5 +147,61 @@ describe('MemoryStore', () => {
       expect(all.get('a')).toBe('content-a');
       expect(all.get('b')).toBe('content-b');
     });
+  });
+});
+
+describe('rewriter hints', () => {
+  let store: MemoryStore;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    store = new MemoryStore();
+  });
+
+  it('loadRewriterHints returns empty map when no hints file exists', () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    expect(loadRewriterHints(store).size).toBe(0);
+  });
+
+  it('loadRewriterHints parses arrow-delimited entries', () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      '# Rewriter Hints\n\n- "my daughter" → daughter-allyson\n- "the car" -> car-tesla\n',
+    );
+    const hints = loadRewriterHints(store);
+    expect(hints.get('my daughter')).toBe('daughter-allyson');
+    expect(hints.get('the car')).toBe('car-tesla');
+  });
+
+  it('loadRewriterHints ignores non-matching lines', () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      '# Rewriter Hints\n\nthis is not a hint\n- "x" → key-x\nrandom text\n',
+    );
+    const hints = loadRewriterHints(store);
+    expect(hints.size).toBe(1);
+    expect(hints.get('x')).toBe('key-x');
+  });
+
+  it('saveRewriterHint writes new mapping preserving existing entries', () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue('# Rewriter Hints\n\n- "existing" → key-existing\n');
+    saveRewriterHint(store, 'my daughter', 'daughter-allyson');
+    expect(fs.writeFileSync).toHaveBeenCalled();
+    const [, written] = vi.mocked(fs.writeFileSync).mock.calls[0];
+    expect(written).toContain('# Rewriter Hints');
+    expect(written).toContain('"existing" → key-existing');
+    expect(written).toContain('"my daughter" → daughter-allyson');
+  });
+
+  it('saveRewriterHint overwrites the same phrase instead of duplicating', () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      '# Rewriter Hints\n\n- "my daughter" → daughter-emma\n',
+    );
+    saveRewriterHint(store, 'my daughter', 'daughter-allyson');
+    const [, written] = vi.mocked(fs.writeFileSync).mock.calls[0];
+    expect(written).toContain('"my daughter" → daughter-allyson');
+    expect(written).not.toContain('daughter-emma');
   });
 });

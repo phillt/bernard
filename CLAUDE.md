@@ -33,6 +33,7 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - **src/critic.ts** — Standalone critic functions: `extractToolCallLog`, `runCritic`, and critic constants/types
 - **src/pac.ts** — Plan-Act-Critic loop wrapper (`runPACLoop`) for sub-agents and specialists
 - **src/overlap-checker.ts** — Token-based Jaccard overlap detection for specialist candidates
+- **src/reference-resolver.ts** — Pre-turn LLM pass that resolves user-named entities (e.g. "my daughter") against persistent memory; returns `resolved`, `ambiguous` (menu), `unknown` (prompts user), or `noop`. Invoked from `src/repl.ts` before `agent.processInput` and rendered as a `## Resolved References` block in the system prompt (agent-visible, user-hidden).
 - **src/providers/** — `getModel()` factory returning AI SDK `LanguageModel`
 - **src/tools/** — Tool registry; each tool is a separate file using `tool()` from `ai`
 
@@ -46,6 +47,13 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - CommonJS (no `"type": "module"` in package.json) for chalk v4 compatibility
 - TypeScript with `module: "Node16"` and `.js` extensions in imports
 - Agent system prompt includes a context-gathering protocol (follow threads, search memory, flag inferred numbers, ask when uncertain). See the `## Context Gathering` section in `BASE_SYSTEM_PROMPT` (src/agent.ts).
+- Reference resolver (pre-turn): expands user-named entities against memory via one `generateText` call; asks via `selectFromMenu` on ambiguity; persists hints to `rewriter-hints.md`. Fails open (returns `noop`) on LLM error. See `src/reference-resolver.ts` and the hook in `src/repl.ts`.
+
+## Evals
+
+Behavioral evals live in `scripts/eval-*.ts`. They run real API calls and are gated behind `BERNARD_EVAL=1` so they never run in CI or day-to-day development. Set an absolute `BERNARD_HOME` so the eval uses an isolated data directory.
+
+- `scripts/eval-context-gathering.ts` — measures whether the context-gathering protocol (`src/agent.ts` `BASE_SYSTEM_PROMPT`) gets the agent to read named memory before answering count-dependent questions. Informs the ship/defer decision on issue #123.
 
 ## File Locations (XDG Base Directory)
 

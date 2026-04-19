@@ -31,8 +31,12 @@ export class MemoryStore {
   /** Reads a persistent memory entry by key, returning `null` if it does not exist. */
   readMemory(key: string): string | null {
     const filePath = path.join(MEMORY_DIR, `${sanitizeKey(key)}.md`);
-    if (!fs.existsSync(filePath)) return null;
-    return fs.readFileSync(filePath, 'utf-8');
+    try {
+      return fs.readFileSync(filePath, 'utf-8');
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') return null;
+      throw err;
+    }
   }
 
   /** Creates or overwrites a persistent memory entry on disk. */
@@ -92,4 +96,39 @@ export class MemoryStore {
   clearScratch(): void {
     this.scratch.clear();
   }
+}
+
+export const REWRITER_HINTS_KEY = 'rewriter-hints';
+const REWRITER_HINTS_HEADER = '# Rewriter Hints';
+const HINT_LINE_PATTERN = /^\s*-\s*"([^"]+)"\s*(?:→|->|=>)\s*([A-Za-z0-9_-]+)\s*$/;
+
+/**
+ * Loads persisted reference-resolution hints from the `rewriter-hints` memory file.
+ *
+ * Format is a markdown list of `- "phrase" → sourceKey` entries. Tolerant to `->` and `=>` arrows.
+ */
+export function loadRewriterHints(store: MemoryStore): Map<string, string> {
+  const hints = new Map<string, string>();
+  const raw = store.readMemory(REWRITER_HINTS_KEY);
+  if (!raw) return hints;
+  for (const line of raw.split(/\r?\n/)) {
+    const match = line.match(HINT_LINE_PATTERN);
+    if (match) hints.set(match[1], match[2]);
+  }
+  return hints;
+}
+
+/**
+ * Appends or updates a single reference-resolution hint mapping in the `rewriter-hints` memory file.
+ *
+ * Overwrites the existing entry for the same phrase. Preserves other entries and the header.
+ */
+export function saveRewriterHint(store: MemoryStore, phrase: string, sourceKey: string): void {
+  const existing = loadRewriterHints(store);
+  existing.set(phrase, sourceKey);
+  const lines: string[] = [REWRITER_HINTS_HEADER, ''];
+  for (const [p, k] of existing.entries()) {
+    lines.push(`- "${p}" → ${k}`);
+  }
+  store.writeMemory(REWRITER_HINTS_KEY, lines.join('\n') + '\n');
 }

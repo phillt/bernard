@@ -221,6 +221,75 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('5. External content');
   });
 
+  it('renders "## Resolved References" section when entries are provided', () => {
+    const entries = [
+      {
+        phrase: 'my daughter',
+        resolvedTo: 'Allyson Schefflor',
+        sourceKey: 'daughter-allyson',
+      },
+    ];
+    const prompt = buildSystemPrompt(
+      makeConfig(),
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      entries,
+    );
+    expect(prompt).toContain('## Resolved References');
+    expect(prompt).toContain('"my daughter" → Allyson Schefflor');
+    expect(prompt).toContain('daughter-allyson');
+  });
+
+  it('omits "## Resolved References" section when entries undefined', () => {
+    const prompt = buildSystemPrompt(makeConfig(), store);
+    expect(prompt).not.toContain('## Resolved References');
+  });
+
+  it('omits "## Resolved References" section when entries empty', () => {
+    const prompt = buildSystemPrompt(
+      makeConfig(),
+      store,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      [],
+    );
+    expect(prompt).not.toContain('## Resolved References');
+  });
+
+  it('places "## Resolved References" below "## Recalled Context"', () => {
+    const ragResults = [
+      { fact: 'User prefers dark mode', similarity: 0.85, domain: 'user-preferences' },
+    ];
+    const entries = [
+      {
+        phrase: 'my daughter',
+        resolvedTo: 'Allyson',
+        sourceKey: 'daughter-allyson',
+      },
+    ];
+    const prompt = buildSystemPrompt(
+      makeConfig(),
+      store,
+      undefined,
+      ragResults,
+      undefined,
+      undefined,
+      undefined,
+      entries,
+    );
+    const recalledIdx = prompt.indexOf('## Recalled Context');
+    const resolvedIdx = prompt.indexOf('## Resolved References');
+    expect(recalledIdx).toBeGreaterThan(-1);
+    expect(resolvedIdx).toBeGreaterThan(recalledIdx);
+  });
+
   it('includes routine summaries when provided', () => {
     const summaries = [
       { id: 'deploy', name: 'Deploy', description: 'Deploy to prod' },
