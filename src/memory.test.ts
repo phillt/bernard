@@ -185,9 +185,7 @@ describe('rewriter hints', () => {
 
   it('saveRewriterHint writes new mapping preserving existing entries', () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockReturnValue(
-      '# Rewriter Hints\n\n- "existing" → key-existing\n',
-    );
+    vi.mocked(fs.readFileSync).mockReturnValue('# Rewriter Hints\n\n- "existing" → key-existing\n');
     saveRewriterHint(store, 'my daughter', 'daughter-allyson');
     expect(fs.writeFileSync).toHaveBeenCalled();
     const [, written] = vi.mocked(fs.writeFileSync).mock.calls[0];

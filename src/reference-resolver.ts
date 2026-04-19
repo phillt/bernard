@@ -1,7 +1,7 @@
 import { generateText } from 'ai';
 import { getModel } from './providers/index.js';
 import { debugLog } from './logger.js';
-import { sanitizeKey, type MemoryStore } from './memory.js';
+import { sanitizeKey, REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
 import type { BernardConfig } from './config.js';
 
 /**
@@ -61,13 +61,15 @@ Rules:
 - \`resolvedTo\` is a short human-readable expansion drawn from the memory content (not a raw dump).
 - \`preview\` in candidates is a short one-line summary (~60 chars) distinguishing candidates.`;
 
-const REFERENCE_PRESCAN = /\b(my|our|the|her|his|their|that|this)\s+\w+/i;
+const POSSESSIVE_PRESCAN = /\b(my|our|her|his|their)\s+\w+/i;
+// Require 2+ words after "the/this/that" to avoid generic "the bug" / "this code" false-positives.
+const DEMONSTRATIVE_PRESCAN = /\b(the|this|that)\s+\w+\s+\w+/i;
 
 export function shouldSkipResolver(userInput: string): boolean {
-  // Run the resolver whenever the prompt contains a possessive/demonstrative token, even
-  // when memory is empty — the resolver may return `unknown` and prompt the user to fill
-  // in the missing entity.
-  return !REFERENCE_PRESCAN.test(userInput);
+  // Run the resolver when the prompt contains a strong reference signal (possessive, or a
+  // multi-word demonstrative phrase). Even when memory is empty the resolver may return
+  // `unknown` and prompt the user to fill in the missing entity.
+  return !(POSSESSIVE_PRESCAN.test(userInput) || DEMONSTRATIVE_PRESCAN.test(userInput));
 }
 
 function buildHintsBlock(hints?: Map<string, string>): string {
@@ -79,12 +81,24 @@ function buildHintsBlock(hints?: Map<string, string>): string {
   return lines.join('\n');
 }
 
+const MAX_MEMORY_ENTRIES_IN_PROMPT = 40;
+const MAX_MEMORY_PREVIEW_CHARS = 140;
+
 function buildMemoryBlock(contents: Map<string, string>): string {
   const lines: string[] = ['## Available memory entries'];
-  for (const [key, content] of contents.entries()) {
+  const entries = Array.from(contents.entries());
+  const selected = entries.slice(0, MAX_MEMORY_ENTRIES_IN_PROMPT);
+  for (const [key, content] of selected) {
     const trimmed = content.trim().replace(/\s+/g, ' ');
-    const preview = trimmed.length > 280 ? trimmed.slice(0, 280) + '…' : trimmed;
+    const preview =
+      trimmed.length > MAX_MEMORY_PREVIEW_CHARS
+        ? trimmed.slice(0, MAX_MEMORY_PREVIEW_CHARS) + '…'
+        : trimmed;
     lines.push(`- ${key}: ${preview}`);
+  }
+  const omitted = entries.length - selected.length;
+  if (omitted > 0) {
+    lines.push(`- … ${omitted} more entr${omitted === 1 ? 'y' : 'ies'} omitted for brevity`);
   }
   return lines.join('\n');
 }
@@ -97,20 +111,40 @@ function parseResolverResponse(text: string): ResolveResult | null {
     if (parsed?.status === 'noop') return { status: 'noop' };
     if (parsed?.status === 'resolved' && Array.isArray(parsed.entries)) {
       const entries: ResolvedEntry[] = parsed.entries
-        .filter((e: any) => e && typeof e.phrase === 'string' && typeof e.resolvedTo === 'string' && typeof e.sourceKey === 'string')
+        .filter(
+          (e: any) =>
+            e &&
+            typeof e.phrase === 'string' &&
+            typeof e.resolvedTo === 'string' &&
+            typeof e.sourceKey === 'string',
+        )
         .map((e: any) => ({ phrase: e.phrase, resolvedTo: e.resolvedTo, sourceKey: e.sourceKey }));
       if (entries.length === 0) return { status: 'noop' };
       return { status: 'resolved', entries };
     }
-    if (parsed?.status === 'ambiguous' && typeof parsed.reference === 'string' && Array.isArray(parsed.candidates)) {
+    if (
+      parsed?.status === 'ambiguous' &&
+      typeof parsed.reference === 'string' &&
+      Array.isArray(parsed.candidates)
+    ) {
       const candidates: Candidate[] = parsed.candidates
-        .filter((c: any) => c && typeof c.label === 'string' && typeof c.sourceKey === 'string' && typeof c.preview === 'string')
+        .filter(
+          (c: any) =>
+            c &&
+            typeof c.label === 'string' &&
+            typeof c.sourceKey === 'string' &&
+            typeof c.preview === 'string',
+        )
         .slice(0, 4)
         .map((c: any) => ({ label: c.label, sourceKey: c.sourceKey, preview: c.preview }));
       if (candidates.length < 2) return { status: 'noop' };
       return { status: 'ambiguous', reference: parsed.reference, candidates };
     }
-    if (parsed?.status === 'unknown' && typeof parsed.reference === 'string' && parsed.reference.trim().length > 0) {
+    if (
+      parsed?.status === 'unknown' &&
+      typeof parsed.reference === 'string' &&
+      parsed.reference.trim().length > 0
+    ) {
       return { status: 'unknown', reference: parsed.reference.trim() };
     }
     return null;
@@ -126,7 +160,9 @@ function validateAgainstMemory(result: ResolveResult, memoryKeys: Set<string>): 
   }
   if (result.status === 'ambiguous') {
     const safe = result.candidates.filter((c) => memoryKeys.has(c.sourceKey));
-    return safe.length < 2 ? { status: 'noop' } : { status: 'ambiguous', reference: result.reference, candidates: safe };
+    return safe.length < 2
+      ? { status: 'noop' }
+      : { status: 'ambiguous', reference: result.reference, candidates: safe };
   }
   return result;
 }
@@ -139,7 +175,7 @@ export async function resolveReferences(
   abortSignal?: AbortSignal,
 ): Promise<ResolveResult> {
   const contents = memoryStore.getAllMemoryContents();
-  contents.delete('rewriter-hints');
+  contents.delete(REWRITER_HINTS_KEY);
   const memoryKeys = Array.from(contents.keys());
 
   if (shouldSkipResolver(userInput)) {
@@ -193,15 +229,27 @@ export async function resolveReferences(
   }
 }
 
+const MAX_RENDERED_FIELD_CHARS = 200;
+
+function oneLine(value: string, max: number = MAX_RENDERED_FIELD_CHARS): string {
+  const flat = value
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return flat.length > max ? flat.slice(0, max) + '…' : flat;
+}
+
 export function renderResolvedBlock(entries: ResolvedEntry[]): string {
   if (entries.length === 0) return '';
   const lines: string[] = ['## Resolved References'];
   lines.push(
-    'These references resolve phrases in the user\'s request from stored memory. Treat as hints, not rules. If a resolution seems wrong for the current task, cross-check with the memory tool or ask.',
+    "These references resolve phrases in the user's request from stored memory. Treat as hints, not rules. If a resolution seems wrong for the current task, cross-check with the memory tool or ask.",
   );
   for (const e of entries) {
-    lines.push(`- "${e.phrase}" → ${e.resolvedTo} (from memory: ${e.sourceKey})`);
+    const phrase = oneLine(e.phrase, 80);
+    const resolvedTo = oneLine(e.resolvedTo);
+    const sourceKey = sanitizeKey(e.sourceKey);
+    lines.push(`- "${phrase}" → ${resolvedTo} (from memory: ${sourceKey})`);
   }
   return lines.join('\n');
 }
-

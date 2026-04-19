@@ -98,7 +98,7 @@ export class MemoryStore {
   }
 }
 
-const REWRITER_HINTS_KEY = 'rewriter-hints';
+export const REWRITER_HINTS_KEY = 'rewriter-hints';
 const REWRITER_HINTS_HEADER = '# Rewriter Hints';
 const HINT_LINE_PATTERN = /^\s*-\s*"([^"]+)"\s*(?:→|->|=>)\s*([A-Za-z0-9_-]+)\s*$/;
 

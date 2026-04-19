@@ -61,14 +61,32 @@ vi.mock('./agent.js', () => ({
   })),
 }));
 
+const mockMemoryWriteMemory = vi.fn();
 vi.mock('./memory.js', () => ({
   MemoryStore: vi.fn(() => ({
     listMemory: vi.fn(() => []),
     listScratch: vi.fn(() => []),
     writeScratch: vi.fn(),
     readScratch: vi.fn(),
+    writeMemory: mockMemoryWriteMemory,
+    readMemory: vi.fn(() => null),
+    getAllMemoryContents: vi.fn(() => new Map()),
   })),
+  loadRewriterHints: vi.fn(() => new Map()),
+  saveRewriterHint: vi.fn(),
+  sanitizeKey: (key: string) => key.replace(/[^a-zA-Z0-9_-]/g, ''),
+  REWRITER_HINTS_KEY: 'rewriter-hints',
 }));
+
+const mockResolveReferences = vi.fn().mockResolvedValue({ status: 'noop' });
+vi.mock('./reference-resolver.js', async () => {
+  const actual =
+    await vi.importActual<typeof import('./reference-resolver.js')>('./reference-resolver.js');
+  return {
+    ...actual,
+    resolveReferences: (...args: any[]) => mockResolveReferences(...args),
+  };
+});
 
 vi.mock('./rag.js', () => ({
   RAGStore: vi.fn(() => ({
@@ -1350,11 +1368,7 @@ describe('REPL inline image detection', () => {
     typeLine('describe /tmp/test.png');
 
     await vi.waitFor(() => {
-      expect(mockProcessInput).toHaveBeenCalledWith(
-        'describe /tmp/test.png',
-        [mockAttachment],
-        [],
-      );
+      expect(mockProcessInput).toHaveBeenCalledWith('describe /tmp/test.png', [mockAttachment], []);
     });
 
     rlEmitter.emit('close');
@@ -1402,6 +1416,102 @@ describe('REPL inline image detection', () => {
     await vi.waitFor(() => {
       // processInput called without images (undefined)
       expect(mockProcessInput).toHaveBeenCalledWith('look at /tmp/nope.png', undefined, []);
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+});
+
+describe('REPL reference resolver wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rlEmitter = makeRl();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'clear').mockImplementation(() => {});
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+    mockResolveReferences.mockResolvedValue({ status: 'noop' });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('skips resolver entirely when prompt has no reference tokens', async () => {
+    mockProcessInput.mockResolvedValue(undefined);
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig());
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('calculate 2+2');
+
+    await vi.waitFor(() => {
+      expect(mockProcessInput).toHaveBeenCalledWith('calculate 2+2', undefined, []);
+    });
+    expect(mockResolveReferences).not.toHaveBeenCalled();
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('passes resolved entries through to processInput', async () => {
+    const entries = [
+      { phrase: 'my daughter', resolvedTo: 'Allyson', sourceKey: 'daughter-allyson' },
+    ];
+    mockResolveReferences.mockResolvedValue({ status: 'resolved', entries });
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig());
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('order my daughter sandwich');
+
+    await vi.waitFor(() => {
+      expect(mockResolveReferences).toHaveBeenCalledTimes(1);
+      expect(mockProcessInput).toHaveBeenCalledWith(
+        'order my daughter sandwich',
+        undefined,
+        entries,
+      );
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('passes empty entries to processInput on resolver noop', async () => {
+    mockResolveReferences.mockResolvedValue({ status: 'noop' });
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig());
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('order my daughter sandwich');
+
+    await vi.waitFor(() => {
+      expect(mockResolveReferences).toHaveBeenCalledTimes(1);
+      expect(mockProcessInput).toHaveBeenCalledWith('order my daughter sandwich', undefined, []);
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('fails open (empty entries) when resolver throws', async () => {
+    mockResolveReferences.mockRejectedValue(new Error('boom'));
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig());
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('order my daughter sandwich');
+
+    await vi.waitFor(() => {
+      expect(mockProcessInput).toHaveBeenCalledWith('order my daughter sandwich', undefined, []);
     });
 
     rlEmitter.emit('close');

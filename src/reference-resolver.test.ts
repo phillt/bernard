@@ -99,8 +99,12 @@ describe('shouldSkipResolver', () => {
     expect(shouldSkipResolver('order my daughter sandwich')).toBe(false);
   });
 
-  it('runs on "the X" references', () => {
-    expect(shouldSkipResolver('fix the bug')).toBe(false);
+  it('skips single-word "the X" references (false-positive guard)', () => {
+    expect(shouldSkipResolver('fix the bug')).toBe(true);
+  });
+
+  it('runs on multi-word "the X Y" references', () => {
+    expect(shouldSkipResolver('fix the staging deploy')).toBe(false);
   });
 });
 
@@ -163,7 +167,7 @@ describe('resolveReferences', () => {
     generateTextMock.mockResolvedValue({
       text: JSON.stringify({ status: 'unknown', reference: '' }),
     });
-    const store = makeStore({ 'x': 'y' });
+    const store = makeStore({ x: 'y' });
     const result = await resolveReferences('call my mother', store, makeConfig());
     expect(result).toEqual({ status: 'noop' });
   });
@@ -217,9 +221,7 @@ describe('resolveReferences', () => {
     generateTextMock.mockResolvedValue({
       text: JSON.stringify({
         status: 'resolved',
-        entries: [
-          { phrase: 'my cat', resolvedTo: 'Whiskers', sourceKey: 'cat-whiskers' },
-        ],
+        entries: [{ phrase: 'my cat', resolvedTo: 'Whiskers', sourceKey: 'cat-whiskers' }],
       }),
     });
     const store = makeStore({ 'daughter-allyson': 'Allyson' });

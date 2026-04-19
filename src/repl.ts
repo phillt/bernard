@@ -363,12 +363,7 @@ export async function startRepl(
 
     const signal = createMenuSignal();
     try {
-      const result = await selectFromMenu(
-        rl,
-        entries,
-        { promptLabel: 'Resolve to' },
-        signal,
-      );
+      const result = await selectFromMenu(rl, entries, { promptLabel: 'Resolve to' }, signal);
       if (result.cancelled) return { cancelled: true };
 
       const idx = result.index;
@@ -417,12 +412,9 @@ export async function startRepl(
     console.log();
     const signal = createMenuSignal();
     try {
-      const result = await promptValue(
-        rl,
-        { label: `"${reference}" is` },
-        signal,
-      );
+      const result = await promptValue(rl, { label: `"${reference}" is` }, signal);
       if (result.cancelled) return { entry: null };
+      if (!result.raw.trim()) return { entry: null };
       const baseKey = deriveKeyFromReference(reference) || 'entity';
       const existing = new Set(store.listMemory());
       let key = baseKey;
@@ -441,6 +433,56 @@ export async function startRepl(
       };
     } finally {
       clearMenuSignal();
+    }
+  }
+
+  async function runReferenceResolver(trimmed: string): Promise<ResolvedEntry[]> {
+    if (shouldSkipResolver(trimmed)) return [];
+    try {
+      const hints = loadRewriterHints(memoryStore);
+      const resolveSignal = createMenuSignal();
+      let resolveResult;
+      startSpinner();
+      try {
+        resolveResult = await resolveReferences(trimmed, memoryStore, config, hints, resolveSignal);
+      } finally {
+        stopSpinner();
+        clearMenuSignal();
+      }
+
+      let entries: ResolvedEntry[] = [];
+      if (resolveResult.status === 'resolved') {
+        entries = resolveResult.entries;
+      } else if (resolveResult.status === 'ambiguous') {
+        const outcome = await promptDisambiguation(
+          resolveResult.reference,
+          resolveResult.candidates,
+        );
+        // Esc/Enter is treated as "pass as-is" — the agent still runs with the original
+        // prompt, consistent with the unknown-reference skip behavior.
+        if (!outcome.cancelled && !outcome.passAsIs) {
+          entries = [outcome.entry];
+          if (outcome.remember) {
+            saveRewriterHint(memoryStore, outcome.entry.phrase, outcome.entry.sourceKey);
+            printInfo(`  Remembered: "${outcome.entry.phrase}" → ${outcome.entry.sourceKey}`);
+          }
+        }
+      } else if (resolveResult.status === 'unknown') {
+        const outcome = await promptUnknownReference(resolveResult.reference, memoryStore);
+        if (outcome.entry) entries = [outcome.entry];
+      }
+
+      if (entries.length > 0) {
+        debugLog('repl:resolved-references', {
+          prompt: trimmed,
+          entries,
+          injectedBlock: renderResolvedBlock(entries),
+        });
+      }
+      return entries;
+    } catch (err: unknown) {
+      debugLog('repl:resolve-references', err instanceof Error ? err.message : String(err));
+      return [];
     }
   }
 
@@ -1896,69 +1938,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
       }
     }
 
-    let resolvedEntries: ResolvedEntry[] = [];
-    if (!shouldSkipResolver(trimmed)) {
-    try {
-      const hints = loadRewriterHints(memoryStore);
-      const resolveSignal = createMenuSignal();
-      let resolveResult;
-      startSpinner();
-      try {
-        resolveResult = await resolveReferences(
-          trimmed,
-          memoryStore,
-          config,
-          hints,
-          resolveSignal,
-        );
-      } finally {
-        stopSpinner();
-        clearMenuSignal();
-      }
-
-      if (resolveResult.status === 'resolved') {
-        resolvedEntries = resolveResult.entries;
-      } else if (resolveResult.status === 'ambiguous') {
-        const outcome = await promptDisambiguation(
-          resolveResult.reference,
-          resolveResult.candidates,
-        );
-        if (outcome.cancelled) {
-          void prompt();
-          return;
-        }
-        if (!outcome.passAsIs) {
-          resolvedEntries = [outcome.entry];
-          if (outcome.remember) {
-            saveRewriterHint(
-              memoryStore,
-              outcome.entry.phrase,
-              outcome.entry.sourceKey,
-            );
-            printInfo(
-              `  Remembered: "${outcome.entry.phrase}" → ${outcome.entry.sourceKey}`,
-            );
-          }
-        }
-      } else if (resolveResult.status === 'unknown') {
-        const outcome = await promptUnknownReference(
-          resolveResult.reference,
-          memoryStore,
-        );
-        if (outcome.entry) resolvedEntries = [outcome.entry];
-      }
-
-      if (resolvedEntries.length > 0) {
-        debugLog('repl:resolved-references', {
-          prompt: trimmed,
-          entries: resolvedEntries,
-          injectedBlock: renderResolvedBlock(resolvedEntries),
-        });
-      }
-    } catch (err: unknown) {
-      debugLog('repl:resolve-references', err instanceof Error ? err.message : String(err));
-    }
-    }
+    const resolvedEntries = await runReferenceResolver(trimmed);
 
     processing = true;
     interrupted = false;
