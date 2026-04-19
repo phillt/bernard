@@ -3,6 +3,7 @@ import { createMemoryTool, createScratchTool } from './memory.js';
 import { createDateTimeTool } from './datetime.js';
 import { createCronTools } from './cron.js';
 import { createCronLogTools } from './cron-logs.js';
+import { createCronNotesTools } from './cron-notes.js';
 import { createTimeTools } from './time.js';
 import { createMCPConfigTool } from './mcp.js';
 import { createMCPAddUrlTool } from './mcp-url.js';
@@ -48,6 +49,7 @@ export function createTools(
     datetime: createDateTimeTool(),
     ...createCronTools(),
     ...createCronLogTools(),
+    ...createCronNotesTools(),
     ...createTimeTools(),
     mcp_config: createMCPConfigTool(),
     mcp_add_url: createMCPAddUrlTool(),

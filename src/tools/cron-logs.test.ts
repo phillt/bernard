@@ -12,8 +12,16 @@ const mockLogStore = {
   deleteJobLogs: vi.fn(),
 };
 
+const mockNotesStore = {
+  entriesForRun: vi.fn().mockReturnValue([]),
+};
+
 vi.mock('../cron/log-store.js', () => ({
   CronLogStore: vi.fn(() => mockLogStore),
+}));
+
+vi.mock('../cron/notes-store.js', () => ({
+  CronNotesStore: vi.fn(() => mockNotesStore),
 }));
 
 import { createCronLogTools } from './cron-logs.js';
@@ -150,6 +158,38 @@ describe('cron log tools', () => {
 
       expect(result).toContain('Status: error');
       expect(result).toContain('Error: API timeout');
+    });
+
+    it('appends "Notes written during this run" section when notes exist for the run', async () => {
+      const entry = makeEntry();
+      mockLogStore.getEntry.mockReturnValue(entry);
+      mockNotesStore.entriesForRun.mockReturnValue([
+        { timestamp: '2025-01-01T00:00:00.500Z', text: 'sent email', runId: 'run-1' },
+        { timestamp: '2025-01-01T00:00:00.600Z', text: 'created issue #42', runId: 'run-1' },
+      ]);
+
+      const result = await tools.cron_logs_get.execute!(
+        { job_id: 'job-1', run_id: 'run-1' },
+        {} as any,
+      );
+
+      expect(mockNotesStore.entriesForRun).toHaveBeenCalledWith('job-1', 'run-1');
+      expect(result).toContain('## Notes written during this run');
+      expect(result).toContain('sent email');
+      expect(result).toContain('created issue #42');
+    });
+
+    it('omits notes section when no notes exist for the run', async () => {
+      const entry = makeEntry();
+      mockLogStore.getEntry.mockReturnValue(entry);
+      mockNotesStore.entriesForRun.mockReturnValue([]);
+
+      const result = await tools.cron_logs_get.execute!(
+        { job_id: 'job-1', run_id: 'run-1' },
+        {} as any,
+      );
+
+      expect(result).not.toContain('Notes written during this run');
     });
 
     it('truncates long tool results', async () => {

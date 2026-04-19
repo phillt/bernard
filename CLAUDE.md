@@ -30,6 +30,7 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - **src/builtin-specialists/** — Bundled specialists (shell/file/web wrappers + correction-agent + specialist-creator) seeded on first run
 - **src/tool-profiles.ts** — `ToolProfileStore`: per-tool profiles with guidelines and good/bad examples, auto-learned from errors
 - **src/tools/augment.ts** — `augmentTools()`: transparent execute-wrapper that observes every tool call, records errors, and patches fixes on retry
+- **src/cron/notes-store.ts** — `CronNotesStore`: per-job persistent notes (JSON per job, capped at 100 entries, atomic writes). Daemon runner injects `cron_notes_read` / `cron_notes_write` scoped to `job.id` + `runId` so cron runs can avoid duplicate work across restarts; `cron_logs_get` appends a `## Notes written during this run` section.
 - **src/critic.ts** — Standalone critic functions: `extractToolCallLog`, `runCritic`, and critic constants/types
 - **src/pac.ts** — Plan-Act-Critic loop wrapper (`runPACLoop`) for sub-agents and specialists
 - **src/overlap-checker.ts** — Token-based Jaccard overlap detection for specialist candidates
@@ -59,12 +60,12 @@ Behavioral evals live in `scripts/eval-*.ts`. They run real API calls and are ga
 
 Bernard follows the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/latest/). All paths are centralized in `src/paths.ts`.
 
-| Category   | Default Location          | Contents                                                                                                                                                 |
-| ---------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Config** | `~/.config/bernard/`      | `preferences.json`, `keys.json`, `.env`, `mcp.json`                                                                                                      |
-| **Data**   | `~/.local/share/bernard/` | `memory/*.md`, `rag/`, `routines/*.json`, `specialists/*.json`, `correction-candidates/*.json`, `tool-profiles/*.json`, `cron/jobs.json`, `cron/alerts/` |
-| **Cache**  | `~/.cache/bernard/`       | `models/` (embeddings), `update-check.json`                                                                                                              |
-| **State**  | `~/.local/state/bernard/` | `conversation-history.json`, `logs/*.jsonl`, `cron-daemon.pid`, `cron-daemon.log`                                                                        |
+| Category   | Default Location          | Contents                                                                                                                                                                      |
+| ---------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Config** | `~/.config/bernard/`      | `preferences.json`, `keys.json`, `.env`, `mcp.json`                                                                                                                           |
+| **Data**   | `~/.local/share/bernard/` | `memory/*.md`, `rag/`, `routines/*.json`, `specialists/*.json`, `correction-candidates/*.json`, `tool-profiles/*.json`, `cron/jobs.json`, `cron/alerts/`, `cron/notes/*.json` |
+| **Cache**  | `~/.cache/bernard/`       | `models/` (embeddings), `update-check.json`                                                                                                                                   |
+| **State**  | `~/.local/state/bernard/` | `conversation-history.json`, `logs/*.jsonl`, `cron-daemon.pid`, `cron-daemon.log`                                                                                             |
 
 Override with `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME` (must be absolute).
 

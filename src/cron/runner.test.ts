@@ -17,6 +17,14 @@ const mockLogStore = vi.hoisted(() => ({
   appendEntry: vi.fn(),
 }));
 
+const mockNotesStore = vi.hoisted(() => ({
+  read: vi.fn().mockReturnValue({ jobId: 'job-123', entries: [] }),
+  append: vi.fn(),
+  listJobIds: vi.fn().mockReturnValue([]),
+  clear: vi.fn(),
+  entriesForRun: vi.fn().mockReturnValue([]),
+}));
+
 const mockMcpManager = vi.hoisted(() => ({
   connect: vi.fn(),
   getTools: vi.fn().mockReturnValue({}),
@@ -49,6 +57,11 @@ vi.mock('./store.js', () => ({
 
 vi.mock('./log-store.js', () => ({
   CronLogStore: vi.fn(() => mockLogStore),
+}));
+
+vi.mock('./notes-store.js', () => ({
+  CronNotesStore: vi.fn(() => mockNotesStore),
+  MAX_NOTE_LENGTH: 1000,
 }));
 
 vi.mock('./notify.js', () => ({
@@ -308,5 +321,22 @@ describe('runJob', () => {
   it('includes error handling rule in system prompt', async () => {
     await runJob(testJob, vi.fn());
     expect(capturedSystem).toContain('NEVER retry the exact same command');
+  });
+
+  // --- Scoped cron_notes_* tools (contract only; behavior covered in scoped-notes-tools.test.ts) ---
+
+  it('includes scoped cron_notes_read and cron_notes_write in tools', async () => {
+    await runJob(testJob, vi.fn());
+
+    expect(capturedTools).toHaveProperty('cron_notes_read');
+    expect(capturedTools).toHaveProperty('cron_notes_write');
+  });
+
+  it('includes Persistent Notes section in system prompt', async () => {
+    await runJob(testJob, vi.fn());
+
+    expect(capturedSystem).toContain('## Persistent Notes');
+    expect(capturedSystem).toContain('cron_notes_read');
+    expect(capturedSystem).toContain('cron_notes_write');
   });
 });

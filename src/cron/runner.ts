@@ -17,6 +17,8 @@ import { createTimeTools } from '../tools/time.js';
 import { MCPManager } from '../mcp.js';
 import { CronStore } from './store.js';
 import { CronLogStore, type CronLogStep } from './log-store.js';
+import { CronNotesStore } from './notes-store.js';
+import { createScopedCronNotesTools } from './scoped-notes-tools.js';
 import { sendNotification } from './notify.js';
 import type { CronJob } from './types.js';
 import { runPACLoop } from '../pac.js';
@@ -41,6 +43,14 @@ This keeps you focused and prevents wasted steps on long-running jobs.
 - **notify** — Send a desktop notification to alert the user. Clicking the notification opens a terminal with the alert context. Only use when you find something that genuinely requires user attention.
 - **cron_self_disable** — Disable this cron job so it won't run again. Use when a one-time task is complete.
 - You may also have access to **MCP tools** (email, calendar, etc.) depending on configuration.
+
+## Persistent Notes
+You have \`cron_notes_read\` and \`cron_notes_write\`, both scoped to this job.
+
+1. Before taking action, call \`cron_notes_read\` to see what prior runs did. Use the notes to avoid duplicate work (e.g. don't re-send an email that a prior run already sent).
+2. After any significant action, call \`cron_notes_write\` with a short factual summary (e.g. "Sent weekly summary to user@example.com", "Created issue #123").
+
+Notes persist across daemon restarts. Keep entries short — one line each — and concrete. Don't log routine checks that found nothing.
 
 ## Decision Rules
 - Be concise. Focus on actionable findings.
@@ -164,6 +174,8 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       confirmDangerous: async () => false, // Auto-deny in daemon mode
     });
 
+    const notesStore = new CronNotesStore();
+
     const tools = {
       shell: shellTool,
       memory: createMemoryTool(memoryStore),
@@ -174,6 +186,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       ...createTimeTools(),
       notify: notifyTool,
       cron_self_disable: selfDisableTool,
+      ...createScopedCronNotesTools(notesStore, job.id, runId),
       ...mcpTools,
     };
 
