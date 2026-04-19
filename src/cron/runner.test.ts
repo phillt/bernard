@@ -323,55 +323,13 @@ describe('runJob', () => {
     expect(capturedSystem).toContain('NEVER retry the exact same command');
   });
 
-  // --- Scoped cron_notes_* tools ---
+  // --- Scoped cron_notes_* tools (contract only; behavior covered in scoped-notes-tools.test.ts) ---
 
   it('includes scoped cron_notes_read and cron_notes_write in tools', async () => {
     await runJob(testJob, vi.fn());
 
     expect(capturedTools).toHaveProperty('cron_notes_read');
     expect(capturedTools).toHaveProperty('cron_notes_write');
-  });
-
-  it('scoped cron_notes_write tags the entry with the current runId and job id', async () => {
-    await runJob(testJob, vi.fn());
-
-    const result = await capturedTools.cron_notes_write.execute({ text: 'sent email' });
-
-    expect(mockNotesStore.append).toHaveBeenCalledTimes(1);
-    const [jobIdArg, textArg, runIdArg] = mockNotesStore.append.mock.calls[0];
-    expect(jobIdArg).toBe('job-123');
-    expect(textArg).toBe('sent email');
-    expect(typeof runIdArg).toBe('string');
-    expect(runIdArg.length).toBeGreaterThan(0);
-    expect(result).toContain('Note appended');
-    expect(result).toContain(runIdArg.slice(0, 8));
-  });
-
-  it('scoped cron_notes_read reads only this job and returns formatted entries', async () => {
-    mockNotesStore.read.mockReturnValue({
-      jobId: 'job-123',
-      entries: [
-        { timestamp: '2026-04-19T10:00:00Z', text: 'earlier action', runId: 'abcdef12' },
-      ],
-    });
-
-    await runJob(testJob, vi.fn());
-
-    const result = await capturedTools.cron_notes_read.execute({});
-
-    expect(mockNotesStore.read).toHaveBeenCalledWith('job-123');
-    expect(result).toContain('1 entry');
-    expect(result).toContain('earlier action');
-    expect(result).toContain('run:abcdef12');
-  });
-
-  it('scoped cron_notes_read returns empty-state message when no prior notes', async () => {
-    mockNotesStore.read.mockReturnValue({ jobId: 'job-123', entries: [] });
-
-    await runJob(testJob, vi.fn());
-
-    const result = await capturedTools.cron_notes_read.execute({});
-    expect(result).toContain('No prior notes');
   });
 
   it('includes Persistent Notes section in system prompt', async () => {

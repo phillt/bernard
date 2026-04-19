@@ -63,8 +63,7 @@ export function createCronNotesTools() {
           return `Error: note text exceeds ${MAX_NOTE_LENGTH} characters (got ${text.length}). Summarize first.`;
         }
 
-        notesStore.append(job_id, text);
-        const total = notesStore.read(job_id).entries.length;
+        const { total } = notesStore.append(job_id, text);
         return `Appended note to job "${job_id}" (${pluralizeEntries(total)} total).`;
       },
     }),

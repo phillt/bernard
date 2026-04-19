@@ -64,8 +64,12 @@ export class CronNotesStore {
     }
   }
 
-  /** Appends a note entry, capping at {@link MAX_ENTRIES} (oldest dropped). */
-  append(jobId: string, text: string, runId?: string): CronNoteEntry {
+  /**
+   * Appends a note entry, capping at {@link MAX_ENTRIES} (oldest dropped).
+   * Returns the new entry and the post-append total so callers don't need a
+   * follow-up read to report counts.
+   */
+  append(jobId: string, text: string, runId?: string): { entry: CronNoteEntry; total: number } {
     const safeId = this.sanitizeJobId(jobId);
     const current = this.read(safeId);
     const entry: CronNoteEntry = {
@@ -76,7 +80,7 @@ export class CronNotesStore {
     const nextEntries = [...current.entries, entry].slice(-MAX_ENTRIES);
     const payload: CronNotes = { jobId: safeId, entries: nextEntries };
     atomicWriteFileSync(this.notesPath(safeId), JSON.stringify(payload, null, 2));
-    return entry;
+    return { entry, total: nextEntries.length };
   }
 
   /** Lists job IDs that have notes files on disk. */

@@ -82,11 +82,8 @@ describe('cron notes tools', () => {
   });
 
   describe('cron_notes_write', () => {
-    it('appends note and returns confirmation', async () => {
-      mockNotesStore.read.mockReturnValue({
-        jobId: 'job-1',
-        entries: [makeEntry(), makeEntry()],
-      });
+    it('appends note and returns confirmation with the total from append', async () => {
+      mockNotesStore.append.mockReturnValue({ entry: makeEntry(), total: 2 });
 
       const result = await tools.cron_notes_write.execute!(
         { job_id: 'job-1', text: 'sent weekly summary' },
@@ -94,6 +91,7 @@ describe('cron notes tools', () => {
       );
 
       expect(mockNotesStore.append).toHaveBeenCalledWith('job-1', 'sent weekly summary');
+      expect(mockNotesStore.read).not.toHaveBeenCalled();
       expect(result).toContain('Appended note');
       expect(result).toContain('2 entries');
     });
@@ -113,7 +111,7 @@ describe('cron notes tools', () => {
     });
 
     it('accepts text exactly at the 1000 char limit', async () => {
-      mockNotesStore.read.mockReturnValue({ jobId: 'job-1', entries: [makeEntry()] });
+      mockNotesStore.append.mockReturnValue({ entry: makeEntry(), total: 1 });
       const text = 'x'.repeat(1000);
 
       const result = await tools.cron_notes_write.execute!(

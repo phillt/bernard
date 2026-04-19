@@ -38,7 +38,7 @@ describe('CronNotesStore', () => {
     it('writes a new file when none exists', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
 
-      const entry = store.append('job-1', 'sent email');
+      const { entry, total } = store.append('job-1', 'sent email');
 
       expect(fs.writeFileSync).toHaveBeenCalledWith(
         expect.stringMatching(/job-1\.json\.tmp$/),
@@ -49,12 +49,13 @@ describe('CronNotesStore', () => {
       expect(entry.text).toBe('sent email');
       expect(entry.timestamp).toMatch(/\d{4}-\d{2}-\d{2}T/);
       expect(entry.runId).toBeUndefined();
+      expect(total).toBe(1);
     });
 
     it('tags entry with runId when provided', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
 
-      const entry = store.append('job-1', 'created issue #42', 'run-abc');
+      const { entry } = store.append('job-1', 'created issue #42', 'run-abc');
 
       expect(entry.runId).toBe('run-abc');
       expect(lastWrittenPayload().entries[0].runId).toBe('run-abc');
@@ -87,12 +88,13 @@ describe('CronNotesStore', () => {
         JSON.stringify({ jobId: 'job-1', entries: existing }),
       );
 
-      store.append('job-1', 'entry-100');
+      const { total } = store.append('job-1', 'entry-100');
 
       const payload = lastWrittenPayload();
       expect(payload.entries).toHaveLength(100);
       expect(payload.entries[0].text).toBe('entry-1');
       expect(payload.entries[99].text).toBe('entry-100');
+      expect(total).toBe(100);
     });
   });
 
