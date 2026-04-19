@@ -269,8 +269,10 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     theme: 'bernard',
     criticMode: false,
     reactMode: false,
+    toolDetails: false,
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
+    correctionEnabled: false,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };
@@ -1197,7 +1199,7 @@ describe('REPL /critic and /react toggle flows', () => {
   ];
 
   it.each(cases)(
-    '$cmd OFF → ON updates config and persists the new value',
+    '$cmd OFF → ON updates config, persists the new value, and preserves existing preferences',
     async ({ cmd, key, onFragment }) => {
       const { startRepl } = await import('./repl.js');
       const config = makeConfig({ [key]: false } as Partial<BernardConfig>);
@@ -1208,6 +1210,7 @@ describe('REPL /critic and /react toggle flows', () => {
       });
       mockSavePreferences.mockClear();
       mockPrintInfo.mockClear();
+      mockLoadPreferences.mockReturnValueOnce({ theme: 'ocean' });
 
       typeLine(cmd);
 
@@ -1227,6 +1230,7 @@ describe('REPL /critic and /react toggle flows', () => {
           [key]: true,
           provider: 'anthropic',
           model: 'claude-sonnet-4-5-20250929',
+          theme: 'ocean',
         }),
       );
 
@@ -1262,7 +1266,11 @@ describe('REPL /critic and /react toggle flows', () => {
 
       expect(config[key]).toBe(false);
       expect(mockSavePreferences).toHaveBeenCalledWith(
-        expect.objectContaining({ [key]: false, provider: 'anthropic' }),
+        expect.objectContaining({
+          [key]: false,
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-5-20250929',
+        }),
       );
 
       rlEmitter.emit('close');
@@ -1280,6 +1288,7 @@ describe('REPL /critic and /react toggle flows', () => {
       await vi.waitFor(() => {
         expect(rlEmitter.prompt).toHaveBeenCalled();
       });
+      const promptCallsBefore = rlEmitter.prompt.mock.calls.length;
       mockSavePreferences.mockClear();
       mockPrintInfo.mockClear();
 
@@ -1291,8 +1300,10 @@ describe('REPL /critic and /react toggle flows', () => {
       const cb = getMenuQuestionCallback();
       cb('');
 
+      // Cancel path: helper short-circuits, command handler re-prompts.
+      // Waiting on the re-prompt avoids coupling to the menu module's cancel wording.
       await vi.waitFor(() => {
-        expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining('Cancelled'));
+        expect(rlEmitter.prompt.mock.calls.length).toBeGreaterThan(promptCallsBefore);
       });
 
       expect(config[key]).toBe(false);
