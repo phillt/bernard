@@ -97,7 +97,7 @@ export function createCronNotesTools() {
 
     cron_notes_view: tool({
       description:
-        'View a cron job\'s persistent notes formatted for human reading (one entry per block). Prefer cron_notes_read for programmatic consumption.',
+        "View a cron job's persistent notes formatted for human reading (one entry per block). Prefer cron_notes_read for programmatic consumption.",
       parameters: z.object({
         job_id: z.string().describe('Job ID to view notes for'),
       }),

@@ -32,10 +32,7 @@ describe('createScopedCronNotesTools', () => {
     it('tags appended entry with the bound jobId and runId', async () => {
       const tools = createScopedCronNotesTools(store, jobId, runId);
 
-      const result = await tools.cron_notes_write.execute!(
-        { text: 'sent email' },
-        {} as any,
-      );
+      const result = await tools.cron_notes_write.execute!({ text: 'sent email' }, {} as any);
 
       expect(store.append).toHaveBeenCalledWith(jobId, 'sent email', runId);
       expect(result).toContain('Note appended');
@@ -74,9 +71,7 @@ describe('createScopedCronNotesTools', () => {
     it('formats a single entry with singular "entry"', async () => {
       vi.mocked(store.read).mockReturnValue({
         jobId,
-        entries: [
-          { timestamp: '2026-04-19T10:00:00Z', text: 'sent email', runId: 'abcdef12' },
-        ],
+        entries: [{ timestamp: '2026-04-19T10:00:00Z', text: 'sent email', runId: 'abcdef12' }],
       });
       const tools = createScopedCronNotesTools(store, jobId, runId);
 

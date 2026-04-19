@@ -114,10 +114,7 @@ describe('cron notes tools', () => {
       mockNotesStore.append.mockReturnValue({ entry: makeEntry(), total: 1 });
       const text = 'x'.repeat(1000);
 
-      const result = await tools.cron_notes_write.execute!(
-        { job_id: 'job-1', text },
-        {} as any,
-      );
+      const result = await tools.cron_notes_write.execute!({ job_id: 'job-1', text }, {} as any);
 
       expect(mockNotesStore.append).toHaveBeenCalledWith('job-1', text);
       expect(result).toContain('Appended note');
