@@ -1350,7 +1350,11 @@ describe('REPL inline image detection', () => {
     typeLine('describe /tmp/test.png');
 
     await vi.waitFor(() => {
-      expect(mockProcessInput).toHaveBeenCalledWith('describe /tmp/test.png', [mockAttachment]);
+      expect(mockProcessInput).toHaveBeenCalledWith(
+        'describe /tmp/test.png',
+        [mockAttachment],
+        [],
+      );
     });
 
     rlEmitter.emit('close');
@@ -1375,7 +1379,7 @@ describe('REPL inline image detection', () => {
     });
     // Should still call processInput but without images
     await vi.waitFor(() => {
-      expect(mockProcessInput).toHaveBeenCalledWith('describe /tmp/test.png', undefined);
+      expect(mockProcessInput).toHaveBeenCalledWith('describe /tmp/test.png', undefined, []);
     });
     expect(mockTryLoadImage).not.toHaveBeenCalled();
 
@@ -1397,7 +1401,7 @@ describe('REPL inline image detection', () => {
 
     await vi.waitFor(() => {
       // processInput called without images (undefined)
-      expect(mockProcessInput).toHaveBeenCalledWith('look at /tmp/nope.png', undefined);
+      expect(mockProcessInput).toHaveBeenCalledWith('look at /tmp/nope.png', undefined, []);
     });
 
     rlEmitter.emit('close');

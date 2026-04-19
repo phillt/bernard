@@ -14,7 +14,13 @@ import {
   CRON_JOBS_FILE,
 } from './paths.js';
 import { Agent } from './agent.js';
-import { MemoryStore } from './memory.js';
+import { MemoryStore, loadRewriterHints, saveRewriterHint } from './memory.js';
+import {
+  resolveReferences,
+  renderResolvedBlock,
+  type ResolvedEntry,
+  type Candidate,
+} from './reference-resolver.js';
 import { RAGStore, type RAGSearchResult } from './rag.js';
 import { MCPManager } from './mcp.js';
 import {
@@ -329,6 +335,72 @@ export async function startRepl(
       clearMenuSignal();
     }
     console.log();
+  }
+
+  type DisambiguationOutcome =
+    | { cancelled: true }
+    | { cancelled: false; passAsIs: true }
+    | { cancelled: false; passAsIs: false; entry: ResolvedEntry; remember: boolean };
+
+  async function promptDisambiguation(
+    reference: string,
+    candidates: Candidate[],
+  ): Promise<DisambiguationOutcome> {
+    const entries: MenuEntry[] = [];
+    for (const c of candidates) {
+      entries.push({ label: c.label, description: c.preview });
+    }
+    entries.push({ label: 'Pass as-is (do not resolve)' });
+    for (const c of candidates) {
+      entries.push({ label: `Remember: "${reference}" → ${c.label}` });
+    }
+
+    printInfo(`\n  Ambiguous reference: "${reference}"\n`);
+    printMenuList(entries);
+    console.log();
+
+    const signal = createMenuSignal();
+    try {
+      const result = await selectFromMenu(
+        rl,
+        entries,
+        { promptLabel: 'Resolve to' },
+        signal,
+      );
+      if (result.cancelled) return { cancelled: true };
+
+      const idx = result.index;
+      if (idx < candidates.length) {
+        const chosen = candidates[idx];
+        return {
+          cancelled: false,
+          passAsIs: false,
+          entry: {
+            phrase: reference,
+            resolvedTo: chosen.label,
+            sourceKey: chosen.sourceKey,
+          },
+          remember: false,
+        };
+      }
+      if (idx === candidates.length) {
+        return { cancelled: false, passAsIs: true };
+      }
+      const rememberIdx = idx - candidates.length - 1;
+      const chosen = candidates[rememberIdx];
+      return {
+        cancelled: false,
+        passAsIs: false,
+        entry: {
+          phrase: reference,
+          resolvedTo: chosen.label,
+          sourceKey: chosen.sourceKey,
+        },
+        remember: true,
+      };
+    } finally {
+      clearMenuSignal();
+    }
   }
 
   process.stdin.on('keypress', (_str: string, key: any) => {
@@ -1783,11 +1855,67 @@ Remember: the systemPrompt should read like a persona definition — who this sp
       }
     }
 
+    let resolvedEntries: ResolvedEntry[] = [];
+    try {
+      const hints = loadRewriterHints(memoryStore);
+      const resolveSignal = createMenuSignal();
+      let resolveResult;
+      startSpinner();
+      try {
+        resolveResult = await resolveReferences(
+          trimmed,
+          memoryStore,
+          config,
+          hints,
+          resolveSignal,
+        );
+      } finally {
+        stopSpinner();
+        clearMenuSignal();
+      }
+
+      if (resolveResult.status === 'resolved') {
+        resolvedEntries = resolveResult.entries;
+      } else if (resolveResult.status === 'ambiguous') {
+        const outcome = await promptDisambiguation(
+          resolveResult.reference,
+          resolveResult.candidates,
+        );
+        if (outcome.cancelled) {
+          void prompt();
+          return;
+        }
+        if (!outcome.passAsIs) {
+          resolvedEntries = [outcome.entry];
+          if (outcome.remember) {
+            saveRewriterHint(
+              memoryStore,
+              outcome.entry.phrase,
+              outcome.entry.sourceKey,
+            );
+            printInfo(
+              `  Remembered: "${outcome.entry.phrase}" → ${outcome.entry.sourceKey}`,
+            );
+          }
+        }
+      }
+
+      if (resolvedEntries.length > 0) {
+        debugLog('repl:resolved-references', {
+          prompt: trimmed,
+          entries: resolvedEntries,
+          injectedBlock: renderResolvedBlock(resolvedEntries),
+        });
+      }
+    } catch (err: unknown) {
+      debugLog('repl:resolve-references', err instanceof Error ? err.message : String(err));
+    }
+
     processing = true;
     interrupted = false;
     try {
       initSpinner();
-      await agent.processInput(trimmed, inlineImages);
+      await agent.processInput(trimmed, inlineImages, resolvedEntries);
       historyStore.save(agent.getHistory());
     } catch (err: unknown) {
       if (!interrupted) {
