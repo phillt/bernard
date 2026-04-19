@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { CronLogStore } from '../cron/log-store.js';
+import { CronNotesStore } from '../cron/notes-store.js';
 import { debugLog } from '../logger.js';
 
 /**
@@ -11,6 +12,7 @@ import { debugLog } from '../logger.js';
  */
 export function createCronLogTools() {
   const logStore = new CronLogStore();
+  const notesStore = new CronNotesStore();
 
   return {
     cron_logs_list: tool({
@@ -85,6 +87,13 @@ export function createCronLogTools() {
         }
 
         result += `\n--- Final Output ---\n${entry.finalOutput}`;
+
+        const notes = notesStore.entriesForRun(job_id, run_id);
+        if (notes.length > 0) {
+          result += `\n\n## Notes written during this run\n`;
+          result += notes.map((n) => `- ${n.timestamp} — ${n.text}`).join('\n');
+        }
+
         return result;
       },
     }),

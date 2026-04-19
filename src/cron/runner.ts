@@ -17,6 +17,8 @@ import { createTimeTools } from '../tools/time.js';
 import { MCPManager } from '../mcp.js';
 import { CronStore } from './store.js';
 import { CronLogStore, type CronLogStep } from './log-store.js';
+import { CronNotesStore, MAX_NOTE_LENGTH } from './notes-store.js';
+import { formatEntryCompact } from '../tools/cron-notes.js';
 import { sendNotification } from './notify.js';
 import type { CronJob } from './types.js';
 import { runPACLoop } from '../pac.js';
@@ -41,6 +43,14 @@ This keeps you focused and prevents wasted steps on long-running jobs.
 - **notify** — Send a desktop notification to alert the user. Clicking the notification opens a terminal with the alert context. Only use when you find something that genuinely requires user attention.
 - **cron_self_disable** — Disable this cron job so it won't run again. Use when a one-time task is complete.
 - You may also have access to **MCP tools** (email, calendar, etc.) depending on configuration.
+
+## Persistent Notes
+You have \`cron_notes_read\` and \`cron_notes_write\`, both scoped to this job.
+
+1. Before taking action, call \`cron_notes_read\` to see what prior runs did. Use the notes to avoid duplicate work (e.g. don't re-send an email that a prior run already sent).
+2. After any significant action, call \`cron_notes_write\` with a short factual summary (e.g. "Sent weekly summary to user@example.com", "Created issue #123").
+
+Notes persist across daemon restarts. Keep entries short — one line each — and concrete. Don't log routine checks that found nothing.
 
 ## Decision Rules
 - Be concise. Focus on actionable findings.
@@ -164,6 +174,41 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       confirmDangerous: async () => false, // Auto-deny in daemon mode
     });
 
+    const notesStore = new CronNotesStore();
+
+    const scopedNotesRead = tool({
+      description:
+        'Read notes previously written for this cron job by prior runs. Call this before acting to avoid duplicate work.',
+      parameters: z.object({}),
+      execute: async (): Promise<string> => {
+        debugLog('cron_notes_read:scoped:execute', { jobId: job.id });
+        const notes = notesStore.read(job.id);
+        if (notes.entries.length === 0) {
+          return `No prior notes for this job.`;
+        }
+        const label = notes.entries.length === 1 ? 'entry' : 'entries';
+        const lines = notes.entries.map(formatEntryCompact);
+        return `Prior notes (${notes.entries.length} ${label}):\n${lines.join('\n')}`;
+      },
+    });
+
+    const scopedNotesWrite = tool({
+      description:
+        "Append a short factual note recording a significant action this run took (e.g. 'Sent email to user@example.com', 'Created issue #123'). Keep it to one line.",
+      parameters: z.object({
+        text: z
+          .string()
+          .min(1)
+          .max(MAX_NOTE_LENGTH)
+          .describe('Short factual description of the action'),
+      }),
+      execute: async ({ text }): Promise<string> => {
+        debugLog('cron_notes_write:scoped:execute', { jobId: job.id, runId, text });
+        notesStore.append(job.id, text, runId);
+        return `Note appended (run ${runId.slice(0, 8)}).`;
+      },
+    });
+
     const tools = {
       shell: shellTool,
       memory: createMemoryTool(memoryStore),
@@ -174,6 +219,8 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       ...createTimeTools(),
       notify: notifyTool,
       cron_self_disable: selfDisableTool,
+      cron_notes_read: scopedNotesRead,
+      cron_notes_write: scopedNotesWrite,
       ...mcpTools,
     };
 
