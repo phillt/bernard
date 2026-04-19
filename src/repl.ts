@@ -19,6 +19,7 @@ import {
   resolveReferences,
   renderResolvedBlock,
   deriveKeyFromReference,
+  shouldSkipResolver,
   type ResolvedEntry,
   type Candidate,
 } from './reference-resolver.js';
@@ -413,6 +414,7 @@ export async function startRepl(
     printInfo(
       `\n  I don't have memory for "${reference}". Tell me about them and I'll remember.\n  (Enter or Esc skips — the agent will run without this resolved.)`,
     );
+    console.log();
     const signal = createMenuSignal();
     try {
       const result = await promptValue(
@@ -422,9 +424,10 @@ export async function startRepl(
       );
       if (result.cancelled) return { entry: null };
       const baseKey = deriveKeyFromReference(reference) || 'entity';
+      const existing = new Set(store.listMemory());
       let key = baseKey;
       let suffix = 2;
-      while (store.readMemory(key) !== null) {
+      while (existing.has(key)) {
         key = `${baseKey}-${suffix++}`;
       }
       store.writeMemory(key, result.raw);
@@ -1894,6 +1897,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
     }
 
     let resolvedEntries: ResolvedEntry[] = [];
+    if (!shouldSkipResolver(trimmed)) {
     try {
       const hints = loadRewriterHints(memoryStore);
       const resolveSignal = createMenuSignal();
@@ -1953,6 +1957,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
       }
     } catch (err: unknown) {
       debugLog('repl:resolve-references', err instanceof Error ? err.message : String(err));
+    }
     }
 
     processing = true;

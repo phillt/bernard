@@ -22,7 +22,11 @@ describe('createMemoryTool', () => {
     // Reset to default implementations
     vi.mocked(fs.readdirSync).mockReturnValue([] as any);
     vi.mocked(fs.existsSync).mockReturnValue(false);
-    vi.mocked(fs.readFileSync).mockReturnValue('');
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      const err: any = new Error('ENOENT');
+      err.code = 'ENOENT';
+      throw err;
+    });
     store = new MemoryStore();
     memoryTool = createMemoryTool(store);
   });

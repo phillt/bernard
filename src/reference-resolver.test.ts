@@ -88,19 +88,19 @@ describe('deriveKeyFromReference', () => {
 
 describe('shouldSkipResolver', () => {
   it('runs even when memory is empty if prompt has reference tokens (resolver may return unknown)', () => {
-    expect(shouldSkipResolver('order my daughter sandwich', [])).toBe(false);
+    expect(shouldSkipResolver('order my daughter sandwich')).toBe(false);
   });
 
   it('skips when prompt has no reference tokens', () => {
-    expect(shouldSkipResolver('what is 2+2', ['some-key'])).toBe(true);
+    expect(shouldSkipResolver('what is 2+2')).toBe(true);
   });
 
   it('runs when prompt has possessive + memory exists', () => {
-    expect(shouldSkipResolver('order my daughter sandwich', ['daughter-allyson'])).toBe(false);
+    expect(shouldSkipResolver('order my daughter sandwich')).toBe(false);
   });
 
   it('runs on "the X" references', () => {
-    expect(shouldSkipResolver('fix the bug', ['bug-report'])).toBe(false);
+    expect(shouldSkipResolver('fix the bug')).toBe(false);
   });
 });
 

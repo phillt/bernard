@@ -111,7 +111,11 @@ describe('MemoryStore', () => {
     });
 
     it('readMemory returns null for missing file', () => {
-      vi.mocked(fs.existsSync).mockReturnValue(false);
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        const err: any = new Error('ENOENT');
+        err.code = 'ENOENT';
+        throw err;
+      });
       expect(store.readMemory('missing')).toBeNull();
     });
 

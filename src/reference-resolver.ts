@@ -63,7 +63,7 @@ Rules:
 
 const REFERENCE_PRESCAN = /\b(my|our|the|her|his|their|that|this)\s+\w+/i;
 
-export function shouldSkipResolver(userInput: string, _memoryKeys: string[]): boolean {
+export function shouldSkipResolver(userInput: string): boolean {
   // Run the resolver whenever the prompt contains a possessive/demonstrative token, even
   // when memory is empty — the resolver may return `unknown` and prompt the user to fill
   // in the missing entity.
@@ -139,23 +139,15 @@ export async function resolveReferences(
   abortSignal?: AbortSignal,
 ): Promise<ResolveResult> {
   const contents = memoryStore.getAllMemoryContents();
+  contents.delete('rewriter-hints');
   const memoryKeys = Array.from(contents.keys());
 
-  if (shouldSkipResolver(userInput, memoryKeys)) {
+  if (shouldSkipResolver(userInput)) {
     debugLog('reference-resolver:skip', {
-      reason: memoryKeys.length === 0 ? 'empty-memory' : 'no-reference-tokens',
+      reason: 'no-reference-tokens',
       prompt: userInput,
     });
     return { status: 'noop' };
-  }
-
-  const resolvedHintKeys = new Set<string>();
-  if (hints) {
-    for (const [phrase, sourceKey] of hints.entries()) {
-      if (memoryKeys.includes(sourceKey) && userInput.toLowerCase().includes(phrase.toLowerCase())) {
-        resolvedHintKeys.add(sourceKey);
-      }
-    }
   }
 
   const userMessage = [
@@ -186,7 +178,7 @@ export async function resolveReferences(
       debugLog('reference-resolver:empty-response', null);
       return { status: 'noop' };
     }
-    debugLog('reference-resolver:response', result.text);
+    debugLog('reference-resolver:response', result.text.slice(0, 200));
     const parsed = parseResolverResponse(result.text);
     if (!parsed) {
       debugLog('reference-resolver:parse-failed', result.text.slice(0, 200));

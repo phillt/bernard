@@ -31,8 +31,12 @@ export class MemoryStore {
   /** Reads a persistent memory entry by key, returning `null` if it does not exist. */
   readMemory(key: string): string | null {
     const filePath = path.join(MEMORY_DIR, `${sanitizeKey(key)}.md`);
-    if (!fs.existsSync(filePath)) return null;
-    return fs.readFileSync(filePath, 'utf-8');
+    try {
+      return fs.readFileSync(filePath, 'utf-8');
+    } catch (err: any) {
+      if (err?.code === 'ENOENT') return null;
+      throw err;
+    }
   }
 
   /** Creates or overwrites a persistent memory entry on disk. */
