@@ -2,7 +2,11 @@ import { generateText } from 'ai';
 import { getModel } from './providers/index.js';
 import { debugLog } from './logger.js';
 import { sanitizeKey, REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
+import type { RAGStore, RAGSearchResult } from './rag.js';
 import type { BernardConfig } from './config.js';
+
+/** Sentinel sourceKey used for resolutions drawn from the RAG knowledge base. */
+export const RAG_SOURCE_KEY = 'rag';
 
 /**
  * Derive a memory key from a natural-language reference phrase.

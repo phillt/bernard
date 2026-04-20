@@ -37,9 +37,12 @@ import {
   renderResolvedBlock,
   shouldSkipResolver,
   deriveKeyFromReference,
+  validateAgainstMemory,
+  RAG_SOURCE_KEY,
   type ResolvedEntry,
 } from './reference-resolver.js';
 import { MemoryStore } from './memory.js';
+import type { RAGStore, RAGSearchResult } from './rag.js';
 import type { BernardConfig } from './config.js';
 
 function makeConfig(): BernardConfig {
