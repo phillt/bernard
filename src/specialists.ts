@@ -112,6 +112,33 @@ function findBuiltinSpecialistsDir(): string | null {
   return null;
 }
 
+let cachedBuiltinIds: Set<string> | null = null;
+
+/**
+ * Returns the set of specialist IDs that ship bundled with Bernard. Used to
+ * distinguish seeded specialists from user-authored ones in the UI. Result is
+ * cached after the first call — the bundle is packaged alongside the binary
+ * and does not change at runtime.
+ */
+export function getBuiltinSpecialistIds(): Set<string> {
+  if (cachedBuiltinIds) return cachedBuiltinIds;
+  const ids = new Set<string>();
+  const bundledDir = findBuiltinSpecialistsDir();
+  if (!bundledDir) {
+    cachedBuiltinIds = ids;
+    return ids;
+  }
+  try {
+    for (const file of fs.readdirSync(bundledDir)) {
+      if (file.endsWith('.json')) ids.add(file.replace(/\.json$/, ''));
+    }
+  } catch {
+    // fall through with whatever we collected
+  }
+  cachedBuiltinIds = ids;
+  return ids;
+}
+
 /**
  * Disk-backed store for named specialists (reusable expert profiles).
  *

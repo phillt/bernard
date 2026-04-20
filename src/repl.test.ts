@@ -88,6 +88,11 @@ vi.mock('./reference-resolver.js', async () => {
   };
 });
 
+const mockRewritePrompt = vi.fn().mockResolvedValue({ status: 'noop' });
+vi.mock('./prompt-rewriter.js', () => ({
+  rewritePrompt: (...args: any[]) => mockRewritePrompt(...args),
+}));
+
 vi.mock('./rag.js', () => ({
   RAGStore: vi.fn(() => ({
     search: vi.fn().mockResolvedValue([]),
@@ -273,6 +278,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
     correctionEnabled: false,
+    promptRewriter: false,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };
@@ -882,7 +888,7 @@ describe('REPL /agent-options threshold normalization', () => {
 
     typeLine('/agent-options');
 
-    // First question: top-level menu — select "2" for threshold
+    // Top-level menu — select "2" for Auto-create threshold
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
@@ -890,7 +896,7 @@ describe('REPL /agent-options threshold normalization', () => {
     rlEmitter.question.mockClear();
     topCb('2');
 
-    // Second question: value prompt — enter "80"
+    // Value prompt — enter "80"
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
@@ -918,7 +924,7 @@ describe('REPL /agent-options threshold normalization', () => {
 
     typeLine('/agent-options');
 
-    // First question: top-level menu — select "2" for threshold
+    // Top-level menu — select "2" for Auto-create threshold
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
@@ -926,7 +932,7 @@ describe('REPL /agent-options threshold normalization', () => {
     rlEmitter.question.mockClear();
     topCb('2');
 
-    // Second question: value prompt — enter "0.75"
+    // Value prompt — enter "0.75"
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
@@ -954,7 +960,7 @@ describe('REPL /agent-options threshold normalization', () => {
 
     typeLine('/agent-options');
 
-    // First question: top-level menu — select "2" for threshold
+    // Top-level menu — select "2" for Auto-create threshold
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
@@ -962,7 +968,7 @@ describe('REPL /agent-options threshold normalization', () => {
     rlEmitter.question.mockClear();
     topCb('2');
 
-    // Second question: value prompt — enter "150"
+    // Value prompt — enter "150"
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
@@ -1020,7 +1026,7 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
 
     typeLine('/agent-options');
 
-    // First question: top-level menu — select "1" for auto-create
+    // Top-level menu — select "1" for Auto-create specialists
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
@@ -1028,12 +1034,12 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
     rlEmitter.question.mockClear();
     topCb('1');
 
-    // Second question: sub-menu — select "1" for On
+    // On/Off submenu → On (1)
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const subCb = getMenuQuestionCallback();
-    subCb('1');
+    const onOffCb = getMenuQuestionCallback();
+    onOffCb('1');
 
     await vi.waitFor(() => {
       expect(mockSpecialistCreate).toHaveBeenCalledWith(
@@ -1081,7 +1087,7 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
 
     typeLine('/agent-options');
 
-    // First question: top-level menu — select "1" for auto-create
+    // Top-level menu — select "1" for Auto-create specialists
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
@@ -1089,12 +1095,12 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
     rlEmitter.question.mockClear();
     topCb('1');
 
-    // Second question: sub-menu — select "1" for On
+    // On/Off submenu → On (1)
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
-    const subCb = getMenuQuestionCallback();
-    subCb('1');
+    const onOffCb = getMenuQuestionCallback();
+    onOffCb('1');
 
     await vi.waitFor(() => {
       expect(mockPrintInfo).toHaveBeenCalledWith(
@@ -1137,7 +1143,7 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
     // Lower threshold from 0.9 to 0.8
     typeLine('/agent-options');
 
-    // First question: top-level menu — select "2" for threshold
+    // Top-level menu — select "2" for Auto-create threshold
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
@@ -1145,7 +1151,7 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
     rlEmitter.question.mockClear();
     topCb('2');
 
-    // Second question: value prompt — enter "0.8"
+    // Value prompt — enter "0.8"
     await vi.waitFor(() => {
       expect(rlEmitter.question).toHaveBeenCalled();
     });
@@ -1169,7 +1175,7 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
   });
 });
 
-describe('REPL /critic and /react toggle flows', () => {
+describe('REPL /agent-options boolean toggles (critic, react, rewriter)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     rlEmitter = makeRl();
@@ -1183,24 +1189,37 @@ describe('REPL /critic and /react toggle flows', () => {
     vi.restoreAllMocks();
   });
 
+  // Menu path: /agent-options → top-level selection:
+  //   3. Critic mode
+  //   4. Coordinator (ReAct) mode
+  //   5. Prompt rewriter
   const cases = [
     {
-      cmd: '/critic',
+      name: 'Critic mode',
+      topIndex: '3',
       key: 'criticMode' as const,
       onFragment: '[CRITIC:ON]',
       offFragment: '[CRITIC:OFF]',
     },
     {
-      cmd: '/react',
+      name: 'Coordinator (ReAct) mode',
+      topIndex: '4',
       key: 'reactMode' as const,
       onFragment: '[REACT:ON]',
       offFragment: '[REACT:OFF]',
     },
+    {
+      name: 'Prompt rewriter',
+      topIndex: '5',
+      key: 'promptRewriter' as const,
+      onFragment: '[REWRITER:ON]',
+      offFragment: '[REWRITER:OFF]',
+    },
   ];
 
   it.each(cases)(
-    '$cmd OFF → ON updates config, persists the new value, and preserves existing preferences',
-    async ({ cmd, key, onFragment }) => {
+    '$name OFF → ON updates config, persists the new value, and preserves existing preferences',
+    async ({ topIndex, key, onFragment }) => {
       const { startRepl } = await import('./repl.js');
       const config = makeConfig({ [key]: false } as Partial<BernardConfig>);
       const replPromise = startRepl(config);
@@ -1210,15 +1229,24 @@ describe('REPL /critic and /react toggle flows', () => {
       });
       mockSavePreferences.mockClear();
       mockPrintInfo.mockClear();
-      mockLoadPreferences.mockReturnValueOnce({ theme: 'ocean' });
+      mockLoadPreferences.mockReturnValue({ theme: 'ocean' });
 
-      typeLine(cmd);
+      typeLine('/agent-options');
 
+      // Top-level menu — pick the toggle directly
       await vi.waitFor(() => {
         expect(rlEmitter.question).toHaveBeenCalled();
       });
-      const cb = getMenuQuestionCallback();
-      cb('1');
+      const topCb = getMenuQuestionCallback();
+      rlEmitter.question.mockClear();
+      topCb(topIndex);
+
+      // On/Off submenu → On (1)
+      await vi.waitFor(() => {
+        expect(rlEmitter.question).toHaveBeenCalled();
+      });
+      const onOffCb = getMenuQuestionCallback();
+      onOffCb('1');
 
       await vi.waitFor(() => {
         expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining(onFragment));
@@ -1240,8 +1268,8 @@ describe('REPL /critic and /react toggle flows', () => {
   );
 
   it.each(cases)(
-    '$cmd ON → OFF updates config and persists the new value',
-    async ({ cmd, key, offFragment }) => {
+    '$name ON → OFF updates config and persists the new value',
+    async ({ topIndex, key, offFragment }) => {
       const { startRepl } = await import('./repl.js');
       const config = makeConfig({ [key]: true } as Partial<BernardConfig>);
       const replPromise = startRepl(config);
@@ -1252,13 +1280,22 @@ describe('REPL /critic and /react toggle flows', () => {
       mockSavePreferences.mockClear();
       mockPrintInfo.mockClear();
 
-      typeLine(cmd);
+      typeLine('/agent-options');
 
+      // Top-level menu — pick the toggle directly
       await vi.waitFor(() => {
         expect(rlEmitter.question).toHaveBeenCalled();
       });
-      const cb = getMenuQuestionCallback();
-      cb('2');
+      const topCb = getMenuQuestionCallback();
+      rlEmitter.question.mockClear();
+      topCb(topIndex);
+
+      // On/Off submenu → Off (2)
+      await vi.waitFor(() => {
+        expect(rlEmitter.question).toHaveBeenCalled();
+      });
+      const onOffCb = getMenuQuestionCallback();
+      onOffCb('2');
 
       await vi.waitFor(() => {
         expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining(offFragment));
@@ -1279,8 +1316,8 @@ describe('REPL /critic and /react toggle flows', () => {
   );
 
   it.each(cases)(
-    '$cmd cancel leaves config unchanged and does not persist',
-    async ({ cmd, key, onFragment, offFragment }) => {
+    '$name On/Off cancel leaves config unchanged and does not persist',
+    async ({ topIndex, key, onFragment, offFragment }) => {
       const { startRepl } = await import('./repl.js');
       const config = makeConfig({ [key]: false } as Partial<BernardConfig>);
       const replPromise = startRepl(config);
@@ -1288,22 +1325,26 @@ describe('REPL /critic and /react toggle flows', () => {
       await vi.waitFor(() => {
         expect(rlEmitter.prompt).toHaveBeenCalled();
       });
-      const promptCallsBefore = rlEmitter.prompt.mock.calls.length;
       mockSavePreferences.mockClear();
       mockPrintInfo.mockClear();
 
-      typeLine(cmd);
+      typeLine('/agent-options');
 
       await vi.waitFor(() => {
         expect(rlEmitter.question).toHaveBeenCalled();
       });
-      const cb = getMenuQuestionCallback();
-      cb('');
+      const topCb = getMenuQuestionCallback();
+      rlEmitter.question.mockClear();
+      topCb(topIndex);
 
-      // Cancel path: helper short-circuits, command handler re-prompts.
-      // Waiting on the re-prompt avoids coupling to the menu module's cancel wording.
       await vi.waitFor(() => {
-        expect(rlEmitter.prompt.mock.calls.length).toBeGreaterThan(promptCallsBefore);
+        expect(rlEmitter.question).toHaveBeenCalled();
+      });
+      const onOffCb = getMenuQuestionCallback();
+      onOffCb('');
+
+      await vi.waitFor(() => {
+        expect(rlEmitter.prompt).toHaveBeenCalled();
       });
 
       expect(config[key]).toBe(false);
@@ -1667,6 +1708,150 @@ describe('REPL reference resolver wiring', () => {
     await vi.waitFor(() => {
       expect(mockProcessInput).toHaveBeenCalledWith('order my daughter sandwich', undefined, []);
     });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+});
+
+describe('REPL prompt rewriter wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rlEmitter = makeRl();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'clear').mockImplementation(() => {});
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+    mockResolveReferences.mockResolvedValue({ status: 'noop' });
+    mockRewritePrompt.mockResolvedValue({ status: 'noop' });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('passes the rewritten string to processInput when rewriter returns rewritten', async () => {
+    mockRewritePrompt.mockResolvedValue({
+      status: 'rewritten',
+      text: 'Task: fix the failing test in src/foo.ts',
+    });
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig({ promptRewriter: true }));
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('please fix the failing test in src/foo.ts');
+
+    await vi.waitFor(() => {
+      expect(mockRewritePrompt).toHaveBeenCalledTimes(1);
+      expect(mockProcessInput).toHaveBeenCalledWith(
+        'Task: fix the failing test in src/foo.ts',
+        undefined,
+        [],
+      );
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('passes the original string to processInput when rewriter returns noop', async () => {
+    mockRewritePrompt.mockResolvedValue({ status: 'noop' });
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig({ promptRewriter: true }));
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('please fix the failing test in src/foo.ts');
+
+    await vi.waitFor(() => {
+      expect(mockRewritePrompt).toHaveBeenCalledTimes(1);
+      expect(mockProcessInput).toHaveBeenCalledWith(
+        'please fix the failing test in src/foo.ts',
+        undefined,
+        [],
+      );
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('skips the rewriter entirely when promptRewriter config is false', async () => {
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig({ promptRewriter: false }));
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('please fix the failing test in src/foo.ts');
+
+    await vi.waitFor(() => {
+      expect(mockProcessInput).toHaveBeenCalledWith(
+        'please fix the failing test in src/foo.ts',
+        undefined,
+        [],
+      );
+    });
+    expect(mockRewritePrompt).not.toHaveBeenCalled();
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('falls back to the original string when the rewriter throws', async () => {
+    mockRewritePrompt.mockRejectedValue(new Error('network down'));
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig({ promptRewriter: true }));
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('please fix the failing test in src/foo.ts');
+
+    await vi.waitFor(() => {
+      expect(mockProcessInput).toHaveBeenCalledWith(
+        'please fix the failing test in src/foo.ts',
+        undefined,
+        [],
+      );
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('forwards resolved entries from the resolver into the rewriter and into processInput', async () => {
+    const entries = [
+      { phrase: 'my daughter', resolvedTo: 'Allyson', sourceKey: 'daughter-allyson' },
+    ];
+    mockResolveReferences.mockResolvedValue({ status: 'resolved', entries });
+    mockRewritePrompt.mockResolvedValue({
+      status: 'rewritten',
+      text: 'Task: order Allyson a sandwich',
+    });
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig({ promptRewriter: true }));
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('order my daughter a sandwich');
+
+    await vi.waitFor(() => {
+      expect(mockRewritePrompt).toHaveBeenCalledTimes(1);
+      expect(mockProcessInput).toHaveBeenCalledWith(
+        'Task: order Allyson a sandwich',
+        undefined,
+        entries,
+      );
+    });
+
+    const rewriteCallArgs = mockRewritePrompt.mock.calls[0];
+    expect(rewriteCallArgs[0]).toBe('order my daughter a sandwich');
+    expect(rewriteCallArgs[2]).toEqual(entries);
 
     rlEmitter.emit('close');
     await replPromise.catch(() => {});

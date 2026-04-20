@@ -17,6 +17,12 @@ export interface ModelProfile {
   wrapUserMessage(message: string): string;
   /** Short advisory block appended to the system prompt. Empty string = no-op. */
   readonly systemSuffix: string;
+  /**
+   * Short per-family style hint injected into the prompt-rewriter's system
+   * prompt (see src/prompt-rewriter.ts). Tells the rewriter what structural
+   * formatting this downstream model responds best to.
+   */
+  readonly rewriterHint: string;
 }
 
 const ANTHROPIC_SUFFIX = `## Model Notes
@@ -35,40 +41,64 @@ const OPENAI_STANDARD_SUFFIX = `## Model Notes
 const XAI_REASONING_SUFFIX = `## Model Notes
 This model reasons internally. Do not narrate chain-of-thought ("think step by step", "explain your reasoning before acting") — state conclusions and take actions directly. Keep instructions terse.`;
 
+const ANTHROPIC_REWRITER_HINT =
+  'Use natural prose framed with XML-style tags (<task>, <context>, <constraints>) when the request has distinct parts. Keep the original voice; do not over-structure short conversational requests.';
+
+const OPENAI_REASONING_REWRITER_HINT =
+  'Keep the rewrite terse. Drop filler ("please", "could you"). One or two short paragraphs or a tight bullet list is ideal. No chain-of-thought prompts.';
+
+const OPENAI_STANDARD_REWRITER_HINT =
+  'Prefer explicit "Task:", "Constraints:", and "Output:" sections when the request has multiple parts. Keep very short requests in natural prose.';
+
+const XAI_REASONING_REWRITER_HINT =
+  'Terse and direct. Strip conversational padding. State the goal in one or two sentences; add a short numbered list only when multiple distinct steps are implied.';
+
+const XAI_STANDARD_REWRITER_HINT =
+  'Direct, explicit, minimal verbosity. A short "Task: … / Requirements: …" shape works well for compound requests.';
+
+const DEFAULT_REWRITER_HINT =
+  'Keep the rewrite close to the original phrasing. Only add structure when the original has multiple distinct parts.';
+
 const DEFAULT_PROFILE: ModelProfile = {
   family: 'default',
   wrapUserMessage: (msg) => msg,
   systemSuffix: '',
+  rewriterHint: DEFAULT_REWRITER_HINT,
 };
 
 const ANTHROPIC_PROFILE: ModelProfile = {
   family: 'anthropic-claude',
   wrapUserMessage: (msg) => `<user_request>\n${msg}\n</user_request>`,
   systemSuffix: ANTHROPIC_SUFFIX,
+  rewriterHint: ANTHROPIC_REWRITER_HINT,
 };
 
 const OPENAI_REASONING_PROFILE: ModelProfile = {
   family: 'openai-reasoning',
   wrapUserMessage: (msg) => msg,
   systemSuffix: OPENAI_REASONING_SUFFIX,
+  rewriterHint: OPENAI_REASONING_REWRITER_HINT,
 };
 
 const OPENAI_STANDARD_PROFILE: ModelProfile = {
   family: 'openai-standard',
   wrapUserMessage: (msg) => `# Request\n${msg}`,
   systemSuffix: OPENAI_STANDARD_SUFFIX,
+  rewriterHint: OPENAI_STANDARD_REWRITER_HINT,
 };
 
 const XAI_REASONING_PROFILE: ModelProfile = {
   family: 'xai-grok-reasoning',
   wrapUserMessage: (msg) => msg,
   systemSuffix: XAI_REASONING_SUFFIX,
+  rewriterHint: XAI_REASONING_REWRITER_HINT,
 };
 
 const XAI_STANDARD_PROFILE: ModelProfile = {
   family: 'xai-grok-standard',
   wrapUserMessage: (msg) => `# Request\n${msg}`,
   systemSuffix: '',
+  rewriterHint: XAI_STANDARD_REWRITER_HINT,
 };
 
 /**

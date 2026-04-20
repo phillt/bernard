@@ -33,6 +33,8 @@ export interface BernardConfig {
   autoCreateThreshold: number;
   /** Whether the correction agent runs at session close to learn from tool-wrapper failures. */
   correctionEnabled: boolean;
+  /** Whether the model-specific prompt rewriter runs as a pre-turn LLM pass. */
+  promptRewriter: boolean;
   /** Anthropic API key, if available. */
   anthropicApiKey?: string;
   /** OpenAI API key, if available. */
@@ -127,6 +129,7 @@ export function savePreferences(prefs: {
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
+  promptRewriter?: boolean;
 }): void {
   const dir = path.dirname(PREFS_PATH);
   if (!fs.existsSync(dir)) {
@@ -145,6 +148,7 @@ export function savePreferences(prefs: {
   if (prefs.autoCreateSpecialists !== undefined)
     data.autoCreateSpecialists = prefs.autoCreateSpecialists;
   if (prefs.autoCreateThreshold !== undefined) data.autoCreateThreshold = prefs.autoCreateThreshold;
+  if (prefs.promptRewriter !== undefined) data.promptRewriter = prefs.promptRewriter;
 
   // Preserve autoUpdate, criticMode, and auto-create settings from existing prefs when callers don't pass them
   let existing: Record<string, unknown> | undefined;
@@ -154,7 +158,13 @@ export function savePreferences(prefs: {
     /* ignore */
   }
 
-  const booleanKeys = ['autoUpdate', 'criticMode', 'reactMode', 'toolDetails'] as const;
+  const booleanKeys = [
+    'autoUpdate',
+    'criticMode',
+    'reactMode',
+    'toolDetails',
+    'promptRewriter',
+  ] as const;
   for (const k of booleanKeys) {
     if (prefs[k] === undefined && existing && typeof existing[k] === 'boolean') {
       data[k] = existing[k];
@@ -211,6 +221,7 @@ export function loadPreferences(): {
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
+  promptRewriter?: boolean;
 } {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
@@ -233,6 +244,8 @@ export function loadPreferences(): {
           : undefined,
       autoCreateThreshold:
         typeof parsed.autoCreateThreshold === 'number' ? parsed.autoCreateThreshold : undefined,
+      promptRewriter:
+        typeof parsed.promptRewriter === 'boolean' ? parsed.promptRewriter : undefined,
     };
   } catch {
     return {};
@@ -551,6 +564,12 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
   const correctionEnabled =
     rawCorrection === undefined ? true : !(rawCorrection === 'false' || rawCorrection === '0');
 
+  // Prompt rewriter runs by default; users can opt out with BERNARD_PROMPT_REWRITER=false.
+  const rawRewriter = process.env.BERNARD_PROMPT_REWRITER;
+  const promptRewriter =
+    prefs.promptRewriter ??
+    (rawRewriter === undefined ? true : !(rawRewriter === 'false' || rawRewriter === '0'));
+
   const config: BernardConfig = {
     provider,
     model,
@@ -566,6 +585,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     autoCreateSpecialists,
     autoCreateThreshold,
     correctionEnabled,
+    promptRewriter,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     xaiApiKey: process.env.XAI_API_KEY,
