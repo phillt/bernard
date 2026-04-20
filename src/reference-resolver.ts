@@ -282,13 +282,17 @@ export function renderResolvedBlock(entries: ResolvedEntry[]): string {
   if (entries.length === 0) return '';
   const lines: string[] = ['## Resolved References'];
   lines.push(
-    "These references resolve phrases in the user's request from stored memory. Treat as hints, not rules. If a resolution seems wrong for the current task, cross-check with the memory tool or ask.",
+    "These references resolve phrases in the user's request from stored memory or the knowledge base. Treat as hints, not rules. If a resolution seems wrong for the current task, cross-check with the memory tool or ask.",
   );
   for (const e of entries) {
     const phrase = oneLine(e.phrase, 80);
     const resolvedTo = oneLine(e.resolvedTo);
-    const sourceKey = sanitizeKey(e.sourceKey);
-    lines.push(`- "${phrase}" → ${resolvedTo} (from memory: ${sourceKey})`);
+    if (e.sourceKey === RAG_SOURCE_KEY) {
+      lines.push(`- "${phrase}" → ${resolvedTo} (from knowledge base)`);
+    } else {
+      const sourceKey = sanitizeKey(e.sourceKey);
+      lines.push(`- "${phrase}" → ${resolvedTo} (from memory: ${sourceKey})`);
+    }
   }
   return lines.join('\n');
 }
