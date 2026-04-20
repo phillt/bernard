@@ -174,13 +174,17 @@ function parseResolverResponse(text: string): ResolveResult | null {
   }
 }
 
-function validateAgainstMemory(result: ResolveResult, memoryKeys: Set<string>): ResolveResult {
+export function validateAgainstMemory(
+  result: ResolveResult,
+  memoryKeys: Set<string>,
+): ResolveResult {
+  const isValidSource = (key: string) => key === RAG_SOURCE_KEY || memoryKeys.has(key);
   if (result.status === 'resolved') {
-    const safe = result.entries.filter((e) => memoryKeys.has(e.sourceKey));
+    const safe = result.entries.filter((e) => isValidSource(e.sourceKey));
     return safe.length === 0 ? { status: 'noop' } : { status: 'resolved', entries: safe };
   }
   if (result.status === 'ambiguous') {
-    const safe = result.candidates.filter((c) => memoryKeys.has(c.sourceKey));
+    const safe = result.candidates.filter((c) => isValidSource(c.sourceKey));
     return safe.length < 2
       ? { status: 'noop' }
       : { status: 'ambiguous', reference: result.reference, candidates: safe };
