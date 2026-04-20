@@ -41,15 +41,17 @@ export type ResolveResult =
   | { status: 'unknown'; reference: string };
 
 const RESOLVER_MAX_TOKENS = 512;
-const RESOLVER_SYSTEM_PROMPT = `You resolve references in a user's request against their stored personal memory.
-You DO NOT retrieve facts. You only resolve phrases the user already wrote.
+const RESOLVER_SYSTEM_PROMPT = `You resolve references in a user's request against their stored personal memory and knowledge base.
+You DO NOT retrieve facts unprompted. You only resolve phrases the user already wrote.
 
-Given the user's input and a list of available memory entries, identify every phrase that refers to a specific person, thing, routine, or plan stored in memory.
+Given the user's input, a list of available memory entries, and (optionally) relevant facts from the knowledge base, identify every phrase that refers to a specific person, thing, routine, or plan.
 
 For each phrase:
-- If exactly ONE memory entry unambiguously matches the reference, include it in \`entries\`.
-- If MULTIPLE entries plausibly match, stop and return status \`ambiguous\` for the FIRST ambiguous reference with 2-4 candidates. Do not guess.
-- If the phrase clearly names a specific person, organization, or concrete thing in the user's life (e.g. "my brother", "my dentist", "the car", "my landlord") AND no memory entry matches AND resolving it is necessary to complete the request, stop and return status \`unknown\` for the FIRST such reference. The caller will prompt the user.
+- If exactly ONE memory entry unambiguously matches the reference, include it in \`entries\` with its memory key as \`sourceKey\`.
+- If no memory entry matches but a fact in "## Relevant known facts" unambiguously identifies the person or thing, include it in \`entries\` with \`sourceKey: "rag"\`. Draw \`resolvedTo\` from the fact text.
+- Prefer a memory entry over a RAG fact when both match the same phrase.
+- If MULTIPLE memory entries plausibly match, stop and return status \`ambiguous\` for the FIRST ambiguous reference with 2-4 candidates. Do not guess.
+- If the phrase clearly names a specific person, organization, or concrete thing (e.g. "my brother", "my dentist", "the car", "aaron") AND neither memory nor known facts match AND resolving it is necessary to complete the request, stop and return status \`unknown\` for the FIRST such reference. The caller will prompt the user.
 - Generic words ("the file", "this code", "the bug", "the PR", "my response", "my email") that don't point at a stored entity are NOT references — omit and prefer \`noop\`.
 
 Output strict JSON matching one of these shapes and nothing else:
@@ -61,8 +63,8 @@ Output strict JSON matching one of these shapes and nothing else:
 Rules:
 - Be conservative. Prefer \`noop\` over guessing.
 - Only one \`unknown\` or \`ambiguous\` per turn — pick the most important reference.
-- Never invent a sourceKey. Use only keys from the provided memory list.
-- \`resolvedTo\` is a short human-readable expansion drawn from the memory content (not a raw dump).
+- For memory-sourced entries, use only keys from the provided memory list. For knowledge-base-sourced entries, use the literal string \`"rag"\`.
+- \`resolvedTo\` is a short human-readable expansion drawn from the source content (not a raw dump).
 - \`preview\` in candidates is a short one-line summary (~60 chars) distinguishing candidates.`;
 
 const POSSESSIVE_PRESCAN = /\b(my|our|her|his|their)\s+\w+/i;
@@ -87,6 +89,21 @@ function buildHintsBlock(hints?: Map<string, string>): string {
 
 const MAX_MEMORY_ENTRIES_IN_PROMPT = 40;
 const MAX_MEMORY_PREVIEW_CHARS = 140;
+const MAX_RAG_FACTS_IN_PROMPT = 12;
+const MAX_RAG_FACT_CHARS = 240;
+
+function buildRagBlock(facts: RAGSearchResult[]): string {
+  if (facts.length === 0) return '';
+  const lines: string[] = ['## Relevant known facts'];
+  const selected = facts.slice(0, MAX_RAG_FACTS_IN_PROMPT);
+  for (const f of selected) {
+    const trimmed = f.fact.trim().replace(/\s+/g, ' ');
+    const preview =
+      trimmed.length > MAX_RAG_FACT_CHARS ? trimmed.slice(0, MAX_RAG_FACT_CHARS) + '…' : trimmed;
+    lines.push(`- ${preview}`);
+  }
+  return lines.join('\n');
+}
 
 function buildMemoryBlock(contents: Map<string, string>): string {
   const lines: string[] = ['## Available memory entries'];
