@@ -71,6 +71,12 @@ function makeStore(contents: Record<string, string>): MemoryStore {
   return store;
 }
 
+function makeRagStore(
+  search: (query: string) => Promise<RAGSearchResult[]> | RAGSearchResult[],
+): RAGStore {
+  return { search: vi.fn(async (q: string) => search(q)) } as unknown as RAGStore;
+}
+
 describe('deriveKeyFromReference', () => {
   it('strips leading possessive', () => {
     expect(deriveKeyFromReference('my brother')).toBe('brother');
@@ -274,5 +280,207 @@ describe('resolveReferences', () => {
     const userContent = callArgs.messages[0].content;
     expect(userContent).toContain('Persisted hints');
     expect(userContent).toContain('"my daughter" → daughter-allyson');
+  });
+});
+
+describe('resolveReferences with RAG', () => {
+  beforeEach(() => {
+    generateTextMock.mockReset();
+  });
+
+  it('resolves a reference from a RAG fact with sourceKey "rag"', async () => {
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({
+        status: 'resolved',
+        entries: [
+          {
+            phrase: 'aaron',
+            resolvedTo: 'Aaron Nichols, PhoneBurner engineer',
+            sourceKey: 'rag',
+          },
+        ],
+      }),
+    });
+    const store = makeStore({});
+    const rag = makeRagStore(() => [
+      {
+        fact: 'Aaron Nichols is a PhoneBurner engineer working on the web dialer.',
+        similarity: 0.78,
+        domain: 'people',
+      },
+    ]);
+    const result = await resolveReferences(
+      'assign the open PRs to aaron',
+      store,
+      makeConfig(),
+      undefined,
+      undefined,
+      rag,
+    );
+    expect(result.status).toBe('resolved');
+    if (result.status === 'resolved') {
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0].sourceKey).toBe('rag');
+      expect(result.entries[0].resolvedTo).toContain('Aaron Nichols');
+    }
+  });
+
+  it('injects the RAG block into the user message when facts are returned', async () => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ status: 'noop' }) });
+    const store = makeStore({});
+    const rag = makeRagStore(() => [
+      {
+        fact: 'Aaron Nichols is a PhoneBurner engineer.',
+        similarity: 0.78,
+        domain: 'people',
+      },
+    ]);
+    await resolveReferences(
+      'assign the open PRs to aaron',
+      store,
+      makeConfig(),
+      undefined,
+      undefined,
+      rag,
+    );
+    const userContent = generateTextMock.mock.calls[0][0].messages[0].content as string;
+    expect(userContent).toContain('## Relevant known facts');
+    expect(userContent).toContain('Aaron Nichols');
+  });
+
+  it('omits the RAG block when search returns no facts', async () => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ status: 'noop' }) });
+    const store = makeStore({});
+    const rag = makeRagStore(() => []);
+    await resolveReferences(
+      'assign the open PRs to aaron',
+      store,
+      makeConfig(),
+      undefined,
+      undefined,
+      rag,
+    );
+    const userContent = generateTextMock.mock.calls[0][0].messages[0].content as string;
+    expect(userContent).not.toContain('## Relevant known facts');
+  });
+
+  it('omits the RAG block when ragStore is undefined (existing behavior)', async () => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ status: 'noop' }) });
+    const store = makeStore({ 'daughter-allyson': 'Allyson' });
+    await resolveReferences('order my daughter sandwich', store, makeConfig());
+    const userContent = generateTextMock.mock.calls[0][0].messages[0].content as string;
+    expect(userContent).not.toContain('## Relevant known facts');
+  });
+
+  it('fails open to noop when ragStore.search throws', async () => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ status: 'noop' }) });
+    const store = makeStore({});
+    const rag = {
+      search: vi.fn(async () => {
+        throw new Error('embedding backend down');
+      }),
+    } as unknown as RAGStore;
+    const result = await resolveReferences(
+      'assign the open PRs to aaron',
+      store,
+      makeConfig(),
+      undefined,
+      undefined,
+      rag,
+    );
+    expect(result).toEqual({ status: 'noop' });
+    // generateText should still be called (resolver degrades to memory-only path)
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+    const userContent = generateTextMock.mock.calls[0][0].messages[0].content as string;
+    expect(userContent).not.toContain('## Relevant known facts');
+  });
+
+  it('prefers a memory-sourced entry when both memory and RAG match', async () => {
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({
+        status: 'resolved',
+        entries: [
+          {
+            phrase: 'aaron',
+            resolvedTo: 'Aaron Nichols',
+            sourceKey: 'aaron-nichols',
+          },
+        ],
+      }),
+    });
+    const store = makeStore({ 'aaron-nichols': 'Aaron Nichols, engineer' });
+    const rag = makeRagStore(() => [
+      { fact: 'Aaron Nichols is an engineer.', similarity: 0.72, domain: 'people' },
+    ]);
+    const result = await resolveReferences(
+      'assign the open PRs to aaron',
+      store,
+      makeConfig(),
+      undefined,
+      undefined,
+      rag,
+    );
+    expect(result.status).toBe('resolved');
+    if (result.status === 'resolved') {
+      expect(result.entries[0].sourceKey).toBe('aaron-nichols');
+    }
+  });
+});
+
+describe('validateAgainstMemory', () => {
+  it('keeps entries whose sourceKey is in memory', () => {
+    const result = validateAgainstMemory(
+      {
+        status: 'resolved',
+        entries: [{ phrase: 'x', resolvedTo: 'y', sourceKey: 'known-key' }],
+      },
+      new Set(['known-key']),
+    );
+    expect(result.status).toBe('resolved');
+  });
+
+  it('keeps entries with sourceKey "rag" even when memory is empty', () => {
+    const result = validateAgainstMemory(
+      {
+        status: 'resolved',
+        entries: [{ phrase: 'aaron', resolvedTo: 'Aaron Nichols', sourceKey: RAG_SOURCE_KEY }],
+      },
+      new Set(),
+    );
+    expect(result.status).toBe('resolved');
+    if (result.status === 'resolved') {
+      expect(result.entries[0].sourceKey).toBe('rag');
+    }
+  });
+
+  it('drops entries with unknown sourceKey', () => {
+    const result = validateAgainstMemory(
+      {
+        status: 'resolved',
+        entries: [{ phrase: 'x', resolvedTo: 'y', sourceKey: 'made-up' }],
+      },
+      new Set(['real-key']),
+    );
+    expect(result).toEqual({ status: 'noop' });
+  });
+});
+
+describe('renderResolvedBlock (RAG label)', () => {
+  it('renders (from knowledge base) for rag-sourced entries', () => {
+    const entries: ResolvedEntry[] = [
+      { phrase: 'aaron', resolvedTo: 'Aaron Nichols', sourceKey: RAG_SOURCE_KEY },
+    ];
+    const block = renderResolvedBlock(entries);
+    expect(block).toContain('"aaron" → Aaron Nichols');
+    expect(block).toContain('(from knowledge base)');
+    expect(block).not.toContain('(from memory: rag)');
+  });
+
+  it('renders (from memory: <key>) for memory-sourced entries', () => {
+    const entries: ResolvedEntry[] = [
+      { phrase: 'my daughter', resolvedTo: 'Allyson', sourceKey: 'daughter-allyson' },
+    ];
+    const block = renderResolvedBlock(entries);
+    expect(block).toContain('(from memory: daughter-allyson)');
   });
 });
