@@ -582,7 +582,14 @@ export async function startRepl(
       let resolveResult;
       startSpinner();
       try {
-        resolveResult = await resolveReferences(trimmed, memoryStore, config, hints, resolveSignal);
+        resolveResult = await resolveReferences(
+          trimmed,
+          memoryStore,
+          config,
+          hints,
+          resolveSignal,
+          ragStore,
+        );
       } finally {
         stopSpinner();
         clearMenuSignal();
