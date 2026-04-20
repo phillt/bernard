@@ -198,6 +198,7 @@ export async function resolveReferences(
   config: BernardConfig,
   hints?: Map<string, string>,
   abortSignal?: AbortSignal,
+  ragStore?: RAGStore,
 ): Promise<ResolveResult> {
   const contents = memoryStore.getAllMemoryContents();
   contents.delete(REWRITER_HINTS_KEY);
@@ -211,9 +212,21 @@ export async function resolveReferences(
     return { status: 'noop' };
   }
 
+  let ragFacts: RAGSearchResult[] = [];
+  if (ragStore) {
+    try {
+      ragFacts = await ragStore.search(userInput);
+      debugLog('reference-resolver:rag-hits', { count: ragFacts.length });
+    } catch (err) {
+      debugLog('reference-resolver:rag-error', err instanceof Error ? err.message : String(err));
+      ragFacts = [];
+    }
+  }
+
   const userMessage = [
     `## User request\n${userInput}`,
     buildMemoryBlock(contents),
+    buildRagBlock(ragFacts),
     buildHintsBlock(hints),
   ]
     .filter((s) => s.length > 0)
@@ -222,6 +235,7 @@ export async function resolveReferences(
   debugLog('reference-resolver:request', {
     prompt: userInput,
     memoryKeys,
+    ragFactCount: ragFacts.length,
     hints: hints ? Array.from(hints.entries()) : [],
   });
 
