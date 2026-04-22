@@ -1869,7 +1869,10 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           { kind: 'section', title: 'User-created' },
           {
             kind: 'item',
-            item: { label: 'Specialists', description: 'List bundled and user-created specialists.' },
+            item: {
+              label: 'Specialists',
+              description: 'List bundled and user-created specialists.',
+            },
             action: () => printSpecialistsList(),
           },
           {

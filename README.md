@@ -229,28 +229,28 @@ Features:
 
 ### REPL Slash Commands
 
-| Command           | Description                                                                          |
-| ----------------- | ------------------------------------------------------------------------------------ |
-| `/help`           | Show available commands                                                              |
-| `/clear`          | Clear conversation history and scratch notes                                         |
-| `/compact`        | Compress conversation history in-place                                               |
-| `/task`           | Run an isolated task (no history, structured output)                                 |
-| `/memory`         | List all persistent memories                                                         |
-| `/scratch`        | List session scratch notes                                                           |
-| `/mcp`            | List connected MCP servers and their tools                                           |
-| `/cron`           | Show cron jobs and daemon status                                                     |
-| `/rag`            | Show RAG memory stats and recent facts                                               |
-| `/provider`       | Switch LLM provider interactively                                                    |
-| `/model`          | Switch model for the current provider                                                |
-| `/theme`          | Switch color theme                                                                   |
-| `/routines`       | List saved routines                                                                  |
-| `/create-routine` | Create a routine with guided AI assistance                                           |
-| `/create-task`    | Create a task routine (`task-` prefixed) with guided AI assistance                   |
-| `/specialists`    | List saved specialists                                                               |
-| `/candidates`     | Review auto-detected specialist suggestions _(v0.6.0+)_                              |
-| `/agent-options`  | Toggle agent behaviors (critic mode, coordinator/ReAct, prompt rewriter, tool details, auto-create specialists) |
+| Command           | Description                                                                                                      |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `/help`           | Show available commands                                                                                          |
+| `/clear`          | Clear conversation history and scratch notes                                                                     |
+| `/compact`        | Compress conversation history in-place                                                                           |
+| `/task`           | Run an isolated task (no history, structured output)                                                             |
+| `/memory`         | List all persistent memories                                                                                     |
+| `/scratch`        | List session scratch notes                                                                                       |
+| `/mcp`            | List connected MCP servers and their tools                                                                       |
+| `/cron`           | Show cron jobs and daemon status                                                                                 |
+| `/rag`            | Show RAG memory stats and recent facts                                                                           |
+| `/provider`       | Switch LLM provider interactively                                                                                |
+| `/model`          | Switch model for the current provider                                                                            |
+| `/theme`          | Switch color theme                                                                                               |
+| `/routines`       | List saved routines                                                                                              |
+| `/create-routine` | Create a routine with guided AI assistance                                                                       |
+| `/create-task`    | Create a task routine (`task-` prefixed) with guided AI assistance                                               |
+| `/specialists`    | List saved specialists                                                                                           |
+| `/candidates`     | Review auto-detected specialist suggestions _(v0.6.0+)_                                                          |
+| `/agent-options`  | Toggle agent behaviors (critic mode, coordinator/ReAct, prompt rewriter, tool details, auto-create specialists)  |
 | `/options`        | View and modify runtime options (max-tokens, max-steps, shell-timeout, token-window); also includes debug report |
-| `/exit`           | Quit Bernard (also: `exit`, `quit`)                                                  |
+| `/exit`           | Quit Bernard (also: `exit`, `quit`)                                                                              |
 
 Type `/{routine-id}` or `/{specialist-id}` to invoke a saved routine or specialist directly (e.g., `/deploy-staging`).
 
