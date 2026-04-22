@@ -523,7 +523,9 @@ export function printHelp(): void {
     '  ' + t.accent('/help') + t.muted('    — Show this help'),
     '  ' + t.accent('/clear') + t.muted('   — Clear conversation (--save/-s to summarize first)'),
     '  ' + t.accent('/compact') + t.muted(' — Compress conversation history in-place'),
-    '  ' + t.accent('/task') + t.muted('    — Run an isolated task (no history, structured output)'),
+    '  ' +
+      t.accent('/task') +
+      t.muted('    — Run an isolated task (no history, structured output)'),
     '  ' + t.accent('/image') + t.muted('   — Attach an image: /image <path> [prompt]'),
     '  ' + t.accent('/memory') + t.muted('  — List persistent memories'),
     '  ' + t.accent('/scratch') + t.muted(' — List session scratch notes'),
@@ -537,14 +539,16 @@ export function printHelp(): void {
     '  ' + t.accent('/create-routine') + t.muted(' — Create a routine with guided AI assistance'),
     '  ' + t.accent('/create-task') + t.muted(' — Create a task routine with guided AI assistance'),
     '  ' + t.accent('/specialists') + t.muted(' — List specialist agents'),
-    '  ' + t.accent('/create-specialist') + t.muted(' — Create a specialist with guided AI assistance'),
+    '  ' +
+      t.accent('/create-specialist') +
+      t.muted(' — Create a specialist with guided AI assistance'),
     '  ' + t.accent('/candidates') + t.muted(' — Review specialist suggestions'),
-    '  ' + t.accent('/options') +
+    '  ' +
+      t.accent('/options') +
       t.muted('  — View and set options (max-tokens, max-steps, shell-timeout, token-window)'),
-    '  ' + t.accent('/agent-options') +
-      t.muted(
-        ' — Configure agent behavior (toggles, thresholds, saved assets)',
-      ),
+    '  ' +
+      t.accent('/agent-options') +
+      t.muted(' — Configure agent behavior (toggles, thresholds, saved assets)'),
     '  ' + t.accent('/update') + t.muted('   — Check for and install updates'),
     '  ' + t.accent('exit') + t.muted('      — Quit Bernard'),
     '',

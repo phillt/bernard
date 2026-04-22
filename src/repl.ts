@@ -305,12 +305,7 @@ export async function startRepl(
   }
 
   async function toggleBooleanPref(
-    key:
-      | 'criticMode'
-      | 'reactMode'
-      | 'toolDetails'
-      | 'promptRewriter'
-      | 'autoCreateSpecialists',
+    key: 'criticMode' | 'reactMode' | 'toolDetails' | 'promptRewriter' | 'autoCreateSpecialists',
     label: string,
     onMsg: string,
     offMsg: string,
@@ -380,9 +375,7 @@ export async function startRepl(
       if (kind === 'tasks') {
         printInfo('No tasks saved. Use /create-task to define one.');
       } else {
-        printInfo(
-          'No routines saved. Teach me a workflow and I can save it as a routine.',
-        );
+        printInfo('No routines saved. Teach me a workflow and I can save it as a routine.');
       }
       return;
     }
@@ -463,8 +456,7 @@ export async function startRepl(
     console.log(t.muted(`    Coordinator mode: ${config.reactMode ? 'on' : 'off'}`));
     console.log(t.muted(`    Tool details: ${config.toolDetails ? 'on' : 'off'}`));
     console.log(t.muted(`    Prompt rewriter: ${config.promptRewriter ? 'on' : 'off'}`));
-    const debugEnabled =
-      process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
+    const debugEnabled = process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
     console.log(t.muted(`    Debug mode: ${debugEnabled ? 'on' : 'off'}`));
 
     console.log(t.text('\n  Paths:'));
@@ -1786,8 +1778,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           {
             key: 'promptRewriter',
             label: 'Prompt rewriter',
-            description:
-              'Restructure your prompt for the active model family before each turn.',
+            description: 'Restructure your prompt for the active model family before each turn.',
             onMsg:
               '  [REWRITER:ON] User prompts will be restructured for the active model before execution.',
             offMsg: '  [REWRITER:OFF] Prompts will be sent to the model verbatim.',
@@ -1820,15 +1811,9 @@ Remember: the systemPrompt should read like a persona definition — who this sp
               provider: config.provider,
               model: config.model,
             });
-            printInfo(
-              `  Auto-create threshold: ${normalized} (${Math.round(normalized * 100)}%)`,
-            );
+            printInfo(`  Auto-create threshold: ${normalized} (${Math.round(normalized * 100)}%)`);
             if (config.autoCreateSpecialists) {
-              promotePendingCandidates(
-                candidateStore,
-                specialistStore,
-                config.autoCreateThreshold,
-              );
+              promotePendingCandidates(candidateStore, specialistStore, config.autoCreateThreshold);
             }
           } finally {
             clearMenuSignal();

@@ -71,6 +71,7 @@ describe('theme', () => {
       'error',
       'success',
       'dim',
+      'dimItalic',
       'warning',
     ];
 

@@ -533,7 +533,10 @@ describe('buildRecentTurnsBlock', () => {
   it('ignores non-user/non-assistant messages', () => {
     const history: CoreMessage[] = [
       { role: 'user', content: 'hi' },
-      { role: 'tool', content: [{ type: 'tool-result', toolCallId: '1', toolName: 'x', result: {} }] as any },
+      {
+        role: 'tool',
+        content: [{ type: 'tool-result', toolCallId: '1', toolName: 'x', result: {} }] as any,
+      },
     ];
     const block = buildRecentTurnsBlock(history);
     expect(block).toContain('user: hi');

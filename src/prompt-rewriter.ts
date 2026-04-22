@@ -48,12 +48,7 @@ const CONVERSATIONAL_RE =
 const FOLLOWUP_PREFIX_RE =
   /^(what about|how about|and what|why not|why is|why does|is that|does that|can you also|can you now)\b/i;
 
-export type SkipReason =
-  | 'disabled'
-  | 'short-or-structured'
-  | 'conversational'
-  | 'followup'
-  | null;
+export type SkipReason = 'disabled' | 'short-or-structured' | 'conversational' | 'followup' | null;
 
 /**
  * Returns a specific reason string when the rewriter should skip, or `null` to continue.

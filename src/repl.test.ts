@@ -257,7 +257,7 @@ vi.mock('./image.js', () => ({
   loadImage: (...args: any[]) => mockLoadImage(...args),
   tryLoadImage: (...args: any[]) => mockTryLoadImage(...args),
   extractImagePaths: (...args: any[]) => mockExtractImagePaths(...args),
-  stripImagePaths: (...args: any[]) => mockStripImagePaths(...args as [string]),
+  stripImagePaths: (...args: any[]) => mockStripImagePaths(...(args as [string])),
   isVisionCapableModel: (...args: any[]) => mockIsVisionCapableModel(...args),
 }));
 
