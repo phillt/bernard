@@ -23,6 +23,8 @@ import {
   stopSpinner,
   buildSpinnerMessage,
   setToolDetailsVisible,
+  setPinnedRegion,
+  clearPinnedRegion,
   type SpinnerStats,
 } from './output.js';
 import type { Step } from './plan-store.js';
@@ -745,6 +747,86 @@ describe('output', () => {
       expect(lines[1]).toContain('user pivoted');
       expect(lines[2]).toContain('\u2717');
       expect(lines[2]).toContain('no permission');
+    });
+  });
+
+  describe('pinned region visual-row counting', () => {
+    let originalIsTTY: boolean | undefined;
+    let originalColumns: number | undefined;
+
+    beforeEach(() => {
+      originalIsTTY = process.stdout.isTTY;
+      originalColumns = process.stdout.columns;
+      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+      Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
+      // Clear any regions left over from earlier tests (e.g. printPlan).
+      clearPinnedRegion('plan');
+      clearPinnedRegion('test');
+      stdoutWriteSpy.mockClear();
+    });
+
+    afterEach(() => {
+      clearPinnedRegion('plan');
+      clearPinnedRegion('test');
+      Object.defineProperty(process.stdout, 'isTTY', {
+        value: originalIsTTY,
+        configurable: true,
+      });
+      Object.defineProperty(process.stdout, 'columns', {
+        value: originalColumns,
+        configurable: true,
+      });
+    });
+
+    function eraseUpCount(): number {
+      // After the second setPinnedRegion call we expect an erase sequence
+      // `\x1b[<N>A` followed by `\r\x1b[J`. Return N, or 0 if no erase was issued.
+      for (const call of stdoutWriteSpy.mock.calls) {
+        const s = String(call[0]);
+        const match = s.match(/^\x1b\[(\d+)A$/);
+        if (match) return parseInt(match[1], 10);
+      }
+      return 0;
+    }
+
+    it('short lines: erase count equals logical line count', () => {
+      setPinnedRegion('test', ['short', 'also short']);
+      stdoutWriteSpy.mockClear();
+      setPinnedRegion('test', []); // triggers erase
+      expect(eraseUpCount()).toBe(2);
+    });
+
+    it('wrapped line counts as multiple visual rows', () => {
+      // columns=40, a 95-char line wraps to 3 rows.
+      const long = 'a'.repeat(95);
+      setPinnedRegion('test', [long]);
+      stdoutWriteSpy.mockClear();
+      setPinnedRegion('test', []);
+      expect(eraseUpCount()).toBe(3);
+    });
+
+    it('ANSI escape codes excluded from width', () => {
+      // 35 visible chars wrapped in color codes; shouldn't wrap at 40 cols.
+      const colored = `\x1b[31m${'x'.repeat(35)}\x1b[0m`;
+      setPinnedRegion('test', [colored]);
+      stdoutWriteSpy.mockClear();
+      setPinnedRegion('test', []);
+      expect(eraseUpCount()).toBe(1);
+    });
+
+    it('empty string counts as one row', () => {
+      setPinnedRegion('test', ['', '']);
+      stdoutWriteSpy.mockClear();
+      setPinnedRegion('test', []);
+      expect(eraseUpCount()).toBe(2);
+    });
+
+    it('mixed short and wrapped lines sum correctly', () => {
+      // columns=40: short(1) + 80-char(2) + short(1) = 4 rows.
+      setPinnedRegion('test', ['short', 'b'.repeat(80), 'tail']);
+      stdoutWriteSpy.mockClear();
+      setPinnedRegion('test', []);
+      expect(eraseUpCount()).toBe(4);
     });
   });
 

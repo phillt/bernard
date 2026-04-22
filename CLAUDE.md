@@ -17,7 +17,7 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - **src/agent.ts** — Agent loop using AI SDK `generateText` + `maxSteps` + auto-continue on truncation + optional critic verification
 - **src/config.ts** — .env loading, defaults, validation
 - **src/output.ts** — Chalk-based terminal formatting
-- **src/menu.ts** — Reusable numbered-list selection UI (`printMenuList`, `selectFromMenu`, `promptValue`) with Escape/Enter-to-cancel support
+- **src/menu.ts** — Ephemeral arrow-key selection UI rendered via `setPinnedRegion('menu', ...)` (`selectFromMenu`, `promptValue`). Arrow keys move the highlight; Enter commits; Esc/q/Ctrl-C cancel; digits 1-9 commit immediately. Non-TTY or `BERNARD_PLAIN_MENU=1` falls back to a numbered-list + `rl.question` path.
 - **src/theme.ts** — Color theme definitions (bernard, ocean, forest, synthwave, high-contrast, colorblind)
 - **src/domains.ts** — Memory domain registry (tool-usage, user-preferences, general) with specialized extraction prompts
 - **src/routines.ts** — RoutineStore class: per-file JSON storage for named multi-step workflows

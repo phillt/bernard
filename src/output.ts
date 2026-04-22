@@ -27,29 +27,62 @@ const silentTools = new Set<string>(['plan', 'think', 'evaluate']);
 // but never rendered, so chat output stays clean.
 
 const pinnedRegions = new Map<string, string[]>();
-let pinnedLineCount = 0;
+let pinnedVisualRowCount = 0;
 
 function pinSupported(): boolean {
   return !!process.stdout.isTTY;
 }
 
+// CSI escapes contribute to `.length` but occupy zero cells on screen, so
+// they must be removed before computing how many visual rows a line wraps to.
+const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+
+function stripAnsi(s: string): string {
+  return s.replace(ANSI_RE, '');
+}
+
+function currentColumns(): number {
+  return process.stdout.columns || 80;
+}
+
+function visualRowCount(line: string, columns: number): number {
+  const width = stripAnsi(line).length;
+  if (width === 0) return 1;
+  return Math.ceil(width / columns);
+}
+
 function erasePinnedRegions(): void {
-  if (!pinSupported() || pinnedLineCount === 0) return;
-  process.stdout.write(`\x1b[${pinnedLineCount}A`);
+  if (!pinSupported() || pinnedVisualRowCount === 0) return;
+  process.stdout.write(`\x1b[${pinnedVisualRowCount}A`);
   process.stdout.write(`\r\x1b[J`);
-  pinnedLineCount = 0;
+  pinnedVisualRowCount = 0;
 }
 
 function renderPinnedRegions(): void {
   if (!pinSupported() || pinnedRegions.size === 0) return;
-  let count = 0;
+  const columns = currentColumns();
+  let rows = 0;
   for (const lines of pinnedRegions.values()) {
     for (const line of lines) {
       process.stdout.write(line + '\n');
-      count++;
+      rows += visualRowCount(line, columns);
     }
   }
-  pinnedLineCount = count;
+  pinnedVisualRowCount = rows;
+}
+
+if (process.stdout.isTTY) {
+  process.stdout.on('resize', () => {
+    // On resize the row math for the currently-rendered pinned content is
+    // based on the old column count. Redraw from scratch using the new width.
+    if (pinnedRegions.size === 0) return;
+    // Can't reliably erase since cursor position relative to the wrapped
+    // lines is now ambiguous. Just reset the counter and re-render below the
+    // current cursor; scrollback picks up the old copy but the live region
+    // stays correct going forward.
+    pinnedVisualRowCount = 0;
+    renderPinnedRegions();
+  });
 }
 
 function sameLines(a: string[] | undefined, b: string[]): boolean {
