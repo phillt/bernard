@@ -23,6 +23,9 @@ import {
   stopSpinner,
   buildSpinnerMessage,
   setToolDetailsVisible,
+  setPinnedRegion,
+  clearPinnedRegion,
+  visualRowCount,
   type SpinnerStats,
 } from './output.js';
 import type { Step } from './plan-store.js';
@@ -745,6 +748,119 @@ describe('output', () => {
       expect(lines[1]).toContain('user pivoted');
       expect(lines[2]).toContain('\u2717');
       expect(lines[2]).toContain('no permission');
+    });
+  });
+
+  describe('visualRowCount', () => {
+    it('counts a short line as one row', () => {
+      expect(visualRowCount('abc', 80)).toBe(1);
+    });
+
+    it('counts an empty string as one row', () => {
+      expect(visualRowCount('', 40)).toBe(1);
+    });
+
+    it('counts a line exactly equal to columns as one row', () => {
+      expect(visualRowCount('x'.repeat(40), 40)).toBe(1);
+    });
+
+    it('wraps a long line across multiple rows', () => {
+      expect(visualRowCount('a'.repeat(95), 40)).toBe(3);
+    });
+
+    it('excludes ANSI escape codes from width calculation', () => {
+      const colored = `\x1b[31m${'x'.repeat(35)}\x1b[0m`;
+      expect(visualRowCount(colored, 40)).toBe(1);
+    });
+
+    it('handles multiple ANSI sequences per line', () => {
+      const line = `\x1b[1m\x1b[31mhello\x1b[0m world \x1b[32mthere\x1b[0m`;
+      // Visible: "hello world there" = 17 chars, fits in 40 cols.
+      expect(visualRowCount(line, 40)).toBe(1);
+    });
+  });
+
+  describe('pinned region integration', () => {
+    let originalIsTTY: boolean | undefined;
+    let originalColumns: number | undefined;
+
+    beforeEach(() => {
+      originalIsTTY = process.stdout.isTTY;
+      originalColumns = process.stdout.columns;
+      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+      Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
+      clearPinnedRegion('plan');
+      clearPinnedRegion('test');
+      stdoutWriteSpy.mockClear();
+    });
+
+    afterEach(() => {
+      clearPinnedRegion('plan');
+      clearPinnedRegion('test');
+      Object.defineProperty(process.stdout, 'isTTY', {
+        value: originalIsTTY,
+        configurable: true,
+      });
+      Object.defineProperty(process.stdout, 'columns', {
+        value: originalColumns,
+        configurable: true,
+      });
+    });
+
+    it('emits an erase sequence summing visual rows across mixed lines', () => {
+      // columns=40: short(1) + 80-char wrap(2) + short(1) = 4 visual rows.
+      setPinnedRegion('test', ['short', 'b'.repeat(80), 'tail']);
+      stdoutWriteSpy.mockClear();
+      setPinnedRegion('test', []); // triggers erase
+      const moveUp = stdoutWriteSpy.mock.calls
+        .map((c) => String(c[0]))
+        .find((s) => /^\x1b\[\d+A$/.test(s));
+      expect(moveUp).toBe('\x1b[4A');
+    });
+  });
+
+  describe('resize handler', () => {
+    it('re-renders pinned content without emitting an erase sequence', async () => {
+      const originalIsTTY = process.stdout.isTTY;
+      const originalColumns = process.stdout.columns;
+      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+      Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+
+      // Snapshot resize listeners so we can strip any added by the re-imported module.
+      const preListeners = process.stdout.listeners('resize');
+      vi.resetModules();
+      const mod = await import('./output.js');
+
+      const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        mod.setPinnedRegion('test', ['hello world']);
+        writeSpy.mockClear();
+
+        Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
+        process.stdout.emit('resize');
+
+        const writes = writeSpy.mock.calls.map((c) => String(c[0]));
+        expect(writes.some((s) => /^\x1b\[\d+A$/.test(s))).toBe(false);
+        expect(writes.join('')).toContain('hello world');
+
+        mod.clearPinnedRegion('test');
+      } finally {
+        writeSpy.mockRestore();
+        for (const l of process.stdout.listeners('resize')) {
+          if (!preListeners.includes(l)) {
+            process.stdout.removeListener('resize', l as (...args: unknown[]) => void);
+          }
+        }
+        Object.defineProperty(process.stdout, 'isTTY', {
+          value: originalIsTTY,
+          configurable: true,
+        });
+        Object.defineProperty(process.stdout, 'columns', {
+          value: originalColumns,
+          configurable: true,
+        });
+        vi.resetModules();
+      }
     });
   });
 

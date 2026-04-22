@@ -98,7 +98,6 @@ import {
   type ImageAttachment,
 } from './image.js';
 import {
-  printMenuList,
   selectFromMenu,
   promptValue,
   type MenuEntry,
@@ -316,12 +315,14 @@ export async function startRepl(
       { label: 'On', active: config[key] === true },
       { label: 'Off', active: config[key] === false },
     ];
-    printInfo(`\n  ${label}: ${config[key] ? 'ON' : 'OFF'}\n`);
-    printMenuList(entries);
-    console.log();
     const signal = createMenuSignal();
     try {
-      const result = await selectFromMenu(rl, entries, {}, signal);
+      const result = await selectFromMenu(
+        rl,
+        entries,
+        { title: `${label}: ${config[key] ? 'ON' : 'OFF'}` },
+        signal,
+      );
       if (!result.cancelled) {
         config[key] = result.index === 0;
         savePreferences({
@@ -490,13 +491,14 @@ export async function startRepl(
       entries.push({ label: `Remember: "${reference}" → ${c.label}` });
     }
 
-    printInfo(`\n  Ambiguous reference: "${reference}"\n`);
-    printMenuList(entries);
-    console.log();
-
     const signal = createMenuSignal();
     try {
-      const result = await selectFromMenu(rl, entries, { promptLabel: 'Resolve to' }, signal);
+      const result = await selectFromMenu(
+        rl,
+        entries,
+        { title: `Ambiguous reference: "${reference}"`, promptLabel: 'Resolve to' },
+        signal,
+      );
       if (result.cancelled) return { cancelled: true };
 
       const idx = result.index;
@@ -1414,13 +1416,14 @@ export async function startRepl(
           return;
         }
         const entries: MenuEntry[] = available.map((p) => ({ label: p }));
-        printInfo(`\n  Current: ${config.provider} (${config.model})\n`);
-        printInfo('  Available providers:');
-        printMenuList(entries);
-        console.log();
         const signal = createMenuSignal();
         try {
-          const result = await selectFromMenu(rl, entries, {}, signal);
+          const result = await selectFromMenu(
+            rl,
+            entries,
+            { title: `Providers — current: ${config.provider} (${config.model})` },
+            signal,
+          );
           if (!result.cancelled) {
             config.provider = available[result.index];
             config.model = getDefaultModel(config.provider);
@@ -1450,13 +1453,14 @@ export async function startRepl(
           return;
         }
         const entries: MenuEntry[] = models.map((m) => ({ label: m }));
-        printInfo(`\n  Current: ${config.provider} / ${config.model}\n`);
-        printInfo('  Available models:');
-        printMenuList(entries);
-        console.log();
         const signal = createMenuSignal();
         try {
-          const result = await selectFromMenu(rl, entries, {}, signal);
+          const result = await selectFromMenu(
+            rl,
+            entries,
+            { title: `Models — current: ${config.provider} / ${config.model}` },
+            signal,
+          );
           if (!result.cancelled) {
             config.model = models[result.index];
             savePreferences({
@@ -1497,14 +1501,14 @@ export async function startRepl(
           })),
         ];
 
-        printInfo(`\n  Current theme: ${THEMES[currentKey].name}\n`);
-        printInfo('  Themes:');
-        printMenuList(entries);
-        console.log();
-
         const signal = createMenuSignal();
         try {
-          const result = await selectFromMenu(rl, entries, {}, signal);
+          const result = await selectFromMenu(
+            rl,
+            entries,
+            { title: `Themes — current: ${THEMES[currentKey].name}` },
+            signal,
+          );
           if (!result.cancelled) {
             const chosen = result.item.value as string;
             setTheme(chosen);
@@ -1542,17 +1546,13 @@ export async function startRepl(
           { type: 'section', title: 'Info' },
           { label: 'Debug report', description: 'Print a diagnostic report for troubleshooting' },
         ];
-        printInfo('\n  Options:');
-        printMenuList(menuEntries);
-        console.log();
-
         const signal1 = createMenuSignal();
         let optResult: SelectResult;
         try {
           optResult = await selectFromMenu(
             rl,
             menuEntries,
-            { promptLabel: 'Select option' },
+            { title: 'Options', promptLabel: 'Select option' },
             signal1,
           );
         } finally {
@@ -1892,14 +1892,10 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         );
         const itemActions = rows.flatMap((r) => (r.kind === 'item' ? [r.action] : []));
 
-        printInfo('\n  Agent Options:\n');
-        printMenuList(topEntries);
-        console.log();
-
         const signal1 = createMenuSignal();
         let topResult: SelectResult;
         try {
-          topResult = await selectFromMenu(rl, topEntries, {}, signal1);
+          topResult = await selectFromMenu(rl, topEntries, { title: 'Agent Options' }, signal1);
         } finally {
           clearMenuSignal();
         }
