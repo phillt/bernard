@@ -821,6 +821,9 @@ export async function startRepl(
   // Surface pending specialist candidates at session start
   candidateStore.pruneOld();
   candidateStore.reconcileSaved(specialistStore.list());
+  if (config.autoCreateSpecialists) {
+    promotePendingCandidates(candidateStore, specialistStore, config.autoCreateThreshold);
+  }
   const pendingCandidates = candidateStore.listPending();
   if (pendingCandidates.length > 0) {
     printInfo(
