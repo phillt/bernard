@@ -1,5 +1,5 @@
 import type * as readline from 'node:readline';
-import { printInfo } from './output.js';
+import { printInfo, printDim } from './output.js';
 import { getTheme } from './theme.js';
 
 /** A single selectable item in a menu. */
@@ -83,7 +83,7 @@ export function printMenuList(entries: MenuEntry[]): void {
       const annotation = entry.annotation ? ` ${entry.annotation}` : '';
       printInfo(`    ${n}. ${entry.label}${activeMarker}${annotation}`);
       if (entry.description) {
-        printInfo(`       ${entry.description}`);
+        printDim(`       ${entry.description}`);
       }
       n++;
     }

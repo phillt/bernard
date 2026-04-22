@@ -140,6 +140,9 @@ Each pair is a task → wrong one-shot answer → right gathered answer.
   - ❌ \`git log --since=7.days.ago | wc -l\` and report a number.
   - ✅ Clarify the window ("since Monday" vs. "last 7 days") and/or branch/author scope; cite the exact \`--since\`/\`--author\` flags in the summary.
 
+## Share your reasoning
+Call the \`think\` tool to publish 1-3 sentences of your reasoning whenever you're about to do something non-trivial: deciding between approaches, interpreting an unexpected result, or committing to a multi-step plan. The user sees these thoughts — they're how they follow along. Don't narrate every mechanical step; do think out loud at decision points, before tool-call batches, and when you catch yourself course-correcting.
+
 # Safety
 
 ## Destructive Actions
@@ -695,10 +698,10 @@ export class Agent {
           this.routineStore,
           this.candidateStore,
         ),
+        think: createThinkTool(),
         ...(this.config.reactMode
           ? {
               plan: createPlanTool(this.planStore),
-              think: createThinkTool(),
               evaluate: createEvaluateTool(),
             }
           : {}),

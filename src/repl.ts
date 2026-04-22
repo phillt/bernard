@@ -20,6 +20,7 @@ import {
   renderResolvedBlock,
   deriveKeyFromReference,
   shouldSkipResolver,
+  stripToolResolvableTokens,
   type ResolvedEntry,
   type Candidate,
 } from './reference-resolver.js';
@@ -92,6 +93,7 @@ import {
   loadImage,
   tryLoadImage,
   extractImagePaths,
+  stripImagePaths,
   isVisionCapableModel,
   type ImageAttachment,
 } from './image.js';
@@ -575,7 +577,11 @@ export async function startRepl(
   }
 
   async function runReferenceResolver(trimmed: string): Promise<ResolvedEntry[]> {
-    if (shouldSkipResolver(trimmed)) return [];
+    // Strip image-attachment paths and tool-resolvable tokens (URLs, PR/issue refs, file
+    // paths, commit hashes) so the resolver's LLM doesn't mistake them for unresolved
+    // entities. The main agent fetches those directly via shell/gh/web_read.
+    const resolverInput = stripToolResolvableTokens(stripImagePaths(trimmed));
+    if (shouldSkipResolver(resolverInput) || resolverInput.length === 0) return [];
     try {
       const hints = loadRewriterHints(memoryStore);
       const resolveSignal = createMenuSignal();
@@ -583,12 +589,13 @@ export async function startRepl(
       startSpinner();
       try {
         resolveResult = await resolveReferences(
-          trimmed,
+          resolverInput,
           memoryStore,
           config,
           hints,
           resolveSignal,
           ragStore,
+          agent.getHistory(),
         );
       } finally {
         stopSpinner();
@@ -1736,6 +1743,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             | 'promptRewriter'
             | 'toolDetails';
           label: string;
+          description: string;
           onMsg: string;
           offMsg: string;
           onToggle?: (value: boolean) => void;
@@ -1745,6 +1753,8 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           {
             key: 'autoCreateSpecialists',
             label: 'Auto-create specialists',
+            description:
+              'Auto-promote pending specialist candidates whose score exceeds the threshold.',
             onMsg: '  Auto-create specialists: on',
             offMsg: '  Auto-create specialists: off',
             onToggle: (value) => {
@@ -1760,18 +1770,24 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           {
             key: 'criticMode',
             label: 'Critic mode',
+            description:
+              'Plan the response, verify it with a critic pass, and retry on failure before replying.',
             onMsg: '  [CRITIC:ON] Responses will be planned and verified.',
             offMsg: '  [CRITIC:OFF] Critic mode disabled.',
           },
           {
             key: 'reactMode',
             label: 'Coordinator (ReAct) mode',
+            description:
+              'Iterate think → act → evaluate; delegate subtasks to subagents for complex work.',
             onMsg: '  [REACT:ON] Operating as coordinator with iterative reasoning and delegation.',
             offMsg: '  [REACT:OFF] Coordinator mode disabled.',
           },
           {
             key: 'promptRewriter',
             label: 'Prompt rewriter',
+            description:
+              'Restructure your prompt for the active model family before each turn.',
             onMsg:
               '  [REWRITER:ON] User prompts will be restructured for the active model before execution.',
             offMsg: '  [REWRITER:OFF] Prompts will be sent to the model verbatim.',
@@ -1779,6 +1795,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           {
             key: 'toolDetails',
             label: 'Tool details',
+            description: 'Show full tool call args and results in the transcript.',
             onMsg: '  [TOOL-DETAILS:ON] Full tool call args and results will be shown.',
             offMsg: '  [TOOL-DETAILS:OFF] Only tool names shown; args and results hidden.',
             onToggle: setToolDetailsVisible,
@@ -1834,19 +1851,22 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           {
             label: systemBools[0].label,
             annotation: `= ${config.autoCreateSpecialists ? 'on' : 'off'}`,
+            description: systemBools[0].description,
           },
           {
             label: 'Auto-create threshold',
             annotation: `= ${config.autoCreateThreshold} (${Math.round(config.autoCreateThreshold * 100)}%)`,
+            description: 'Minimum score (0-1) a pending specialist needs before auto-promotion.',
           },
           ...systemBools.slice(1).map((opt) => ({
             label: opt.label,
             annotation: `= ${config[opt.key] ? 'on' : 'off'}`,
+            description: opt.description,
           })),
           { type: 'section', title: 'User-created' },
-          { label: 'Specialists' },
-          { label: 'Tasks' },
-          { label: 'Routines' },
+          { label: 'Specialists', description: 'List bundled and user-created specialists.' },
+          { label: 'Tasks', description: 'List saved single-step tasks.' },
+          { label: 'Routines', description: 'List saved multi-step routines.' },
         ];
         printInfo('\n  Agent Options:\n');
         printMenuList(topEntries);

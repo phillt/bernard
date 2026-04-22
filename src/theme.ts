@@ -28,6 +28,8 @@ export interface Theme {
   success: ColorFn;
   /** Dimmed color for de-emphasized content like conversation replays. */
   dim: ColorFn;
+  /** Dimmed italic variant, used for secondary blocks like the `think` tool output. */
+  dimItalic: ColorFn;
   /** Color for warning messages. */
   warning: ColorFn;
   /** Rotating palette of colors assigned to sub-agent prefixes. */
@@ -64,6 +66,7 @@ export const THEMES: Record<string, Theme> = {
     error: chalk.red,
     success: chalk.green,
     dim: chalk.dim,
+    dimItalic: chalk.dim.italic,
     warning: chalk.yellow,
     prefixColors: [chalk.magenta, chalk.blue, chalk.green, chalk.yellow],
     ansi: {
@@ -86,6 +89,7 @@ export const THEMES: Record<string, Theme> = {
     error: chalk.hex('#f87171'),
     success: chalk.hex('#34d399'),
     dim: chalk.dim,
+    dimItalic: chalk.dim.italic,
     warning: chalk.hex('#fbbf24'),
     prefixColors: [
       chalk.hex('#38bdf8'),
@@ -113,6 +117,7 @@ export const THEMES: Record<string, Theme> = {
     error: chalk.hex('#ef4444'),
     success: chalk.hex('#4ade80'),
     dim: chalk.dim,
+    dimItalic: chalk.dim.italic,
     warning: chalk.hex('#facc15'),
     prefixColors: [
       chalk.hex('#4ade80'),
@@ -140,6 +145,7 @@ export const THEMES: Record<string, Theme> = {
     error: chalk.hex('#fb7185'),
     success: chalk.hex('#34d399'),
     dim: chalk.dim,
+    dimItalic: chalk.dim.italic,
     warning: chalk.hex('#fde68a'),
     prefixColors: [
       chalk.hex('#f472b6'),
@@ -167,6 +173,7 @@ export const THEMES: Record<string, Theme> = {
     error: chalk.bold.redBright,
     success: chalk.bold.greenBright,
     dim: chalk.white,
+    dimItalic: chalk.white.italic,
     warning: chalk.bold.yellowBright,
     prefixColors: [
       chalk.bold.magentaBright,
@@ -194,6 +201,7 @@ export const THEMES: Record<string, Theme> = {
     error: chalk.hex('#DC267F'),
     success: chalk.hex('#648FFF'),
     dim: chalk.dim,
+    dimItalic: chalk.dim.italic,
     warning: chalk.hex('#FFB000'),
     prefixColors: [
       chalk.hex('#785EF0'),

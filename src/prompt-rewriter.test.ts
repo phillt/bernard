@@ -17,7 +17,7 @@ vi.mock('ai', async () => {
   };
 });
 
-import { rewritePrompt, shouldSkipRewriter } from './prompt-rewriter.js';
+import { rewritePrompt, shouldSkipRewriter, skipRewriterReason } from './prompt-rewriter.js';
 import type { ModelProfile } from './providers/profiles.js';
 import type { ResolvedEntry } from './reference-resolver.js';
 import type { BernardConfig } from './config.js';
@@ -76,6 +76,37 @@ describe('shouldSkipRewriter', () => {
   it('does not skip normal prose prompts', () => {
     expect(shouldSkipRewriter(LONG_INPUT)).toBe(false);
     expect(shouldSkipRewriter('what is going on with the build')).toBe(false);
+  });
+});
+
+describe('shouldSkipRewriter — conversational heuristics', () => {
+  it('skips bare acknowledgments', () => {
+    expect(skipRewriterReason('thanks!')).toBe('conversational');
+    expect(skipRewriterReason('got it')).toBe('conversational');
+    expect(skipRewriterReason('sounds good')).toBe('conversational');
+    expect(skipRewriterReason('continue')).toBe('conversational');
+  });
+
+  it('skips single-word conversational questions', () => {
+    expect(skipRewriterReason('really?')).toBe('conversational');
+    expect(skipRewriterReason('why?')).toBe('conversational');
+    expect(skipRewriterReason('how come?')).toBe('conversational');
+  });
+
+  it('skips followup prefixes that key off conversation state', () => {
+    expect(skipRewriterReason('what about the other one?')).toBe('followup');
+    expect(skipRewriterReason('how about tomorrow?')).toBe('followup');
+    expect(skipRewriterReason('why not keep the old one')).toBe('followup');
+    expect(skipRewriterReason('can you also add tests')).toBe('followup');
+  });
+
+  it('does NOT skip a substantive request that happens to start with "ok"', () => {
+    expect(skipRewriterReason('ok so rewrite this function to handle nulls')).toBeNull();
+    expect(skipRewriterReason('okay, next please look at src/foo.ts and fix it')).toBeNull();
+  });
+
+  it('does NOT skip long prose even if it contains conversational words', () => {
+    expect(skipRewriterReason(LONG_INPUT)).toBeNull();
   });
 });
 

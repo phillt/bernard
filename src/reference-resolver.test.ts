@@ -38,12 +38,15 @@ import {
   shouldSkipResolver,
   deriveKeyFromReference,
   validateAgainstMemory,
+  buildRecentTurnsBlock,
+  stripToolResolvableTokens,
   RAG_SOURCE_KEY,
   type ResolvedEntry,
 } from './reference-resolver.js';
 import { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import type { BernardConfig } from './config.js';
+import type { CoreMessage } from 'ai';
 
 function makeConfig(): BernardConfig {
   return {
@@ -465,6 +468,130 @@ describe('validateAgainstMemory', () => {
   });
 });
 
+describe('buildRecentTurnsBlock', () => {
+  it('returns empty string for empty history', () => {
+    expect(buildRecentTurnsBlock([])).toBe('');
+  });
+
+  it('extracts string content from user turns', () => {
+    const history: CoreMessage[] = [{ role: 'user', content: 'aaron is my PhoneBurner teammate' }];
+    const block = buildRecentTurnsBlock(history);
+    expect(block).toContain('## Recent conversation');
+    expect(block).toContain('user: aaron is my PhoneBurner teammate');
+  });
+
+  it('extracts text parts from assistant turns', () => {
+    const history: CoreMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text' as const, text: 'Got it — Aaron is noted.' },
+          { type: 'tool-call' as const, toolCallId: '1', toolName: 'memory', args: {} },
+        ] as any,
+      },
+    ];
+    const block = buildRecentTurnsBlock(history);
+    expect(block).toContain('assistant: Got it — Aaron is noted.');
+  });
+
+  it('caps at most N recent turns (oldest dropped)', () => {
+    const history: CoreMessage[] = [
+      { role: 'user', content: 'turn 1' },
+      { role: 'assistant', content: 'turn 2' },
+      { role: 'user', content: 'turn 3' },
+      { role: 'assistant', content: 'turn 4' },
+      { role: 'user', content: 'turn 5' },
+      { role: 'assistant', content: 'turn 6' },
+    ];
+    const block = buildRecentTurnsBlock(history);
+    expect(block).not.toContain('turn 1');
+    expect(block).not.toContain('turn 2');
+    expect(block).toContain('turn 6');
+  });
+
+  it('truncates very long turns with ellipsis', () => {
+    const longText = 'x'.repeat(1000);
+    const history: CoreMessage[] = [{ role: 'user', content: longText }];
+    const block = buildRecentTurnsBlock(history);
+    expect(block).toContain('…');
+    expect(block.length).toBeLessThan(longText.length);
+  });
+
+  it('skips messages with empty text (e.g. tool-only assistant turns)', () => {
+    const history: CoreMessage[] = [
+      { role: 'user', content: 'hello' },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call' as const, toolCallId: '1', toolName: 'x', args: {} }] as any,
+      },
+    ];
+    const block = buildRecentTurnsBlock(history);
+    expect(block).toContain('user: hello');
+    expect(block).not.toContain('assistant:');
+  });
+
+  it('ignores non-user/non-assistant messages', () => {
+    const history: CoreMessage[] = [
+      { role: 'user', content: 'hi' },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: '1', toolName: 'x', result: {} }] as any },
+    ];
+    const block = buildRecentTurnsBlock(history);
+    expect(block).toContain('user: hi');
+    expect(block).not.toContain('tool:');
+  });
+});
+
+describe('resolveReferences with history', () => {
+  beforeEach(() => {
+    generateTextMock.mockReset();
+  });
+
+  it('injects the recent-conversation block into the user message', async () => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ status: 'noop' }) });
+    const store = makeStore({});
+    const history: CoreMessage[] = [
+      { role: 'user', content: 'aaron is my PhoneBurner teammate' },
+      { role: 'assistant', content: 'Understood. I will remember that.' },
+    ];
+    await resolveReferences(
+      'assign the open PRs to aaron',
+      store,
+      makeConfig(),
+      undefined,
+      undefined,
+      undefined,
+      history,
+    );
+    const userContent = generateTextMock.mock.calls[0][0].messages[0].content as string;
+    expect(userContent).toContain('## Recent conversation');
+    expect(userContent).toContain('aaron is my PhoneBurner teammate');
+  });
+
+  it('omits the recent-conversation block when history is empty', async () => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ status: 'noop' }) });
+    const store = makeStore({});
+    await resolveReferences(
+      'assign the open PRs to aaron',
+      store,
+      makeConfig(),
+      undefined,
+      undefined,
+      undefined,
+      [],
+    );
+    const userContent = generateTextMock.mock.calls[0][0].messages[0].content as string;
+    expect(userContent).not.toContain('## Recent conversation');
+  });
+
+  it('omits the recent-conversation block when history arg is undefined', async () => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ status: 'noop' }) });
+    const store = makeStore({});
+    await resolveReferences('assign the open PRs to aaron', store, makeConfig());
+    const userContent = generateTextMock.mock.calls[0][0].messages[0].content as string;
+    expect(userContent).not.toContain('## Recent conversation');
+  });
+});
+
 describe('renderResolvedBlock (RAG label)', () => {
   it('renders (from knowledge base) for rag-sourced entries', () => {
     const entries: ResolvedEntry[] = [
@@ -482,5 +609,74 @@ describe('renderResolvedBlock (RAG label)', () => {
     ];
     const block = renderResolvedBlock(entries);
     expect(block).toContain('(from memory: daughter-allyson)');
+  });
+});
+
+describe('stripToolResolvableTokens', () => {
+  it('strips https and http URLs', () => {
+    expect(stripToolResolvableTokens('review https://github.com/foo/bar/pull/3')).toBe('review');
+    expect(stripToolResolvableTokens('see http://example.com/x')).toBe('see');
+  });
+
+  it('strips "PR 3802", "issue 45", and "#123" references', () => {
+    expect(stripToolResolvableTokens('look at PR 3802 please')).toBe('look at please');
+    expect(stripToolResolvableTokens('check issue 45')).toBe('check');
+    expect(stripToolResolvableTokens('fix #123 today')).toBe('fix today');
+    expect(stripToolResolvableTokens('close pull 99')).toBe('close');
+  });
+
+  it('strips absolute and home-relative file paths', () => {
+    expect(stripToolResolvableTokens('summarize /home/me/notes.md')).toBe('summarize');
+    expect(stripToolResolvableTokens('open ~/.config/app.json')).toBe('open');
+    expect(stripToolResolvableTokens('read ./src/foo.ts for context')).toBe('read for context');
+  });
+
+  it('strips commit hashes (7–40 hex chars)', () => {
+    expect(stripToolResolvableTokens('revert abcdef1 for me')).toBe('revert for me');
+    expect(stripToolResolvableTokens('diff 0123456789abcdef')).toBe('diff');
+    // 6-char hex is below the threshold and must not be stripped.
+    expect(stripToolResolvableTokens('commit abc123')).toBe('commit abc123');
+  });
+
+  it('leaves bare names, word-pairs, and hostnames alone', () => {
+    expect(stripToolResolvableTokens('tell me about aaron')).toBe('tell me about aaron');
+    expect(stripToolResolvableTokens('does foo.bar work')).toBe('does foo.bar work');
+    expect(stripToolResolvableTokens("aaron's PR needs review")).toBe("aaron's PR needs review");
+  });
+
+  it('returns empty string for URL-only input', () => {
+    expect(stripToolResolvableTokens('https://github.com/foo/bar')).toBe('');
+    expect(stripToolResolvableTokens('  /home/me/x.md  ')).toBe('');
+  });
+});
+
+describe('resolveReferences short-circuits tool-resolvable input', () => {
+  beforeEach(() => {
+    generateTextMock.mockReset();
+  });
+
+  it('does not call generateText when the reference phrase is entirely a URL', async () => {
+    // The REPL layer pipes input through stripToolResolvableTokens, but the resolver itself
+    // also benefits: a prompt with no possessive/demonstrative tokens after stripping
+    // should skip. Here we verify the existing skip path still fires — `https://...` alone
+    // has no reference signal, so shouldSkipResolver returns true and generateText is never
+    // called.
+    const store = makeStore({});
+    const result = await resolveReferences(
+      'https://github.com/foo/bar/pull/3',
+      store,
+      makeConfig(),
+    );
+    expect(result).toEqual({ status: 'noop' });
+    expect(generateTextMock).not.toHaveBeenCalled();
+  });
+
+  it('still calls generateText for a bare-name reference with no tool-resolvable tokens', async () => {
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({ status: 'unknown', reference: 'my brother' }),
+    });
+    const store = makeStore({});
+    await resolveReferences('did my brother email me', store, makeConfig());
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -139,6 +139,7 @@ const mockBuildSpinnerMessage = vi.fn();
 vi.mock('./output.js', () => ({
   printHelp: (...args: any[]) => mockPrintHelp(...args),
   printInfo: (...args: any[]) => mockPrintInfo(...args),
+  printDim: (...args: any[]) => mockPrintInfo(...args),
   printError: (...args: any[]) => mockPrintError(...args),
   printWarning: (...args: any[]) => mockPrintWarning(...args),
   printWelcome: (...args: any[]) => mockPrintWelcome(...args),
@@ -250,11 +251,13 @@ vi.mock('./specialist-detector.js', () => ({
 const mockLoadImage = vi.fn();
 const mockTryLoadImage = vi.fn();
 const mockExtractImagePaths = vi.fn(() => []);
+const mockStripImagePaths = vi.fn((text: string) => text);
 const mockIsVisionCapableModel = vi.fn(() => true);
 vi.mock('./image.js', () => ({
   loadImage: (...args: any[]) => mockLoadImage(...args),
   tryLoadImage: (...args: any[]) => mockTryLoadImage(...args),
   extractImagePaths: (...args: any[]) => mockExtractImagePaths(...args),
+  stripImagePaths: (...args: any[]) => mockStripImagePaths(...args as [string]),
   isVisionCapableModel: (...args: any[]) => mockIsVisionCapableModel(...args),
 }));
 

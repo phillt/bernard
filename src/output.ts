@@ -285,6 +285,11 @@ export function printInfo(message: string): void {
   emit(getTheme().muted(message));
 }
 
+/** Prints a dimmed, de-emphasized line — used for secondary text like menu descriptions. */
+export function printDim(message: string): void {
+  emit(getTheme().dim(message));
+}
+
 /** Prints a warning message in the theme's warning color. */
 export function printWarning(message: string): void {
   stopSpinner();
@@ -379,12 +384,16 @@ export function printPlan(steps: Step[], prefix?: string): void {
   setPinnedRegion('plan', lines);
 }
 
-/** Prints a visible thought line. */
+/** Prints a visible thought block, styled as secondary (dim italic) so it reads below the main response. */
 export function printThought(thought: string, prefix?: string): void {
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  emit(label + t.accent(`  ${thought}`));
+  emit(label + t.dim('◉ thinking'));
+  for (const line of thought.split('\n')) {
+    emit(label + t.dimItalic(line));
+  }
+  emit(label + '');
 }
 
 /** Prints a visible post-action self-evaluation prefixed with a magnifying glass. */

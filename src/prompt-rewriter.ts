@@ -34,12 +34,45 @@ const STRUCTURED_PREFIX = /^\s*(task:|#\s|<[a-z])/i;
 /** Reject suspiciously short rewrites relative to the source (catches truncation). */
 const MIN_REWRITE_RATIO = 0.4;
 
-export function shouldSkipRewriter(input: string): boolean {
+/**
+ * Whole-prompt matches for conversational replies and acknowledgments. Full-match only —
+ * "ok" alone is a followup, but "ok so what I need is..." is a real request.
+ */
+const CONVERSATIONAL_RE =
+  /^(ok(ay)?|thanks?|thank you|yes|yep|yeah|no|nope|sure|cool|got it|sounds good|continue|go ahead|keep going|next|and|also|why|how come|really|hmm+|what)[.!?]*$/i;
+
+/**
+ * Short follow-up prefixes that key off conversation state. No nouns worth inlining,
+ * no structure to reshape — pass the prompt through to the main agent untouched.
+ */
+const FOLLOWUP_PREFIX_RE =
+  /^(what about|how about|and what|why not|why is|why does|is that|does that|can you also|can you now)\b/i;
+
+export type SkipReason =
+  | 'disabled'
+  | 'short-or-structured'
+  | 'conversational'
+  | 'followup'
+  | null;
+
+/**
+ * Returns a specific reason string when the rewriter should skip, or `null` to continue.
+ * Exposed so the REPL (and tests) can log the precise skip cause.
+ */
+export function skipRewriterReason(input: string): SkipReason {
   const trimmed = input.trim();
-  if (trimmed.length < MIN_INPUT_CHARS) return true;
-  if (trimmed.startsWith('/')) return true;
-  if (STRUCTURED_PREFIX.test(trimmed)) return true;
-  return false;
+  // Check conversational / followup patterns first so they report a specific reason
+  // rather than falling through to the length check for short acknowledgments like "why?".
+  if (CONVERSATIONAL_RE.test(trimmed)) return 'conversational';
+  if (FOLLOWUP_PREFIX_RE.test(trimmed)) return 'followup';
+  if (trimmed.length < MIN_INPUT_CHARS) return 'short-or-structured';
+  if (trimmed.startsWith('/')) return 'short-or-structured';
+  if (STRUCTURED_PREFIX.test(trimmed)) return 'short-or-structured';
+  return null;
+}
+
+export function shouldSkipRewriter(input: string): boolean {
+  return skipRewriterReason(input) !== null;
 }
 
 function buildSystemPrompt(profile: ModelProfile): string {
@@ -56,7 +89,13 @@ Output strict JSON and nothing else. One of:
   {"status":"noop"}
   {"status":"rewritten","text":"…"}
 
-Prefer "noop" whenever the input is already clear, short, or conversational.`;
+Prefer "noop" generously. Specifically return "noop" when the input is:
+- A followup or clarification to a previous turn (e.g. "why not?", "what about the other one?", "and then?").
+- An acknowledgment or conversational reply (e.g. "ok thanks", "got it", "sounds good").
+- A short single-sentence question that is already unambiguous.
+- Already clearly structured.
+
+Only rewrite when the original prompt has real ambiguity or missing structure that a lossless transform can fix. When in doubt, "noop".`;
 }
 
 function buildUserMessage(input: string, resolvedEntries: ResolvedEntry[]): string {
@@ -99,8 +138,9 @@ export async function rewritePrompt(
     debugLog('prompt-rewriter:skip', { reason: 'disabled' });
     return { status: 'noop' };
   }
-  if (shouldSkipRewriter(input)) {
-    debugLog('prompt-rewriter:skip', { reason: 'short-or-structured', input });
+  const skipReason = skipRewriterReason(input);
+  if (skipReason !== null) {
+    debugLog('prompt-rewriter:skip', { reason: skipReason, input });
     return { status: 'noop' };
   }
 

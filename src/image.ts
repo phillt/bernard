@@ -124,6 +124,15 @@ export function extractImagePaths(text: string): string[] {
 }
 
 /**
+ * Removes image-path tokens from user text. Used to sanitize input before handing it to
+ * the reference resolver so attachment paths aren't mistaken for unresolved entities.
+ */
+export function stripImagePaths(text: string): string {
+  const re = new RegExp(IMAGE_PATH_RE.source, 'gi');
+  return text.replace(re, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
  * Heuristic check for whether the given provider/model combination supports image input.
  *
  * - Anthropic: all models are treated as vision-capable (all current models are Claude 3+).

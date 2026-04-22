@@ -1,4 +1,4 @@
-import { generateText } from 'ai';
+import { generateText, type CoreMessage } from 'ai';
 import { getModel } from './providers/index.js';
 import { debugLog } from './logger.js';
 import { sanitizeKey, REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
@@ -51,8 +51,10 @@ For each phrase:
 - If no memory entry matches but a fact in "## Relevant known facts" unambiguously identifies the person or thing, include it in \`entries\` with \`sourceKey: "rag"\`. Draw \`resolvedTo\` from the fact text.
 - Prefer a memory entry over a RAG fact when both match the same phrase.
 - If MULTIPLE memory entries plausibly match, stop and return status \`ambiguous\` for the FIRST ambiguous reference with 2-4 candidates. Do not guess.
-- If the phrase clearly names a specific person, organization, or concrete thing (e.g. "my brother", "my dentist", "the car", "aaron") AND neither memory nor known facts match AND resolving it is necessary to complete the request, stop and return status \`unknown\` for the FIRST such reference. The caller will prompt the user.
+- If the phrase clearly names a specific person, organization, or concrete thing (e.g. "my brother", "my dentist", "the car", "aaron") AND neither memory nor known facts match AND the reference was NOT already introduced in "## Recent conversation" AND resolving it is necessary to complete the request, stop and return status \`unknown\` for the FIRST such reference. The caller will prompt the user.
+- If the reference was already introduced or clarified in "## Recent conversation" (e.g. the user or assistant named the person/thing earlier in this session), return \`noop\` for that phrase. The downstream agent has full history access and can resolve it without our help.
 - Generic words ("the file", "this code", "the bug", "the PR", "my response", "my email") that don't point at a stored entity are NOT references — omit and prefer \`noop\`.
+- Tool-resolvable identifiers (URLs like \`https://github.com/...\`, PR/issue numbers like \`#3802\` or \`PR 3802\`, file paths like \`/home/user/foo.md\`, commit hashes, package names, API endpoints) are NOT references — the downstream agent will fetch them with \`shell\`, \`gh\`, \`web_read\`, or similar tools. Omit them and prefer \`noop\`. Example: for "review PR https://github.com/foo/bar/pull/123", return \`{"status":"noop"}\`.
 
 Output strict JSON matching one of these shapes and nothing else:
   {"status":"noop"}
@@ -70,6 +72,26 @@ Rules:
 const POSSESSIVE_PRESCAN = /\b(my|our|her|his|their)\s+\w+/i;
 // Require 2+ words after "the/this/that" to avoid generic "the bug" / "this code" false-positives.
 const DEMONSTRATIVE_PRESCAN = /\b(the|this|that)\s+\w+\s+\w+/i;
+
+const URL_RE = /https?:\/\/\S+/gi;
+const GH_REF_RE = /\b(?:PR|issue|pull|issues)[\s#]*\d+\b|#\d+\b/gi;
+const FILE_PATH_RE = /(?<!\S)(?:~|\.{1,2})?\/[\w./\-]+/g;
+const COMMIT_HASH_RE = /\b[a-f0-9]{7,40}\b/gi;
+
+/**
+ * Remove tokens that the main agent can resolve with tools (URLs, PR/issue refs,
+ * file paths, commit hashes) before the reference resolver sees the input.
+ * Mirrors {@link ../image.ts:stripImagePaths} in shape and intent.
+ */
+export function stripToolResolvableTokens(text: string): string {
+  return text
+    .replace(URL_RE, ' ')
+    .replace(GH_REF_RE, ' ')
+    .replace(FILE_PATH_RE, ' ')
+    .replace(COMMIT_HASH_RE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 export function shouldSkipResolver(userInput: string): boolean {
   // Run the resolver when the prompt contains a strong reference signal (possessive, or a
@@ -91,6 +113,40 @@ const MAX_MEMORY_ENTRIES_IN_PROMPT = 40;
 const MAX_MEMORY_PREVIEW_CHARS = 140;
 const MAX_RAG_FACTS_IN_PROMPT = 12;
 const MAX_RAG_FACT_CHARS = 240;
+const RECENT_TURNS_IN_PROMPT = 4;
+const MAX_TURN_PREVIEW_CHARS = 300;
+
+function extractMessageText(msg: CoreMessage): string {
+  if (typeof msg.content === 'string') return msg.content;
+  if (!Array.isArray(msg.content)) return '';
+  const parts: string[] = [];
+  for (const part of msg.content) {
+    if (part.type === 'text' && typeof part.text === 'string') {
+      parts.push(part.text);
+    }
+  }
+  return parts.join(' ');
+}
+
+export function buildRecentTurnsBlock(history: CoreMessage[]): string {
+  if (history.length === 0) return '';
+  const turns: { role: string; text: string }[] = [];
+  for (let i = history.length - 1; i >= 0 && turns.length < RECENT_TURNS_IN_PROMPT; i--) {
+    const msg = history[i];
+    if (msg.role !== 'user' && msg.role !== 'assistant') continue;
+    const text = extractMessageText(msg).trim().replace(/\s+/g, ' ');
+    if (text.length === 0) continue;
+    const preview =
+      text.length > MAX_TURN_PREVIEW_CHARS ? text.slice(0, MAX_TURN_PREVIEW_CHARS) + '…' : text;
+    turns.unshift({ role: msg.role, text: preview });
+  }
+  if (turns.length === 0) return '';
+  const lines: string[] = ['## Recent conversation'];
+  for (const t of turns) {
+    lines.push(`- ${t.role}: ${t.text}`);
+  }
+  return lines.join('\n');
+}
 
 function buildRagBlock(facts: RAGSearchResult[]): string {
   if (facts.length === 0) return '';
@@ -199,6 +255,7 @@ export async function resolveReferences(
   hints?: Map<string, string>,
   abortSignal?: AbortSignal,
   ragStore?: RAGStore,
+  recentHistory?: CoreMessage[],
 ): Promise<ResolveResult> {
   const contents = memoryStore.getAllMemoryContents();
   contents.delete(REWRITER_HINTS_KEY);
@@ -223,8 +280,11 @@ export async function resolveReferences(
     }
   }
 
+  const historyBlock = recentHistory ? buildRecentTurnsBlock(recentHistory) : '';
+
   const userMessage = [
     `## User request\n${userInput}`,
+    historyBlock,
     buildMemoryBlock(contents),
     buildRagBlock(ragFacts),
     buildHintsBlock(hints),
@@ -236,6 +296,7 @@ export async function resolveReferences(
     prompt: userInput,
     memoryKeys,
     ragFactCount: ragFacts.length,
+    recentTurnCount: historyBlock ? historyBlock.split('\n').length - 1 : 0,
     hints: hints ? Array.from(hints.entries()) : [],
   });
 

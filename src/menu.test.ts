@@ -12,8 +12,10 @@ import {
 // ── Mock output + theme ──────────────────────────────────
 
 const mockPrintInfo = vi.fn();
+const mockPrintDim = vi.fn();
 vi.mock('./output.js', () => ({
   printInfo: (...args: any[]) => mockPrintInfo(...args),
+  printDim: (...args: any[]) => mockPrintDim(...args),
 }));
 
 vi.mock('./theme.js', () => ({
@@ -86,6 +88,7 @@ describe('getMenuItem', () => {
 describe('printMenuList', () => {
   beforeEach(() => {
     mockPrintInfo.mockClear();
+    mockPrintDim.mockClear();
   });
 
   it('prints numbered items', () => {
@@ -105,10 +108,12 @@ describe('printMenuList', () => {
     expect(calls).toContain('    4. Purple (new)');
   });
 
-  it('prints descriptions on a second line', () => {
+  it('prints descriptions on a second line via printDim (dimmer than labels)', () => {
     printMenuList(entriesWithDescription);
-    expect(mockPrintInfo).toHaveBeenCalledWith('       Max response tokens');
-    expect(mockPrintInfo).toHaveBeenCalledWith('       Shell command timeout');
+    expect(mockPrintDim).toHaveBeenCalledWith('       Max response tokens');
+    expect(mockPrintDim).toHaveBeenCalledWith('       Shell command timeout');
+    // Descriptions must not land on printInfo (same color as labels defeats the purpose).
+    expect(mockPrintInfo).not.toHaveBeenCalledWith('       Max response tokens');
   });
 
   it('handles empty entries without error', () => {
