@@ -5,6 +5,8 @@ import {
   getMenuItem,
   selectFromMenu,
   promptValue,
+  renderMenuLines,
+  buildLegacyLines,
   MENU_REGION_ID,
   type MenuEntry,
 } from './menu.js';
@@ -207,7 +209,8 @@ describe('selectFromMenu (fallback path)', () => {
 
 describe('selectFromMenu (interactive path)', () => {
   let rl: any;
-  let originalIsTTY: boolean | undefined;
+  let originalStdoutIsTTY: boolean | undefined;
+  let originalStdinIsTTY: boolean | undefined;
   let originalSetRawMode: any;
   let originalIsRaw: any;
   let originalPlainMenu: string | undefined;
@@ -218,8 +221,10 @@ describe('selectFromMenu (interactive path)', () => {
     mockSetPinnedRegion.mockClear();
     mockClearPinnedRegion.mockClear();
 
-    originalIsTTY = process.stdout.isTTY;
+    originalStdoutIsTTY = process.stdout.isTTY;
+    originalStdinIsTTY = process.stdin.isTTY;
     Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
     originalPlainMenu = process.env.BERNARD_PLAIN_MENU;
     delete process.env.BERNARD_PLAIN_MENU;
 
@@ -230,10 +235,12 @@ describe('selectFromMenu (interactive path)', () => {
   });
 
   afterEach(() => {
-    // Menu code owns the 'keypress' listener lifecycle; just in case a test
-    // leaks one, clean up the ones our test added.
     Object.defineProperty(process.stdout, 'isTTY', {
-      value: originalIsTTY,
+      value: originalStdoutIsTTY,
+      configurable: true,
+    });
+    Object.defineProperty(process.stdin, 'isTTY', {
+      value: originalStdinIsTTY,
       configurable: true,
     });
     if (originalPlainMenu !== undefined) process.env.BERNARD_PLAIN_MENU = originalPlainMenu;
@@ -431,5 +438,106 @@ describe('promptValue', () => {
     await promptValue(rl, { label: 'New threshold' });
     const promptStr = rl.question.mock.calls[0][0] as string;
     expect(promptStr).toContain('New threshold');
+  });
+});
+
+describe('renderMenuLines', () => {
+  it('renders the title as the first line when provided', () => {
+    const lines = renderMenuLines(simpleEntries, 0, { title: 'Pick one' });
+    expect(lines[0]).toContain('Pick one');
+  });
+
+  it('omits the title block when none is provided', () => {
+    const lines = renderMenuLines(simpleEntries, 0, undefined);
+    expect(lines[0]).not.toContain('Pick one');
+    expect(lines[0]).toContain('1. Alpha');
+  });
+
+  it('marks only the highlighted row with the > cursor', () => {
+    const lines = renderMenuLines(simpleEntries, 1, undefined);
+    const alpha = lines.find((l) => l.includes('Alpha'))!;
+    const beta = lines.find((l) => l.includes('Beta'))!;
+    const gamma = lines.find((l) => l.includes('Gamma'))!;
+    expect(alpha).not.toMatch(/^\s*>/);
+    expect(beta).toMatch(/^\s*>\s/);
+    expect(gamma).not.toMatch(/^\s*>/);
+  });
+
+  it('shows the description only under the highlighted item', () => {
+    const entries: MenuEntry[] = [
+      { label: 'One', description: 'first desc' },
+      { label: 'Two', description: 'second desc' },
+    ];
+    const lines = renderMenuLines(entries, 1, undefined);
+    expect(lines.some((l) => l.includes('second desc'))).toBe(true);
+    expect(lines.some((l) => l.includes('first desc'))).toBe(false);
+  });
+
+  it('renders section headers as unselectable rows', () => {
+    const lines = renderMenuLines(groupedEntries, 0, undefined);
+    expect(lines.some((l) => l.includes('Cool colors:'))).toBe(true);
+  });
+
+  it('appends active and annotation markers on item labels', () => {
+    const lines = renderMenuLines(groupedEntries, 0, undefined);
+    const redLine = lines.find((l) => l.includes('Red'))!;
+    expect(redLine).toContain('(active)');
+    const purpleLine = lines.find((l) => l.includes('Purple'))!;
+    expect(purpleLine).toContain('(new)');
+  });
+
+  it('includes the footer hint as the last line', () => {
+    const lines = renderMenuLines(simpleEntries, 0, undefined);
+    const footer = lines[lines.length - 1];
+    expect(footer).toContain('Enter');
+    expect(footer).toContain('Esc');
+  });
+
+  it('numbers items from 1 skipping sections', () => {
+    const lines = renderMenuLines(groupedEntries, 0, undefined);
+    expect(lines.some((l) => /1\. Red/.test(l))).toBe(true);
+    expect(lines.some((l) => /2\. Green/.test(l))).toBe(true);
+    expect(lines.some((l) => /3\. Blue/.test(l))).toBe(true);
+    expect(lines.some((l) => /4\. Purple/.test(l))).toBe(true);
+  });
+});
+
+describe('buildLegacyLines', () => {
+  it('numbers items and skips sections in numbering', () => {
+    const out = buildLegacyLines(groupedEntries);
+    const texts = out.map((l) => l.text);
+    expect(texts.some((t) => /1\. Red/.test(t))).toBe(true);
+    expect(texts.some((t) => /2\. Green/.test(t))).toBe(true);
+    expect(texts.some((t) => /3\. Blue/.test(t))).toBe(true);
+    expect(texts.some((t) => /4\. Purple/.test(t))).toBe(true);
+  });
+
+  it('includes section headers verbatim', () => {
+    const out = buildLegacyLines(groupedEntries);
+    expect(out.some((l) => l.text.includes('Cool colors:'))).toBe(true);
+  });
+
+  it('appends (active) and annotation markers', () => {
+    const out = buildLegacyLines(groupedEntries);
+    expect(out.some((l) => l.text.includes('Red (active)'))).toBe(true);
+    expect(out.some((l) => l.text.includes('Purple (new)'))).toBe(true);
+  });
+
+  it('tags description rows as dim', () => {
+    const entries: MenuEntry[] = [{ label: 'One', description: 'more info' }];
+    const out = buildLegacyLines(entries);
+    const desc = out.find((l) => l.text.includes('more info'))!;
+    expect(desc.dim).toBe(true);
+  });
+
+  it('does not tag label rows as dim', () => {
+    const out = buildLegacyLines(simpleEntries);
+    for (const line of out) {
+      expect(line.dim).toBeFalsy();
+    }
+  });
+
+  it('returns an empty array for empty entries', () => {
+    expect(buildLegacyLines([])).toEqual([]);
   });
 });

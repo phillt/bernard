@@ -11,9 +11,6 @@ const DIGIT_KEY_RE = /^[1-9]$/;
 interface KeyEvent {
   name?: string;
   ctrl?: boolean;
-  shift?: boolean;
-  meta?: boolean;
-  sequence?: string;
 }
 
 /** A single selectable item in a menu. */
@@ -92,25 +89,36 @@ export function getMenuItem(entries: MenuEntry[], index: number): MenuItem | und
 function useFallback(): boolean {
   const flag = process.env.BERNARD_PLAIN_MENU;
   const forcePlain = flag === 'true' || flag === '1';
-  return !process.stdout.isTTY || forcePlain;
+  // setRawMode throws on non-TTY stdin, so both streams must be TTY.
+  return !process.stdout.isTTY || !process.stdin.isTTY || forcePlain;
 }
 
-/** Legacy numbered-list renderer (fallback path). */
-function renderLegacyList(entries: MenuEntry[]): void {
+/**
+ * A single line of the fallback numbered-list rendering, tagged with whether
+ * it should be emitted via `printDim` (description rows) or `printInfo`.
+ */
+export interface LegacyLine {
+  text: string;
+  dim?: boolean;
+}
+
+export function buildLegacyLines(entries: MenuEntry[]): LegacyLine[] {
+  const out: LegacyLine[] = [];
   let n = 1;
   for (const entry of entries) {
     if (isSection(entry)) {
-      printInfo(`\n  ${entry.title}`);
+      out.push({ text: `\n  ${entry.title}` });
     } else {
       const activeMarker = entry.active ? ' (active)' : '';
       const annotation = entry.annotation ? ` ${entry.annotation}` : '';
-      printInfo(`    ${n}. ${entry.label}${activeMarker}${annotation}`);
+      out.push({ text: `    ${n}. ${entry.label}${activeMarker}${annotation}` });
       if (entry.description) {
-        printDim(`       ${entry.description}`);
+        out.push({ text: `       ${entry.description}`, dim: true });
       }
       n++;
     }
   }
+  return out;
 }
 
 /**
@@ -159,8 +167,10 @@ async function legacySelect(
   if (options?.title) {
     printInfo(`\n  ${options.title}\n`);
   }
-  renderLegacyList(entries);
-  // Blank line between list and prompt.
+  for (const line of buildLegacyLines(entries)) {
+    if (line.dim) printDim(line.text);
+    else printInfo(line.text);
+  }
   printInfo('');
 
   const items = entries.filter((e) => !isSection(e)) as MenuItem[];
@@ -187,8 +197,10 @@ async function legacySelect(
  * Build the lines array for the ephemeral menu block.
  * The highlighted item gets a `>` cursor and accent styling; its description
  * (if present) is shown below it. Other items show a plain numbered label.
+ *
+ * Exported for direct testing; production callers go through selectFromMenu.
  */
-function renderMenuLines(
+export function renderMenuLines(
   entries: MenuEntry[],
   highlightItemIndex: number,
   options: MenuOptions | undefined,
@@ -249,6 +261,8 @@ async function interactiveSelect(
   const wasRaw = process.stdin.isRaw ?? false;
   process.stdin.setRawMode(true);
   rl.pause();
+  // rl.pause() pauses the underlying stdin; resume so 'keypress' events fire.
+  process.stdin.resume();
 
   let highlight = 0;
 

@@ -25,6 +25,7 @@ import {
   setToolDetailsVisible,
   setPinnedRegion,
   clearPinnedRegion,
+  visualRowCount,
   type SpinnerStats,
 } from './output.js';
 import type { Step } from './plan-store.js';
@@ -750,7 +751,36 @@ describe('output', () => {
     });
   });
 
-  describe('pinned region visual-row counting', () => {
+  describe('visualRowCount', () => {
+    it('counts a short line as one row', () => {
+      expect(visualRowCount('abc', 80)).toBe(1);
+    });
+
+    it('counts an empty string as one row', () => {
+      expect(visualRowCount('', 40)).toBe(1);
+    });
+
+    it('counts a line exactly equal to columns as one row', () => {
+      expect(visualRowCount('x'.repeat(40), 40)).toBe(1);
+    });
+
+    it('wraps a long line across multiple rows', () => {
+      expect(visualRowCount('a'.repeat(95), 40)).toBe(3);
+    });
+
+    it('excludes ANSI escape codes from width calculation', () => {
+      const colored = `\x1b[31m${'x'.repeat(35)}\x1b[0m`;
+      expect(visualRowCount(colored, 40)).toBe(1);
+    });
+
+    it('handles multiple ANSI sequences per line', () => {
+      const line = `\x1b[1m\x1b[31mhello\x1b[0m world \x1b[32mthere\x1b[0m`;
+      // Visible: "hello world there" = 17 chars, fits in 40 cols.
+      expect(visualRowCount(line, 40)).toBe(1);
+    });
+  });
+
+  describe('pinned region integration', () => {
     let originalIsTTY: boolean | undefined;
     let originalColumns: number | undefined;
 
@@ -759,7 +789,6 @@ describe('output', () => {
       originalColumns = process.stdout.columns;
       Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
       Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
-      // Clear any regions left over from earlier tests (e.g. printPlan).
       clearPinnedRegion('plan');
       clearPinnedRegion('test');
       stdoutWriteSpy.mockClear();
@@ -778,55 +807,60 @@ describe('output', () => {
       });
     });
 
-    function eraseUpCount(): number {
-      // After the second setPinnedRegion call we expect an erase sequence
-      // `\x1b[<N>A` followed by `\r\x1b[J`. Return N, or 0 if no erase was issued.
-      for (const call of stdoutWriteSpy.mock.calls) {
-        const s = String(call[0]);
-        const match = s.match(/^\x1b\[(\d+)A$/);
-        if (match) return parseInt(match[1], 10);
-      }
-      return 0;
-    }
-
-    it('short lines: erase count equals logical line count', () => {
-      setPinnedRegion('test', ['short', 'also short']);
-      stdoutWriteSpy.mockClear();
-      setPinnedRegion('test', []); // triggers erase
-      expect(eraseUpCount()).toBe(2);
-    });
-
-    it('wrapped line counts as multiple visual rows', () => {
-      // columns=40, a 95-char line wraps to 3 rows.
-      const long = 'a'.repeat(95);
-      setPinnedRegion('test', [long]);
-      stdoutWriteSpy.mockClear();
-      setPinnedRegion('test', []);
-      expect(eraseUpCount()).toBe(3);
-    });
-
-    it('ANSI escape codes excluded from width', () => {
-      // 35 visible chars wrapped in color codes; shouldn't wrap at 40 cols.
-      const colored = `\x1b[31m${'x'.repeat(35)}\x1b[0m`;
-      setPinnedRegion('test', [colored]);
-      stdoutWriteSpy.mockClear();
-      setPinnedRegion('test', []);
-      expect(eraseUpCount()).toBe(1);
-    });
-
-    it('empty string counts as one row', () => {
-      setPinnedRegion('test', ['', '']);
-      stdoutWriteSpy.mockClear();
-      setPinnedRegion('test', []);
-      expect(eraseUpCount()).toBe(2);
-    });
-
-    it('mixed short and wrapped lines sum correctly', () => {
-      // columns=40: short(1) + 80-char(2) + short(1) = 4 rows.
+    it('emits an erase sequence summing visual rows across mixed lines', () => {
+      // columns=40: short(1) + 80-char wrap(2) + short(1) = 4 visual rows.
       setPinnedRegion('test', ['short', 'b'.repeat(80), 'tail']);
       stdoutWriteSpy.mockClear();
-      setPinnedRegion('test', []);
-      expect(eraseUpCount()).toBe(4);
+      setPinnedRegion('test', []); // triggers erase
+      const moveUp = stdoutWriteSpy.mock.calls
+        .map((c) => String(c[0]))
+        .find((s) => /^\x1b\[\d+A$/.test(s));
+      expect(moveUp).toBe('\x1b[4A');
+    });
+  });
+
+  describe('resize handler', () => {
+    it('re-renders pinned content without emitting an erase sequence', async () => {
+      const originalIsTTY = process.stdout.isTTY;
+      const originalColumns = process.stdout.columns;
+      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
+      Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
+
+      // Snapshot resize listeners so we can strip any added by the re-imported module.
+      const preListeners = process.stdout.listeners('resize');
+      vi.resetModules();
+      const mod = await import('./output.js');
+
+      const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        mod.setPinnedRegion('test', ['hello world']);
+        writeSpy.mockClear();
+
+        Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
+        process.stdout.emit('resize');
+
+        const writes = writeSpy.mock.calls.map((c) => String(c[0]));
+        expect(writes.some((s) => /^\x1b\[\d+A$/.test(s))).toBe(false);
+        expect(writes.join('')).toContain('hello world');
+
+        mod.clearPinnedRegion('test');
+      } finally {
+        writeSpy.mockRestore();
+        for (const l of process.stdout.listeners('resize')) {
+          if (!preListeners.includes(l)) {
+            process.stdout.removeListener('resize', l as (...args: unknown[]) => void);
+          }
+        }
+        Object.defineProperty(process.stdout, 'isTTY', {
+          value: originalIsTTY,
+          configurable: true,
+        });
+        Object.defineProperty(process.stdout, 'columns', {
+          value: originalColumns,
+          configurable: true,
+        });
+        vi.resetModules();
+      }
     });
   });
 

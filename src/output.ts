@@ -45,7 +45,12 @@ function currentColumns(): number {
   return process.stdout.columns || 80;
 }
 
-function visualRowCount(line: string, columns: number): number {
+/**
+ * Number of visual terminal rows a single logical line will occupy, given
+ * the current column width. Strips ANSI CSI escapes so zero-width control
+ * codes don't inflate the count. Exported for direct testing.
+ */
+export function visualRowCount(line: string, columns: number): number {
   const width = stripAnsi(line).length;
   if (width === 0) return 1;
   return Math.ceil(width / columns);
@@ -584,6 +589,10 @@ export function printHelp(): void {
       t.muted(' — Configure agent behavior (toggles, thresholds, saved assets)'),
     '  ' + t.accent('/update') + t.muted('   — Check for and install updates'),
     '  ' + t.accent('exit') + t.muted('      — Quit Bernard'),
+    '',
+    t.muted(
+      '  Tip: set BERNARD_PLAIN_MENU=1 for a static numbered-list menu (better for screen readers).',
+    ),
     '',
   ];
   emit(lines.join('\n'));
