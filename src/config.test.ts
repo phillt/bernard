@@ -688,6 +688,53 @@ describe('loadConfig criticMode from env var', () => {
   });
 });
 
+describe('loadConfig promptRewriter', () => {
+  beforeEach(() => {
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    vi.stubEnv('OPENAI_API_KEY', '');
+    vi.stubEnv('XAI_API_KEY', '');
+    vi.stubEnv('BERNARD_PROVIDER', '');
+    vi.stubEnv('BERNARD_MODEL', '');
+    vi.stubEnv('BERNARD_PROMPT_REWRITER', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('defaults to true when env var is unset', () => {
+    vi.unstubAllEnvs();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    expect(loadConfig().promptRewriter).toBe(true);
+  });
+
+  it('disables when BERNARD_PROMPT_REWRITER is "false"', () => {
+    vi.stubEnv('BERNARD_PROMPT_REWRITER', 'false');
+    expect(loadConfig().promptRewriter).toBe(false);
+  });
+
+  it('disables when BERNARD_PROMPT_REWRITER is "0"', () => {
+    vi.stubEnv('BERNARD_PROMPT_REWRITER', '0');
+    expect(loadConfig().promptRewriter).toBe(false);
+  });
+
+  it('prefs.promptRewriter takes precedence over env var', () => {
+    vi.stubEnv('BERNARD_PROMPT_REWRITER', 'false');
+    let callCount = 0;
+    fsMock.readFileSync.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 1) throw new Error('ENOENT');
+      return JSON.stringify({ provider: 'anthropic', model: 'test', promptRewriter: true });
+    });
+    expect(loadConfig().promptRewriter).toBe(true);
+  });
+});
+
 describe('isValidProvider', () => {
   it('returns true for known providers', () => {
     expect(isValidProvider('anthropic')).toBe(true);

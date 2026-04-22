@@ -53,6 +53,19 @@ import { createPlanTool } from './tools/plan.js';
 import { createThinkTool } from './tools/think.js';
 import { createEvaluateTool } from './tools/evaluate.js';
 
+/**
+ * Directs the model to publish brief reasoning via the `think` tool so the
+ * user can follow along. Injected only for model families where narrating
+ * intent does not conflict with the family's `systemSuffix` guidance
+ * (reasoning families like o-series and grok reasoning tell the model NOT
+ * to narrate chain-of-thought, so we skip this block for them).
+ */
+const SHARE_REASONING_PROMPT = `## Share your reasoning
+Call the \`think\` tool to publish 1-3 sentences of your reasoning whenever you're about to do something non-trivial: deciding between approaches, interpreting an unexpected result, or committing to a multi-step plan. The user sees these thoughts — they're how they follow along. Don't narrate every mechanical step; do think out loud at decision points, before tool-call batches, and when you catch yourself course-correcting.`;
+
+/** Model families whose `systemSuffix` explicitly forbids chain-of-thought narration. */
+const REASONING_FAMILIES = new Set(['openai-reasoning', 'xai-grok-reasoning']);
+
 const BASE_SYSTEM_PROMPT = `# Identity
 
 You are Bernard, a local CLI AI agent with direct shell access, persistent memory, and a suite of tools for system tasks, web reading, and scheduling.
@@ -630,6 +643,13 @@ export class Agent {
         systemPrompt += '\n\n' + profile.systemSuffix;
       }
 
+      // Encourage brief `think`-tool reasoning for families that welcome narration.
+      // Skip for reasoning families — their systemSuffix tells the model NOT to
+      // narrate chain-of-thought, and contradicting it confuses the model.
+      if (!REASONING_FAMILIES.has(profile.family)) {
+        systemPrompt += '\n\n' + SHARE_REASONING_PROMPT;
+      }
+
       // Inject tool usage profiles (guidelines + observed bad examples)
       const profilesBlock = buildToolProfilesPrompt(this.toolProfileStore);
       if (profilesBlock) {
@@ -695,10 +715,10 @@ export class Agent {
           this.routineStore,
           this.candidateStore,
         ),
+        think: createThinkTool(),
         ...(this.config.reactMode
           ? {
               plan: createPlanTool(this.planStore),
-              think: createThinkTool(),
               evaluate: createEvaluateTool(),
             }
           : {}),

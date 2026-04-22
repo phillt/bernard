@@ -122,3 +122,24 @@ describe('systemSuffix — per family', () => {
     expect(p.wrapUserMessage('hi')).toBe('hi');
   });
 });
+
+describe('rewriterHint — per family', () => {
+  it('every family has a non-empty rewriterHint', () => {
+    for (const [provider, model] of [
+      ['anthropic', 'claude-opus-4-6'],
+      ['openai', 'o3'],
+      ['openai', 'gpt-4.1'],
+      ['xai', 'grok-4-fast-reasoning'],
+      ['xai', 'grok-3'],
+      ['unknown', 'mystery-model'],
+    ] as const) {
+      const hint = getModelProfile(provider, model).rewriterHint;
+      expect(hint.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('reasoning-family hints emphasize terseness', () => {
+    expect(getModelProfile('openai', 'o3').rewriterHint).toMatch(/terse/i);
+    expect(getModelProfile('xai', 'grok-4-fast-reasoning').rewriterHint).toMatch(/terse|direct/i);
+  });
+});

@@ -285,6 +285,11 @@ export function printInfo(message: string): void {
   emit(getTheme().muted(message));
 }
 
+/** Prints a dimmed, de-emphasized line — used for secondary text like menu descriptions. */
+export function printDim(message: string): void {
+  emit(getTheme().dim(message));
+}
+
 /** Prints a warning message in the theme's warning color. */
 export function printWarning(message: string): void {
   stopSpinner();
@@ -379,12 +384,16 @@ export function printPlan(steps: Step[], prefix?: string): void {
   setPinnedRegion('plan', lines);
 }
 
-/** Prints a visible thought line. */
+/** Prints a visible thought block, styled as secondary (dim italic) so it reads below the main response. */
 export function printThought(thought: string, prefix?: string): void {
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  emit(label + t.accent(`  ${thought}`));
+  emit(label + t.dim('◉ thinking'));
+  for (const line of thought.split('\n')) {
+    emit(label + t.dimItalic(line));
+  }
+  emit(label + '');
 }
 
 /** Prints a visible post-action self-evaluation prefixed with a magnifying glass. */
@@ -511,33 +520,37 @@ export function printHelp(): void {
   const t = getTheme();
   const lines = [
     t.accent('\nCommands:'),
-    t.text('  /help') + t.muted('    — Show this help'),
-    t.text('  /clear') + t.muted('   — Clear conversation (--save/-s to summarize first)'),
-    t.text('  /compact') + t.muted(' — Compress conversation history in-place'),
-    t.text('  /task') + t.muted('    — Run an isolated task (no history, structured output)'),
-    t.text('  /image') + t.muted('   — Attach an image: /image <path> [prompt]'),
-    t.text('  /memory') + t.muted('  — List persistent memories'),
-    t.text('  /scratch') + t.muted(' — List session scratch notes'),
-    t.text('  /mcp') + t.muted('      — List MCP servers and tools'),
-    t.text('  /cron') + t.muted('     — Show cron jobs and daemon status'),
-    t.text('  /facts') + t.muted('    — Show RAG facts in current context window'),
-    t.text('  /provider') + t.muted(' — Switch LLM provider'),
-    t.text('  /model') + t.muted('    — Switch model for current provider'),
-    t.text('  /theme') + t.muted('    — Switch color theme'),
-    t.text('  /routines') + t.muted(' — List saved routines'),
-    t.text('  /create-routine') + t.muted(' — Create a routine with guided AI assistance'),
-    t.text('  /create-task') + t.muted(' — Create a task routine with guided AI assistance'),
-    t.text('  /specialists') + t.muted(' — List specialist agents'),
-    t.text('  /create-specialist') + t.muted(' — Create a specialist with guided AI assistance'),
-    t.text('  /candidates') + t.muted(' — Review specialist suggestions'),
-    t.text('  /critic') + t.muted('   — Toggle critic mode'),
-    t.text('  /tool-details') + t.muted(' — Toggle visibility of tool call args and result output'),
-    t.text('  /options') +
+    '  ' + t.accent('/help') + t.muted('    — Show this help'),
+    '  ' + t.accent('/clear') + t.muted('   — Clear conversation (--save/-s to summarize first)'),
+    '  ' + t.accent('/compact') + t.muted(' — Compress conversation history in-place'),
+    '  ' +
+      t.accent('/task') +
+      t.muted('    — Run an isolated task (no history, structured output)'),
+    '  ' + t.accent('/image') + t.muted('   — Attach an image: /image <path> [prompt]'),
+    '  ' + t.accent('/memory') + t.muted('  — List persistent memories'),
+    '  ' + t.accent('/scratch') + t.muted(' — List session scratch notes'),
+    '  ' + t.accent('/mcp') + t.muted('      — List MCP servers and tools'),
+    '  ' + t.accent('/cron') + t.muted('     — Show cron jobs and daemon status'),
+    '  ' + t.accent('/facts') + t.muted('    — Show RAG facts in current context window'),
+    '  ' + t.accent('/provider') + t.muted(' — Switch LLM provider'),
+    '  ' + t.accent('/model') + t.muted('    — Switch model for current provider'),
+    '  ' + t.accent('/theme') + t.muted('    — Switch color theme'),
+    '  ' + t.accent('/routines') + t.muted(' — List saved routines'),
+    '  ' + t.accent('/create-routine') + t.muted(' — Create a routine with guided AI assistance'),
+    '  ' + t.accent('/create-task') + t.muted(' — Create a task routine with guided AI assistance'),
+    '  ' + t.accent('/specialists') + t.muted(' — List specialist agents'),
+    '  ' +
+      t.accent('/create-specialist') +
+      t.muted(' — Create a specialist with guided AI assistance'),
+    '  ' + t.accent('/candidates') + t.muted(' — Review specialist suggestions'),
+    '  ' +
+      t.accent('/options') +
       t.muted('  — View and set options (max-tokens, max-steps, shell-timeout, token-window)'),
-    t.text('  /agent-options') + t.muted(' — Configure specialist auto-creation settings'),
-    t.text('  /update') + t.muted('   — Check for and install updates'),
-    t.text('  /debug') + t.muted('    — Print diagnostic report for troubleshooting'),
-    t.text('  exit') + t.muted('      — Quit Bernard'),
+    '  ' +
+      t.accent('/agent-options') +
+      t.muted(' — Configure agent behavior (toggles, thresholds, saved assets)'),
+    '  ' + t.accent('/update') + t.muted('   — Check for and install updates'),
+    '  ' + t.accent('exit') + t.muted('      — Quit Bernard'),
     '',
   ];
   emit(lines.join('\n'));

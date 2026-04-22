@@ -28,6 +28,8 @@ export interface Theme {
   success: ColorFn;
   /** Dimmed color for de-emphasized content like conversation replays. */
   dim: ColorFn;
+  /** Dimmed italic variant, used for secondary blocks like the `think` tool output. */
+  dimItalic: ColorFn;
   /** Color for warning messages. */
   warning: ColorFn;
   /** Rotating palette of colors assigned to sub-agent prefixes. */
@@ -64,12 +66,13 @@ export const THEMES: Record<string, Theme> = {
     error: chalk.red,
     success: chalk.green,
     dim: chalk.dim,
+    dimItalic: chalk.dim.italic,
     warning: chalk.yellow,
     prefixColors: [chalk.magenta, chalk.blue, chalk.green, chalk.yellow],
     ansi: {
       prompt: '\x1b[38;2;249;115;22m',
-      hintCmd: '\x1b[37m',
-      hintDesc: '\x1b[90m',
+      hintCmd: '\x1b[1;38;2;249;115;22m',
+      hintDesc: '\x1b[22;38;2;115;115;115m',
       warning: '\x1b[33m',
       reset: '\x1b[0m',
     },
@@ -86,6 +89,7 @@ export const THEMES: Record<string, Theme> = {
     error: chalk.hex('#f87171'),
     success: chalk.hex('#34d399'),
     dim: chalk.dim,
+    dimItalic: chalk.dim.italic,
     warning: chalk.hex('#fbbf24'),
     prefixColors: [
       chalk.hex('#38bdf8'),
@@ -95,8 +99,8 @@ export const THEMES: Record<string, Theme> = {
     ],
     ansi: {
       prompt: '\x1b[38;2;6;182;212m',
-      hintCmd: '\x1b[38;2;226;232;240m',
-      hintDesc: '\x1b[38;2;148;163;184m',
+      hintCmd: '\x1b[1;38;2;6;182;212m',
+      hintDesc: '\x1b[22;38;2;115;125;140m',
       warning: '\x1b[38;2;251;191;36m',
       reset: '\x1b[0m',
     },
@@ -113,6 +117,7 @@ export const THEMES: Record<string, Theme> = {
     error: chalk.hex('#ef4444'),
     success: chalk.hex('#4ade80'),
     dim: chalk.dim,
+    dimItalic: chalk.dim.italic,
     warning: chalk.hex('#facc15'),
     prefixColors: [
       chalk.hex('#4ade80'),
@@ -122,8 +127,8 @@ export const THEMES: Record<string, Theme> = {
     ],
     ansi: {
       prompt: '\x1b[38;2;34;197;94m',
-      hintCmd: '\x1b[38;2;229;229;229m',
-      hintDesc: '\x1b[38;2;163;163;163m',
+      hintCmd: '\x1b[1;38;2;34;197;94m',
+      hintDesc: '\x1b[22;38;2;115;115;115m',
       warning: '\x1b[38;2;250;204;21m',
       reset: '\x1b[0m',
     },
@@ -140,6 +145,7 @@ export const THEMES: Record<string, Theme> = {
     error: chalk.hex('#fb7185'),
     success: chalk.hex('#34d399'),
     dim: chalk.dim,
+    dimItalic: chalk.dim.italic,
     warning: chalk.hex('#fde68a'),
     prefixColors: [
       chalk.hex('#f472b6'),
@@ -149,8 +155,8 @@ export const THEMES: Record<string, Theme> = {
     ],
     ansi: {
       prompt: '\x1b[38;2;192;132;252m',
-      hintCmd: '\x1b[38;2;240;171;252m',
-      hintDesc: '\x1b[38;2;167;139;250m',
+      hintCmd: '\x1b[1;38;2;192;132;252m',
+      hintDesc: '\x1b[22;38;2;130;130;150m',
       warning: '\x1b[38;2;253;230;138m',
       reset: '\x1b[0m',
     },
@@ -167,6 +173,7 @@ export const THEMES: Record<string, Theme> = {
     error: chalk.bold.redBright,
     success: chalk.bold.greenBright,
     dim: chalk.white,
+    dimItalic: chalk.white.italic,
     warning: chalk.bold.yellowBright,
     prefixColors: [
       chalk.bold.magentaBright,
@@ -176,8 +183,8 @@ export const THEMES: Record<string, Theme> = {
     ],
     ansi: {
       prompt: '\x1b[1;97m',
-      hintCmd: '\x1b[97m',
-      hintDesc: '\x1b[97m',
+      hintCmd: '\x1b[1;93m',
+      hintDesc: '\x1b[22;37m',
       warning: '\x1b[1;93m',
       reset: '\x1b[0m',
     },
@@ -194,6 +201,7 @@ export const THEMES: Record<string, Theme> = {
     error: chalk.hex('#DC267F'),
     success: chalk.hex('#648FFF'),
     dim: chalk.dim,
+    dimItalic: chalk.dim.italic,
     warning: chalk.hex('#FFB000'),
     prefixColors: [
       chalk.hex('#785EF0'),
@@ -203,8 +211,8 @@ export const THEMES: Record<string, Theme> = {
     ],
     ansi: {
       prompt: '\x1b[38;2;100;143;255m',
-      hintCmd: '\x1b[38;2;224;224;224m',
-      hintDesc: '\x1b[38;2;176;176;176m',
+      hintCmd: '\x1b[1;38;2;100;143;255m',
+      hintDesc: '\x1b[22;38;2;130;130;130m',
       warning: '\x1b[38;2;255;176;0m',
       reset: '\x1b[0m',
     },

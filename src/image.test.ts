@@ -8,6 +8,7 @@ import {
   loadImage,
   tryLoadImage,
   extractImagePaths,
+  stripImagePaths,
   isVisionCapableModel,
   stripImagesFromHistory,
   estimateContentPartTokens,
@@ -170,6 +171,39 @@ describe('extractImagePaths', () => {
   it('handles case-insensitive extensions', () => {
     const result = extractImagePaths('look at /tmp/photo.PNG');
     expect(result).toEqual(['/tmp/photo.PNG']);
+  });
+});
+
+/* ---------- stripImagePaths ---------- */
+describe('stripImagePaths', () => {
+  it('removes absolute image paths and collapses whitespace', () => {
+    expect(stripImagePaths('here is the screenshot /home/user/pics/a.png please look')).toBe(
+      'here is the screenshot please look',
+    );
+  });
+
+  it('removes quoted image paths', () => {
+    expect(stripImagePaths('check "/tmp/my file.jpg" now')).toBe('check now');
+  });
+
+  it('removes multiple image paths in one message', () => {
+    expect(stripImagePaths('compare /tmp/a.png and /tmp/b.jpeg side by side')).toBe(
+      'compare and side by side',
+    );
+  });
+
+  it('leaves non-image text unchanged (aside from whitespace trim)', () => {
+    expect(stripImagePaths('just a normal message')).toBe('just a normal message');
+  });
+
+  it('does not touch non-image file extensions', () => {
+    expect(stripImagePaths('edit /tmp/code.ts and /tmp/data.json')).toBe(
+      'edit /tmp/code.ts and /tmp/data.json',
+    );
+  });
+
+  it('returns empty string when input is only an image path', () => {
+    expect(stripImagePaths('/tmp/screenshot.png')).toBe('');
   });
 });
 

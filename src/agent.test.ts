@@ -1456,7 +1456,7 @@ describe('Agent', () => {
   });
 
   describe('coordinator (ReAct) mode', () => {
-    it('omits plan, think, and evaluate tools when reactMode is false', async () => {
+    it('omits plan and evaluate but keeps think when reactMode is false', async () => {
       mockGenerateText.mockResolvedValue({
         response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
         usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
@@ -1465,8 +1465,8 @@ describe('Agent', () => {
       await agent.processInput('Hello');
       const call = mockGenerateText.mock.calls[0][0];
       expect(call.tools).not.toHaveProperty('plan');
-      expect(call.tools).not.toHaveProperty('think');
       expect(call.tools).not.toHaveProperty('evaluate');
+      expect(call.tools).toHaveProperty('think');
     });
 
     it('includes plan, think, and evaluate tools when reactMode is true', async () => {

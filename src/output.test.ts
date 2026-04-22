@@ -749,11 +749,19 @@ describe('output', () => {
   });
 
   describe('printThought', () => {
-    it('prints the thought text', () => {
+    it('renders a thinking header followed by the body', () => {
       printThought('Next I will check deps.');
-      const output = String(logSpy.mock.calls[0][0]);
-      expect(output).not.toContain('\uD83D\uDCAD');
-      expect(output).toContain('Next I will check deps.');
+      const calls = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((line) => line.includes('\u25C9 thinking'))).toBe(true);
+      expect(calls.some((line) => line.includes('Next I will check deps.'))).toBe(true);
+      expect(calls.join('\n')).not.toContain('\uD83D\uDCAD');
+    });
+
+    it('preserves multi-line thoughts as separate lines', () => {
+      printThought('First sentence.\nSecond sentence.');
+      const calls = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((line) => line.includes('First sentence.'))).toBe(true);
+      expect(calls.some((line) => line.includes('Second sentence.'))).toBe(true);
     });
   });
 

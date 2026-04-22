@@ -20,6 +20,7 @@ import {
   renderResolvedBlock,
   deriveKeyFromReference,
   shouldSkipResolver,
+  stripToolResolvableTokens,
   type ResolvedEntry,
   type Candidate,
 } from './reference-resolver.js';
@@ -56,7 +57,8 @@ import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
 import { generateText } from 'ai';
-import { getModel } from './providers/index.js';
+import { getModel, getModelProfile } from './providers/index.js';
+import { rewritePrompt } from './prompt-rewriter.js';
 import {
   serializeMessages,
   SUMMARIZATION_PROMPT,
@@ -65,7 +67,7 @@ import {
 } from './context.js';
 import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
-import { SpecialistStore } from './specialists.js';
+import { SpecialistStore, getBuiltinSpecialistIds } from './specialists.js';
 import { runCorrectionAgent } from './correction.js';
 import { CandidateStore, type SpecialistCandidate } from './specialist-candidates.js';
 import { detectSpecialistCandidate } from './specialist-detector.js';
@@ -91,6 +93,7 @@ import {
   loadImage,
   tryLoadImage,
   extractImagePaths,
+  stripImagePaths,
   isVisionCapableModel,
   type ImageAttachment,
 } from './image.js';
@@ -99,6 +102,7 @@ import {
   selectFromMenu,
   promptValue,
   type MenuEntry,
+  type MenuItem,
   type SelectResult,
   type ValueResult,
 } from './menu.js';
@@ -193,15 +197,11 @@ export async function startRepl(
     { command: '/specialists', description: 'List specialist agents' },
     { command: '/create-specialist', description: 'Create a specialist with guided AI assistance' },
     { command: '/candidates', description: 'Review specialist suggestions' },
-    { command: '/critic', description: 'Toggle critic mode' },
-    { command: '/react', description: 'Toggle coordinator (ReAct) mode' },
     {
-      command: '/tool-details',
-      description: 'Toggle visibility of tool call args and result output',
+      command: '/agent-options',
+      description: 'Configure agent behavior (toggles, thresholds, saved assets)',
     },
-    { command: '/agent-options', description: 'Configure specialist auto-creation settings' },
     { command: '/image', description: 'Attach an image: /image <path> [prompt]' },
-    { command: '/debug', description: 'Print diagnostic report for troubleshooting' },
     { command: '/exit', description: 'Quit Bernard' },
   ];
 
@@ -306,7 +306,7 @@ export async function startRepl(
   }
 
   async function toggleBooleanPref(
-    key: 'criticMode' | 'reactMode' | 'toolDetails',
+    key: 'criticMode' | 'reactMode' | 'toolDetails' | 'promptRewriter' | 'autoCreateSpecialists',
     label: string,
     onMsg: string,
     offMsg: string,
@@ -336,6 +336,139 @@ export async function startRepl(
     } finally {
       clearMenuSignal();
     }
+    console.log();
+  }
+
+  function printSpecialistsList(): void {
+    const specialists = specialistStore.list();
+    if (specialists.length === 0) {
+      printInfo(
+        'No specialist agents defined yet. Ask me to create one or use /create-specialist.',
+      );
+      return;
+    }
+    const builtinIds = getBuiltinSpecialistIds();
+    const bundled = specialists.filter((s) => builtinIds.has(s.id));
+    const user = specialists.filter((s) => !builtinIds.has(s.id));
+    const t = getTheme();
+    printInfo(`\n  Specialists (${specialists.length}):`);
+    if (bundled.length > 0) {
+      console.log(t.muted('\n    Bundled:'));
+      for (const s of bundled) {
+        printInfo(`      ${s.id} — ${s.name}: ${s.description}`);
+      }
+    }
+    if (user.length > 0) {
+      console.log(t.muted('\n    Yours:'));
+      for (const s of user) {
+        printInfo(`      ${s.id} — ${s.name}: ${s.description}`);
+      }
+    }
+    console.log();
+  }
+
+  function printRoutinesList(kind: 'tasks' | 'routines'): void {
+    const all = routineStore.list();
+    const match = all.filter((r) =>
+      kind === 'tasks' ? r.id.startsWith('task-') : !r.id.startsWith('task-'),
+    );
+    if (match.length === 0) {
+      if (kind === 'tasks') {
+        printInfo('No tasks saved. Use /create-task to define one.');
+      } else {
+        printInfo('No routines saved. Teach me a workflow and I can save it as a routine.');
+      }
+      return;
+    }
+    const heading =
+      kind === 'tasks'
+        ? `\n  Tasks (${match.length}) — single-step, structured output:`
+        : `\n  Routines (${match.length}) — multi-step workflows:`;
+    printInfo(heading);
+    const t = getTheme();
+    for (const r of match) {
+      console.log(`    ${t.accent(`/${r.id}`)} ${t.muted(`— ${r.name}: ${r.description}`)}`);
+    }
+    console.log();
+  }
+
+  function printDebugReport(): void {
+    const t = getTheme();
+    console.log(t.accent('\n  Bernard Diagnostic Report'));
+    console.log(t.accent('  ' + '─'.repeat(40)));
+
+    console.log(t.text('\n  Runtime:'));
+    console.log(t.muted(`    Bernard version: ${getLocalVersion()}`));
+    console.log(t.muted(`    Node.js version: ${process.version}`));
+    console.log(t.muted(`    OS: ${process.platform} ${process.arch} (${os.release()})`));
+
+    console.log(t.text('\n  LLM:'));
+    console.log(t.muted(`    Provider: ${config.provider}`));
+    console.log(t.muted(`    Model: ${config.model}`));
+    console.log(t.muted(`    maxTokens: ${config.maxTokens}`));
+    console.log(t.muted(`    shellTimeout: ${config.shellTimeout}ms`));
+    console.log(t.muted(`    tokenWindow: ${config.tokenWindow || 'auto-detect'}`));
+
+    console.log(t.text('\n  API Keys:'));
+    for (const { provider, hasKey } of getProviderKeyStatus()) {
+      console.log(t.muted(`    ${provider}: ${hasKey ? 'configured' : 'not set'}`));
+    }
+
+    const debugStatuses = mcpManager.getServerStatuses();
+    console.log(t.text('\n  MCP Servers:'));
+    if (debugStatuses.length === 0) {
+      console.log(t.muted('    (none configured)'));
+    } else {
+      for (const s of debugStatuses) {
+        if (s.connected) {
+          console.log(t.muted(`    ${s.name}: connected (${s.toolCount} tools)`));
+        } else {
+          console.log(t.muted(`    ${s.name}: failed — ${s.error}`));
+        }
+      }
+    }
+
+    console.log(t.text('\n  RAG:'));
+    console.log(t.muted(`    Enabled: ${config.ragEnabled}`));
+    if (ragStore) {
+      console.log(t.muted(`    Facts: ${ragStore.count()}`));
+    }
+
+    console.log(t.text('\n  Memory:'));
+    console.log(t.muted(`    Persistent memories: ${memoryStore.listMemory().length}`));
+
+    console.log(t.text('\n  Cron:'));
+    console.log(t.muted(`    Daemon: ${isDaemonRunning() ? 'running' : 'stopped'}`));
+    let debugJobCount = 0;
+    try {
+      const raw = fs.readFileSync(CRON_JOBS_FILE, 'utf-8');
+      debugJobCount = JSON.parse(raw).length;
+    } catch {
+      // jobs.json doesn't exist yet — that's fine
+    }
+    console.log(t.muted(`    Jobs: ${debugJobCount}`));
+
+    console.log(t.text('\n  Conversation:'));
+    console.log(t.muted(`    Messages: ${agent.getHistory().length}`));
+
+    console.log(t.text('\n  Settings:'));
+    console.log(t.muted(`    Theme: ${getActiveThemeKey()}`));
+    console.log(t.muted(`    Critic mode: ${config.criticMode ? 'on' : 'off'}`));
+    console.log(t.muted(`    Coordinator mode: ${config.reactMode ? 'on' : 'off'}`));
+    console.log(t.muted(`    Tool details: ${config.toolDetails ? 'on' : 'off'}`));
+    console.log(t.muted(`    Prompt rewriter: ${config.promptRewriter ? 'on' : 'off'}`));
+    const debugEnabled = process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
+    console.log(t.muted(`    Debug mode: ${debugEnabled ? 'on' : 'off'}`));
+
+    console.log(t.text('\n  Paths:'));
+    if (process.env.BERNARD_HOME) {
+      console.log(t.muted(`    BERNARD_HOME: ${process.env.BERNARD_HOME}`));
+    }
+    console.log(t.muted(`    Config: ${CONFIG_DIR}`));
+    console.log(t.muted(`    Data: ${DATA_DIR}`));
+    console.log(t.muted(`    Cache: ${CACHE_DIR}`));
+    console.log(t.muted(`    State: ${STATE_DIR}`));
+
     console.log();
   }
 
@@ -437,14 +570,26 @@ export async function startRepl(
   }
 
   async function runReferenceResolver(trimmed: string): Promise<ResolvedEntry[]> {
-    if (shouldSkipResolver(trimmed)) return [];
+    // Strip image-attachment paths and tool-resolvable tokens (URLs, PR/issue refs, file
+    // paths, commit hashes) so the resolver's LLM doesn't mistake them for unresolved
+    // entities. The main agent fetches those directly via shell/gh/web_read.
+    const resolverInput = stripToolResolvableTokens(stripImagePaths(trimmed));
+    if (shouldSkipResolver(resolverInput) || resolverInput.length === 0) return [];
     try {
       const hints = loadRewriterHints(memoryStore);
       const resolveSignal = createMenuSignal();
       let resolveResult;
       startSpinner();
       try {
-        resolveResult = await resolveReferences(trimmed, memoryStore, config, hints, resolveSignal);
+        resolveResult = await resolveReferences(
+          resolverInput,
+          memoryStore,
+          config,
+          hints,
+          resolveSignal,
+          ragStore,
+          agent.getHistory(),
+        );
       } finally {
         stopSpinner();
         clearMenuSignal();
@@ -483,6 +628,37 @@ export async function startRepl(
     } catch (err: unknown) {
       debugLog('repl:resolve-references', err instanceof Error ? err.message : String(err));
       return [];
+    }
+  }
+
+  async function runPromptRewriter(
+    trimmed: string,
+    resolvedEntries: ResolvedEntry[],
+  ): Promise<string | null> {
+    if (!config.promptRewriter) return null;
+    try {
+      const profile = getModelProfile(config.provider, config.model);
+      const rewriteSignal = createMenuSignal();
+      let result;
+      startSpinner();
+      try {
+        result = await rewritePrompt(trimmed, profile, resolvedEntries, config, rewriteSignal);
+      } finally {
+        stopSpinner();
+        clearMenuSignal();
+      }
+      if (result.status === 'rewritten') {
+        debugLog('repl:prompt-rewritten', {
+          original: trimmed,
+          rewritten: result.text,
+          family: profile.family,
+        });
+        return result.text;
+      }
+      return null;
+    } catch (err: unknown) {
+      debugLog('repl:prompt-rewriter', err instanceof Error ? err.message : String(err));
+      return null;
     }
   }
 
@@ -1353,15 +1529,19 @@ export async function startRepl(
 
       if (trimmed === '/options') {
         const optEntries = Object.entries(OPTIONS_REGISTRY);
-        const menuEntries: MenuEntry[] = optEntries.map(([name, opt]) => {
-          const current = config[opt.configKey];
-          const tag = current === opt.default ? '(default)' : '(custom)';
-          return {
-            label: name,
-            annotation: `= ${current} ${tag}`,
-            description: opt.description,
-          };
-        });
+        const menuEntries: MenuEntry[] = [
+          ...optEntries.map(([name, opt]) => {
+            const current = config[opt.configKey];
+            const tag = current === opt.default ? '(default)' : '(custom)';
+            return {
+              label: name,
+              annotation: `= ${current} ${tag}`,
+              description: opt.description,
+            };
+          }),
+          { type: 'section', title: 'Info' },
+          { label: 'Debug report', description: 'Print a diagnostic report for troubleshooting' },
+        ];
         printInfo('\n  Options:');
         printMenuList(menuEntries);
         console.log();
@@ -1380,6 +1560,13 @@ export async function startRepl(
         }
 
         if (!optResult.cancelled) {
+          if (optResult.index >= optEntries.length) {
+            // Debug report is the only non-editable entry beyond the option rows.
+            printDebugReport();
+            void prompt();
+            return;
+          }
+
           const [name, opt] = optEntries[optResult.index];
           const signal2 = createMenuSignal();
           let valResult: ValueResult;
@@ -1427,22 +1614,10 @@ export async function startRepl(
         if (allRoutines.length === 0) {
           printInfo('No routines saved. Teach me a workflow and I can save it as a routine.');
         } else {
-          const tasks = allRoutines.filter((r) => r.id.startsWith('task-'));
-          const routines = allRoutines.filter((r) => !r.id.startsWith('task-'));
-
-          if (tasks.length > 0) {
-            printInfo(`\n  Tasks (${tasks.length}) — single-step, structured output:`);
-            for (const r of tasks) {
-              printInfo(`    /${r.id} — ${r.name}: ${r.description}`);
-            }
-          }
-          if (routines.length > 0) {
-            printInfo(`\n  Routines (${routines.length}) — multi-step workflows:`);
-            for (const r of routines) {
-              printInfo(`    /${r.id} — ${r.name}: ${r.description}`);
-            }
-          }
-          console.log();
+          const hasTasks = allRoutines.some((r) => r.id.startsWith('task-'));
+          const hasRoutines = allRoutines.some((r) => !r.id.startsWith('task-'));
+          if (hasTasks) printRoutinesList('tasks');
+          if (hasRoutines) printRoutinesList('routines');
         }
         void prompt();
         return;
@@ -1494,18 +1669,7 @@ Remember: task content should describe a single atomic operation with clear succ
       }
 
       if (trimmed === '/specialists') {
-        const specialists = specialistStore.list();
-        if (specialists.length === 0) {
-          printInfo(
-            'No specialist agents defined yet. Ask me to create one or use /create-specialist.',
-          );
-        } else {
-          printInfo(`\n  Specialists (${specialists.length}):`);
-          for (const s of specialists) {
-            printInfo(`    ${s.id} — ${s.name}: ${s.description}`);
-          }
-          console.log();
-        }
+        printSpecialistsList();
         void prompt();
         return;
       }
@@ -1563,51 +1727,171 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         return;
       }
 
-      if (trimmed === '/critic') {
-        await toggleBooleanPref(
-          'criticMode',
-          'Critic mode',
-          '  [CRITIC:ON] Responses will be planned and verified.',
-          '  [CRITIC:OFF] Critic mode disabled.',
-        );
-        void prompt();
-        return;
-      }
-
-      if (trimmed === '/react') {
-        await toggleBooleanPref(
-          'reactMode',
-          'Coordinator (ReAct) mode',
-          '  [REACT:ON] Operating as coordinator with iterative reasoning and delegation.',
-          '  [REACT:OFF] Coordinator mode disabled.',
-        );
-        void prompt();
-        return;
-      }
-
-      if (trimmed === '/tool-details') {
-        await toggleBooleanPref(
-          'toolDetails',
-          'Tool details',
-          '  [TOOL-DETAILS:ON] Full tool call args and results will be shown.',
-          '  [TOOL-DETAILS:OFF] Only tool names shown; args and results hidden.',
-          setToolDetailsVisible,
-        );
+      // Backwards-compat shims: the standalone toggles (/critic, /react, /tool-details, /debug)
+      // were consolidated into /agent-options and /options. Print a short pointer so users typing
+      // the old command aren't silently dropped into the prompt.
+      const legacyToggle = {
+        '/critic': 'Critic mode → /agent-options',
+        '/react': 'Coordinator (ReAct) mode → /agent-options',
+        '/tool-details': 'Tool-call details → /agent-options',
+        '/debug': 'Debug logging → /options',
+      }[trimmed];
+      if (legacyToggle) {
+        printInfo(`  This command moved. ${legacyToggle}`);
         void prompt();
         return;
       }
 
       if (trimmed === '/agent-options') {
-        const topEntries: MenuEntry[] = [
+        type BooleanOpt = {
+          key:
+            | 'autoCreateSpecialists'
+            | 'criticMode'
+            | 'reactMode'
+            | 'promptRewriter'
+            | 'toolDetails';
+          label: string;
+          description: string;
+          onMsg: string;
+          offMsg: string;
+          onToggle?: (value: boolean) => void;
+        };
+
+        const systemBools: BooleanOpt[] = [
           {
+            key: 'autoCreateSpecialists',
             label: 'Auto-create specialists',
-            annotation: `= ${config.autoCreateSpecialists ? 'on' : 'off'}`,
+            description:
+              'Auto-promote pending specialist candidates whose score exceeds the threshold.',
+            onMsg: '  Auto-create specialists: on',
+            offMsg: '  Auto-create specialists: off',
+            onToggle: (value) => {
+              if (value) {
+                promotePendingCandidates(
+                  candidateStore,
+                  specialistStore,
+                  config.autoCreateThreshold,
+                );
+              }
+            },
           },
           {
-            label: 'Auto-create threshold',
-            annotation: `= ${config.autoCreateThreshold} (${Math.round(config.autoCreateThreshold * 100)}%)`,
+            key: 'criticMode',
+            label: 'Critic mode',
+            description:
+              'Plan the response, verify it with a critic pass, and retry on failure before replying.',
+            onMsg: '  [CRITIC:ON] Responses will be planned and verified.',
+            offMsg: '  [CRITIC:OFF] Critic mode disabled.',
+          },
+          {
+            key: 'reactMode',
+            label: 'Coordinator (ReAct) mode',
+            description:
+              'Iterate think → act → evaluate; delegate subtasks to subagents for complex work.',
+            onMsg: '  [REACT:ON] Operating as coordinator with iterative reasoning and delegation.',
+            offMsg: '  [REACT:OFF] Coordinator mode disabled.',
+          },
+          {
+            key: 'promptRewriter',
+            label: 'Prompt rewriter',
+            description: 'Restructure your prompt for the active model family before each turn.',
+            onMsg:
+              '  [REWRITER:ON] User prompts will be restructured for the active model before execution.',
+            offMsg: '  [REWRITER:OFF] Prompts will be sent to the model verbatim.',
+          },
+          {
+            key: 'toolDetails',
+            label: 'Tool details',
+            description: 'Show full tool call args and results in the transcript.',
+            onMsg: '  [TOOL-DETAILS:ON] Full tool call args and results will be shown.',
+            offMsg: '  [TOOL-DETAILS:OFF] Only tool names shown; args and results hidden.',
+            onToggle: setToolDetailsVisible,
           },
         ];
+
+        async function runThresholdPrompt(): Promise<void> {
+          const signal = createMenuSignal();
+          try {
+            const val = await promptValue(rl, { label: 'New threshold (0-100)' }, signal);
+            if (val.cancelled) return;
+            const parsed = parseFloat(val.raw);
+            if (isNaN(parsed) || parsed < 0 || parsed > 100) {
+              printError('Threshold must be a number between 0 and 100 (e.g. 0.8 or 80)');
+              return;
+            }
+            const normalized = normalizeThreshold(parsed);
+            config.autoCreateThreshold = normalized;
+            savePreferences({
+              ...loadPreferences(),
+              autoCreateThreshold: normalized,
+              provider: config.provider,
+              model: config.model,
+            });
+            printInfo(`  Auto-create threshold: ${normalized} (${Math.round(normalized * 100)}%)`);
+            if (config.autoCreateSpecialists) {
+              promotePendingCandidates(candidateStore, specialistStore, config.autoCreateThreshold);
+            }
+          } finally {
+            clearMenuSignal();
+          }
+        }
+
+        // Data-driven menu: each row is either a section header or an item paired
+        // with its action. `topEntries` and `itemActions` are derived from the
+        // same source, so reordering or inserting rows cannot cause index drift.
+        type MenuRow =
+          | { kind: 'section'; title: string }
+          | { kind: 'item'; item: MenuItem; action: () => void | Promise<void> };
+
+        const toggleRow = (opt: BooleanOpt): MenuRow => ({
+          kind: 'item',
+          item: {
+            label: opt.label,
+            annotation: `= ${config[opt.key] ? 'on' : 'off'}`,
+            description: opt.description,
+          },
+          action: () => toggleBooleanPref(opt.key, opt.label, opt.onMsg, opt.offMsg, opt.onToggle),
+        });
+
+        const rows: MenuRow[] = [
+          { kind: 'section', title: 'System' },
+          toggleRow(systemBools[0]),
+          {
+            kind: 'item',
+            item: {
+              label: 'Auto-create threshold',
+              annotation: `= ${config.autoCreateThreshold} (${Math.round(config.autoCreateThreshold * 100)}%)`,
+              description: 'Minimum score (0-1) a pending specialist needs before auto-promotion.',
+            },
+            action: runThresholdPrompt,
+          },
+          ...systemBools.slice(1).map(toggleRow),
+          { kind: 'section', title: 'User-created' },
+          {
+            kind: 'item',
+            item: {
+              label: 'Specialists',
+              description: 'List bundled and user-created specialists.',
+            },
+            action: () => printSpecialistsList(),
+          },
+          {
+            kind: 'item',
+            item: { label: 'Tasks', description: 'List saved single-step tasks.' },
+            action: () => printRoutinesList('tasks'),
+          },
+          {
+            kind: 'item',
+            item: { label: 'Routines', description: 'List saved multi-step routines.' },
+            action: () => printRoutinesList('routines'),
+          },
+        ];
+
+        const topEntries: MenuEntry[] = rows.map((r) =>
+          r.kind === 'section' ? { type: 'section', title: r.title } : r.item,
+        );
+        const itemActions = rows.flatMap((r) => (r.kind === 'item' ? [r.action] : []));
+
         printInfo('\n  Agent Options:\n');
         printMenuList(topEntries);
         console.log();
@@ -1621,157 +1905,9 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         }
 
         if (!topResult.cancelled) {
-          if (topResult.index === 0) {
-            // Sub-menu: on/off for auto-create
-            const subEntries: MenuEntry[] = [
-              { label: 'On', active: config.autoCreateSpecialists },
-              { label: 'Off', active: !config.autoCreateSpecialists },
-            ];
-            printInfo('\n  Auto-create specialists:\n');
-            printMenuList(subEntries);
-            console.log();
-            const signal2 = createMenuSignal();
-            try {
-              const sub = await selectFromMenu(rl, subEntries, {}, signal2);
-              if (!sub.cancelled) {
-                config.autoCreateSpecialists = sub.index === 0;
-                savePreferences({
-                  ...loadPreferences(),
-                  autoCreateSpecialists: config.autoCreateSpecialists,
-                  provider: config.provider,
-                  model: config.model,
-                });
-                printInfo(
-                  `  Auto-create specialists: ${config.autoCreateSpecialists ? 'on' : 'off'}`,
-                );
-                if (config.autoCreateSpecialists) {
-                  promotePendingCandidates(
-                    candidateStore,
-                    specialistStore,
-                    config.autoCreateThreshold,
-                  );
-                }
-              }
-            } finally {
-              clearMenuSignal();
-            }
-          } else {
-            // Sub-menu: threshold numeric input
-            const signal2 = createMenuSignal();
-            try {
-              const val = await promptValue(rl, { label: 'New threshold (0-100)' }, signal2);
-              if (!val.cancelled) {
-                const parsed = parseFloat(val.raw);
-                if (isNaN(parsed) || parsed < 0 || parsed > 100) {
-                  printError('Threshold must be a number between 0 and 100 (e.g. 0.8 or 80)');
-                } else {
-                  const normalized = normalizeThreshold(parsed);
-                  config.autoCreateThreshold = normalized;
-                  savePreferences({
-                    ...loadPreferences(),
-                    autoCreateThreshold: normalized,
-                    provider: config.provider,
-                    model: config.model,
-                  });
-                  printInfo(
-                    `  Auto-create threshold: ${normalized} (${Math.round(normalized * 100)}%)`,
-                  );
-                  if (config.autoCreateSpecialists) {
-                    promotePendingCandidates(
-                      candidateStore,
-                      specialistStore,
-                      config.autoCreateThreshold,
-                    );
-                  }
-                }
-              }
-            } finally {
-              clearMenuSignal();
-            }
-          }
+          const action = itemActions[topResult.index];
+          if (action) await action();
         }
-        console.log();
-        void prompt();
-        return;
-      }
-
-      if (trimmed === '/debug') {
-        const t = getTheme();
-        console.log(t.accent('\n  Bernard Diagnostic Report'));
-        console.log(t.accent('  ' + '─'.repeat(40)));
-
-        console.log(t.text('\n  Runtime:'));
-        console.log(t.muted(`    Bernard version: ${getLocalVersion()}`));
-        console.log(t.muted(`    Node.js version: ${process.version}`));
-        console.log(t.muted(`    OS: ${process.platform} ${process.arch} (${os.release()})`));
-
-        console.log(t.text('\n  LLM:'));
-        console.log(t.muted(`    Provider: ${config.provider}`));
-        console.log(t.muted(`    Model: ${config.model}`));
-        console.log(t.muted(`    maxTokens: ${config.maxTokens}`));
-        console.log(t.muted(`    shellTimeout: ${config.shellTimeout}ms`));
-        console.log(t.muted(`    tokenWindow: ${config.tokenWindow || 'auto-detect'}`));
-
-        console.log(t.text('\n  API Keys:'));
-        for (const { provider, hasKey } of getProviderKeyStatus()) {
-          console.log(t.muted(`    ${provider}: ${hasKey ? 'configured' : 'not set'}`));
-        }
-
-        const debugStatuses = mcpManager.getServerStatuses();
-        console.log(t.text('\n  MCP Servers:'));
-        if (debugStatuses.length === 0) {
-          console.log(t.muted('    (none configured)'));
-        } else {
-          for (const s of debugStatuses) {
-            if (s.connected) {
-              console.log(t.muted(`    ${s.name}: connected (${s.toolCount} tools)`));
-            } else {
-              console.log(t.muted(`    ${s.name}: failed — ${s.error}`));
-            }
-          }
-        }
-
-        console.log(t.text('\n  RAG:'));
-        console.log(t.muted(`    Enabled: ${config.ragEnabled}`));
-        if (ragStore) {
-          console.log(t.muted(`    Facts: ${ragStore.count()}`));
-        }
-
-        console.log(t.text('\n  Memory:'));
-        console.log(t.muted(`    Persistent memories: ${memoryStore.listMemory().length}`));
-
-        console.log(t.text('\n  Cron:'));
-        console.log(t.muted(`    Daemon: ${isDaemonRunning() ? 'running' : 'stopped'}`));
-        let debugJobCount = 0;
-        try {
-          const raw = fs.readFileSync(CRON_JOBS_FILE, 'utf-8');
-          debugJobCount = JSON.parse(raw).length;
-        } catch {
-          // jobs.json doesn't exist yet — that's fine
-        }
-        console.log(t.muted(`    Jobs: ${debugJobCount}`));
-
-        console.log(t.text('\n  Conversation:'));
-        console.log(t.muted(`    Messages: ${agent.getHistory().length}`));
-
-        console.log(t.text('\n  Settings:'));
-        console.log(t.muted(`    Theme: ${getActiveThemeKey()}`));
-        console.log(t.muted(`    Critic mode: ${config.criticMode ? 'on' : 'off'}`));
-        console.log(t.muted(`    Coordinator mode: ${config.reactMode ? 'on' : 'off'}`));
-        console.log(t.muted(`    Tool details: ${config.toolDetails ? 'on' : 'off'}`));
-        const debugEnabled =
-          process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
-        console.log(t.muted(`    Debug mode: ${debugEnabled ? 'on' : 'off'}`));
-
-        console.log(t.text('\n  Paths:'));
-        if (process.env.BERNARD_HOME) {
-          console.log(t.muted(`    BERNARD_HOME: ${process.env.BERNARD_HOME}`));
-        }
-        console.log(t.muted(`    Config: ${CONFIG_DIR}`));
-        console.log(t.muted(`    Data: ${DATA_DIR}`));
-        console.log(t.muted(`    Cache: ${CACHE_DIR}`));
-        console.log(t.muted(`    State: ${STATE_DIR}`));
-
         console.log();
         void prompt();
         return;
@@ -1939,12 +2075,14 @@ Remember: the systemPrompt should read like a persona definition — who this sp
     }
 
     const resolvedEntries = await runReferenceResolver(trimmed);
+    const rewritten = await runPromptRewriter(trimmed, resolvedEntries);
+    const agentInput = rewritten ?? trimmed;
 
     processing = true;
     interrupted = false;
     try {
       initSpinner();
-      await agent.processInput(trimmed, inlineImages, resolvedEntries);
+      await agent.processInput(agentInput, inlineImages, resolvedEntries);
       historyStore.save(agent.getHistory());
     } catch (err: unknown) {
       if (!interrupted) {
