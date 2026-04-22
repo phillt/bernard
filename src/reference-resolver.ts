@@ -81,7 +81,7 @@ const COMMIT_HASH_RE = /\b[a-f0-9]{7,40}\b/gi;
 /**
  * Remove tokens that the main agent can resolve with tools (URLs, PR/issue refs,
  * file paths, commit hashes) before the reference resolver sees the input.
- * Mirrors {@link ../image.ts:stripImagePaths} in shape and intent.
+ * Mirrors {@link ./image.ts:stripImagePaths} in shape and intent.
  */
 export function stripToolResolvableTokens(text: string): string {
   return text
@@ -233,8 +233,10 @@ function parseResolverResponse(text: string): ResolveResult | null {
 export function validateAgainstMemory(
   result: ResolveResult,
   memoryKeys: Set<string>,
+  ragAvailable: boolean = false,
 ): ResolveResult {
-  const isValidSource = (key: string) => key === RAG_SOURCE_KEY || memoryKeys.has(key);
+  const isValidSource = (key: string) =>
+    (ragAvailable && key === RAG_SOURCE_KEY) || memoryKeys.has(key);
   if (result.status === 'resolved') {
     const safe = result.entries.filter((e) => isValidSource(e.sourceKey));
     return safe.length === 0 ? { status: 'noop' } : { status: 'resolved', entries: safe };
@@ -320,7 +322,7 @@ export async function resolveReferences(
       debugLog('reference-resolver:parse-failed', result.text.slice(0, 200));
       return { status: 'noop' };
     }
-    const validated = validateAgainstMemory(parsed, new Set(memoryKeys));
+    const validated = validateAgainstMemory(parsed, new Set(memoryKeys), ragFacts.length > 0);
     debugLog('reference-resolver:result', validated);
     return validated;
   } catch (err) {

@@ -248,10 +248,8 @@ Features:
 | `/create-task`    | Create a task routine (`task-` prefixed) with guided AI assistance                   |
 | `/specialists`    | List saved specialists                                                               |
 | `/candidates`     | Review auto-detected specialist suggestions _(v0.6.0+)_                              |
-| `/critic`         | Toggle critic mode                                                                   |
-| `/agent-options`  | Configure specialist auto-creation settings                                          |
-| `/options`        | View and modify runtime options (max-tokens, max-steps, shell-timeout, token-window) |
-| `/debug`          | Print a diagnostic report for troubleshooting (no secrets leaked)                    |
+| `/agent-options`  | Toggle agent behaviors (critic mode, coordinator/ReAct, prompt rewriter, tool details, auto-create specialists) |
+| `/options`        | View and modify runtime options (max-tokens, max-steps, shell-timeout, token-window); also includes debug report |
 | `/exit`           | Quit Bernard (also: `exit`, `quit`)                                                  |
 
 Type `/{routine-id}` or `/{specialist-id}` to invoke a saved routine or specialist directly (e.g., `/deploy-staging`).
@@ -506,7 +504,7 @@ Storage: one JSON file per candidate in `~/.local/share/bernard/specialist-candi
 Critic mode adds planning, proactive scratch/memory usage, and post-response verification. Toggle it during a session:
 
 ```bash
-/critic    # Interactive menu to toggle on/off
+/agent-options   # Interactive menu; toggle "Critic mode"
 ```
 
 When enabled:
@@ -719,7 +717,7 @@ Summarization and domain-specific fact extraction run in parallel. Scratch notes
 
 **Auto-continue on truncation:** If a response hits the `max-tokens` limit and is cut off, Bernard automatically continues where it left off (up to 3 continuations). After completing, it shows a recommended `max-tokens` value based on actual usage. If the response is still incomplete after 3 continuations, a warning is shown with instructions to increase the limit via `/options max-tokens <value>`.
 
-When critic mode is enabled (`/critic on`), Bernard writes plans to scratch before complex tasks and verifies outcomes after tool use. See [Critic Mode](#critic-mode).
+When critic mode is enabled (toggle via `/agent-options`), Bernard writes plans to scratch before complex tasks and verifies outcomes after tool use. See [Critic Mode](#critic-mode).
 
 ### RAG Memory
 
@@ -830,7 +828,7 @@ Logs are written to `.logs/YYYY-MM-DD.log` in JSON format, covering agent proces
 
 ### Diagnostic Report
 
-Use `/debug` in the REPL to print a diagnostic report useful for troubleshooting. The report includes runtime info (Bernard version, Node.js version, OS), LLM configuration, API key status (configured/not set — keys are never shown), MCP server status, RAG/memory/cron state, conversation stats, active settings, and file paths. No secrets are included in the output.
+Use `/options` in the REPL and select "Debug report" to print a diagnostic report useful for troubleshooting. The report includes runtime info (Bernard version, Node.js version, OS), LLM configuration, API key status (configured/not set — keys are never shown), MCP server status, RAG/memory/cron state, conversation stats, active settings, and file paths. No secrets are included in the output.
 
 ### Adding a New Provider
 
@@ -925,7 +923,7 @@ Found a bug? Please [open an issue](https://github.com/phillt/bernard/issues/new
 
 - Steps to reproduce the problem
 - Expected vs. actual behavior
-- Your environment — run `/debug` in the REPL and paste the output
+- Your environment — run `/options` and select "Debug report" in the REPL, then paste the output
 - Any relevant logs (run with `BERNARD_DEBUG=1` for verbose output)
 
 ## Third-Party Licenses

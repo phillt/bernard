@@ -77,7 +77,7 @@ Rules:
 - Preserve every verb, noun, and constraint the user wrote. Do not add tasks. Do not remove tasks. Do not answer the request.
 - Treat this as a lossless structural transform, not reasoning. If in doubt, output status "noop".
 - If resolved entities are provided, you MAY inline them verbatim to eliminate ambiguity (e.g. replace "my daughter" with "Sarah, my daughter"). Never invent or extrapolate entities.
-- Never wrap the rewrite in XML tags, markdown code fences, or framing the downstream agent expects — the caller applies those.
+- Never wrap the rewrite in the downstream wrapper (\`<user_request>\`) or in markdown code fences — the caller applies those. Lightweight structural tags like \`<task>\`, \`<context>\`, or \`<constraints>\` are allowed when the per-model hint recommends them.
 - Per-model hint: ${profile.rewriterHint}
 
 Output strict JSON and nothing else. One of:

@@ -53,6 +53,19 @@ import { createPlanTool } from './tools/plan.js';
 import { createThinkTool } from './tools/think.js';
 import { createEvaluateTool } from './tools/evaluate.js';
 
+/**
+ * Directs the model to publish brief reasoning via the `think` tool so the
+ * user can follow along. Injected only for model families where narrating
+ * intent does not conflict with the family's `systemSuffix` guidance
+ * (reasoning families like o-series and grok reasoning tell the model NOT
+ * to narrate chain-of-thought, so we skip this block for them).
+ */
+const SHARE_REASONING_PROMPT = `## Share your reasoning
+Call the \`think\` tool to publish 1-3 sentences of your reasoning whenever you're about to do something non-trivial: deciding between approaches, interpreting an unexpected result, or committing to a multi-step plan. The user sees these thoughts — they're how they follow along. Don't narrate every mechanical step; do think out loud at decision points, before tool-call batches, and when you catch yourself course-correcting.`;
+
+/** Model families whose `systemSuffix` explicitly forbids chain-of-thought narration. */
+const REASONING_FAMILIES = new Set(['openai-reasoning', 'xai-grok-reasoning']);
+
 const BASE_SYSTEM_PROMPT = `# Identity
 
 You are Bernard, a local CLI AI agent with direct shell access, persistent memory, and a suite of tools for system tasks, web reading, and scheduling.
@@ -139,9 +152,6 @@ Each pair is a task → wrong one-shot answer → right gathered answer.
 - **Time-windowed count.** "How many commits this week?"
   - ❌ \`git log --since=7.days.ago | wc -l\` and report a number.
   - ✅ Clarify the window ("since Monday" vs. "last 7 days") and/or branch/author scope; cite the exact \`--since\`/\`--author\` flags in the summary.
-
-## Share your reasoning
-Call the \`think\` tool to publish 1-3 sentences of your reasoning whenever you're about to do something non-trivial: deciding between approaches, interpreting an unexpected result, or committing to a multi-step plan. The user sees these thoughts — they're how they follow along. Don't narrate every mechanical step; do think out loud at decision points, before tool-call batches, and when you catch yourself course-correcting.
 
 # Safety
 
@@ -631,6 +641,13 @@ export class Agent {
       // Model-specific advisory block (XML usage notes for Claude, strip-CoT for reasoning, etc.)
       if (profile.systemSuffix) {
         systemPrompt += '\n\n' + profile.systemSuffix;
+      }
+
+      // Encourage brief `think`-tool reasoning for families that welcome narration.
+      // Skip for reasoning families — their systemSuffix tells the model NOT to
+      // narrate chain-of-thought, and contradicting it confuses the model.
+      if (!REASONING_FAMILIES.has(profile.family)) {
+        systemPrompt += '\n\n' + SHARE_REASONING_PROMPT;
       }
 
       // Inject tool usage profiles (guidelines + observed bad examples)

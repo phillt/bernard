@@ -442,18 +442,31 @@ describe('validateAgainstMemory', () => {
     expect(result.status).toBe('resolved');
   });
 
-  it('keeps entries with sourceKey "rag" even when memory is empty', () => {
+  it('keeps entries with sourceKey "rag" when RAG facts were provided', () => {
     const result = validateAgainstMemory(
       {
         status: 'resolved',
         entries: [{ phrase: 'aaron', resolvedTo: 'Aaron Nichols', sourceKey: RAG_SOURCE_KEY }],
       },
       new Set(),
+      true,
     );
     expect(result.status).toBe('resolved');
     if (result.status === 'resolved') {
       expect(result.entries[0].sourceKey).toBe('rag');
     }
+  });
+
+  it('drops entries with sourceKey "rag" when no RAG facts were injected', () => {
+    const result = validateAgainstMemory(
+      {
+        status: 'resolved',
+        entries: [{ phrase: 'aaron', resolvedTo: 'Aaron Nichols', sourceKey: RAG_SOURCE_KEY }],
+      },
+      new Set(),
+      false,
+    );
+    expect(result).toEqual({ status: 'noop' });
   });
 
   it('drops entries with unknown sourceKey', () => {

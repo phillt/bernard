@@ -102,6 +102,7 @@ import {
   selectFromMenu,
   promptValue,
   type MenuEntry,
+  type MenuItem,
   type SelectResult,
   type ValueResult,
 } from './menu.js';
@@ -1726,6 +1727,21 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         return;
       }
 
+      // Backwards-compat shims: the standalone toggles (/critic, /react, /tool-details, /debug)
+      // were consolidated into /agent-options and /options. Print a short pointer so users typing
+      // the old command aren't silently dropped into the prompt.
+      const legacyToggle = {
+        '/critic': 'Critic mode → /agent-options',
+        '/react': 'Coordinator (ReAct) mode → /agent-options',
+        '/tool-details': 'Tool-call details → /agent-options',
+        '/debug': 'Debug logging → /options',
+      }[trimmed];
+      if (legacyToggle) {
+        printInfo(`  This command moved. ${legacyToggle}`);
+        void prompt();
+        return;
+      }
+
       if (trimmed === '/agent-options') {
         type BooleanOpt = {
           key:
@@ -1820,39 +1836,59 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           }
         }
 
-        // Flat menu, visually grouped into System / User-created sections.
-        // Item indexes (0-based, skipping sections):
-        //   0: Auto-create specialists (toggle)
-        //   1: Auto-create threshold   (value prompt)
-        //   2: Critic mode             (toggle)
-        //   3: Coordinator (ReAct)     (toggle)
-        //   4: Prompt rewriter         (toggle)
-        //   5: Tool details            (toggle)
-        //   6: Specialists             (show list)
-        //   7: Tasks                   (show list)
-        //   8: Routines                (show list)
-        const topEntries: MenuEntry[] = [
-          { type: 'section', title: 'System' },
-          {
-            label: systemBools[0].label,
-            annotation: `= ${config.autoCreateSpecialists ? 'on' : 'off'}`,
-            description: systemBools[0].description,
-          },
-          {
-            label: 'Auto-create threshold',
-            annotation: `= ${config.autoCreateThreshold} (${Math.round(config.autoCreateThreshold * 100)}%)`,
-            description: 'Minimum score (0-1) a pending specialist needs before auto-promotion.',
-          },
-          ...systemBools.slice(1).map((opt) => ({
+        // Data-driven menu: each row is either a section header or an item paired
+        // with its action. `topEntries` and `itemActions` are derived from the
+        // same source, so reordering or inserting rows cannot cause index drift.
+        type MenuRow =
+          | { kind: 'section'; title: string }
+          | { kind: 'item'; item: MenuItem; action: () => void | Promise<void> };
+
+        const toggleRow = (opt: BooleanOpt): MenuRow => ({
+          kind: 'item',
+          item: {
             label: opt.label,
             annotation: `= ${config[opt.key] ? 'on' : 'off'}`,
             description: opt.description,
-          })),
-          { type: 'section', title: 'User-created' },
-          { label: 'Specialists', description: 'List bundled and user-created specialists.' },
-          { label: 'Tasks', description: 'List saved single-step tasks.' },
-          { label: 'Routines', description: 'List saved multi-step routines.' },
+          },
+          action: () => toggleBooleanPref(opt.key, opt.label, opt.onMsg, opt.offMsg, opt.onToggle),
+        });
+
+        const rows: MenuRow[] = [
+          { kind: 'section', title: 'System' },
+          toggleRow(systemBools[0]),
+          {
+            kind: 'item',
+            item: {
+              label: 'Auto-create threshold',
+              annotation: `= ${config.autoCreateThreshold} (${Math.round(config.autoCreateThreshold * 100)}%)`,
+              description: 'Minimum score (0-1) a pending specialist needs before auto-promotion.',
+            },
+            action: runThresholdPrompt,
+          },
+          ...systemBools.slice(1).map(toggleRow),
+          { kind: 'section', title: 'User-created' },
+          {
+            kind: 'item',
+            item: { label: 'Specialists', description: 'List bundled and user-created specialists.' },
+            action: () => printSpecialistsList(),
+          },
+          {
+            kind: 'item',
+            item: { label: 'Tasks', description: 'List saved single-step tasks.' },
+            action: () => printRoutinesList('tasks'),
+          },
+          {
+            kind: 'item',
+            item: { label: 'Routines', description: 'List saved multi-step routines.' },
+            action: () => printRoutinesList('routines'),
+          },
         ];
+
+        const topEntries: MenuEntry[] = rows.map((r) =>
+          r.kind === 'section' ? { type: 'section', title: r.title } : r.item,
+        );
+        const itemActions = rows.flatMap((r) => (r.kind === 'item' ? [r.action] : []));
+
         printInfo('\n  Agent Options:\n');
         printMenuList(topEntries);
         console.log();
@@ -1866,22 +1902,8 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         }
 
         if (!topResult.cancelled) {
-          const idx = topResult.index;
-          if (idx === 0) {
-            const opt = systemBools[0];
-            await toggleBooleanPref(opt.key, opt.label, opt.onMsg, opt.offMsg, opt.onToggle);
-          } else if (idx === 1) {
-            await runThresholdPrompt();
-          } else if (idx >= 2 && idx <= 5) {
-            const opt = systemBools[idx - 1];
-            await toggleBooleanPref(opt.key, opt.label, opt.onMsg, opt.offMsg, opt.onToggle);
-          } else if (idx === 6) {
-            printSpecialistsList();
-          } else if (idx === 7) {
-            printRoutinesList('tasks');
-          } else if (idx === 8) {
-            printRoutinesList('routines');
-          }
+          const action = itemActions[topResult.index];
+          if (action) await action();
         }
         console.log();
         void prompt();
