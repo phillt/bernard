@@ -18,7 +18,7 @@ export function getModel(provider: string, model: string): LanguageModel {
     case 'anthropic':
       return anthropic(model);
     case 'openai':
-      return openai(model);
+      return openai.responses(model);
     case 'xai':
       return xai(model);
     default:
