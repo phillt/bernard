@@ -109,6 +109,9 @@ export async function runCorrectionAgent(
         {
           specialistId: CORRECTION_SPECIALIST_ID,
           input,
+          context: null,
+          provider: null,
+          model: null,
         },
         { toolCallId: `correction-${candidate.id}`, messages: [] },
       );
