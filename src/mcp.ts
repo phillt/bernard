@@ -3,8 +3,62 @@ import * as path from 'node:path';
 import { createMCPClient, type MCPClient } from '@ai-sdk/mcp';
 import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
 import { jsonSchema } from 'ai';
+import type { JSONSchema7, JSONSchema7Definition } from 'json-schema';
 import { printInfo, printError } from './output.js';
 import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
+
+/**
+ * Every JSONSchema7 keyword whose value is itself a sub-schema (or array/dict of sub-schemas).
+ * Used by both the normalizer and the strict-mode validator so they stay in sync with the spec.
+ * Source: @types/json-schema (JSONSchema7 interface).
+ */
+const SUBSCHEMA_KEYWORDS = {
+  /** keyword → JSONSchema7Definition (single sub-schema) */
+  single: ['additionalItems', 'additionalProperties', 'contains', 'propertyNames', 'if', 'then', 'else', 'not'] as const,
+  /** keyword → JSONSchema7Definition[] */
+  array: ['allOf', 'anyOf', 'oneOf'] as const,
+  /** keyword → { [k: string]: JSONSchema7Definition } */
+  dict: ['$defs', 'definitions', 'properties', 'patternProperties'] as const,
+  /** keyword → JSONSchema7Definition | JSONSchema7Definition[] */
+  itemsOrArray: ['items', 'prefixItems'] as const,
+  /** keyword → { [k: string]: JSONSchema7Definition | string[] } (mixed; only schema values recursed) */
+  mixedDict: ['dependencies'] as const,
+} satisfies Record<string, readonly string[]>;
+
+/**
+ * Keywords forbidden in OpenAI strict mode, per the structured-outputs documentation.
+ * Stripped during normalization. https://platform.openai.com/docs/guides/structured-outputs
+ */
+const STRICT_FORBIDDEN_KEYWORDS = [
+  'oneOf',
+  'not',
+  'if',
+  'then',
+  'else',
+  'unevaluatedProperties',
+  'unevaluatedItems',
+  'propertyNames',
+  'contains',
+  'minContains',
+  'maxContains',
+  'patternProperties',
+  'dependencies',
+  'dependentSchemas',
+  'dependentRequired',
+] as const;
+
+/** Returns true if a value is a plain JSONSchema7 object (not a boolean shortcut, not null). */
+function isSchemaObject(value: unknown): value is JSONSchema7 {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** True when a schema is, or could be, an object instance and therefore needs `additionalProperties: false`. */
+function isObjectSchema(schema: JSONSchema7): boolean {
+  if (schema.type === 'object') return true;
+  if (Array.isArray(schema.type) && schema.type.includes('object')) return true;
+  if (schema.properties !== undefined) return true;
+  return false;
+}
 
 /** Configuration for an MCP server launched via stdio subprocess. */
 interface MCPStdioConfig {
@@ -34,6 +88,166 @@ interface ServerStatus {
   connected: boolean;
   toolCount: number;
   error?: string;
+}
+
+/**
+ * Recursively normalizes a JSON Schema to satisfy OpenAI Responses API strict-mode
+ * requirements: every object schema must set `additionalProperties: false`, every
+ * key in `properties` must appear in `required`, and forbidden keywords are
+ * stripped. Properties that were not already required are wrapped in
+ * `{ anyOf: [original, { type: 'null' }] }` so the model can still omit them by
+ * passing null.
+ *
+ * The walk visits every sub-schema position defined in JSONSchema7 (per
+ * `SUBSCHEMA_KEYWORDS`) so additions to the JSON Schema spec don't silently
+ * leak un-normalized objects through to OpenAI.
+ */
+export function normalizeSchemaForOpenAI(input: JSONSchema7Definition | undefined): any {
+  if (typeof input === 'boolean') return input;
+  if (!isSchemaObject(input)) return input;
+  const schema = input;
+
+  const out: Record<string, any> = { ...schema };
+
+  // 1. Merge oneOf → anyOf (oneOf is forbidden in strict mode).
+  const mergedAnyOf: JSONSchema7Definition[] = [];
+  if (schema.anyOf) mergedAnyOf.push(...schema.anyOf);
+  if (schema.oneOf) mergedAnyOf.push(...schema.oneOf);
+  if (mergedAnyOf.length > 0) {
+    out.anyOf = mergedAnyOf.map(normalizeSchemaForOpenAI);
+  }
+
+  // 2. Strip every forbidden keyword.
+  for (const forbidden of STRICT_FORBIDDEN_KEYWORDS) {
+    delete out[forbidden];
+  }
+
+  // 3. Recurse into every sub-schema position, skipping keywords already stripped
+  //    in step 2 (so we don't re-add them via the recursion).
+  const isForbidden = (k: string) => (STRICT_FORBIDDEN_KEYWORDS as readonly string[]).includes(k);
+
+  for (const key of SUBSCHEMA_KEYWORDS.single) {
+    if (isForbidden(key)) continue;
+    if (schema[key] !== undefined) out[key] = normalizeSchemaForOpenAI(schema[key]);
+  }
+  for (const key of SUBSCHEMA_KEYWORDS.array) {
+    if (key === 'oneOf' || key === 'anyOf' || isForbidden(key)) continue;
+    const arr = schema[key];
+    if (Array.isArray(arr)) out[key] = arr.map(normalizeSchemaForOpenAI);
+  }
+  for (const key of SUBSCHEMA_KEYWORDS.dict) {
+    if (isForbidden(key)) continue;
+    const dict = schema[key];
+    if (dict && typeof dict === 'object' && !Array.isArray(dict)) {
+      out[key] = Object.fromEntries(
+        Object.entries(dict).map(([k, v]) => [k, normalizeSchemaForOpenAI(v)]),
+      );
+    }
+  }
+  for (const key of SUBSCHEMA_KEYWORDS.itemsOrArray) {
+    if (isForbidden(key)) continue;
+    const v = (schema as any)[key];
+    if (Array.isArray(v)) out[key] = v.map(normalizeSchemaForOpenAI);
+    else if (v !== undefined) out[key] = normalizeSchemaForOpenAI(v);
+  }
+  for (const key of SUBSCHEMA_KEYWORDS.mixedDict) {
+    if (isForbidden(key)) continue;
+    const dict = (schema as any)[key];
+    if (dict && typeof dict === 'object' && !Array.isArray(dict)) {
+      out[key] = Object.fromEntries(
+        Object.entries(dict).map(([k, v]) => [k, Array.isArray(v) ? v : normalizeSchemaForOpenAI(v as JSONSchema7Definition)]),
+      );
+    }
+  }
+
+  // 4. If this isn't an object schema, we're done — no `properties`/`required`/`additionalProperties` work.
+  if (!isObjectSchema(out as JSONSchema7)) return out;
+
+  // 5. Ensure every property is required (wrap non-required as nullable so the model can omit by passing null).
+  const properties = (out.properties ?? {}) as Record<string, any>;
+  const required = new Set<string>(out.required ?? []);
+  const newProperties: Record<string, any> = {};
+
+  for (const [key, propSchema] of Object.entries(properties)) {
+    const normalized = propSchema; // already normalized in the dict pass above
+    if (required.has(key)) {
+      newProperties[key] = normalized;
+    } else {
+      const alreadyNullable =
+        normalized?.type === 'null' ||
+        (Array.isArray(normalized?.type) && normalized.type.includes('null')) ||
+        normalized?.anyOf?.some((s: any) => s?.type === 'null');
+      newProperties[key] = alreadyNullable ? normalized : { anyOf: [normalized, { type: 'null' }] };
+      required.add(key);
+    }
+  }
+
+  return {
+    ...out,
+    properties: newProperties,
+    required: [...required],
+    additionalProperties: false,
+  };
+}
+
+/**
+ * Walks a normalized schema and asserts it satisfies OpenAI strict-mode requirements.
+ * Throws with the JSON path of the first violation so failures are diagnosed locally
+ * before the request reaches OpenAI. Mirrors the path format OpenAI uses in errors,
+ * e.g. `properties.attachments.anyOf.0.items.anyOf.0`.
+ */
+export function validateOpenAIStrictSchema(schema: unknown, basePath: string[] = []): void {
+  const visit = (node: unknown, path: string[]): void => {
+    if (typeof node === 'boolean') return;
+    if (!isSchemaObject(node)) return;
+
+    if (isObjectSchema(node) && node.additionalProperties !== false) {
+      throw new Error(
+        `OpenAI strict-mode schema violation at ${path.join('.') || '<root>'}: additionalProperties must be false on object schemas`,
+      );
+    }
+
+    for (const forbidden of STRICT_FORBIDDEN_KEYWORDS) {
+      if (forbidden in node) {
+        throw new Error(
+          `OpenAI strict-mode schema violation at ${path.join('.') || '<root>'}: forbidden keyword "${forbidden}"`,
+        );
+      }
+    }
+
+    if (isObjectSchema(node) && node.properties) {
+      const required = new Set(node.required ?? []);
+      for (const key of Object.keys(node.properties)) {
+        if (!required.has(key)) {
+          throw new Error(
+            `OpenAI strict-mode schema violation at ${path.join('.') || '<root>'}: property "${key}" must be in required`,
+          );
+        }
+      }
+    }
+
+    for (const key of SUBSCHEMA_KEYWORDS.single) {
+      const v = (node as any)[key];
+      if (v !== undefined) visit(v, [...path, key]);
+    }
+    for (const key of SUBSCHEMA_KEYWORDS.array) {
+      const v = (node as any)[key];
+      if (Array.isArray(v)) v.forEach((s, i) => visit(s, [...path, key, String(i)]));
+    }
+    for (const key of SUBSCHEMA_KEYWORDS.dict) {
+      const v = (node as any)[key];
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        for (const [k, s] of Object.entries(v)) visit(s, [...path, key, k]);
+      }
+    }
+    for (const key of SUBSCHEMA_KEYWORDS.itemsOrArray) {
+      const v = (node as any)[key];
+      if (Array.isArray(v)) v.forEach((s, i) => visit(s, [...path, key, String(i)]));
+      else if (v !== undefined) visit(v, [...path, key]);
+    }
+  };
+
+  visit(schema, basePath);
 }
 
 /**
@@ -270,9 +484,17 @@ export class MCPManager {
   private convertTool(name: string, tool: any): any {
     if (tool.type === 'dynamic') {
       const { type: _type, inputSchema, ...rest } = tool;
+      const normalized = normalizeSchemaForOpenAI(inputSchema.jsonSchema);
+      try {
+        validateOpenAIStrictSchema(normalized);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        printError(`MCP tool "${name}" produced a non-strict schema after normalization: ${message}`);
+        throw new Error(`MCP tool "${name}": ${message}`);
+      }
       return {
         ...rest,
-        parameters: jsonSchema(inputSchema.jsonSchema),
+        parameters: jsonSchema(normalized),
       };
     }
     return tool;
