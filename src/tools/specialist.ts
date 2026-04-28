@@ -12,13 +12,13 @@ import { type BernardConfig, PROVIDER_MODELS, isValidProvider } from '../config.
 const goodExampleSchema = z.object({
   input: z.string(),
   call: z.string(),
-  note: z.string().optional(),
+  note: z.string().nullable(),
 });
 
 const badExampleSchema = z.object({
   input: z.string(),
   call: z.string(),
-  note: z.string().optional(),
+  note: z.string().nullable(),
   error: z.string(),
   fix: z.string(),
 });
@@ -46,59 +46,59 @@ export function createSpecialistTool(
         .describe('The action to perform'),
       id: z
         .string()
-        .optional()
+        .nullable()
         .describe(
           'Specialist ID (kebab-case slug, e.g. "email-triage"). Required for create/read/update/delete.',
         ),
-      name: z.string().optional().describe('Display name (required for create)'),
-      description: z.string().optional().describe('One-line summary (required for create)'),
+      name: z.string().nullable().describe('Display name (required for create)'),
+      description: z.string().nullable().describe('One-line summary (required for create)'),
       systemPrompt: z
         .string()
-        .optional()
+        .nullable()
         .describe("The specialist's persona and behavioral instructions (required for create)"),
       guidelines: z
         .array(z.string())
-        .optional()
+        .nullable()
         .describe('Short behavioral rules, appended as bullets (optional, defaults to [])'),
       provider: z
         .string()
-        .optional()
+        .nullable()
         .describe(
           'Optional LLM provider override for this specialist (e.g. "xai", "openai"). Used with create/update.',
         ),
       model: z
         .string()
-        .optional()
+        .nullable()
         .describe(
           'Optional model override for this specialist (e.g. "grok-code-fast-1"). Used with create/update.',
         ),
       kind: z
         .enum(['persona', 'tool-wrapper', 'meta'])
-        .optional()
+        .nullable()
         .describe(
           'Specialist category. "persona" (default) is the historical role-based specialist. "tool-wrapper" fronts a concrete tool or CLI and is invoked via tool_wrapper_run. "meta" specialists operate on other specialists (e.g. specialist-creator).',
         ),
       targetTools: z
         .array(z.string())
-        .optional()
+        .nullable()
         .describe(
           'For tool-wrapper or meta specialists: the tool names exposed to the child agent (e.g. ["shell"] or ["specialist", "tool_wrapper_run"]). Isolates the specialist from unrelated tools.',
         ),
       goodExamples: z
         .array(goodExampleSchema)
-        .optional()
+        .nullable()
         .describe(
           'Few-shot examples of correct tool usage. Each entry: {input, call, note?}. Used by tool-wrapper specialists.',
         ),
       badExamples: z
         .array(badExampleSchema)
-        .optional()
+        .nullable()
         .describe(
           'Few-shot examples of incorrect tool usage with their corrections. Each entry: {input, call, error, fix, note?}.',
         ),
       structuredOutput: z
         .boolean()
-        .optional()
+        .nullable()
         .describe(
           'When true, the specialist must emit JSON {status, result, error?, reasoning?} as its final message. Default: true for tool-wrapper kind, false otherwise.',
         ),
@@ -176,12 +176,12 @@ export function createSpecialistTool(
           if (!name) return 'Error: name is required for create action.';
           if (!description) return 'Error: description is required for create action.';
           if (!systemPrompt) return 'Error: systemPrompt is required for create action.';
-          if (provider !== undefined) {
+          if (provider != null) {
             if (!isValidProvider(provider))
               return `Error: Unknown provider "${provider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
-            if (model !== undefined && !PROVIDER_MODELS[provider]?.includes(model))
+            if (model != null && !PROVIDER_MODELS[provider]?.includes(model))
               return `Error: Unknown model "${model}" for provider "${provider}". Valid models: ${PROVIDER_MODELS[provider].join(', ')}`;
-          } else if (model !== undefined && config) {
+          } else if (model != null && config) {
             // Validate model against the global config's provider when no explicit provider given
             if (!PROVIDER_MODELS[config.provider]?.includes(model))
               return `Error: Unknown model "${model}" for provider "${config.provider}". Valid models: ${PROVIDER_MODELS[config.provider].join(', ')}`;
@@ -193,13 +193,13 @@ export function createSpecialistTool(
               description,
               systemPrompt,
               guidelines: guidelines ?? [],
-              provider,
-              model,
-              kind,
-              targetTools,
-              goodExamples: goodExamples as SpecialistExample[] | undefined,
-              badExamples: badExamples as SpecialistBadExample[] | undefined,
-              structuredOutput,
+              provider: provider ?? undefined,
+              model: model ?? undefined,
+              kind: kind ?? undefined,
+              targetTools: targetTools ?? undefined,
+              goodExamples: (goodExamples ?? undefined) as SpecialistExample[] | undefined,
+              badExamples: (badExamples ?? undefined) as SpecialistBadExample[] | undefined,
+              structuredOutput: structuredOutput ?? undefined,
             });
             // Auto-mark matching candidate as accepted (best-effort)
             try {
@@ -221,12 +221,12 @@ export function createSpecialistTool(
 
         case 'update': {
           if (!id) return 'Error: id is required for update action.';
-          if (provider !== undefined && provider !== '') {
+          if (provider != null && provider !== '') {
             if (!isValidProvider(provider))
               return `Error: Unknown provider "${provider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
-            if (model !== undefined && model !== '' && !PROVIDER_MODELS[provider]?.includes(model))
+            if (model != null && model !== '' && !PROVIDER_MODELS[provider]?.includes(model))
               return `Error: Unknown model "${model}" for provider "${provider}". Valid models: ${PROVIDER_MODELS[provider].join(', ')}`;
-          } else if (model !== undefined && model !== '' && provider === undefined) {
+          } else if (model != null && model !== '' && provider == null) {
             // Model-only update: validate against existing specialist's provider or global config
             const existing = store.get(id);
             const effectiveProvider = existing?.provider || config?.provider;
@@ -234,21 +234,21 @@ export function createSpecialistTool(
               return `Error: Unknown model "${model}" for provider "${effectiveProvider}". Valid models: ${PROVIDER_MODELS[effectiveProvider]?.join(', ') ?? 'none'}`;
           }
           const updates: SpecialistUpdates = {};
-          if (name !== undefined) updates.name = name;
-          if (description !== undefined) updates.description = description;
-          if (systemPrompt !== undefined) updates.systemPrompt = systemPrompt;
-          if (guidelines !== undefined) updates.guidelines = guidelines;
-          if (provider !== undefined) updates.provider = provider;
-          if (model !== undefined) updates.model = model;
-          if (kind !== undefined) updates.kind = kind;
-          if (targetTools !== undefined) updates.targetTools = targetTools;
-          if (goodExamples !== undefined)
+          if (name != null) updates.name = name;
+          if (description != null) updates.description = description;
+          if (systemPrompt != null) updates.systemPrompt = systemPrompt;
+          if (guidelines != null) updates.guidelines = guidelines;
+          if (provider != null) updates.provider = provider;
+          if (model != null) updates.model = model;
+          if (kind != null) updates.kind = kind;
+          if (targetTools != null) updates.targetTools = targetTools;
+          if (goodExamples != null)
             updates.goodExamples = goodExamples as SpecialistExample[];
-          if (badExamples !== undefined)
+          if (badExamples != null)
             updates.badExamples = badExamples as SpecialistBadExample[];
-          if (structuredOutput !== undefined) updates.structuredOutput = structuredOutput;
+          if (structuredOutput != null) updates.structuredOutput = structuredOutput;
           // Auto-clear model when provider is cleared and model not explicitly provided
-          if (provider === '' && model === undefined) updates.model = '';
+          if (provider === '' && model == null) updates.model = '';
           if (Object.keys(updates).length === 0)
             return 'Error: provide at least one field to update (name, description, systemPrompt, guidelines, provider, model, kind, targetTools, goodExamples, badExamples, or structuredOutput).';
           const updated = store.update(id, updates);

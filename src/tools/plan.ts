@@ -29,17 +29,17 @@ export function createPlanTool(planStore: PlanStore) {
       action: z.enum(['create', 'update', 'add', 'view']).describe('The action to perform'),
       steps: z
         .array(z.string())
-        .optional()
+        .nullable()
         .describe('Required for create: ordered list of step descriptions'),
-      step: z.string().optional().describe('Required for add: description of the new step'),
-      id: z.number().optional().describe('Required for update: step id'),
+      step: z.string().nullable().describe('Required for add: description of the new step'),
+      id: z.number().nullable().describe('Required for update: step id'),
       status: z
         .enum(['pending', 'in_progress', 'done', 'cancelled', 'error'])
-        .optional()
+        .nullable()
         .describe('Required for update: new status'),
       note: z
         .string()
-        .optional()
+        .nullable()
         .describe(
           'Required when transitioning to a terminal status (done/cancelled/error). For done: summarize what was accomplished and the key result. For cancelled/error: explain why. Keep to 1-2 sentences.',
         ),
@@ -61,13 +61,13 @@ export function createPlanTool(planStore: PlanStore) {
           return `Step ${added.id} added.`;
         }
         case 'update': {
-          if (id === undefined || !status) {
+          if (id == null || !status) {
             return 'Error: id and status are required for update action.';
           }
           if ((status === 'done' || status === 'cancelled' || status === 'error') && !note) {
             return `Error: note is required when marking a step ${status}. Summarize what was accomplished (done) or why it could not be (cancelled/error) in 1-2 sentences.`;
           }
-          const updated = planStore.update(id, status, note);
+          const updated = planStore.update(id, status, note ?? undefined);
           if (!updated) return `Error: no step found with id ${id}.`;
           printIfChanged();
           return `Step ${id} -> ${status}.`;

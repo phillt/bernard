@@ -144,26 +144,26 @@ export function createTaskTool(
       .object({
         task: z
           .string()
-          .optional()
+          .nullable()
           .describe(
             'A self-contained task description. Include specific objective, expected output, exact file paths or commands, and success criteria. The task executor has zero prior context.',
           ),
         taskId: z
           .string()
-          .optional()
+          .nullable()
           .describe(
             'ID of a saved task (task-prefixed routine) to execute. Loads stored task content as the primary description.',
           ),
-        context: z.string().optional().describe('Optional additional context for the task'),
+        context: z.string().nullable().describe('Optional additional context for the task'),
         provider: z
           .string()
-          .optional()
+          .nullable()
           .describe(
             'Optional provider override for this task (e.g. "xai"). Falls back to global config.',
           ),
         model: z
           .string()
-          .optional()
+          .nullable()
           .describe(
             'Optional model override for this task (e.g. "grok-code-fast-1"). Falls back to global config.',
           ),

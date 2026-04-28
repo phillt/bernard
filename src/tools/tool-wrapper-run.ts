@@ -170,10 +170,10 @@ export function createToolWrapperRunTool(
         ),
       context: z
         .string()
-        .optional()
+        .nullable()
         .describe('Optional additional context (file paths, prior findings, constraints).'),
-      provider: z.string().optional().describe('Optional provider override for this invocation.'),
-      model: z.string().optional().describe('Optional model override for this invocation.'),
+      provider: z.string().nullable().describe('Optional provider override for this invocation.'),
+      model: z.string().nullable().describe('Optional model override for this invocation.'),
     }),
     execute: async ({ specialistId, input, context, provider, model }, execOptions) => {
       const specialist = specialistStore.get(specialistId);

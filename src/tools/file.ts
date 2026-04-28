@@ -25,10 +25,10 @@ interface NormalizedEdit {
   affectedLine: number; // line number used for sorting (Infinity for append)
   original: {
     action: string;
-    line?: number;
-    before?: number;
-    lines?: number[];
-    content?: string;
+    line?: number | null;
+    before?: number | null;
+    lines?: number[] | null;
+    content?: string | null;
   };
 }
 
@@ -36,10 +36,10 @@ interface NormalizedEdit {
 export function sortEditsDescending(
   edits: Array<{
     action: 'replace' | 'insert' | 'delete' | 'append';
-    line?: number;
-    before?: number;
-    lines?: number[];
-    content?: string;
+    line?: number | null;
+    before?: number | null;
+    lines?: number[] | null;
+    content?: string | null;
   }>,
 ): NormalizedEdit[] {
   const normalized: NormalizedEdit[] = edits.map((e) => {
@@ -74,15 +74,15 @@ export function sortEditsDescending(
 export function detectConflicts(
   edits: Array<{
     action: 'replace' | 'insert' | 'delete' | 'append';
-    line?: number;
-    lines?: number[];
+    line?: number | null;
+    lines?: number[] | null;
   }>,
 ): string[] {
   const errors: string[] = [];
   const targeted = new Map<number, string[]>();
 
   for (const e of edits) {
-    if (e.action === 'replace' && e.line !== undefined) {
+    if (e.action === 'replace' && e.line != null) {
       const existing = targeted.get(e.line) ?? [];
       existing.push('replace');
       targeted.set(e.line, existing);
@@ -110,10 +110,10 @@ export function generateDiffSummary(
   oldLines: string[],
   edits: Array<{
     action: 'replace' | 'insert' | 'delete' | 'append';
-    line?: number;
-    before?: number;
-    lines?: number[];
-    content?: string;
+    line?: number | null;
+    before?: number | null;
+    lines?: number[] | null;
+    content?: string | null;
   }>,
 ): string {
   const parts: string[] = [];
@@ -176,19 +176,19 @@ export function createFileTools() {
           .number()
           .int()
           .min(1)
-          .optional()
+          .nullable()
           .describe('Start line number (1-based, default 1)'),
         limit: z
           .number()
           .int()
           .min(1)
-          .optional()
+          .nullable()
           .describe('Maximum lines to return (default 1000)'),
       }),
       execute: async ({
         path: filePath,
-        offset = 1,
-        limit = 1000,
+        offset: offsetParam,
+        limit: limitParam,
       }): Promise<
         | {
             path: string;
@@ -201,6 +201,8 @@ export function createFileTools() {
         | { error: string }
       > => {
         try {
+          const offset = offsetParam ?? 1;
+          const limit = limitParam ?? 1000;
           const absPath = path.resolve(filePath);
 
           // Validate file exists
@@ -269,12 +271,12 @@ export function createFileTools() {
                 .describe(
                   'replace: replace content at a line number; insert: insert before a line; delete: remove specific lines; append: add to end of file',
                 ),
-              line: z.number().int().min(1).optional().describe('Line number for replace action'),
-              before: z.number().int().min(1).optional().describe('Line number to insert before'),
-              lines: z.array(z.number().int().min(1)).optional().describe('Line numbers to delete'),
+              line: z.number().int().min(1).nullable().describe('Line number for replace action'),
+              before: z.number().int().min(1).nullable().describe('Line number to insert before'),
+              lines: z.array(z.number().int().min(1)).nullable().describe('Line numbers to delete'),
               content: z
                 .string()
-                .optional()
+                .nullable()
                 .describe('New content for replace/insert/append (may contain \\n for multi-line)'),
             }),
           )
@@ -340,22 +342,22 @@ export function createFileTools() {
 
             switch (e.action) {
               case 'replace':
-                if (e.line === undefined) validationErrors.push(`${prefix}: "line" is required`);
+                if (e.line == null) validationErrors.push(`${prefix}: "line" is required`);
                 else if (e.line > totalLines)
                   validationErrors.push(
                     `${prefix}: line ${e.line} out of bounds (file has ${totalLines} lines)`,
                   );
-                if (e.content === undefined)
+                if (e.content == null)
                   validationErrors.push(`${prefix}: "content" is required`);
                 break;
               case 'insert':
-                if (e.before === undefined)
+                if (e.before == null)
                   validationErrors.push(`${prefix}: "before" is required`);
                 else if (e.before > totalLines + 1)
                   validationErrors.push(
                     `${prefix}: before ${e.before} out of bounds (file has ${totalLines} lines, max ${totalLines + 1})`,
                   );
-                if (e.content === undefined)
+                if (e.content == null)
                   validationErrors.push(`${prefix}: "content" is required`);
                 break;
               case 'delete':
@@ -373,7 +375,7 @@ export function createFileTools() {
                 }
                 break;
               case 'append':
-                if (e.content === undefined)
+                if (e.content == null)
                   validationErrors.push(`${prefix}: "content" is required`);
                 break;
             }

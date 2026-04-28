@@ -69,16 +69,16 @@ export function createSpecialistRunTool(
         .describe(
           'A detailed, self-contained task description. Include: (1) specific objective and expected output format, (2) exact file paths, commands, or URLs, (3) edge cases and what to do if something fails. The specialist has zero prior context beyond its own profile.',
         ),
-      context: z.string().optional().describe('Optional additional context to help the specialist'),
+      context: z.string().nullable().describe('Optional additional context to help the specialist'),
       provider: z
         .string()
-        .optional()
+        .nullable()
         .describe(
           'Optional provider override for this invocation (e.g. "xai"). Takes priority over specialist config and global config.',
         ),
       model: z
         .string()
-        .optional()
+        .nullable()
         .describe(
           'Optional model override for this invocation (e.g. "grok-code-fast-1"). Takes priority over specialist config and global config.',
         ),

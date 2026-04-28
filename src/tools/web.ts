@@ -42,7 +42,7 @@ export function createWebReadTool() {
       url: z.string().describe('The URL to fetch (must start with http:// or https://)'),
       selector: z
         .string()
-        .optional()
+        .nullable()
         .describe(
           'Optional CSS selector to extract specific content (e.g., "article", "main", ".post-body")',
         ),
