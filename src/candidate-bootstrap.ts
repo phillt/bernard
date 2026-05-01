@@ -2,6 +2,7 @@ import { SpecialistStore } from './specialists.js';
 import { CandidateStore, type SpecialistCandidate } from './specialist-candidates.js';
 import { printInfo, printWarning } from './output.js';
 import { debugLog } from './logger.js';
+import type { BernardConfig } from './config.js';
 
 /** Promote a pending candidate to a full specialist, updating status and logging. */
 export function promoteCandidate(
@@ -61,6 +62,12 @@ export interface BootstrapResult {
   contextBlock: string | null;
 }
 
+export function buildCandidateContextBlock(
+  pending: Pick<SpecialistCandidate, 'name' | 'draftId' | 'description'>[],
+): string {
+  return `## Specialist Suggestions\n\nBernard detected patterns in previous sessions that might benefit from saved specialists. Mention these when relevant.\n\n${pending.map((c) => `- "${c.name}" (${c.draftId}): ${c.description}`).join('\n')}`;
+}
+
 /**
  * Reconcile and optionally auto-promote pending specialist candidates at session start.
  * Returns the remaining pending candidates (post-promotion) and a system-prompt context
@@ -69,7 +76,7 @@ export interface BootstrapResult {
 export function bootstrapPendingCandidates(
   candidateStore: CandidateStore,
   specialistStore: SpecialistStore,
-  opts: { autoCreateSpecialists: boolean; autoCreateThreshold: number },
+  opts: Pick<BernardConfig, 'autoCreateSpecialists' | 'autoCreateThreshold'>,
 ): BootstrapResult {
   candidateStore.pruneOld();
   candidateStore.reconcileSaved(specialistStore.list());
@@ -80,6 +87,5 @@ export function bootstrapPendingCandidates(
   if (pending.length === 0) {
     return { pending, contextBlock: null };
   }
-  const contextBlock = `## Specialist Suggestions\n\nBernard detected patterns in previous sessions that might benefit from saved specialists. Mention these when relevant.\n\n${pending.map((c) => `- "${c.name}" (${c.draftId}): ${c.description}`).join('\n')}`;
-  return { pending, contextBlock };
+  return { pending, contextBlock: buildCandidateContextBlock(pending) };
 }

@@ -72,6 +72,7 @@ import { runCorrectionAgent } from './correction.js';
 import { CandidateStore } from './specialist-candidates.js';
 import {
   bootstrapPendingCandidates,
+  buildCandidateContextBlock,
   promoteCandidate,
   promotePendingCandidates,
 } from './candidate-bootstrap.js';
@@ -1674,8 +1675,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             '  The agent can create the specialist via the specialist tool, then update candidate status.\n',
           );
           // Inject candidate context so the agent knows about them for the rest of the session
-          const candidateContext = `## Specialist Suggestions\n\nBernard detected patterns in previous sessions that might benefit from saved specialists. Mention these when relevant.\n\n${pending.map((c) => `- "${c.name}" (${c.draftId}): ${c.description}`).join('\n')}`;
-          agent.setAlertContext(candidateContext);
+          agent.setAlertContext(buildCandidateContextBlock(pending));
         }
         void prompt();
         return;

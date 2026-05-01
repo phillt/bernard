@@ -26,16 +26,15 @@ export function getModel(provider: string, model: string): LanguageModel {
   }
 }
 
-/**
- * Per-call provider options forwarded to `generateText`. We disable OpenAI's
- * strict-schemas mode because MCP tools commonly emit JSON Schema features
- * (`oneOf` partial-constraint branches, untyped `items: {}`, etc.) that strict
- * mode rejects at preflight, killing the user's turn. Tool calls become
- * advisory rather than enforced — minor reliability cost, large UX win.
- */
+// Disable OpenAI strict-schemas: MCP tools commonly emit JSON Schema features
+// (`oneOf` partial-constraint branches, untyped `items: {}`, etc.) that strict
+// mode rejects at preflight, killing the user's turn.
+const OPENAI_PROVIDER_OPTIONS = Object.freeze({
+  openai: Object.freeze({ strictSchemas: false as const }),
+});
+
 export function getProviderOptions(
   provider: string,
 ): { openai: { strictSchemas: false } } | undefined {
-  if (provider === 'openai') return { openai: { strictSchemas: false } };
-  return undefined;
+  return provider === 'openai' ? OPENAI_PROVIDER_OPTIONS : undefined;
 }

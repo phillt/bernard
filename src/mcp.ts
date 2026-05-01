@@ -36,7 +36,6 @@ interface ServerStatus {
   error?: string;
 }
 
-
 /**
  * Manages the lifecycle of MCP (Model Context Protocol) server connections.
  *
