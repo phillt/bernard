@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { getModel } from './providers/index.js';
+import { getModel, getProviderOptions } from './providers/index.js';
 import {
   printCriticStart,
   printCriticVerdict,
@@ -129,6 +129,7 @@ ${truncatedLog
 
     const result = await generateText({
       model: getModel(config.provider, config.model),
+      providerOptions: getProviderOptions(config.provider),
       system: CRITIC_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: criticMessage }],
       maxSteps: 1,

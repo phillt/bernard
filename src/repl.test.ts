@@ -158,6 +158,7 @@ vi.mock('./providers/index.js', () => ({
     wrapUserMessage: (m: string) => m,
     systemSuffix: '',
   })),
+  getProviderOptions: vi.fn(() => undefined),
 }));
 
 const mockSavePreferences = vi.fn();

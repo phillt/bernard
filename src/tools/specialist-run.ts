@@ -1,6 +1,6 @@
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
-import { getModel } from '../providers/index.js';
+import { getModel, getProviderOptions } from '../providers/index.js';
 import { createTools, type ToolOptions } from './index.js';
 import {
   printSpecialistStart,
@@ -163,6 +163,7 @@ export function createSpecialistRunTool(
 
         const result = await generateText({
           model: getModel(resolvedProvider, resolvedModel),
+          providerOptions: getProviderOptions(resolvedProvider),
           tools: baseTools,
           maxSteps: Math.ceil(config.maxSteps * 0.5),
           maxTokens: config.maxTokens,
@@ -180,6 +181,7 @@ export function createSpecialistRunTool(
             regenerate: async (extraMessages) => {
               return generateText({
                 model: getModel(resolvedProvider, resolvedModel),
+                providerOptions: getProviderOptions(resolvedProvider),
                 tools: baseTools,
                 maxSteps: 10,
                 maxTokens: config.maxTokens,

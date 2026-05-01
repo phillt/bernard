@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { getModel } from './index.js';
+import { getModel, getProviderOptions } from './index.js';
 
 const mockAnthropicModel = { modelId: 'anthropic-mock' };
 const mockOpenaiModel = { modelId: 'openai-mock' };
@@ -10,7 +10,7 @@ vi.mock('@ai-sdk/anthropic', () => ({
 }));
 
 vi.mock('@ai-sdk/openai', () => ({
-  openai: vi.fn(() => mockOpenaiModel),
+  openai: { responses: vi.fn(() => mockOpenaiModel) },
 }));
 
 vi.mock('@ai-sdk/xai', () => ({
@@ -35,5 +35,19 @@ describe('getModel', () => {
 
   it('throws for unknown provider', () => {
     expect(() => getModel('unknown', 'model')).toThrow(/Unknown provider/);
+  });
+});
+
+describe('getProviderOptions', () => {
+  it('returns strictSchemas:false for openai', () => {
+    expect(getProviderOptions('openai')).toEqual({ openai: { strictSchemas: false } });
+  });
+
+  it('returns undefined for anthropic', () => {
+    expect(getProviderOptions('anthropic')).toBeUndefined();
+  });
+
+  it('returns undefined for xai', () => {
+    expect(getProviderOptions('xai')).toBeUndefined();
   });
 });

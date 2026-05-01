@@ -25,3 +25,17 @@ export function getModel(provider: string, model: string): LanguageModel {
       throw new Error(`Unknown provider: ${provider}. Supported: anthropic, openai, xai`);
   }
 }
+
+/**
+ * Per-call provider options forwarded to `generateText`. We disable OpenAI's
+ * strict-schemas mode because MCP tools commonly emit JSON Schema features
+ * (`oneOf` partial-constraint branches, untyped `items: {}`, etc.) that strict
+ * mode rejects at preflight, killing the user's turn. Tool calls become
+ * advisory rather than enforced — minor reliability cost, large UX win.
+ */
+export function getProviderOptions(
+  provider: string,
+): { openai: { strictSchemas: false } } | undefined {
+  if (provider === 'openai') return { openai: { strictSchemas: false } };
+  return undefined;
+}

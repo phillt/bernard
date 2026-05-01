@@ -20,7 +20,7 @@ vi.mock('ai', () => ({
 
 const { createMCPClient } = await import('@ai-sdk/mcp');
 const { printInfo, printError } = await import('./output.js');
-const { MCPManager, normalizeSchemaForOpenAI, validateOpenAIStrictSchema } = await import('./mcp.js');
+const { MCPManager } = await import('./mcp.js');
 
 const mockCreateMCPClient = createMCPClient as ReturnType<typeof vi.fn>;
 const mockPrintInfo = printInfo as ReturnType<typeof vi.fn>;
@@ -198,175 +198,41 @@ describe('MCPManager reconnection', () => {
   });
 });
 
-describe('normalizeSchemaForOpenAI', () => {
-  it('sets additionalProperties:false on object schemas without properties', () => {
-    const out = normalizeSchemaForOpenAI({ type: 'object' });
-    expect(out.additionalProperties).toBe(false);
-  });
-
-  it('overrides additionalProperties:<schema> with false', () => {
-    const out = normalizeSchemaForOpenAI({
-      type: 'object',
-      additionalProperties: { type: 'string' },
-    });
-    expect(out.additionalProperties).toBe(false);
-  });
-
-  it('sets additionalProperties:false on every object inside items.anyOf (gmail attachments shape)', () => {
-    // Mirrors the google_gmail_send_email schema that previously failed strict mode at
-    // properties.attachments.anyOf[0].items.anyOf[0]
-    const schema = {
+describe('MCPManager schema pass-through', () => {
+  it('passes the MCP tool schema to jsonSchema unchanged (no normalization)', async () => {
+    // OpenAI strict mode is off, so we no longer rewrite incoming schemas. Verify
+    // that a schema with full JSON Schema features (oneOf, no additionalProperties,
+    // untyped items) reaches the AI SDK exactly as the MCP server emitted it.
+    vi.clearAllMocks();
+    const manager = new MCPManager();
+    const richSchema = {
       type: 'object',
       properties: {
         attachments: {
           type: 'array',
           items: {
-            anyOf: [
-              { type: 'object', properties: { filename: { type: 'string' } }, required: ['filename'] },
-              { type: 'object' },
-            ],
+            oneOf: [{ required: ['filePath'] }, { required: ['driveFileId'] }],
           },
         },
       },
-      required: [],
     };
-
-    const out = normalizeSchemaForOpenAI(schema);
-
-    // attachments was optional → wrapped as anyOf:[orig, {type:'null'}]
-    const attachmentsSchema = out.properties.attachments;
-    expect(attachmentsSchema.anyOf).toBeDefined();
-    const arraySchema = attachmentsSchema.anyOf[0];
-    expect(arraySchema.type).toBe('array');
-
-    const itemAlternatives = arraySchema.items.anyOf;
-    expect(itemAlternatives).toHaveLength(2);
-    for (const alt of itemAlternatives) {
-      expect(alt.additionalProperties).toBe(false);
-    }
-  });
-
-  it('marks every property as required and wraps optional ones as nullable', () => {
-    const out = normalizeSchemaForOpenAI({
-      type: 'object',
-      properties: {
-        a: { type: 'string' },
-        b: { type: 'number' },
+    const tools = {
+      richTool: {
+        type: 'dynamic',
+        inputSchema: { jsonSchema: richSchema },
+        description: 'tool with rich schema',
+        execute: vi.fn(),
       },
-      required: ['a'],
-    });
-
-    expect(out.required).toEqual(expect.arrayContaining(['a', 'b']));
-    expect(out.properties.a).toEqual({ type: 'string' });
-    expect(out.properties.b.anyOf).toEqual([{ type: 'number' }, { type: 'null' }]);
-    expect(out.additionalProperties).toBe(false);
-  });
-
-  it('strips forbidden keywords and merges oneOf into anyOf', () => {
-    const out = normalizeSchemaForOpenAI({
-      oneOf: [{ type: 'string' }, { type: 'number' }],
-      not: { type: 'boolean' },
-      patternProperties: { '^x': { type: 'string' } },
-    });
-    expect(out.oneOf).toBeUndefined();
-    expect(out.not).toBeUndefined();
-    expect(out.patternProperties).toBeUndefined();
-    expect(out.anyOf).toEqual([{ type: 'string' }, { type: 'number' }]);
-  });
-
-  it('recurses into $defs', () => {
-    const out = normalizeSchemaForOpenAI({
-      $defs: {
-        Attachment: { type: 'object' },
-      },
-    });
-    expect(out.$defs.Attachment.additionalProperties).toBe(false);
-  });
-
-  it('produces strict-mode-compliant output for the gmail attachments shape', () => {
-    const schema = {
-      type: 'object',
-      properties: {
-        to: { type: 'string' },
-        attachments: {
-          type: 'array',
-          items: {
-            anyOf: [
-              { type: 'object', properties: { filename: { type: 'string' } } },
-              { type: 'object' },
-            ],
-          },
-        },
-      },
-      required: ['to'],
     };
-    const out = normalizeSchemaForOpenAI(schema);
-    // Validator should not throw — exercises the same walk OpenAI's strict mode performs.
-    expect(() => validateOpenAIStrictSchema(out)).not.toThrow();
+    const client = makeMockClient(tools);
+    mockCreateMCPClient.mockResolvedValue(client);
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { 'rich-server': { url: 'http://rich-server' } },
+    });
+    await manager.connect();
+
+    const out = manager.getTools();
+    expect(out.richTool.parameters).toEqual({ _jsonSchema: richSchema });
   });
 });
 
-describe('validateOpenAIStrictSchema', () => {
-  it('passes a fully-normalized object schema', () => {
-    const ok = {
-      type: 'object',
-      properties: { x: { type: 'string' } },
-      required: ['x'],
-      additionalProperties: false,
-    };
-    expect(() => validateOpenAIStrictSchema(ok)).not.toThrow();
-  });
-
-  it('throws when an object is missing additionalProperties:false', () => {
-    expect(() =>
-      validateOpenAIStrictSchema({ type: 'object', properties: { x: { type: 'string' } }, required: ['x'] }),
-    ).toThrow(/additionalProperties must be false/);
-  });
-
-  it('throws with the exact JSON path of the offending sub-schema', () => {
-    const bad = {
-      type: 'object',
-      additionalProperties: false,
-      required: ['attachments'],
-      properties: {
-        attachments: {
-          anyOf: [
-            {
-              type: 'array',
-              items: {
-                anyOf: [
-                  { type: 'object', properties: {}, required: [] },
-                ],
-              },
-            },
-            { type: 'null' },
-          ],
-        },
-      },
-    };
-    expect(() => validateOpenAIStrictSchema(bad)).toThrow(
-      /properties\.attachments\.anyOf\.0\.items\.anyOf\.0/,
-    );
-  });
-
-  it('throws on forbidden keywords', () => {
-    expect(() => validateOpenAIStrictSchema({ oneOf: [{ type: 'string' }] })).toThrow(/forbidden/);
-    expect(() => validateOpenAIStrictSchema({ patternProperties: {} })).toThrow(/forbidden/);
-  });
-
-  it('throws when a property is not in required', () => {
-    expect(() =>
-      validateOpenAIStrictSchema({
-        type: 'object',
-        additionalProperties: false,
-        properties: { a: { type: 'string' }, b: { type: 'string' } },
-        required: ['a'],
-      }),
-    ).toThrow(/property "b" must be in required/);
-  });
-
-  it('treats boolean schema shortcuts as valid', () => {
-    expect(() => validateOpenAIStrictSchema(true)).not.toThrow();
-    expect(() => validateOpenAIStrictSchema(false)).not.toThrow();
-  });
-});

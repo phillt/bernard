@@ -57,7 +57,7 @@ import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
 import { generateText } from 'ai';
-import { getModel, getModelProfile } from './providers/index.js';
+import { getModel, getModelProfile, getProviderOptions } from './providers/index.js';
 import { rewritePrompt } from './prompt-rewriter.js';
 import {
   serializeMessages,
@@ -952,6 +952,7 @@ export async function startRepl(
       const taskMaxSteps = getTaskMaxSteps(config);
       const result = await generateText({
         model: getModel(config.provider, config.model),
+        providerOptions: getProviderOptions(config.provider),
         tools: baseTools,
         maxSteps: taskMaxSteps,
         maxTokens: config.maxTokens,
@@ -1073,6 +1074,7 @@ export async function startRepl(
               const [summaryResult, domainFacts, candidateResult] = await Promise.all([
                 generateText({
                   model: getModel(config.provider, config.model),
+                  providerOptions: getProviderOptions(config.provider),
                   maxTokens: 2048,
                   system: SUMMARIZATION_PROMPT,
                   messages: [
