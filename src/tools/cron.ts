@@ -181,11 +181,11 @@ Examples:
   Change multiple: { "id": "<id>", "name": "New name", "prompt": "new prompt" }`,
       parameters: z.object({
         id: z.string().describe('Job ID'),
-        name: z.string().nullable().describe('New job name'),
-        schedule: z.string().nullable().describe('New cron expression'),
+        name: z.string().optional().describe('New job name'),
+        schedule: z.string().optional().describe('New cron expression'),
         prompt: z
           .string()
-          .nullable()
+          .optional()
           .describe('New AI prompt text — replaces the existing prompt entirely'),
       }),
       execute: async ({ id, name, schedule, prompt }): Promise<string> => {
