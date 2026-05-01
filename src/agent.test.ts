@@ -30,6 +30,7 @@ vi.mock('./providers/index.js', () => ({
     wrapUserMessage: (m: string) => m,
     systemSuffix: '',
   })),
+  getProviderOptions: vi.fn(() => undefined),
 }));
 
 vi.mock('./output.js', () => ({

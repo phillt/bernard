@@ -197,3 +197,41 @@ describe('MCPManager reconnection', () => {
     expect(status).toEqual({ name: 'test-server', connected: true, toolCount: 2 });
   });
 });
+
+describe('MCPManager schema pass-through', () => {
+  it('passes the MCP tool schema to jsonSchema unchanged (no normalization)', async () => {
+    // OpenAI strict mode is off, so we no longer rewrite incoming schemas. Verify
+    // that a schema with full JSON Schema features (oneOf, no additionalProperties,
+    // untyped items) reaches the AI SDK exactly as the MCP server emitted it.
+    vi.clearAllMocks();
+    const manager = new MCPManager();
+    const richSchema = {
+      type: 'object',
+      properties: {
+        attachments: {
+          type: 'array',
+          items: {
+            oneOf: [{ required: ['filePath'] }, { required: ['driveFileId'] }],
+          },
+        },
+      },
+    };
+    const tools = {
+      richTool: {
+        type: 'dynamic',
+        inputSchema: { jsonSchema: richSchema },
+        description: 'tool with rich schema',
+        execute: vi.fn(),
+      },
+    };
+    const client = makeMockClient(tools);
+    mockCreateMCPClient.mockResolvedValue(client);
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { 'rich-server': { url: 'http://rich-server' } },
+    });
+    await manager.connect();
+
+    const out = manager.getTools();
+    expect(out.richTool.parameters).toEqual({ _jsonSchema: richSchema });
+  });
+});

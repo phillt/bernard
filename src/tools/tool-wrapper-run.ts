@@ -1,6 +1,6 @@
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
-import { getModel } from '../providers/index.js';
+import { getModel, getProviderOptions } from '../providers/index.js';
 import { createTools, type ToolOptions } from './index.js';
 import { createSubAgentTool } from './subagent.js';
 import { createTaskTool } from './task.js';
@@ -302,6 +302,7 @@ export function createToolWrapperRunTool(
 
         const result = await generateText({
           model: getModel(resolvedProvider, resolvedModel),
+          providerOptions: getProviderOptions(resolvedProvider),
           tools: childTools,
           maxSteps,
           maxTokens: config.maxTokens,

@@ -1,6 +1,6 @@
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
-import { getModel } from '../providers/index.js';
+import { getModel, getProviderOptions } from '../providers/index.js';
 import { createTools, type ToolOptions } from './index.js';
 import { extractJsonBlock } from '../structured-output.js';
 import {
@@ -263,6 +263,7 @@ export function createTaskTool(
         const taskMaxSteps = getTaskMaxSteps(config);
         const result = await generateText({
           model: getModel(resolvedProvider, resolvedModel),
+          providerOptions: getProviderOptions(resolvedProvider),
           tools: baseTools,
           maxSteps: taskMaxSteps,
           maxTokens: config.maxTokens,

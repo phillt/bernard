@@ -74,6 +74,7 @@ vi.mock('../mcp.js', () => ({
 
 vi.mock('../providers/index.js', () => ({
   getModel: vi.fn().mockReturnValue('mock-model'),
+  getProviderOptions: vi.fn(() => undefined),
 }));
 
 vi.mock('../config.js', () => ({

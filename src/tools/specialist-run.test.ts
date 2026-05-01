@@ -16,6 +16,7 @@ const fs = await import('node:fs');
 
 vi.mock('../providers/index.js', () => ({
   getModel: vi.fn(() => ({ modelId: 'mock' })),
+  getProviderOptions: vi.fn(() => undefined),
 }));
 
 vi.mock('../logger.js', () => ({

@@ -57,7 +57,7 @@ import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
 import { generateText } from 'ai';
-import { getModel, getModelProfile } from './providers/index.js';
+import { getModel, getModelProfile, getProviderOptions } from './providers/index.js';
 import { rewritePrompt } from './prompt-rewriter.js';
 import {
   serializeMessages,
@@ -69,7 +69,13 @@ import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
 import { SpecialistStore, getBuiltinSpecialistIds } from './specialists.js';
 import { runCorrectionAgent } from './correction.js';
-import { CandidateStore, type SpecialistCandidate } from './specialist-candidates.js';
+import { CandidateStore } from './specialist-candidates.js';
+import {
+  bootstrapPendingCandidates,
+  buildCandidateContextBlock,
+  promoteCandidate,
+  promotePendingCandidates,
+} from './candidate-bootstrap.js';
 import { detectSpecialistCandidate } from './specialist-detector.js';
 import {
   TASK_SYSTEM_PROMPT,
@@ -105,59 +111,6 @@ import {
   type SelectResult,
   type ValueResult,
 } from './menu.js';
-
-/** Promote a pending candidate to a full specialist, updating status and logging. */
-function promoteCandidate(
-  candidate: Pick<
-    SpecialistCandidate,
-    'id' | 'draftId' | 'name' | 'description' | 'systemPrompt' | 'guidelines' | 'confidence'
-  >,
-  specialistStore: SpecialistStore,
-  candidateStore: CandidateStore,
-  threshold: number,
-): void {
-  specialistStore.create(
-    candidate.draftId,
-    candidate.name,
-    candidate.description,
-    candidate.systemPrompt,
-    candidate.guidelines,
-  );
-  candidateStore.updateStatus(candidate.id, 'accepted');
-  debugLog('repl:auto-create', {
-    candidate: candidate.name,
-    confidence: candidate.confidence,
-    threshold,
-  });
-  printInfo(
-    `Specialist auto-created: "${candidate.name}" (confidence: ${Math.round(candidate.confidence * 100)}%). Use /specialists to view.`,
-  );
-}
-
-/** Re-evaluate all pending candidates and auto-create those meeting the threshold. */
-function promotePendingCandidates(
-  candidateStore: CandidateStore,
-  specialistStore: SpecialistStore,
-  threshold: number,
-): void {
-  const pending = candidateStore.listPending();
-  for (const c of pending) {
-    if (c.confidence >= threshold) {
-      try {
-        promoteCandidate(c, specialistStore, candidateStore, threshold);
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        debugLog('repl:auto-create', {
-          action: 're-evaluate-failed',
-          candidate: c.name,
-          confidence: c.confidence,
-          error: errorMessage,
-        });
-        printWarning(`Failed to auto-create specialist "${c.name}": ${errorMessage}`);
-      }
-    }
-  }
-}
 
 /**
  * Launch the interactive REPL, wiring up readline, MCP servers, memory stores, and the agent loop.
@@ -818,16 +771,16 @@ export async function startRepl(
     }
   }
 
-  // Surface pending specialist candidates at session start
-  candidateStore.pruneOld();
-  candidateStore.reconcileSaved(specialistStore.list());
-  const pendingCandidates = candidateStore.listPending();
-  if (pendingCandidates.length > 0) {
+  const { pending: pendingCandidates, contextBlock } = bootstrapPendingCandidates(
+    candidateStore,
+    specialistStore,
+    config,
+  );
+  if (contextBlock) {
     printInfo(
       `  ${pendingCandidates.length} specialist suggestion(s) pending. Use /candidates to review.`,
     );
-    const candidateContext = `## Specialist Suggestions\n\nBernard detected patterns in previous sessions that might benefit from saved specialists. Mention these when relevant.\n\n${pendingCandidates.map((c) => `- "${c.name}" (${c.draftId}): ${c.description}`).join('\n')}`;
-    alertContext = alertContext ? alertContext + '\n\n' + candidateContext : candidateContext;
+    alertContext = alertContext ? alertContext + '\n\n' + contextBlock : contextBlock;
   }
 
   const agent = new Agent(
@@ -1000,6 +953,7 @@ export async function startRepl(
       const taskMaxSteps = getTaskMaxSteps(config);
       const result = await generateText({
         model: getModel(config.provider, config.model),
+        providerOptions: getProviderOptions(config.provider),
         tools: baseTools,
         maxSteps: taskMaxSteps,
         maxTokens: config.maxTokens,
@@ -1121,6 +1075,7 @@ export async function startRepl(
               const [summaryResult, domainFacts, candidateResult] = await Promise.all([
                 generateText({
                   model: getModel(config.provider, config.model),
+                  providerOptions: getProviderOptions(config.provider),
                   maxTokens: 2048,
                   system: SUMMARIZATION_PROMPT,
                   messages: [
@@ -1720,8 +1675,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             '  The agent can create the specialist via the specialist tool, then update candidate status.\n',
           );
           // Inject candidate context so the agent knows about them for the rest of the session
-          const candidateContext = `## Specialist Suggestions\n\nBernard detected patterns in previous sessions that might benefit from saved specialists. Mention these when relevant.\n\n${pending.map((c) => `- "${c.name}" (${c.draftId}): ${c.description}`).join('\n')}`;
-          agent.setAlertContext(candidateContext);
+          agent.setAlertContext(buildCandidateContextBlock(pending));
         }
         void prompt();
         return;

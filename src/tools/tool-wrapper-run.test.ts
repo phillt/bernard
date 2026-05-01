@@ -9,6 +9,7 @@ vi.mock('ai', () => ({
 
 vi.mock('../providers/index.js', () => ({
   getModel: vi.fn(() => 'mock-model'),
+  getProviderOptions: vi.fn(() => undefined),
 }));
 
 vi.mock('./index.js', () => ({

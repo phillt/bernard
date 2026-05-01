@@ -90,6 +90,7 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_AUTO_CREATE_THRESHOLD` — Confidence threshold for auto-creating specialists, 0-1 (default: 0.8)
 - `BERNARD_CORRECTION_ENABLED` — Run the correction agent at session close to learn from tool-wrapper failures (default: true)
 - `BERNARD_PROMPT_REWRITER` — Run the model-specific prompt rewriter as a pre-turn LLM pass (default: true). Fails open to the original prompt on any error.
+- **OpenAI strict-schema mode** is disabled for all `generateText` calls (see `getProviderOptions` in `src/providers/index.ts`). MCP tool schemas come from third parties and use full JSON Schema features that strict mode rejects at preflight. Trade-off: tool calls become advisory rather than enforced — minor reliability cost, large UX win. To re-enable for a specific call, pass `providerOptions: { openai: { strictSchemas: true } }` directly.
 - `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `XAI_API_KEY` — Provider API keys
 - `BRAVE_API_KEY` — Optional: Brave Search API key for `web_search` (first provider tried)
 - `TAVILY_API_KEY` — Optional: Tavily API key for `web_search` (fallback when Brave is absent)

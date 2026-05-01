@@ -1,5 +1,5 @@
 import { generateText, type CoreMessage, type UserContent } from 'ai';
-import { getModel, getModelProfile } from './providers/index.js';
+import { getModel, getModelProfile, getProviderOptions } from './providers/index.js';
 import { createTools, type ToolOptions } from './tools/index.js';
 import { createSubAgentTool } from './tools/subagent.js';
 import { createTaskTool } from './tools/task.js';
@@ -738,6 +738,7 @@ export class Agent {
       const callGenerateText = (messages?: CoreMessage[]) =>
         generateText({
           model: getModel(this.config.provider, this.config.model),
+          providerOptions: getProviderOptions(this.config.provider),
           tools: augmentedTools,
           maxSteps: effectiveMaxSteps,
           maxTokens: this.config.maxTokens,

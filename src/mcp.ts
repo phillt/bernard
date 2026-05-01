@@ -267,7 +267,7 @@ export class MCPManager {
    * Converts a dynamic MCP tool to the function-tool shape expected by AI SDK v4.
    * @internal
    */
-  private convertTool(name: string, tool: any): any {
+  private convertTool(_name: string, tool: any): any {
     if (tool.type === 'dynamic') {
       const { type: _type, inputSchema, ...rest } = tool;
       return {

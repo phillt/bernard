@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto';
 import { generateText } from 'ai';
 import { tool } from 'ai';
 import { z } from 'zod';
-import { getModel } from '../providers/index.js';
+import { getModel, getProviderOptions } from '../providers/index.js';
 import { loadConfig } from '../config.js';
 import { MemoryStore } from '../memory.js';
 import { RAGStore } from '../rag.js';
@@ -262,6 +262,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
 
     const result = await generateText({
       model: getModel(config.provider, config.model),
+      providerOptions: getProviderOptions(config.provider),
       tools,
       maxSteps: config.maxSteps,
       maxTokens: config.maxTokens,
@@ -280,6 +281,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         regenerate: async (extraMessages) => {
           return generateText({
             model: getModel(config.provider, config.model),
+            providerOptions: getProviderOptions(config.provider),
             tools,
             maxSteps: 20,
             maxTokens: config.maxTokens,
