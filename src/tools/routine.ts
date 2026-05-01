@@ -20,13 +20,13 @@ export function createRoutineTool(routineStore?: RoutineStore) {
         .describe('The action to perform'),
       id: z
         .string()
-        .nullable()
+        .optional()
         .describe(
           'Routine ID (kebab-case slug, e.g. "deploy-staging"). Required for create/read/update/delete.',
         ),
-      name: z.string().nullable().describe('Display name (required for create)'),
-      description: z.string().nullable().describe('One-line summary (required for create)'),
-      content: z.string().nullable().describe('Full procedure as markdown (required for create)'),
+      name: z.string().optional().describe('Display name (required for create)'),
+      description: z.string().optional().describe('One-line summary (required for create)'),
+      content: z.string().optional().describe('Full procedure as markdown (required for create)'),
     }),
     execute: async ({ action, id, name, description, content }): Promise<string> => {
       switch (action) {
@@ -59,9 +59,9 @@ export function createRoutineTool(routineStore?: RoutineStore) {
         case 'update': {
           if (!id) return 'Error: id is required for update action.';
           const updates: Record<string, string> = {};
-          if (name != null) updates.name = name;
-          if (description != null) updates.description = description;
-          if (content != null) updates.content = content;
+          if (name !== undefined) updates.name = name;
+          if (description !== undefined) updates.description = description;
+          if (content !== undefined) updates.content = content;
           if (Object.keys(updates).length === 0)
             return 'Error: provide at least one field to update (name, description, or content).';
           const updated = store.update(id, updates);

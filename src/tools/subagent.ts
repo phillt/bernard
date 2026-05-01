@@ -76,16 +76,16 @@ export function createSubAgentTool(
         .describe(
           'A detailed, self-contained task description. Include: (1) specific objective and expected output format, (2) exact file paths, commands, or URLs, (3) edge cases and what to do if something fails, (4) what "done" looks like. The sub-agent has zero prior context.',
         ),
-      context: z.string().nullable().describe('Optional additional context to help the sub-agent'),
+      context: z.string().optional().describe('Optional additional context to help the sub-agent'),
       provider: z
         .string()
-        .nullable()
+        .optional()
         .describe(
           'Optional provider override for this sub-agent (e.g. "xai"). Falls back to global config.',
         ),
       model: z
         .string()
-        .nullable()
+        .optional()
         .describe(
           'Optional model override for this sub-agent (e.g. "grok-code-fast-1"). Falls back to global config.',
         ),

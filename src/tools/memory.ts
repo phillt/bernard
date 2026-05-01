@@ -15,8 +15,8 @@ export function createMemoryTool(memoryStore: MemoryStore) {
     description: `Persistent memory that survives across sessions. Use this to remember user preferences, project knowledge, or anything worth recalling later. Stored as files on disk at ${MEMORY_DIR}.`,
     parameters: z.object({
       action: z.enum(['list', 'read', 'write', 'delete']).describe('The action to perform'),
-      key: z.string().nullable().describe('The memory key (required for read/write/delete)'),
-      content: z.string().nullable().describe('The content to write (required for write)'),
+      key: z.string().optional().describe('The memory key (required for read/write/delete)'),
+      content: z.string().optional().describe('The content to write (required for write)'),
     }),
     execute: async ({ action, key, content }): Promise<string> => {
       switch (action) {
@@ -63,8 +63,8 @@ export function createScratchTool(memoryStore: MemoryStore) {
       'Session scratch notes for tracking complex task progress, intermediate findings, and working plans. These notes survive context compression but are discarded when the session ends. Use this to keep track of multi-step work within a single session.',
     parameters: z.object({
       action: z.enum(['list', 'read', 'write', 'delete']).describe('The action to perform'),
-      key: z.string().nullable().describe('The scratch note key (required for read/write/delete)'),
-      content: z.string().nullable().describe('The content to write (required for write)'),
+      key: z.string().optional().describe('The scratch note key (required for read/write/delete)'),
+      content: z.string().optional().describe('The content to write (required for write)'),
     }),
     execute: async ({ action, key, content }): Promise<string> => {
       switch (action) {

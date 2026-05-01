@@ -235,4 +235,3 @@ describe('MCPManager schema pass-through', () => {
     expect(out.richTool.parameters).toEqual({ _jsonSchema: richSchema });
   });
 });
-

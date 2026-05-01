@@ -20,12 +20,10 @@ export function createCronLogTools() {
         'List recent cron job execution runs. Returns one-line summaries (no step details). Use cron_logs_get for full traces.',
       parameters: z.object({
         job_id: z.string().describe('Job ID to list runs for'),
-        limit: z.number().min(1).max(50).nullable().describe('Number of runs to return (max 50, default 10)'),
-        offset: z.number().min(0).nullable().describe('Offset for pagination (default 0)'),
+        limit: z.number().min(1).max(50).default(10).describe('Number of runs to return (max 50)'),
+        offset: z.number().min(0).default(0).describe('Offset for pagination'),
       }),
-      execute: async ({ job_id, limit: limitParam, offset: offsetParam }): Promise<string> => {
-        const limit = limitParam ?? 10;
-        const offset = offsetParam ?? 0;
+      execute: async ({ job_id, limit, offset }): Promise<string> => {
         debugLog('cron_logs_list:execute', { job_id, limit, offset });
 
         const entries = logStore.getEntries(job_id, limit, offset);
@@ -149,11 +147,10 @@ export function createCronLogTools() {
           .number()
           .min(1)
           .max(10000)
-          .nullable()
-          .describe('Number of recent entries to keep (only for rotate, default 500)'),
+          .default(500)
+          .describe('Number of recent entries to keep (only for rotate)'),
       }),
-      execute: async ({ job_id, action, keep: keepParam }): Promise<string> => {
-        const keep = keepParam ?? 500;
+      execute: async ({ job_id, action, keep }): Promise<string> => {
         debugLog('cron_logs_cleanup:execute', { job_id, action, keep });
 
         if (action === 'delete') {

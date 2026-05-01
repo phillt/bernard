@@ -13,11 +13,8 @@ vi.mock('./logger.js', () => ({
   debugLog: vi.fn(),
 }));
 
-const {
-  bootstrapPendingCandidates,
-  promotePendingCandidates,
-  promoteCandidate,
-} = await import('./candidate-bootstrap.js');
+const { bootstrapPendingCandidates, promotePendingCandidates, promoteCandidate } =
+  await import('./candidate-bootstrap.js');
 
 function makeCandidate(overrides: Partial<SpecialistCandidate> = {}): SpecialistCandidate {
   return {
@@ -125,7 +122,9 @@ describe('bootstrapPendingCandidates', () => {
     expect(result.pending).toEqual([below]);
     expect(result.contextBlock).toContain('"Below"');
     expect(result.contextBlock).not.toContain('"Above"');
-    expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining('Specialist auto-created: "Above"'));
+    expect(mockPrintInfo).toHaveBeenCalledWith(
+      expect.stringContaining('Specialist auto-created: "Above"'),
+    );
   });
 
   it('warns and keeps the candidate pending when promoteCandidate throws', () => {
@@ -159,7 +158,13 @@ describe('promotePendingCandidates', () => {
     promotePendingCandidates(candidateStore as any, specialistStore as any, 0.8);
 
     expect(specialistStore.create).toHaveBeenCalledTimes(1);
-    expect(specialistStore.create).toHaveBeenCalledWith('at', 'At', expect.anything(), expect.anything(), expect.anything());
+    expect(specialistStore.create).toHaveBeenCalledWith(
+      'at',
+      'At',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
     expect(candidateStore.updateStatus).toHaveBeenCalledWith('at', 'accepted');
     expect(candidateStore.updateStatus).not.toHaveBeenCalledWith('below', 'accepted');
   });

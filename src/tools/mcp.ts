@@ -14,20 +14,20 @@ export function createMCPConfigTool() {
       'Manage MCP server configuration. Add, remove, list, or inspect MCP servers. Changes take effect after restarting Bernard.',
     parameters: z.object({
       action: z.enum(['list', 'add', 'remove', 'get']).describe('The action to perform'),
-      key: z.string().nullable().describe('Server name/key (required for add, remove, get)'),
+      key: z.string().optional().describe('Server name/key (required for add, remove, get)'),
       command: z
         .string()
-        .nullable()
+        .optional()
         .describe('Executable to run, e.g. "npx", "python", "node" (required for add)'),
       args: z
         .array(z.string())
-        .nullable()
+        .optional()
         .describe(
           'Command arguments, e.g. ["-y", "@modelcontextprotocol/server-filesystem", "/home/user"]',
         ),
       env: z
         .record(z.string())
-        .nullable()
+        .optional()
         .describe('Environment variables to pass to the server process'),
     }),
     execute: async ({ action, key, command, args, env }): Promise<string> => {
@@ -58,7 +58,7 @@ export function createMCPConfigTool() {
           if (!command) return 'Error: command is required for add action.';
 
           try {
-            addMCPServer(key, command, args ?? undefined, env ?? undefined);
+            addMCPServer(key, command, args, env);
             const argsStr = args && args.length > 0 ? `\n  Args: ${args.join(' ')}` : '';
             const envStr =
               env && Object.keys(env).length > 0 ? `\n  Env: ${Object.keys(env).join(', ')}` : '';

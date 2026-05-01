@@ -147,7 +147,7 @@ export function createWebSearchTool() {
         .int()
         .min(1)
         .max(MAX_LIMIT)
-        .nullable()
+        .optional()
         .describe(`Maximum results to return (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}).`),
     }),
     execute: async ({ query, limit }): Promise<string> => {
