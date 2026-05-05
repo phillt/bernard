@@ -172,11 +172,14 @@ export function createTaskTool(
         message: 'Either task or taskId must be provided',
       }),
     execute: async ({ task, taskId, context, provider, model }, execOptions) => {
+      // Treat empty/whitespace as "not provided" — the model sometimes passes `provider: ""`.
       // When the resolved provider differs from config.provider and no explicit model
       // override exists, use the provider's default model to avoid cross-provider mismatches.
-      const resolvedProvider = provider ?? config.provider;
+      const blank = (v: string | undefined) => (v && v.trim() ? v.trim() : undefined);
+      const resolvedProvider = blank(provider) ?? config.provider;
+      const explicitModel = blank(model);
       const resolvedModel =
-        model ??
+        explicitModel ??
         (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);
 
       if (!hasProviderKey(config, resolvedProvider)) {

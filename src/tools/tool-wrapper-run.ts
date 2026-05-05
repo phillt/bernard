@@ -193,8 +193,11 @@ export function createToolWrapperRunTool(
         });
       }
 
-      const resolvedProvider = provider ?? specialist.provider ?? config.provider;
-      const explicitModel = model ?? specialist.model;
+      // Treat empty/whitespace as "not provided" — the model sometimes passes `provider: ""`
+      // and saved specialists may have `"provider": ""`.
+      const blank = (v: string | undefined) => (v && v.trim() ? v.trim() : undefined);
+      const resolvedProvider = blank(provider) ?? blank(specialist.provider) ?? config.provider;
+      const explicitModel = blank(model) ?? blank(specialist.model);
       const resolvedModel =
         explicitModel ??
         (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);
