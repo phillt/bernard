@@ -36,7 +36,7 @@ export function buildActivitySummary(steps: unknown[] | undefined): string {
 export function appendActivitySummary(
   text: string,
   steps: unknown[] | undefined,
-  agentLabel: string = 'agent',
+  agentLabel: string,
 ): string {
   const summary = buildActivitySummary(steps);
   if (!text.trim()) {

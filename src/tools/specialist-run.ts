@@ -19,6 +19,7 @@ import {
   hasProviderKey,
   getDefaultModel,
   PROVIDER_ENV_VARS,
+  blankToUndefined,
 } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
@@ -36,6 +37,7 @@ import {
   shouldEnforcePlan,
   computeEffectiveMaxSteps,
   REACT_ENFORCEMENT_MAX_RETRIES,
+  REACT_AUTO_CANCEL_NOTE,
 } from '../react.js';
 import { truncateToolResults } from '../context.js';
 
@@ -110,14 +112,12 @@ export function createSpecialistRunTool(
       }
 
       // 3-tier model resolution: invocation override > specialist config > global config.
-      // Treat empty/whitespace strings as "not provided" — the model sometimes passes
-      // `provider: ""` to mean "use default" and saved specialists may have `"provider": ""`.
       // When the resolved provider differs from config.provider and no explicit model
       // override exists, use the provider's default model to avoid cross-provider mismatches
       // (e.g. xai provider with an anthropic model name).
-      const blank = (v: string | undefined) => (v && v.trim() ? v.trim() : undefined);
-      const resolvedProvider = blank(provider) ?? blank(specialist.provider) ?? config.provider;
-      const explicitModel = blank(model) ?? blank(specialist.model);
+      const resolvedProvider =
+        blankToUndefined(provider) ?? blankToUndefined(specialist.provider) ?? config.provider;
+      const explicitModel = blankToUndefined(model) ?? blankToUndefined(specialist.model);
       const resolvedModel =
         explicitModel ??
         (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);
@@ -241,7 +241,8 @@ export function createSpecialistRunTool(
           result = {
             ...result,
             text: pacResult.finalText,
-            steps: pacResult.finalSteps as typeof result.steps,
+            steps: pacResult.finalSteps,
+            response: pacResult.finalResponse as typeof result.response,
           };
         }
 
@@ -296,9 +297,7 @@ export function createSpecialistRunTool(
             }
           }
           if (!planStore.isComplete()) {
-            const cancelled = planStore.cancelAllUnresolved(
-              'auto-cancelled: enforcement retries exhausted',
-            );
+            const cancelled = planStore.cancelAllUnresolved(REACT_AUTO_CANCEL_NOTE);
             if (cancelled > 0) {
               printInfo(
                 `[${prefix}] Auto-cancelled ${cancelled} unresolved plan step(s) after enforcement retries.`,

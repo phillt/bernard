@@ -21,6 +21,7 @@ import {
   hasProviderKey,
   getDefaultModel,
   PROVIDER_ENV_VARS,
+  blankToUndefined,
 } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
@@ -193,11 +194,9 @@ export function createToolWrapperRunTool(
         });
       }
 
-      // Treat empty/whitespace as "not provided" — the model sometimes passes `provider: ""`
-      // and saved specialists may have `"provider": ""`.
-      const blank = (v: string | undefined) => (v && v.trim() ? v.trim() : undefined);
-      const resolvedProvider = blank(provider) ?? blank(specialist.provider) ?? config.provider;
-      const explicitModel = blank(model) ?? blank(specialist.model);
+      const resolvedProvider =
+        blankToUndefined(provider) ?? blankToUndefined(specialist.provider) ?? config.provider;
+      const explicitModel = blankToUndefined(model) ?? blankToUndefined(specialist.model);
       const resolvedModel =
         explicitModel ??
         (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);

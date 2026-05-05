@@ -18,6 +18,7 @@ import {
   hasProviderKey,
   getDefaultModel,
   PROVIDER_ENV_VARS,
+  blankToUndefined,
 } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
@@ -172,12 +173,10 @@ export function createTaskTool(
         message: 'Either task or taskId must be provided',
       }),
     execute: async ({ task, taskId, context, provider, model }, execOptions) => {
-      // Treat empty/whitespace as "not provided" — the model sometimes passes `provider: ""`.
       // When the resolved provider differs from config.provider and no explicit model
       // override exists, use the provider's default model to avoid cross-provider mismatches.
-      const blank = (v: string | undefined) => (v && v.trim() ? v.trim() : undefined);
-      const resolvedProvider = blank(provider) ?? config.provider;
-      const explicitModel = blank(model);
+      const resolvedProvider = blankToUndefined(provider) ?? config.provider;
+      const explicitModel = blankToUndefined(model);
       const resolvedModel =
         explicitModel ??
         (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);

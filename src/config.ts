@@ -465,6 +465,17 @@ export function hasProviderKey(config: BernardConfig, provider: string): boolean
 }
 
 /**
+ * Coerces an empty or whitespace-only string to undefined, otherwise trims it.
+ * Used to normalize provider/model overrides — the model sometimes passes
+ * `provider: ""` to mean "use default" and saved specialists may have
+ * `"provider": ""`. With `??` chains, empty strings would falsely "win" over
+ * the next fallback; this helper makes them fall through.
+ */
+export function blankToUndefined(v: string | undefined): string | undefined {
+  return v && v.trim() ? v.trim() : undefined;
+}
+
+/**
  * Builds a fully-resolved {@link BernardConfig} by merging (in priority order):
  * CLI overrides, saved preferences, environment variables, and built-in defaults.
  *

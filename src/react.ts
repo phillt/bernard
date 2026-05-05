@@ -104,3 +104,6 @@ export function computeEffectiveMaxSteps(maxSteps: number, reactMode: boolean): 
 
 /** Max plan-enforcement re-prompts after the main generateText call. */
 export const REACT_ENFORCEMENT_MAX_RETRIES = 2;
+
+/** Note attached to plan steps auto-cancelled after enforcement retries are exhausted. */
+export const REACT_AUTO_CANCEL_NOTE = 'auto-cancelled: enforcement retries exhausted';

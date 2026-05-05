@@ -17,6 +17,7 @@ import {
   hasProviderKey,
   getDefaultModel,
   PROVIDER_ENV_VARS,
+  blankToUndefined,
 } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
@@ -24,6 +25,9 @@ import { runPACLoop } from '../pac.js';
 import { capSubagentResult } from './result-cap.js';
 import { appendActivitySummary } from './activity-summary.js';
 import { makeLastStepTextOnly } from './task.js';
+
+const SUBAGENT_STEP_RATIO = 0.5;
+const SUBAGENT_PAC_RETRY_STEPS = 10;
 
 const SUB_AGENT_SYSTEM_PROMPT = `You are a sub-agent of Bernard, a CLI AI assistant. You have been delegated a specific, scoped task.
 
@@ -94,12 +98,10 @@ export function createSubAgentTool(
         ),
     }),
     execute: async ({ task, context, provider, model }, execOptions) => {
-      // Treat empty/whitespace as "not provided" — the model sometimes passes `provider: ""`.
       // When the resolved provider differs from config.provider and no explicit model
       // override exists, use the provider's default model to avoid cross-provider mismatches.
-      const blank = (v: string | undefined) => (v && v.trim() ? v.trim() : undefined);
-      const resolvedProvider = blank(provider) ?? config.provider;
-      const explicitModel = blank(model);
+      const resolvedProvider = blankToUndefined(provider) ?? config.provider;
+      const explicitModel = blankToUndefined(model);
       const resolvedModel =
         explicitModel ??
         (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);
@@ -161,7 +163,7 @@ export function createSubAgentTool(
           }
         };
 
-        const maxSteps = Math.ceil(config.maxSteps * 0.5);
+        const maxSteps = Math.ceil(config.maxSteps * SUBAGENT_STEP_RATIO);
         const result = await generateText({
           model: getModel(resolvedProvider, resolvedModel),
           providerOptions: getProviderOptions(resolvedProvider),
@@ -181,7 +183,7 @@ export function createSubAgentTool(
             userInput: userMessage,
             initialResult: result,
             regenerate: async (extraMessages) => {
-              const retryMaxSteps = 10;
+              const retryMaxSteps = SUBAGENT_PAC_RETRY_STEPS;
               return generateText({
                 model: getModel(resolvedProvider, resolvedModel),
                 providerOptions: getProviderOptions(resolvedProvider),

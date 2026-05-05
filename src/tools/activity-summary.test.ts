@@ -86,7 +86,7 @@ describe('appendActivitySummary', () => {
   ];
 
   it('preserves model text and appends the activity log', () => {
-    const out = appendActivitySummary('done', sampleSteps);
+    const out = appendActivitySummary('done', sampleSteps, 'agent');
     expect(out.startsWith('done')).toBe(true);
     expect(out).toContain('## Activity Log');
     expect(out).toContain('1 tool call(s):');
@@ -109,13 +109,8 @@ describe('appendActivitySummary', () => {
   });
 
   it('does not emit the preamble when text is non-empty', () => {
-    const out = appendActivitySummary('actual response', sampleSteps);
+    const out = appendActivitySummary('actual response', sampleSteps, 'agent');
     expect(out).not.toContain('produced no text summary');
-  });
-
-  it('uses default agent label when none provided', () => {
-    const out = appendActivitySummary('', sampleSteps);
-    expect(out).toContain('(agent produced no text summary');
   });
 
   it('uses provided agent label in preamble', () => {

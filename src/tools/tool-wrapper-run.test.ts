@@ -59,6 +59,7 @@ vi.mock('../config.js', () => ({
   hasProviderKey: vi.fn(() => true),
   getDefaultModel: vi.fn(() => 'default-model'),
   PROVIDER_ENV_VARS: { anthropic: 'ANTHROPIC_API_KEY' },
+  blankToUndefined: (v: string | undefined) => (v && v.trim() ? v.trim() : undefined),
 }));
 
 vi.mock('../os-info.js', () => ({

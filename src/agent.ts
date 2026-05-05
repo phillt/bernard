@@ -230,12 +230,14 @@ export {
   REACT_MAX_STEPS_CEILING,
   computeEffectiveMaxSteps,
   REACT_ENFORCEMENT_MAX_RETRIES,
+  REACT_AUTO_CANCEL_NOTE,
 } from './react.js';
 import {
   REACT_COORDINATOR_PROMPT,
   shouldEnforcePlan,
   computeEffectiveMaxSteps,
   REACT_ENFORCEMENT_MAX_RETRIES,
+  REACT_AUTO_CANCEL_NOTE,
 } from './react.js';
 
 /**
@@ -850,7 +852,7 @@ export class Agent {
           reactMode: this.config.reactMode,
           aborted: this.abortController?.signal.aborted === true,
           stepLimitHit: this.lastStepLimitHit,
-          hasSteps: this.planStore.view().length > 0,
+          hasSteps: this.planStore.unresolvedCount() > 0,
         })
       ) {
         let enforcementAttempts = 0;
@@ -875,7 +877,7 @@ export class Agent {
         }
 
         if (!this.planStore.isComplete()) {
-          this.planStore.cancelAllUnresolved('auto-cancelled: enforcement retries exhausted');
+          this.planStore.cancelAllUnresolved(REACT_AUTO_CANCEL_NOTE);
           printInfo('Auto-cancelled unresolved plan steps after enforcement retries.');
         }
       }
