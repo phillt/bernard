@@ -283,6 +283,8 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     autoCreateThreshold: 0.8,
     correctionEnabled: false,
     promptRewriter: false,
+    referenceLookup: false,
+    referenceLookupTools: [],
     anthropicApiKey: 'sk-test',
     ...overrides,
   };

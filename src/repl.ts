@@ -24,6 +24,9 @@ import {
   type ResolvedEntry,
   type Candidate,
 } from './reference-resolver.js';
+import { runReferenceLookup } from './reference-tool-lookup.js';
+import { createWebReadTool } from './tools/web.js';
+import { createWebSearchTool } from './tools/web-search.js';
 import { RAGStore, type RAGSearchResult } from './rag.js';
 import { MCPManager } from './mcp.js';
 import {
@@ -490,6 +493,23 @@ export async function startRepl(
 
   type UnknownReferenceOutcome = { entry: ResolvedEntry | null };
 
+  function persistReference(
+    reference: string,
+    value: string,
+    store: MemoryStore,
+  ): ResolvedEntry {
+    const baseKey = deriveKeyFromReference(reference) || 'entity';
+    const existing = new Set(store.listMemory());
+    let key = baseKey;
+    let suffix = 2;
+    while (existing.has(key)) {
+      key = `${baseKey}-${suffix++}`;
+    }
+    store.writeMemory(key, value);
+    printInfo(`  Saved as memory: ${key}`);
+    return { phrase: reference, resolvedTo: value, sourceKey: key };
+  }
+
   async function promptUnknownReference(
     reference: string,
     store: MemoryStore,
@@ -503,22 +523,50 @@ export async function startRepl(
       const result = await promptValue(rl, { label: `"${reference}" is` }, signal);
       if (result.cancelled) return { entry: null };
       if (!result.raw.trim()) return { entry: null };
-      const baseKey = deriveKeyFromReference(reference) || 'entity';
-      const existing = new Set(store.listMemory());
-      let key = baseKey;
-      let suffix = 2;
-      while (existing.has(key)) {
-        key = `${baseKey}-${suffix++}`;
+      return { entry: persistReference(reference, result.raw, store) };
+    } finally {
+      clearMenuSignal();
+    }
+  }
+
+  // User confirmation is mandatory — the resolver lookup is a hint, not a fact,
+  // and may have matched the wrong person.
+  async function promptToolLookupConfirmation(
+    reference: string,
+    resolvedTo: string,
+    toolName: string,
+    store: MemoryStore,
+  ): Promise<UnknownReferenceOutcome> {
+    printInfo(`\n  Lookup via ${toolName} found a possible match for "${reference}":\n  → ${resolvedTo}`);
+    console.log();
+    const SAVE = 0;
+    const EDIT = 1;
+    const SKIP = 2;
+    const entries: MenuEntry[] = [
+      { label: 'Save as memory', description: resolvedTo },
+      { label: 'Edit before saving' },
+      { label: 'Skip (do not resolve)' },
+    ];
+    const signal = createMenuSignal();
+    try {
+      const result = await selectFromMenu(
+        rl,
+        entries,
+        { title: `Save lookup result for "${reference}"?`, promptLabel: 'Choose' },
+        signal,
+      );
+      if (result.cancelled || result.index === SKIP) return { entry: null };
+
+      let value = resolvedTo;
+      if (result.index === EDIT) {
+        const edited = await promptValue(rl, { label: `"${reference}" is` }, signal);
+        if (edited.cancelled || !edited.raw.trim()) return { entry: null };
+        value = edited.raw;
+      } else if (result.index !== SAVE) {
+        return { entry: null };
       }
-      store.writeMemory(key, result.raw);
-      printInfo(`  Saved as memory: ${key}`);
-      return {
-        entry: {
-          phrase: reference,
-          resolvedTo: result.raw,
-          sourceKey: key,
-        },
-      };
+
+      return { entry: persistReference(reference, value, store) };
     } finally {
       clearMenuSignal();
     }
@@ -568,8 +616,40 @@ export async function startRepl(
           }
         }
       } else if (resolveResult.status === 'unknown') {
-        const outcome = await promptUnknownReference(resolveResult.reference, memoryStore);
-        if (outcome.entry) entries = [outcome.entry];
+        // Try a read-only tool lookup before falling back to asking the user.
+        // Fail-open at every layer: any error or `none` drops through to the
+        // existing free-form prompt.
+        let lookupHandled = false;
+        if (config.referenceLookup) {
+          const lookupSignal = createMenuSignal();
+          startSpinner();
+          let lookup;
+          try {
+            lookup = await runReferenceLookup(
+              resolveResult.reference,
+              lookupTools,
+              config,
+              lookupSignal,
+            );
+          } finally {
+            stopSpinner();
+            clearMenuSignal();
+          }
+          if (lookup.status === 'found') {
+            const outcome = await promptToolLookupConfirmation(
+              resolveResult.reference,
+              lookup.resolvedTo,
+              lookup.toolName,
+              memoryStore,
+            );
+            if (outcome.entry) entries = [outcome.entry];
+            lookupHandled = true;
+          }
+        }
+        if (!lookupHandled) {
+          const outcome = await promptUnknownReference(resolveResult.reference, memoryStore);
+          if (outcome.entry) entries = [outcome.entry];
+        }
       }
 
       if (entries.length > 0) {
@@ -721,6 +801,15 @@ export async function startRepl(
 
   const mcpTools = mcpManager.getTools();
   const mcpServerNames = mcpManager.getConnectedServerNames();
+
+  // Tool registry exposed to the resolver's pre-fallback lookup pass. Limited
+  // to read-only network tools + MCP tools so a slow or write-side tool can't
+  // be selected. The lookup module further filters via `isAllowedLookupTool`.
+  const lookupTools: Record<string, any> = {
+    web_search: createWebSearchTool(),
+    web_read: createWebReadTool(),
+    ...mcpTools,
+  };
 
   const confirmFn = (command: string): Promise<boolean> => {
     return new Promise((resolve) => {
