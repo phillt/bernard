@@ -126,9 +126,9 @@ describe('plan tool', () => {
     });
     expect(parsed.success).toBe(false);
     if (!parsed.success) {
-      expect(parsed.error.issues.some((i) => /verification must not be empty/.test(i.message))).toBe(
-        true,
-      );
+      expect(
+        parsed.error.issues.some((i) => /verification must not be empty/.test(i.message)),
+      ).toBe(true);
     }
   });
 

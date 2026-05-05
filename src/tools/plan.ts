@@ -4,7 +4,10 @@ import type { PlanStore } from '../plan-store.js';
 import { printPlan } from '../output.js';
 
 const stepInputSchema = z.object({
-  description: z.string().min(1, 'description must not be empty').describe('What this step accomplishes.'),
+  description: z
+    .string()
+    .min(1, 'description must not be empty')
+    .describe('What this step accomplishes.'),
   verification: z
     .string()
     .min(1, 'verification must not be empty')
@@ -42,7 +45,9 @@ export function createPlanTool(planStore: PlanStore) {
         .array(stepInputSchema)
         .optional()
         .describe('Required for create: ordered list of {description, verification} objects.'),
-      step: stepInputSchema.optional().describe('Required for add: a {description, verification} object.'),
+      step: stepInputSchema
+        .optional()
+        .describe('Required for add: a {description, verification} object.'),
       id: z.number().optional().describe('Required for update: step id'),
       status: z
         .enum(['pending', 'in_progress', 'done', 'cancelled', 'error'])

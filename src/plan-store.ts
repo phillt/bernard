@@ -63,11 +63,7 @@ export class PlanStore {
   }
 
   /** Transitions a step's status. Returns null if no step matches the id. */
-  update(
-    id: number,
-    status: StepStatus,
-    opts?: { note?: string; signoff?: string },
-  ): Step | null {
+  update(id: number, status: StepStatus, opts?: { note?: string; signoff?: string }): Step | null {
     const step = this.steps.find((s) => s.id === id);
     if (!step) return null;
     step.status = status;

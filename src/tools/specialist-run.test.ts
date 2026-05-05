@@ -686,7 +686,11 @@ describe('specialist-run tool', () => {
 
       expect(capturedRegenerate).toBeDefined();
       mockGenerateText.mockClear();
-      mockGenerateText.mockResolvedValue({ text: 'retry-out', steps: [], response: { messages: [] } });
+      mockGenerateText.mockResolvedValue({
+        text: 'retry-out',
+        steps: [],
+        response: { messages: [] },
+      });
       await capturedRegenerate!([{ role: 'user', content: 'try again' }]);
 
       const retryCall = mockGenerateText.mock.calls[0][0];
@@ -855,9 +859,7 @@ describe('specialist-run tool', () => {
       // 1 initial call + 2 enforcement retries = 3 total
       expect(mockGenerateText).toHaveBeenCalledTimes(3);
       // Auto-cancel notice printed
-      expect(mockPrintInfo).toHaveBeenCalledWith(
-        expect.stringContaining('Auto-cancelled'),
-      );
+      expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining('Auto-cancelled'));
     });
 
     it('does not run plan-enforcement when reactMode is off', async () => {
