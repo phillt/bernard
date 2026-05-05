@@ -16,6 +16,9 @@ import {
   hasProviderKey,
   getProviderApiKey,
   normalizeThreshold,
+  blankToUndefined,
+  resolveProviderAndModel,
+  defaultProviderErrorMessage,
 } from './config.js';
 import type { BernardConfig } from './config.js';
 
@@ -896,5 +899,111 @@ describe('loadConfig correctionEnabled from env var', () => {
     vi.stubEnv('BERNARD_CORRECTION_ENABLED', 'true');
     const config = loadConfig();
     expect(config.correctionEnabled).toBe(true);
+  });
+});
+
+describe('blankToUndefined', () => {
+  it('returns undefined for empty string', () => {
+    expect(blankToUndefined('')).toBeUndefined();
+  });
+
+  it('returns undefined for whitespace-only string', () => {
+    expect(blankToUndefined('   \t\n')).toBeUndefined();
+  });
+
+  it('returns undefined for undefined', () => {
+    expect(blankToUndefined(undefined)).toBeUndefined();
+  });
+
+  it('returns trimmed value for non-empty string', () => {
+    expect(blankToUndefined('  xai  ')).toBe('xai');
+  });
+});
+
+describe('resolveProviderAndModel', () => {
+  const baseConfig: BernardConfig = {
+    provider: 'anthropic',
+    model: 'claude-default',
+    maxTokens: 4096,
+    shellTimeout: 30000,
+    tokenWindow: 0,
+    ragEnabled: true,
+    theme: 'bernard',
+    maxSteps: 25,
+    criticMode: false,
+    reactMode: false,
+    toolDetails: false,
+    autoCreateSpecialists: false,
+    autoCreateThreshold: 0.8,
+    correctionEnabled: true,
+    promptRewriter: true,
+    anthropicApiKey: 'sk-ant-test',
+  };
+
+  it('uses config provider and model when no overrides given', () => {
+    const r = resolveProviderAndModel({ config: baseConfig });
+    expect(r).toEqual({ ok: true, provider: 'anthropic', model: 'claude-default' });
+  });
+
+  it('treats empty-string overrides as not provided', () => {
+    const r = resolveProviderAndModel({ provider: '', model: '   ', config: baseConfig });
+    expect(r).toEqual({ ok: true, provider: 'anthropic', model: 'claude-default' });
+  });
+
+  it('respects an explicit invocation provider override and switches to its default model', () => {
+    const config = { ...baseConfig, xaiApiKey: 'xai-key' };
+    const r = resolveProviderAndModel({ provider: 'xai', config });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.provider).toBe('xai');
+      expect(r.model).toBe(getDefaultModel('xai'));
+    }
+  });
+
+  it('keeps config.model when override provider matches config provider', () => {
+    const r = resolveProviderAndModel({ provider: 'anthropic', config: baseConfig });
+    expect(r).toEqual({ ok: true, provider: 'anthropic', model: 'claude-default' });
+  });
+
+  it('falls through specialist provider when invocation override is blank', () => {
+    const config = { ...baseConfig, openaiApiKey: 'sk-openai' };
+    const r = resolveProviderAndModel({
+      provider: '',
+      specialistProvider: 'openai',
+      config,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.provider).toBe('openai');
+  });
+
+  it('explicit invocation override beats specialist defaults', () => {
+    const config = { ...baseConfig, xaiApiKey: 'xai-key', openaiApiKey: 'sk-openai' };
+    const r = resolveProviderAndModel({
+      provider: 'xai',
+      specialistProvider: 'openai',
+      config,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.provider).toBe('xai');
+  });
+
+  it('returns ok:false with envVar when no key is present', () => {
+    const r = resolveProviderAndModel({ provider: 'xai', config: baseConfig });
+    expect(r).toEqual({ ok: false, provider: 'xai', envVar: 'XAI_API_KEY' });
+  });
+
+  it('uses explicit model override over default-model fallback on cross-provider', () => {
+    const config = { ...baseConfig, xaiApiKey: 'xai-key' };
+    const r = resolveProviderAndModel({ provider: 'xai', model: 'grok-2', config });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.model).toBe('grok-2');
+  });
+});
+
+describe('defaultProviderErrorMessage', () => {
+  it('formats the canonical missing-key message', () => {
+    expect(defaultProviderErrorMessage('xai', 'XAI_API_KEY')).toBe(
+      'No API key found for provider "xai". Run: bernard add-key xai <your-api-key> or set XAI_API_KEY.',
+    );
   });
 });

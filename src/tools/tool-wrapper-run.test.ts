@@ -56,9 +56,7 @@ vi.mock('./agent-pool.js', async (importOriginal) => {
 });
 
 vi.mock('../config.js', () => ({
-  hasProviderKey: vi.fn(() => true),
-  getDefaultModel: vi.fn(() => 'default-model'),
-  PROVIDER_ENV_VARS: { anthropic: 'ANTHROPIC_API_KEY' },
+  resolveProviderAndModel: vi.fn(),
 }));
 
 vi.mock('../os-info.js', () => ({
@@ -104,7 +102,7 @@ import { _resetPool } from './agent-pool.js';
 
 const { generateText } = await import('ai');
 const { acquireSlot, releaseSlot } = await import('./agent-pool.js');
-const { hasProviderKey } = await import('../config.js');
+const { resolveProviderAndModel } = await import('../config.js');
 const { appendReasoningLog } = await import('../reasoning-log.js');
 const { wrapWrapperResult } = await import('../structured-output.js');
 
@@ -471,7 +469,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
 
     // Restore sensible defaults after clearAllMocks.
     vi.mocked(acquireSlot).mockReturnValue({ id: 1 });
-    vi.mocked(hasProviderKey).mockReturnValue(true);
+    vi.mocked(resolveProviderAndModel).mockReturnValue({
+      ok: true,
+      provider: 'anthropic',
+      model: 'claude-test',
+    });
   });
 
   // ── Guard: specialist not found ─────────────────────────────────────────────
@@ -545,7 +547,11 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
 
   it('returns no_api_key error when provider key is absent', async () => {
     specialistStore.get.mockReturnValue(makeToolWrapperSpecialist());
-    vi.mocked(hasProviderKey).mockReturnValue(false);
+    vi.mocked(resolveProviderAndModel).mockReturnValue({
+      ok: false,
+      provider: 'anthropic',
+      envVar: 'ANTHROPIC_API_KEY',
+    });
 
     const toolDef = createToolWrapperRunTool(
       config,

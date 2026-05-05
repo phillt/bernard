@@ -465,6 +465,73 @@ export function hasProviderKey(config: BernardConfig, provider: string): boolean
 }
 
 /**
+ * Coerces an empty or whitespace-only string to undefined, otherwise trims it.
+ * Used to normalize provider/model overrides — the model sometimes passes
+ * `provider: ""` to mean "use default" and saved specialists may have
+ * `"provider": ""`. With `??` chains, empty strings would falsely "win" over
+ * the next fallback; this helper makes them fall through.
+ */
+export function blankToUndefined(v: string | undefined): string | undefined {
+  return v && v.trim() ? v.trim() : undefined;
+}
+
+/**
+ * Result of {@link resolveProviderAndModel}. On the failure branch, `provider`
+ * is the resolved provider name and `envVar` is the conventional environment
+ * variable for it — callers format the error string in their preferred shape
+ * (plain text vs JSON-wrapped) using these fields.
+ */
+export type ProviderResolution =
+  | { ok: true; provider: string; model: string }
+  | { ok: false; provider: string; envVar: string };
+
+/**
+ * Resolves the provider and model to use for a sub-agent / specialist /
+ * task / tool-wrapper invocation, applying the same precedence rule across
+ * all four call sites:
+ *
+ * 1. Invocation-level override (the model passes `provider`/`model` args).
+ * 2. Specialist-level default (when invoking a saved specialist).
+ * 3. Global config.
+ *
+ * Empty/whitespace strings are treated as "not provided". When the resolved
+ * provider differs from `config.provider` and no explicit model override is
+ * given, `getDefaultModel(provider)` is used to avoid cross-provider model
+ * mismatches (e.g. xai provider with an Anthropic model name).
+ */
+export function resolveProviderAndModel(opts: {
+  provider?: string;
+  model?: string;
+  specialistProvider?: string;
+  specialistModel?: string;
+  config: BernardConfig;
+}): ProviderResolution {
+  const provider =
+    blankToUndefined(opts.provider) ??
+    blankToUndefined(opts.specialistProvider) ??
+    opts.config.provider;
+  const explicitModel = blankToUndefined(opts.model) ?? blankToUndefined(opts.specialistModel);
+  const model =
+    explicitModel ??
+    (provider !== opts.config.provider ? getDefaultModel(provider) : opts.config.model);
+
+  if (!hasProviderKey(opts.config, provider)) {
+    const envVar = PROVIDER_ENV_VARS[provider] ?? `${provider.toUpperCase()}_API_KEY`;
+    return { ok: false, provider, envVar };
+  }
+  return { ok: true, provider, model };
+}
+
+/**
+ * Default error message format for a {@link ProviderResolution} failure.
+ * Used by the plain-string callers (specialist-run, subagent). Other callers
+ * (task: JSON-wrapped, tool-wrapper-run: shorter format) format their own.
+ */
+export function defaultProviderErrorMessage(provider: string, envVar: string): string {
+  return `No API key found for provider "${provider}". Run: bernard add-key ${provider} <your-api-key> or set ${envVar}.`;
+}
+
+/**
  * Builds a fully-resolved {@link BernardConfig} by merging (in priority order):
  * CLI overrides, saved preferences, environment variables, and built-in defaults.
  *

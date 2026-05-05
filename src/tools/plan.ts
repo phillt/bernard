@@ -3,12 +3,26 @@ import { z } from 'zod';
 import type { PlanStore } from '../plan-store.js';
 import { printPlan } from '../output.js';
 
+const stepInputSchema = z.object({
+  description: z
+    .string()
+    .min(1, 'description must not be empty')
+    .describe('What this step accomplishes.'),
+  verification: z
+    .string()
+    .min(1, 'verification must not be empty')
+    .describe(
+      'Concrete check that proves the step succeeded — a command to run, a file to read, a URL to GET, an output substring to look for. Must be observable, not subjective.',
+    ),
+});
+
 /**
  * Creates the `plan` tool for coordinator (ReAct) mode.
  *
- * The main agent uses this to expose a structured, visible todo list with a
- * status lifecycle: pending → in_progress → done/cancelled/error. Each action
- * prints the updated plan to the user.
+ * Each step carries a verification criterion at creation time. Marking a step
+ * `done` requires a `signoff` attesting that the verification was actually
+ * performed. `cancelled`/`error` require `note` (no sign-off, since the step
+ * did not succeed).
  */
 export function createPlanTool(planStore: PlanStore) {
   // Suppress redundant re-renders: the model often calls `view` repeatedly
@@ -24,14 +38,16 @@ export function createPlanTool(planStore: PlanStore) {
 
   return tool({
     description:
-      "Track and manage a structured plan for the current turn. Required in coordinator mode. Actions: 'create' seeds a new plan (pass `steps` — an array of step descriptions), 'add' appends a step, 'update' transitions a step's status (pending -> in_progress -> done/cancelled/error), 'view' shows the current plan. Mark a step 'cancelled' when the user pivots or the step becomes unnecessary; mark it 'error' when the step is genuinely unachievable. Always pass `note` explaining the reason for cancelled/error. The plan is visible to the user — use it to show your intended work before acting.",
+      "Track and manage a structured plan for the current turn. Required in coordinator mode. Each step has a `verification` criterion (set at creation) describing how you'll prove it succeeded. Actions: 'create' seeds a plan with step objects {description, verification}; 'add' appends one such step; 'update' transitions a step's status; 'view' shows the plan. Marking 'done' requires `signoff` (attesting verification was performed). Marking 'cancelled' or 'error' requires `note` (the reason). The plan is visible to the user.",
     parameters: z.object({
       action: z.enum(['create', 'update', 'add', 'view']).describe('The action to perform'),
       steps: z
-        .array(z.string())
+        .array(stepInputSchema)
         .optional()
-        .describe('Required for create: ordered list of step descriptions'),
-      step: z.string().optional().describe('Required for add: description of the new step'),
+        .describe('Required for create: ordered list of {description, verification} objects.'),
+      step: stepInputSchema
+        .optional()
+        .describe('Required for add: a {description, verification} object.'),
       id: z.number().optional().describe('Required for update: step id'),
       status: z
         .enum(['pending', 'in_progress', 'done', 'cancelled', 'error'])
@@ -41,10 +57,16 @@ export function createPlanTool(planStore: PlanStore) {
         .string()
         .optional()
         .describe(
-          'Required when transitioning to a terminal status (done/cancelled/error). For done: summarize what was accomplished and the key result. For cancelled/error: explain why. Keep to 1-2 sentences.',
+          'Required when transitioning to cancelled or error: 1-2 sentences explaining why the step did not complete.',
+        ),
+      signoff: z
+        .string()
+        .optional()
+        .describe(
+          'Required when transitioning to done: a brief statement (1-2 sentences) attesting that the verification criterion was checked and passed. Cite the concrete evidence (command output, file contents, status code) — do not just restate the description.',
         ),
     }),
-    execute: async ({ action, steps, step, id, status, note }): Promise<string> => {
+    execute: async ({ action, steps, step, id, status, note, signoff }): Promise<string> => {
       switch (action) {
         case 'create': {
           if (!steps || steps.length === 0) {
@@ -55,7 +77,7 @@ export function createPlanTool(planStore: PlanStore) {
           return `Plan created with ${created.length} step${created.length === 1 ? '' : 's'}.`;
         }
         case 'add': {
-          if (!step) return 'Error: step is required for add action.';
+          if (!step) return 'Error: step is required for add action ({description, verification}).';
           const added = planStore.add(step);
           printIfChanged();
           return `Step ${added.id} added.`;
@@ -64,10 +86,13 @@ export function createPlanTool(planStore: PlanStore) {
           if (id === undefined || !status) {
             return 'Error: id and status are required for update action.';
           }
-          if ((status === 'done' || status === 'cancelled' || status === 'error') && !note) {
-            return `Error: note is required when marking a step ${status}. Summarize what was accomplished (done) or why it could not be (cancelled/error) in 1-2 sentences.`;
+          if (status === 'done' && !signoff) {
+            return 'Error: signoff is required when marking a step done. Cite the verification evidence (command output, file contents, status code) — do not just restate the step description.';
           }
-          const updated = planStore.update(id, status, note);
+          if ((status === 'cancelled' || status === 'error') && !note) {
+            return `Error: note is required when marking a step ${status}. Explain why the step did not complete in 1-2 sentences.`;
+          }
+          const updated = planStore.update(id, status, { note, signoff });
           if (!updated) return `Error: no step found with id ${id}.`;
           printIfChanged();
           return `Step ${id} -> ${status}.`;

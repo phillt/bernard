@@ -434,12 +434,16 @@ export function printThought(thought: string, prefix?: string): void {
   emit(label + '');
 }
 
-/** Prints a visible post-action self-evaluation prefixed with a magnifying glass. */
+/** Prints a visible post-action self-evaluation, styled to mirror printThought. */
 export function printEvaluation(evaluation: string, prefix?: string): void {
   stopSpinner();
   const t = getTheme();
   const label = formatPrefix(prefix);
-  emit(label + t.warning(`  \uD83D\uDD0D ${evaluation}`));
+  emit(label + t.dim('\u2316 evaluating'));
+  for (const line of evaluation.split('\n')) {
+    emit(label + t.dimItalic(line));
+  }
+  emit(label + '');
 }
 
 /** Prints a colored top-border line when a sub-agent begins executing a task. */

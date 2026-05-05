@@ -1519,10 +1519,14 @@ describe('Agent', () => {
         let call = 0;
         mockGenerateText.mockImplementation(async () => {
           call++;
-          if (call === 1) planStore.create(['gather', 'summarize']);
+          if (call === 1)
+            planStore.create([
+              { description: 'gather', verification: 'check output' },
+              { description: 'summarize', verification: 'check summary' },
+            ]);
           else {
-            planStore.update(1, 'done', 'got data');
-            planStore.update(2, 'done', 'wrote summary');
+            planStore.update(1, 'done', { signoff: 'got data' });
+            planStore.update(2, 'done', { signoff: 'wrote summary' });
           }
           return baseResult;
         });
@@ -1538,8 +1542,8 @@ describe('Agent', () => {
         const planStore = (agent as unknown as { planStore: any }).planStore;
         mockGenerateText.mockImplementation(async () => {
           if (planStore.view().length === 0) {
-            planStore.create(['only step']);
-            planStore.update(1, 'done', 'finished');
+            planStore.create([{ description: 'only step', verification: 'check it' }]);
+            planStore.update(1, 'done', { signoff: 'finished' });
           }
           return baseResult;
         });
@@ -1561,7 +1565,7 @@ describe('Agent', () => {
         mockGenerateText.mockImplementation(async () => {
           call++;
           if (call === 1) {
-            planStore.create(['never resolved']);
+            planStore.create([{ description: 'never resolved', verification: 'check' }]);
             agent.abort();
           }
           return baseResult;
@@ -1574,7 +1578,8 @@ describe('Agent', () => {
         const agent = new Agent(makeConfig({ reactMode: true }), toolOptions, store);
         const planStore = (agent as unknown as { planStore: any }).planStore;
         mockGenerateText.mockImplementation(async () => {
-          if (planStore.view().length === 0) planStore.create(['stuck']);
+          if (planStore.view().length === 0)
+            planStore.create([{ description: 'stuck', verification: 'check' }]);
           return baseResult;
         });
         await agent.processInput('try');
@@ -1591,7 +1596,8 @@ describe('Agent', () => {
         const agent = new Agent(makeConfig({ reactMode: false }), toolOptions, store);
         const planStore = (agent as unknown as { planStore: any }).planStore;
         mockGenerateText.mockImplementation(async () => {
-          if (planStore.view().length === 0) planStore.create(['unresolved']);
+          if (planStore.view().length === 0)
+            planStore.create([{ description: 'unresolved', verification: 'check' }]);
           return baseResult;
         });
         await agent.processInput('hi');
