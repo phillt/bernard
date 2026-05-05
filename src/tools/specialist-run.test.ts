@@ -57,6 +57,9 @@ vi.mock('ai', async (importOriginal) => {
   };
 });
 
+// Mocked at module scope (not per-test) so the critic-mode tests can swap
+// behavior via mockRunPACLoop while the non-critic tests confirm it is never
+// invoked. Reset between tests in beforeEach.
 const mockRunPACLoop = vi.fn();
 vi.mock('../pac.js', () => ({
   runPACLoop: (...args: any[]) => mockRunPACLoop(...args),

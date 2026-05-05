@@ -61,9 +61,11 @@ Rules:
 /**
  * Creates the specialist execution tool for running tasks through a saved specialist profile.
  *
- * Each specialist run receives its own `generateText` loop with a 10-step budget
- * and no conversation history. The specialist's system prompt and guidelines are
- * used as the persona. Shares the concurrency pool with sub-agents and tasks.
+ * Each specialist run receives its own `generateText` loop with a step budget of
+ * `ceil(config.maxSteps * SPECIALIST_STEP_RATIO)` (tripled and clamped via
+ * `computeEffectiveMaxSteps` when ReAct mode is on) and no conversation history.
+ * The specialist's system prompt and guidelines are used as the persona. Shares
+ * the concurrency pool with sub-agents and tasks.
  *
  * @param config - Bernard configuration (provider, model, token limits).
  * @param options - Shell execution options forwarded to child tool sets.
@@ -235,7 +237,8 @@ export function createSpecialistRunTool(
           result = { ...result, ...pacResult.finalResult } as typeof result;
         }
 
-        const stepLimitHit = (result.steps?.length ?? 0) >= maxSteps;
+        const stepLimitHit =
+          result.finishReason === 'tool-calls' && (result.steps?.length ?? 0) >= maxSteps;
         if (
           shouldEnforcePlan({
             reactMode: config.reactMode,
