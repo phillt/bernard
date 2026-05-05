@@ -16,13 +16,7 @@ import {
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
-import {
-  type BernardConfig,
-  hasProviderKey,
-  getDefaultModel,
-  PROVIDER_ENV_VARS,
-  blankToUndefined,
-} from '../config.js';
+import { type BernardConfig, resolveProviderAndModel } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
 import type { RoutineStore } from '../routines.js';
@@ -194,22 +188,21 @@ export function createToolWrapperRunTool(
         });
       }
 
-      const resolvedProvider =
-        blankToUndefined(provider) ?? blankToUndefined(specialist.provider) ?? config.provider;
-      const explicitModel = blankToUndefined(model) ?? blankToUndefined(specialist.model);
-      const resolvedModel =
-        explicitModel ??
-        (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);
-
-      if (!hasProviderKey(config, resolvedProvider)) {
-        const envVar =
-          PROVIDER_ENV_VARS[resolvedProvider] ?? `${resolvedProvider.toUpperCase()}_API_KEY`;
+      const resolution = resolveProviderAndModel({
+        provider,
+        model,
+        specialistProvider: specialist.provider,
+        specialistModel: specialist.model,
+        config,
+      });
+      if (!resolution.ok) {
         return JSON.stringify({
           status: 'error',
-          result: `No API key for provider "${resolvedProvider}". Set ${envVar} or run: bernard add-key ${resolvedProvider} <key>.`,
+          result: `No API key for provider "${resolution.provider}". Set ${resolution.envVar} or run: bernard add-key ${resolution.provider} <key>.`,
           error: 'no_api_key',
         });
       }
+      const { provider: resolvedProvider, model: resolvedModel } = resolution;
 
       const slot = acquireSlot();
       if (!slot) {

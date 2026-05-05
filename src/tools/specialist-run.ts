@@ -16,10 +16,8 @@ import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
 import {
   type BernardConfig,
-  hasProviderKey,
-  getDefaultModel,
-  PROVIDER_ENV_VARS,
-  blankToUndefined,
+  resolveProviderAndModel,
+  defaultProviderErrorMessage,
 } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
@@ -38,6 +36,7 @@ import {
   computeEffectiveMaxSteps,
   REACT_ENFORCEMENT_MAX_RETRIES,
   REACT_AUTO_CANCEL_NOTE,
+  buildEnforcementFeedback,
 } from '../react.js';
 import { truncateToolResults } from '../context.js';
 
@@ -111,22 +110,17 @@ export function createSpecialistRunTool(
         return `Error: No specialist found with id "${specialistId}". Use the specialist tool to list or create specialists.`;
       }
 
-      // 3-tier model resolution: invocation override > specialist config > global config.
-      // When the resolved provider differs from config.provider and no explicit model
-      // override exists, use the provider's default model to avoid cross-provider mismatches
-      // (e.g. xai provider with an anthropic model name).
-      const resolvedProvider =
-        blankToUndefined(provider) ?? blankToUndefined(specialist.provider) ?? config.provider;
-      const explicitModel = blankToUndefined(model) ?? blankToUndefined(specialist.model);
-      const resolvedModel =
-        explicitModel ??
-        (resolvedProvider !== config.provider ? getDefaultModel(resolvedProvider) : config.model);
-
-      if (!hasProviderKey(config, resolvedProvider)) {
-        const envVar =
-          PROVIDER_ENV_VARS[resolvedProvider] ?? `${resolvedProvider.toUpperCase()}_API_KEY`;
-        return `Error: No API key found for provider "${resolvedProvider}". Run: bernard add-key ${resolvedProvider} <your-api-key> or set ${envVar}.`;
+      const resolution = resolveProviderAndModel({
+        provider,
+        model,
+        specialistProvider: specialist.provider,
+        specialistModel: specialist.model,
+        config,
+      });
+      if (!resolution.ok) {
+        return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar)}`;
       }
+      const { provider: resolvedProvider, model: resolvedModel } = resolution;
 
       const slot = acquireSlot();
       if (!slot) {
@@ -238,12 +232,7 @@ export function createSpecialistRunTool(
             prefix,
             abortSignal: execOptions.abortSignal,
           });
-          result = {
-            ...result,
-            text: pacResult.finalText,
-            steps: pacResult.finalSteps,
-            response: pacResult.finalResponse as typeof result.response,
-          };
+          result = { ...result, ...pacResult.finalResult } as typeof result;
         }
 
         const stepLimitHit = (result.steps?.length ?? 0) >= maxSteps;
@@ -262,9 +251,7 @@ export function createSpecialistRunTool(
             printWarning(
               `[${prefix}] Plan has ${planStore.unresolvedCount()} unresolved step(s). Prompting to resolve... (${attempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`,
             );
-            const feedback =
-              `Your plan still has unresolved steps:\n\n${planStore.render()}\n\n` +
-              `Resolve each remaining step: complete it (plan update -> done), mark it cancelled with a note if the user's intent changed or the step is no longer needed, or mark it error with a note if it is genuinely unachievable. Do not leave steps pending or in_progress.`;
+            const feedback = buildEnforcementFeedback(planStore.render());
 
             try {
               const retryMessages: CoreMessage[] = [

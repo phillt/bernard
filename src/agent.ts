@@ -231,6 +231,7 @@ export {
   computeEffectiveMaxSteps,
   REACT_ENFORCEMENT_MAX_RETRIES,
   REACT_AUTO_CANCEL_NOTE,
+  buildEnforcementFeedback,
 } from './react.js';
 import {
   REACT_COORDINATOR_PROMPT,
@@ -238,6 +239,7 @@ import {
   computeEffectiveMaxSteps,
   REACT_ENFORCEMENT_MAX_RETRIES,
   REACT_AUTO_CANCEL_NOTE,
+  buildEnforcementFeedback,
 } from './react.js';
 
 /**
@@ -868,8 +870,7 @@ export class Agent {
 
           const retryResult = await pushAndRetry(
             result,
-            `Your plan still has unresolved steps:\n\n${this.planStore.render()}\n\n` +
-              `Resolve each remaining step: complete it (plan update -> done), mark it cancelled with a note if the user's intent changed or the step is no longer needed, or mark it error with a note if it is genuinely unachievable. Do not leave steps pending or in_progress.`,
+            buildEnforcementFeedback(this.planStore.render()),
             'agent:react:enforcement-error',
           );
           if (!retryResult) break;

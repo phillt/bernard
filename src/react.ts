@@ -107,3 +107,15 @@ export const REACT_ENFORCEMENT_MAX_RETRIES = 2;
 
 /** Note attached to plan steps auto-cancelled after enforcement retries are exhausted. */
 export const REACT_AUTO_CANCEL_NOTE = 'auto-cancelled: enforcement retries exhausted';
+
+/**
+ * Builds the user-facing enforcement re-prompt used when a plan still has
+ * unresolved steps after the main generateText call. Shared by the agent and
+ * specialist enforcement loops so the wording cannot drift between the two.
+ */
+export function buildEnforcementFeedback(planRender: string): string {
+  return (
+    `Your plan still has unresolved steps:\n\n${planRender}\n\n` +
+    `Resolve each remaining step: complete it (plan update -> done), mark it cancelled with a note if the user's intent changed or the step is no longer needed, or mark it error with a note if it is genuinely unachievable. Do not leave steps pending or in_progress.`
+  );
+}

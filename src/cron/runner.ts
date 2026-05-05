@@ -291,7 +291,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
           });
         },
       });
-      finalOutput = pacResult.finalText || '(no text output)';
+      finalOutput = pacResult.finalResult.text || '(no text output)';
     } else {
       finalOutput = result.text || '(no text output)';
     }

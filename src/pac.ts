@@ -5,13 +5,20 @@ import { printCriticRetry } from './output.js';
 import { truncateToolResults } from './context.js';
 import { debugLog } from './logger.js';
 
+/** Subset of `GenerateTextResult` that callers continue to consume after PAC ends. */
+export interface PACFinalResult {
+  text: string;
+  steps: any[];
+  response: { messages: CoreMessage[] };
+}
+
 export interface PACLoopResult {
-  /** The final generateText result after all PAC iterations. */
-  finalText: string;
-  /** The final generateText steps (matches finalText). Lets callers summarize the actual tool calls behind the returned prose. */
-  finalSteps: any[];
-  /** The final generateText response (matches finalText/finalSteps). Callers that re-prompt after PAC must use this — not the pre-PAC response — to keep retry context aligned with the critic-corrected work. */
-  finalResponse: { messages: CoreMessage[] };
+  /**
+   * The final generateText result after all PAC iterations. Carrying the whole
+   * result (rather than spreading individual fields) prevents call sites from
+   * silently going stale when a new field is added to the result shape.
+   */
+  finalResult: PACFinalResult;
   /** Whether the critic passed on the final iteration. */
   criticPassed: boolean;
   /** Number of retry iterations used. */
@@ -42,13 +49,7 @@ export async function runPACLoop(opts: {
 
   let toolCallLog = extractToolCallLog(result.steps);
   if (toolCallLog.length === 0) {
-    return {
-      finalText: result.text,
-      finalSteps: result.steps,
-      finalResponse: result.response,
-      criticPassed: true,
-      retriesUsed: 0,
-    };
+    return { finalResult: result, criticPassed: true, retriesUsed: 0 };
   }
 
   const criticResult = await runCritic(config, userInput, result.text, toolCallLog, {
@@ -57,13 +58,7 @@ export async function runPACLoop(opts: {
   });
 
   if (!criticResult || criticResult.verdict === 'PASS' || criticResult.verdict === 'WARN') {
-    return {
-      finalText: result.text,
-      finalSteps: result.steps,
-      finalResponse: result.response,
-      criticPassed: true,
-      retriesUsed: 0,
-    };
+    return { finalResult: result, criticPassed: true, retriesUsed: 0 };
   }
 
   // FAIL — retry loop
@@ -87,13 +82,7 @@ export async function runPACLoop(opts: {
       toolCallLog = extractToolCallLog(result.steps);
 
       if (toolCallLog.length === 0) {
-        return {
-          finalText: result.text,
-          finalSteps: result.steps,
-          finalResponse: result.response,
-          criticPassed: true,
-          retriesUsed,
-        };
+        return { finalResult: result, criticPassed: true, retriesUsed };
       }
 
       const retryCriticResult = await runCritic(config, userInput, result.text, toolCallLog, {
@@ -107,13 +96,7 @@ export async function runPACLoop(opts: {
         retryCriticResult.verdict === 'PASS' ||
         retryCriticResult.verdict === 'WARN'
       ) {
-        return {
-          finalText: result.text,
-          finalSteps: result.steps,
-          finalResponse: result.response,
-          criticPassed: true,
-          retriesUsed,
-        };
+        return { finalResult: result, criticPassed: true, retriesUsed };
       }
 
       lastCriticResult = retryCriticResult;
@@ -123,11 +106,5 @@ export async function runPACLoop(opts: {
     }
   }
 
-  return {
-    finalText: result.text,
-    finalSteps: result.steps,
-    finalResponse: result.response,
-    criticPassed: false,
-    retriesUsed,
-  };
+  return { finalResult: result, criticPassed: false, retriesUsed };
 }

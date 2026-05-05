@@ -57,6 +57,11 @@ vi.mock('ai', async (importOriginal) => {
   };
 });
 
+const mockRunPACLoop = vi.fn();
+vi.mock('../pac.js', () => ({
+  runPACLoop: (...args: any[]) => mockRunPACLoop(...args),
+}));
+
 import { createSpecialistRunTool } from './specialist-run.js';
 import { _resetPool } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
@@ -577,6 +582,115 @@ describe('specialist-run tool', () => {
       // Earlier steps are unaffected.
       const earlyStep = await call.experimental_prepareStep({ stepNumber: 0 });
       expect(earlyStep).toBeUndefined();
+    });
+  });
+
+  describe('critic mode', () => {
+    it('does not invoke runPACLoop when criticMode is off', async () => {
+      mockGenerateText.mockResolvedValue({
+        text: 'initial text',
+        steps: [],
+        response: { messages: [] },
+      });
+      vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
+
+      const tool = createSpecialistRunTool(
+        makeConfig({ criticMode: false }),
+        toolOptions,
+        memoryStore,
+        specialistStore,
+      );
+      await tool.execute!(
+        { specialistId: 'email-triage', task: 'review' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(mockRunPACLoop).not.toHaveBeenCalled();
+    });
+
+    it('returns the post-PAC text and activity log when criticMode is on', async () => {
+      mockGenerateText.mockResolvedValue({
+        text: 'initial text — critic will reject this',
+        steps: [{ toolCalls: [], toolResults: [] }],
+        response: { messages: [{ role: 'assistant', content: 'initial' }] },
+      });
+      vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
+
+      mockRunPACLoop.mockResolvedValue({
+        finalResult: {
+          text: 'corrected text after critic feedback',
+          steps: [
+            {
+              toolCalls: [{ toolName: 'shell', args: { command: 'gh pr review --approve' } }],
+              toolResults: [{ result: 'approved' }],
+            },
+          ],
+          response: { messages: [{ role: 'assistant', content: 'corrected' }] },
+        },
+        criticPassed: true,
+        retriesUsed: 1,
+      });
+
+      const tool = createSpecialistRunTool(
+        makeConfig({ criticMode: true }),
+        toolOptions,
+        memoryStore,
+        specialistStore,
+      );
+      const result = (await tool.execute!(
+        { specialistId: 'email-triage', task: 'review' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      )) as string;
+
+      expect(mockRunPACLoop).toHaveBeenCalledTimes(1);
+      // The returned string uses post-PAC text, not the initial text.
+      expect(result).toContain('corrected text after critic feedback');
+      expect(result).not.toContain('critic will reject this');
+      // Activity log is built from post-PAC steps, not initial steps.
+      expect(result).toContain('## Activity Log');
+      expect(result).toContain('shell');
+      expect(result).toContain('approved');
+    });
+
+    it('exposes a regenerate callback to runPACLoop with retry maxSteps and text-only last step', async () => {
+      mockGenerateText.mockResolvedValue({
+        text: 'initial',
+        steps: [{ toolCalls: [], toolResults: [] }],
+        response: { messages: [] },
+      });
+      vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
+
+      let capturedRegenerate: ((extra: any[]) => Promise<any>) | undefined;
+      mockRunPACLoop.mockImplementation(async (opts) => {
+        capturedRegenerate = opts.regenerate;
+        return {
+          finalResult: opts.initialResult,
+          criticPassed: true,
+          retriesUsed: 0,
+        };
+      });
+
+      const tool = createSpecialistRunTool(
+        makeConfig({ criticMode: true }),
+        toolOptions,
+        memoryStore,
+        specialistStore,
+      );
+      await tool.execute!(
+        { specialistId: 'email-triage', task: 'review' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(capturedRegenerate).toBeDefined();
+      mockGenerateText.mockClear();
+      mockGenerateText.mockResolvedValue({ text: 'retry-out', steps: [], response: { messages: [] } });
+      await capturedRegenerate!([{ role: 'user', content: 'try again' }]);
+
+      const retryCall = mockGenerateText.mock.calls[0][0];
+      expect(retryCall.maxSteps).toBe(10); // SPECIALIST_PAC_RETRY_STEPS
+      expect(retryCall.experimental_prepareStep).toBeDefined();
+      const lastStep = await retryCall.experimental_prepareStep({ stepNumber: 10 });
+      expect(lastStep).toEqual({ toolChoice: 'none' });
     });
   });
 

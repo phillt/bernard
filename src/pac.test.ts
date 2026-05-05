@@ -93,7 +93,7 @@ describe('runPACLoop', () => {
       regenerate: vi.fn(),
     });
 
-    expect(result.finalText).toBe('The answer is 4.');
+    expect(result.finalResult.text).toBe('The answer is 4.');
     expect(result.criticPassed).toBe(true);
     expect(result.retriesUsed).toBe(0);
     expect(mockGenerateText).not.toHaveBeenCalled();

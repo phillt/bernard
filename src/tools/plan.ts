@@ -4,9 +4,10 @@ import type { PlanStore } from '../plan-store.js';
 import { printPlan } from '../output.js';
 
 const stepInputSchema = z.object({
-  description: z.string().describe('What this step accomplishes.'),
+  description: z.string().min(1, 'description must not be empty').describe('What this step accomplishes.'),
   verification: z
     .string()
+    .min(1, 'verification must not be empty')
     .describe(
       'Concrete check that proves the step succeeded — a command to run, a file to read, a URL to GET, an output substring to look for. Must be observable, not subjective.',
     ),

@@ -119,6 +119,35 @@ describe('plan tool', () => {
     expect(result).toContain('1 unresolved');
   });
 
+  it('rejects create with empty verification at the schema layer', () => {
+    const parsed = tool.parameters.safeParse({
+      action: 'create',
+      steps: [{ description: 'do a thing', verification: '' }],
+    });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues.some((i) => /verification must not be empty/.test(i.message))).toBe(
+        true,
+      );
+    }
+  });
+
+  it('rejects add with empty verification at the schema layer', () => {
+    const parsed = tool.parameters.safeParse({
+      action: 'add',
+      step: { description: 'do a thing', verification: '' },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it('rejects create with empty description at the schema layer', () => {
+    const parsed = tool.parameters.safeParse({
+      action: 'create',
+      steps: [{ description: '', verification: 'check it' }],
+    });
+    expect(parsed.success).toBe(false);
+  });
+
   it('skips re-printing when repeated view actions yield identical render', async () => {
     await run({ action: 'create', steps: [s('a'), s('b')] });
     expect(printPlan).toHaveBeenCalledTimes(1);
