@@ -35,6 +35,7 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - **src/pac.ts** — Plan-Act-Critic loop wrapper (`runPACLoop`) for sub-agents and specialists
 - **src/overlap-checker.ts** — Token-based Jaccard overlap detection for specialist candidates
 - **src/reference-resolver.ts** — Pre-turn LLM pass that resolves user-named entities (e.g. "my daughter") against persistent memory; returns `resolved`, `ambiguous` (menu), `unknown` (prompts user), or `noop`. Invoked from `src/repl.ts` before `agent.processInput` and rendered as a `## Resolved References` block in the system prompt (agent-visible, user-hidden).
+- **src/reference-tool-lookup.ts** — Pre-fallback module that runs only when the resolver returns `unknown`. Picks one read-only allowlisted lookup tool (MCP `*_search`/`*_list`/`*_read`/etc., plus `web_search`/`web_read`) via an LLM call, executes it with a 5 s hard timeout, and interprets the result into `{none|found|ambiguous}`. On `found`, the REPL shows a Save/Edit/Skip menu before persisting to memory. Fails open at every stage. Gated by `config.referenceLookup` (default on).
 - **src/prompt-rewriter.ts** — Pre-turn LLM pass that rewrites the user's message for the active model family (see `ModelProfile.rewriterHint` in `src/providers/profiles.ts`). Runs after reference-resolution so resolved entities can be inlined. Temperature 0, fail-open to the original prompt, gated by `config.promptRewriter` (default on; toggle via `/agent-options` or `BERNARD_PROMPT_REWRITER=false`).
 - **src/providers/** — `getModel()` factory returning AI SDK `LanguageModel`
 - **src/tools/** — Tool registry; each tool is a separate file using `tool()` from `ai`
@@ -90,6 +91,8 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_AUTO_CREATE_THRESHOLD` — Confidence threshold for auto-creating specialists, 0-1 (default: 0.8)
 - `BERNARD_CORRECTION_ENABLED` — Run the correction agent at session close to learn from tool-wrapper failures (default: true)
 - `BERNARD_PROMPT_REWRITER` — Run the model-specific prompt rewriter as a pre-turn LLM pass (default: true). Fails open to the original prompt on any error.
+- `BERNARD_REFERENCE_LOOKUP` — When the reference resolver returns `unknown`, attempt one read-only tool lookup (e.g. a Google Contacts MCP) before prompting the user for free-form text (default: true). Hard 5 s timeout, fail-open. See `src/reference-tool-lookup.ts`.
+- `BERNARD_LOOKUP_TOOLS` — Comma-separated tool-name allowlist additions for the resolver lookup pass (additive over the built-in MCP read-only suffix patterns + `web_search` / `web_read`). Use sparingly — only allow tools that are read-only.
 - **OpenAI strict-schema mode** is disabled for all `generateText` calls (see `getProviderOptions` in `src/providers/index.ts`). MCP tool schemas come from third parties and use full JSON Schema features that strict mode rejects at preflight. Trade-off: tool calls become advisory rather than enforced — minor reliability cost, large UX win. To re-enable for a specific call, pass `providerOptions: { openai: { strictSchemas: true } }` directly.
 - `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `XAI_API_KEY` — Provider API keys
 - `BRAVE_API_KEY` — Optional: Brave Search API key for `web_search` (first provider tried)
