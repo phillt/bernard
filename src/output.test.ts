@@ -882,11 +882,19 @@ describe('output', () => {
   });
 
   describe('printEvaluation', () => {
-    it('prints the evaluation with a magnifying-glass marker', () => {
+    it('renders an evaluating header followed by the body', () => {
       printEvaluation('That result was empty; retrying with a wider glob.');
-      const output = String(logSpy.mock.calls[0][0]);
-      expect(output).toContain('\uD83D\uDD0D');
-      expect(output).toContain('That result was empty');
+      const calls = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((line) => line.includes('\u2316 evaluating'))).toBe(true);
+      expect(calls.some((line) => line.includes('That result was empty'))).toBe(true);
+      expect(calls.join('\n')).not.toContain('\uD83D\uDD0D');
+    });
+
+    it('preserves multi-line evaluations as separate lines', () => {
+      printEvaluation('First observation.\nSecond observation.');
+      const calls = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((line) => line.includes('First observation.'))).toBe(true);
+      expect(calls.some((line) => line.includes('Second observation.'))).toBe(true);
     });
   });
 });
