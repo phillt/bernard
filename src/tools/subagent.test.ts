@@ -129,14 +129,15 @@ describe('subagent tool', () => {
     expect(call.messages[0].content).toContain('Context: Focus on error handling');
   });
 
-  it('returns result.text on success', async () => {
+  it('returns result.text on success with appended activity log', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Analysis complete: all good' });
     const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
     const result = await agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
     );
-    expect(result).toBe('Analysis complete: all good');
+    expect(result).toContain('Analysis complete: all good');
+    expect(result).toContain('## Activity Log');
   });
 
   it('returns error string (not throw) on API failure', async () => {
@@ -316,7 +317,8 @@ describe('subagent tool', () => {
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
     );
 
-    expect(result).toBe('Done');
+    expect(result).toContain('Done');
+    expect(result).toContain('## Activity Log');
     const call = mockGenerateText.mock.calls[0][0];
     expect(call.system).not.toContain('Recalled Context');
   });
@@ -425,6 +427,62 @@ describe('subagent tool', () => {
       expect(result).toContain('No API key found');
       expect(result).toContain('xai');
       expect(mockGenerateText).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('post-run activity summary', () => {
+    it('synthesizes activity log when text is empty but tool calls were made', async () => {
+      mockGenerateText.mockResolvedValue({
+        text: '',
+        steps: [
+          {
+            toolCalls: [{ toolName: 'shell', args: { command: 'gh pr review --request-changes' } }],
+            toolResults: [{ result: 'review submitted' }],
+          },
+        ],
+      });
+
+      const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+      const result = (await agentTool.execute!(
+        { task: 'review the PR' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      )) as string;
+
+      expect(result).not.toBe('');
+      expect(result).toContain('subagent produced no text summary');
+      expect(result).toContain('## Activity Log');
+      expect(result).toContain('shell');
+      expect(result).toContain('review submitted');
+    });
+
+    it('emits "(no tool calls)" when text and steps are both empty', async () => {
+      mockGenerateText.mockResolvedValue({ text: '', steps: [] });
+
+      const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+      const result = (await agentTool.execute!(
+        { task: 'noop' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      )) as string;
+
+      expect(result).toContain('subagent produced no text summary');
+      expect(result).toContain('(no tool calls)');
+    });
+
+    it('forces a text-only final step via experimental_prepareStep', async () => {
+      mockGenerateText.mockResolvedValue({ text: 'Done' });
+
+      const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+      await agentTool.execute!(
+        { task: 'test' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      const call = mockGenerateText.mock.calls[0][0];
+      expect(call.experimental_prepareStep).toBeDefined();
+      const lastStep = await call.experimental_prepareStep({ stepNumber: call.maxSteps });
+      expect(lastStep).toEqual({ toolChoice: 'none' });
+      const earlyStep = await call.experimental_prepareStep({ stepNumber: 0 });
+      expect(earlyStep).toBeUndefined();
     });
   });
 });
