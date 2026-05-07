@@ -93,6 +93,11 @@ vi.mock('./prompt-rewriter.js', () => ({
   rewritePrompt: (...args: any[]) => mockRewritePrompt(...args),
 }));
 
+const mockRunReferenceLookup = vi.fn().mockResolvedValue({ status: 'none' });
+vi.mock('./reference-tool-lookup.js', () => ({
+  runReferenceLookup: (...args: any[]) => mockRunReferenceLookup(...args),
+}));
+
 vi.mock('./rag.js', () => ({
   RAGStore: vi.fn(() => ({
     search: vi.fn().mockResolvedValue([]),
@@ -1713,6 +1718,98 @@ describe('REPL reference resolver wiring', () => {
 
     await vi.waitFor(() => {
       expect(mockProcessInput).toHaveBeenCalledWith('order my daughter sandwich', undefined, []);
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+});
+
+describe('REPL reference tool lookup wiring', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rlEmitter = makeRl();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'clear').mockImplementation(() => {});
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+    mockResolveReferences.mockResolvedValue({
+      status: 'unknown',
+      reference: 'my brother',
+    });
+    mockRunReferenceLookup.mockResolvedValue({ status: 'none' });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('skips runReferenceLookup when referenceLookup is disabled', async () => {
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig({ referenceLookup: false }));
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('email my brother');
+
+    // Resolver returns 'unknown' → REPL prompts the user via rl.question.
+    // Simulate Enter (empty input) to skip and let the turn proceed.
+    await vi.waitFor(() => expect(rlEmitter.question).toHaveBeenCalled());
+    getMenuQuestionCallback()('');
+
+    await vi.waitFor(() => {
+      expect(mockProcessInput).toHaveBeenCalledWith('email my brother', undefined, []);
+    });
+    expect(mockRunReferenceLookup).not.toHaveBeenCalled();
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('calls runReferenceLookup on unknown when referenceLookup is enabled', async () => {
+    mockRunReferenceLookup.mockResolvedValue({ status: 'none' });
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig({ referenceLookup: true }));
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('email my brother');
+
+    await vi.waitFor(() => expect(mockRunReferenceLookup).toHaveBeenCalledTimes(1));
+    expect(mockRunReferenceLookup.mock.calls[0][0]).toBe('my brother');
+
+    // Lookup said 'none' → REPL falls through to promptUnknownReference.
+    await vi.waitFor(() => expect(rlEmitter.question).toHaveBeenCalled());
+    getMenuQuestionCallback()('');
+
+    await vi.waitFor(() => {
+      expect(mockProcessInput).toHaveBeenCalledWith('email my brother', undefined, []);
+    });
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
+
+  it('falls through to processInput when lookup returns ambiguous', async () => {
+    mockRunReferenceLookup.mockResolvedValue({ status: 'ambiguous' });
+    mockProcessInput.mockResolvedValue(undefined);
+
+    const { startRepl } = await import('./repl.js');
+    const replPromise = startRepl(makeConfig({ referenceLookup: true }));
+
+    await vi.waitFor(() => expect(rlEmitter.prompt).toHaveBeenCalled());
+    typeLine('email my brother');
+
+    await vi.waitFor(() => expect(mockRunReferenceLookup).toHaveBeenCalledTimes(1));
+
+    // Ambiguous → REPL falls through to free-form prompt; user skips with Enter.
+    await vi.waitFor(() => expect(rlEmitter.question).toHaveBeenCalled());
+    getMenuQuestionCallback()('');
+
+    await vi.waitFor(() => {
+      expect(mockProcessInput).toHaveBeenCalledWith('email my brother', undefined, []);
     });
 
     rlEmitter.emit('close');

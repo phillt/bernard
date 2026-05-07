@@ -937,6 +937,8 @@ describe('resolveProviderAndModel', () => {
     autoCreateThreshold: 0.8,
     correctionEnabled: true,
     promptRewriter: true,
+    referenceLookup: true,
+    referenceLookupTools: [],
     anthropicApiKey: 'sk-ant-test',
   };
 

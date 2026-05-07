@@ -160,11 +160,7 @@ describe('runReferenceLookup', () => {
       .mockResolvedValueOnce({
         text: '{"status":"found","resolvedTo":"Tom <tom@example.com>"}',
       });
-    const result = await runReferenceLookup(
-      'my brother',
-      { contacts__search: tool },
-      makeConfig(),
-    );
+    const result = await runReferenceLookup('my brother', { contacts__search: tool }, makeConfig());
     expect(result).toEqual({
       status: 'found',
       resolvedTo: 'Tom <tom@example.com>',
@@ -197,11 +193,7 @@ describe('runReferenceLookup', () => {
         throw new Error('network error');
       }),
     };
-    const result = await runReferenceLookup(
-      'my brother',
-      { contacts__search: tool },
-      makeConfig(),
-    );
+    const result = await runReferenceLookup('my brother', { contacts__search: tool }, makeConfig());
     expect(result).toEqual({ status: 'none' });
   });
 

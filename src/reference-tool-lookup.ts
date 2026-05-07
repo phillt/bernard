@@ -70,18 +70,21 @@ interface ToolDescriptor {
 
 function describeTool(name: string, tool: any): ToolDescriptor {
   const description = typeof tool?.description === 'string' ? tool.description : '';
+  // MCP tools converted via `jsonSchema(...)` from @ai-sdk/ui-utils expose the
+  // raw schema as `_jsonSchema`. Bare-schema tools may use `jsonSchema`.
   let schema: unknown;
   const params = tool?.parameters;
-  if (params && typeof params === 'object' && 'jsonSchema' in params) {
-    schema = (params as { jsonSchema: unknown }).jsonSchema;
+  if (params && typeof params === 'object') {
+    if ('_jsonSchema' in params) {
+      schema = (params as { _jsonSchema: unknown })._jsonSchema;
+    } else if ('jsonSchema' in params) {
+      schema = (params as { jsonSchema: unknown }).jsonSchema;
+    }
   }
   return { name, description, schema };
 }
 
-function collectAllowedTools(
-  tools: Record<string, any>,
-  extraAllowed: string[],
-): ToolDescriptor[] {
+function collectAllowedTools(tools: Record<string, any>, extraAllowed: string[]): ToolDescriptor[] {
   const out: ToolDescriptor[] = [];
   for (const [name, tool] of Object.entries(tools)) {
     if (!tool || typeof tool.execute !== 'function') continue;
@@ -130,9 +133,11 @@ interface SelectResult {
 }
 
 function parseSelectResponse(text: string): SelectResult | null {
-  const parsed = extractJsonObject(text) as
-    | { status?: string; toolName?: unknown; args?: unknown }
-    | null;
+  const parsed = extractJsonObject(text) as {
+    status?: string;
+    toolName?: unknown;
+    args?: unknown;
+  } | null;
   if (!parsed || parsed.status === 'none') return null;
   if (parsed.status === 'call' && typeof parsed.toolName === 'string') {
     return { toolName: parsed.toolName, args: parsed.args ?? {} };
@@ -171,15 +176,17 @@ export async function selectLookupTool(
     }
     return parsed;
   } catch (err) {
-    debugLog('reference-tool-lookup:select-error', err instanceof Error ? err.message : String(err));
+    debugLog(
+      'reference-tool-lookup:select-error',
+      err instanceof Error ? err.message : String(err),
+    );
     return null;
   }
 }
 
-/**
- * Composes a 5 s timeout with the caller's abort signal so a slow MCP can't
- * stall the turn. `AbortSignal.any` is available on Node ≥20.3.
- */
+// Composes the caller's abort signal with a 5 s timeout. The signal is best-
+// effort: many MCP tools ignore `abortSignal`, so the real enforcement is the
+// `Promise.race` in `executeLookupTool`. `AbortSignal.any` requires Node ≥20.3.
 function withTimeout(signal?: AbortSignal): AbortSignal {
   const timeoutSignal = AbortSignal.timeout(LOOKUP_TIMEOUT_MS);
   if (!signal) return timeoutSignal;
@@ -194,12 +201,33 @@ export async function executeLookupTool(
 ): Promise<string | null> {
   const tool = tools[toolName];
   if (!tool || typeof tool.execute !== 'function') return null;
+  // Hard timeout via Promise.race — if the tool ignores `abortSignal` (many
+  // MCP tools do), this still returns null after LOOKUP_TIMEOUT_MS so a hung
+  // tool can't stall the REPL.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      debugLog('reference-tool-lookup:execute-timeout', toolName);
+      resolve(null);
+    }, LOOKUP_TIMEOUT_MS);
+  });
   try {
-    const result = await tool.execute(args, {
-      toolCallId: `resolver-lookup-${Date.now()}`,
-      abortSignal: withTimeout(abortSignal),
-      messages: [],
-    });
+    const execPromise = (async () => {
+      try {
+        return await tool.execute(args, {
+          toolCallId: `resolver-lookup-${Date.now()}`,
+          abortSignal: withTimeout(abortSignal),
+          messages: [],
+        });
+      } catch (err) {
+        debugLog(
+          'reference-tool-lookup:execute-error',
+          err instanceof Error ? err.message : String(err),
+        );
+        return null;
+      }
+    })();
+    const result = await Promise.race([execPromise, timeoutPromise]);
     if (result === undefined || result === null) return null;
     if (typeof result === 'string') return result.slice(0, TOOL_RESULT_PREVIEW_CHARS);
     try {
@@ -207,9 +235,8 @@ export async function executeLookupTool(
     } catch {
       return String(result).slice(0, TOOL_RESULT_PREVIEW_CHARS);
     }
-  } catch (err) {
-    debugLog('reference-tool-lookup:execute-error', err instanceof Error ? err.message : String(err));
-    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -227,9 +254,7 @@ Rules:
 - Be conservative. When in doubt, prefer "none" or "ambiguous" over a wrong "found".`;
 
 function parseInterpretResponse(text: string): ReferenceLookupResult | null {
-  const parsed = extractJsonObject(text) as
-    | { status?: string; resolvedTo?: unknown }
-    | null;
+  const parsed = extractJsonObject(text) as { status?: string; resolvedTo?: unknown } | null;
   if (!parsed) return null;
   if (parsed.status === 'none') return { status: 'none' };
   if (parsed.status === 'ambiguous') return { status: 'ambiguous' };
@@ -288,11 +313,7 @@ export async function interpretLookupResult(
 function isEmptyToolResult(toolResult: string): boolean {
   const trimmed = toolResult.trim();
   return (
-    trimmed === '' ||
-    trimmed === '[]' ||
-    trimmed === '{}' ||
-    trimmed === 'null' ||
-    trimmed === '""'
+    trimmed === '' || trimmed === '[]' || trimmed === '{}' || trimmed === 'null' || trimmed === '""'
   );
 }
 

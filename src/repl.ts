@@ -493,11 +493,7 @@ export async function startRepl(
 
   type UnknownReferenceOutcome = { entry: ResolvedEntry | null };
 
-  function persistReference(
-    reference: string,
-    value: string,
-    store: MemoryStore,
-  ): ResolvedEntry {
+  function persistReference(reference: string, value: string, store: MemoryStore): ResolvedEntry {
     const baseKey = deriveKeyFromReference(reference) || 'entity';
     const existing = new Set(store.listMemory());
     let key = baseKey;
@@ -537,7 +533,9 @@ export async function startRepl(
     toolName: string,
     store: MemoryStore,
   ): Promise<UnknownReferenceOutcome> {
-    printInfo(`\n  Lookup via ${toolName} found a possible match for "${reference}":\n  → ${resolvedTo}`);
+    printInfo(
+      `\n  Lookup via ${toolName} found a possible match for "${reference}":\n  → ${resolvedTo}`,
+    );
     console.log();
     const SAVE = 0;
     const EDIT = 1;

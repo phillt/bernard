@@ -65,6 +65,9 @@ function makeConfig(): BernardConfig {
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
     correctionEnabled: false,
+    promptRewriter: false,
+    referenceLookup: false,
+    referenceLookupTools: [],
   };
 }
 
