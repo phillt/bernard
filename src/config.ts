@@ -35,6 +35,10 @@ export interface BernardConfig {
   correctionEnabled: boolean;
   /** Whether the model-specific prompt rewriter runs as a pre-turn LLM pass. */
   promptRewriter: boolean;
+  /** Whether the resolver attempts a tool-based lookup before prompting the user for unknown references. */
+  referenceLookup: boolean;
+  /** Extra tool-name allowlist for the reference-lookup pass (additive over built-in patterns). */
+  referenceLookupTools: string[];
   /** Anthropic API key, if available. */
   anthropicApiKey?: string;
   /** OpenAI API key, if available. */
@@ -130,6 +134,7 @@ export function savePreferences(prefs: {
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
+  referenceLookup?: boolean;
 }): void {
   const dir = path.dirname(PREFS_PATH);
   if (!fs.existsSync(dir)) {
@@ -149,6 +154,7 @@ export function savePreferences(prefs: {
     data.autoCreateSpecialists = prefs.autoCreateSpecialists;
   if (prefs.autoCreateThreshold !== undefined) data.autoCreateThreshold = prefs.autoCreateThreshold;
   if (prefs.promptRewriter !== undefined) data.promptRewriter = prefs.promptRewriter;
+  if (prefs.referenceLookup !== undefined) data.referenceLookup = prefs.referenceLookup;
 
   // Preserve autoUpdate, criticMode, and auto-create settings from existing prefs when callers don't pass them
   let existing: Record<string, unknown> | undefined;
@@ -164,6 +170,7 @@ export function savePreferences(prefs: {
     'reactMode',
     'toolDetails',
     'promptRewriter',
+    'referenceLookup',
   ] as const;
   for (const k of booleanKeys) {
     if (prefs[k] === undefined && existing && typeof existing[k] === 'boolean') {
@@ -222,6 +229,7 @@ export function loadPreferences(): {
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
+  referenceLookup?: boolean;
 } {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
@@ -246,6 +254,8 @@ export function loadPreferences(): {
         typeof parsed.autoCreateThreshold === 'number' ? parsed.autoCreateThreshold : undefined,
       promptRewriter:
         typeof parsed.promptRewriter === 'boolean' ? parsed.promptRewriter : undefined,
+      referenceLookup:
+        typeof parsed.referenceLookup === 'boolean' ? parsed.referenceLookup : undefined,
     };
   } catch {
     return {};
@@ -637,6 +647,19 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     prefs.promptRewriter ??
     (rawRewriter === undefined ? true : !(rawRewriter === 'false' || rawRewriter === '0'));
 
+  // Reference tool-lookup runs by default; users can opt out with BERNARD_REFERENCE_LOOKUP=false.
+  const rawReferenceLookup = process.env.BERNARD_REFERENCE_LOOKUP;
+  const referenceLookup =
+    prefs.referenceLookup ??
+    (rawReferenceLookup === undefined
+      ? true
+      : !(rawReferenceLookup === 'false' || rawReferenceLookup === '0'));
+
+  const referenceLookupTools = (process.env.BERNARD_LOOKUP_TOOLS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
   const config: BernardConfig = {
     provider,
     model,
@@ -653,6 +676,8 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     autoCreateThreshold,
     correctionEnabled,
     promptRewriter,
+    referenceLookup,
+    referenceLookupTools,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     xaiApiKey: process.env.XAI_API_KEY,
