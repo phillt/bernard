@@ -1,5 +1,7 @@
 # How Domain-Specific Memory Works
 
+_Current as of Bernard v0.9.0._
+
 Bernard's memory system learns from your conversations and organizes what it learns into four specialized domains. Instead of treating every fact the same, it categorizes knowledge so it can extract better facts and recall the right ones at the right time.
 
 This document walks through the full lifecycle — from how facts get extracted, to how they're stored, to how they show up in future conversations. It covers both the conceptual design and the technical implementation.

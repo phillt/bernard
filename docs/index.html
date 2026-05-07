@@ -49,7 +49,7 @@
         "operatingSystem": "Linux, macOS, Windows",
         "url": "https://phillt.github.io/bernard/",
         "downloadUrl": "https://www.npmjs.com/package/bernard-agent",
-        "softwareVersion": "0.8.0",
+        "softwareVersion": "0.9.0",
         "license": "https://opensource.org/licenses/MIT",
         "offers": {
           "@type": "Offer",
@@ -973,10 +973,10 @@
         </button>
         <div class="badges">
           <a
-            href="https://github.com/phillt/bernard/releases/tag/0.8.0"
+            href="https://github.com/phillt/bernard/releases/tag/0.9.0"
             target="_blank"
             class="badge"
-            ><span class="dot"></span>v0.8.0</a
+            ><span class="dot"></span>v0.9.0</a
           >
           <span class="badge">MIT</span>
           <span class="badge">Node &ge; 20</span>
@@ -1010,6 +1010,10 @@
           <button class="feature-tab" data-feature="4">MCP Support</button>
           <button class="feature-tab" data-feature="5">Sub-Agents</button>
           <button class="feature-tab" data-feature="6">Tasks</button>
+          <button class="feature-tab" data-feature="7">Reference Resolution</button>
+          <button class="feature-tab" data-feature="8">Coordinator Mode</button>
+          <button class="feature-tab" data-feature="9">Specialists &amp; Auto-Dispatch</button>
+          <button class="feature-tab" data-feature="10">Image Attachment</button>
         </div>
         <div class="feature-desc" id="feature-desc">
           Switch between Anthropic, OpenAI, and xAI with a flag. One interface, any model.
@@ -1036,7 +1040,8 @@
           <span class="comment"># Install globally</span><br />
           <span class="cmd-prefix">$ </span>npm install -g bernard-agent<br />
           <br />
-          <span class="comment"># Store your API key securely</span><br />
+          <span class="comment"># Store your API key securely (or set ANTHROPIC_API_KEY /</span><br />
+          <span class="comment"># OPENAI_API_KEY / XAI_API_KEY in ~/.config/bernard/.env)</span><br />
           <span class="cmd-prefix">$ </span>bernard add-key anthropic sk-ant-...<br />
           <br />
           <span class="comment"># Start the REPL</span><br />
@@ -1226,7 +1231,7 @@
                 </svg>
               </div>
               <h3>OpenAI</h3>
-              <div class="model">gpt-4o</div>
+              <div class="model">gpt-5.2</div>
             </div>
           </a>
           <a
@@ -1244,7 +1249,7 @@
                 </svg>
               </div>
               <h3>xAI</h3>
-              <div class="model">grok-3</div>
+              <div class="model">grok-4-fast</div>
             </div>
           </a>
         </div>
@@ -1290,7 +1295,7 @@
     <footer>
       <div class="container">
         <div class="footer-left">
-          bernard-agent &copy; <span id="year">2025</span> &middot; MIT License
+          bernard-agent &copy; <span id="year">2026</span> &middot; MIT License
         </div>
         <div class="footer-links">
           <a href="https://github.com/phillt/bernard" target="_blank" rel="noopener noreferrer"
@@ -1586,7 +1591,7 @@
             { type: 'line' },
             { type: 'instant', text: '  Switching to openai...', cls: 'tool' },
             { type: 'pause', ms: 400 },
-            { type: 'instant', text: '  \u2713 Now using openai (gpt-4o)', cls: 'output' },
+            { type: 'instant', text: '  \u2713 Now using openai (gpt-5.2)', cls: 'output' },
           ],
         },
         {
@@ -1730,6 +1735,145 @@
             {
               type: 'instant',
               text: '  \u2514\u2500 task success: Found 23 .ts files',
+              cls: 'output',
+            },
+          ],
+        },
+        {
+          desc: 'Bernard resolves named entities ("my brother", "the staging cluster") against memory before each turn. Unknown? It tries one read-only tool first.',
+          seq: [
+            { type: 'prompt', text: 'bernard> ' },
+            { type: 'type', text: 'email my brother about the trip', cls: 'cmd' },
+            { type: 'pause', ms: 400 },
+            { type: 'line' },
+            {
+              type: 'instant',
+              text: '  resolver: "my brother" not in memory \u2014 trying lookup',
+              cls: 'sub',
+            },
+            { type: 'pause', ms: 300 },
+            {
+              type: 'instant',
+              text: '  \u25B6 google_contacts__search { query: "brother" }',
+              cls: 'tool',
+            },
+            { type: 'pause', ms: 400 },
+            {
+              type: 'instant',
+              text: '  \u2514\u2500 found: Daniel Pereira <daniel@example.com>',
+              cls: 'output',
+            },
+            { type: 'pause', ms: 600 },
+            { type: 'line' },
+            { type: 'instant', text: '  ? Save this for next time?', cls: 'sub' },
+            { type: 'instant', text: '  \u276F Save  Edit  Skip', cls: 'output' },
+            { type: 'pause', ms: 500 },
+            { type: 'line' },
+            {
+              type: 'instant',
+              text: '  \u25B6 gmail__send_email { to: "daniel@example.com", \u2026 }',
+              cls: 'tool',
+            },
+            { type: 'instant', text: '  \u2713 sent', cls: 'output' },
+          ],
+        },
+        {
+          desc: 'Coordinator (ReAct) mode runs a think \u2192 act \u2192 evaluate \u2192 decide loop with new plan, think, and evaluate tools. Built for hard multi-step work.',
+          seq: [
+            { type: 'prompt', text: 'bernard> ' },
+            { type: 'type', text: '/agent-options', cls: 'cmd' },
+            { type: 'pause', ms: 400 },
+            { type: 'line' },
+            {
+              type: 'instant',
+              text: '  ReAct (coordinator) mode  [on]',
+              cls: 'output',
+            },
+            { type: 'pause', ms: 600 },
+            { type: 'line' },
+            { type: 'prompt', text: 'bernard> ' },
+            { type: 'type', text: 'ship a release: build, test, tag, push', cls: 'cmd' },
+            { type: 'pause', ms: 400 },
+            { type: 'line' },
+            { type: 'instant', text: '  \u25B6 plan: 4 steps drafted', cls: 'tool' },
+            { type: 'instant', text: '  \u25B6 think: tests must pass before tagging', cls: 'sub' },
+            {
+              type: 'instant',
+              text: '  \u25B6 shell: npm test \u2014 2074 passed',
+              cls: 'tool',
+            },
+            { type: 'instant', text: '  \u25B6 evaluate: step 1/4 done, advancing', cls: 'sub' },
+            { type: 'instant', text: '  \u2026 (think \u2192 act \u2192 evaluate, repeated)', cls: 'sub' },
+            { type: 'pause', ms: 400 },
+            { type: 'instant', text: '  \u2713 all 4 steps verified', cls: 'output' },
+          ],
+        },
+        {
+          desc: 'Specialists are reusable expert profiles. Auto-dispatch routes matching prompts; the candidates queue lets you review what Bernard suggested.',
+          seq: [
+            { type: 'prompt', text: 'bernard> ' },
+            { type: 'type', text: '/specialists', cls: 'cmd' },
+            { type: 'pause', ms: 300 },
+            { type: 'line' },
+            {
+              type: 'instant',
+              text: '  3 specialists \u2014 code-reviewer, sql-helper, release-driver',
+              cls: 'output',
+            },
+            { type: 'pause', ms: 600 },
+            { type: 'line' },
+            { type: 'prompt', text: 'bernard> ' },
+            { type: 'type', text: 'review the diff in src/agent.ts', cls: 'cmd' },
+            { type: 'pause', ms: 300 },
+            { type: 'line' },
+            {
+              type: 'instant',
+              text: '  auto-dispatch \u2192 code-reviewer (confidence 0.91)',
+              cls: 'sub',
+            },
+            { type: 'instant', text: '  \u25B6 shell: git diff src/agent.ts', cls: 'tool' },
+            { type: 'pause', ms: 400 },
+            {
+              type: 'instant',
+              text: '  spec:1 [Code Reviewer] \u2014 3 suggestions, 0 blockers',
+              cls: 'output',
+            },
+            { type: 'pause', ms: 600 },
+            { type: 'line' },
+            { type: 'prompt', text: 'bernard> ' },
+            { type: 'type', text: '/candidates', cls: 'cmd' },
+            { type: 'pause', ms: 300 },
+            { type: 'line' },
+            {
+              type: 'instant',
+              text: '  1 pending \u2014 "k8s-debugger" (confidence 0.74)',
+              cls: 'output',
+            },
+          ],
+        },
+        {
+          desc: 'Attach an image to the next turn with /image. Works with any vision-capable model.',
+          seq: [
+            { type: 'prompt', text: 'bernard> ' },
+            { type: 'type', text: '/image ./screenshot.png describe this UI', cls: 'cmd' },
+            { type: 'pause', ms: 400 },
+            { type: 'line' },
+            { type: 'instant', text: '  attached: screenshot.png (412 KB)', cls: 'sub' },
+            { type: 'instant', text: '  \u25B6 reading image \u2026', cls: 'tool' },
+            { type: 'pause', ms: 500 },
+            {
+              type: 'instant',
+              text: '  \u2514\u2500 A dark dashboard with three tabs:',
+              cls: 'output',
+            },
+            {
+              type: 'instant',
+              text: '    Memory, Cron, MCP. The Memory tab shows 142 facts',
+              cls: 'output',
+            },
+            {
+              type: 'instant',
+              text: '    across 4 domains. The header reads "bernard 0.9.0".',
               cls: 'output',
             },
           ],

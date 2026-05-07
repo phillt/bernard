@@ -434,10 +434,200 @@
         fill: currentColor;
       }
 
+      /* ── Major Release Hero (v0.9.0 special header) ── */
+      .major-release {
+        position: relative;
+        padding: 48px 40px;
+        margin-bottom: 32px;
+        border-radius: 16px;
+        background:
+          radial-gradient(circle at 0% 0%, rgba(249, 115, 22, 0.18), transparent 55%),
+          radial-gradient(circle at 100% 100%, rgba(249, 115, 22, 0.08), transparent 50%),
+          linear-gradient(180deg, rgba(249, 115, 22, 0.05), rgba(22, 27, 34, 0.6));
+        border: 1px solid rgba(249, 115, 22, 0.35);
+        overflow: hidden;
+      }
+
+      .major-release::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background-image: linear-gradient(
+            rgba(249, 115, 22, 0.04) 1px,
+            transparent 1px
+          ),
+          linear-gradient(90deg, rgba(249, 115, 22, 0.04) 1px, transparent 1px);
+        background-size: 32px 32px;
+        pointer-events: none;
+        mask-image: radial-gradient(ellipse at top right, black 20%, transparent 70%);
+      }
+
+      .major-release > * {
+        position: relative;
+      }
+
+      .major-release-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-family: var(--mono);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.15em;
+        color: var(--accent);
+        background: var(--accent-dim);
+        border: 1px solid rgba(249, 115, 22, 0.4);
+        border-radius: 999px;
+        padding: 6px 14px;
+        margin-bottom: 20px;
+        text-transform: uppercase;
+      }
+
+      .major-release-badge::before {
+        content: '';
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 10px var(--accent);
+        animation: pulse 2s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+
+      .major-release h2.version-heading {
+        font-size: clamp(28px, 6vw, 48px);
+        margin-bottom: 12px;
+        padding-bottom: 0;
+        border-bottom: 0;
+        line-height: 1.15;
+        flex-wrap: wrap;
+      }
+
+      .major-release .version-tagline {
+        flex-basis: 100%;
+        font-size: clamp(15px, 2vw, 18px);
+        font-weight: 400;
+        color: var(--text-secondary);
+        font-family: var(--sans);
+        margin-top: 6px;
+      }
+
+      .major-release-intro {
+        max-width: 720px;
+        font-size: 16px;
+        color: var(--text-secondary);
+        line-height: 1.7;
+        margin: 20px 0 24px;
+      }
+
+      .release-stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 24px;
+      }
+
+      .release-stat {
+        background: rgba(13, 17, 23, 0.6);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px 18px;
+        min-width: 110px;
+      }
+
+      .release-stat .stat-value {
+        display: block;
+        font-family: var(--mono);
+        font-size: 22px;
+        font-weight: 800;
+        color: var(--accent);
+        line-height: 1;
+      }
+
+      .release-stat .stat-label {
+        display: block;
+        font-size: 12px;
+        color: var(--text-secondary);
+        margin-top: 4px;
+      }
+
+      /* ── Theme grid (responsive multi-column) ── */
+      .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+        gap: 24px;
+        margin-top: 16px;
+      }
+
+      .feature-grid .feature {
+        margin-bottom: 0;
+      }
+
+      /* Wide cards span both columns when present */
+      .feature-grid .feature.feature-wide {
+        grid-column: 1 / -1;
+      }
+
+      /* Sub-section heading inside a release */
+      .release-subheading {
+        font-family: var(--mono);
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--text);
+        margin: 40px 0 16px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border);
+        letter-spacing: 0.02em;
+      }
+
+      .release-subheading-desc {
+        color: var(--text-secondary);
+        font-size: 14px;
+        margin: -8px 0 16px;
+      }
+
+      /* Compact card variant (no terminal, used in 2-col grid) */
+      .feature-compact {
+        padding: 24px;
+      }
+
+      .feature-compact h2 {
+        font-size: 17px;
+      }
+
+      .feature-compact p {
+        font-size: 14px;
+      }
+
+      .feature-compact ul li {
+        font-size: 14px;
+      }
+
       /* ── Responsive ── */
       @media (max-width: 640px) {
         .feature {
           padding: 24px 20px;
+        }
+
+        .major-release {
+          padding: 32px 20px;
+        }
+
+        .release-stats {
+          gap: 8px;
+        }
+
+        .release-stat {
+          padding: 10px 14px;
+          min-width: 90px;
+        }
+
+        .release-stat .stat-value {
+          font-size: 18px;
         }
 
         .menu-toggle {
@@ -531,6 +721,580 @@
       <div class="container">
         <h1>Release Notes</h1>
         <p>All Bernard releases, newest first.</p>
+      </div>
+    </section>
+
+    <!-- v0.9.0 -->
+    <section class="version-section" id="v0.9.0">
+      <div class="container">
+        <div class="major-release">
+          <div class="major-release-badge">Major release</div>
+          <h2 class="version-heading">
+            v0.9.0
+            <span class="version-date">2026-05-07</span>
+            <span class="version-tagline">Bernard learns to look things up.</span>
+          </h2>
+          <p class="major-release-intro">
+            The largest update since launch. v0.9.0 reshapes how Bernard handles ambiguity:
+            references resolve against memory before each turn, unknown entities trigger a
+            read-only tool lookup, and prompts get rewritten for the active model family. A
+            new coordinator (ReAct) mode adds iterative reasoning with verifiable plans, the
+            UI moves to arrow-key menus, and a tool augmentation layer learns from every
+            error your tools throw.
+          </p>
+          <div class="release-stats">
+            <div class="release-stat">
+              <span class="stat-value">16</span>
+              <span class="stat-label">PRs merged</span>
+            </div>
+            <div class="release-stat">
+              <span class="stat-value">14</span>
+              <span class="stat-label">user-facing features</span>
+            </div>
+            <div class="release-stat">
+              <span class="stat-value">7</span>
+              <span class="stat-label">new env vars</span>
+            </div>
+            <div class="release-stat">
+              <span class="stat-value">5</span>
+              <span class="stat-label">bundled specialists</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="feature-grid">
+        <!-- Theme: Smarter conversations -->
+        <div class="feature feature-wide">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- message-square icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+              </svg>
+            </div>
+            <h2>Smarter conversations <span class="tag">new</span></h2>
+          </div>
+          <p>
+            Bernard now understands references the same way a human collaborator does. Before each
+            turn, a reference resolver scans your message for named entities ("my brother", "the
+            staging cluster") and looks them up in persistent memory. If the answer is missing,
+            Bernard tries one read-only tool (e.g.&nbsp;a Google Contacts MCP) before asking you,
+            then offers a Save / Edit / Skip menu so the answer sticks. A model-specific prompt
+            rewriter then reshapes the message for the active model family, and a context-gathering
+            protocol keeps the agent from inventing numbers it could have just looked up.
+          </p>
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-dot"></div>
+              <div class="terminal-dot"></div>
+              <div class="terminal-dot"></div>
+              <span class="terminal-title">bernard</span>
+            </div>
+            <div class="terminal-body">
+              <span class="prompt">bernard&gt;</span> email my brother about the trip<br />
+              <span class="muted">// resolver: "my brother" not in memory &mdash; trying lookup</span><br />
+              &nbsp;&nbsp;&#x25B6; google_contacts__search { query: "brother" }<br />
+              &nbsp;&nbsp;&#x2514;&#x2500; <span class="success">found</span>: Daniel Pereira
+              &lt;daniel@example.com&gt;<br />
+              <br />
+              <span class="muted">? Save this for next time?</span><br />
+              &nbsp;&nbsp;&#x276F; <span class="success">Save</span>
+              &nbsp;&nbsp;Edit&nbsp;&nbsp;Skip<br />
+              <br />
+              &nbsp;&nbsp;&#x25B6; gmail__send_email { to: "daniel@example.com", &hellip; }<br />
+              &nbsp;&nbsp;<span class="success">&#x2713;</span> sent
+            </div>
+          </div>
+          <ul>
+            <li>Reference resolver with four outcomes: resolved, ambiguous, unknown, no-op (#128)</li>
+            <li>Reference tool-lookup pass with read-only allowlist + 5&thinsp;s timeout (#138)</li>
+            <li>
+              Model-specific prompt rewriter using <code>ModelProfile.rewriterHint</code>, fail-open
+              (#125, #131)
+            </li>
+            <li>Context-gathering protocol baked into the base system prompt (#126)</li>
+          </ul>
+        </div>
+
+        <!-- Theme: Better reasoning -->
+        <div class="feature feature-wide">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- brain icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <path
+                  d="M12 5a3 3 0 1 0-5.997.142 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"
+                ></path>
+                <path
+                  d="M12 5a3 3 0 1 1 5.997.142 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"
+                ></path>
+              </svg>
+            </div>
+            <h2>Better reasoning <span class="tag">new</span></h2>
+          </div>
+          <p>
+            Coordinator (ReAct) mode turns Bernard into an iterative thinker. With
+            <code>BERNARD_REACT_MODE=true</code>, every turn runs a think&nbsp;&rarr;&nbsp;act&nbsp;&rarr;&nbsp;evaluate&nbsp;&rarr;&nbsp;decide
+            loop with new <code>plan</code>, <code>think</code>, and <code>evaluate</code> tools.
+            The step budget triples (capped at 150) so multi-step plans actually finish, and a
+            post-run verifier re-checks the plan if any step is still unresolved. Turn it on for
+            hard tasks; leave it off for chat &mdash; you can flip the toggle live in
+            <code>/agent-options</code>.
+          </p>
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-dot"></div>
+              <div class="terminal-dot"></div>
+              <div class="terminal-dot"></div>
+              <span class="terminal-title">bernard</span>
+            </div>
+            <div class="terminal-body">
+              <span class="prompt">bernard&gt;</span> /agent-options<br />
+              &nbsp;&nbsp;ReAct (coordinator) mode&nbsp;&nbsp;<span class="success">[on]</span><br />
+              <br />
+              <span class="prompt">bernard&gt;</span> ship a release: build, test, tag, push<br />
+              &nbsp;&nbsp;&#x25B6; plan: 4 steps drafted<br />
+              &nbsp;&nbsp;&#x25B6; think: tests must pass before tagging<br />
+              &nbsp;&nbsp;&#x25B6; shell: npm test &mdash; <span class="success">2074 passed</span><br />
+              &nbsp;&nbsp;&#x25B6; evaluate: step 1/4 done, advancing<br />
+              &nbsp;&nbsp;&hellip; (think &rarr; act &rarr; evaluate, repeated)<br />
+              &nbsp;&nbsp;<span class="success">&#x2713;</span> all 4 steps verified
+            </div>
+          </div>
+          <ul>
+            <li>
+              Coordinator / ReAct loop with <code>plan</code>, <code>think</code>,
+              <code>evaluate</code> tools (#117)
+            </li>
+            <li>
+              Per-turn step budget grows to <code>min(BERNARD_MAX_STEPS &times; 3, 150)</code> when
+              ReAct is on
+            </li>
+            <li>Post-run activity logs and plan verification with up to 2 enforcement re-prompts (#137)</li>
+          </ul>
+        </div>
+
+        <!-- Theme: New UI surface -->
+        <div class="feature feature-wide">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- monitor icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
+              </svg>
+            </div>
+            <h2>New UI surface <span class="tag">new</span></h2>
+          </div>
+          <p>
+            Menus are now arrow-key driven by default. Bernard pins the menu region with
+            <code>setPinnedRegion</code>, you move with arrows or digits 1&ndash;9, and Enter
+            commits. Non-TTY environments and <code>BERNARD_PLAIN_MENU=1</code> still get the
+            classic numbered prompt as a fallback. <code>/image &lt;path&gt; [prompt]</code>
+            attaches an image to the next turn, and a <code>/options tool-details</code> toggle
+            collapses the per-call tool noise into compact one-liners.
+          </p>
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-dot"></div>
+              <div class="terminal-dot"></div>
+              <div class="terminal-dot"></div>
+              <span class="terminal-title">bernard</span>
+            </div>
+            <div class="terminal-body">
+              <span class="prompt">bernard&gt;</span> /image ./screenshot.png describe this UI<br />
+              <span class="muted">// attached: screenshot.png (412 KB)</span><br />
+              &nbsp;&nbsp;&#x25B6; reading image &hellip;<br />
+              &nbsp;&nbsp;&#x2514;&#x2500; A dark dashboard with three tabs: Memory, Cron, MCP. The
+              Memory tab&hellip;<br />
+              <br />
+              <span class="prompt">bernard&gt;</span> /theme<br />
+              &nbsp;&nbsp;<span class="muted">? Pick a theme &mdash; &uarr;/&darr; Enter</span><br />
+              &nbsp;&nbsp;&#x276F; <span class="success">bernard</span><br />
+              &nbsp;&nbsp;&nbsp;&nbsp;ocean<br />
+              &nbsp;&nbsp;&nbsp;&nbsp;forest<br />
+              &nbsp;&nbsp;&nbsp;&nbsp;synthwave
+            </div>
+          </div>
+          <ul>
+            <li>Arrow-key menu component with <code>BERNARD_PLAIN_MENU</code> fallback (#113, #132)</li>
+            <li>Image attachment via <code>/image</code> on vision-capable models (#112)</li>
+            <li>
+              <code>/options tool-details</code> compact / verbose toggle &mdash;
+              <code>BERNARD_TOOL_DETAILS</code> (#119)
+            </li>
+          </ul>
+        </div>
+
+        <!-- Theme: Operators & infra -->
+        <div class="feature feature-wide">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- server icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                <line x1="6" y1="18" x2="6.01" y2="18"></line>
+              </svg>
+            </div>
+            <h2>Operators &amp; infra <span class="tag">new</span></h2>
+          </div>
+          <p>
+            A new tool augmentation layer wraps every tool's <code>execute</code> to observe errors
+            and patch the system prompt with concrete bad-example fixes &mdash; no hallucination,
+            only real observed failures. Shell commands are split into sub-categories
+            (<code>shell.git</code>, <code>shell.gh</code>, <code>shell.docker</code>,
+            <code>shell.npm</code>, <code>shell.fs</code>, <code>shell.http</code>) so guidance
+            stays scoped. Cron jobs gained persistent notes: the daemon injects
+            <code>cron_notes_read</code> / <code>cron_notes_write</code> scoped to the current job
+            so long-running schedules don't redo work after restarts.
+          </p>
+          <div class="terminal">
+            <div class="terminal-bar">
+              <div class="terminal-dot"></div>
+              <div class="terminal-dot"></div>
+              <div class="terminal-dot"></div>
+              <span class="terminal-title">bernard</span>
+            </div>
+            <div class="terminal-body">
+              <span class="muted">// In a cron job, Bernard reads notes from the previous run:</span><br />
+              &nbsp;&nbsp;&#x25B6; cron_notes_read &mdash; 3 entries<br />
+              &nbsp;&nbsp;&nbsp;&nbsp;1. last sync cursor: 2026-05-07T03:14Z<br />
+              &nbsp;&nbsp;&nbsp;&nbsp;2. skip account #482 &mdash; flagged for review<br />
+              &nbsp;&nbsp;&nbsp;&nbsp;3. retry budget reset to 0<br />
+              &nbsp;&nbsp;&#x25B6; sync_accounts { since: "2026-05-07T03:14Z" }<br />
+              &nbsp;&nbsp;&#x25B6; cron_notes_write { entry: "synced 12 accounts, cursor &rarr; &hellip;" }<br />
+              &nbsp;&nbsp;<span class="success">&#x2713;</span> run finished &mdash; notes saved
+            </div>
+          </div>
+          <ul>
+            <li>
+              Tool augmentation layer with auto-learned bad-example fixes &mdash; tool-wrapper
+              specialists (<code>shell-wrapper</code>, <code>file-wrapper</code>,
+              <code>web-wrapper</code>), correction agent, and specialist creator (#111)
+            </li>
+            <li>
+              Cron persistent notes: per-job JSON store, 100-entry cap, atomic writes, and a
+              <code>## Notes written during this run</code> section in <code>cron_logs_get</code> (#130)
+            </li>
+          </ul>
+        </div>
+
+        <!-- Reliability & polish -->
+        <div class="feature feature-wide">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- check-circle icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+              </svg>
+            </div>
+            <h2>Reliability &amp; polish <span class="tag">fix</span></h2>
+          </div>
+          <ul>
+            <li>Auto-create startup race fixed &mdash; pending candidates are promoted on enable (#135)</li>
+            <li>Critic and ReAct toggles now have round-trip test coverage (#129)</li>
+            <li>
+              MCP-tool schema extraction handles both <code>jsonSchema</code> and the
+              <code>_jsonSchema</code> shape produced by <code>@ai-sdk/ui-utils</code>
+            </li>
+            <li>
+              Reference-lookup timeout enforced via <code>Promise.race</code> against a real timer
+              &mdash; resilient to tools that ignore <code>abortSignal</code>
+            </li>
+          </ul>
+        </div>
+        </div>
+        <!-- /feature-grid (themes) -->
+
+        <h3 class="release-subheading">Also in this release</h3>
+        <p class="release-subheading-desc">
+          Smaller-but-load-bearing pieces that ship with v0.9.0 &mdash; many of them power the
+          headline themes above.
+        </p>
+
+        <div class="feature-grid">
+          <!-- Bundled specialists -->
+          <div class="feature feature-compact">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                  <circle cx="8.5" cy="7" r="4"></circle>
+                  <path d="M20 8v6"></path>
+                  <path d="M23 11h-6"></path>
+                </svg>
+              </div>
+              <h2>Bundled specialists</h2>
+            </div>
+            <p>
+              Five tool-wrapper specialists ship out of the box and seed on first run:
+              <code>shell-wrapper</code>, <code>file-wrapper</code>, <code>web-wrapper</code>,
+              <code>correction-agent</code>, and <code>specialist-creator</code>. A
+              <code>.seeded-v1</code> marker prevents re-seeding so user edits stick.
+            </p>
+          </div>
+
+          <!-- tool_wrapper_run -->
+          <div class="feature feature-compact">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline>
+                  <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path>
+                </svg>
+              </div>
+              <h2><code>tool_wrapper_run</code> dispatch</h2>
+            </div>
+            <p>
+              The main agent talks to specialists through one strict-typed dispatch tool.
+              Each call is isolated to its <code>targetTools</code> &mdash; the
+              <code>shell-wrapper</code> can't accidentally browse the web. Output is
+              guaranteed JSON: <code>{status, result, error?, reasoning?}</code>.
+            </p>
+          </div>
+
+          <!-- web_search provider chain -->
+          <div class="feature feature-compact">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </div>
+              <h2><code>web_search</code> with provider chain</h2>
+            </div>
+            <p>
+              A new built-in <code>web_search</code> tool tries Brave first
+              (<code>BRAVE_API_KEY</code>), falls back to Tavily
+              (<code>TAVILY_API_KEY</code>), and finally to a DuckDuckGo scrape so search
+              keeps working without keys. Returns <code>[{title, url, snippet}]</code>.
+            </p>
+          </div>
+
+          <!-- Correction loop -->
+          <div class="feature feature-compact">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <polyline points="23 4 23 10 17 10"></polyline>
+                  <polyline points="1 20 1 14 7 14"></polyline>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path>
+                  <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path>
+                </svg>
+              </div>
+              <h2>Correction loop with validation</h2>
+            </div>
+            <p>
+              When a tool-wrapper returns <code>status: 'error'</code>, the args land in a
+              candidate queue. At REPL shutdown the <code>correction-agent</code> proposes a
+              fix and <em>actually executes</em> it via <code>tool_wrapper_run</code>. Only
+              validated fixes get appended to the specialist's good/bad examples (capped at
+              10 each).
+            </p>
+          </div>
+
+          <!-- Reasoning logs -->
+          <div class="feature feature-compact">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                  <polyline points="14 2 14 8 20 8"></polyline>
+                  <line x1="16" y1="13" x2="8" y2="13"></line>
+                  <line x1="16" y1="17" x2="8" y2="17"></line>
+                  <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+              </div>
+              <h2>Reasoning logs</h2>
+            </div>
+            <p>
+              Every tool-wrapper run appends one JSONL entry to
+              <code>logs/tool-wrappers.jsonl</code>. Easy to <code>jq</code>, easy to grep,
+              easy to ship to a log aggregator. Pairs naturally with the new post-run
+              activity logs to give you a full audit trail of what Bernard actually did.
+            </p>
+          </div>
+
+          <!-- OS-aware prompts -->
+          <div class="feature feature-compact">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                  <line x1="8" y1="21" x2="16" y2="21"></line>
+                  <line x1="12" y1="17" x2="12" y2="21"></line>
+                </svg>
+              </div>
+              <h2>OS-aware tool prompts</h2>
+            </div>
+            <p>
+              <code>osPromptBlock()</code> detects the host OS and injects shell hints
+              (Linux, macOS, Windows) into every tool-wrapper system prompt &mdash; so the
+              <code>shell-wrapper</code> doesn't suggest <code>brew</code> on Ubuntu or
+              GNU-only flags on macOS.
+            </p>
+          </div>
+
+          <!-- XDG layout -->
+          <div class="feature feature-compact">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                </svg>
+              </div>
+              <h2>XDG paths everywhere</h2>
+            </div>
+            <p>
+              All file paths now follow the XDG Base Directory Specification, centralized in
+              <code>src/paths.ts</code>. Set <code>BERNARD_HOME</code> for the legacy flat
+              layout. Existing <code>~/.bernard/</code> installs auto-migrate on first run
+              and leave a <code>MIGRATED</code> marker behind.
+            </p>
+          </div>
+
+          <!-- Subagent result cap -->
+          <div class="feature feature-compact">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                  <line x1="9" y1="10" x2="15" y2="10"></line>
+                </svg>
+              </div>
+              <h2>Sub-agent context guard</h2>
+            </div>
+            <p>
+              <code>BERNARD_SUBAGENT_RESULT_MAX_CHARS</code> (default 4000) caps how much of
+              a sub-agent or specialist's output gets fed back into the parent context. The
+              user still sees the full output in the terminal &mdash; only the parent's
+              memory budget gets protected.
+            </p>
+          </div>
+        </div>
+        <!-- /feature-grid (Also in this release) -->
       </div>
     </section>
 
@@ -1567,7 +2331,7 @@
             <li>Helps identify recurring patterns across conversations</li>
             <li>All four domain extractors run in parallel &mdash; no extra latency</li>
             <li>
-              Search returns up to 5 results per domain (20 total max), preventing any single domain
+              Search returns up to 5 results per domain (15 total max), preventing any single domain
               from crowding out others
             </li>
           </ul>
@@ -1600,6 +2364,27 @@
               &nbsp;&nbsp;&nbsp;&nbsp;conversations&nbsp;&nbsp;&nbsp;&nbsp;22 facts
             </div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="version-section" id="pre-v0.6.0">
+      <div class="container">
+        <div class="feature" style="background: transparent; border-style: dashed">
+          <p>
+            <span class="muted" style="color: var(--text-secondary)"
+              >Earlier releases &mdash; <code>Routines</code>, the multi-provider switch, and the
+              first sub-agent loop &mdash; predate this changelog format and aren't reproduced here.
+              See the
+              <a
+                href="https://github.com/phillt/bernard/commits/master"
+                target="_blank"
+                rel="noopener noreferrer"
+                >git history</a
+              >
+              for anything before v0.6.0.</span
+            >
+          </p>
         </div>
       </div>
     </section>
