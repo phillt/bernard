@@ -683,6 +683,8 @@
               <li><a href="#tool-web">Web Read</a></li>
               <li><a href="#tool-subagent">Sub-Agents</a></li>
               <li><a href="#tool-task">Tasks</a></li>
+              <li><a href="#tool-image">Image Attachment</a></li>
+              <li><a href="#tool-augmentation">Tool Augmentation Layer</a></li>
               <li><a href="#tool-datetime">Date/Time</a></li>
               <li><a href="#tool-wait">Wait</a></li>
             </ul>
@@ -715,6 +717,17 @@
             </ul>
           </li>
           <li>
+            <a href="#references">Reference Resolution</a>
+            <ul class="toc-sub">
+              <li><a href="#references-resolver">Resolver</a></li>
+              <li><a href="#references-lookup">Tool Lookup</a></li>
+              <li><a href="#references-rewriter">Prompt Rewriter</a></li>
+            </ul>
+          </li>
+          <li>
+            <a href="#react">Coordinator (ReAct) Mode</a>
+          </li>
+          <li>
             <a href="#context">Context Management</a>
             <ul class="toc-sub">
               <li><a href="#context-auto-continue">Auto-Continue</a></li>
@@ -731,6 +744,7 @@
               <li><a href="#cron-daemon">Daemon</a></li>
               <li><a href="#cron-alerts">Alerts</a></li>
               <li><a href="#cron-logs">Logs</a></li>
+              <li><a href="#cron-notes">Notes</a></li>
               <li><a href="#cron-cli">CLI Commands</a></li>
             </ul>
           </li>
@@ -788,12 +802,36 @@
 
 <span class="comment"># Verify it's configured</span>
 <span class="accent">$</span> bernard providers</code></pre>
-        <p>All configuration is stored in <code>~/.bernard/</code>:</p>
+        <p>
+          Bernard follows the
+          <a
+            href="https://specifications.freedesktop.org/basedir/latest/"
+            target="_blank"
+            rel="noopener noreferrer"
+            >XDG Base Directory Specification</a
+          >. Default locations:
+        </p>
         <ul>
-          <li><code>keys.json</code> &mdash; Stored API keys (file permissions set to 0600)</li>
-          <li><code>preferences.json</code> &mdash; Provider, model, theme, and option choices</li>
-          <li><code>.env</code> &mdash; Fallback environment variable file</li>
+          <li>
+            <code>~/.config/bernard/</code> &mdash; <code>preferences.json</code>,
+            <code>keys.json</code> (0600), <code>.env</code>, <code>mcp.json</code>
+          </li>
+          <li>
+            <code>~/.local/share/bernard/</code> &mdash; <code>memory/</code>, <code>rag/</code>,
+            <code>routines/</code>, <code>specialists/</code>, <code>tool-profiles/</code>,
+            <code>cron/</code>
+          </li>
+          <li><code>~/.cache/bernard/</code> &mdash; embeddings models, update-check cache</li>
+          <li>
+            <code>~/.local/state/bernard/</code> &mdash; conversation history, logs, daemon PID
+          </li>
         </ul>
+        <p>
+          Override with the standard <code>XDG_*_HOME</code> variables, or use
+          <code>BERNARD_HOME=/path</code> to force the legacy flat layout (everything under one
+          directory, like the old <code>~/.bernard/</code>). On first run, files are auto-migrated
+          from <code>~/.bernard/</code> if present.
+        </p>
 
         <h3 id="basic-usage">Basic Usage</h3>
         <p>
@@ -923,6 +961,93 @@
                 <td><code>0.8</code></td>
               </tr>
               <tr>
+                <td><code>BERNARD_REACT_MODE</code> <span class="vtag">v0.9.0+</span></td>
+                <td>
+                  Coordinator (ReAct) mode &mdash;
+                  think&nbsp;&rarr;&nbsp;act&nbsp;&rarr;&nbsp;evaluate&nbsp;&rarr;&nbsp;decide loop.
+                  Per-turn step budget grows to <code>min(BERNARD_MAX_STEPS &times; 3, 150)</code>.
+                </td>
+                <td><code>false</code></td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_PROMPT_REWRITER</code> <span class="vtag">v0.9.0+</span></td>
+                <td>
+                  Pre-turn LLM pass that rewrites the user message for the active model family
+                  (fail-open)
+                </td>
+                <td><code>true</code></td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_REFERENCE_LOOKUP</code> <span class="vtag">v0.9.0+</span></td>
+                <td>
+                  When the resolver returns <code>unknown</code>, attempt one read-only tool lookup
+                  before prompting (5&thinsp;s timeout, fail-open)
+                </td>
+                <td><code>true</code></td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_LOOKUP_TOOLS</code> <span class="vtag">v0.9.0+</span></td>
+                <td>
+                  Comma-separated tool-name allowlist additions for the resolver lookup pass (use
+                  read-only tools only)
+                </td>
+                <td>&mdash;</td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_TOOL_DETAILS</code> <span class="vtag">v0.9.0+</span></td>
+                <td>
+                  Show full tool-call input/output (off collapses each call to a one-line summary)
+                </td>
+                <td><code>true</code></td>
+              </tr>
+              <tr>
+                <td>
+                  <code>BERNARD_SUBAGENT_RESULT_MAX_CHARS</code>
+                  <span class="vtag">v0.9.0+</span>
+                </td>
+                <td>
+                  Max characters returned from a sub-agent / specialist into the parent agent's
+                  context (the user still sees full output)
+                </td>
+                <td><code>4000</code></td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_PLAIN_MENU</code> <span class="vtag">v0.9.0+</span></td>
+                <td>
+                  Force the classic numbered-list menu fallback instead of the arrow-key UI (also
+                  used automatically in non-TTY shells)
+                </td>
+                <td><code>0</code></td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_CORRECTION_ENABLED</code> <span class="vtag">v0.9.0+</span></td>
+                <td>
+                  Run the correction agent at session close to learn from tool-wrapper failures
+                </td>
+                <td><code>true</code></td>
+              </tr>
+              <tr>
+                <td><code>BERNARD_HOME</code></td>
+                <td>
+                  Override every XDG directory with one flat path (legacy <code>~/.bernard/</code>
+                  layout)
+                </td>
+                <td>&mdash;</td>
+              </tr>
+              <tr>
+                <td><code>BRAVE_API_KEY</code></td>
+                <td>Optional &mdash; Brave Search API key for <code>web_search</code></td>
+                <td>&mdash;</td>
+              </tr>
+              <tr>
+                <td><code>TAVILY_API_KEY</code></td>
+                <td>
+                  Optional &mdash; Tavily API key for <code>web_search</code> (fallback when Brave
+                  is absent)
+                </td>
+                <td>&mdash;</td>
+              </tr>
+              <tr>
                 <td><code>ANTHROPIC_API_KEY</code></td>
                 <td>Anthropic API key</td>
                 <td>&mdash;</td>
@@ -949,7 +1074,14 @@
           <li>
             <strong>Current working directory</strong> &mdash; <code>./.env</code> (checked first)
           </li>
-          <li><strong>Home config</strong> &mdash; <code>~/.bernard/.env</code> (fallback)</li>
+          <li>
+            <strong>XDG config</strong> &mdash; <code>$XDG_CONFIG_HOME/bernard/.env</code> (defaults
+            to <code>~/.config/bernard/.env</code>)
+          </li>
+          <li>
+            <strong>Legacy</strong> &mdash; <code>~/.bernard/.env</code> (fallback for migrations
+            from older installs)
+          </li>
         </ol>
         <p>
           API keys stored via <code>bernard add-key</code> take precedence over
@@ -966,8 +1098,9 @@
 <span class="comment"># Check key status for all providers</span>
 <span class="accent">$</span> bernard providers</code></pre>
         <p>
-          Keys are stored in <code>~/.bernard/keys.json</code> with file permissions set to
-          <code>0600</code> (owner read/write only).
+          Keys are stored in <code>$XDG_CONFIG_HOME/bernard/keys.json</code> (defaults to
+          <code>~/.config/bernard/keys.json</code>) with file permissions set to <code>0600</code>
+          (owner read/write only).
         </p>
 
         <h3 id="options">Options Management</h3>
@@ -1003,6 +1136,22 @@
                 <td><code>BERNARD_TOKEN_WINDOW</code></td>
                 <td>0</td>
                 <td>Context window size for compression (0 = auto-detect from model)</td>
+              </tr>
+              <tr>
+                <td><code>max-steps</code></td>
+                <td><code>BERNARD_MAX_STEPS</code></td>
+                <td>25</td>
+                <td>
+                  Max agent loop iterations per request. ReAct mode triples this (capped at 150).
+                </td>
+              </tr>
+              <tr>
+                <td><code>tool-details</code> <span class="vtag">v0.9.0+</span></td>
+                <td><code>BERNARD_TOOL_DETAILS</code></td>
+                <td>true</td>
+                <td>
+                  Show full tool-call input/output (off collapses each call to a one-line summary)
+                </td>
               </tr>
             </tbody>
           </table>
@@ -1164,7 +1313,8 @@
               <tr>
                 <td><code>/task</code></td>
                 <td>
-                  Run an isolated task with structured JSON output (no history, 5-step budget)
+                  Run an isolated task with structured JSON output (no history, proportional step
+                  budget &mdash; minimum 2)
                 </td>
               </tr>
               <tr>
@@ -1204,10 +1354,6 @@
                 <td>Interactively switch color theme</td>
               </tr>
               <tr>
-                <td><code>/options</code></td>
-                <td>View and set options (max-tokens, shell-timeout, token-window)</td>
-              </tr>
-              <tr>
                 <td><code>/update</code></td>
                 <td>Check for and install updates</td>
               </tr>
@@ -1230,16 +1376,19 @@
                 <td>List all saved specialists</td>
               </tr>
               <tr>
+                <td><code>/create-specialist</code></td>
+                <td>Create a specialist with guided AI assistance</td>
+              </tr>
+              <tr>
                 <td><code>/candidates</code></td>
                 <td>Review auto-detected specialist suggestions</td>
               </tr>
               <tr>
-                <td><code>/critic</code></td>
-                <td>Toggle critic mode for response verification (on/off)</td>
-              </tr>
-              <tr>
-                <td><code>/agent-options</code></td>
-                <td>Configure auto-creation for specialist agents</td>
+                <td><code>/agent-options</code> <span class="vtag">v0.9.0+</span></td>
+                <td>
+                  Configure agent behavior &mdash; toggles for critic mode, ReAct/coordinator mode,
+                  prompt rewriter, tool-details, plus auto-create thresholds
+                </td>
               </tr>
               <tr>
                 <td><code>/options</code></td>
@@ -1249,8 +1398,11 @@
                 </td>
               </tr>
               <tr>
-                <td><code>/debug</code></td>
-                <td>Print a diagnostic report for troubleshooting (no secrets leaked)</td>
+                <td><code>/image</code> <span class="vtag">v0.9.0+</span></td>
+                <td>
+                  Attach an image to the next turn: <code>/image &lt;path&gt; [prompt]</code>
+                  (vision-capable model required)
+                </td>
               </tr>
               <tr>
                 <td><code>/{routine-id}</code></td>
@@ -1314,8 +1466,8 @@
 
         <h3 id="tool-memory">Memory</h3>
         <p>
-          Persistent, disk-backed storage at <code>~/.bernard/memory/</code>. Survives across
-          sessions. The agent can list, read, write, and delete memory entries by key.
+          Persistent, disk-backed storage at <code>~/.local/share/bernard/memory/</code>. Survives
+          across sessions. The agent can list, read, write, and delete memory entries by key.
         </p>
         <p>
           Use this for things like project conventions, server addresses, or personal preferences.
@@ -1399,6 +1551,56 @@
           sub-steps and use the structured JSON result to decide next steps &mdash; enabling
           conditional branching and output chaining within routines.
         </div>
+
+        <h3 id="tool-image">Image Attachment <span class="vtag">v0.9.0+</span></h3>
+        <p>
+          Use <code>/image &lt;path&gt; [prompt]</code> in the REPL to attach an image to the next
+          turn. The image is loaded into the message as a vision content block, so it works only
+          with vision-capable models (Anthropic Claude, OpenAI GPT-4o family, etc.).
+        </p>
+        <ul>
+          <li>
+            Supported formats: PNG, JPEG, GIF, WebP &mdash; resolved relative to the current working
+            directory
+          </li>
+          <li>Optional inline prompt: <code>/image diagram.png explain the data flow</code></li>
+          <li>
+            Switch to a vision-capable model with <code>/model</code> first if your current default
+            doesn't support images
+          </li>
+        </ul>
+
+        <h3 id="tool-augmentation">Tool Augmentation Layer <span class="vtag">v0.9.0+</span></h3>
+        <p>
+          Every tool's <code>execute</code> function is wrapped in a transparent layer that observes
+          calls, records errors, and patches the system prompt with concrete bad-example fixes the
+          next turn. The invariant is strict: only real observed failures become bad examples
+          &mdash; no hallucinated guidance.
+        </p>
+        <ul>
+          <li>
+            One JSON profile per tool at <code>tool-profiles/&lt;key&gt;.json</code>, capped at 5
+            good and 5 bad examples (oldest drops first)
+          </li>
+          <li>
+            Shell commands are split by prefix into <code>shell.git</code>, <code>shell.gh</code>,
+            <code>shell.docker</code>, <code>shell.npm</code>, <code>shell.fs</code>,
+            <code>shell.http</code> &mdash; each sub-category gets scoped guidance
+          </li>
+          <li>
+            MCP tools are augmented automatically (identified by the <code>__</code> separator) and
+            stored at <code>mcp.&lt;name&gt;.json</code>
+          </li>
+          <li>
+            When a retry succeeds, the bad example's <code>fix</code> field is patched with the
+            working args
+          </li>
+          <li>
+            Seeded defaults ship for <code>shell.git</code>, <code>shell.fs</code>,
+            <code>shell.npm</code>, <code>web_read</code>, <code>file_read_lines</code>,
+            <code>file_edit_lines</code>
+          </li>
+        </ul>
 
         <h3 id="tool-datetime">Date/Time</h3>
         <p>
@@ -1674,9 +1876,7 @@
           Critic mode adds planning, proactive scratch/memory usage, and post-response verification.
           Toggle it during a session:
         </p>
-        <pre><code><span class="accent">bernard&gt;</span> /critic on     <span class="dim"># Enable critic mode</span>
-<span class="accent">bernard&gt;</span> /critic off    <span class="dim"># Disable critic mode</span>
-<span class="accent">bernard&gt;</span> /critic        <span class="dim"># Show current status</span></code></pre>
+        <pre><code><span class="accent">bernard&gt;</span> /agent-options   <span class="dim"># Toggle critic mode (and the other behavior toggles)</span></code></pre>
         <p>When enabled:</p>
         <ul>
           <li>
@@ -1698,7 +1898,7 @@
           answers are not verified.
         </p>
         <p>
-          Enable via <code>/critic on</code> in the REPL or set
+          Enable from <code>/agent-options</code> in the REPL or set
           <code>BERNARD_CRITIC_MODE=true</code>
           in your environment. Recommended for high-stakes work (deployments, git operations,
           multi-file edits).
@@ -1784,7 +1984,7 @@
 
         <h3 id="context-diagnostics">Diagnostics</h3>
         <p>
-          Use <code>/debug</code> in the REPL to print a diagnostic report useful for
+          Use <code>/options debug</code> in the REPL to print a diagnostic report useful for
           troubleshooting. The report includes:
         </p>
         <ul>
@@ -1798,8 +1998,104 @@
         </ul>
         <p>No secrets are included in the output.</p>
 
-        <!-- ═══════════════ 10. Cron Jobs ═══════════════ -->
-        <h2 id="cron">10. Cron Jobs</h2>
+        <!-- ═══════════════ 10. Reference Resolution ═══════════════ -->
+        <h2 id="references">10. Reference Resolution <span class="vtag">v0.9.0+</span></h2>
+        <p>
+          Before each turn Bernard resolves the named entities in your message ("my brother", "the
+          staging cluster") against persistent memory. Anything that resolves is appended to the
+          system prompt as a hidden <code>## Resolved References</code> block, so the agent sees
+          concrete identifiers without you having to repeat them.
+        </p>
+
+        <h3 id="references-resolver">Resolver</h3>
+        <p>A short LLM pass returns one of four outcomes:</p>
+        <ul>
+          <li>
+            <code>resolved</code> &mdash; the entity matches one memory; Bernard inlines the value
+          </li>
+          <li>
+            <code>ambiguous</code> &mdash; multiple candidates; Bernard shows an arrow-key menu so
+            you can pick
+          </li>
+          <li>
+            <code>unknown</code> &mdash; no match; Bernard either tries a tool lookup (see below) or
+            asks for free-form text
+          </li>
+          <li>
+            <code>noop</code> &mdash; no entities to resolve, or the LLM call failed (fail-open)
+          </li>
+        </ul>
+        <p>
+          Confirmed answers are written to <code>memory/rewriter-hints.md</code> so the same
+          reference resolves silently next time.
+        </p>
+
+        <h3 id="references-lookup">Tool Lookup</h3>
+        <p>
+          When the resolver returns <code>unknown</code> and
+          <code>BERNARD_REFERENCE_LOOKUP</code> is on (the default), Bernard picks one read-only
+          allowlisted tool &mdash; e.g.&nbsp;<code>contacts__search</code>, <code>web_search</code>,
+          an MCP <code>*_list</code> / <code>*_read</code> &mdash; and runs it with a hard 5-second
+          timeout enforced via <code>Promise.race</code> against a real timer (resilient to tools
+          that ignore <code>abortSignal</code>). The result is parsed into one of
+          <code>none</code> / <code>found</code> / <code>ambiguous</code>; on
+          <code>found</code> Bernard shows a Save / Edit / Skip menu before persisting to memory.
+          Every stage fails open &mdash; if anything goes wrong, you simply get the original prompt
+          for the value.
+        </p>
+        <p>
+          Use <code>BERNARD_LOOKUP_TOOLS=tool_a,tool_b</code> to extend the allowlist. Only allow
+          tools that are read-only.
+        </p>
+
+        <h3 id="references-rewriter">Prompt Rewriter</h3>
+        <p>
+          After reference resolution, a second LLM pass rewrites the user's message for the active
+          model family using the per-model <code>rewriterHint</code> in
+          <code>src/providers/profiles.ts</code>. Resolved entities can be inlined inline, jargon is
+          smoothed, and instructions are normalised. Temperature is 0, output falls back to the
+          original prompt on any error, and the toggle lives at
+          <code>BERNARD_PROMPT_REWRITER</code> (also flippable from <code>/agent-options</code>).
+        </p>
+
+        <!-- ═══════════════ 11. Coordinator (ReAct) Mode ═══════════════ -->
+        <h2 id="react">11. Coordinator (ReAct) Mode <span class="vtag">v0.9.0+</span></h2>
+        <p>
+          Coordinator mode turns each turn into a structured
+          think&nbsp;&rarr;&nbsp;act&nbsp;&rarr;&nbsp;evaluate&nbsp;&rarr;&nbsp;decide loop. Bernard
+          plans the work with a <code>plan</code> tool, talks itself through the rationale with
+          <code>think</code>, and re-checks the plan after each step with <code>evaluate</code>.
+          It's slower per turn but dramatically better at multi-step work that combines tool calls
+          and reasoning.
+        </p>
+        <ul>
+          <li>
+            Toggle with <code>BERNARD_REACT_MODE=true</code> or interactively from
+            <code>/agent-options</code>
+          </li>
+          <li>
+            Per-turn step budget grows to
+            <code>min(BERNARD_MAX_STEPS &times; 3, 150)</code> &mdash; sub-agents and specialists
+            are unaffected
+          </li>
+          <li>
+            Worst-case step count per turn is <code>effectiveMaxSteps &times; 3</code>; the
+            enforcement loop may re-prompt up to 2 extra times if a plan step is still unresolved
+          </li>
+          <li>
+            New tools available to the agent: <code>plan</code>, <code>think</code>,
+            <code>evaluate</code>
+          </li>
+        </ul>
+        <div class="callout callout-tip">
+          <div class="callout-title">When to use</div>
+          Turn ReAct on for "ship a release", "diagnose this flaky test", "migrate the database
+          schema" &mdash; tasks that need a plan and verification. Leave it off for chat or
+          single-tool requests; the extra overhead isn't worth it.
+        </div>
+
+        <!-- ═══════════════ 12. Cron Jobs ═══════════════ -->
+        <h2 id="cron">12. Cron Jobs <span class="vtag">v0.5.0+</span></h2>
         <p>
           Bernard can schedule recurring tasks that run in the background on a timer. Cron jobs
           execute an AI prompt through the agent on each run, with access to all tools.
@@ -1919,6 +2215,26 @@
           </li>
         </ul>
 
+        <h3 id="cron-notes">Notes <span class="vtag">v0.9.0+</span></h3>
+        <p>
+          Each cron job has a private notebook so long-running schedules don't redo work after
+          restarts or learn the same lesson twice. The daemon injects a scoped variant of these
+          tools into every run, bound to the current <code>job.id</code> and <code>runId</code>:
+        </p>
+        <ul>
+          <li><code>cron_notes_read</code> &mdash; Read the latest notes for the current job</li>
+          <li><code>cron_notes_write</code> &mdash; Append a note to the current job's notebook</li>
+          <li><code>cron_notes_list</code> &mdash; List jobs that have at least one note</li>
+          <li><code>cron_notes_view</code> &mdash; View notes for a specific job by id</li>
+        </ul>
+        <p>
+          Notes live in <code>~/.local/share/bernard/cron/notes/&lt;job-id&gt;.json</code>, capped
+          at 100 entries per job with atomic writes. Anything written during a run is appended to
+          the matching <code>cron_logs_get</code> output as a
+          <code>## Notes written during this run</code> section, so you can read the run log and the
+          notes in one place.
+        </p>
+
         <h3 id="cron-cli">CLI Commands</h3>
         <p>Cron jobs can also be managed from the command line without entering the REPL:</p>
         <div class="table-wrap">
@@ -1959,7 +2275,7 @@
         </div>
 
         <!-- ═══════════════ 11. MCP ═══════════════ -->
-        <h2 id="mcp">11. MCP (Model Context Protocol)</h2>
+        <h2 id="mcp">13. MCP (Model Context Protocol)</h2>
         <p>
           Bernard supports the
           <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener noreferrer"
@@ -1971,7 +2287,7 @@
 
         <h3 id="mcp-config">Configuration</h3>
         <p>
-          MCP servers are configured in <code>~/.bernard/mcp.json</code>. The file uses a
+          MCP servers are configured in <code>~/.config/bernard/mcp.json</code>. The file uses a
           <code>mcpServers</code> object where each key is the server name:
         </p>
         <pre><code>{
@@ -2103,7 +2419,7 @@
         </div>
 
         <!-- ═══════════════ 12. RAG Memory ═══════════════ -->
-        <h2 id="rag">12. RAG Memory</h2>
+        <h2 id="rag">14. RAG Memory</h2>
         <p>
           Bernard automatically builds a long-term knowledge base from your conversations using
           local embeddings and retrieval-augmented generation (RAG). No data leaves your machine.
@@ -2125,7 +2441,7 @@
               >fastembed</a
             >
             &mdash; no API calls required. Embeddings and facts are stored in
-            <code>~/.bernard/rag/memories.json</code>.
+            <code>~/.local/share/bernard/rag/memories.json</code>.
           </li>
           <li>
             <strong>Retrieval</strong> &mdash; On each new message, Bernard searches the RAG store
@@ -2233,7 +2549,7 @@
         </ul>
 
         <!-- ═══════════════ 13. Auto-Updates ═══════════════ -->
-        <h2 id="updates">13. Auto-Updates <span class="vtag">v0.3.0+</span></h2>
+        <h2 id="updates">15. Auto-Updates <span class="vtag">v0.3.0+</span></h2>
         <p>
           Bernard can check for new versions on npm and install them for you. Update checks are
           cached for 24 hours.
@@ -2260,7 +2576,7 @@
     <footer>
       <div class="container">
         <div class="footer-left">
-          bernard-agent &copy; <span id="year">2025</span> &middot; MIT License
+          bernard-agent &copy; <span id="year">2026</span> &middot; MIT License
         </div>
         <div class="footer-links">
           <a href="https://github.com/phillt/bernard" target="_blank" rel="noopener noreferrer"
