@@ -1,5 +1,17 @@
-/** Result of an `askUser` interaction. */
-export type AskUserResult = { answer: string } | { cancelled: true };
+/** A single question for the `askUser` callback. */
+export interface AskUserQuestion {
+  question: string;
+  choices?: string[];
+  /** When true and `choices` is present, the implementation appends an escape-hatch row that falls back to free-form input. */
+  allowOther: boolean;
+  /** Optional label for the escape-hatch row; defaults to a generic "Other" wording. */
+  otherLabel?: string;
+}
+
+/** Result of an `askUser` batch interaction. `answered` is aligned by index with the input questions. */
+export type AskUserBatchResult =
+  | { answers: string[] }
+  | { cancelled: true; answered: string[] };
 
 /** Options shared by all tool implementations. */
 export interface ToolOptions {
@@ -11,19 +23,15 @@ export interface ToolOptions {
    */
   confirmDangerous: (command: string, signal?: AbortSignal) => Promise<boolean>;
   /**
-   * Callback that asks the user a question, either by free-form input or by
-   * picking from `choices`. When `allowOther` is true and `choices` is given,
-   * the implementation appends an escape-hatch option (labelled `otherLabel`
-   * if provided, otherwise a generic default) that falls back to free-form
-   * input. Omitted in non-interactive environments (cron daemon).
+   * Callback that asks the user one or more questions in sequence. The
+   * implementation owns any progress UI (e.g. a tab strip for batches of
+   * 2+). On mid-batch cancellation, returns whatever was answered so far.
+   * Omitted in non-interactive environments (cron daemon).
    */
   askUser?: (
-    question: string,
-    choices: string[] | undefined,
-    allowOther: boolean,
-    otherLabel: string | undefined,
+    questions: AskUserQuestion[],
     signal?: AbortSignal,
-  ) => Promise<AskUserResult>;
+  ) => Promise<AskUserBatchResult>;
 }
 
 /** Outcome of a shell tool invocation. */

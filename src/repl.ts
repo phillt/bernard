@@ -39,9 +39,11 @@ import {
   stopSpinner,
   buildSpinnerMessage,
   formatTokenCount,
+  setPinnedRegion,
+  clearPinnedRegion,
   type SpinnerStats,
 } from './output.js';
-import type { ToolOptions } from './tools';
+import type { ToolOptions, AskUserQuestion } from './tools/types.js';
 import {
   PROVIDER_MODELS,
   getAvailableProviders,
@@ -838,27 +840,56 @@ export async function startRepl(
       return !result.cancelled && result.index === 0;
     });
 
-  const askUserFn: NonNullable<ToolOptions['askUser']> = (
-    question,
-    choices,
-    allowOther,
-    otherLabel,
-    signal,
-  ) =>
+  const PROGRESS_REGION_ID = 'ask-user-progress';
+
+  const renderTabStrip = (currentIndex: number, total: number): string => {
+    const theme = getTheme();
+    const tabs: string[] = [];
+    for (let i = 0; i < total; i++) {
+      const num = String(i + 1);
+      if (i < currentIndex) tabs.push(theme.success(`${num} ✓`));
+      else if (i === currentIndex) tabs.push(theme.accentBold(`▸${num}◂`));
+      else tabs.push(theme.dim(num));
+    }
+    return '  ' + tabs.join('   ');
+  };
+
+  const askSingleQuestion = async (
+    q: AskUserQuestion,
+    signal: AbortSignal | undefined,
+  ): Promise<string | null> => {
+    if (!q.choices || q.choices.length === 0) {
+      const r = await promptValue(rl, { label: q.question }, signal);
+      return r.cancelled ? null : r.raw;
+    }
+    const entries = q.choices.map((label) => ({ label }));
+    if (q.allowOther) entries.push({ label: q.otherLabel ?? 'Other (type a custom answer)' });
+    const r = await selectFromMenu(rl, entries, { title: q.question }, signal);
+    if (r.cancelled) return null;
+    if (q.allowOther && r.index === q.choices.length) {
+      const free = await promptValue(rl, { label: q.question }, signal);
+      return free.cancelled ? null : free.raw;
+    }
+    return q.choices[r.index];
+  };
+
+  const askUserFn: NonNullable<ToolOptions['askUser']> = (questions, signal) =>
     withPausedSpinner(signal, async () => {
-      if (!choices || choices.length === 0) {
-        const r = await promptValue(rl, { label: question }, signal);
-        return r.cancelled ? { cancelled: true } : { answer: r.raw };
+      const answered: string[] = [];
+      const showTabs = questions.length > 1;
+      try {
+        for (let i = 0; i < questions.length; i++) {
+          if (showTabs) {
+            setPinnedRegion(PROGRESS_REGION_ID, [renderTabStrip(i, questions.length)]);
+          }
+          const answer = await askSingleQuestion(questions[i], signal);
+          if (answer === null) return { cancelled: true, answered };
+          answered.push(answer);
+        }
+        return { answers: answered };
+      } finally {
+        if (showTabs) clearPinnedRegion(PROGRESS_REGION_ID);
       }
-      const entries = choices.map((label) => ({ label }));
-      if (allowOther) entries.push({ label: otherLabel ?? 'Other (type a custom answer)' });
-      const r = await selectFromMenu(rl, entries, { title: question }, signal);
-      if (r.cancelled) return { cancelled: true };
-      if (allowOther && r.index === choices.length) {
-        const free = await promptValue(rl, { label: question }, signal);
-        return free.cancelled ? { cancelled: true } : { answer: free.raw };
-      }
-      return { answer: choices[r.index] };
     });
 
   const toolOptions: ToolOptions = {

@@ -125,7 +125,7 @@ Tool schemas describe each tool's parameters and purpose. Behavioral notes:
 - **specialist_run** — Invoke a saved specialist to handle a task using its custom persona. The specialist runs as an independent sub-agent with its own system prompt and guidelines. Use when a task matches an existing specialist's domain.
 - **mcp_config / mcp_add_url** — Manage MCP server connections. Changes require a restart.
 - **datetime / time_range / time_range_total** — Time and duration utilities.
-- **ask_user** — Ask the user a clarifying question and wait for their answer. Provide \`choices\` when the answer is constrained; otherwise the user gets a free-form prompt. Always prefer this over writing the question in prose.
+- **ask_user** — Ask the user one or more clarifying questions and wait for their answers. Provide each as an entry in \`questions\`; supply \`choices\` per question when the answer is constrained, otherwise the user gets a free-form prompt. Batch related questions in one call (e.g. title + body + labels) — the user sees a tab strip showing progress. Always prefer this over writing the question in prose.
 
 ## Context Awareness
 - Your context may include **Recalled Context** (auto-retrieved past observations), **Persistent Memory**, and **Scratch Notes**.
