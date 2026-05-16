@@ -39,8 +39,6 @@ import {
   stopSpinner,
   buildSpinnerMessage,
   formatTokenCount,
-  setPinnedRegion,
-  clearPinnedRegion,
   type SpinnerStats,
 } from './output.js';
 import type { ToolOptions, AskUserQuestion } from './tools/types.js';
@@ -840,8 +838,6 @@ export async function startRepl(
       return !result.cancelled && result.index === 0;
     });
 
-  const PROGRESS_REGION_ID = 'ask-user-progress';
-
   const renderTabStrip = (currentIndex: number, total: number): string => {
     const theme = getTheme();
     const tabs: string[] = [];
@@ -856,18 +852,19 @@ export async function startRepl(
 
   const askSingleQuestion = async (
     q: AskUserQuestion,
+    headerLines: string[] | undefined,
     signal: AbortSignal | undefined,
   ): Promise<string | null> => {
     if (!q.choices || q.choices.length === 0) {
-      const r = await promptValue(rl, { label: q.question }, signal);
+      const r = await promptValue(rl, { label: q.question, headerLines }, signal);
       return r.cancelled ? null : r.raw;
     }
     const entries = q.choices.map((label) => ({ label }));
     if (q.allowOther) entries.push({ label: q.otherLabel ?? 'Other (type a custom answer)' });
-    const r = await selectFromMenu(rl, entries, { title: q.question }, signal);
+    const r = await selectFromMenu(rl, entries, { title: q.question, headerLines }, signal);
     if (r.cancelled) return null;
     if (q.allowOther && r.index === q.choices.length) {
-      const free = await promptValue(rl, { label: q.question }, signal);
+      const free = await promptValue(rl, { label: q.question, headerLines }, signal);
       return free.cancelled ? null : free.raw;
     }
     return q.choices[r.index];
@@ -877,19 +874,13 @@ export async function startRepl(
     withPausedSpinner(signal, async () => {
       const answered: string[] = [];
       const showTabs = questions.length > 1;
-      try {
-        for (let i = 0; i < questions.length; i++) {
-          if (showTabs) {
-            setPinnedRegion(PROGRESS_REGION_ID, [renderTabStrip(i, questions.length)]);
-          }
-          const answer = await askSingleQuestion(questions[i], signal);
-          if (answer === null) return { cancelled: true, answered };
-          answered.push(answer);
-        }
-        return { answers: answered };
-      } finally {
-        if (showTabs) clearPinnedRegion(PROGRESS_REGION_ID);
+      for (let i = 0; i < questions.length; i++) {
+        const headerLines = showTabs ? [renderTabStrip(i, questions.length)] : undefined;
+        const answer = await askSingleQuestion(questions[i], headerLines, signal);
+        if (answer === null) return { cancelled: true, answered };
+        answered.push(answer);
       }
+      return { answers: answered };
     });
 
   const toolOptions: ToolOptions = {
