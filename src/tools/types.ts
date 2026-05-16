@@ -9,9 +9,7 @@ export interface AskUserQuestion {
 }
 
 /** Result of an `askUser` batch interaction. `answered` is aligned by index with the input questions. */
-export type AskUserBatchResult =
-  | { answers: string[] }
-  | { cancelled: true; answered: string[] };
+export type AskUserBatchResult = { answers: string[] } | { cancelled: true; answered: string[] };
 
 /** Options shared by all tool implementations. */
 export interface ToolOptions {
@@ -28,10 +26,7 @@ export interface ToolOptions {
    * 2+). On mid-batch cancellation, returns whatever was answered so far.
    * Omitted in non-interactive environments (cron daemon).
    */
-  askUser?: (
-    questions: AskUserQuestion[],
-    signal?: AbortSignal,
-  ) => Promise<AskUserBatchResult>;
+  askUser?: (questions: AskUserQuestion[], signal?: AbortSignal) => Promise<AskUserBatchResult>;
 }
 
 /** Outcome of a shell tool invocation. */
