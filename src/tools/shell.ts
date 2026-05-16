@@ -1,6 +1,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { execSync } from 'node:child_process';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { ToolOptions, ShellResult } from './types.js';
 
 const DANGEROUS_PATTERNS = [
@@ -31,11 +33,45 @@ export function isDangerous(command: string): boolean {
   return DANGEROUS_PATTERNS.some((pattern) => pattern.test(command));
 }
 
+// Reject commands containing these so the safelist can't be tricked into
+// composing additional shell work outside its narrow scope.
+const META_RE = /[;&|`>]|\$\(/;
+
+/**
+ * The agent's system prompt instructs the model to write temp scripts under
+ * this prefix and clean them up afterward, so the cleanup must not require
+ * confirmation.
+ */
+export const BERNARD_TMP_PREFIX = path.join(os.tmpdir(), 'bernard-');
+
+/**
+ * Commands that match a dangerous pattern but should bypass the confirmation
+ * prompt because they operate exclusively on Bernard's own workspace.
+ *
+ * @internal Exported for testing only.
+ */
+export function isSafelisted(command: string): boolean {
+  const trimmed = command.trim();
+  if (!/^rm(\s|$)/.test(trimmed)) return false;
+  if (META_RE.test(trimmed)) return false;
+
+  const paths = trimmed
+    .split(/\s+/)
+    .slice(1)
+    .filter((t) => !t.startsWith('-'));
+  if (paths.length === 0) return false;
+
+  return paths.every((t) => {
+    const unquoted = t.replace(/^['"]/, '').replace(/['"]$/, '');
+    return unquoted.startsWith(BERNARD_TMP_PREFIX);
+  });
+}
+
 /**
  * Creates the shell execution tool that runs commands in the user's terminal.
  *
  * Dangerous commands are intercepted and require explicit user confirmation
- * before execution.
+ * before execution, unless they match a safelist of Bernard-owned operations.
  *
  * @param options - Shell timeout and dangerous-command confirmation callback.
  */
@@ -46,9 +82,9 @@ export function createShellTool(options: ToolOptions) {
     parameters: z.object({
       command: z.string().describe('The shell command to execute'),
     }),
-    execute: async ({ command }): Promise<ShellResult> => {
-      if (isDangerous(command)) {
-        const confirmed = await options.confirmDangerous(command);
+    execute: async ({ command }, execOptions): Promise<ShellResult> => {
+      if (isDangerous(command) && !isSafelisted(command)) {
+        const confirmed = await options.confirmDangerous(command, execOptions?.abortSignal);
         if (!confirmed) {
           return { output: 'Command cancelled by user.', is_error: false };
         }

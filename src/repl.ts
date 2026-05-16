@@ -809,21 +809,62 @@ export async function startRepl(
     ...mcpTools,
   };
 
-  const confirmFn = (command: string): Promise<boolean> => {
-    return new Promise((resolve) => {
-      const { ansi } = getTheme();
-      rl.question(
-        `${ansi.warning}  ⚠ Dangerous command: ${command}\n  Allow? (y/N): ${ansi.reset}`,
-        (answer) => {
-          resolve(answer.trim().toLowerCase() === 'y');
-        },
-      );
-    });
+  // The thinking-spinner repaints stdout every 80 ms and would blank any
+  // interactive prompt, so callers that need to talk to the user must run
+  // through this helper to stop the spinner first and restart it after.
+  const withPausedSpinner = async <T>(
+    signal: AbortSignal | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    stopSpinner();
+    try {
+      return await fn();
+    } finally {
+      // Skip restart when the turn is over or aborted — nothing left to think about.
+      if (processing && !signal?.aborted) {
+        initSpinner();
+      }
+    }
   };
+
+  const confirmFn = (command: string, signal?: AbortSignal): Promise<boolean> =>
+    withPausedSpinner(signal, async () => {
+      const result = await selectFromMenu(
+        rl,
+        [{ label: 'Allow once' }, { label: 'Cancel' }],
+        { title: `⚠ Dangerous command: ${command}` },
+        signal,
+      );
+      return !result.cancelled && result.index === 0;
+    });
+
+  const askUserFn: NonNullable<ToolOptions['askUser']> = (
+    question,
+    choices,
+    allowOther,
+    otherLabel,
+    signal,
+  ) =>
+    withPausedSpinner(signal, async () => {
+      if (!choices || choices.length === 0) {
+        const r = await promptValue(rl, { label: question }, signal);
+        return r.cancelled ? { cancelled: true } : { answer: r.raw };
+      }
+      const entries = choices.map((label) => ({ label }));
+      if (allowOther) entries.push({ label: otherLabel ?? 'Other (type a custom answer)' });
+      const r = await selectFromMenu(rl, entries, { title: question }, signal);
+      if (r.cancelled) return { cancelled: true };
+      if (allowOther && r.index === choices.length) {
+        const free = await promptValue(rl, { label: question }, signal);
+        return free.cancelled ? { cancelled: true } : { answer: free.raw };
+      }
+      return { answer: choices[r.index] };
+    });
 
   const toolOptions: ToolOptions = {
     shellTimeout: config.shellTimeout,
     confirmDangerous: confirmFn,
+    askUser: askUserFn,
   };
 
   const historyStore = new HistoryStore();

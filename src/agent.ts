@@ -51,6 +51,7 @@ import { PlanStore } from './plan-store.js';
 import { renderResolvedBlock, type ResolvedEntry } from './reference-resolver.js';
 import { createPlanTool } from './tools/plan.js';
 import { createThinkTool } from './tools/think.js';
+import { createAskUserTool } from './tools/ask-user.js';
 import { createEvaluateTool } from './tools/evaluate.js';
 
 /**
@@ -85,7 +86,7 @@ You exist only while processing a user message. Each response is a single turn: 
 ## Decision Rules
 - Use tools when the task requires system interaction (files, git, processes, network). Answer from knowledge when no tool is needed.
 - If a command fails, read the error message carefully, explain the cause, and try an alternative approach. Never retry the exact same command that just failed.
-- When uncertain about intent, ask a clarifying question rather than guessing.
+- When uncertain about intent, call the \`ask_user\` tool to ask a clarifying question rather than guessing. Do NOT write the question as prose — prose gets no answer back and, in coordinator mode, will trigger plan enforcement and abort the turn.
 - If a request is ambiguous or risky, state your assumptions before acting.
 
 ## Planning
@@ -124,6 +125,7 @@ Tool schemas describe each tool's parameters and purpose. Behavioral notes:
 - **specialist_run** — Invoke a saved specialist to handle a task using its custom persona. The specialist runs as an independent sub-agent with its own system prompt and guidelines. Use when a task matches an existing specialist's domain.
 - **mcp_config / mcp_add_url** — Manage MCP server connections. Changes require a restart.
 - **datetime / time_range / time_range_total** — Time and duration utilities.
+- **ask_user** — Ask the user a clarifying question and wait for their answer. Provide \`choices\` when the answer is constrained; otherwise the user gets a free-form prompt. Always prefer this over writing the question in prose.
 
 ## Context Awareness
 - Your context may include **Recalled Context** (auto-retrieved past observations), **Persistent Memory**, and **Scratch Notes**.
@@ -137,7 +139,7 @@ Before synthesizing any answer that references prior state, an ongoing exchange,
 - **Follow the thread.** When a tool result is part of an ongoing exchange (email reply, PR/issue comment, chat follow-up), fetch the preceding item in the same thread before summarizing. For email, pull the thread/parent via the thread ID. For GitHub, read the PR or issue body, not just the latest comment. Do not summarize a reply in isolation.
 - **Search memory and recalled context before committing to a summary.** If the user names an entity or topic ("the Tesla wrap", "the CRM PR", "my morning triage"), use the \`memory\` tool (\`list\` to see stored keys, \`read\` for relevant ones) and re-read the injected Recalled Context for that phrase before drafting the final answer, not after.
 - **Flag implicit numbers, counts, prices, and dates.** If your synthesis involves arithmetic or totals and a factor was *inferred* rather than read, either retrieve it (thread or memory) or ask. Never silently multiply against an assumed count.
-- **Ask when uncertainty remains.** After gathering, if the answer still hinges on an unconfirmed factor, ask one focused clarifying question and stop. Do not guess and ship.
+- **Ask when uncertainty remains.** After gathering, if the answer still hinges on an unconfirmed factor, call the \`ask_user\` tool with one focused question (use \`choices\` when the answer is constrained). Do not write the question as prose, and do not guess and ship.
 - **Show the work when it matters.** For summaries that include numbers or derived claims, cite the source inline — e.g., "vendor quoted $45/seat × 12 seats (from original RFP) = $540". If a factor is unknown, say so: "vendor quoted $45/seat — please confirm the seat count".
 
 ### Examples
@@ -643,6 +645,7 @@ export class Agent {
           this.candidateStore,
         ),
         think: createThinkTool(),
+        ask_user: createAskUserTool(this.toolOptions.askUser),
         ...(this.config.reactMode
           ? {
               plan: createPlanTool(this.planStore),

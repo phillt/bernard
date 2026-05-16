@@ -172,6 +172,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     const shellTool = createShellTool({
       shellTimeout: config.shellTimeout,
       confirmDangerous: async () => false, // Auto-deny in daemon mode
+      // askUser intentionally omitted — no interactive user; the ask_user tool returns {unavailable}.
     });
 
     const notesStore = new CronNotesStore();

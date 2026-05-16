@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { isDangerous, createShellTool } from './shell.js';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { isDangerous, isSafelisted, BERNARD_TMP_PREFIX, createShellTool } from './shell.js';
 
 vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
@@ -47,6 +49,44 @@ describe('isDangerous', () => {
   });
 });
 
+describe('isSafelisted', () => {
+  const tmp = os.tmpdir();
+  const bernardA = `${BERNARD_TMP_PREFIX}task.sh`;
+  const bernardB = `${BERNARD_TMP_PREFIX}other.py`;
+
+  it('safelists rm -f on a single Bernard tmp script', () => {
+    expect(isSafelisted(`rm -f ${bernardA}`)).toBe(true);
+  });
+
+  it('safelists rm -rf on multiple Bernard tmp paths', () => {
+    expect(isSafelisted(`rm -rf ${bernardA} ${bernardB}`)).toBe(true);
+  });
+
+  it('does not safelist rm on non-Bernard tmp paths', () => {
+    expect(isSafelisted(`rm -rf ${path.join(tmp, 'something-else')}`)).toBe(false);
+  });
+
+  it('does not safelist rm under the user home directory', () => {
+    expect(isSafelisted('rm -rf ~/.config/bernard')).toBe(false);
+  });
+
+  it('rejects commands with shell metacharacters even if the prefix matches', () => {
+    expect(isSafelisted(`rm -rf ${bernardA} && rm -rf /`)).toBe(false);
+    expect(isSafelisted(`rm -rf ${bernardA}; rm -rf /`)).toBe(false);
+    expect(isSafelisted(`rm -rf ${bernardA} | tee out`)).toBe(false);
+    expect(isSafelisted(`rm -rf $(echo ${bernardA})`)).toBe(false);
+  });
+
+  it('does not safelist rm with no path arguments', () => {
+    expect(isSafelisted('rm -rf')).toBe(false);
+  });
+
+  it('does not safelist non-rm commands', () => {
+    expect(isSafelisted(`cat ${bernardA}`)).toBe(false);
+    expect(isSafelisted(`sudo ls ${bernardA}`)).toBe(false);
+  });
+});
+
 describe('createShellTool', () => {
   let confirmDangerous: ReturnType<typeof vi.fn>;
 
@@ -75,8 +115,30 @@ describe('createShellTool', () => {
     vi.mocked(execSync).mockReturnValue('done');
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
     const result = await shellTool.execute({ command: 'rm -rf /tmp/test' }, {} as any);
-    expect(confirmDangerous).toHaveBeenCalledWith('rm -rf /tmp/test');
+    expect(confirmDangerous).toHaveBeenCalledWith('rm -rf /tmp/test', undefined);
     expect(result).toEqual({ output: 'done', is_error: false });
+  });
+
+  it('forwards the abort signal to confirmDangerous', async () => {
+    confirmDangerous.mockResolvedValue(true);
+    vi.mocked(execSync).mockReturnValue('done');
+    const controller = new AbortController();
+    const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
+    await shellTool.execute(
+      { command: 'rm -rf /tmp/test' },
+      { abortSignal: controller.signal } as any,
+    );
+    expect(confirmDangerous).toHaveBeenCalledWith('rm -rf /tmp/test', controller.signal);
+  });
+
+  it('skips confirmDangerous for safelisted Bernard tmp cleanup', async () => {
+    vi.mocked(execSync).mockReturnValue('');
+    const tmpFile = `${BERNARD_TMP_PREFIX}task.sh`;
+    const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
+    const result = await shellTool.execute({ command: `rm -f ${tmpFile}` }, {} as any);
+    expect(confirmDangerous).not.toHaveBeenCalled();
+    expect(execSync).toHaveBeenCalled();
+    expect(result.is_error).toBe(false);
   });
 
   it('cancels command when user declines', async () => {
