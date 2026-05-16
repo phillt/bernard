@@ -1040,8 +1040,10 @@
           <span class="comment"># Install globally</span><br />
           <span class="cmd-prefix">$ </span>npm install -g bernard-agent<br />
           <br />
-          <span class="comment"># Store your API key securely (or set ANTHROPIC_API_KEY /</span><br />
-          <span class="comment"># OPENAI_API_KEY / XAI_API_KEY in ~/.config/bernard/.env)</span><br />
+          <span class="comment"># Store your API key securely (or set ANTHROPIC_API_KEY /</span
+          ><br />
+          <span class="comment"># OPENAI_API_KEY / XAI_API_KEY in ~/.config/bernard/.env)</span
+          ><br />
           <span class="cmd-prefix">$ </span>bernard add-key anthropic sk-ant-...<br />
           <br />
           <span class="comment"># Start the REPL</span><br />
@@ -1803,7 +1805,11 @@
               cls: 'tool',
             },
             { type: 'instant', text: '  \u25B6 evaluate: step 1/4 done, advancing', cls: 'sub' },
-            { type: 'instant', text: '  \u2026 (think \u2192 act \u2192 evaluate, repeated)', cls: 'sub' },
+            {
+              type: 'instant',
+              text: '  \u2026 (think \u2192 act \u2192 evaluate, repeated)',
+              cls: 'sub',
+            },
             { type: 'pause', ms: 400 },
             { type: 'instant', text: '  \u2713 all 4 steps verified', cls: 'output' },
           ],

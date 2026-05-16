@@ -452,10 +452,8 @@
         content: '';
         position: absolute;
         inset: 0;
-        background-image: linear-gradient(
-            rgba(249, 115, 22, 0.04) 1px,
-            transparent 1px
-          ),
+        background-image:
+          linear-gradient(rgba(249, 115, 22, 0.04) 1px, transparent 1px),
           linear-gradient(90deg, rgba(249, 115, 22, 0.04) 1px, transparent 1px);
         background-size: 32px 32px;
         pointer-events: none;
@@ -494,8 +492,13 @@
       }
 
       @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.5; }
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.5;
+        }
       }
 
       .major-release h2.version-heading {
@@ -736,11 +739,10 @@
           </h2>
           <p class="major-release-intro">
             The largest update since launch. v0.9.0 reshapes how Bernard handles ambiguity:
-            references resolve against memory before each turn, unknown entities trigger a
-            read-only tool lookup, and prompts get rewritten for the active model family. A
-            new coordinator (ReAct) mode adds iterative reasoning with verifiable plans, the
-            UI moves to arrow-key menus, and a tool augmentation layer learns from every
-            error your tools throw.
+            references resolve against memory before each turn, unknown entities trigger a read-only
+            tool lookup, and prompts get rewritten for the active model family. A new coordinator
+            (ReAct) mode adds iterative reasoning with verifiable plans, the UI moves to arrow-key
+            menus, and a tool augmentation layer learns from every error your tools throw.
           </p>
           <div class="release-stats">
             <div class="release-stat">
@@ -763,295 +765,319 @@
         </div>
 
         <div class="feature-grid">
-        <!-- Theme: Smarter conversations -->
-        <div class="feature feature-wide">
-          <div class="feature-header">
-            <div class="feature-icon">
-              <!-- message-square icon -->
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                style="fill: none; stroke: var(--accent)"
-              >
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-              </svg>
+          <!-- Theme: Smarter conversations -->
+          <div class="feature feature-wide">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <!-- message-square icon -->
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                </svg>
+              </div>
+              <h2>Smarter conversations <span class="tag">new</span></h2>
             </div>
-            <h2>Smarter conversations <span class="tag">new</span></h2>
+            <p>
+              Bernard now understands references the same way a human collaborator does. Before each
+              turn, a reference resolver scans your message for named entities ("my brother", "the
+              staging cluster") and looks them up in persistent memory. If the answer is missing,
+              Bernard tries one read-only tool (e.g.&nbsp;a Google Contacts MCP) before asking you,
+              then offers a Save / Edit / Skip menu so the answer sticks. A model-specific prompt
+              rewriter then reshapes the message for the active model family, and a
+              context-gathering protocol keeps the agent from inventing numbers it could have just
+              looked up.
+            </p>
+            <div class="terminal">
+              <div class="terminal-bar">
+                <div class="terminal-dot"></div>
+                <div class="terminal-dot"></div>
+                <div class="terminal-dot"></div>
+                <span class="terminal-title">bernard</span>
+              </div>
+              <div class="terminal-body">
+                <span class="prompt">bernard&gt;</span> email my brother about the trip<br />
+                <span class="muted"
+                  >// resolver: "my brother" not in memory &mdash; trying lookup</span
+                ><br />
+                &nbsp;&nbsp;&#x25B6; google_contacts__search { query: "brother" }<br />
+                &nbsp;&nbsp;&#x2514;&#x2500; <span class="success">found</span>: Daniel Pereira
+                &lt;daniel@example.com&gt;<br />
+                <br />
+                <span class="muted">? Save this for next time?</span><br />
+                &nbsp;&nbsp;&#x276F;
+                <span class="success">Save</span> &nbsp;&nbsp;Edit&nbsp;&nbsp;Skip<br />
+                <br />
+                &nbsp;&nbsp;&#x25B6; gmail__send_email { to: "daniel@example.com", &hellip; }<br />
+                &nbsp;&nbsp;<span class="success">&#x2713;</span> sent
+              </div>
+            </div>
+            <ul>
+              <li>
+                Reference resolver with four outcomes: resolved, ambiguous, unknown, no-op (#128)
+              </li>
+              <li>
+                Reference tool-lookup pass with read-only allowlist + 5&thinsp;s timeout (#138)
+              </li>
+              <li>
+                Model-specific prompt rewriter using <code>ModelProfile.rewriterHint</code>,
+                fail-open (#125, #131)
+              </li>
+              <li>Context-gathering protocol baked into the base system prompt (#126)</li>
+            </ul>
           </div>
-          <p>
-            Bernard now understands references the same way a human collaborator does. Before each
-            turn, a reference resolver scans your message for named entities ("my brother", "the
-            staging cluster") and looks them up in persistent memory. If the answer is missing,
-            Bernard tries one read-only tool (e.g.&nbsp;a Google Contacts MCP) before asking you,
-            then offers a Save / Edit / Skip menu so the answer sticks. A model-specific prompt
-            rewriter then reshapes the message for the active model family, and a context-gathering
-            protocol keeps the agent from inventing numbers it could have just looked up.
-          </p>
-          <div class="terminal">
-            <div class="terminal-bar">
-              <div class="terminal-dot"></div>
-              <div class="terminal-dot"></div>
-              <div class="terminal-dot"></div>
-              <span class="terminal-title">bernard</span>
-            </div>
-            <div class="terminal-body">
-              <span class="prompt">bernard&gt;</span> email my brother about the trip<br />
-              <span class="muted">// resolver: "my brother" not in memory &mdash; trying lookup</span><br />
-              &nbsp;&nbsp;&#x25B6; google_contacts__search { query: "brother" }<br />
-              &nbsp;&nbsp;&#x2514;&#x2500; <span class="success">found</span>: Daniel Pereira
-              &lt;daniel@example.com&gt;<br />
-              <br />
-              <span class="muted">? Save this for next time?</span><br />
-              &nbsp;&nbsp;&#x276F; <span class="success">Save</span>
-              &nbsp;&nbsp;Edit&nbsp;&nbsp;Skip<br />
-              <br />
-              &nbsp;&nbsp;&#x25B6; gmail__send_email { to: "daniel@example.com", &hellip; }<br />
-              &nbsp;&nbsp;<span class="success">&#x2713;</span> sent
-            </div>
-          </div>
-          <ul>
-            <li>Reference resolver with four outcomes: resolved, ambiguous, unknown, no-op (#128)</li>
-            <li>Reference tool-lookup pass with read-only allowlist + 5&thinsp;s timeout (#138)</li>
-            <li>
-              Model-specific prompt rewriter using <code>ModelProfile.rewriterHint</code>, fail-open
-              (#125, #131)
-            </li>
-            <li>Context-gathering protocol baked into the base system prompt (#126)</li>
-          </ul>
-        </div>
 
-        <!-- Theme: Better reasoning -->
-        <div class="feature feature-wide">
-          <div class="feature-header">
-            <div class="feature-icon">
-              <!-- brain icon -->
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                style="fill: none; stroke: var(--accent)"
-              >
-                <path
-                  d="M12 5a3 3 0 1 0-5.997.142 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"
-                ></path>
-                <path
-                  d="M12 5a3 3 0 1 1 5.997.142 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"
-                ></path>
-              </svg>
+          <!-- Theme: Better reasoning -->
+          <div class="feature feature-wide">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <!-- brain icon -->
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <path
+                    d="M12 5a3 3 0 1 0-5.997.142 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"
+                  ></path>
+                  <path
+                    d="M12 5a3 3 0 1 1 5.997.142 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"
+                  ></path>
+                </svg>
+              </div>
+              <h2>Better reasoning <span class="tag">new</span></h2>
             </div>
-            <h2>Better reasoning <span class="tag">new</span></h2>
+            <p>
+              Coordinator (ReAct) mode turns Bernard into an iterative thinker. With
+              <code>BERNARD_REACT_MODE=true</code>, every turn runs a
+              think&nbsp;&rarr;&nbsp;act&nbsp;&rarr;&nbsp;evaluate&nbsp;&rarr;&nbsp;decide loop with
+              new <code>plan</code>, <code>think</code>, and <code>evaluate</code> tools. The step
+              budget triples (capped at 150) so multi-step plans actually finish, and a post-run
+              verifier re-checks the plan if any step is still unresolved. Turn it on for hard
+              tasks; leave it off for chat &mdash; you can flip the toggle live in
+              <code>/agent-options</code>.
+            </p>
+            <div class="terminal">
+              <div class="terminal-bar">
+                <div class="terminal-dot"></div>
+                <div class="terminal-dot"></div>
+                <div class="terminal-dot"></div>
+                <span class="terminal-title">bernard</span>
+              </div>
+              <div class="terminal-body">
+                <span class="prompt">bernard&gt;</span> /agent-options<br />
+                &nbsp;&nbsp;ReAct (coordinator) mode&nbsp;&nbsp;<span class="success">[on]</span
+                ><br />
+                <br />
+                <span class="prompt">bernard&gt;</span> ship a release: build, test, tag, push<br />
+                &nbsp;&nbsp;&#x25B6; plan: 4 steps drafted<br />
+                &nbsp;&nbsp;&#x25B6; think: tests must pass before tagging<br />
+                &nbsp;&nbsp;&#x25B6; shell: npm test &mdash; <span class="success">2074 passed</span
+                ><br />
+                &nbsp;&nbsp;&#x25B6; evaluate: step 1/4 done, advancing<br />
+                &nbsp;&nbsp;&hellip; (think &rarr; act &rarr; evaluate, repeated)<br />
+                &nbsp;&nbsp;<span class="success">&#x2713;</span> all 4 steps verified
+              </div>
+            </div>
+            <ul>
+              <li>
+                Coordinator / ReAct loop with <code>plan</code>, <code>think</code>,
+                <code>evaluate</code> tools (#117)
+              </li>
+              <li>
+                Per-turn step budget grows to
+                <code>min(BERNARD_MAX_STEPS &times; 3, 150)</code> when ReAct is on
+              </li>
+              <li>
+                Post-run activity logs and plan verification with up to 2 enforcement re-prompts
+                (#137)
+              </li>
+            </ul>
           </div>
-          <p>
-            Coordinator (ReAct) mode turns Bernard into an iterative thinker. With
-            <code>BERNARD_REACT_MODE=true</code>, every turn runs a think&nbsp;&rarr;&nbsp;act&nbsp;&rarr;&nbsp;evaluate&nbsp;&rarr;&nbsp;decide
-            loop with new <code>plan</code>, <code>think</code>, and <code>evaluate</code> tools.
-            The step budget triples (capped at 150) so multi-step plans actually finish, and a
-            post-run verifier re-checks the plan if any step is still unresolved. Turn it on for
-            hard tasks; leave it off for chat &mdash; you can flip the toggle live in
-            <code>/agent-options</code>.
-          </p>
-          <div class="terminal">
-            <div class="terminal-bar">
-              <div class="terminal-dot"></div>
-              <div class="terminal-dot"></div>
-              <div class="terminal-dot"></div>
-              <span class="terminal-title">bernard</span>
-            </div>
-            <div class="terminal-body">
-              <span class="prompt">bernard&gt;</span> /agent-options<br />
-              &nbsp;&nbsp;ReAct (coordinator) mode&nbsp;&nbsp;<span class="success">[on]</span><br />
-              <br />
-              <span class="prompt">bernard&gt;</span> ship a release: build, test, tag, push<br />
-              &nbsp;&nbsp;&#x25B6; plan: 4 steps drafted<br />
-              &nbsp;&nbsp;&#x25B6; think: tests must pass before tagging<br />
-              &nbsp;&nbsp;&#x25B6; shell: npm test &mdash; <span class="success">2074 passed</span><br />
-              &nbsp;&nbsp;&#x25B6; evaluate: step 1/4 done, advancing<br />
-              &nbsp;&nbsp;&hellip; (think &rarr; act &rarr; evaluate, repeated)<br />
-              &nbsp;&nbsp;<span class="success">&#x2713;</span> all 4 steps verified
-            </div>
-          </div>
-          <ul>
-            <li>
-              Coordinator / ReAct loop with <code>plan</code>, <code>think</code>,
-              <code>evaluate</code> tools (#117)
-            </li>
-            <li>
-              Per-turn step budget grows to <code>min(BERNARD_MAX_STEPS &times; 3, 150)</code> when
-              ReAct is on
-            </li>
-            <li>Post-run activity logs and plan verification with up to 2 enforcement re-prompts (#137)</li>
-          </ul>
-        </div>
 
-        <!-- Theme: New UI surface -->
-        <div class="feature feature-wide">
-          <div class="feature-header">
-            <div class="feature-icon">
-              <!-- monitor icon -->
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                style="fill: none; stroke: var(--accent)"
-              >
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                <line x1="8" y1="21" x2="16" y2="21"></line>
-                <line x1="12" y1="17" x2="12" y2="21"></line>
-              </svg>
+          <!-- Theme: New UI surface -->
+          <div class="feature feature-wide">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <!-- monitor icon -->
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                  <line x1="8" y1="21" x2="16" y2="21"></line>
+                  <line x1="12" y1="17" x2="12" y2="21"></line>
+                </svg>
+              </div>
+              <h2>New UI surface <span class="tag">new</span></h2>
             </div>
-            <h2>New UI surface <span class="tag">new</span></h2>
+            <p>
+              Menus are now arrow-key driven by default. Bernard pins the menu region with
+              <code>setPinnedRegion</code>, you move with arrows or digits 1&ndash;9, and Enter
+              commits. Non-TTY environments and <code>BERNARD_PLAIN_MENU=1</code> still get the
+              classic numbered prompt as a fallback.
+              <code>/image &lt;path&gt; [prompt]</code> attaches an image to the next turn, and a
+              <code>/options tool-details</code> toggle collapses the per-call tool noise into
+              compact one-liners.
+            </p>
+            <div class="terminal">
+              <div class="terminal-bar">
+                <div class="terminal-dot"></div>
+                <div class="terminal-dot"></div>
+                <div class="terminal-dot"></div>
+                <span class="terminal-title">bernard</span>
+              </div>
+              <div class="terminal-body">
+                <span class="prompt">bernard&gt;</span> /image ./screenshot.png describe this UI<br />
+                <span class="muted">// attached: screenshot.png (412 KB)</span><br />
+                &nbsp;&nbsp;&#x25B6; reading image &hellip;<br />
+                &nbsp;&nbsp;&#x2514;&#x2500; A dark dashboard with three tabs: Memory, Cron, MCP.
+                The Memory tab&hellip;<br />
+                <br />
+                <span class="prompt">bernard&gt;</span> /theme<br />
+                &nbsp;&nbsp;<span class="muted">? Pick a theme &mdash; &uarr;/&darr; Enter</span
+                ><br />
+                &nbsp;&nbsp;&#x276F; <span class="success">bernard</span><br />
+                &nbsp;&nbsp;&nbsp;&nbsp;ocean<br />
+                &nbsp;&nbsp;&nbsp;&nbsp;forest<br />
+                &nbsp;&nbsp;&nbsp;&nbsp;synthwave
+              </div>
+            </div>
+            <ul>
+              <li>
+                Arrow-key menu component with <code>BERNARD_PLAIN_MENU</code> fallback (#113, #132)
+              </li>
+              <li>Image attachment via <code>/image</code> on vision-capable models (#112)</li>
+              <li>
+                <code>/options tool-details</code> compact / verbose toggle &mdash;
+                <code>BERNARD_TOOL_DETAILS</code> (#119)
+              </li>
+            </ul>
           </div>
-          <p>
-            Menus are now arrow-key driven by default. Bernard pins the menu region with
-            <code>setPinnedRegion</code>, you move with arrows or digits 1&ndash;9, and Enter
-            commits. Non-TTY environments and <code>BERNARD_PLAIN_MENU=1</code> still get the
-            classic numbered prompt as a fallback. <code>/image &lt;path&gt; [prompt]</code>
-            attaches an image to the next turn, and a <code>/options tool-details</code> toggle
-            collapses the per-call tool noise into compact one-liners.
-          </p>
-          <div class="terminal">
-            <div class="terminal-bar">
-              <div class="terminal-dot"></div>
-              <div class="terminal-dot"></div>
-              <div class="terminal-dot"></div>
-              <span class="terminal-title">bernard</span>
-            </div>
-            <div class="terminal-body">
-              <span class="prompt">bernard&gt;</span> /image ./screenshot.png describe this UI<br />
-              <span class="muted">// attached: screenshot.png (412 KB)</span><br />
-              &nbsp;&nbsp;&#x25B6; reading image &hellip;<br />
-              &nbsp;&nbsp;&#x2514;&#x2500; A dark dashboard with three tabs: Memory, Cron, MCP. The
-              Memory tab&hellip;<br />
-              <br />
-              <span class="prompt">bernard&gt;</span> /theme<br />
-              &nbsp;&nbsp;<span class="muted">? Pick a theme &mdash; &uarr;/&darr; Enter</span><br />
-              &nbsp;&nbsp;&#x276F; <span class="success">bernard</span><br />
-              &nbsp;&nbsp;&nbsp;&nbsp;ocean<br />
-              &nbsp;&nbsp;&nbsp;&nbsp;forest<br />
-              &nbsp;&nbsp;&nbsp;&nbsp;synthwave
-            </div>
-          </div>
-          <ul>
-            <li>Arrow-key menu component with <code>BERNARD_PLAIN_MENU</code> fallback (#113, #132)</li>
-            <li>Image attachment via <code>/image</code> on vision-capable models (#112)</li>
-            <li>
-              <code>/options tool-details</code> compact / verbose toggle &mdash;
-              <code>BERNARD_TOOL_DETAILS</code> (#119)
-            </li>
-          </ul>
-        </div>
 
-        <!-- Theme: Operators & infra -->
-        <div class="feature feature-wide">
-          <div class="feature-header">
-            <div class="feature-icon">
-              <!-- server icon -->
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                style="fill: none; stroke: var(--accent)"
-              >
-                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
-                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
-                <line x1="6" y1="6" x2="6.01" y2="6"></line>
-                <line x1="6" y1="18" x2="6.01" y2="18"></line>
-              </svg>
+          <!-- Theme: Operators & infra -->
+          <div class="feature feature-wide">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <!-- server icon -->
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                  <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                  <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                  <line x1="6" y1="18" x2="6.01" y2="18"></line>
+                </svg>
+              </div>
+              <h2>Operators &amp; infra <span class="tag">new</span></h2>
             </div>
-            <h2>Operators &amp; infra <span class="tag">new</span></h2>
+            <p>
+              A new tool augmentation layer wraps every tool's <code>execute</code> to observe
+              errors and patch the system prompt with concrete bad-example fixes &mdash; no
+              hallucination, only real observed failures. Shell commands are split into
+              sub-categories (<code>shell.git</code>, <code>shell.gh</code>,
+              <code>shell.docker</code>, <code>shell.npm</code>, <code>shell.fs</code>,
+              <code>shell.http</code>) so guidance stays scoped. Cron jobs gained persistent notes:
+              the daemon injects <code>cron_notes_read</code> / <code>cron_notes_write</code> scoped
+              to the current job so long-running schedules don't redo work after restarts.
+            </p>
+            <div class="terminal">
+              <div class="terminal-bar">
+                <div class="terminal-dot"></div>
+                <div class="terminal-dot"></div>
+                <div class="terminal-dot"></div>
+                <span class="terminal-title">bernard</span>
+              </div>
+              <div class="terminal-body">
+                <span class="muted"
+                  >// In a cron job, Bernard reads notes from the previous run:</span
+                ><br />
+                &nbsp;&nbsp;&#x25B6; cron_notes_read &mdash; 3 entries<br />
+                &nbsp;&nbsp;&nbsp;&nbsp;1. last sync cursor: 2026-05-07T03:14Z<br />
+                &nbsp;&nbsp;&nbsp;&nbsp;2. skip account #482 &mdash; flagged for review<br />
+                &nbsp;&nbsp;&nbsp;&nbsp;3. retry budget reset to 0<br />
+                &nbsp;&nbsp;&#x25B6; sync_accounts { since: "2026-05-07T03:14Z" }<br />
+                &nbsp;&nbsp;&#x25B6; cron_notes_write { entry: "synced 12 accounts, cursor &rarr;
+                &hellip;" }<br />
+                &nbsp;&nbsp;<span class="success">&#x2713;</span> run finished &mdash; notes saved
+              </div>
+            </div>
+            <ul>
+              <li>
+                Tool augmentation layer with auto-learned bad-example fixes &mdash; tool-wrapper
+                specialists (<code>shell-wrapper</code>, <code>file-wrapper</code>,
+                <code>web-wrapper</code>), correction agent, and specialist creator (#111)
+              </li>
+              <li>
+                Cron persistent notes: per-job JSON store, 100-entry cap, atomic writes, and a
+                <code>## Notes written during this run</code> section in
+                <code>cron_logs_get</code> (#130)
+              </li>
+            </ul>
           </div>
-          <p>
-            A new tool augmentation layer wraps every tool's <code>execute</code> to observe errors
-            and patch the system prompt with concrete bad-example fixes &mdash; no hallucination,
-            only real observed failures. Shell commands are split into sub-categories
-            (<code>shell.git</code>, <code>shell.gh</code>, <code>shell.docker</code>,
-            <code>shell.npm</code>, <code>shell.fs</code>, <code>shell.http</code>) so guidance
-            stays scoped. Cron jobs gained persistent notes: the daemon injects
-            <code>cron_notes_read</code> / <code>cron_notes_write</code> scoped to the current job
-            so long-running schedules don't redo work after restarts.
-          </p>
-          <div class="terminal">
-            <div class="terminal-bar">
-              <div class="terminal-dot"></div>
-              <div class="terminal-dot"></div>
-              <div class="terminal-dot"></div>
-              <span class="terminal-title">bernard</span>
-            </div>
-            <div class="terminal-body">
-              <span class="muted">// In a cron job, Bernard reads notes from the previous run:</span><br />
-              &nbsp;&nbsp;&#x25B6; cron_notes_read &mdash; 3 entries<br />
-              &nbsp;&nbsp;&nbsp;&nbsp;1. last sync cursor: 2026-05-07T03:14Z<br />
-              &nbsp;&nbsp;&nbsp;&nbsp;2. skip account #482 &mdash; flagged for review<br />
-              &nbsp;&nbsp;&nbsp;&nbsp;3. retry budget reset to 0<br />
-              &nbsp;&nbsp;&#x25B6; sync_accounts { since: "2026-05-07T03:14Z" }<br />
-              &nbsp;&nbsp;&#x25B6; cron_notes_write { entry: "synced 12 accounts, cursor &rarr; &hellip;" }<br />
-              &nbsp;&nbsp;<span class="success">&#x2713;</span> run finished &mdash; notes saved
-            </div>
-          </div>
-          <ul>
-            <li>
-              Tool augmentation layer with auto-learned bad-example fixes &mdash; tool-wrapper
-              specialists (<code>shell-wrapper</code>, <code>file-wrapper</code>,
-              <code>web-wrapper</code>), correction agent, and specialist creator (#111)
-            </li>
-            <li>
-              Cron persistent notes: per-job JSON store, 100-entry cap, atomic writes, and a
-              <code>## Notes written during this run</code> section in <code>cron_logs_get</code> (#130)
-            </li>
-          </ul>
-        </div>
 
-        <!-- Reliability & polish -->
-        <div class="feature feature-wide">
-          <div class="feature-header">
-            <div class="feature-icon">
-              <!-- check-circle icon -->
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                style="fill: none; stroke: var(--accent)"
-              >
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-                <polyline points="22 4 12 14.01 9 11.01"></polyline>
-              </svg>
+          <!-- Reliability & polish -->
+          <div class="feature feature-wide">
+            <div class="feature-header">
+              <div class="feature-icon">
+                <!-- check-circle icon -->
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  style="fill: none; stroke: var(--accent)"
+                >
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                  <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+              </div>
+              <h2>Reliability &amp; polish <span class="tag">fix</span></h2>
             </div>
-            <h2>Reliability &amp; polish <span class="tag">fix</span></h2>
+            <ul>
+              <li>
+                Auto-create startup race fixed &mdash; pending candidates are promoted on enable
+                (#135)
+              </li>
+              <li>Critic and ReAct toggles now have round-trip test coverage (#129)</li>
+              <li>
+                MCP-tool schema extraction handles both <code>jsonSchema</code> and the
+                <code>_jsonSchema</code> shape produced by <code>@ai-sdk/ui-utils</code>
+              </li>
+              <li>
+                Reference-lookup timeout enforced via <code>Promise.race</code> against a real timer
+                &mdash; resilient to tools that ignore <code>abortSignal</code>
+              </li>
+            </ul>
           </div>
-          <ul>
-            <li>Auto-create startup race fixed &mdash; pending candidates are promoted on enable (#135)</li>
-            <li>Critic and ReAct toggles now have round-trip test coverage (#129)</li>
-            <li>
-              MCP-tool schema extraction handles both <code>jsonSchema</code> and the
-              <code>_jsonSchema</code> shape produced by <code>@ai-sdk/ui-utils</code>
-            </li>
-            <li>
-              Reference-lookup timeout enforced via <code>Promise.race</code> against a real timer
-              &mdash; resilient to tools that ignore <code>abortSignal</code>
-            </li>
-          </ul>
-        </div>
         </div>
         <!-- /feature-grid (themes) -->
 
@@ -1107,16 +1133,18 @@
                   style="fill: none; stroke: var(--accent)"
                 >
                   <polyline points="22 12 16 12 14 15 10 15 8 12 2 12"></polyline>
-                  <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path>
+                  <path
+                    d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"
+                  ></path>
                 </svg>
               </div>
               <h2><code>tool_wrapper_run</code> dispatch</h2>
             </div>
             <p>
-              The main agent talks to specialists through one strict-typed dispatch tool.
-              Each call is isolated to its <code>targetTools</code> &mdash; the
-              <code>shell-wrapper</code> can't accidentally browse the web. Output is
-              guaranteed JSON: <code>{status, result, error?, reasoning?}</code>.
+              The main agent talks to specialists through one strict-typed dispatch tool. Each call
+              is isolated to its <code>targetTools</code> &mdash; the
+              <code>shell-wrapper</code> can't accidentally browse the web. Output is guaranteed
+              JSON: <code>{status, result, error?, reasoning?}</code>.
             </p>
           </div>
 
@@ -1142,9 +1170,9 @@
             </div>
             <p>
               A new built-in <code>web_search</code> tool tries Brave first
-              (<code>BRAVE_API_KEY</code>), falls back to Tavily
-              (<code>TAVILY_API_KEY</code>), and finally to a DuckDuckGo scrape so search
-              keeps working without keys. Returns <code>[{title, url, snippet}]</code>.
+              (<code>BRAVE_API_KEY</code>), falls back to Tavily (<code>TAVILY_API_KEY</code>), and
+              finally to a DuckDuckGo scrape so search keeps working without keys. Returns
+              <code>[{title, url, snippet}]</code>.
             </p>
           </div>
 
@@ -1171,11 +1199,10 @@
               <h2>Correction loop with validation</h2>
             </div>
             <p>
-              When a tool-wrapper returns <code>status: 'error'</code>, the args land in a
-              candidate queue. At REPL shutdown the <code>correction-agent</code> proposes a
-              fix and <em>actually executes</em> it via <code>tool_wrapper_run</code>. Only
-              validated fixes get appended to the specialist's good/bad examples (capped at
-              10 each).
+              When a tool-wrapper returns <code>status: 'error'</code>, the args land in a candidate
+              queue. At REPL shutdown the <code>correction-agent</code> proposes a fix and
+              <em>actually executes</em> it via <code>tool_wrapper_run</code>. Only validated fixes
+              get appended to the specialist's good/bad examples (capped at 10 each).
             </p>
           </div>
 
@@ -1204,9 +1231,9 @@
             </div>
             <p>
               Every tool-wrapper run appends one JSONL entry to
-              <code>logs/tool-wrappers.jsonl</code>. Easy to <code>jq</code>, easy to grep,
-              easy to ship to a log aggregator. Pairs naturally with the new post-run
-              activity logs to give you a full audit trail of what Bernard actually did.
+              <code>logs/tool-wrappers.jsonl</code>. Easy to <code>jq</code>, easy to grep, easy to
+              ship to a log aggregator. Pairs naturally with the new post-run activity logs to give
+              you a full audit trail of what Bernard actually did.
             </p>
           </div>
 
@@ -1232,10 +1259,10 @@
               <h2>OS-aware tool prompts</h2>
             </div>
             <p>
-              <code>osPromptBlock()</code> detects the host OS and injects shell hints
-              (Linux, macOS, Windows) into every tool-wrapper system prompt &mdash; so the
-              <code>shell-wrapper</code> doesn't suggest <code>brew</code> on Ubuntu or
-              GNU-only flags on macOS.
+              <code>osPromptBlock()</code> detects the host OS and injects shell hints (Linux,
+              macOS, Windows) into every tool-wrapper system prompt &mdash; so the
+              <code>shell-wrapper</code> doesn't suggest <code>brew</code> on Ubuntu or GNU-only
+              flags on macOS.
             </p>
           </div>
 
@@ -1253,16 +1280,18 @@
                   stroke-linejoin="round"
                   style="fill: none; stroke: var(--accent)"
                 >
-                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                  <path
+                    d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"
+                  ></path>
                 </svg>
               </div>
               <h2>XDG paths everywhere</h2>
             </div>
             <p>
               All file paths now follow the XDG Base Directory Specification, centralized in
-              <code>src/paths.ts</code>. Set <code>BERNARD_HOME</code> for the legacy flat
-              layout. Existing <code>~/.bernard/</code> installs auto-migrate on first run
-              and leave a <code>MIGRATED</code> marker behind.
+              <code>src/paths.ts</code>. Set <code>BERNARD_HOME</code> for the legacy flat layout.
+              Existing <code>~/.bernard/</code> installs auto-migrate on first run and leave a
+              <code>MIGRATED</code> marker behind.
             </p>
           </div>
 
@@ -1287,10 +1316,10 @@
               <h2>Sub-agent context guard</h2>
             </div>
             <p>
-              <code>BERNARD_SUBAGENT_RESULT_MAX_CHARS</code> (default 4000) caps how much of
-              a sub-agent or specialist's output gets fed back into the parent context. The
-              user still sees the full output in the terminal &mdash; only the parent's
-              memory budget gets protected.
+              <code>BERNARD_SUBAGENT_RESULT_MAX_CHARS</code> (default 4000) caps how much of a
+              sub-agent or specialist's output gets fed back into the parent context. The user still
+              sees the full output in the terminal &mdash; only the parent's memory budget gets
+              protected.
             </p>
           </div>
         </div>

@@ -804,7 +804,10 @@
 <span class="accent">$</span> bernard providers</code></pre>
         <p>
           Bernard follows the
-          <a href="https://specifications.freedesktop.org/basedir/latest/" target="_blank" rel="noopener noreferrer"
+          <a
+            href="https://specifications.freedesktop.org/basedir/latest/"
+            target="_blank"
+            rel="noopener noreferrer"
             >XDG Base Directory Specification</a
           >. Default locations:
         </p>
@@ -814,13 +817,11 @@
             <code>keys.json</code> (0600), <code>.env</code>, <code>mcp.json</code>
           </li>
           <li>
-            <code>~/.local/share/bernard/</code> &mdash; <code>memory/</code>,
-            <code>rag/</code>, <code>routines/</code>, <code>specialists/</code>,
-            <code>tool-profiles/</code>, <code>cron/</code>
+            <code>~/.local/share/bernard/</code> &mdash; <code>memory/</code>, <code>rag/</code>,
+            <code>routines/</code>, <code>specialists/</code>, <code>tool-profiles/</code>,
+            <code>cron/</code>
           </li>
-          <li>
-            <code>~/.cache/bernard/</code> &mdash; embeddings models, update-check cache
-          </li>
+          <li><code>~/.cache/bernard/</code> &mdash; embeddings models, update-check cache</li>
           <li>
             <code>~/.local/state/bernard/</code> &mdash; conversation history, logs, daemon PID
           </li>
@@ -962,8 +963,9 @@
               <tr>
                 <td><code>BERNARD_REACT_MODE</code> <span class="vtag">v0.9.0+</span></td>
                 <td>
-                  Coordinator (ReAct) mode &mdash; think&nbsp;&rarr;&nbsp;act&nbsp;&rarr;&nbsp;evaluate&nbsp;&rarr;&nbsp;decide
-                  loop. Per-turn step budget grows to <code>min(BERNARD_MAX_STEPS &times; 3, 150)</code>.
+                  Coordinator (ReAct) mode &mdash;
+                  think&nbsp;&rarr;&nbsp;act&nbsp;&rarr;&nbsp;evaluate&nbsp;&rarr;&nbsp;decide loop.
+                  Per-turn step budget grows to <code>min(BERNARD_MAX_STEPS &times; 3, 150)</code>.
                 </td>
                 <td><code>false</code></td>
               </tr>
@@ -1040,8 +1042,8 @@
               <tr>
                 <td><code>TAVILY_API_KEY</code></td>
                 <td>
-                  Optional &mdash; Tavily API key for <code>web_search</code> (fallback when Brave is
-                  absent)
+                  Optional &mdash; Tavily API key for <code>web_search</code> (fallback when Brave
+                  is absent)
                 </td>
                 <td>&mdash;</td>
               </tr>
@@ -1073,8 +1075,8 @@
             <strong>Current working directory</strong> &mdash; <code>./.env</code> (checked first)
           </li>
           <li>
-            <strong>XDG config</strong> &mdash; <code>$XDG_CONFIG_HOME/bernard/.env</code>
-            (defaults to <code>~/.config/bernard/.env</code>)
+            <strong>XDG config</strong> &mdash; <code>$XDG_CONFIG_HOME/bernard/.env</code> (defaults
+            to <code>~/.config/bernard/.env</code>)
           </li>
           <li>
             <strong>Legacy</strong> &mdash; <code>~/.bernard/.env</code> (fallback for migrations
@@ -1464,8 +1466,8 @@
 
         <h3 id="tool-memory">Memory</h3>
         <p>
-          Persistent, disk-backed storage at <code>~/.local/share/bernard/memory/</code>. Survives across
-          sessions. The agent can list, read, write, and delete memory entries by key.
+          Persistent, disk-backed storage at <code>~/.local/share/bernard/memory/</code>. Survives
+          across sessions. The agent can list, read, write, and delete memory entries by key.
         </p>
         <p>
           Use this for things like project conventions, server addresses, or personal preferences.
@@ -1561,9 +1563,7 @@
             Supported formats: PNG, JPEG, GIF, WebP &mdash; resolved relative to the current working
             directory
           </li>
-          <li>
-            Optional inline prompt: <code>/image diagram.png explain the data flow</code>
-          </li>
+          <li>Optional inline prompt: <code>/image diagram.png explain the data flow</code></li>
           <li>
             Switch to a vision-capable model with <code>/model</code> first if your current default
             doesn't support images
@@ -2008,9 +2008,7 @@
         </p>
 
         <h3 id="references-resolver">Resolver</h3>
-        <p>
-          A short LLM pass returns one of four outcomes:
-        </p>
+        <p>A short LLM pass returns one of four outcomes:</p>
         <ul>
           <li>
             <code>resolved</code> &mdash; the entity matches one memory; Bernard inlines the value
@@ -2023,7 +2021,9 @@
             <code>unknown</code> &mdash; no match; Bernard either tries a tool lookup (see below) or
             asks for free-form text
           </li>
-          <li><code>noop</code> &mdash; no entities to resolve, or the LLM call failed (fail-open)</li>
+          <li>
+            <code>noop</code> &mdash; no entities to resolve, or the LLM call failed (fail-open)
+          </li>
         </ul>
         <p>
           Confirmed answers are written to <code>memory/rewriter-hints.md</code> so the same
@@ -2034,11 +2034,11 @@
         <p>
           When the resolver returns <code>unknown</code> and
           <code>BERNARD_REFERENCE_LOOKUP</code> is on (the default), Bernard picks one read-only
-          allowlisted tool &mdash; e.g.&nbsp;<code>contacts__search</code>,
-          <code>web_search</code>, an MCP <code>*_list</code> / <code>*_read</code> &mdash; and runs
-          it with a hard 5-second timeout enforced via <code>Promise.race</code> against a real
-          timer (resilient to tools that ignore <code>abortSignal</code>). The result is parsed into
-          one of <code>none</code> / <code>found</code> / <code>ambiguous</code>; on
+          allowlisted tool &mdash; e.g.&nbsp;<code>contacts__search</code>, <code>web_search</code>,
+          an MCP <code>*_list</code> / <code>*_read</code> &mdash; and runs it with a hard 5-second
+          timeout enforced via <code>Promise.race</code> against a real timer (resilient to tools
+          that ignore <code>abortSignal</code>). The result is parsed into one of
+          <code>none</code> / <code>found</code> / <code>ambiguous</code>; on
           <code>found</code> Bernard shows a Save / Edit / Skip menu before persisting to memory.
           Every stage fails open &mdash; if anything goes wrong, you simply get the original prompt
           for the value.
@@ -2055,18 +2055,18 @@
           <code>src/providers/profiles.ts</code>. Resolved entities can be inlined inline, jargon is
           smoothed, and instructions are normalised. Temperature is 0, output falls back to the
           original prompt on any error, and the toggle lives at
-          <code>BERNARD_PROMPT_REWRITER</code> (also flippable from
-          <code>/agent-options</code>).
+          <code>BERNARD_PROMPT_REWRITER</code> (also flippable from <code>/agent-options</code>).
         </p>
 
         <!-- ═══════════════ 11. Coordinator (ReAct) Mode ═══════════════ -->
         <h2 id="react">11. Coordinator (ReAct) Mode <span class="vtag">v0.9.0+</span></h2>
         <p>
-          Coordinator mode turns each turn into a structured think&nbsp;&rarr;&nbsp;act&nbsp;&rarr;&nbsp;evaluate&nbsp;&rarr;&nbsp;decide
-          loop. Bernard plans the work with a <code>plan</code> tool, talks itself through the
-          rationale with <code>think</code>, and re-checks the plan after each step with
-          <code>evaluate</code>. It's slower per turn but dramatically better at multi-step work
-          that combines tool calls and reasoning.
+          Coordinator mode turns each turn into a structured
+          think&nbsp;&rarr;&nbsp;act&nbsp;&rarr;&nbsp;evaluate&nbsp;&rarr;&nbsp;decide loop. Bernard
+          plans the work with a <code>plan</code> tool, talks itself through the rationale with
+          <code>think</code>, and re-checks the plan after each step with <code>evaluate</code>.
+          It's slower per turn but dramatically better at multi-step work that combines tool calls
+          and reasoning.
         </p>
         <ul>
           <li>
@@ -2075,14 +2075,17 @@
           </li>
           <li>
             Per-turn step budget grows to
-            <code>min(BERNARD_MAX_STEPS &times; 3, 150)</code> &mdash; sub-agents and specialists are
-            unaffected
+            <code>min(BERNARD_MAX_STEPS &times; 3, 150)</code> &mdash; sub-agents and specialists
+            are unaffected
           </li>
           <li>
             Worst-case step count per turn is <code>effectiveMaxSteps &times; 3</code>; the
             enforcement loop may re-prompt up to 2 extra times if a plan step is still unresolved
           </li>
-          <li>New tools available to the agent: <code>plan</code>, <code>think</code>, <code>evaluate</code></li>
+          <li>
+            New tools available to the agent: <code>plan</code>, <code>think</code>,
+            <code>evaluate</code>
+          </li>
         </ul>
         <div class="callout callout-tip">
           <div class="callout-title">When to use</div>
@@ -2228,8 +2231,8 @@
           Notes live in <code>~/.local/share/bernard/cron/notes/&lt;job-id&gt;.json</code>, capped
           at 100 entries per job with atomic writes. Anything written during a run is appended to
           the matching <code>cron_logs_get</code> output as a
-          <code>## Notes written during this run</code> section, so you can read the run log and
-          the notes in one place.
+          <code>## Notes written during this run</code> section, so you can read the run log and the
+          notes in one place.
         </p>
 
         <h3 id="cron-cli">CLI Commands</h3>
