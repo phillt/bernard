@@ -5,6 +5,9 @@ import { getTheme } from './theme.js';
 /** Pinned-region id used by the interactive menu. Exported for tests. */
 export const MENU_REGION_ID = 'menu';
 
+/** Pinned-region id used by promptValue() to display optional header lines. */
+const PROMPT_HEADER_REGION_ID = 'prompt-header';
+
 const DIGIT_KEY_RE = /^[1-9]$/;
 
 /** Minimal shape of the keypress events emitted by node:readline. */
@@ -43,12 +46,23 @@ export interface MenuOptions {
   promptLabel?: string;
   /** Optional heading rendered inside the ephemeral menu block. */
   title?: string;
+  /**
+   * Optional header lines pinned above the title. Rendered inside the menu's
+   * own pinned region so they update atomically with the menu, never leaking
+   * into scrollback as the menu repaints.
+   */
+  headerLines?: string[];
 }
 
 /** Options for promptValue(). */
 export interface ValuePromptOptions {
   /** Prompt label, e.g. "New value for max-tokens". */
   label: string;
+  /**
+   * Optional header lines printed above the prompt. Use to provide context
+   * (e.g. an ask_user progress strip).
+   */
+  headerLines?: string[];
 }
 
 /** Result from selectFromMenu(). */
@@ -164,6 +178,10 @@ async function legacySelect(
   options: MenuOptions | undefined,
   signal: AbortSignal | undefined,
 ): Promise<SelectResult> {
+  if (options?.headerLines && options.headerLines.length > 0) {
+    for (const headerLine of options.headerLines) printInfo(headerLine);
+    printInfo('');
+  }
   if (options?.title) {
     printInfo(`\n  ${options.title}\n`);
   }
@@ -207,6 +225,11 @@ export function renderMenuLines(
 ): string[] {
   const { accent, accentBold, dim, muted } = getTheme();
   const lines: string[] = [];
+
+  if (options?.headerLines && options.headerLines.length > 0) {
+    for (const headerLine of options.headerLines) lines.push(headerLine);
+    lines.push('');
+  }
 
   if (options?.title) {
     lines.push(`  ${accentBold(options.title)}`);
@@ -376,11 +399,18 @@ export async function promptValue(
   const { ansi } = getTheme();
   const promptStr = `  ${ansi.prompt}${options.label}${ansi.reset} (Enter or Esc to cancel): `;
 
-  const answer = await questionWithSignal(rl, promptStr, signal);
-  if (answer === null || answer.trim() === '') {
-    printInfo('  Cancelled.');
-    return { cancelled: true };
+  const hasHeader = options.headerLines && options.headerLines.length > 0;
+  if (hasHeader) {
+    setPinnedRegion(PROMPT_HEADER_REGION_ID, [...options.headerLines!, '']);
   }
-
-  return { cancelled: false, raw: answer.trim() };
+  try {
+    const answer = await questionWithSignal(rl, promptStr, signal);
+    if (answer === null || answer.trim() === '') {
+      printInfo('  Cancelled.');
+      return { cancelled: true };
+    }
+    return { cancelled: false, raw: answer.trim() };
+  } finally {
+    if (hasHeader) clearPinnedRegion(PROMPT_HEADER_REGION_ID);
+  }
 }

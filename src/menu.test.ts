@@ -500,6 +500,28 @@ describe('renderMenuLines', () => {
     expect(lines.some((l) => /3\. Blue/.test(l))).toBe(true);
     expect(lines.some((l) => /4\. Purple/.test(l))).toBe(true);
   });
+
+  it('prepends headerLines above the title with a blank separator', () => {
+    const lines = renderMenuLines(simpleEntries, 0, {
+      title: 'Pick one',
+      headerLines: ['  >1< 2 3'],
+    });
+    expect(lines[0]).toBe('  >1< 2 3');
+    expect(lines[1]).toBe('');
+    expect(lines[2]).toContain('Pick one');
+  });
+
+  it('prepends headerLines even when title is omitted', () => {
+    const lines = renderMenuLines(simpleEntries, 0, { headerLines: ['  >1< 2 3'] });
+    expect(lines[0]).toBe('  >1< 2 3');
+    expect(lines[1]).toBe('');
+    expect(lines[2]).toContain('1. Alpha');
+  });
+
+  it('ignores an empty headerLines array', () => {
+    const lines = renderMenuLines(simpleEntries, 0, { headerLines: [] });
+    expect(lines[0]).toContain('1. Alpha');
+  });
 });
 
 describe('buildLegacyLines', () => {

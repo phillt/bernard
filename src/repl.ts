@@ -41,7 +41,7 @@ import {
   formatTokenCount,
   type SpinnerStats,
 } from './output.js';
-import type { ToolOptions } from './tools';
+import type { ToolOptions, AskUserQuestion } from './tools/types.js';
 import {
   PROVIDER_MODELS,
   getAvailableProviders,
@@ -809,21 +809,84 @@ export async function startRepl(
     ...mcpTools,
   };
 
-  const confirmFn = (command: string): Promise<boolean> => {
-    return new Promise((resolve) => {
-      const { ansi } = getTheme();
-      rl.question(
-        `${ansi.warning}  ⚠ Dangerous command: ${command}\n  Allow? (y/N): ${ansi.reset}`,
-        (answer) => {
-          resolve(answer.trim().toLowerCase() === 'y');
-        },
-      );
-    });
+  // The thinking-spinner repaints stdout every 80 ms and would blank any
+  // interactive prompt, so callers that need to talk to the user must run
+  // through this helper to stop the spinner first and restart it after.
+  const withPausedSpinner = async <T>(
+    signal: AbortSignal | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> => {
+    stopSpinner();
+    try {
+      return await fn();
+    } finally {
+      // Skip restart when the turn is over or aborted — nothing left to think about.
+      if (processing && !signal?.aborted) {
+        resumeSpinner();
+      }
+    }
   };
+
+  const confirmFn = (command: string, signal?: AbortSignal): Promise<boolean> =>
+    withPausedSpinner(signal, async () => {
+      const result = await selectFromMenu(
+        rl,
+        [{ label: 'Allow once' }, { label: 'Cancel' }],
+        { title: `⚠ Dangerous command: ${command}` },
+        signal,
+      );
+      return !result.cancelled && result.index === 0;
+    });
+
+  const renderTabStrip = (currentIndex: number, total: number): string => {
+    const theme = getTheme();
+    const tabs: string[] = [];
+    for (let i = 0; i < total; i++) {
+      const num = String(i + 1);
+      if (i < currentIndex) tabs.push(theme.success(`${num} ✓`));
+      else if (i === currentIndex) tabs.push(theme.accentBold(`▸${num}◂`));
+      else tabs.push(theme.dim(num));
+    }
+    return '  ' + tabs.join('   ');
+  };
+
+  const askSingleQuestion = async (
+    q: AskUserQuestion,
+    headerLines: string[] | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<string | null> => {
+    if (!q.choices || q.choices.length === 0) {
+      const r = await promptValue(rl, { label: q.question, headerLines }, signal);
+      return r.cancelled ? null : r.raw;
+    }
+    const entries = q.choices.map((label) => ({ label }));
+    if (q.allowOther) entries.push({ label: q.otherLabel ?? 'Other (type a custom answer)' });
+    const r = await selectFromMenu(rl, entries, { title: q.question, headerLines }, signal);
+    if (r.cancelled) return null;
+    if (q.allowOther && r.index === q.choices.length) {
+      const free = await promptValue(rl, { label: q.question, headerLines }, signal);
+      return free.cancelled ? null : free.raw;
+    }
+    return q.choices[r.index];
+  };
+
+  const askUserFn: NonNullable<ToolOptions['askUser']> = (questions, signal) =>
+    withPausedSpinner(signal, async () => {
+      const answered: string[] = [];
+      const showTabs = questions.length > 1;
+      for (let i = 0; i < questions.length; i++) {
+        const headerLines = showTabs ? [renderTabStrip(i, questions.length)] : undefined;
+        const answer = await askSingleQuestion(questions[i], headerLines, signal);
+        if (answer === null) return { cancelled: true, answered };
+        answered.push(answer);
+      }
+      return { answers: answered };
+    });
 
   const toolOptions: ToolOptions = {
     shellTimeout: config.shellTimeout,
     confirmDangerous: confirmFn,
+    askUser: askUserFn,
   };
 
   const historyStore = new HistoryStore();
@@ -961,6 +1024,11 @@ export async function startRepl(
     await mcpManager.close();
   };
 
+  // Tracks the SpinnerStats for the in-flight turn so resumeSpinner() can
+  // re-attach the spinner after a pause (e.g. an ask_user prompt) without
+  // resetting startTime or the running token totals.
+  let activeSpinnerStats: SpinnerStats | null = null;
+
   function initSpinner(): void {
     const spinnerStats: SpinnerStats = {
       startTime: Date.now(),
@@ -970,8 +1038,18 @@ export async function startRepl(
       model: config.model,
       contextWindowOverride: config.tokenWindow || undefined,
     };
+    activeSpinnerStats = spinnerStats;
     agent.setSpinnerStats(spinnerStats);
     startSpinner(() => buildSpinnerMessage(spinnerStats));
+  }
+
+  function resumeSpinner(): void {
+    const stats = activeSpinnerStats;
+    if (!stats) {
+      initSpinner();
+      return;
+    }
+    startSpinner(() => buildSpinnerMessage(stats));
   }
 
   async function runGuidedCreation(message: string): Promise<void> {
