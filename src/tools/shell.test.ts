@@ -77,6 +77,26 @@ describe('isSafelisted', () => {
     expect(isSafelisted(`rm -rf $(echo ${bernardA})`)).toBe(false);
   });
 
+  it('rejects path-traversal segments that would escape the tmp prefix', () => {
+    expect(isSafelisted(`rm -rf ${bernardA}/../..`)).toBe(false);
+    expect(isSafelisted(`rm -rf ${BERNARD_TMP_PREFIX}x/../../etc`)).toBe(false);
+    expect(isSafelisted(`rm -rf ${bernardA} ${bernardB}/../..`)).toBe(false);
+  });
+
+  it('rejects glob characters in safelisted paths', () => {
+    expect(isSafelisted(`rm -rf ${BERNARD_TMP_PREFIX}*`)).toBe(false);
+    expect(isSafelisted(`rm -rf ${BERNARD_TMP_PREFIX}?ask.sh`)).toBe(false);
+    expect(isSafelisted(`rm -rf ${BERNARD_TMP_PREFIX}[abc].sh`)).toBe(false);
+    expect(isSafelisted(`rm -rf ${BERNARD_TMP_PREFIX}{a,b}.sh`)).toBe(false);
+  });
+
+  it('rejects quoted or expansion-bearing tokens', () => {
+    expect(isSafelisted(`rm -rf '${bernardA}'`)).toBe(false);
+    expect(isSafelisted(`rm -rf "${bernardA}"`)).toBe(false);
+    expect(isSafelisted(`rm -rf $HOME/${bernardA}`)).toBe(false);
+    expect(isSafelisted(`rm -rf \\\\${bernardA}`)).toBe(false);
+  });
+
   it('does not safelist rm with no path arguments', () => {
     expect(isSafelisted('rm -rf')).toBe(false);
   });

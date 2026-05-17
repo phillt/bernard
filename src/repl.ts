@@ -822,7 +822,7 @@ export async function startRepl(
     } finally {
       // Skip restart when the turn is over or aborted — nothing left to think about.
       if (processing && !signal?.aborted) {
-        initSpinner();
+        resumeSpinner();
       }
     }
   };
@@ -1024,6 +1024,11 @@ export async function startRepl(
     await mcpManager.close();
   };
 
+  // Tracks the SpinnerStats for the in-flight turn so resumeSpinner() can
+  // re-attach the spinner after a pause (e.g. an ask_user prompt) without
+  // resetting startTime or the running token totals.
+  let activeSpinnerStats: SpinnerStats | null = null;
+
   function initSpinner(): void {
     const spinnerStats: SpinnerStats = {
       startTime: Date.now(),
@@ -1033,8 +1038,18 @@ export async function startRepl(
       model: config.model,
       contextWindowOverride: config.tokenWindow || undefined,
     };
+    activeSpinnerStats = spinnerStats;
     agent.setSpinnerStats(spinnerStats);
     startSpinner(() => buildSpinnerMessage(spinnerStats));
+  }
+
+  function resumeSpinner(): void {
+    const stats = activeSpinnerStats;
+    if (!stats) {
+      initSpinner();
+      return;
+    }
+    startSpinner(() => buildSpinnerMessage(stats));
   }
 
   async function runGuidedCreation(message: string): Promise<void> {

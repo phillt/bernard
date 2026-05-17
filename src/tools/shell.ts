@@ -37,6 +37,13 @@ export function isDangerous(command: string): boolean {
 // composing additional shell work outside its narrow scope.
 const META_RE = /[;&|`>]|\$\(/;
 
+// Glob characters would let the shell expand the path past the prefix check.
+const GLOB_RE = /[*?[\]{}!]/;
+
+// Quotes or expansion sigils inside a token signal an attempt to inject more
+// shell work — the safelist only handles literal paths.
+const UNSAFE_TOKEN_CHARS = /['"`$\\]/;
+
 /**
  * The agent's system prompt instructs the model to write temp scripts under
  * this prefix and clean them up afterward, so the cleanup must not require
@@ -62,8 +69,13 @@ export function isSafelisted(command: string): boolean {
   if (paths.length === 0) return false;
 
   return paths.every((t) => {
-    const unquoted = t.replace(/^['"]/, '').replace(/['"]$/, '');
-    return unquoted.startsWith(BERNARD_TMP_PREFIX);
+    if (GLOB_RE.test(t)) return false;
+    if (UNSAFE_TOKEN_CHARS.test(t)) return false;
+    if (t.split('/').includes('..')) return false;
+    // Resolve against cwd to catch `bernard-x/../..` traversal that would
+    // escape the tmp prefix once the shell evaluates it.
+    const resolved = path.resolve(t);
+    return resolved.startsWith(BERNARD_TMP_PREFIX);
   });
 }
 
