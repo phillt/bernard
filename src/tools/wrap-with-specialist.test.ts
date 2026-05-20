@@ -182,7 +182,10 @@ describe('wrapToolWithSpecialist', () => {
     });
 
     const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', deps);
-    const result = await wrapped.execute({ command: 'cat /etc/shadow' }, { abortSignal: undefined });
+    const result = await wrapped.execute(
+      { command: 'cat /etc/shadow' },
+      { abortSignal: undefined },
+    );
 
     expect(result).toBe('Error (exit_code_1): permission denied');
     expect(String(result)).not.toContain('should not leak');

@@ -57,7 +57,9 @@ function makeRepairContext(overrides: Record<string, any> = {}) {
     parameterSchema: vi.fn(() => ({ type: 'object', properties: { command: { type: 'string' } } })),
     messages: [{ role: 'user', content: 'do a thing' }],
     system: 'you are bernard',
-    error: new (InvalidToolArgumentsError as any)('JSON parsing failed: Unterminated string at position 16602'),
+    error: new (InvalidToolArgumentsError as any)(
+      'JSON parsing failed: Unterminated string at position 16602',
+    ),
     ...overrides,
   };
 }

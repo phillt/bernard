@@ -35,12 +35,9 @@ export function formatWrappedResult(wrapped: {
   error?: string;
 }): string {
   if (wrapped.status === 'ok') {
-    return typeof wrapped.result === 'string'
-      ? wrapped.result
-      : JSON.stringify(wrapped.result);
+    return typeof wrapped.result === 'string' ? wrapped.result : JSON.stringify(wrapped.result);
   }
-  const body =
-    typeof wrapped.result === 'string' ? wrapped.result : JSON.stringify(wrapped.result);
+  const body = typeof wrapped.result === 'string' ? wrapped.result : JSON.stringify(wrapped.result);
   return wrapped.error ? `Error (${wrapped.error}): ${body}` : `Error: ${body}`;
 }
 

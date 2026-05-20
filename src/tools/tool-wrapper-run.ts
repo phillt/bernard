@@ -270,8 +270,7 @@ export async function dispatchToolWrapper(
 
     let systemPrompt = specialist.systemPrompt;
     if (specialist.guidelines.length > 0) {
-      systemPrompt +=
-        '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
+      systemPrompt += '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
     }
     systemPrompt += '\n\n' + osPromptBlock();
     systemPrompt += formatExamples(specialist);

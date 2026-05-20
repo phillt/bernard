@@ -122,10 +122,7 @@ export function makeRepairHook<TOOLS extends ToolSet>(
         args: JSON.stringify(repaired.args),
       };
     } catch (err) {
-      debugLog(
-        `tool-call-repair:${label}:error`,
-        err instanceof Error ? err.message : String(err),
-      );
+      debugLog(`tool-call-repair:${label}:error`, err instanceof Error ? err.message : String(err));
       return null;
     }
   };
