@@ -107,21 +107,30 @@ const XAI_STANDARD_PROFILE: ModelProfile = {
  * Matching is first-match-wins and pattern-based so new models in an existing
  * family pick up the right profile automatically. Unknown combinations fall
  * back to a conservative passthrough profile.
+ *
+ * For custom providers (user-defined endpoints that wrap an installed AI-SDK)
+ * pass the wrapped SDK family via `sdk` so the model picks up family-specific
+ * prompt tuning regardless of the registered provider name.
  */
-export function getModelProfile(provider: string, model: string): ModelProfile {
+export function getModelProfile(
+  provider: string,
+  model: string,
+  sdk?: 'anthropic' | 'openai' | 'xai',
+): ModelProfile {
   const m = model.toLowerCase();
+  const family = sdk ?? provider;
 
-  if (provider === 'anthropic') {
+  if (family === 'anthropic') {
     return ANTHROPIC_PROFILE;
   }
 
-  if (provider === 'openai') {
+  if (family === 'openai') {
     // o-series reasoning models: o1, o3, o3-mini, o4-mini, …
     if (/^o\d/.test(m)) return OPENAI_REASONING_PROFILE;
     return OPENAI_STANDARD_PROFILE;
   }
 
-  if (provider === 'xai') {
+  if (family === 'xai') {
     // Explicit non-reasoning variants take precedence over the generic grok-4 rule.
     if (m.includes('non-reasoning')) return XAI_STANDARD_PROFILE;
     if (m.includes('reasoning')) return XAI_REASONING_PROFILE;

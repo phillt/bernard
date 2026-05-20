@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('./providers/index.js', () => ({
   getModel: vi.fn(() => ({ modelId: 'mock' })),
+  getModelForConfig: vi.fn(() => ({ modelId: 'mock' })),
   getProviderOptions: vi.fn(() => undefined),
+  getProviderOptionsForConfig: vi.fn(() => undefined),
 }));
 
 vi.mock('./logger.js', () => ({

@@ -16,7 +16,9 @@ const fs = await import('node:fs');
 
 vi.mock('../providers/index.js', () => ({
   getModel: vi.fn(() => ({ modelId: 'mock' })),
+  getModelForConfig: vi.fn(() => ({ modelId: 'mock' })),
   getProviderOptions: vi.fn(() => undefined),
+  getProviderOptionsForConfig: vi.fn(() => undefined),
 }));
 
 vi.mock('../logger.js', () => ({
@@ -70,7 +72,7 @@ import { _resetPool } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 import { SpecialistStore } from '../specialists.js';
 
-const { getModel: mockGetModel } = await import('../providers/index.js');
+const { getModelForConfig: mockGetModel } = await import('../providers/index.js');
 
 function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
   return {
@@ -401,7 +403,7 @@ describe('specialist-run tool', () => {
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
       );
 
-      expect(mockGetModel).toHaveBeenCalledWith('xai', 'grok-code-fast-1');
+      expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'xai', 'grok-code-fast-1');
     });
 
     it('invocation override takes priority over specialist config', async () => {
@@ -416,7 +418,7 @@ describe('specialist-run tool', () => {
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
       );
 
-      expect(mockGetModel).toHaveBeenCalledWith('openai', 'gpt-4o-mini');
+      expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'openai', 'gpt-4o-mini');
     });
 
     it('falls back to global config when no overrides', async () => {
@@ -429,7 +431,11 @@ describe('specialist-run tool', () => {
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
       );
 
-      expect(mockGetModel).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-5-20250929');
+      expect(mockGetModel).toHaveBeenCalledWith(
+        expect.anything(),
+        'anthropic',
+        'claude-sonnet-4-5-20250929',
+      );
     });
 
     it('returns error when resolved provider has no API key', async () => {
@@ -463,7 +469,7 @@ describe('specialist-run tool', () => {
 
       // Should use xai's default model, not anthropic's model
       const { getDefaultModel } = await import('../config.js');
-      expect(mockGetModel).toHaveBeenCalledWith('xai', getDefaultModel('xai'));
+      expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'xai', getDefaultModel('xai'));
     });
 
     it('uses provider default model when invocation overrides provider but not model', async () => {
@@ -478,7 +484,11 @@ describe('specialist-run tool', () => {
       );
 
       const { getDefaultModel } = await import('../config.js');
-      expect(mockGetModel).toHaveBeenCalledWith('openai', getDefaultModel('openai'));
+      expect(mockGetModel).toHaveBeenCalledWith(
+        expect.anything(),
+        'openai',
+        getDefaultModel('openai'),
+      );
     });
 
     it('returns error when specialist provider has no API key', async () => {
@@ -508,7 +518,7 @@ describe('specialist-run tool', () => {
       );
 
       expect(result).not.toContain('No API key found');
-      expect(mockGetModel).toHaveBeenCalledWith('anthropic', expect.any(String));
+      expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'anthropic', expect.any(String));
     });
 
     it('treats empty-string provider on saved specialist as not provided', async () => {
@@ -523,7 +533,7 @@ describe('specialist-run tool', () => {
       );
 
       expect(result).not.toContain('No API key found');
-      expect(mockGetModel).toHaveBeenCalledWith('anthropic', expect.any(String));
+      expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'anthropic', expect.any(String));
     });
   });
 

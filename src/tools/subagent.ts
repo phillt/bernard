@@ -1,6 +1,6 @@
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
-import { getModel, getProviderOptions } from '../providers/index.js';
+import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
 import { createTools, type ToolOptions } from './index.js';
 import {
   printSubAgentStart,
@@ -98,7 +98,7 @@ export function createSubAgentTool(
     execute: async ({ task, context, provider, model }, execOptions) => {
       const resolution = resolveProviderAndModel({ provider, model, config });
       if (!resolution.ok) {
-        return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar)}`;
+        return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom)}`;
       }
       const { provider: resolvedProvider, model: resolvedModel } = resolution;
 
@@ -155,8 +155,8 @@ export function createSubAgentTool(
 
         const maxSteps = Math.ceil(config.maxSteps * SUBAGENT_STEP_RATIO);
         const result = await generateText({
-          model: getModel(resolvedProvider, resolvedModel),
-          providerOptions: getProviderOptions(resolvedProvider),
+          model: getModelForConfig(config, resolvedProvider, resolvedModel),
+          providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
           tools: baseTools,
           maxSteps,
           maxTokens: config.maxTokens,
@@ -175,8 +175,8 @@ export function createSubAgentTool(
             regenerate: async (extraMessages) => {
               const retryMaxSteps = SUBAGENT_PAC_RETRY_STEPS;
               return generateText({
-                model: getModel(resolvedProvider, resolvedModel),
-                providerOptions: getProviderOptions(resolvedProvider),
+                model: getModelForConfig(config, resolvedProvider, resolvedModel),
+                providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
                 tools: baseTools,
                 maxSteps: retryMaxSteps,
                 maxTokens: config.maxTokens,

@@ -37,14 +37,33 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - **src/reference-resolver.ts** — Pre-turn LLM pass that resolves user-named entities (e.g. "my daughter") against persistent memory; returns `resolved`, `ambiguous` (menu), `unknown` (prompts user), or `noop`. Invoked from `src/repl.ts` before `agent.processInput` and rendered as a `## Resolved References` block in the system prompt (agent-visible, user-hidden).
 - **src/reference-tool-lookup.ts** — Pre-fallback module that runs only when the resolver returns `unknown`. Picks one read-only allowlisted lookup tool (MCP `*_search`/`*_list`/`*_read`/etc., plus `web_search`/`web_read`) via an LLM call, executes it with a 5 s hard timeout enforced via `Promise.race` (so even MCP tools that ignore `abortSignal` can't stall the REPL), and interprets the result into `{none|found|ambiguous}`. The `select` and `interpret` LLM calls respect the parent abort signal (Esc cancels) but are otherwise bounded by the AI SDK's API timeout. On `found`, the REPL shows a Save/Edit/Skip menu before persisting to memory. Fails open at every stage. Gated by `config.referenceLookup` (default on).
 - **src/prompt-rewriter.ts** — Pre-turn LLM pass that rewrites the user's message for the active model family (see `ModelProfile.rewriterHint` in `src/providers/profiles.ts`). Runs after reference-resolution so resolved entities can be inlined. Temperature 0, fail-open to the original prompt, gated by `config.promptRewriter` (default on; toggle via `/agent-options` or `BERNARD_PROMPT_REWRITER=false`).
-- **src/providers/** — `getModel()` factory returning AI SDK `LanguageModel`
+- **src/providers/** — `getModel()` factory returning AI SDK `LanguageModel`. `getModelForConfig(config, provider, model)` wraps it to consult `config.customProviders` and route through `createOpenAI` / `createAnthropic` / `createXai` with `{ baseURL, apiKey }` when the active provider is user-defined.
+- **src/custom-providers.ts** — `CustomProviderStore`: single-file JSON store at `~/.config/bernard/custom-providers.json`. Each entry binds a user-chosen `name` to one of the three installed SDKs (`openai` / `anthropic` / `xai`), a `baseURL`, a `defaultModel`, and a remembered `models[]` list that grows as the user types new names in `/model`. Reserved names: `anthropic`, `openai`, `xai`.
 - **src/tools/** — Tool registry; each tool is a separate file using `tool()` from `ai`
+
+## Custom Providers
+
+Users can register named **custom providers** that wrap one of the installed SDKs (`openai`, `anthropic`, `xai`) and point it at a non-default endpoint — Ollama, LM Studio, OpenRouter, internal proxies, etc. Multiple custom providers can coexist with the built-ins.
+
+```bash
+# CLI:
+bernard add-provider ollama --sdk openai --base-url http://localhost:11434/v1 --model llama3.2 [--key <api-key>]
+bernard remove-provider ollama
+bernard providers                # lists built-ins and custom side-by-side
+
+# REPL:
+/provider                        # menu now ends with "+ Add custom provider…" (interactive wizard)
+/model                           # for a custom provider, menu ends with "+ Type a new model name…"
+```
+
+Keys for custom providers are stored in `keys.json` (same path as built-ins) and never injected into `process.env`. Built-in providers are unaffected.
 
 ## Key Patterns
 
 - **Vercel AI SDK** (`ai` package) provides unified tool calling across Anthropic/OpenAI/xAI
-- Adding a provider: one import + one case in `src/providers/index.ts`
+- Adding a built-in provider: one import + one case in `src/providers/index.ts`. To wrap an existing SDK at a different endpoint, use **Custom Providers** (`bernard add-provider`) instead — no code change.
 - Adding a tool: create `src/tools/newtool.ts`, register in `src/tools/index.ts`
+- All `generateText` call sites use `getModelForConfig(config, provider, model)` + `getProviderOptionsForConfig(config, provider)` rather than calling `getModel`/`getProviderOptions` directly, so custom-provider endpoints are routed transparently.
 - Config loads `.env` from cwd first, then `$XDG_CONFIG_HOME/bernard/.env`, then legacy `~/.bernard/.env`
 - **src/paths.ts** centralizes all file paths using XDG Base Directory Specification
 - CommonJS (no `"type": "module"` in package.json) for chalk v4 compatibility
@@ -64,7 +83,7 @@ Bernard follows the [XDG Base Directory Specification](https://specifications.fr
 
 | Category   | Default Location          | Contents                                                                                                                                                                      |
 | ---------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Config** | `~/.config/bernard/`      | `preferences.json`, `keys.json`, `.env`, `mcp.json`                                                                                                                           |
+| **Config** | `~/.config/bernard/`      | `preferences.json`, `keys.json`, `custom-providers.json`, `.env`, `mcp.json`                                                                                                  |
 | **Data**   | `~/.local/share/bernard/` | `memory/*.md`, `rag/`, `routines/*.json`, `specialists/*.json`, `correction-candidates/*.json`, `tool-profiles/*.json`, `cron/jobs.json`, `cron/alerts/`, `cron/notes/*.json` |
 | **Cache**  | `~/.cache/bernard/`       | `models/` (embeddings), `update-check.json`                                                                                                                                   |
 | **State**  | `~/.local/state/bernard/` | `conversation-history.json`, `logs/*.jsonl`, `cron-daemon.pid`, `cron-daemon.log`                                                                                             |

@@ -52,15 +52,30 @@ import {
   saveOption,
   getProviderKeyStatus,
   normalizeThreshold,
+  saveProviderKey,
   type BernardConfig,
 } from './config.js';
+import {
+  loadCustomProviders,
+  saveCustomProvider,
+  rememberCustomModel,
+  validateProviderName,
+  validateBaseURL,
+  SUPPORTED_SDKS,
+  type CustomProvider,
+} from './custom-providers.js';
+import type { SupportedSdk } from './providers/types.js';
 import { getTheme, setTheme, getThemeKeys, getActiveThemeKey, THEMES } from './theme.js';
 import { interactiveUpdate, getLocalVersion } from './update.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
 import { generateText } from 'ai';
-import { getModel, getModelProfile, getProviderOptions } from './providers/index.js';
+import {
+  getModelForConfig,
+  getModelProfile,
+  getProviderOptionsForConfig,
+} from './providers/index.js';
 import { rewritePrompt } from './prompt-rewriter.js';
 import {
   serializeMessages,
@@ -670,7 +685,11 @@ export async function startRepl(
   ): Promise<string | null> {
     if (!config.promptRewriter) return null;
     try {
-      const profile = getModelProfile(config.provider, config.model);
+      const profile = getModelProfile(
+        config.provider,
+        config.model,
+        config.customProviders?.[config.provider]?.sdk,
+      );
       const rewriteSignal = createMenuSignal();
       let result;
       startSpinner();
@@ -1117,8 +1136,8 @@ export async function startRepl(
 
       const taskMaxSteps = getTaskMaxSteps(config);
       const result = await generateText({
-        model: getModel(config.provider, config.model),
-        providerOptions: getProviderOptions(config.provider),
+        model: getModelForConfig(config, config.provider, config.model),
+        providerOptions: getProviderOptionsForConfig(config, config.provider),
         tools: baseTools,
         maxSteps: taskMaxSteps,
         maxTokens: config.maxTokens,
@@ -1239,8 +1258,8 @@ export async function startRepl(
 
               const [summaryResult, domainFacts, candidateResult] = await Promise.all([
                 generateText({
-                  model: getModel(config.provider, config.model),
-                  providerOptions: getProviderOptions(config.provider),
+                  model: getModelForConfig(config, config.provider, config.model),
+                  providerOptions: getProviderOptionsForConfig(config, config.provider),
                   maxTokens: 2048,
                   system: SUMMARIZATION_PROMPT,
                   messages: [
@@ -1336,7 +1355,12 @@ export async function startRepl(
         agent.clearHistory();
         historyStore.clear();
         console.clear();
-        printWelcome(config.provider, config.model, getLocalVersion());
+        printWelcome(
+          config.provider,
+          config.model,
+          getLocalVersion(),
+          config.customProviders?.[config.provider]?.baseURL,
+        );
         printInfo('Conversation history and scratch notes cleared.');
         void prompt();
         return;
@@ -1530,12 +1554,29 @@ export async function startRepl(
 
       if (trimmed === '/provider') {
         const available = getAvailableProviders(config);
-        if (available.length === 0) {
-          printError('No providers have API keys configured.');
-          void prompt();
-          return;
+        const customProviders = config.customProviders ?? {};
+        const builtinAvailable = available.filter((p) => !customProviders[p]);
+        const customAvailable = available.filter((p) => customProviders[p]);
+
+        const entries: MenuEntry[] = [];
+        for (const p of builtinAvailable) entries.push({ label: p, value: p });
+        if (customAvailable.length > 0) {
+          entries.push({ type: 'section', title: 'Custom:' });
+          for (const p of customAvailable) {
+            const entry = customProviders[p];
+            entries.push({
+              label: p,
+              annotation: `(${entry.sdk} → ${entry.baseURL})`,
+              value: p,
+            });
+          }
         }
-        const entries: MenuEntry[] = available.map((p) => ({ label: p }));
+        if (builtinAvailable.length === 0 && customAvailable.length === 0) {
+          printInfo('No providers have API keys configured yet — add one below.');
+        }
+        entries.push({ type: 'section', title: '' });
+        entries.push({ label: '+ Add custom provider…', value: '__add__' });
+
         const signal = createMenuSignal();
         try {
           const result = await selectFromMenu(
@@ -1545,17 +1586,42 @@ export async function startRepl(
             signal,
           );
           if (!result.cancelled) {
-            config.provider = available[result.index];
-            config.model = getDefaultModel(config.provider);
-            savePreferences({
-              provider: config.provider,
-              model: config.model,
-              maxTokens: config.maxTokens,
-              shellTimeout: config.shellTimeout,
-              tokenWindow: config.tokenWindow,
-              theme: config.theme,
-            });
-            printInfo(`  Switched to ${config.provider} (${config.model})`);
+            const value = result.item.value as string;
+            if (value === '__add__') {
+              const added = await runAddProviderWizard(rl, createMenuSignal, clearMenuSignal);
+              if (added) {
+                config.customProviders = {
+                  ...customProviders,
+                  [added.entry.name]: added.entry,
+                };
+                config.apiKeys = { ...(config.apiKeys ?? {}), [added.entry.name]: added.apiKey };
+                config.provider = added.entry.name;
+                config.model = added.entry.defaultModel;
+                savePreferences({
+                  provider: config.provider,
+                  model: config.model,
+                  maxTokens: config.maxTokens,
+                  shellTimeout: config.shellTimeout,
+                  tokenWindow: config.tokenWindow,
+                  theme: config.theme,
+                });
+                printInfo(
+                  `  Added and switched to ${added.entry.name} (${added.entry.defaultModel})`,
+                );
+              }
+            } else {
+              config.provider = value;
+              config.model = getDefaultModel(config.provider, customProviders);
+              savePreferences({
+                provider: config.provider,
+                model: config.model,
+                maxTokens: config.maxTokens,
+                shellTimeout: config.shellTimeout,
+                tokenWindow: config.tokenWindow,
+                theme: config.theme,
+              });
+              printInfo(`  Switched to ${config.provider} (${config.model})`);
+            }
           }
         } finally {
           clearMenuSignal();
@@ -1566,13 +1632,20 @@ export async function startRepl(
       }
 
       if (trimmed === '/model') {
-        const models = PROVIDER_MODELS[config.provider];
+        const customProviders = config.customProviders ?? {};
+        const customEntry = customProviders[config.provider];
+        const models = customEntry ? customEntry.models : PROVIDER_MODELS[config.provider];
+
         if (!models || models.length === 0) {
           printError(`No models listed for provider "${config.provider}".`);
           void prompt();
           return;
         }
-        const entries: MenuEntry[] = models.map((m) => ({ label: m }));
+        const entries: MenuEntry[] = models.map((m) => ({ label: m, value: m }));
+        if (customEntry) {
+          entries.push({ type: 'section', title: '' });
+          entries.push({ label: '+ Type a new model name…', value: '__free__' });
+        }
         const signal = createMenuSignal();
         try {
           const result = await selectFromMenu(
@@ -1582,16 +1655,39 @@ export async function startRepl(
             signal,
           );
           if (!result.cancelled) {
-            config.model = models[result.index];
-            savePreferences({
-              provider: config.provider,
-              model: config.model,
-              maxTokens: config.maxTokens,
-              shellTimeout: config.shellTimeout,
-              tokenWindow: config.tokenWindow,
-              theme: config.theme,
-            });
-            printInfo(`  Switched to ${config.model}`);
+            const value = result.item.value as string;
+            let chosenModel: string | null = null;
+            if (value === '__free__' && customEntry) {
+              const valueResult = await promptValue(
+                rl,
+                { label: 'Model name' },
+                createMenuSignal(),
+              );
+              clearMenuSignal();
+              if (!valueResult.cancelled) {
+                const newModel = valueResult.raw.trim();
+                if (newModel) {
+                  rememberCustomModel(config.provider, newModel);
+                  // Refresh local copy
+                  config.customProviders = loadCustomProviders();
+                  chosenModel = newModel;
+                }
+              }
+            } else {
+              chosenModel = value;
+            }
+            if (chosenModel) {
+              config.model = chosenModel;
+              savePreferences({
+                provider: config.provider,
+                model: config.model,
+                maxTokens: config.maxTokens,
+                shellTimeout: config.shellTimeout,
+                tokenWindow: config.tokenWindow,
+                theme: config.theme,
+              });
+              printInfo(`  Switched to ${config.model}`);
+            }
           }
         } finally {
           clearMenuSignal();
@@ -2246,4 +2342,106 @@ Remember: the systemPrompt should read like a persona definition — who this sp
   });
 
   void prompt();
+}
+
+/**
+ * Interactive wizard for adding a custom provider from `/provider`.
+ * Returns the saved entry plus the freshly entered API key on success
+ * (so the caller can update the live `config.apiKeys` map without
+ * re-reading from disk), or `null` on cancel/error.
+ */
+async function runAddProviderWizard(
+  rl: readline.Interface,
+  createMenuSignal: () => AbortSignal,
+  clearMenuSignal: () => void,
+): Promise<{ entry: CustomProvider; apiKey: string } | null> {
+  printInfo('\nAdd custom provider — follows the same SDK contract as built-ins.');
+
+  // 1. SDK choice
+  const sdkEntries: MenuEntry[] = SUPPORTED_SDKS.map((s) => ({ label: s, value: s }));
+  let sdkResult: SelectResult;
+  let sig = createMenuSignal();
+  try {
+    sdkResult = await selectFromMenu(rl, sdkEntries, { title: 'Which SDK to use?' }, sig);
+  } finally {
+    clearMenuSignal();
+  }
+  if (sdkResult.cancelled) return null;
+  const sdk = sdkResult.item.value as SupportedSdk;
+
+  // 2. Name
+  sig = createMenuSignal();
+  let nameResult: ValueResult;
+  try {
+    nameResult = await promptValue(rl, { label: 'Provider name (lowercase, e.g. "ollama")' }, sig);
+  } finally {
+    clearMenuSignal();
+  }
+  if (nameResult.cancelled) return null;
+  const name = nameResult.raw.trim();
+  const nameErr = validateProviderName(name);
+  if (nameErr) {
+    printError(nameErr);
+    return null;
+  }
+
+  // 3. Base URL
+  sig = createMenuSignal();
+  let urlResult: ValueResult;
+  try {
+    urlResult = await promptValue(rl, { label: 'Base URL (e.g. http://localhost:11434/v1)' }, sig);
+  } finally {
+    clearMenuSignal();
+  }
+  if (urlResult.cancelled) return null;
+  const baseURL = urlResult.raw.trim();
+  const urlErr = validateBaseURL(baseURL);
+  if (urlErr) {
+    printError(urlErr);
+    return null;
+  }
+
+  // 4. Default model
+  sig = createMenuSignal();
+  let modelResult: ValueResult;
+  try {
+    modelResult = await promptValue(rl, { label: 'Default model name' }, sig);
+  } finally {
+    clearMenuSignal();
+  }
+  if (modelResult.cancelled) return null;
+  const defaultModel = modelResult.raw.trim();
+  if (!defaultModel) {
+    printError('Default model cannot be empty.');
+    return null;
+  }
+
+  // 5. API key
+  sig = createMenuSignal();
+  let keyResult: ValueResult;
+  try {
+    keyResult = await promptValue(
+      rl,
+      { label: 'API key (any non-empty token; some local servers ignore the value)' },
+      sig,
+    );
+  } finally {
+    clearMenuSignal();
+  }
+  if (keyResult.cancelled) return null;
+  const apiKey = keyResult.raw.trim();
+  if (!apiKey) {
+    printError('API key cannot be empty.');
+    return null;
+  }
+
+  try {
+    const entry = saveCustomProvider({ name, sdk, baseURL, defaultModel });
+    saveProviderKey(name, apiKey);
+    return { entry, apiKey };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    printError(message);
+    return null;
+  }
 }

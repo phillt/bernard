@@ -158,12 +158,14 @@ vi.mock('./output.js', () => ({
 
 vi.mock('./providers/index.js', () => ({
   getModel: vi.fn(() => ({ modelId: 'mock' })),
+  getModelForConfig: vi.fn(() => ({ modelId: 'mock' })),
   getModelProfile: vi.fn(() => ({
     family: 'test',
     wrapUserMessage: (m: string) => m,
     systemSuffix: '',
   })),
   getProviderOptions: vi.fn(() => undefined),
+  getProviderOptionsForConfig: vi.fn(() => undefined),
 }));
 
 const mockSavePreferences = vi.fn();
@@ -377,7 +379,7 @@ describe('REPL /clear command', () => {
     typeLine('/clear');
 
     await vi.waitFor(() => {
-      expect(mockPrintWelcome).toHaveBeenCalledWith('openai', 'gpt-4o', '0.3.1');
+      expect(mockPrintWelcome).toHaveBeenCalledWith('openai', 'gpt-4o', '0.3.1', undefined);
     });
 
     rlEmitter.emit('close');

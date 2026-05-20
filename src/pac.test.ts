@@ -13,12 +13,14 @@ vi.mock('node:fs', () => ({
 
 vi.mock('./providers/index.js', () => ({
   getModel: vi.fn(() => ({ modelId: 'mock' })),
+  getModelForConfig: vi.fn(() => ({ modelId: 'mock' })),
   getModelProfile: vi.fn(() => ({
     family: 'test',
     wrapUserMessage: (m: string) => m,
     systemSuffix: '',
   })),
   getProviderOptions: vi.fn(() => undefined),
+  getProviderOptionsForConfig: vi.fn(() => undefined),
 }));
 
 vi.mock('./output.js', () => ({

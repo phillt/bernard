@@ -1,6 +1,6 @@
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
-import { getModel, getProviderOptions } from '../providers/index.js';
+import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
 import { createTools, type ToolOptions } from './index.js';
 import { extractJsonBlock } from '../structured-output.js';
 import {
@@ -169,9 +169,10 @@ export function createTaskTool(
     execute: async ({ task, taskId, context, provider, model }, execOptions) => {
       const resolution = resolveProviderAndModel({ provider, model, config });
       if (!resolution.ok) {
+        const envHint = resolution.isCustom ? '' : ` or set ${resolution.envVar}`;
         return JSON.stringify({
           status: 'error',
-          output: `No API key found for provider "${resolution.provider}". Run: bernard add-key ${resolution.provider} <your-api-key> or set ${resolution.envVar}.`,
+          output: `No API key found for provider "${resolution.provider}". Run: bernard add-key ${resolution.provider} <your-api-key>${envHint}.`,
         });
       }
       const { provider: resolvedProvider, model: resolvedModel } = resolution;
@@ -250,8 +251,8 @@ export function createTaskTool(
 
         const taskMaxSteps = getTaskMaxSteps(config);
         const result = await generateText({
-          model: getModel(resolvedProvider, resolvedModel),
-          providerOptions: getProviderOptions(resolvedProvider),
+          model: getModelForConfig(config, resolvedProvider, resolvedModel),
+          providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
           tools: baseTools,
           maxSteps: taskMaxSteps,
           maxTokens: config.maxTokens,

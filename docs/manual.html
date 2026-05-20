@@ -298,8 +298,11 @@
       .content h3 {
         font-size: 18px;
         font-weight: 600;
-        margin-top: 32px;
+        margin-top: 64px;
         margin-bottom: 12px;
+        padding-bottom: 6px;
+        color: var(--text-secondary);
+        border-bottom: 1px solid var(--border);
       }
 
       .content h4 {
@@ -668,6 +671,7 @@
               <li><a href="#anthropic">Anthropic</a></li>
               <li><a href="#openai">OpenAI</a></li>
               <li><a href="#xai">xAI</a></li>
+              <li><a href="#custom-providers">Custom Providers</a></li>
               <li><a href="#switching-providers">Switching Providers</a></li>
             </ul>
           </li>
@@ -1065,6 +1069,12 @@
             </tbody>
           </table>
         </div>
+        <p>
+          <strong>Custom providers</strong> (see <a href="#custom-providers">Custom Providers</a>)
+          store their keys via <code>bernard add-key &lt;name&gt; &lt;key&gt;</code> and are
+          <em>not</em> read from environment variables — there is no
+          <code>BERNARD_&lt;NAME&gt;_API_KEY</code> bridge.
+        </p>
 
         <h3 id="env-loading">.env File Loading</h3>
         <p>
@@ -1262,6 +1272,54 @@
           <li><code>grok-3-mini</code></li>
         </ul>
 
+        <h3 id="custom-providers">Custom Providers</h3>
+        <p>
+          A <strong>custom provider</strong> is a user-registered named endpoint that wraps one of
+          the three installed SDKs (<code>openai</code>, <code>anthropic</code>, <code>xai</code>)
+          and points it at a non-default base URL — Ollama, LM Studio, vLLM, OpenRouter, Together,
+          Fireworks, internal proxies, or anything else that speaks one of those APIs. You can
+          register as many as you like, and they coexist with the built-ins.
+        </p>
+        <p>Register one from the command line:</p>
+        <pre><code><span class="accent">$</span> bernard add-provider ollama \
+    --sdk openai \
+    --base-url http://localhost:11434/v1 \
+    --model llama3.2 \
+    --key ollama</code></pre>
+        <p>
+          The key is required (some local servers ignore the value but the SDK still sends one). If
+          you skip <code>--key</code>, run <code>bernard add-key ollama &lt;token&gt;</code>
+          afterwards.
+        </p>
+        <p>
+          To register interactively, type <code>/provider</code> in the REPL and choose
+          <strong>+ Add custom provider…</strong>. The wizard asks for SDK, name, base URL, default
+          model, and API key in turn.
+        </p>
+        <p>Other commands:</p>
+        <ul>
+          <li><code>bernard providers</code> &mdash; lists built-ins and custom side-by-side.</li>
+          <li>
+            <code>bernard remove-provider &lt;name&gt;</code> &mdash; deletes the entry and its
+            stored key.
+          </li>
+          <li>
+            <code>/model</code> &mdash; for a custom provider, the menu shows the remembered model
+            list plus a <strong>+ Type a new model name…</strong> entry; whatever you type is added
+            to the list for next time.
+          </li>
+        </ul>
+        <p>
+          When the active provider is custom, the welcome banner prints an extra
+          <code>Endpoint:</code> line so it's obvious the session isn't using the SDK's default URL.
+        </p>
+        <p>
+          Reserved names: <code>anthropic</code>, <code>openai</code>, <code>xai</code> (the
+          built-ins). Custom-provider API keys are stored in <code>keys.json</code> alongside the
+          built-in keys and are <strong>not</strong> read from environment variables — there is no
+          <code>BERNARD_&lt;NAME&gt;_API_KEY</code> bridge.
+        </p>
+
         <h3 id="switching-providers">Switching Providers</h3>
         <p>There are three ways to switch your provider and model:</p>
         <ol>
@@ -1343,11 +1401,18 @@
               </tr>
               <tr>
                 <td><code>/provider</code></td>
-                <td>Interactively switch LLM provider</td>
+                <td>
+                  Interactively switch LLM provider; menu ends with
+                  <strong>+ Add custom provider…</strong> to register a new endpoint
+                </td>
               </tr>
               <tr>
                 <td><code>/model</code></td>
-                <td>Interactively switch model for the current provider</td>
+                <td>
+                  Interactively switch model for the current provider; for custom providers, the
+                  menu includes a <strong>+ Type a new model name…</strong> entry that is remembered
+                  for next time
+                </td>
               </tr>
               <tr>
                 <td><code>/theme</code></td>

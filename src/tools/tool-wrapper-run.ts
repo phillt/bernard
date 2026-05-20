@@ -1,6 +1,6 @@
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
-import { getModel, getProviderOptions } from '../providers/index.js';
+import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
 import { createTools, type ToolOptions } from './index.js';
 import { createSubAgentTool } from './subagent.js';
 import { createTaskTool } from './task.js';
@@ -196,9 +196,12 @@ export function createToolWrapperRunTool(
         config,
       });
       if (!resolution.ok) {
+        const hint = resolution.isCustom
+          ? `Run: bernard add-key ${resolution.provider} <key>`
+          : `Set ${resolution.envVar} or run: bernard add-key ${resolution.provider} <key>`;
         return JSON.stringify({
           status: 'error',
-          result: `No API key for provider "${resolution.provider}". Set ${resolution.envVar} or run: bernard add-key ${resolution.provider} <key>.`,
+          result: `No API key for provider "${resolution.provider}". ${hint}.`,
           error: 'no_api_key',
         });
       }
@@ -296,8 +299,8 @@ export function createToolWrapperRunTool(
         };
 
         const result = await generateText({
-          model: getModel(resolvedProvider, resolvedModel),
-          providerOptions: getProviderOptions(resolvedProvider),
+          model: getModelForConfig(config, resolvedProvider, resolvedModel),
+          providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
           tools: childTools,
           maxSteps,
           maxTokens: config.maxTokens,

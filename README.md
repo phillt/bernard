@@ -1,6 +1,6 @@
 # Bernard
 
-A local CLI AI agent that executes terminal commands, manages scheduled tasks, remembers context across sessions, and connects to external tool servers — all through natural language. Supports multiple LLM providers (Anthropic, OpenAI, xAI) via the Vercel AI SDK.
+A local CLI AI agent that executes terminal commands, manages scheduled tasks, remembers context across sessions, and connects to external tool servers — all through natural language. Supports multiple LLM providers (Anthropic, OpenAI, xAI) via the Vercel AI SDK, plus user-registered **custom providers** that point those SDKs at any compatible endpoint (Ollama, LM Studio, OpenRouter, internal proxies, …).
 
 ## Table of Contents
 
@@ -125,6 +125,28 @@ Check which providers have keys configured:
 bernard providers
 ```
 
+### Custom Providers
+
+If you run your own LLM (Ollama, LM Studio, vLLM, ...) or use an OpenAI/Anthropic/xAI-compatible aggregator (OpenRouter, Together, Fireworks, internal proxies), register it as a **custom provider**. You pick a name, pick which of the three installed SDKs to wrap, supply a base URL, and Bernard treats that name like any other provider.
+
+```bash
+# CLI
+bernard add-provider ollama \
+  --sdk openai \
+  --base-url http://localhost:11434/v1 \
+  --model llama3.2 \
+  --key ollama          # any non-empty token; some local servers ignore the value
+bernard add-key ollama <token>   # if you skipped --key above
+bernard providers               # lists built-ins and custom side-by-side
+bernard remove-provider ollama  # removes the entry and its stored key
+```
+
+You can also add one interactively from the REPL: type `/provider`, scroll to **+ Add custom provider…**, and the wizard walks you through SDK, name, base URL, default model, and key. Once added, `/provider` switches to it like any built-in. In `/model`, the menu shows a remembered list of model names plus a `+ Type a new model name…` entry that adds whatever you type for next time.
+
+When the active provider is custom, the welcome banner prints an extra `Endpoint:` line so it's clear the session isn't hitting the SDK's default URL.
+
+Reserved names: `anthropic`, `openai`, `xai` (these are the built-ins). Custom-provider keys are stored in `keys.json` and are **not** read from environment variables.
+
 ### Environment Variables
 
 Bernard loads `.env` from the current directory first, then falls back to `~/.bernard/.env`.
@@ -198,14 +220,17 @@ bernard --alert <id>             # Open with cron alert context
 ### CLI Management Commands
 
 ```bash
-bernard add-key <provider> <key>   # Store an API key securely
-bernard remove-key <provider>      # Remove a stored API key
-bernard providers                  # List providers and key status
-bernard list-options               # Show configurable options
-bernard reset-option <option>      # Reset one option to default
-bernard reset-options              # Reset all options (with confirmation)
-bernard mcp-list                   # List configured MCP servers
-bernard remove-mcp <key>           # Remove an MCP server
+bernard add-key <provider> <key>                                # Store an API key securely
+bernard remove-key <provider>                                   # Remove a stored API key
+bernard providers                                               # List providers (built-in + custom) and key status
+bernard add-provider <name> --sdk <openai|anthropic|xai> \
+  --base-url <url> --model <model> [--key <key>]                # Register a custom provider
+bernard remove-provider <name>                                  # Remove a custom provider and its key
+bernard list-options                                            # Show configurable options
+bernard reset-option <option>                                   # Reset one option to default
+bernard reset-options                                           # Reset all options (with confirmation)
+bernard mcp-list                                                # List configured MCP servers
+bernard remove-mcp <key>                                        # Remove an MCP server
 
 # Cron management
 bernard cron-list                  # List all cron jobs with status

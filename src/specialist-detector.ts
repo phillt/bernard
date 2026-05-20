@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { getModel, getProviderOptions } from './providers/index.js';
+import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 import type { Specialist, SpecialistSummary } from './specialists.js';
@@ -126,8 +126,8 @@ export async function detectSpecialistCandidate(
 
   try {
     const result = await generateText({
-      model: getModel(config.provider, config.model),
-      providerOptions: getProviderOptions(config.provider),
+      model: getModelForConfig(config, config.provider, config.model),
+      providerOptions: getProviderOptionsForConfig(config, config.provider),
       maxTokens: 2048,
       system: DETECTION_SYSTEM_PROMPT,
       messages: [

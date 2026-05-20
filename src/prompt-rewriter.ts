@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { getModel, getProviderOptions } from './providers/index.js';
+import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import type { ModelProfile } from './providers/profiles.js';
 import type { ResolvedEntry } from './reference-resolver.js';
 import type { BernardConfig } from './config.js';
@@ -143,8 +143,8 @@ export async function rewritePrompt(
 
   try {
     const result = await generateText({
-      model: getModel(config.provider, config.model),
-      providerOptions: getProviderOptions(config.provider),
+      model: getModelForConfig(config, config.provider, config.model),
+      providerOptions: getProviderOptionsForConfig(config, config.provider),
       system: buildSystemPrompt(profile),
       messages: [{ role: 'user', content: buildUserMessage(input, resolvedEntries) }],
       maxSteps: 1,

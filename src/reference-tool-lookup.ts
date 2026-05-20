@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { getModel, getProviderOptions } from './providers/index.js';
+import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 
@@ -154,8 +154,8 @@ export async function selectLookupTool(
   if (candidates.length === 0) return null;
   try {
     const result = await generateText({
-      model: getModel(config.provider, config.model),
-      providerOptions: getProviderOptions(config.provider),
+      model: getModelForConfig(config, config.provider, config.model),
+      providerOptions: getProviderOptionsForConfig(config, config.provider),
       system: SELECT_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: buildSelectUserMessage(reference, candidates) }],
       maxSteps: 1,
@@ -277,8 +277,8 @@ export async function interpretLookupResult(
 ): Promise<ReferenceLookupResult> {
   try {
     const result = await generateText({
-      model: getModel(config.provider, config.model),
-      providerOptions: getProviderOptions(config.provider),
+      model: getModelForConfig(config, config.provider, config.model),
+      providerOptions: getProviderOptionsForConfig(config, config.provider),
       system: INTERPRET_SYSTEM_PROMPT,
       messages: [
         {

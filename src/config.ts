@@ -2,6 +2,7 @@ import * as dotenv from 'dotenv';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { PREFS_PATH, KEYS_PATH, ENV_PATH, LEGACY_DIR } from './paths.js';
+import { loadCustomProviders, type CustomProvider } from './custom-providers.js';
 
 /** Resolved runtime configuration for a Bernard session. */
 export interface BernardConfig {
@@ -45,6 +46,14 @@ export interface BernardConfig {
   openaiApiKey?: string;
   /** xAI API key, if available. */
   xaiApiKey?: string;
+  /**
+   * Generic provider -> API key map sourced from `keys.json`. Carries keys
+   * for both built-in and custom providers. The named fields above are kept
+   * as a backwards-compat read view for the three built-in providers.
+   */
+  apiKeys?: Record<string, string>;
+  /** Loaded snapshot of user-defined custom providers from `custom-providers.json`. */
+  customProviders: Record<string, CustomProvider>;
 }
 
 const DEFAULT_PROVIDER = 'anthropic';
@@ -278,13 +287,22 @@ function loadStoredKeys(): Record<string, string> {
 /**
  * Stores an API key for the given provider in the config directory (mode 0600).
  *
- * @throws {Error} If `provider` is not a recognised provider name.
+ * Accepts both built-in providers and custom providers that have been
+ * registered via `bernard add-provider`.
+ *
+ * @throws {Error} If `provider` is neither a built-in nor a known custom provider.
  */
 export function saveProviderKey(provider: string, key: string): void {
-  if (!PROVIDER_ENV_VARS[provider]) {
-    throw new Error(
-      `Unknown provider "${provider}". Supported: ${Object.keys(PROVIDER_ENV_VARS).join(', ')}`,
-    );
+  const isBuiltin = !!PROVIDER_ENV_VARS[provider];
+  if (!isBuiltin) {
+    const customProviders = loadCustomProviders();
+    if (!Object.hasOwn(customProviders, provider)) {
+      const known = [...Object.keys(PROVIDER_ENV_VARS), ...Object.keys(customProviders)];
+      throw new Error(
+        `Unknown provider "${provider}". Known: ${known.join(', ') || '(none)'}. ` +
+          `Run \`bernard add-provider ${provider} …\` first to register a custom provider.`,
+      );
+    }
   }
   const dir = path.dirname(KEYS_PATH);
   if (!fs.existsSync(dir)) {
@@ -301,14 +319,9 @@ export function saveProviderKey(provider: string, key: string): void {
  *
  * Deletes `keys.json` entirely when no keys remain.
  *
- * @throws {Error} If `provider` is unrecognised or has no stored key.
+ * @throws {Error} If `provider` has no stored key.
  */
 export function removeProviderKey(provider: string): void {
-  if (!PROVIDER_ENV_VARS[provider]) {
-    throw new Error(
-      `Unknown provider "${provider}". Supported: ${Object.keys(PROVIDER_ENV_VARS).join(', ')}`,
-    );
-  }
   const existing = loadStoredKeys();
   if (!existing[provider]) {
     throw new Error(`No stored API key found for "${provider}".`);
@@ -389,11 +402,17 @@ export function resetAllOptions(): void {
 }
 
 /**
- * Returns the API key availability status for every known provider.
+ * Returns the API key availability status for every known provider —
+ * built-in providers plus any registered custom providers.
  *
- * Checks both stored keys and environment variables.
+ * Checks both stored keys and environment variables (env vars apply only
+ * to the three built-in providers; custom providers always use `keys.json`).
  */
-export function getProviderKeyStatus(): Array<{ provider: string; hasKey: boolean }> {
+export function getProviderKeyStatus(): Array<{
+  provider: string;
+  hasKey: boolean;
+  custom?: boolean;
+}> {
   const cwdEnv = path.join(process.cwd(), '.env');
   const homeEnv = ENV_PATH;
   const legacyEnv = path.join(LEGACY_DIR, '.env');
@@ -406,11 +425,18 @@ export function getProviderKeyStatus(): Array<{ provider: string; hasKey: boolea
   }
 
   const storedKeys = loadStoredKeys();
+  const customProviders = loadCustomProviders();
 
-  return Object.entries(PROVIDER_ENV_VARS).map(([provider, envVar]) => ({
+  const builtin = Object.entries(PROVIDER_ENV_VARS).map(([provider, envVar]) => ({
     provider,
     hasKey: !!(storedKeys[provider] || process.env[envVar]),
   }));
+  const custom = Object.keys(customProviders).map((provider) => ({
+    provider,
+    hasKey: !!storedKeys[provider],
+    custom: true,
+  }));
+  return [...builtin, ...custom];
 }
 
 /** Known model identifiers for each provider, ordered by preference (first = default). */
@@ -444,34 +470,87 @@ export const PROVIDER_MODELS: Record<string, string[]> = {
   ],
 };
 
-/** Returns the first (preferred) model for a provider, falling back to Anthropic's default. */
-export function getDefaultModel(provider: string): string {
-  return PROVIDER_MODELS[provider]?.[0] ?? PROVIDER_MODELS[DEFAULT_PROVIDER][0];
+/**
+ * Returns the first (preferred) model for a provider.
+ *
+ * For built-ins this is the first entry in `PROVIDER_MODELS`. For custom
+ * providers it is the registered `defaultModel`. Falls back to Anthropic's
+ * built-in default when the provider is unknown.
+ */
+export function getDefaultModel(
+  provider: string,
+  customProviders?: Record<string, CustomProvider>,
+): string {
+  if (PROVIDER_MODELS[provider]) return PROVIDER_MODELS[provider][0];
+  const custom = customProviders ?? loadCustomProviders();
+  if (custom[provider]) return custom[provider].defaultModel;
+  return PROVIDER_MODELS[DEFAULT_PROVIDER][0];
 }
 
-/** Returns the API key for the given provider from config, or undefined if not set. */
+/**
+ * Returns the API key for the given provider from config, or undefined if not set.
+ *
+ * Looks up the generic `apiKeys` map first (which carries keys for both
+ * built-in and custom providers), then falls back to the legacy named fields
+ * (`anthropicApiKey`/`openaiApiKey`/`xaiApiKey`) for backwards compat with
+ * older test fixtures.
+ */
 export function getProviderApiKey(config: BernardConfig, provider: string): string | undefined {
-  const keyMap: Record<string, string | undefined> = {
-    anthropic: config.anthropicApiKey,
-    openai: config.openaiApiKey,
-    xai: config.xaiApiKey,
-  };
-  return Object.hasOwn(keyMap, provider) ? keyMap[provider] : undefined;
+  if (config.apiKeys && Object.hasOwn(config.apiKeys, provider) && config.apiKeys[provider]) {
+    return config.apiKeys[provider];
+  }
+  switch (provider) {
+    case 'anthropic':
+      return config.anthropicApiKey;
+    case 'openai':
+      return config.openaiApiKey;
+    case 'xai':
+      return config.xaiApiKey;
+    default:
+      return undefined;
+  }
 }
 
-/** Returns provider names that have an API key present in the given config. */
+/**
+ * Returns provider names that have an API key present in the given config.
+ * Built-ins precede custom providers in the returned list.
+ */
 export function getAvailableProviders(config: BernardConfig): string[] {
-  return Object.keys(PROVIDER_MODELS).filter((p) => !!getProviderApiKey(config, p));
+  const builtin = Object.keys(PROVIDER_MODELS).filter((p) => !!getProviderApiKey(config, p));
+  const custom = Object.keys(config.customProviders ?? {}).filter(
+    (p) => !!getProviderApiKey(config, p),
+  );
+  return [...builtin, ...custom];
 }
 
-/** Returns true if the given provider name is a known provider in PROVIDER_MODELS. */
-export function isValidProvider(provider: string): boolean {
-  return Object.hasOwn(PROVIDER_MODELS, provider);
+/**
+ * Returns true if `provider` is a known provider — built-in or registered
+ * as a custom provider in the supplied (or freshly loaded) registry.
+ */
+export function isValidProvider(
+  provider: string,
+  customProviders?: Record<string, CustomProvider>,
+): boolean {
+  if (Object.hasOwn(PROVIDER_MODELS, provider)) return true;
+  const custom = customProviders ?? loadCustomProviders();
+  return Object.hasOwn(custom, provider);
 }
 
 /** Returns true if the given config has an API key for the specified provider. */
 export function hasProviderKey(config: BernardConfig, provider: string): boolean {
   return !!getProviderApiKey(config, provider);
+}
+
+/**
+ * Returns the conventional env-var name for an API key for the given provider.
+ * Built-ins return the canonical `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `XAI_API_KEY`;
+ * custom providers return `BERNARD_<NAME>_API_KEY` (informational only — custom
+ * keys are never read from env, only from `keys.json`).
+ */
+export function providerEnvVar(provider: string): string {
+  return (
+    PROVIDER_ENV_VARS[provider] ?? `BERNARD_${provider.toUpperCase().replace(/-/g, '_')}_API_KEY`
+  );
 }
 
 /**
@@ -488,12 +567,13 @@ export function blankToUndefined(v: string | undefined): string | undefined {
 /**
  * Result of {@link resolveProviderAndModel}. On the failure branch, `provider`
  * is the resolved provider name and `envVar` is the conventional environment
- * variable for it — callers format the error string in their preferred shape
- * (plain text vs JSON-wrapped) using these fields.
+ * variable for it — only meaningful for built-in providers. Custom-provider
+ * keys are stored in `keys.json` and never read from `process.env`, so
+ * callers should hide the env-var hint when `isCustom` is `true`.
  */
 export type ProviderResolution =
   | { ok: true; provider: string; model: string }
-  | { ok: false; provider: string; envVar: string };
+  | { ok: false; provider: string; envVar: string; isCustom: boolean };
 
 /**
  * Resolves the provider and model to use for a sub-agent / specialist /
@@ -523,11 +603,13 @@ export function resolveProviderAndModel(opts: {
   const explicitModel = blankToUndefined(opts.model) ?? blankToUndefined(opts.specialistModel);
   const model =
     explicitModel ??
-    (provider !== opts.config.provider ? getDefaultModel(provider) : opts.config.model);
+    (provider !== opts.config.provider
+      ? getDefaultModel(provider, opts.config.customProviders)
+      : opts.config.model);
 
   if (!hasProviderKey(opts.config, provider)) {
-    const envVar = PROVIDER_ENV_VARS[provider] ?? `${provider.toUpperCase()}_API_KEY`;
-    return { ok: false, provider, envVar };
+    const isCustom = Object.hasOwn(opts.config.customProviders ?? {}, provider);
+    return { ok: false, provider, envVar: providerEnvVar(provider), isCustom };
   }
   return { ok: true, provider, model };
 }
@@ -536,9 +618,17 @@ export function resolveProviderAndModel(opts: {
  * Default error message format for a {@link ProviderResolution} failure.
  * Used by the plain-string callers (specialist-run, subagent). Other callers
  * (task: JSON-wrapped, tool-wrapper-run: shorter format) format their own.
+ *
+ * For custom providers, omits the env-var suggestion — those keys are not
+ * read from `process.env`.
  */
-export function defaultProviderErrorMessage(provider: string, envVar: string): string {
-  return `No API key found for provider "${provider}". Run: bernard add-key ${provider} <your-api-key> or set ${envVar}.`;
+export function defaultProviderErrorMessage(
+  provider: string,
+  envVar: string,
+  isCustom = false,
+): string {
+  const envHint = isCustom ? '' : ` or set ${envVar}`;
+  return `No API key found for provider "${provider}". Run: bernard add-key ${provider} <your-api-key>${envHint}.`;
 }
 
 /**
@@ -563,33 +653,45 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     dotenv.config({ path: legacyEnv });
   }
 
-  // Stored keys override .env — user explicitly ran `add-key`
+  // Stored keys override .env — user explicitly ran `add-key`.
+  // Built-in providers also get their key bridged into `process.env` so the
+  // AI SDK module-level singletons pick it up. Custom-provider keys live only
+  // in `config.apiKeys` and are read directly when constructing the model.
   const storedKeys = loadStoredKeys();
   for (const [provider, key] of Object.entries(storedKeys)) {
     const envVar = PROVIDER_ENV_VARS[provider];
     if (envVar && key) process.env[envVar] = key;
   }
 
+  const customProviders = loadCustomProviders();
   const prefs = loadPreferences();
   const explicitProvider = overrides?.provider || prefs.provider || process.env.BERNARD_PROVIDER;
   let provider = explicitProvider || DEFAULT_PROVIDER;
   let model =
-    overrides?.model || prefs.model || process.env.BERNARD_MODEL || getDefaultModel(provider);
+    overrides?.model ||
+    prefs.model ||
+    process.env.BERNARD_MODEL ||
+    getDefaultModel(provider, customProviders);
 
   // When provider was not explicitly chosen and the default has no key,
-  // auto-detect the first provider that does have a key available.
+  // auto-detect the first provider (built-in or custom) that does have one.
   if (!explicitProvider) {
-    const keyMap: Record<string, string | undefined> = {
+    const builtinKeys: Record<string, string | undefined> = {
       anthropic: process.env.ANTHROPIC_API_KEY,
       openai: process.env.OPENAI_API_KEY,
       xai: process.env.XAI_API_KEY,
     };
-    if (!keyMap[provider]) {
-      const available = Object.keys(PROVIDER_ENV_VARS).find((p) => !!keyMap[p]);
+    const hasKey = (p: string): boolean => {
+      if (builtinKeys[p]) return true;
+      return !!storedKeys[p];
+    };
+    if (!hasKey(provider)) {
+      const available =
+        Object.keys(PROVIDER_ENV_VARS).find(hasKey) ?? Object.keys(customProviders).find(hasKey);
       if (available) {
         provider = available;
         if (!overrides?.model && !prefs.model && !process.env.BERNARD_MODEL) {
-          model = getDefaultModel(provider);
+          model = getDefaultModel(provider, customProviders);
         }
       }
     }
@@ -681,6 +783,8 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     xaiApiKey: process.env.XAI_API_KEY,
+    apiKeys: { ...storedKeys },
+    customProviders,
   };
 
   validateConfig(config);
@@ -690,11 +794,11 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
 function validateConfig(config: BernardConfig): void {
   const key = getProviderApiKey(config, config.provider);
   if (!key) {
-    const envVar = PROVIDER_ENV_VARS[config.provider];
-    throw new Error(
-      `No API key found for provider "${config.provider}". ` +
-        `Run: bernard add-key ${config.provider} <your-api-key>\n` +
-        `Or set ${envVar} in your .env file or environment.`,
-    );
+    const envVar = providerEnvVar(config.provider);
+    const isCustom = Object.hasOwn(config.customProviders ?? {}, config.provider);
+    const hint = isCustom
+      ? `Run: bernard add-key ${config.provider} <your-api-key>`
+      : `Run: bernard add-key ${config.provider} <your-api-key>\nOr set ${envVar} in your .env file or environment.`;
+    throw new Error(`No API key found for provider "${config.provider}". ${hint}`);
   }
 }

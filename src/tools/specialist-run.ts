@@ -1,6 +1,6 @@
 import { generateText, tool, type CoreMessage } from 'ai';
 import { z } from 'zod';
-import { getModel, getProviderOptions } from '../providers/index.js';
+import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
 import { createTools, type ToolOptions } from './index.js';
 import {
   printSpecialistStart,
@@ -120,7 +120,7 @@ export function createSpecialistRunTool(
         config,
       });
       if (!resolution.ok) {
-        return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar)}`;
+        return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom)}`;
       }
       const { provider: resolvedProvider, model: resolvedModel } = resolution;
 
@@ -200,8 +200,8 @@ export function createSpecialistRunTool(
         const baseMaxSteps = Math.ceil(config.maxSteps * SPECIALIST_STEP_RATIO);
         const maxSteps = computeEffectiveMaxSteps(baseMaxSteps, config.reactMode);
         let result = await generateText({
-          model: getModel(resolvedProvider, resolvedModel),
-          providerOptions: getProviderOptions(resolvedProvider),
+          model: getModelForConfig(config, resolvedProvider, resolvedModel),
+          providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
           tools: specialistTools,
           maxSteps,
           maxTokens: config.maxTokens,
@@ -219,8 +219,8 @@ export function createSpecialistRunTool(
             initialResult: result,
             regenerate: async (extraMessages) => {
               return generateText({
-                model: getModel(resolvedProvider, resolvedModel),
-                providerOptions: getProviderOptions(resolvedProvider),
+                model: getModelForConfig(config, resolvedProvider, resolvedModel),
+                providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
                 tools: specialistTools,
                 maxSteps: SPECIALIST_PAC_RETRY_STEPS,
                 maxTokens: config.maxTokens,
@@ -267,8 +267,8 @@ export function createSpecialistRunTool(
                 config.reactMode,
               );
               result = await generateText({
-                model: getModel(resolvedProvider, resolvedModel),
-                providerOptions: getProviderOptions(resolvedProvider),
+                model: getModelForConfig(config, resolvedProvider, resolvedModel),
+                providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
                 tools: specialistTools,
                 maxSteps: retryMaxSteps,
                 maxTokens: config.maxTokens,
