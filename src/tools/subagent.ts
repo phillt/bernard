@@ -23,6 +23,7 @@ import { runPACLoop } from '../pac.js';
 import { capSubagentResult } from './result-cap.js';
 import { appendActivitySummary } from './activity-summary.js';
 import { makeLastStepTextOnly } from './task.js';
+import { makeRepairHook } from '../tool-call-repair.js';
 
 const SUBAGENT_STEP_RATIO = 0.5;
 const SUBAGENT_PAC_RETRY_STEPS = 10;
@@ -154,6 +155,13 @@ export function createSubAgentTool(
         };
 
         const maxSteps = Math.ceil(config.maxSteps * SUBAGENT_STEP_RATIO);
+        const repairHook = makeRepairHook({
+          config,
+          provider: resolvedProvider,
+          model: resolvedModel,
+          label: 'subagent',
+          abortSignal: execOptions.abortSignal,
+        });
         const result = await generateText({
           model: getModelForConfig(config, resolvedProvider, resolvedModel),
           providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
@@ -164,6 +172,7 @@ export function createSubAgentTool(
           messages: [{ role: 'user', content: userMessage }],
           abortSignal: execOptions.abortSignal,
           experimental_prepareStep: makeLastStepTextOnly(maxSteps),
+          experimental_repairToolCall: repairHook,
           onStepFinish,
         });
 
@@ -184,6 +193,7 @@ export function createSubAgentTool(
                 messages: [{ role: 'user', content: userMessage }, ...extraMessages],
                 abortSignal: execOptions.abortSignal,
                 experimental_prepareStep: makeLastStepTextOnly(retryMaxSteps),
+                experimental_repairToolCall: repairHook,
                 onStepFinish,
               });
             },

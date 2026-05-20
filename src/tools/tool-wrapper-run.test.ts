@@ -99,8 +99,10 @@ import {
   captureLastToolCall,
   captureToolCalls,
   createToolWrapperRunTool,
+  renderWrapperParentView,
 } from './tool-wrapper-run.js';
 import { _resetPool } from './agent-pool.js';
+import { DEFAULT_SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 
 const { generateText } = await import('ai');
 const { acquireSlot, releaseSlot } = await import('./agent-pool.js');
@@ -447,6 +449,57 @@ describe('captureToolCalls', () => {
     const result = captureToolCalls(steps);
     expect(result).toHaveLength(1);
     expect(result[0].tool).toBe('shell');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('renderWrapperParentView', () => {
+  it('returns only status and result on success — never reasoning', () => {
+    const view = renderWrapperParentView({
+      status: 'ok',
+      result: 'done',
+      reasoning: ['decided to call shell', 'parsed output'],
+    });
+    const parsed = JSON.parse(view);
+    expect(parsed).toEqual({ status: 'ok', result: 'done' });
+    expect(parsed.reasoning).toBeUndefined();
+  });
+
+  it('includes error field on error and still strips reasoning', () => {
+    const view = renderWrapperParentView({
+      status: 'error',
+      result: 'command failed',
+      error: 'exit_code_1',
+      reasoning: ['internal note that should not leak'],
+    });
+    const parsed = JSON.parse(view);
+    expect(parsed).toEqual({
+      status: 'error',
+      result: 'command failed',
+      error: 'exit_code_1',
+    });
+    expect(parsed.reasoning).toBeUndefined();
+  });
+
+  it('omits the error field when it is absent', () => {
+    const view = renderWrapperParentView({
+      status: 'error',
+      result: 'opaque failure',
+    });
+    const parsed = JSON.parse(view);
+    expect(parsed).toEqual({ status: 'error', result: 'opaque failure' });
+    expect('error' in parsed).toBe(false);
+  });
+
+  it('applies capSubagentResult to the rendered JSON string', () => {
+    const longResult = 'x'.repeat(DEFAULT_SUBAGENT_RESULT_MAX_CHARS + 5000);
+    const view = renderWrapperParentView({
+      status: 'ok',
+      result: longResult,
+    });
+    expect(view.length).toBe(DEFAULT_SUBAGENT_RESULT_MAX_CHARS);
+    expect(view.endsWith(`chars]`)).toBe(true);
   });
 });
 
