@@ -518,11 +518,7 @@ describe('specialist-run tool', () => {
       );
 
       expect(result).not.toContain('No API key found');
-      expect(mockGetModel).toHaveBeenCalledWith(
-        expect.anything(),
-        'anthropic',
-        expect.any(String),
-      );
+      expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'anthropic', expect.any(String));
     });
 
     it('treats empty-string provider on saved specialist as not provided', async () => {
@@ -537,11 +533,7 @@ describe('specialist-run tool', () => {
       );
 
       expect(result).not.toContain('No API key found');
-      expect(mockGetModel).toHaveBeenCalledWith(
-        expect.anything(),
-        'anthropic',
-        expect.any(String),
-      );
+      expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'anthropic', expect.any(String));
     });
   });
 

@@ -23,11 +23,7 @@ import { CUSTOM_PROVIDERS_PATH } from './paths.js';
 import type { SupportedSdk } from './providers/types.js';
 
 /** Names reserved by built-in providers — cannot be used for custom entries. */
-export const RESERVED_PROVIDER_NAMES: ReadonlySet<string> = new Set([
-  'anthropic',
-  'openai',
-  'xai',
-]);
+export const RESERVED_PROVIDER_NAMES: ReadonlySet<string> = new Set(['anthropic', 'openai', 'xai']);
 
 /** Allowed SDK choices for a custom provider. */
 export const SUPPORTED_SDKS: ReadonlyArray<SupportedSdk> = ['openai', 'anthropic', 'xai'];
@@ -97,7 +93,12 @@ export function loadCustomProviders(): Record<string, CustomProvider> {
   try {
     const raw = fs.readFileSync(CUSTOM_PROVIDERS_PATH, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<CustomProvidersFile>;
-    if (parsed && typeof parsed === 'object' && parsed.providers && typeof parsed.providers === 'object') {
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      parsed.providers &&
+      typeof parsed.providers === 'object'
+    ) {
       const out: Record<string, CustomProvider> = {};
       for (const [name, entry] of Object.entries(parsed.providers)) {
         if (!entry || typeof entry !== 'object') continue;

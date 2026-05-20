@@ -168,7 +168,9 @@ program
       printInfo('\nTo add a key: bernard add-key <provider> <key>');
     }
     if (customStatuses.length === 0) {
-      printInfo('To add a custom provider: bernard add-provider <name> --sdk <openai|anthropic|xai> --base-url <url> --model <model>');
+      printInfo(
+        'To add a custom provider: bernard add-provider <name> --sdk <openai|anthropic|xai> --base-url <url> --model <model>',
+      );
     }
   });
 
@@ -179,37 +181,32 @@ program
   .requiredOption('--base-url <url>', 'Base URL for the API endpoint')
   .requiredOption('--model <model>', 'Default model name to use')
   .option('--key <key>', 'API key (can also be added later via add-key)')
-  .action(
-    (
-      name: string,
-      opts: { sdk: string; baseUrl: string; model: string; key?: string },
-    ) => {
-      try {
-        const sdk = opts.sdk.toLowerCase();
-        if (!SUPPORTED_SDKS.includes(sdk as SupportedSdk)) {
-          printError(`Unsupported SDK "${opts.sdk}". Supported: ${SUPPORTED_SDKS.join(', ')}.`);
-          process.exit(1);
-        }
-        const entry = saveCustomProvider({
-          name,
-          sdk: sdk as SupportedSdk,
-          baseURL: opts.baseUrl,
-          defaultModel: opts.model,
-        });
-        printInfo(`Custom provider "${entry.name}" saved (sdk=${entry.sdk}, url=${entry.baseURL}).`);
-        if (opts.key) {
-          saveProviderKey(name, opts.key);
-          printInfo(`API key for "${name}" saved.`);
-        } else {
-          printInfo(`Next: bernard add-key ${name} <your-api-key>`);
-        }
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        printError(message);
+  .action((name: string, opts: { sdk: string; baseUrl: string; model: string; key?: string }) => {
+    try {
+      const sdk = opts.sdk.toLowerCase();
+      if (!SUPPORTED_SDKS.includes(sdk as SupportedSdk)) {
+        printError(`Unsupported SDK "${opts.sdk}". Supported: ${SUPPORTED_SDKS.join(', ')}.`);
         process.exit(1);
       }
-    },
-  );
+      const entry = saveCustomProvider({
+        name,
+        sdk: sdk as SupportedSdk,
+        baseURL: opts.baseUrl,
+        defaultModel: opts.model,
+      });
+      printInfo(`Custom provider "${entry.name}" saved (sdk=${entry.sdk}, url=${entry.baseURL}).`);
+      if (opts.key) {
+        saveProviderKey(name, opts.key);
+        printInfo(`API key for "${name}" saved.`);
+      } else {
+        printInfo(`Next: bernard add-key ${name} <your-api-key>`);
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
 
 program
   .command('remove-provider <name>')

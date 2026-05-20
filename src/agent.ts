@@ -1,5 +1,9 @@
 import { generateText, type CoreMessage, type UserContent } from 'ai';
-import { getModelForConfig, getModelProfile, getProviderOptionsForConfig } from './providers/index.js';
+import {
+  getModelForConfig,
+  getModelProfile,
+  getProviderOptionsForConfig,
+} from './providers/index.js';
 import { createTools, type ToolOptions } from './tools/index.js';
 import { createSubAgentTool } from './tools/subagent.js';
 import { createTaskTool } from './tools/task.js';

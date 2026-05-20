@@ -305,10 +305,7 @@ function isKnownProvider(provider: string): boolean {
  */
 export function saveProviderKey(provider: string, key: string): void {
   if (!isKnownProvider(provider)) {
-    const known = [
-      ...Object.keys(PROVIDER_ENV_VARS),
-      ...Object.keys(loadCustomProviders()),
-    ];
+    const known = [...Object.keys(PROVIDER_ENV_VARS), ...Object.keys(loadCustomProviders())];
     throw new Error(
       `Unknown provider "${provider}". Known: ${known.join(', ') || '(none)'}. ` +
         `Run \`bernard add-provider ${provider} …\` first to register a custom provider.`,
@@ -558,7 +555,9 @@ export function hasProviderKey(config: BernardConfig, provider: string): boolean
  * keys are never read from env, only from `keys.json`).
  */
 export function providerEnvVar(provider: string): string {
-  return PROVIDER_ENV_VARS[provider] ?? `BERNARD_${provider.toUpperCase().replace(/-/g, '_')}_API_KEY`;
+  return (
+    PROVIDER_ENV_VARS[provider] ?? `BERNARD_${provider.toUpperCase().replace(/-/g, '_')}_API_KEY`
+  );
 }
 
 /**

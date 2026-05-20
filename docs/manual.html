@@ -298,8 +298,11 @@
       .content h3 {
         font-size: 18px;
         font-weight: 600;
-        margin-top: 32px;
+        margin-top: 64px;
         margin-bottom: 12px;
+        padding-bottom: 6px;
+        color: var(--text-secondary);
+        border-bottom: 1px solid var(--border);
       }
 
       .content h4 {
@@ -1067,10 +1070,10 @@
           </table>
         </div>
         <p>
-          <strong>Custom providers</strong> (see
-          <a href="#custom-providers">Custom Providers</a>) store their keys via
-          <code>bernard add-key &lt;name&gt; &lt;key&gt;</code> and are <em>not</em> read from
-          environment variables — there is no <code>BERNARD_&lt;NAME&gt;_API_KEY</code> bridge.
+          <strong>Custom providers</strong> (see <a href="#custom-providers">Custom Providers</a>)
+          store their keys via <code>bernard add-key &lt;name&gt; &lt;key&gt;</code> and are
+          <em>not</em> read from environment variables — there is no
+          <code>BERNARD_&lt;NAME&gt;_API_KEY</code> bridge.
         </p>
 
         <h3 id="env-loading">.env File Loading</h3>
@@ -1407,8 +1410,8 @@
                 <td><code>/model</code></td>
                 <td>
                   Interactively switch model for the current provider; for custom providers, the
-                  menu includes a <strong>+ Type a new model name…</strong> entry that is
-                  remembered for next time
+                  menu includes a <strong>+ Type a new model name…</strong> entry that is remembered
+                  for next time
                 </td>
               </tr>
               <tr>

@@ -2367,11 +2367,7 @@ async function runAddProviderWizard(
   sig = createMenuSignal();
   let nameResult: ValueResult;
   try {
-    nameResult = await promptValue(
-      rl,
-      { label: 'Provider name (lowercase, e.g. "ollama")' },
-      sig,
-    );
+    nameResult = await promptValue(rl, { label: 'Provider name (lowercase, e.g. "ollama")' }, sig);
   } finally {
     clearMenuSignal();
   }
@@ -2387,11 +2383,7 @@ async function runAddProviderWizard(
   sig = createMenuSignal();
   let urlResult: ValueResult;
   try {
-    urlResult = await promptValue(
-      rl,
-      { label: 'Base URL (e.g. http://localhost:11434/v1)' },
-      sig,
-    );
+    urlResult = await promptValue(rl, { label: 'Base URL (e.g. http://localhost:11434/v1)' }, sig);
   } finally {
     clearMenuSignal();
   }
