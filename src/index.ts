@@ -26,7 +26,6 @@ import {
   loadCustomProviders,
   saveCustomProvider,
   removeCustomProvider,
-  SUPPORTED_SDKS,
 } from './custom-providers.js';
 import type { SupportedSdk } from './providers/types.js';
 import { startRepl } from './repl.js';
@@ -183,14 +182,9 @@ program
   .option('--key <key>', 'API key (can also be added later via add-key)')
   .action((name: string, opts: { sdk: string; baseUrl: string; model: string; key?: string }) => {
     try {
-      const sdk = opts.sdk.toLowerCase();
-      if (!SUPPORTED_SDKS.includes(sdk as SupportedSdk)) {
-        printError(`Unsupported SDK "${opts.sdk}". Supported: ${SUPPORTED_SDKS.join(', ')}.`);
-        process.exit(1);
-      }
       const entry = saveCustomProvider({
         name,
-        sdk: sdk as SupportedSdk,
+        sdk: opts.sdk.toLowerCase() as SupportedSdk,
         baseURL: opts.baseUrl,
         defaultModel: opts.model,
       });

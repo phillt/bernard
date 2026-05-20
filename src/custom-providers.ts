@@ -20,6 +20,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { CUSTOM_PROVIDERS_PATH } from './paths.js';
+import { atomicWriteFileSync } from './fs-utils.js';
 import type { SupportedSdk } from './providers/types.js';
 
 /** Names reserved by built-in providers — cannot be used for custom entries. */
@@ -134,12 +135,9 @@ export function loadCustomProviders(): Record<string, CustomProvider> {
 }
 
 function writeFile(providers: Record<string, CustomProvider>): void {
-  const dir = path.dirname(CUSTOM_PROVIDERS_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  fs.mkdirSync(path.dirname(CUSTOM_PROVIDERS_PATH), { recursive: true });
   const payload: CustomProvidersFile = { providers };
-  fs.writeFileSync(CUSTOM_PROVIDERS_PATH, JSON.stringify(payload, null, 2) + '\n');
+  atomicWriteFileSync(CUSTOM_PROVIDERS_PATH, JSON.stringify(payload, null, 2) + '\n');
   fs.chmodSync(CUSTOM_PROVIDERS_PATH, 0o600);
 }
 

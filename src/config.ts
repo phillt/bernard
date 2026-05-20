@@ -285,17 +285,6 @@ function loadStoredKeys(): Record<string, string> {
 }
 
 /**
- * Returns true if `provider` is a known built-in or registered custom provider.
- * Used by {@link saveProviderKey} / {@link removeProviderKey} to validate that
- * a key being stored belongs to a provider Bernard knows how to dispatch to.
- */
-function isKnownProvider(provider: string): boolean {
-  if (PROVIDER_ENV_VARS[provider]) return true;
-  const customProviders = loadCustomProviders();
-  return Object.hasOwn(customProviders, provider);
-}
-
-/**
  * Stores an API key for the given provider in the config directory (mode 0600).
  *
  * Accepts both built-in providers and custom providers that have been
@@ -304,12 +293,16 @@ function isKnownProvider(provider: string): boolean {
  * @throws {Error} If `provider` is neither a built-in nor a known custom provider.
  */
 export function saveProviderKey(provider: string, key: string): void {
-  if (!isKnownProvider(provider)) {
-    const known = [...Object.keys(PROVIDER_ENV_VARS), ...Object.keys(loadCustomProviders())];
-    throw new Error(
-      `Unknown provider "${provider}". Known: ${known.join(', ') || '(none)'}. ` +
-        `Run \`bernard add-provider ${provider} …\` first to register a custom provider.`,
-    );
+  const isBuiltin = !!PROVIDER_ENV_VARS[provider];
+  if (!isBuiltin) {
+    const customProviders = loadCustomProviders();
+    if (!Object.hasOwn(customProviders, provider)) {
+      const known = [...Object.keys(PROVIDER_ENV_VARS), ...Object.keys(customProviders)];
+      throw new Error(
+        `Unknown provider "${provider}". Known: ${known.join(', ') || '(none)'}. ` +
+          `Run \`bernard add-provider ${provider} …\` first to register a custom provider.`,
+      );
+    }
   }
   const dir = path.dirname(KEYS_PATH);
   if (!fs.existsSync(dir)) {
@@ -609,7 +602,9 @@ export function resolveProviderAndModel(opts: {
   const explicitModel = blankToUndefined(opts.model) ?? blankToUndefined(opts.specialistModel);
   const model =
     explicitModel ??
-    (provider !== opts.config.provider ? getDefaultModel(provider) : opts.config.model);
+    (provider !== opts.config.provider
+      ? getDefaultModel(provider, opts.config.customProviders)
+      : opts.config.model);
 
   if (!hasProviderKey(opts.config, provider)) {
     return { ok: false, provider, envVar: providerEnvVar(provider) };

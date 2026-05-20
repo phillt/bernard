@@ -20,12 +20,34 @@ export interface CustomProviderInvocation {
   apiKey: string;
 }
 
+// Memoize SDK factories so repeated `getModel` calls for the same custom
+// provider don't reconstruct the factory on every agent turn / sub-agent
+// dispatch. Built-in providers already use module-level singletons.
+type CustomFactory = ReturnType<typeof createOpenAI | typeof createAnthropic | typeof createXai>;
+const customFactoryCache = new Map<string, CustomFactory>();
+
+function getCustomFactory(custom: CustomProviderInvocation): CustomFactory {
+  const cacheKey = `${custom.sdk}|${custom.baseURL}|${custom.apiKey}`;
+  const cached = customFactoryCache.get(cacheKey);
+  if (cached) return cached;
+  const opts = { baseURL: custom.baseURL, apiKey: custom.apiKey };
+  const factory =
+    custom.sdk === 'openai'
+      ? createOpenAI(opts)
+      : custom.sdk === 'anthropic'
+        ? createAnthropic(opts)
+        : createXai(opts);
+  customFactoryCache.set(cacheKey, factory);
+  return factory;
+}
+
 /**
  * Return an AI SDK `LanguageModel` instance for the given provider and model name.
  *
  * For built-in providers (`anthropic`, `openai`, `xai`) the module-level singletons
  * are used, which read API keys from environment variables. For custom providers
- * the matching `createXxx({ baseURL, apiKey })` factory is invoked instead.
+ * the matching `createXxx({ baseURL, apiKey })` factory is invoked instead (cached
+ * by `(sdk, baseURL, apiKey)` so repeated calls are cheap).
  *
  * @param provider - Provider identifier (built-in or custom registry name).
  * @param model - Provider-specific model identifier.
@@ -39,16 +61,9 @@ export function getModel(
   custom?: CustomProviderInvocation,
 ): LanguageModel {
   if (custom) {
-    switch (custom.sdk) {
-      case 'openai': {
-        const factory = createOpenAI({ baseURL: custom.baseURL, apiKey: custom.apiKey });
-        return factory.responses(model);
-      }
-      case 'anthropic':
-        return createAnthropic({ baseURL: custom.baseURL, apiKey: custom.apiKey })(model);
-      case 'xai':
-        return createXai({ baseURL: custom.baseURL, apiKey: custom.apiKey })(model);
-    }
+    const factory = getCustomFactory(custom);
+    if (custom.sdk === 'openai') return (factory as ReturnType<typeof createOpenAI>).responses(model);
+    return (factory as ReturnType<typeof createAnthropic> | ReturnType<typeof createXai>)(model);
   }
   switch (provider) {
     case 'anthropic':
