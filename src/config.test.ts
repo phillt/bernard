@@ -991,7 +991,7 @@ describe('resolveProviderAndModel', () => {
 
   it('returns ok:false with envVar when no key is present', () => {
     const r = resolveProviderAndModel({ provider: 'xai', config: baseConfig });
-    expect(r).toEqual({ ok: false, provider: 'xai', envVar: 'XAI_API_KEY' });
+    expect(r).toEqual({ ok: false, provider: 'xai', envVar: 'XAI_API_KEY', isCustom: false });
   });
 
   it('uses explicit model override over default-model fallback on cross-provider', () => {

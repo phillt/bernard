@@ -62,7 +62,8 @@ export function getModel(
 ): LanguageModel {
   if (custom) {
     const factory = getCustomFactory(custom);
-    if (custom.sdk === 'openai') return (factory as ReturnType<typeof createOpenAI>).responses(model);
+    if (custom.sdk === 'openai')
+      return (factory as ReturnType<typeof createOpenAI>).responses(model);
     return (factory as ReturnType<typeof createAnthropic> | ReturnType<typeof createXai>)(model);
   }
   switch (provider) {

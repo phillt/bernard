@@ -169,9 +169,10 @@ export function createTaskTool(
     execute: async ({ task, taskId, context, provider, model }, execOptions) => {
       const resolution = resolveProviderAndModel({ provider, model, config });
       if (!resolution.ok) {
+        const envHint = resolution.isCustom ? '' : ` or set ${resolution.envVar}`;
         return JSON.stringify({
           status: 'error',
-          output: `No API key found for provider "${resolution.provider}". Run: bernard add-key ${resolution.provider} <your-api-key> or set ${resolution.envVar}.`,
+          output: `No API key found for provider "${resolution.provider}". Run: bernard add-key ${resolution.provider} <your-api-key>${envHint}.`,
         });
       }
       const { provider: resolvedProvider, model: resolvedModel } = resolution;

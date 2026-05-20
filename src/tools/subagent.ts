@@ -98,7 +98,7 @@ export function createSubAgentTool(
     execute: async ({ task, context, provider, model }, execOptions) => {
       const resolution = resolveProviderAndModel({ provider, model, config });
       if (!resolution.ok) {
-        return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar)}`;
+        return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom)}`;
       }
       const { provider: resolvedProvider, model: resolvedModel } = resolution;
 

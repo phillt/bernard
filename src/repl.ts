@@ -1571,13 +1571,11 @@ export async function startRepl(
             });
           }
         }
+        if (builtinAvailable.length === 0 && customAvailable.length === 0) {
+          printInfo('No providers have API keys configured yet — add one below.');
+        }
         entries.push({ type: 'section', title: '' });
         entries.push({ label: '+ Add custom provider…', value: '__add__' });
-
-        if (entries.length === 1) {
-          // Only the "+ Add custom provider…" entry — nothing else to choose.
-          printError('No providers have API keys configured.');
-        }
 
         const signal = createMenuSignal();
         try {
@@ -1592,9 +1590,13 @@ export async function startRepl(
             if (value === '__add__') {
               const added = await runAddProviderWizard(rl, createMenuSignal, clearMenuSignal);
               if (added) {
-                config.customProviders = { ...customProviders, [added.name]: added };
-                config.provider = added.name;
-                config.model = added.defaultModel;
+                config.customProviders = {
+                  ...customProviders,
+                  [added.entry.name]: added.entry,
+                };
+                config.apiKeys = { ...(config.apiKeys ?? {}), [added.entry.name]: added.apiKey };
+                config.provider = added.entry.name;
+                config.model = added.entry.defaultModel;
                 savePreferences({
                   provider: config.provider,
                   model: config.model,
@@ -1603,7 +1605,9 @@ export async function startRepl(
                   tokenWindow: config.tokenWindow,
                   theme: config.theme,
                 });
-                printInfo(`  Added and switched to ${added.name} (${added.defaultModel})`);
+                printInfo(
+                  `  Added and switched to ${added.entry.name} (${added.entry.defaultModel})`,
+                );
               }
             } else {
               config.provider = value;
@@ -2342,13 +2346,15 @@ Remember: the systemPrompt should read like a persona definition — who this sp
 
 /**
  * Interactive wizard for adding a custom provider from `/provider`.
- * Returns the saved entry on success, `null` on cancel/error.
+ * Returns the saved entry plus the freshly entered API key on success
+ * (so the caller can update the live `config.apiKeys` map without
+ * re-reading from disk), or `null` on cancel/error.
  */
 async function runAddProviderWizard(
   rl: readline.Interface,
   createMenuSignal: () => AbortSignal,
   clearMenuSignal: () => void,
-): Promise<CustomProvider | null> {
+): Promise<{ entry: CustomProvider; apiKey: string } | null> {
   printInfo('\nAdd custom provider — follows the same SDK contract as built-ins.');
 
   // 1. SDK choice
@@ -2432,7 +2438,7 @@ async function runAddProviderWizard(
   try {
     const entry = saveCustomProvider({ name, sdk, baseURL, defaultModel });
     saveProviderKey(name, apiKey);
-    return entry;
+    return { entry, apiKey };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     printError(message);

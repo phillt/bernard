@@ -196,9 +196,12 @@ export function createToolWrapperRunTool(
         config,
       });
       if (!resolution.ok) {
+        const hint = resolution.isCustom
+          ? `Run: bernard add-key ${resolution.provider} <key>`
+          : `Set ${resolution.envVar} or run: bernard add-key ${resolution.provider} <key>`;
         return JSON.stringify({
           status: 'error',
-          result: `No API key for provider "${resolution.provider}". Set ${resolution.envVar} or run: bernard add-key ${resolution.provider} <key>.`,
+          result: `No API key for provider "${resolution.provider}". ${hint}.`,
           error: 'no_api_key',
         });
       }

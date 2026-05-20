@@ -120,7 +120,7 @@ export function createSpecialistRunTool(
         config,
       });
       if (!resolution.ok) {
-        return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar)}`;
+        return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom)}`;
       }
       const { provider: resolvedProvider, model: resolvedModel } = resolution;
 

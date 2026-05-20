@@ -567,12 +567,13 @@ export function blankToUndefined(v: string | undefined): string | undefined {
 /**
  * Result of {@link resolveProviderAndModel}. On the failure branch, `provider`
  * is the resolved provider name and `envVar` is the conventional environment
- * variable for it — callers format the error string in their preferred shape
- * (plain text vs JSON-wrapped) using these fields.
+ * variable for it — only meaningful for built-in providers. Custom-provider
+ * keys are stored in `keys.json` and never read from `process.env`, so
+ * callers should hide the env-var hint when `isCustom` is `true`.
  */
 export type ProviderResolution =
   | { ok: true; provider: string; model: string }
-  | { ok: false; provider: string; envVar: string };
+  | { ok: false; provider: string; envVar: string; isCustom: boolean };
 
 /**
  * Resolves the provider and model to use for a sub-agent / specialist /
@@ -607,7 +608,8 @@ export function resolveProviderAndModel(opts: {
       : opts.config.model);
 
   if (!hasProviderKey(opts.config, provider)) {
-    return { ok: false, provider, envVar: providerEnvVar(provider) };
+    const isCustom = Object.hasOwn(opts.config.customProviders ?? {}, provider);
+    return { ok: false, provider, envVar: providerEnvVar(provider), isCustom };
   }
   return { ok: true, provider, model };
 }
@@ -616,9 +618,17 @@ export function resolveProviderAndModel(opts: {
  * Default error message format for a {@link ProviderResolution} failure.
  * Used by the plain-string callers (specialist-run, subagent). Other callers
  * (task: JSON-wrapped, tool-wrapper-run: shorter format) format their own.
+ *
+ * For custom providers, omits the env-var suggestion — those keys are not
+ * read from `process.env`.
  */
-export function defaultProviderErrorMessage(provider: string, envVar: string): string {
-  return `No API key found for provider "${provider}". Run: bernard add-key ${provider} <your-api-key> or set ${envVar}.`;
+export function defaultProviderErrorMessage(
+  provider: string,
+  envVar: string,
+  isCustom = false,
+): string {
+  const envHint = isCustom ? '' : ` or set ${envVar}`;
+  return `No API key found for provider "${provider}". Run: bernard add-key ${provider} <your-api-key>${envHint}.`;
 }
 
 /**
