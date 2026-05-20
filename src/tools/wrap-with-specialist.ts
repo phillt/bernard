@@ -23,22 +23,42 @@ Execute this tool call (or a safer/equivalent variant if you spot a clear proble
 }
 
 /**
- * Formats a wrapper's structured result into a string suitable for return
- * from a regular tool's `execute` — i.e. what the main agent will see in its
- * tool-result message. On success, returns the `result` field directly
- * (stringifying non-string values). On error, prefixes with `Error:` so the
- * model treats it like any other tool error.
+ * Formats a wrapper's structured result so the main agent — and the
+ * tool-augmentation layer's `detectToolError` — observe the *native* tool
+ * return shape, just as if the shim had been bypassed.
+ *
+ * - On `status: 'ok'`, returns `wrapped.result` as-is (no JSON-stringifying
+ *   structured payloads), so e.g. `shell`'s `{ output, is_error }` and
+ *   `file_*`'s `{ ... }` propagate unchanged.
+ * - On `status: 'error'`, maps the wrapper error to the *same shape* the
+ *   native tool would have produced for an error:
+ *     - `shell` → `{ output: 'Error (...): ...', is_error: true }`
+ *     - `file_read_lines` / `file_edit_lines` / `file_write` → `{ error: '...' }`
+ *     - everything else (web_*, MCP, generic) → `'Error (...): ...'` string
+ *   This keeps `detectToolError` and tool-profile learning working whether or
+ *   not the shim is active.
  */
-export function formatWrappedResult(wrapped: {
-  status: 'ok' | 'error';
-  result: unknown;
-  error?: string;
-}): string {
+export function formatWrappedResult(
+  wrapped: { status: 'ok' | 'error'; result: unknown; error?: string },
+  toolName?: string,
+): unknown {
   if (wrapped.status === 'ok') {
-    return typeof wrapped.result === 'string' ? wrapped.result : JSON.stringify(wrapped.result);
+    return wrapped.result;
   }
   const body = typeof wrapped.result === 'string' ? wrapped.result : JSON.stringify(wrapped.result);
-  return wrapped.error ? `Error (${wrapped.error}): ${body}` : `Error: ${body}`;
+  const message = wrapped.error ? `Error (${wrapped.error}): ${body}` : `Error: ${body}`;
+
+  if (toolName === 'shell') {
+    return { output: message, is_error: true };
+  }
+  if (
+    toolName === 'file_read_lines' ||
+    toolName === 'file_edit_lines' ||
+    toolName === 'file_write'
+  ) {
+    return { error: message };
+  }
+  return message;
 }
 
 /**
@@ -54,7 +74,7 @@ export function formatWrappedResult(wrapped: {
  * agent; the wrapper's `reasoning` array is logged separately and never enters
  * the parent's context.
  */
-export function wrapToolWithSpecialist<TArgs, TResult>(
+export function wrapToolWithSpecialist<TArgs>(
   baseTool: any,
   toolName: string,
   specialistId: string,
@@ -67,7 +87,7 @@ export function wrapToolWithSpecialist<TArgs, TResult>(
 
   return {
     ...baseTool,
-    execute: async (args: TArgs, execOptions: any): Promise<TResult | string> => {
+    execute: async (args: TArgs, execOptions: any): Promise<unknown> => {
       const specialist = deps.specialistStore.get(specialistId);
       if (!specialist) {
         return baseExecute(args, execOptions);
@@ -88,7 +108,7 @@ export function wrapToolWithSpecialist<TArgs, TResult>(
           },
           deps,
         );
-        return formatWrappedResult(wrapped) as TResult | string;
+        return formatWrappedResult(wrapped, toolName);
       } catch (err) {
         // Defensive: if the dispatch itself throws, fall back to the raw tool
         // rather than killing the turn.

@@ -76,33 +76,65 @@ describe('formatWrappedResult', () => {
     expect(formatWrappedResult({ status: 'ok', result: 'hello' })).toBe('hello');
   });
 
-  it('JSON-stringifies non-string `result` on success', () => {
-    expect(formatWrappedResult({ status: 'ok', result: { a: 1 } })).toBe('{"a":1}');
+  it('preserves a structured `result` object on success (does not JSON-stringify)', () => {
+    const obj = { output: 'hi', is_error: false };
+    const out = formatWrappedResult({ status: 'ok', result: obj }, 'shell');
+    expect(out).toEqual(obj);
+    // Same reference — passed through as-is so detectToolError sees native shape.
+    expect(out).toBe(obj);
   });
 
-  it('prefixes with "Error (<code>):" when an error code is present', () => {
-    const out = formatWrappedResult({
-      status: 'error',
-      result: 'command failed',
-      error: 'exit_code_1',
+  it('maps shell errors into native `{ output, is_error: true }` shape', () => {
+    const out = formatWrappedResult(
+      { status: 'error', result: 'command failed', error: 'exit_code_1' },
+      'shell',
+    );
+    expect(out).toEqual({
+      output: 'Error (exit_code_1): command failed',
+      is_error: true,
     });
-    expect(out).toBe('Error (exit_code_1): command failed');
   });
 
-  it('prefixes with "Error:" when no error code is present', () => {
-    const out = formatWrappedResult({
+  it('maps file_read_lines errors into native `{ error }` shape', () => {
+    const out = formatWrappedResult(
+      { status: 'error', result: 'no such file', error: 'enoent' },
+      'file_read_lines',
+    );
+    expect(out).toEqual({ error: 'Error (enoent): no such file' });
+  });
+
+  it('maps file_edit_lines and file_write errors into native `{ error }` shape', () => {
+    const editOut = formatWrappedResult(
+      { status: 'error', result: 'range invalid' },
+      'file_edit_lines',
+    );
+    expect(editOut).toEqual({ error: 'Error: range invalid' });
+    const writeOut = formatWrappedResult(
+      { status: 'error', result: 'permission denied', error: 'eperm' },
+      'file_write',
+    );
+    expect(writeOut).toEqual({ error: 'Error (eperm): permission denied' });
+  });
+
+  it('returns an `Error (...): ...` string for web_* / generic tools on error', () => {
+    const web = formatWrappedResult(
+      { status: 'error', result: '404 not found', error: 'http_404' },
+      'web_read',
+    );
+    expect(web).toBe('Error (http_404): 404 not found');
+
+    const generic = formatWrappedResult({
       status: 'error',
       result: 'opaque failure',
     });
-    expect(out).toBe('Error: opaque failure');
+    expect(generic).toBe('Error: opaque failure');
   });
 
-  it('JSON-stringifies a non-string error body', () => {
-    const out = formatWrappedResult({
-      status: 'error',
-      result: { reason: 'bad' },
-      error: 'parse_failed',
-    });
+  it('JSON-stringifies a non-string error body inside the error message', () => {
+    const out = formatWrappedResult(
+      { status: 'error', result: { reason: 'bad' }, error: 'parse_failed' },
+      'web_read',
+    );
     expect(out).toBe('Error (parse_failed): {"reason":"bad"}');
   });
 });
@@ -170,7 +202,7 @@ describe('wrapToolWithSpecialist', () => {
     expect(call.runLabel).toBe('[shim] shell → Shell Wrapper');
   });
 
-  it('formats wrapper errors as "Error (code): body" without exposing reasoning', async () => {
+  it('maps wrapper errors to the native shell error shape without exposing reasoning', async () => {
     const base = makeBaseTool(async () => 'should not run');
     const deps = makeDeps();
     deps.specialistStore.get.mockReturnValue({ name: 'Shell Wrapper', kind: 'tool-wrapper' });
@@ -187,8 +219,26 @@ describe('wrapToolWithSpecialist', () => {
       { abortSignal: undefined },
     );
 
-    expect(result).toBe('Error (exit_code_1): permission denied');
-    expect(String(result)).not.toContain('should not leak');
+    expect(result).toEqual({
+      output: 'Error (exit_code_1): permission denied',
+      is_error: true,
+    });
+    expect(JSON.stringify(result)).not.toContain('should not leak');
+  });
+
+  it('preserves a structured shell success result so detectToolError sees native shape', async () => {
+    const base = makeBaseTool(async () => 'should not run');
+    const deps = makeDeps();
+    deps.specialistStore.get.mockReturnValue({ name: 'Shell Wrapper', kind: 'tool-wrapper' });
+    vi.mocked(dispatchToolWrapper).mockResolvedValue({
+      status: 'ok',
+      result: { output: 'file1\nfile2', is_error: false },
+    });
+
+    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', deps);
+    const result = await wrapped.execute({ command: 'ls' }, { abortSignal: undefined });
+
+    expect(result).toEqual({ output: 'file1\nfile2', is_error: false });
   });
 
   it('falls back to baseExecute when dispatch itself throws', async () => {

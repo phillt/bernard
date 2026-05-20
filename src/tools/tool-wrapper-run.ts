@@ -30,7 +30,7 @@ import {
   type WrapperResult,
 } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
-import { capSubagentResult } from './result-cap.js';
+import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 
 /** Fraction of config.maxSteps allocated to a tool-wrapper run. Mirrors task/specialist ratios. */
 const TOOL_WRAPPER_STEP_RATIO = 0.5;
@@ -313,6 +313,7 @@ export async function dispatchToolWrapper(
       provider: resolvedProvider,
       model: resolvedModel,
       label: 'tool-wrapper',
+      abortSignal,
     });
 
     const result = await generateText({
@@ -388,20 +389,40 @@ export async function dispatchToolWrapper(
 
 /**
  * Strips internal fields (`reasoning`) from a wrapper result before it crosses
- * back into the parent agent's context, and applies the standard subagent
- * result cap. The reasoning array is already persisted to the JSONL trace via
+ * back into the parent agent's context, and caps the `result` field so the
+ * outer JSON envelope stays parseable when the wrapper output is large. The
+ * reasoning array is already persisted to the JSONL trace via
  * {@link appendReasoningLog}; the parent doesn't need it.
+ *
+ * The cap is applied to the `result` field *before* serialization rather than
+ * to the serialized envelope, so a truncated payload never produces invalid
+ * JSON.
  */
-export function renderWrapperParentView(wrapped: WrapperResult): string {
+export function renderWrapperParentView(
+  wrapped: WrapperResult,
+  maxChars: number = SUBAGENT_RESULT_MAX_CHARS,
+): string {
+  const errorLen = wrapped.error?.length ?? 0;
+  const resultBudget = Math.max(256, maxChars - errorLen - 80);
+
+  const cappedResult =
+    typeof wrapped.result === 'string'
+      ? capSubagentResult(wrapped.result, resultBudget)
+      : (() => {
+          const asJson = JSON.stringify(wrapped.result);
+          if (asJson === undefined || asJson.length <= resultBudget) return wrapped.result;
+          return capSubagentResult(asJson, resultBudget);
+        })();
+
   const parentView =
     wrapped.status === 'ok'
-      ? { status: 'ok' as const, result: wrapped.result }
+      ? { status: 'ok' as const, result: cappedResult }
       : {
           status: 'error' as const,
-          result: wrapped.result,
+          result: cappedResult,
           ...(wrapped.error !== undefined ? { error: wrapped.error } : {}),
         };
-  return capSubagentResult(JSON.stringify(parentView));
+  return JSON.stringify(parentView);
 }
 
 /**

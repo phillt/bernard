@@ -492,14 +492,41 @@ describe('renderWrapperParentView', () => {
     expect('error' in parsed).toBe(false);
   });
 
-  it('applies capSubagentResult to the rendered JSON string', () => {
+  it('caps the result field before serialization so the envelope stays valid JSON', () => {
     const longResult = 'x'.repeat(DEFAULT_SUBAGENT_RESULT_MAX_CHARS + 5000);
     const view = renderWrapperParentView({
       status: 'ok',
       result: longResult,
     });
-    expect(view.length).toBe(DEFAULT_SUBAGENT_RESULT_MAX_CHARS);
-    expect(view.endsWith(`chars]`)).toBe(true);
+
+    // The outer envelope must remain parseable — that's the whole point of the fix.
+    const parsed = JSON.parse(view);
+    expect(parsed.status).toBe('ok');
+    expect(typeof parsed.result).toBe('string');
+
+    // Result was truncated (much shorter than the original) and carries the marker.
+    expect((parsed.result as string).length).toBeLessThan(longResult.length);
+    expect((parsed.result as string).endsWith('chars]')).toBe(true);
+
+    // Total envelope still bounded around the cap.
+    expect(view.length).toBeLessThanOrEqual(DEFAULT_SUBAGENT_RESULT_MAX_CHARS);
+  });
+
+  it('caps a non-string `result` by JSON-stringifying and truncating it', () => {
+    const big = { payload: 'y'.repeat(DEFAULT_SUBAGENT_RESULT_MAX_CHARS + 1000) };
+    const view = renderWrapperParentView({ status: 'ok', result: big });
+
+    const parsed = JSON.parse(view);
+    expect(parsed.status).toBe('ok');
+    // Non-string result that exceeds budget becomes a truncated string carrying the marker.
+    expect(typeof parsed.result).toBe('string');
+    expect((parsed.result as string).endsWith('chars]')).toBe(true);
+  });
+
+  it('preserves small non-string `result` payloads as native JSON', () => {
+    const small = { output: 'hi', is_error: false };
+    const view = renderWrapperParentView({ status: 'ok', result: small });
+    expect(JSON.parse(view)).toEqual({ status: 'ok', result: small });
   });
 });
 
