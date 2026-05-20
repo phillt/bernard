@@ -1,5 +1,5 @@
 import { generateText, type CoreMessage } from 'ai';
-import { getModel, getProviderOptions } from './providers/index.js';
+import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 import type { RAGStore } from './rag.js';
@@ -163,8 +163,8 @@ export async function extractDomainFacts(
       const domain = DOMAIN_REGISTRY[domainId];
 
       const result = await generateText({
-        model: getModel(config.provider, config.model),
-        providerOptions: getProviderOptions(config.provider),
+        model: getModelForConfig(config, config.provider, config.model),
+        providerOptions: getProviderOptionsForConfig(config, config.provider),
         maxTokens: 2048,
         system: domain.extractionPrompt,
         messages: [
@@ -257,8 +257,8 @@ export async function compressHistory(
   try {
     // Run summarization and domain-specific fact extraction in parallel
     const summarizePromise = generateText({
-      model: getModel(config.provider, config.model),
-      providerOptions: getProviderOptions(config.provider),
+      model: getModelForConfig(config, config.provider, config.model),
+      providerOptions: getProviderOptionsForConfig(config, config.provider),
       maxTokens: 2048,
       system: SUMMARIZATION_PROMPT,
       messages: [{ role: 'user', content: `Summarize this conversation:\n\n${serialized}` }],

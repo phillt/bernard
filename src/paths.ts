@@ -29,6 +29,7 @@ export const PREFS_PATH = path.join(CONFIG_DIR, 'preferences.json');
 export const KEYS_PATH = path.join(CONFIG_DIR, 'keys.json');
 export const ENV_PATH = path.join(CONFIG_DIR, '.env');
 export const MCP_CONFIG_PATH = path.join(CONFIG_DIR, 'mcp.json');
+export const CUSTOM_PROVIDERS_PATH = path.join(CONFIG_DIR, 'custom-providers.json');
 
 // Data
 export const MEMORY_DIR = path.join(DATA_DIR, 'memory');

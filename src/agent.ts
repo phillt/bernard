@@ -1,5 +1,5 @@
 import { generateText, type CoreMessage, type UserContent } from 'ai';
-import { getModel, getModelProfile, getProviderOptions } from './providers/index.js';
+import { getModelForConfig, getModelProfile, getProviderOptionsForConfig } from './providers/index.js';
 import { createTools, type ToolOptions } from './tools/index.js';
 import { createSubAgentTool } from './tools/subagent.js';
 import { createTaskTool } from './tools/task.js';
@@ -480,7 +480,11 @@ export class Agent {
     this.planStore.clear();
     clearPinnedRegion('plan');
 
-    const profile = getModelProfile(this.config.provider, this.config.model);
+    const profile = getModelProfile(
+      this.config.provider,
+      this.config.model,
+      this.config.customProviders?.[this.config.provider]?.sdk,
+    );
     // Wrap is outermost so `<user_request>` / `# Request` opens the text at position 0;
     // the timestamp prefix lives inside the wrapper.
     const wrappedInput = profile.wrapUserMessage(timestampUserMessage(userInput));
@@ -667,8 +671,8 @@ export class Agent {
 
       const callGenerateText = (messages?: CoreMessage[]) =>
         generateText({
-          model: getModel(this.config.provider, this.config.model),
-          providerOptions: getProviderOptions(this.config.provider),
+          model: getModelForConfig(this.config, this.config.provider, this.config.model),
+          providerOptions: getProviderOptionsForConfig(this.config, this.config.provider),
           tools: augmentedTools,
           maxSteps: effectiveMaxSteps,
           maxTokens: this.config.maxTokens,

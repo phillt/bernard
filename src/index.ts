@@ -20,7 +20,15 @@ import {
   resetOption,
   resetAllOptions,
   getDefaultModel,
+  providerEnvVar,
 } from './config.js';
+import {
+  loadCustomProviders,
+  saveCustomProvider,
+  removeCustomProvider,
+  SUPPORTED_SDKS,
+} from './custom-providers.js';
+import type { SupportedSdk } from './providers/types.js';
 import { startRepl } from './repl.js';
 import { printWelcome, printError, printInfo } from './output.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
@@ -87,7 +95,12 @@ The user has been notified and this session is open for them to review and act o
         printInfo(`  Time: ${alert.timestamp}\n`);
       }
 
-      printWelcome(config.provider, config.model, getLocalVersion());
+      printWelcome(
+        config.provider,
+        config.model,
+        getLocalVersion(),
+        config.customProviders?.[config.provider]?.baseURL,
+      );
       const prefs = loadPreferences();
       startupUpdateCheck(!!prefs.autoUpdate);
       await startRepl(config, alertContext, !!opts.resume);
@@ -131,14 +144,89 @@ program
   .description('List supported providers and their API key status')
   .action(() => {
     const statuses = getProviderKeyStatus();
-    printInfo('Providers:');
-    for (const { provider, hasKey } of statuses) {
-      const envVar = PROVIDER_ENV_VARS[provider];
+    const customProviders = loadCustomProviders();
+    const builtinStatuses = statuses.filter((s) => !customProviders[s.provider]);
+    const customStatuses = statuses.filter((s) => customProviders[s.provider]);
+
+    printInfo('Built-in providers:');
+    for (const { provider, hasKey } of builtinStatuses) {
+      const envVar = PROVIDER_ENV_VARS[provider] ?? providerEnvVar(provider);
       const status = hasKey ? '\u2713' : '\u2717';
       printInfo(`  ${status} ${provider} (${envVar})`);
     }
+
+    if (customStatuses.length > 0) {
+      printInfo('\nCustom providers:');
+      for (const { provider, hasKey } of customStatuses) {
+        const entry = customProviders[provider];
+        const status = hasKey ? '\u2713' : '\u2717';
+        printInfo(`  ${status} ${provider} \u2014 sdk=${entry.sdk} url=${entry.baseURL}`);
+      }
+    }
+
     if (statuses.some((s) => !s.hasKey)) {
       printInfo('\nTo add a key: bernard add-key <provider> <key>');
+    }
+    if (customStatuses.length === 0) {
+      printInfo('To add a custom provider: bernard add-provider <name> --sdk <openai|anthropic|xai> --base-url <url> --model <model>');
+    }
+  });
+
+program
+  .command('add-provider <name>')
+  .description('Register a custom provider (OpenAI/Anthropic/xAI-compatible endpoint)')
+  .requiredOption('--sdk <sdk>', 'Which SDK to use: openai, anthropic, or xai')
+  .requiredOption('--base-url <url>', 'Base URL for the API endpoint')
+  .requiredOption('--model <model>', 'Default model name to use')
+  .option('--key <key>', 'API key (can also be added later via add-key)')
+  .action(
+    (
+      name: string,
+      opts: { sdk: string; baseUrl: string; model: string; key?: string },
+    ) => {
+      try {
+        const sdk = opts.sdk.toLowerCase();
+        if (!SUPPORTED_SDKS.includes(sdk as SupportedSdk)) {
+          printError(`Unsupported SDK "${opts.sdk}". Supported: ${SUPPORTED_SDKS.join(', ')}.`);
+          process.exit(1);
+        }
+        const entry = saveCustomProvider({
+          name,
+          sdk: sdk as SupportedSdk,
+          baseURL: opts.baseUrl,
+          defaultModel: opts.model,
+        });
+        printInfo(`Custom provider "${entry.name}" saved (sdk=${entry.sdk}, url=${entry.baseURL}).`);
+        if (opts.key) {
+          saveProviderKey(name, opts.key);
+          printInfo(`API key for "${name}" saved.`);
+        } else {
+          printInfo(`Next: bernard add-key ${name} <your-api-key>`);
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        printError(message);
+        process.exit(1);
+      }
+    },
+  );
+
+program
+  .command('remove-provider <name>')
+  .description('Remove a custom provider and its stored API key')
+  .action((name: string) => {
+    try {
+      removeCustomProvider(name);
+      try {
+        removeProviderKey(name);
+      } catch {
+        // No key stored for this provider \u2014 fine.
+      }
+      printInfo(`Custom provider "${name}" removed.`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
     }
   });
 

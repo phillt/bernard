@@ -79,7 +79,12 @@ export async function runFirstTimeSetup(): Promise<boolean> {
 
     console.log(t.success('\n  Setup complete!'));
     console.log(t.muted(`  Provider: ${provider} | Model: ${model}`));
-    console.log(t.muted('  You can change these later with /provider and /model\n'));
+    console.log(t.muted('  You can change these later with /provider and /model'));
+    console.log(
+      t.muted(
+        '  Tip: running a local LLM? Use `bernard add-provider` to point at it (Ollama, LM Studio, OpenRouter, etc.)\n',
+      ),
+    );
 
     return true;
   } finally {

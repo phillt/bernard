@@ -6,7 +6,7 @@
     <title>Bernard — Local CLI AI Agent</title>
     <meta
       name="description"
-      content="A multi-provider CLI AI agent with tools, memory, sub-agents, and MCP support. Works with Anthropic, OpenAI, and xAI."
+      content="A multi-provider CLI AI agent with tools, memory, sub-agents, and MCP support. Works with Anthropic, OpenAI, xAI, and any custom endpoint that speaks one of those APIs (Ollama, LM Studio, OpenRouter, …)."
     />
 
     <!-- Open Graph -->
@@ -14,7 +14,7 @@
     <meta property="og:title" content="Bernard — Local CLI AI Agent" />
     <meta
       property="og:description"
-      content="A multi-provider CLI AI agent with tools, memory, sub-agents, and MCP support. Works with Anthropic, OpenAI, and xAI."
+      content="A multi-provider CLI AI agent with tools, memory, sub-agents, and MCP support. Works with Anthropic, OpenAI, xAI, and any custom endpoint that speaks one of those APIs (Ollama, LM Studio, OpenRouter, …)."
     />
     <meta property="og:image" content="https://phillt.github.io/bernard/img.png" />
     <meta property="og:url" content="https://phillt.github.io/bernard/" />
@@ -1196,7 +1196,9 @@
         <h2 class="section-title">Your models, your choice</h2>
         <p class="section-desc">
           Bernard uses the Vercel AI SDK for unified access across providers. Switch with a single
-          flag.
+          flag — and point any of the three SDKs at your own endpoint (Ollama, LM Studio,
+          OpenRouter, internal proxy, …) via
+          <code>bernard add-provider</code>.
         </p>
         <div class="providers-grid">
           <a

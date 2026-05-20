@@ -16,7 +16,9 @@ const fs = await import('node:fs');
 
 vi.mock('../providers/index.js', () => ({
   getModel: vi.fn(() => ({ modelId: 'mock' })),
+  getModelForConfig: vi.fn(() => ({ modelId: 'mock' })),
   getProviderOptions: vi.fn(() => undefined),
+  getProviderOptionsForConfig: vi.fn(() => undefined),
 }));
 
 vi.mock('../logger.js', () => ({
@@ -50,7 +52,7 @@ vi.mock('ai', async (importOriginal) => {
 import { createSubAgentTool, _resetSubAgentState } from './subagent.js';
 import { MemoryStore } from '../memory.js';
 
-const { getModel: mockGetModel } = await import('../providers/index.js');
+const { getModelForConfig: mockGetModel } = await import('../providers/index.js');
 
 function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
   return {
@@ -389,7 +391,7 @@ describe('subagent tool', () => {
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
       );
 
-      expect(mockGetModel).toHaveBeenCalledWith('xai', 'grok-code-fast-1');
+      expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'xai', 'grok-code-fast-1');
     });
 
     it('falls back to global config when no override', async () => {
@@ -400,7 +402,11 @@ describe('subagent tool', () => {
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
       );
 
-      expect(mockGetModel).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-5-20250929');
+      expect(mockGetModel).toHaveBeenCalledWith(
+        expect.anything(),
+        'anthropic',
+        'claude-sonnet-4-5-20250929',
+      );
     });
 
     it('uses provider default model when provider overridden but model not (avoids cross-provider mismatch)', async () => {
@@ -414,7 +420,7 @@ describe('subagent tool', () => {
 
       // Should use xai's default model, not anthropic's model
       const { getDefaultModel } = await import('../config.js');
-      expect(mockGetModel).toHaveBeenCalledWith('xai', getDefaultModel('xai'));
+      expect(mockGetModel).toHaveBeenCalledWith(expect.anything(), 'xai', getDefaultModel('xai'));
     });
 
     it('returns error when override provider has no API key', async () => {

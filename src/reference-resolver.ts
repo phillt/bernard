@@ -1,5 +1,5 @@
 import { generateText, type CoreMessage } from 'ai';
-import { getModel, getProviderOptions } from './providers/index.js';
+import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import { debugLog } from './logger.js';
 import { sanitizeKey, REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
@@ -304,8 +304,8 @@ export async function resolveReferences(
 
   try {
     const result = await generateText({
-      model: getModel(config.provider, config.model),
-      providerOptions: getProviderOptions(config.provider),
+      model: getModelForConfig(config, config.provider, config.model),
+      providerOptions: getProviderOptionsForConfig(config, config.provider),
       system: RESOLVER_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userMessage }],
       maxSteps: 1,

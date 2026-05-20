@@ -237,10 +237,18 @@ export function stopSpinner(): void {
 }
 
 /** Prints the branded welcome banner with provider, model, and optional version info. */
-export function printWelcome(provider: string, model: string, version?: string): void {
+export function printWelcome(
+  provider: string,
+  model: string,
+  version?: string,
+  baseURL?: string,
+): void {
   const ver = version ? getTheme().muted(` v${version}`) : '';
   console.log(getTheme().accentBold('\n  Bernard') + ver + getTheme().muted(' — AI CLI Assistant'));
   console.log(getTheme().muted(`  Provider: ${provider} | Model: ${model}`));
+  if (baseURL) {
+    console.log(getTheme().muted(`  Endpoint: ${baseURL}`));
+  }
   if (process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1') {
     console.log(getTheme().warning('  DEBUG mode enabled — logging to .logs/'));
   }
