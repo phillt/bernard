@@ -22,6 +22,7 @@ import { createScopedCronNotesTools } from './scoped-notes-tools.js';
 import { sendNotification } from './notify.js';
 import type { CronJob } from './types.js';
 import { runPACLoop } from '../pac.js';
+import { makeRepairHook } from '../tool-call-repair.js';
 
 const DAEMON_SYSTEM_PROMPT = `You are Bernard, running as a background cron job in daemon mode. There is no interactive user present — you execute autonomously and have a limited step budget (20 steps), so work efficiently.
 
@@ -261,6 +262,11 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       });
     };
 
+    const repairHook = makeRepairHook({
+      config,
+      label: 'cron',
+    });
+
     const result = await generateText({
       model: getModelForConfig(config, config.provider, config.model),
       providerOptions: getProviderOptionsForConfig(config, config.provider),
@@ -269,6 +275,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       maxTokens: config.maxTokens,
       system: enrichedPrompt,
       messages: [{ role: 'user', content: job.prompt }],
+      experimental_repairToolCall: repairHook,
       onStepFinish,
     });
 
@@ -288,6 +295,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
             maxTokens: config.maxTokens,
             system: enrichedPrompt,
             messages: [{ role: 'user', content: job.prompt }, ...extraMessages],
+            experimental_repairToolCall: repairHook,
             onStepFinish,
           });
         },

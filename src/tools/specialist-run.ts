@@ -39,6 +39,7 @@ import {
   buildEnforcementFeedback,
 } from '../react.js';
 import { truncateToolResults } from '../context.js';
+import { makeRepairHook } from '../tool-call-repair.js';
 
 const SPECIALIST_STEP_RATIO = 0.5;
 const SPECIALIST_PAC_RETRY_STEPS = 10;
@@ -199,6 +200,13 @@ export function createSpecialistRunTool(
 
         const baseMaxSteps = Math.ceil(config.maxSteps * SPECIALIST_STEP_RATIO);
         const maxSteps = computeEffectiveMaxSteps(baseMaxSteps, config.reactMode);
+        const repairHook = makeRepairHook({
+          config,
+          provider: resolvedProvider,
+          model: resolvedModel,
+          label: 'specialist',
+          abortSignal: execOptions.abortSignal,
+        });
         let result = await generateText({
           model: getModelForConfig(config, resolvedProvider, resolvedModel),
           providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
@@ -209,6 +217,7 @@ export function createSpecialistRunTool(
           messages: [{ role: 'user', content: userMessage }],
           abortSignal: execOptions.abortSignal,
           experimental_prepareStep: makeLastStepTextOnly(maxSteps),
+          experimental_repairToolCall: repairHook,
           onStepFinish,
         });
 
@@ -228,6 +237,7 @@ export function createSpecialistRunTool(
                 messages: [{ role: 'user', content: userMessage }, ...extraMessages],
                 abortSignal: execOptions.abortSignal,
                 experimental_prepareStep: makeLastStepTextOnly(SPECIALIST_PAC_RETRY_STEPS),
+                experimental_repairToolCall: repairHook,
                 onStepFinish,
               });
             },
@@ -276,6 +286,7 @@ export function createSpecialistRunTool(
                 messages: retryMessages,
                 abortSignal: execOptions.abortSignal,
                 experimental_prepareStep: makeLastStepTextOnly(retryMaxSteps),
+                experimental_repairToolCall: repairHook,
                 onStepFinish,
               });
             } catch (retryErr) {

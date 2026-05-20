@@ -99,8 +99,10 @@ import {
   captureLastToolCall,
   captureToolCalls,
   createToolWrapperRunTool,
+  renderWrapperParentView,
 } from './tool-wrapper-run.js';
 import { _resetPool } from './agent-pool.js';
+import { DEFAULT_SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 
 const { generateText } = await import('ai');
 const { acquireSlot, releaseSlot } = await import('./agent-pool.js');
@@ -447,6 +449,84 @@ describe('captureToolCalls', () => {
     const result = captureToolCalls(steps);
     expect(result).toHaveLength(1);
     expect(result[0].tool).toBe('shell');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('renderWrapperParentView', () => {
+  it('returns only status and result on success — never reasoning', () => {
+    const view = renderWrapperParentView({
+      status: 'ok',
+      result: 'done',
+      reasoning: ['decided to call shell', 'parsed output'],
+    });
+    const parsed = JSON.parse(view);
+    expect(parsed).toEqual({ status: 'ok', result: 'done' });
+    expect(parsed.reasoning).toBeUndefined();
+  });
+
+  it('includes error field on error and still strips reasoning', () => {
+    const view = renderWrapperParentView({
+      status: 'error',
+      result: 'command failed',
+      error: 'exit_code_1',
+      reasoning: ['internal note that should not leak'],
+    });
+    const parsed = JSON.parse(view);
+    expect(parsed).toEqual({
+      status: 'error',
+      result: 'command failed',
+      error: 'exit_code_1',
+    });
+    expect(parsed.reasoning).toBeUndefined();
+  });
+
+  it('omits the error field when it is absent', () => {
+    const view = renderWrapperParentView({
+      status: 'error',
+      result: 'opaque failure',
+    });
+    const parsed = JSON.parse(view);
+    expect(parsed).toEqual({ status: 'error', result: 'opaque failure' });
+    expect('error' in parsed).toBe(false);
+  });
+
+  it('caps the result field before serialization so the envelope stays valid JSON', () => {
+    const longResult = 'x'.repeat(DEFAULT_SUBAGENT_RESULT_MAX_CHARS + 5000);
+    const view = renderWrapperParentView({
+      status: 'ok',
+      result: longResult,
+    });
+
+    // The outer envelope must remain parseable — that's the whole point of the fix.
+    const parsed = JSON.parse(view);
+    expect(parsed.status).toBe('ok');
+    expect(typeof parsed.result).toBe('string');
+
+    // Result was truncated (much shorter than the original) and carries the marker.
+    expect((parsed.result as string).length).toBeLessThan(longResult.length);
+    expect((parsed.result as string).endsWith('chars]')).toBe(true);
+
+    // Total envelope still bounded around the cap.
+    expect(view.length).toBeLessThanOrEqual(DEFAULT_SUBAGENT_RESULT_MAX_CHARS);
+  });
+
+  it('caps a non-string `result` by JSON-stringifying and truncating it', () => {
+    const big = { payload: 'y'.repeat(DEFAULT_SUBAGENT_RESULT_MAX_CHARS + 1000) };
+    const view = renderWrapperParentView({ status: 'ok', result: big });
+
+    const parsed = JSON.parse(view);
+    expect(parsed.status).toBe('ok');
+    // Non-string result that exceeds budget becomes a truncated string carrying the marker.
+    expect(typeof parsed.result).toBe('string');
+    expect((parsed.result as string).endsWith('chars]')).toBe(true);
+  });
+
+  it('preserves small non-string `result` payloads as native JSON', () => {
+    const small = { output: 'hi', is_error: false };
+    const view = renderWrapperParentView({ status: 'ok', result: small });
+    expect(JSON.parse(view)).toEqual({ status: 'ok', result: small });
   });
 });
 

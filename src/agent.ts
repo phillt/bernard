@@ -57,6 +57,8 @@ import { createPlanTool } from './tools/plan.js';
 import { createThinkTool } from './tools/think.js';
 import { createAskUserTool } from './tools/ask-user.js';
 import { createEvaluateTool } from './tools/evaluate.js';
+import { applyShimRouting } from './tools/wrap-with-specialist.js';
+import { makeRepairHook } from './tool-call-repair.js';
 
 /**
  * Directs the model to publish brief reasoning via the `think` tool so the
@@ -102,7 +104,10 @@ Before executing any task that requires more than two tool calls:
 This makes your reasoning visible and reduces errors on multi-step tasks. For simple tasks (1-2 tool calls), skip the plan and act directly.
 
 ## Temporary Scripts
-For complex multi-step shell work, JSON parsing pipelines, retry loops, or anything you expect to iterate on, prefer writing a short throwaway script to a temp path (e.g. \`/tmp/bernard-<task>.sh\`, \`/tmp/bernard-<task>.py\`, \`/tmp/bernard-<task>.mjs\`) and running it instead of cramming logic into a single inline shell command. Edit and re-run the script when you need to adjust — that is faster, more debuggable, and produces clearer error messages than rebuilding a long one-liner. Use \`file_edit_lines\` (or \`file_write\` for a fresh file) to author the script, then \`shell\` to execute it. Clean up temp files when the task is finished.
+For complex multi-step shell work, JSON parsing pipelines, retry loops, or anything you expect to iterate on, prefer writing a short throwaway script to a temp path (e.g. \`/tmp/bernard-<task>.sh\`, \`/tmp/bernard-<task>.py\`, \`/tmp/bernard-<task>.mjs\`) and running it instead of cramming logic into a single inline shell command. Use \`file_write\` to author the script, then \`shell\` to execute it. Edit and re-run with \`file_edit_lines\` when you need to adjust. Clean up temp files when the task is finished.
+
+## Tool-Call Argument Size
+Never embed file content, scripts, JSON bodies, or any other payload larger than ~500 bytes inside a \`shell\` command (no heredocs like \`cat > file <<EOF\`, no \`printf\`/\`echo\` of long literals, no inline JSON over a few lines). Large single-string tool arguments can be truncated mid-response, producing JSON-parse failures that abort the turn. The correct pattern is always: write the payload to a file with \`file_write\`, then reference that file from \`shell\`.
 
 ## Tool Execution Integrity
 - NEVER simulate, fabricate, or narrate tool execution. If a task requires running a command, you MUST call the shell tool — do not write prose describing what a command "would return" or pretend you already ran it.
@@ -662,8 +667,22 @@ export class Agent {
           : {}),
       };
 
-      // Wrap every tool's execute to observe errors and record profiles
-      const augmentedTools = augmentTools(tools, this.toolProfileStore);
+      // Route low-level tool calls (shell, web_read, file_*) through their
+      // wrapper specialists transparently, then wrap every tool's execute to
+      // observe errors and record profiles. Shim routing happens only at the
+      // main-agent level — sub-agents and specialists keep raw tools.
+      const shimmedTools = applyShimRouting(tools, {
+        config: this.config,
+        options: this.toolOptions,
+        memoryStore: this.memoryStore,
+        specialistStore: this.specialistStore,
+        correctionStore: this.correctionStore,
+        mcpTools: this.mcpTools,
+        ragStore: this.ragStore,
+        routineStore: this.routineStore,
+        candidateStore: this.candidateStore,
+      });
+      const augmentedTools = augmentTools(shimmedTools, this.toolProfileStore);
 
       // Coordinator (ReAct) mode triples the step budget for the main agent,
       // clamped to REACT_MAX_STEPS_CEILING to bound worst-case cost.
@@ -683,6 +702,11 @@ export class Agent {
           system: systemPrompt,
           messages: messages ?? this.history,
           abortSignal: this.abortController!.signal,
+          experimental_repairToolCall: makeRepairHook({
+            config: this.config,
+            label: 'main',
+            abortSignal: this.abortController!.signal,
+          }),
           onStepFinish: ({ text, toolCalls, toolResults, usage }) => {
             if (usage) {
               this.lastStepPromptTokens = usage.promptTokens;

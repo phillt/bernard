@@ -24,8 +24,13 @@ import type { SpecialistStore, Specialist } from '../specialists.js';
 import type { CandidateStoreReader } from '../specialist-candidates.js';
 import type { CorrectionCandidateStore } from '../correction-candidates.js';
 import { osPromptBlock } from '../os-info.js';
-import { STRUCTURED_OUTPUT_RULES, wrapWrapperResult } from '../structured-output.js';
+import {
+  STRUCTURED_OUTPUT_RULES,
+  wrapWrapperResult,
+  type WrapperResult,
+} from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
+import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 
 /** Fraction of config.maxSteps allocated to a tool-wrapper run. Mirrors task/specialist ratios. */
 const TOOL_WRAPPER_STEP_RATIO = 0.5;
@@ -125,6 +130,301 @@ export function captureToolCalls(steps: any[] | undefined): Array<{
   return out;
 }
 
+/** Dependencies that change per-process but never per-call. Passed once. */
+export interface ToolWrapperDeps {
+  config: BernardConfig;
+  options: ToolOptions;
+  memoryStore: MemoryStore;
+  specialistStore: SpecialistStore;
+  correctionStore: CorrectionCandidateStore;
+  mcpTools?: Record<string, any>;
+  ragStore?: RAGStore;
+  routineStore?: RoutineStore;
+  candidateStore?: CandidateStoreReader;
+}
+
+/** Per-call inputs to a tool-wrapper dispatch. */
+export interface DispatchToolWrapperArgs {
+  specialistId: string;
+  input: string;
+  context?: string;
+  provider?: string;
+  model?: string;
+  abortSignal?: AbortSignal;
+  /** Label shown to the user when announcing the wrapper run. Defaults to `[<kind>] <name>`. */
+  runLabel?: string;
+}
+
+/**
+ * Core dispatch for tool-wrapper specialists. Used by both the explicit
+ * `tool_wrapper_run` tool and the shim layer that routes raw tool calls
+ * (e.g. `shell`) through their corresponding wrapper specialist.
+ *
+ * Returns a {@link WrapperResult} so callers can shape the parent-facing
+ * response however they like (JSON envelope, raw result, error string).
+ * Pool acquisition, reasoning logging, and correction-candidate enqueue
+ * happen inside.
+ */
+export async function dispatchToolWrapper(
+  args: DispatchToolWrapperArgs,
+  deps: ToolWrapperDeps,
+): Promise<WrapperResult> {
+  const { specialistId, input, context, provider, model, abortSignal, runLabel } = args;
+  const {
+    config,
+    options,
+    memoryStore,
+    specialistStore,
+    correctionStore,
+    mcpTools,
+    ragStore,
+    routineStore,
+    candidateStore,
+  } = deps;
+
+  const specialist = specialistStore.get(specialistId);
+  if (!specialist) {
+    return {
+      status: 'error',
+      result: `No specialist found with id "${specialistId}".`,
+      error: 'not_found',
+    };
+  }
+  const kind = specialist.kind ?? 'persona';
+  if (kind === 'persona') {
+    return {
+      status: 'error',
+      result: `Specialist "${specialistId}" is a persona specialist. Use specialist_run instead, or update its kind to "tool-wrapper".`,
+      error: 'wrong_kind',
+    };
+  }
+
+  const resolution = resolveProviderAndModel({
+    provider,
+    model,
+    specialistProvider: specialist.provider,
+    specialistModel: specialist.model,
+    config,
+  });
+  if (!resolution.ok) {
+    const hint = resolution.isCustom
+      ? `Run: bernard add-key ${resolution.provider} <key>`
+      : `Set ${resolution.envVar} or run: bernard add-key ${resolution.provider} <key>`;
+    return {
+      status: 'error',
+      result: `No API key for provider "${resolution.provider}". ${hint}.`,
+      error: 'no_api_key',
+    };
+  }
+  const { provider: resolvedProvider, model: resolvedModel } = resolution;
+
+  const slot = acquireSlot();
+  if (!slot) {
+    return {
+      status: 'error',
+      result: `Maximum concurrent agents (${MAX_CONCURRENT_AGENTS}) reached.`,
+      error: 'pool_exhausted',
+    };
+  }
+
+  const id = slot.id;
+  const prefix = `wrap:${id}`;
+  const label = runLabel ?? `[${kind}] ${specialist.name}`;
+  printSpecialistStart(id, label, input);
+
+  try {
+    const baseTools = createTools(
+      options,
+      memoryStore,
+      mcpTools,
+      routineStore,
+      specialistStore,
+      candidateStore,
+      config,
+    );
+    const fullRegistry: Record<string, any> = {
+      ...baseTools,
+      agent: createSubAgentTool(config, options, memoryStore, mcpTools, ragStore),
+      task: createTaskTool(config, options, memoryStore, mcpTools, ragStore, routineStore),
+      specialist_run: createSpecialistRunTool(
+        config,
+        options,
+        memoryStore,
+        specialistStore,
+        mcpTools,
+        ragStore,
+      ),
+      tool_wrapper_run: createToolWrapperRunTool(
+        config,
+        options,
+        memoryStore,
+        specialistStore,
+        correctionStore,
+        mcpTools,
+        ragStore,
+        routineStore,
+        candidateStore,
+      ),
+    };
+    const childTools = buildChildTools(specialist, fullRegistry);
+
+    let systemPrompt = specialist.systemPrompt;
+    if (specialist.guidelines.length > 0) {
+      systemPrompt += '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
+    }
+    systemPrompt += '\n\n' + osPromptBlock();
+    systemPrompt += formatExamples(specialist);
+    // Default to structured output for tool-wrapper specialists unless explicitly disabled.
+    const wantStructured = specialist.structuredOutput ?? kind === 'tool-wrapper';
+    if (wantStructured) {
+      systemPrompt += STRUCTURED_OUTPUT_RULES;
+    }
+    systemPrompt += buildMemoryContext({
+      memoryStore,
+      ragResults: undefined,
+      includeScratch: true,
+    });
+    if (Object.keys(childTools).length > 0) {
+      systemPrompt += `\n\nAvailable tools for this run: ${Object.keys(childTools).join(', ')}`;
+    } else {
+      systemPrompt +=
+        '\n\nNo tools are available for this run. Produce the structured output based on reasoning alone.';
+    }
+
+    let userMessage = `Request: ${input}`;
+    if (context) userMessage += `\n\nContext: ${context}`;
+
+    const maxSteps = Math.max(2, Math.ceil(config.maxSteps * TOOL_WRAPPER_STEP_RATIO));
+
+    const onStepFinish = ({ text, toolCalls, toolResults }: any) => {
+      for (const tc of toolCalls ?? []) {
+        printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
+      }
+      for (const tr of toolResults ?? []) {
+        printToolResult(tr.toolName, tr.result, prefix);
+      }
+      if (text) printAssistantText(text, prefix);
+    };
+
+    // Lazy import to avoid a top-level cycle (tool-call-repair → providers).
+    const { makeRepairHook } = await import('../tool-call-repair.js');
+    const repairHook = makeRepairHook({
+      config,
+      provider: resolvedProvider,
+      model: resolvedModel,
+      label: 'tool-wrapper',
+      abortSignal,
+    });
+
+    const result = await generateText({
+      model: getModelForConfig(config, resolvedProvider, resolvedModel),
+      providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
+      tools: childTools,
+      maxSteps,
+      maxTokens: config.maxTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }],
+      abortSignal,
+      experimental_prepareStep: wantStructured ? makeLastStepTextOnly(maxSteps) : undefined,
+      experimental_repairToolCall: repairHook,
+      onStepFinish,
+    });
+
+    printSpecialistEnd(id);
+
+    const wrapped = wantStructured
+      ? wrapWrapperResult(result.text)
+      : { status: 'ok' as const, result: result.text };
+
+    appendReasoningLog({
+      ts: new Date().toISOString(),
+      specialistId,
+      input,
+      toolCalls: captureToolCalls(result.steps as any[]),
+      finalOutput: wrapped.result,
+      status:
+        wrapped.status === 'ok'
+          ? 'ok'
+          : wrapped.error === 'parse_failed'
+            ? 'parse_failed'
+            : 'error',
+      ...(wrapped.error !== undefined ? { error: wrapped.error } : {}),
+      ...(wrapped.reasoning !== undefined ? { reasoning: wrapped.reasoning } : {}),
+    });
+
+    if (wrapped.status === 'error' && kind === 'tool-wrapper') {
+      try {
+        correctionStore.enqueue({
+          specialistId,
+          input,
+          attemptedCall: captureLastToolCall(result.steps as any[]),
+          error: wrapped.error ?? String(wrapped.result),
+        });
+      } catch (err) {
+        debugLog(
+          'tool-wrapper:correction-enqueue:error',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
+    return wrapped;
+  } catch (err: unknown) {
+    printSpecialistEnd(id);
+    const message = err instanceof Error ? err.message : String(err);
+    appendReasoningLog({
+      ts: new Date().toISOString(),
+      specialistId,
+      input,
+      toolCalls: [],
+      finalOutput: message,
+      status: 'error',
+      error: 'runtime_error',
+    });
+    return { status: 'error', result: message, error: 'runtime_error' };
+  } finally {
+    releaseSlot();
+  }
+}
+
+/**
+ * Strips internal fields (`reasoning`) from a wrapper result before it crosses
+ * back into the parent agent's context, and caps the `result` field so the
+ * outer JSON envelope stays parseable when the wrapper output is large. The
+ * reasoning array is already persisted to the JSONL trace via
+ * {@link appendReasoningLog}; the parent doesn't need it.
+ *
+ * The cap is applied to the `result` field *before* serialization rather than
+ * to the serialized envelope, so a truncated payload never produces invalid
+ * JSON.
+ */
+export function renderWrapperParentView(
+  wrapped: WrapperResult,
+  maxChars: number = SUBAGENT_RESULT_MAX_CHARS,
+): string {
+  const errorLen = wrapped.error?.length ?? 0;
+  const resultBudget = Math.max(256, maxChars - errorLen - 80);
+
+  const cappedResult =
+    typeof wrapped.result === 'string'
+      ? capSubagentResult(wrapped.result, resultBudget)
+      : (() => {
+          const asJson = JSON.stringify(wrapped.result);
+          if (asJson === undefined || asJson.length <= resultBudget) return wrapped.result;
+          return capSubagentResult(asJson, resultBudget);
+        })();
+
+  const parentView =
+    wrapped.status === 'ok'
+      ? { status: 'ok' as const, result: cappedResult }
+      : {
+          status: 'error' as const,
+          result: cappedResult,
+          ...(wrapped.error !== undefined ? { error: wrapped.error } : {}),
+        };
+  return JSON.stringify(parentView);
+}
+
 /**
  * Creates the `tool_wrapper_run` tool for structured, isolated tool-wrapper
  * specialist execution with validated JSON output and failure-learning.
@@ -137,6 +437,8 @@ export function captureToolCalls(steps: any[] | undefined): Array<{
  *   - parses through a Zod schema and logs runs that reach `generateText`
  *     to the reasoning log (guard failures return early without logging)
  *   - enqueues a correction candidate on error for end-of-session learning
+ *   - strips `reasoning` and caps the JSON envelope before returning to the
+ *     parent agent — the full reasoning lives in the JSONL trace only
  */
 export function createToolWrapperRunTool(
   config: BernardConfig,
@@ -151,7 +453,7 @@ export function createToolWrapperRunTool(
 ) {
   return tool({
     description:
-      'Dispatch to a saved tool-wrapper specialist that handles a concrete tool or CLI (e.g. shell-wrapper, file-wrapper). Returns strict JSON {status, result, error?, reasoning?}. Use this for tool-heavy operations where domain-specific examples and error handling reduce misuse. Also used to invoke meta specialists (specialist-creator, correction-agent).',
+      'Dispatch to a saved tool-wrapper specialist that handles a concrete tool or CLI (e.g. shell-wrapper, file-wrapper). Returns JSON {status, result, error?}. Use this for tool-heavy operations where domain-specific examples and error handling reduce misuse. Also used to invoke meta specialists (specialist-creator, correction-agent).',
     parameters: z.object({
       specialistId: z
         .string()
@@ -171,205 +473,28 @@ export function createToolWrapperRunTool(
       model: z.string().optional().describe('Optional model override for this invocation.'),
     }),
     execute: async ({ specialistId, input, context, provider, model }, execOptions) => {
-      const specialist = specialistStore.get(specialistId);
-      if (!specialist) {
-        return JSON.stringify({
-          status: 'error',
-          result: `No specialist found with id "${specialistId}".`,
-          error: 'not_found',
-        });
-      }
-      const kind = specialist.kind ?? 'persona';
-      if (kind === 'persona') {
-        return JSON.stringify({
-          status: 'error',
-          result: `Specialist "${specialistId}" is a persona specialist. Use specialist_run instead, or update its kind to "tool-wrapper".`,
-          error: 'wrong_kind',
-        });
-      }
-
-      const resolution = resolveProviderAndModel({
-        provider,
-        model,
-        specialistProvider: specialist.provider,
-        specialistModel: specialist.model,
-        config,
-      });
-      if (!resolution.ok) {
-        const hint = resolution.isCustom
-          ? `Run: bernard add-key ${resolution.provider} <key>`
-          : `Set ${resolution.envVar} or run: bernard add-key ${resolution.provider} <key>`;
-        return JSON.stringify({
-          status: 'error',
-          result: `No API key for provider "${resolution.provider}". ${hint}.`,
-          error: 'no_api_key',
-        });
-      }
-      const { provider: resolvedProvider, model: resolvedModel } = resolution;
-
-      const slot = acquireSlot();
-      if (!slot) {
-        return JSON.stringify({
-          status: 'error',
-          result: `Maximum concurrent agents (${MAX_CONCURRENT_AGENTS}) reached.`,
-          error: 'pool_exhausted',
-        });
-      }
-
-      const id = slot.id;
-      const prefix = `wrap:${id}`;
-      const runLabel = `[${kind}] ${specialist.name}`;
-      printSpecialistStart(id, runLabel, input);
-
-      try {
-        // Base tools + dispatch tools so meta specialists can nest properly.
-        const baseTools = createTools(
+      const wrapped = await dispatchToolWrapper(
+        {
+          specialistId,
+          input,
+          context,
+          provider,
+          model,
+          abortSignal: execOptions.abortSignal,
+        },
+        {
+          config,
           options,
           memoryStore,
-          mcpTools,
-          routineStore,
           specialistStore,
+          correctionStore,
+          mcpTools,
+          ragStore,
+          routineStore,
           candidateStore,
-          config,
-        );
-        const fullRegistry: Record<string, any> = {
-          ...baseTools,
-          agent: createSubAgentTool(config, options, memoryStore, mcpTools, ragStore),
-          task: createTaskTool(config, options, memoryStore, mcpTools, ragStore, routineStore),
-          specialist_run: createSpecialistRunTool(
-            config,
-            options,
-            memoryStore,
-            specialistStore,
-            mcpTools,
-            ragStore,
-          ),
-          tool_wrapper_run: createToolWrapperRunTool(
-            config,
-            options,
-            memoryStore,
-            specialistStore,
-            correctionStore,
-            mcpTools,
-            ragStore,
-            routineStore,
-            candidateStore,
-          ),
-        };
-        const childTools = buildChildTools(specialist, fullRegistry);
-
-        // Build system prompt.
-        let systemPrompt = specialist.systemPrompt;
-        if (specialist.guidelines.length > 0) {
-          systemPrompt +=
-            '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
-        }
-        systemPrompt += '\n\n' + osPromptBlock();
-        systemPrompt += formatExamples(specialist);
-        // Default to structured output for tool-wrapper specialists unless explicitly disabled.
-        const wantStructured = specialist.structuredOutput ?? kind === 'tool-wrapper';
-        if (wantStructured) {
-          systemPrompt += STRUCTURED_OUTPUT_RULES;
-        }
-        systemPrompt += buildMemoryContext({
-          memoryStore,
-          ragResults: undefined,
-          includeScratch: true,
-        });
-        if (Object.keys(childTools).length > 0) {
-          systemPrompt += `\n\nAvailable tools for this run: ${Object.keys(childTools).join(', ')}`;
-        } else {
-          systemPrompt +=
-            '\n\nNo tools are available for this run. Produce the structured output based on reasoning alone.';
-        }
-
-        let userMessage = `Request: ${input}`;
-        if (context) userMessage += `\n\nContext: ${context}`;
-
-        const maxSteps = Math.max(2, Math.ceil(config.maxSteps * TOOL_WRAPPER_STEP_RATIO));
-
-        const onStepFinish = ({ text, toolCalls, toolResults }: any) => {
-          for (const tc of toolCalls ?? []) {
-            printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
-          }
-          for (const tr of toolResults ?? []) {
-            printToolResult(tr.toolName, tr.result, prefix);
-          }
-          if (text) printAssistantText(text, prefix);
-        };
-
-        const result = await generateText({
-          model: getModelForConfig(config, resolvedProvider, resolvedModel),
-          providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
-          tools: childTools,
-          maxSteps,
-          maxTokens: config.maxTokens,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: userMessage }],
-          abortSignal: execOptions.abortSignal,
-          experimental_prepareStep: wantStructured ? makeLastStepTextOnly(maxSteps) : undefined,
-          onStepFinish,
-        });
-
-        printSpecialistEnd(id);
-
-        const wrapped = wantStructured
-          ? wrapWrapperResult(result.text)
-          : { status: 'ok' as const, result: result.text };
-
-        // Reasoning log — always write, even when parsing fails.
-        appendReasoningLog({
-          ts: new Date().toISOString(),
-          specialistId,
-          input,
-          toolCalls: captureToolCalls(result.steps as any[]),
-          finalOutput: wrapped.result,
-          status:
-            wrapped.status === 'ok'
-              ? 'ok'
-              : wrapped.error === 'parse_failed'
-                ? 'parse_failed'
-                : 'error',
-          ...(wrapped.error !== undefined ? { error: wrapped.error } : {}),
-          ...(wrapped.reasoning !== undefined ? { reasoning: wrapped.reasoning } : {}),
-        });
-
-        // Enqueue correction candidate on failure (tool-wrapper only; meta specialists
-        // often manage their own error flows and don't benefit from auto-correction).
-        if (wrapped.status === 'error' && kind === 'tool-wrapper') {
-          try {
-            correctionStore.enqueue({
-              specialistId,
-              input,
-              attemptedCall: captureLastToolCall(result.steps as any[]),
-              error: wrapped.error ?? String(wrapped.result),
-            });
-          } catch (err) {
-            debugLog(
-              'tool-wrapper:correction-enqueue:error',
-              err instanceof Error ? err.message : String(err),
-            );
-          }
-        }
-
-        return JSON.stringify(wrapped);
-      } catch (err: unknown) {
-        printSpecialistEnd(id);
-        const message = err instanceof Error ? err.message : String(err);
-        const errorResult = { status: 'error' as const, result: message, error: 'runtime_error' };
-        appendReasoningLog({
-          ts: new Date().toISOString(),
-          specialistId,
-          input,
-          toolCalls: [],
-          finalOutput: message,
-          status: 'error',
-          error: 'runtime_error',
-        });
-        return JSON.stringify(errorResult);
-      } finally {
-        releaseSlot();
-      }
+        },
+      );
+      return renderWrapperParentView(wrapped);
     },
   });
 }
