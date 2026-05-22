@@ -299,7 +299,7 @@ bernard> what git branch am I on?
 You're on the main branch.
 ```
 
-**Dangerous command protection:** Bernard detects risky patterns (`rm -rf`, `sudo`, `mkfs`, `dd`, `chmod 777`, `reboot`, `kill -9`, etc.) and asks for your confirmation via an arrow-key menu before executing. `rm` calls scoped to the `BERNARD_TMP_PREFIX` scratch directory (and free of shell metacharacters) skip the prompt — that's just Bernard cleaning up its own temporary scripts.
+**Dangerous command protection:** Bernard detects risky patterns (`rm -rf`, `sudo`, `mkfs`, `dd`, `chmod 777`, `reboot`, `kill -9`, etc.) and asks for your confirmation via an arrow-key menu before executing. `rm` calls scoped to Bernard's own scratch-script directory (`<os-tmpdir>/bernard-*`, e.g. `/tmp/bernard-*` on Linux — an internal constant, not configurable) and free of shell metacharacters skip the prompt, since that's just Bernard cleaning up after itself.
 
 **Timeout:** Commands time out after 30 seconds by default (configurable via `shell-timeout` option).
 

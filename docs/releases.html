@@ -770,7 +770,7 @@
               <code
                 >bernard add-provider &lt;name&gt; --sdk &lt;openai|anthropic|xai&gt; --base-url
                 &lt;url&gt; --model &lt;model&gt;</code
-              >, <code>bernard remove-provider</code>, <code>bernard providers</code>.
+              >, <code>bernard remove-provider &lt;name&gt;</code>, <code>bernard providers</code>.
             </li>
             <li>
               REPL: <code>/provider</code> now ends with
@@ -853,9 +853,12 @@
           <p>
             The dangerous-command confirmation now uses the arrow-key menu instead of the legacy
             <code>rl.question</code> prompt, fixing a hang where the spinner blanked the prompt and
-            the agent waited indefinitely. <code>rm</code> calls scoped to
-            <code>BERNARD_TMP_PREFIX</code> (and free of shell metacharacters) skip the prompt
-            entirely &mdash; that&rsquo;s just Bernard cleaning up its own scratch scripts.
+            the agent waited indefinitely. <code>rm</code> calls scoped to Bernard&rsquo;s own
+            scratch-script directory (<code>&lt;os-tmpdir&gt;/bernard-*</code>, e.g.
+            <code>/tmp/bernard-*</code> on Linux &mdash; an internal constant in
+            <code>src/tools/shell.ts</code>, not a configurable env var) and free of shell
+            metacharacters skip the prompt entirely &mdash; that&rsquo;s just Bernard cleaning up
+            after itself.
           </p>
         </div>
 
