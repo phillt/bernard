@@ -299,7 +299,7 @@ bernard> what git branch am I on?
 You're on the main branch.
 ```
 
-**Dangerous command protection:** Bernard detects risky patterns (`rm -rf`, `sudo`, `mkfs`, `dd`, `chmod 777`, `reboot`, `kill -9`, etc.) and asks for your confirmation before executing.
+**Dangerous command protection:** Bernard detects risky patterns (`rm -rf`, `sudo`, `mkfs`, `dd`, `chmod 777`, `reboot`, `kill -9`, etc.) and asks for your confirmation via an arrow-key menu before executing. `rm` calls scoped to the `BERNARD_TMP_PREFIX` scratch directory (and free of shell metacharacters) skip the prompt — that's just Bernard cleaning up its own temporary scripts.
 
 **Timeout:** Commands time out after 30 seconds by default (configurable via `shell-timeout` option).
 
@@ -360,6 +360,23 @@ bernard> I need to migrate 5 database tables — track progress in scratch
 ```
 
 Actions: `list`, `read`, `write`, `delete`. Scratch notes are also injected into the system prompt, so Bernard always knows the current session state.
+
+### Asking the User
+
+When Bernard is missing information only you can provide — intent, preferences, a missing argument — it calls `ask_user` to pause the turn and prompt you directly, instead of writing the question as prose (which would leave the turn idle).
+
+```
+bernard> file an issue about the menu bug
+  ▶ ask_user: 3 questions
+  [1 ✓   ▸2◂   3]   Which labels apply?
+    ▸ bug
+      ui
+      Other (type a custom answer)
+
+Filed issue #214 with title, body, and the labels you picked.
+```
+
+A single call can batch up to 10 related questions (title + body + labels, say), each with free-form input or a fixed choice list plus an optional "Other" escape hatch. Hit Esc mid-batch and whatever you already answered is returned to the agent. In non-interactive sessions the tool reports `unavailable` so the agent can pick a sensible default.
 
 ### Date and Time
 
