@@ -766,13 +766,16 @@
           </p>
           <ul>
             <li>
-              CLI: <code>bernard add-provider &lt;name&gt; --sdk &lt;openai|anthropic|xai&gt;
-              --base-url &lt;url&gt; --model &lt;model&gt;</code>,
-              <code>bernard remove-provider</code>, <code>bernard providers</code>.
+              CLI:
+              <code
+                >bernard add-provider &lt;name&gt; --sdk &lt;openai|anthropic|xai&gt; --base-url
+                &lt;url&gt; --model &lt;model&gt;</code
+              >, <code>bernard remove-provider</code>, <code>bernard providers</code>.
             </li>
             <li>
-              REPL: <code>/provider</code> now ends with <strong>+ Add custom provider&hellip;</strong>
-              (interactive wizard); for a custom provider, <code>/model</code> ends with
+              REPL: <code>/provider</code> now ends with
+              <strong>+ Add custom provider&hellip;</strong> (interactive wizard); for a custom
+              provider, <code>/model</code> ends with
               <strong>+ Type a new model name&hellip;</strong> and remembers what you typed.
             </li>
             <li>
@@ -811,17 +814,18 @@
           </p>
           <ul>
             <li>
-              Batches up to 10 questions in one call &mdash; useful for &ldquo;title + body + labels&rdquo;
-              style prompts &mdash; with a pinned tab strip showing
-              <code>[1 &check;   &#9656;2&#9666;   3]</code> progress.
+              Batches up to 10 questions in one call &mdash; useful for &ldquo;title + body +
+              labels&rdquo; style prompts &mdash; with a pinned tab strip showing
+              <code>[1 &check; &#9656;2&#9666; 3]</code> progress.
             </li>
             <li>
               Each question can be free-form or constrained by a <code>choices</code> list with an
               optional &ldquo;Other&rdquo; escape hatch (custom label supported).
             </li>
             <li>
-              Esc mid-batch returns whatever was already answered, so partial input isn&rsquo;t lost.
-              Headless sessions get <code>{unavailable: true}</code> so the agent can pick a default.
+              Esc mid-batch returns whatever was already answered, so partial input isn&rsquo;t
+              lost. Headless sessions get <code>{unavailable: true}</code> so the agent can pick a
+              default.
             </li>
           </ul>
         </div>
@@ -879,10 +883,10 @@
           </div>
           <p>
             The main agent&rsquo;s direct <code>shell</code>, <code>web_read</code>,
-            <code>file_read_lines</code>, and <code>file_edit_lines</code> calls are now transparently
-            routed through their bundled wrapper specialists &mdash; same tool name and schema, only
-            the <code>execute</code> path changes. The model can&rsquo;t tell the difference, but
-            wrappers add OS-aware examples, schema validation, and result capping.
+            <code>file_read_lines</code>, and <code>file_edit_lines</code> calls are now
+            transparently routed through their bundled wrapper specialists &mdash; same tool name
+            and schema, only the <code>execute</code> path changes. The model can&rsquo;t tell the
+            difference, but wrappers add OS-aware examples, schema validation, and result capping.
           </p>
           <ul>
             <li>
@@ -899,8 +903,8 @@
             <li>
               <code>tool_wrapper_run</code> now strips the wrapper&rsquo;s reasoning array and caps
               the <code>result</code> field before returning to the parent, keeping the parent
-              context clean. Reasoning still lands in
-              <code>logs/tool-wrappers.jsonl</code> for debugging.
+              context clean. Reasoning still lands in <code>logs/tool-wrappers.jsonl</code> for
+              debugging.
             </li>
             <li>
               Wrapper errors are mapped back to the native tool&rsquo;s error shape (e.g.
