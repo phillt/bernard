@@ -1,6 +1,6 @@
 {
   "name": "bernard-agent",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Local CLI AI agent with multi-provider support",
   "main": "dist/index.js",
   "bin": {
