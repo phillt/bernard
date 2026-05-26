@@ -727,6 +727,198 @@
       </div>
     </section>
 
+    <!-- v0.9.1 -->
+    <section class="version-section" id="v0.9.1">
+      <div class="container">
+        <h2 class="version-heading">
+          v0.9.1
+          <span class="version-date">2026-05-22</span>
+        </h2>
+
+        <!-- Custom Providers -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- plug icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <path d="M9 2v6"></path>
+                <path d="M15 2v6"></path>
+                <path d="M7 10h10v4a5 5 0 0 1-10 0z"></path>
+                <path d="M12 18v4"></path>
+              </svg>
+            </div>
+            <h2>Custom Providers <span class="tag">feature</span></h2>
+          </div>
+          <p>
+            Register named providers that wrap one of the three installed SDKs (<code>openai</code>,
+            <code>anthropic</code>, <code>xai</code>) and point it at a different endpoint &mdash;
+            Ollama, LM Studio, vLLM, OpenRouter, internal proxies, anything compatible. Multiple
+            custom providers coexist with the built-ins.
+          </p>
+          <ul>
+            <li>
+              CLI:
+              <code
+                >bernard add-provider &lt;name&gt; --sdk &lt;openai|anthropic|xai&gt; --base-url
+                &lt;url&gt; --model &lt;model&gt;</code
+              >, <code>bernard remove-provider &lt;name&gt;</code>, <code>bernard providers</code>.
+            </li>
+            <li>
+              REPL: <code>/provider</code> now ends with
+              <strong>+ Add custom provider&hellip;</strong> (interactive wizard); for a custom
+              provider, <code>/model</code> ends with
+              <strong>+ Type a new model name&hellip;</strong> and remembers what you typed.
+            </li>
+            <li>
+              Keys are stored in <code>keys.json</code> alongside built-in keys and are never
+              injected into <code>process.env</code>.
+            </li>
+          </ul>
+        </div>
+
+        <!-- ask_user tool -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- help-circle icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+              </svg>
+            </div>
+            <h2>Mid-Turn Questions with <code>ask_user</code> <span class="tag">feature</span></h2>
+          </div>
+          <p>
+            A new <code>ask_user</code> tool lets the agent pause the turn and ask clarifying
+            questions instead of writing them as prose (which previously left the turn idle and, in
+            coordinator mode, tripped the plan-enforcement loop).
+          </p>
+          <ul>
+            <li>
+              Batches up to 10 questions in one call &mdash; useful for &ldquo;title + body +
+              labels&rdquo; style prompts &mdash; with a pinned tab strip showing
+              <code>[1 &check; &#9656;2&#9666; 3]</code> progress.
+            </li>
+            <li>
+              Each question can be free-form or constrained by a <code>choices</code> list with an
+              optional &ldquo;Other&rdquo; escape hatch (custom label supported).
+            </li>
+            <li>
+              Esc mid-batch returns whatever was already answered, so partial input isn&rsquo;t
+              lost. Headless sessions get <code>{unavailable: true}</code> so the agent can pick a
+              default.
+            </li>
+          </ul>
+        </div>
+
+        <!-- Dangerous-command hang fix -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- shield icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              </svg>
+            </div>
+            <h2>Dangerous-Command Confirmation Fix <span class="tag">fix</span></h2>
+          </div>
+          <p>
+            The dangerous-command confirmation now uses the arrow-key menu instead of the legacy
+            <code>rl.question</code> prompt, fixing a hang where the spinner blanked the prompt and
+            the agent waited indefinitely. <code>rm</code> calls scoped to Bernard&rsquo;s own
+            scratch-script directory (<code>&lt;os-tmpdir&gt;/bernard-*</code>, e.g.
+            <code>/tmp/bernard-*</code> on Linux &mdash; an internal constant in
+            <code>src/tools/shell.ts</code>, not a configurable env var) and free of shell
+            metacharacters skip the prompt entirely &mdash; that&rsquo;s just Bernard cleaning up
+            after itself.
+          </p>
+        </div>
+
+        <!-- Wrapper routing + repair hook -->
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-icon">
+              <!-- wrench icon -->
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                style="fill: none; stroke: var(--accent)"
+              >
+                <path
+                  d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.7 2.7-2.7-2.7z"
+                ></path>
+              </svg>
+            </div>
+            <h2>Wrapper Routing + Tool-Call Repair <span class="tag">reliability</span></h2>
+          </div>
+          <p>
+            The main agent&rsquo;s direct <code>shell</code>, <code>web_read</code>,
+            <code>file_read_lines</code>, and <code>file_edit_lines</code> calls are now
+            transparently routed through their bundled wrapper specialists &mdash; same tool name
+            and schema, only the <code>execute</code> path changes. The model can&rsquo;t tell the
+            difference, but wrappers add OS-aware examples, schema validation, and result capping.
+          </p>
+          <ul>
+            <li>
+              A one-shot <strong>repair hook</strong> is wired into every <code>generateText</code>
+              site (main, specialist, subagent, tool-wrapper, cron). On
+              <code>InvalidToolArgumentsError</code> or <code>NoSuchToolError</code> the model gets
+              re-prompted with the actual error.
+            </li>
+            <li>
+              Argument-truncation errors (the classic 16&nbsp;KB heredoc cut mid-string) trigger a
+              specific hint to use <code>file_write</code> + <code>shell</code> instead of inlining
+              the payload.
+            </li>
+            <li>
+              <code>tool_wrapper_run</code> now strips the wrapper&rsquo;s reasoning array and caps
+              the <code>result</code> field before returning to the parent, keeping the parent
+              context clean. Reasoning still lands in <code>logs/tool-wrappers.jsonl</code> for
+              debugging.
+            </li>
+            <li>
+              Wrapper errors are mapped back to the native tool&rsquo;s error shape (e.g.
+              <code>shell</code> &rarr; <code>{ output, is_error: true }</code>), so
+              <code>detectToolError</code> and tool-profile learning keep working under the shim.
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
     <!-- v0.9.0 -->
     <section class="version-section" id="v0.9.0">
       <div class="container">
