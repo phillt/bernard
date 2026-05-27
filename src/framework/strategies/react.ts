@@ -69,9 +69,14 @@ export class ReActStrategy implements ExecutionStrategy {
       return result;
     }
 
+    // Enforcement budget is intentionally `config.maxSteps * enforcementRatio`
+    // (not `baseMaxSteps * ratio`) to preserve historical behavior: callers
+    // that reduce the initial budget (specialist halves it) still get the full
+    // documented enforcement allowance, so `ratio = 0.25` means
+    // `config.maxSteps * 0.25` regardless of the initial-call multiplier.
     const enforcementRatio = this.opts.enforcementStepRatio ?? 1;
     const enforcementMaxSteps = computeEffectiveMaxSteps(
-      Math.ceil(baseMaxSteps * enforcementRatio),
+      Math.ceil(ctx.config.maxSteps * enforcementRatio),
       true,
     );
     const prefixTag = ctx.prefix ? `[${ctx.prefix}] ` : '';

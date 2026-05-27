@@ -134,6 +134,28 @@ describe('ReActStrategy', () => {
     expect(enforcementOpts.maxStepsOverride).toBe(30);
   });
 
+  it('enforcement budget is relative to config.maxSteps, not baseMaxSteps', async () => {
+    // Specialist scenario: config.maxSteps=25, baseMaxSteps=13 (caller halved).
+    // Initial call uses tripled baseMaxSteps; enforcement should use
+    // ceil(config.maxSteps * 0.25) = 7, tripled = 21 — the historical budget.
+    const planStore = new PlanStore();
+    const ctx = makeCtx({
+      planStore,
+      baseMaxSteps: 13,
+      config: { reactMode: true, maxSteps: 25 },
+    });
+    let call = 0;
+    ctx.iterate.mockImplementation(async () => {
+      call++;
+      if (call === 1) planStore.create([{ description: 'a', verification: 'b' }]);
+      else planStore.update(1, 'done', { signoff: 'ok' });
+      return baseResult;
+    });
+    await new ReActStrategy(new NormalStrategy(), { enforcementStepRatio: 0.25 }).run(ctx);
+    expect((ctx.iterate.mock.calls[0][0] as IterateOpts).maxStepsOverride).toBe(39);
+    expect((ctx.iterate.mock.calls[1][0] as IterateOpts).maxStepsOverride).toBe(21);
+  });
+
   it('prefixes warnings/info with ctx.prefix when provided', async () => {
     const planStore = new PlanStore();
     const ctx = makeCtx({ planStore, prefix: 'spec:1' });

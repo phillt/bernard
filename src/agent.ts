@@ -218,6 +218,7 @@ Do NOT use sub-agents for tasks that are sequential or depend on each other's re
 // ReAct primitives live in ./react.js so tools/* can use them without forming
 // a circular import via agent.ts. Re-exported here because agent.test.ts and
 // other callers import them from './agent.js'.
+import { REACT_COORDINATOR_PROMPT } from './react.js';
 export {
   REACT_COORDINATOR_PROMPT,
   shouldEnforcePlan,
@@ -557,11 +558,16 @@ export class Agent {
         systemPrompt += '\n\n' + profilesBlock;
       }
 
-      // Pre-flight token guard: emergency truncate if estimated tokens exceed 90% of context window
+      // Pre-flight token guard: emergency truncate if estimated tokens exceed 90% of context window.
+      // ReActStrategy appends `REACT_COORDINATOR_PROMPT` as a system suffix on every call, so when
+      // reactMode is on the actual system prompt is larger than `systemPrompt`. Include the suffix
+      // in the estimate to avoid undercounting and skipping a needed truncation.
       const HARD_LIMIT_RATIO = 0.9;
       const contextWindow = getContextWindow(this.config.model, this.config.tokenWindow);
+      const effectiveSystemPromptChars =
+        systemPrompt.length + (this.config.reactMode ? REACT_COORDINATOR_PROMPT.length + 2 : 0);
       const estimatedTokens =
-        estimateHistoryTokens(this.history) + Math.ceil(systemPrompt.length / 4);
+        estimateHistoryTokens(this.history) + Math.ceil(effectiveSystemPromptChars / 4);
       const hardLimit = contextWindow * HARD_LIMIT_RATIO;
       let preflightTruncated = false;
 
