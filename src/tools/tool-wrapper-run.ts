@@ -212,7 +212,6 @@ export async function dispatchToolWrapper(
     specialistStore,
     correctionStore,
     mcpTools,
-    ragStore,
     routineStore,
     candidateStore,
   } = deps;
