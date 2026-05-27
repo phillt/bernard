@@ -53,8 +53,7 @@ function recordOutcome(
     const profile = profileStore.get(profileKey);
     if (
       profile?.badExamples.length &&
-      profile.badExamples[profile.badExamples.length - 1].fix ===
-        '(awaiting successful retry)'
+      profile.badExamples[profile.badExamples.length - 1].fix === '(awaiting successful retry)'
     ) {
       profileStore.patchLastBadWithFix(profileKey, argsSnippet);
       debugLog(`augment:${toolName}:patched`, { profileKey });
@@ -124,7 +123,10 @@ export function augmentTools(
           const argsSnippet = safeSerialize(args);
           const errSnippet =
             envelope.status === 'error'
-              ? `${envelope.error.message}${envelope.error.snippet ? `\n${envelope.error.snippet}` : ''}`.slice(0, 200)
+              ? `${envelope.error.message}${envelope.error.snippet ? `\n${envelope.error.snippet}` : ''}`.slice(
+                  0,
+                  200,
+                )
               : undefined;
           setImmediate(() =>
             recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet),

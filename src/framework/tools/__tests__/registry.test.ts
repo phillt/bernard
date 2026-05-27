@@ -3,7 +3,10 @@ import { z } from 'zod';
 import { ToolRegistry } from '../registry.js';
 import { ok, type BernardTool } from '../types.js';
 
-function makeTool(name: string, kind: 'read' | 'write' | 'dangerous' | 'inert'): BernardTool<unknown, unknown> {
+function makeTool(
+  name: string,
+  kind: 'read' | 'write' | 'dangerous' | 'inert',
+): BernardTool<unknown, unknown> {
   return {
     meta: { name, kind },
     description: name,
@@ -46,7 +49,12 @@ describe('ToolRegistry', () => {
 
   it('byMetadata({}) returns every tool', () => {
     const r = new ToolRegistry([makeTool('a', 'read'), makeTool('b', 'write')]);
-    expect(r.byMetadata({}).map((t) => t.meta.name).sort()).toEqual(['a', 'b']);
+    expect(
+      r
+        .byMetadata({})
+        .map((t) => t.meta.name)
+        .sort(),
+    ).toEqual(['a', 'b']);
   });
 
   it('byMetadata ignores undefined filter values', () => {

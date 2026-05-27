@@ -34,20 +34,23 @@ export function createMemoryTool(memoryStore: MemoryStore): BernardTool<MemoryAr
           return ok(`Stored memories:\n${keys.map((k) => `  - ${k}`).join('\n')}`);
         }
         case 'read': {
-          if (!key) return err({ type: 'invalid_args', message: 'key is required for read action.' });
+          if (!key)
+            return err({ type: 'invalid_args', message: 'key is required for read action.' });
           const value = memoryStore.readMemory(key);
           if (value === null) return ok(`No memory found for key "${key}".`);
           return ok(value);
         }
         case 'write': {
-          if (!key) return err({ type: 'invalid_args', message: 'key is required for write action.' });
+          if (!key)
+            return err({ type: 'invalid_args', message: 'key is required for write action.' });
           if (!content)
             return err({ type: 'invalid_args', message: 'content is required for write action.' });
           memoryStore.writeMemory(key, content);
           return ok(`Memory "${key}" saved.`);
         }
         case 'delete': {
-          if (!key) return err({ type: 'invalid_args', message: 'key is required for delete action.' });
+          if (!key)
+            return err({ type: 'invalid_args', message: 'key is required for delete action.' });
           const deleted = memoryStore.deleteMemory(key);
           if (!deleted) return ok(`No memory found for key "${key}".`);
           return ok(`Memory "${key}" deleted.`);
@@ -81,20 +84,23 @@ export function createScratchTool(memoryStore: MemoryStore): BernardTool<MemoryA
           return ok(`Scratch notes:\n${keys.map((k) => `  - ${k}`).join('\n')}`);
         }
         case 'read': {
-          if (!key) return err({ type: 'invalid_args', message: 'key is required for read action.' });
+          if (!key)
+            return err({ type: 'invalid_args', message: 'key is required for read action.' });
           const value = memoryStore.readScratch(key);
           if (value === null) return ok(`No scratch note found for key "${key}".`);
           return ok(value);
         }
         case 'write': {
-          if (!key) return err({ type: 'invalid_args', message: 'key is required for write action.' });
+          if (!key)
+            return err({ type: 'invalid_args', message: 'key is required for write action.' });
           if (!content)
             return err({ type: 'invalid_args', message: 'content is required for write action.' });
           memoryStore.writeScratch(key, content);
           return ok(`Scratch note "${key}" saved.`);
         }
         case 'delete': {
-          if (!key) return err({ type: 'invalid_args', message: 'key is required for delete action.' });
+          if (!key)
+            return err({ type: 'invalid_args', message: 'key is required for delete action.' });
           const deleted = memoryStore.deleteScratch(key);
           if (!deleted) return ok(`No scratch note found for key "${key}".`);
           return ok(`Scratch note "${key}" deleted.`);

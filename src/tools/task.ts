@@ -184,7 +184,9 @@ function serializeTaskForModel(r: ToolResult<TaskPayload>): string {
   if (r.status === 'ok') {
     const { innerStatus, output, details } = r.result;
     return JSON.stringify(
-      details !== undefined ? { status: innerStatus, output, details } : { status: innerStatus, output },
+      details !== undefined
+        ? { status: innerStatus, output, details }
+        : { status: innerStatus, output },
     );
   }
   return JSON.stringify({ status: 'error', output: r.error.message });

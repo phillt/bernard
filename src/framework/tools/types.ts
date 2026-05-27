@@ -12,12 +12,7 @@ export interface ToolMeta {
   category?: string;
 }
 
-export type ToolErrorType =
-  | 'invalid_args'
-  | 'exec_failed'
-  | 'timeout'
-  | 'cancelled'
-  | 'unknown';
+export type ToolErrorType = 'invalid_args' | 'exec_failed' | 'timeout' | 'cancelled' | 'unknown';
 
 export interface ToolError {
   type: ToolErrorType;
@@ -32,9 +27,7 @@ export interface ToolError {
  * Discriminated union the agent reads internally. `status` mirrors the shape
  * the codebase already uses in `tool_wrapper_run`.
  */
-export type ToolResult<T> =
-  | { status: 'ok'; result: T }
-  | { status: 'error'; error: ToolError };
+export type ToolResult<T> = { status: 'ok'; result: T } | { status: 'error'; error: ToolError };
 
 export function ok<T>(result: T): ToolResult<T> {
   return { status: 'ok', result };

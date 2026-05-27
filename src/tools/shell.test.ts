@@ -153,9 +153,12 @@ describe('createShellTool', () => {
     vi.mocked(execSync).mockReturnValue('done');
     const controller = new AbortController();
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
-    await shellTool.execute({ command: 'rm -rf /tmp/test' }, {
-      abortSignal: controller.signal,
-    });
+    await shellTool.execute(
+      { command: 'rm -rf /tmp/test' },
+      {
+        abortSignal: controller.signal,
+      },
+    );
     expect(confirmDangerous).toHaveBeenCalledWith('rm -rf /tmp/test', controller.signal);
   });
 

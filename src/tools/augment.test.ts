@@ -587,7 +587,9 @@ describe('augmentTools', () => {
     }
 
     it('records error envelope WITHOUT calling detectToolError heuristic', async () => {
-      const aisdk = toolToAISDK(makeBernardTool({ name: 'demo', result: 'error', message: 'fail' }));
+      const aisdk = toolToAISDK(
+        makeBernardTool({ name: 'demo', result: 'error', message: 'fail' }),
+      );
       const augmented = augmentTools({ demo: aisdk }, store);
       await augmented.demo.execute({ x: 1 }, {});
       await new Promise((resolve) => setImmediate(resolve));
@@ -608,7 +610,9 @@ describe('augmentTools', () => {
     });
 
     it('returns the model-facing serialized form, not the raw envelope', async () => {
-      const aisdk = toolToAISDK(makeBernardTool({ name: 'demo', result: 'error', message: 'oops' }));
+      const aisdk = toolToAISDK(
+        makeBernardTool({ name: 'demo', result: 'error', message: 'oops' }),
+      );
       const augmented = augmentTools({ demo: aisdk }, store);
       const out = await augmented.demo.execute({ x: 1 }, {});
       expect(out).toBe('Error: oops');
@@ -616,9 +620,7 @@ describe('augmentTools', () => {
 
     it('patches the most recent unfixed bad example on success (envelope path)', async () => {
       store.get.mockReturnValue({
-        badExamples: [
-          { args: '{"x":2}', errorSnippet: 'old', fix: '(awaiting successful retry)' },
-        ],
+        badExamples: [{ args: '{"x":2}', errorSnippet: 'old', fix: '(awaiting successful retry)' }],
       });
       const aisdk = toolToAISDK(makeBernardTool({ name: 'demo', result: 'ok' }));
       const augmented = augmentTools({ demo: aisdk }, store);

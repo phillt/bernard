@@ -34,9 +34,10 @@ export function wrapMCPTool(
     parameters: mcpTool.parameters as never,
     execute: async (args, opts): Promise<ToolResult<unknown>> => {
       try {
-        const value = await (
-          mcpTool as { execute: (a: unknown, o: unknown) => unknown }
-        ).execute(args, opts);
+        const value = await (mcpTool as { execute: (a: unknown, o: unknown) => unknown }).execute(
+          args,
+          opts,
+        );
         if (isToolResult(value)) return value as ToolResult<unknown>;
         // Heuristic: MCP servers historically return string errors prefixed
         // with "Error". detectToolError used to catch these; localize it here.

@@ -15,8 +15,7 @@ function makeMigrated(): BernardTool<{ x: number }, { doubled: number }> {
       }
       return ok({ doubled: x * 2 });
     },
-    serializeForModel: (r) =>
-      r.status === 'ok' ? r.result : `Error: ${r.error.message}`,
+    serializeForModel: (r) => (r.status === 'ok' ? r.result : `Error: ${r.error.message}`),
   };
 }
 
