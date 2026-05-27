@@ -1,4 +1,4 @@
-import { generateText, type CoreMessage, type UserContent } from 'ai';
+import { type CoreMessage, type UserContent } from 'ai';
 import {
   getModelForConfig,
   getModelProfile,
@@ -9,9 +9,6 @@ import { createSubAgentTool } from './tools/subagent.js';
 import { createTaskTool } from './tools/task.js';
 import { toolToAISDK } from './framework/tools/adapter.js';
 import {
-  printAssistantText,
-  printToolCall,
-  printToolResult,
   printInfo,
   printWarning,
   printCriticRetry,
@@ -20,6 +17,9 @@ import {
   clearPinnedRegion,
   type SpinnerStats,
 } from './output.js';
+import { runAgent } from './framework/runner.js';
+import { tokenStatsHook } from './framework/hooks/token-stats.js';
+import { outputHook } from './framework/hooks/output.js';
 import { debugLog } from './logger.js';
 import { extractToolCallLog, runCritic, CRITIC_MAX_RETRIES } from './critic.js';
 import {
@@ -391,8 +391,10 @@ export class Agent {
   private lastRAGResults: RAGSearchResult[] = [];
   private abortController: AbortController | null = null;
   private lastPromptTokens: number = 0;
-  private lastStepPromptTokens: number = 0;
-  private spinnerStats: SpinnerStats | null = null;
+  // Public so tokenStatsHook (an external module) can mutate these in place
+  // after each agent step. See src/framework/hooks/token-stats.ts.
+  lastStepPromptTokens: number = 0;
+  spinnerStats: SpinnerStats | null = null;
   private routineStore: RoutineStore;
   private specialistStore: SpecialistStore;
   private candidateStore?: CandidateStoreReader;
@@ -646,7 +648,7 @@ export class Agent {
       );
 
       const callGenerateText = (messages?: CoreMessage[]) =>
-        generateText({
+        runAgent({
           model: getModelForConfig(this.config, this.config.provider, this.config.model),
           providerOptions: getProviderOptionsForConfig(this.config, this.config.provider),
           tools: augmentedTools,
@@ -655,34 +657,12 @@ export class Agent {
           system: systemPrompt,
           messages: messages ?? this.history,
           abortSignal: this.abortController!.signal,
-          experimental_repairToolCall: makeRepairHook({
+          repair: makeRepairHook({
             config: this.config,
             label: 'main',
             abortSignal: this.abortController!.signal,
           }),
-          onStepFinish: ({ text, toolCalls, toolResults, usage }) => {
-            if (usage) {
-              this.lastStepPromptTokens = usage.promptTokens;
-              if (this.spinnerStats) {
-                this.spinnerStats.totalPromptTokens += usage.promptTokens;
-                this.spinnerStats.totalCompletionTokens += usage.completionTokens;
-                this.spinnerStats.latestPromptTokens = usage.promptTokens;
-              }
-            }
-            for (const tc of toolCalls) {
-              printToolCall(tc.toolName, tc.args as Record<string, unknown>);
-            }
-            for (const tr of toolResults) {
-              printToolResult(tr.toolName, tr.result);
-            }
-            if (text) {
-              printAssistantText(text);
-            }
-            // Restart spinner between tool-call steps (another LLM call is coming)
-            if (toolCalls.length > 0 && this.spinnerStats) {
-              startSpinner(() => buildSpinnerMessage(this.spinnerStats!));
-            }
-          },
+          hooks: [tokenStatsHook(this), outputHook()],
         });
 
       // Shared retry path for critic and ReAct enforcement loops: truncate the

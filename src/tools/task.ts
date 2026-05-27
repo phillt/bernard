@@ -1,15 +1,10 @@
-import { generateText } from 'ai';
 import { z } from 'zod';
 import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
 import { createTools } from './index.js';
 import { extractJsonBlock } from '../structured-output.js';
-import {
-  printTaskStart,
-  printTaskEnd,
-  printToolCall,
-  printToolResult,
-  printAssistantText,
-} from '../output.js';
+import { printTaskStart, printTaskEnd } from '../output.js';
+import { runAgent } from '../framework/runner.js';
+import { outputHook } from '../framework/hooks/output.js';
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
@@ -285,7 +280,7 @@ export function createTaskTool(ctx: AgentContext): BernardTool<TaskArgs, TaskPay
           });
 
         const taskMaxSteps = getTaskMaxSteps(config);
-        const result = await generateText({
+        const result = await runAgent({
           model: getModelForConfig(config, resolvedProvider, resolvedModel),
           providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
           tools: baseTools,
@@ -294,18 +289,8 @@ export function createTaskTool(ctx: AgentContext): BernardTool<TaskArgs, TaskPay
           system: enrichedPrompt,
           messages: [{ role: 'user', content: userMessage }],
           abortSignal: execOptions.abortSignal,
-          experimental_prepareStep: makeLastStepTextOnly(taskMaxSteps),
-          onStepFinish: ({ text, toolCalls, toolResults }) => {
-            for (const tc of toolCalls) {
-              printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
-            }
-            for (const tr of toolResults) {
-              printToolResult(tr.toolName, tr.result, prefix);
-            }
-            if (text) {
-              printAssistantText(text, prefix);
-            }
-          },
+          prepareStep: makeLastStepTextOnly(taskMaxSteps),
+          hooks: [outputHook(prefix)],
         });
 
         const taskResult = wrapTaskResult(result.text);

@@ -1,4 +1,4 @@
-import { generateText, tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
 import { createTools, type ToolOptions } from './index.js';
@@ -7,13 +7,9 @@ import { createTaskTool } from './task.js';
 import { toolToAISDK } from '../framework/tools/adapter.js';
 import { createSpecialistRunTool } from './specialist-run.js';
 import { makeLastStepTextOnly } from './task.js';
-import {
-  printSpecialistStart,
-  printSpecialistEnd,
-  printToolCall,
-  printToolResult,
-  printAssistantText,
-} from '../output.js';
+import { runAgent } from '../framework/runner.js';
+import { outputHook } from '../framework/hooks/output.js';
+import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
@@ -317,16 +313,6 @@ export async function dispatchToolWrapper(
 
     const maxSteps = Math.max(2, Math.ceil(config.maxSteps * TOOL_WRAPPER_STEP_RATIO));
 
-    const onStepFinish = ({ text, toolCalls, toolResults }: any) => {
-      for (const tc of toolCalls ?? []) {
-        printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
-      }
-      for (const tr of toolResults ?? []) {
-        printToolResult(tr.toolName, tr.result, prefix);
-      }
-      if (text) printAssistantText(text, prefix);
-    };
-
     // Lazy import to avoid a top-level cycle (tool-call-repair → providers).
     const { makeRepairHook } = await import('../tool-call-repair.js');
     const repairHook = makeRepairHook({
@@ -337,7 +323,7 @@ export async function dispatchToolWrapper(
       abortSignal,
     });
 
-    const result = await generateText({
+    const result = await runAgent({
       model: getModelForConfig(config, resolvedProvider, resolvedModel),
       providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
       tools: childTools,
@@ -346,9 +332,9 @@ export async function dispatchToolWrapper(
       system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
       abortSignal,
-      experimental_prepareStep: wantStructured ? makeLastStepTextOnly(maxSteps) : undefined,
-      experimental_repairToolCall: repairHook,
-      onStepFinish,
+      prepareStep: wantStructured ? makeLastStepTextOnly(maxSteps) : undefined,
+      repair: repairHook,
+      hooks: [outputHook(prefix)],
     });
 
     printSpecialistEnd(id);

@@ -1,16 +1,10 @@
-import { generateText, tool, type CoreMessage } from 'ai';
+import { tool, type CoreMessage } from 'ai';
 import { z } from 'zod';
 import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
 import { createTools } from './index.js';
-import {
-  printSpecialistStart,
-  printSpecialistEnd,
-  printToolCall,
-  printToolResult,
-  printAssistantText,
-  printWarning,
-  printInfo,
-} from '../output.js';
+import { printSpecialistStart, printSpecialistEnd, printWarning, printInfo } from '../output.js';
+import { runAgent } from '../framework/runner.js';
+import { outputHook } from '../framework/hooks/output.js';
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
@@ -174,17 +168,7 @@ export function createSpecialistRunTool(ctx: AgentContext) {
           includeScratch: true,
         });
 
-        const onStepFinish = ({ text, toolCalls, toolResults }: any) => {
-          for (const tc of toolCalls ?? []) {
-            printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
-          }
-          for (const tr of toolResults ?? []) {
-            printToolResult(tr.toolName, tr.result, prefix);
-          }
-          if (text) {
-            printAssistantText(text, prefix);
-          }
-        };
+        const printHook = outputHook(prefix);
 
         const baseMaxSteps = Math.ceil(config.maxSteps * SPECIALIST_STEP_RATIO);
         const maxSteps = computeEffectiveMaxSteps(baseMaxSteps, config.reactMode);
@@ -195,7 +179,7 @@ export function createSpecialistRunTool(ctx: AgentContext) {
           label: 'specialist',
           abortSignal: execOptions.abortSignal,
         });
-        let result = await generateText({
+        let result = await runAgent({
           model: getModelForConfig(config, resolvedProvider, resolvedModel),
           providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
           tools: specialistTools,
@@ -204,9 +188,9 @@ export function createSpecialistRunTool(ctx: AgentContext) {
           system: systemPrompt,
           messages: [{ role: 'user', content: userMessage }],
           abortSignal: execOptions.abortSignal,
-          experimental_prepareStep: makeLastStepTextOnly(maxSteps),
-          experimental_repairToolCall: repairHook,
-          onStepFinish,
+          prepareStep: makeLastStepTextOnly(maxSteps),
+          repair: repairHook,
+          hooks: [printHook],
         });
 
         if (config.criticMode) {
@@ -215,7 +199,7 @@ export function createSpecialistRunTool(ctx: AgentContext) {
             userInput: userMessage,
             initialResult: result,
             regenerate: async (extraMessages) => {
-              return generateText({
+              return runAgent({
                 model: getModelForConfig(config, resolvedProvider, resolvedModel),
                 providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
                 tools: specialistTools,
@@ -224,9 +208,9 @@ export function createSpecialistRunTool(ctx: AgentContext) {
                 system: systemPrompt,
                 messages: [{ role: 'user', content: userMessage }, ...extraMessages],
                 abortSignal: execOptions.abortSignal,
-                experimental_prepareStep: makeLastStepTextOnly(SPECIALIST_PAC_RETRY_STEPS),
-                experimental_repairToolCall: repairHook,
-                onStepFinish,
+                prepareStep: makeLastStepTextOnly(SPECIALIST_PAC_RETRY_STEPS),
+                repair: repairHook,
+                hooks: [printHook],
               });
             },
             prefix,
@@ -264,7 +248,7 @@ export function createSpecialistRunTool(ctx: AgentContext) {
                 Math.ceil(config.maxSteps * SPECIALIST_ENFORCEMENT_STEP_RATIO),
                 config.reactMode,
               );
-              result = await generateText({
+              result = await runAgent({
                 model: getModelForConfig(config, resolvedProvider, resolvedModel),
                 providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
                 tools: specialistTools,
@@ -273,9 +257,9 @@ export function createSpecialistRunTool(ctx: AgentContext) {
                 system: systemPrompt,
                 messages: retryMessages,
                 abortSignal: execOptions.abortSignal,
-                experimental_prepareStep: makeLastStepTextOnly(retryMaxSteps),
-                experimental_repairToolCall: repairHook,
-                onStepFinish,
+                prepareStep: makeLastStepTextOnly(retryMaxSteps),
+                repair: repairHook,
+                hooks: [printHook],
               });
             } catch (retryErr) {
               debugLog(
