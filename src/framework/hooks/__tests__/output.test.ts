@@ -13,7 +13,9 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-function payload(over: Partial<Parameters<NonNullable<ReturnType<typeof outputHook>['onStepFinish']>>[0]> = {}) {
+function payload(
+  over: Partial<Parameters<NonNullable<ReturnType<typeof outputHook>['onStepFinish']>>[0]> = {},
+) {
   return {
     text: '',
     toolCalls: [],
@@ -29,11 +31,17 @@ describe('outputHook', () => {
       payload({
         text: 'hi',
         toolCalls: [{ toolName: 'shell', toolCallId: 't1', args: { command: 'ls' } }],
-        toolResults: [{ toolName: 'shell', toolCallId: 't1', result: { output: 'x', is_error: false } }],
+        toolResults: [
+          { toolName: 'shell', toolCallId: 't1', result: { output: 'x', is_error: false } },
+        ],
       }),
     );
     expect(printToolCall).toHaveBeenCalledWith('shell', { command: 'ls' }, 'sub:2');
-    expect(printToolResult).toHaveBeenCalledWith('shell', { output: 'x', is_error: false }, 'sub:2');
+    expect(printToolResult).toHaveBeenCalledWith(
+      'shell',
+      { output: 'x', is_error: false },
+      'sub:2',
+    );
     expect(printAssistantText).toHaveBeenCalledWith('hi', 'sub:2');
   });
 
@@ -61,7 +69,9 @@ describe('outputHook', () => {
 
   it('skips printAssistantText when text is empty', async () => {
     const hook = outputHook();
-    await hook.onStepFinish!(payload({ text: '', toolCalls: [{ toolName: 'shell', toolCallId: 'x', args: {} }] }));
+    await hook.onStepFinish!(
+      payload({ text: '', toolCalls: [{ toolName: 'shell', toolCallId: 'x', args: {} }] }),
+    );
     expect(printAssistantText).not.toHaveBeenCalled();
   });
 });

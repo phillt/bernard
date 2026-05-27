@@ -42,7 +42,10 @@ function composeOnStepFinish(
   hooks: AgentHook[] | undefined,
 ): ((payload: StepFinishPayload) => Promise<void>) | undefined {
   if (!hooks || hooks.length === 0) return undefined;
-  const observers = hooks.filter((h): h is AgentHook & { onStepFinish: NonNullable<AgentHook['onStepFinish']> } => Boolean(h.onStepFinish));
+  const observers = hooks.filter(
+    (h): h is AgentHook & { onStepFinish: NonNullable<AgentHook['onStepFinish']> } =>
+      Boolean(h.onStepFinish),
+  );
   if (observers.length === 0) return undefined;
   return async (payload: StepFinishPayload) => {
     for (const hook of observers) {
