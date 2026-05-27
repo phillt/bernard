@@ -143,6 +143,7 @@ export interface ToolWrapperDeps {
   ragStore?: RAGStore;
   routineStore?: RoutineStore;
   candidateStore?: CandidateStoreReader;
+  toolProfileStore?: ToolProfileStore;
 }
 
 /** Derives the legacy {@link ToolWrapperDeps} shape from an {@link AgentContext}. */
@@ -157,6 +158,7 @@ export function ctxToToolWrapperDeps(ctx: AgentContext): ToolWrapperDeps {
     ragStore: ctx.rag,
     routineStore: ctx.stores.routines,
     candidateStore: ctx.stores.candidates,
+    toolProfileStore: ctx.stores.toolProfiles,
   };
 }
 
@@ -170,7 +172,7 @@ export function depsToCtx(deps: ToolWrapperDeps): AgentContext {
       specialists: deps.specialistStore,
       candidates: deps.candidateStore ?? new CandidateStore(),
       correction: deps.correctionStore,
-      toolProfiles: new ToolProfileStore(),
+      toolProfiles: deps.toolProfileStore ?? new ToolProfileStore(),
     },
     mcp: { tools: deps.mcpTools ?? {}, serverNames: [] },
     rag: deps.ragStore,
