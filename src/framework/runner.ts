@@ -55,14 +55,19 @@ function composeOnStepFinish(
 }
 
 /**
- * Single entry point that replaces every direct `generateText({ ... })` call
- * across the codebase. Cross-cutting behaviors (print-with-prefix, token
- * tracking, structured-log accumulation) are provided by hooks under
- * `src/framework/hooks/`.
+ * Single entry point used by the agent-loop sites that share boilerplate:
+ * main agent, subagent, specialist, task, tool-wrapper, cron, critic.
+ * Other `generateText` callers (`context.ts`, `prompt-rewriter.ts`,
+ * `reference-resolver.ts`, `repl.ts`) are single-shot helpers that do not
+ * need the hook chain and stay on the direct AI-SDK call.
  *
- * Phase C goal: zero observable behavior change. The runner is a thin shim;
- * the only delta vs. inline `generateText` is that `onStepFinish` and
- * `experimental_repairToolCall` are sourced from spec hooks/factories.
+ * Cross-cutting behaviors (print-with-prefix, token tracking, structured-log
+ * accumulation) are provided by hooks under `src/framework/hooks/`.
+ *
+ * Phase C goal: zero observable behavior change for the migrated sites. The
+ * runner is a thin shim; the only delta vs. inline `generateText` is that
+ * `onStepFinish` and `experimental_repairToolCall` are sourced from spec
+ * hooks/factories.
  */
 export async function runAgent(spec: AgentSpec): Promise<AgentResult> {
   const onStepFinish = composeOnStepFinish(spec.hooks);

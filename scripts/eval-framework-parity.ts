@@ -238,7 +238,7 @@ async function main(): Promise<void> {
     },
     {
       id: 'specialist-initial',
-      description: 'src/tools/specialist-run.ts — initial call with planStore observability.',
+      description: 'src/tools/specialist-run.ts — initial call, outputHook("spec:1") + repair + prepareStep.',
       build: () => {
         const fires: Array<{ hookId: string; payloadKeys: string[] }> = [];
         return {
