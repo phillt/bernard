@@ -183,10 +183,7 @@ export function createSpecialistRunTool(ctx: AgentContext) {
             ? `${systemPrompt}\n\n${opts.systemSuffix}`
             : systemPrompt;
           const maxSteps = opts.maxStepsOverride ?? baseMaxSteps;
-          const messages: CoreMessage[] = [
-            { role: 'user', content: userMessage },
-            ...opts.extra,
-          ];
+          const messages: CoreMessage[] = [{ role: 'user', content: userMessage }, ...opts.extra];
           const r = await runAgent({
             model: getModelForConfig(config, resolvedProvider, resolvedModel),
             providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
@@ -200,8 +197,7 @@ export function createSpecialistRunTool(ctx: AgentContext) {
             repair: repairHook,
             hooks: [printHook],
           });
-          stepLimitHit =
-            r.finishReason === 'tool-calls' && (r.steps?.length ?? 0) >= maxSteps;
+          stepLimitHit = r.finishReason === 'tool-calls' && (r.steps?.length ?? 0) >= maxSteps;
           return r;
         };
 

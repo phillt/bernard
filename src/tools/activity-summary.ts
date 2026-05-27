@@ -7,9 +7,7 @@ interface ToolCallEntry {
   result: unknown;
 }
 
-function extractToolCallLog(
-  steps: { toolCalls: any[]; toolResults: any[] }[],
-): ToolCallEntry[] {
+function extractToolCallLog(steps: { toolCalls: any[]; toolResults: any[] }[]): ToolCallEntry[] {
   const entries: ToolCallEntry[] = [];
   for (const step of steps) {
     for (let i = 0; i < step.toolCalls.length; i++) {

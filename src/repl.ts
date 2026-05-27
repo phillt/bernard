@@ -1944,11 +1944,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
 
       if (trimmed === '/agent-options') {
         type BooleanOpt = {
-          key:
-            | 'autoCreateSpecialists'
-            | 'reactMode'
-            | 'promptRewriter'
-            | 'toolDetails';
+          key: 'autoCreateSpecialists' | 'reactMode' | 'promptRewriter' | 'toolDetails';
           label: string;
           description: string;
           onMsg: string;

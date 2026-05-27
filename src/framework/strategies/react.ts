@@ -96,10 +96,7 @@ export class ReActStrategy implements ExecutionStrategy {
           maxStepsOverride: enforcementMaxSteps,
         });
       } catch (err) {
-        debugLog(
-          'react:enforcement-error',
-          err instanceof Error ? err.message : String(err),
-        );
+        debugLog('react:enforcement-error', err instanceof Error ? err.message : String(err));
         break;
       }
     }

@@ -40,7 +40,7 @@ describe('buildStrategy', () => {
     const strategy = buildStrategy(config);
     const ctx = makeCtx(config);
     await strategy.run(ctx);
-    expect((ctx.iterate as any)).toHaveBeenCalledTimes(1);
+    expect(ctx.iterate as any).toHaveBeenCalledTimes(1);
     expect((ctx.iterate as any).mock.calls[0][0].systemSuffix).toBeUndefined();
   });
 });
