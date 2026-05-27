@@ -209,6 +209,36 @@ describe('runReferenceLookup', () => {
     expect(result).toEqual({ status: 'none' });
   });
 
+  it('accepts a tool flagged kind:read via __bernardMeta even when not in the allowlist', async () => {
+    const tool = makeTool(() => ({ id: 'r1' }));
+    Object.defineProperty(tool, '__bernardMeta', {
+      value: { name: 'lookup_thing', kind: 'read' },
+      enumerable: false,
+    });
+    generateTextMock
+      .mockResolvedValueOnce({
+        text: '{"status":"call","toolName":"lookup_thing","args":{"q":"brother"}}',
+      })
+      .mockResolvedValueOnce({ text: '{"status":"found","resolvedTo":"r1"}' });
+    const result = await runReferenceLookup('my brother', { lookup_thing: tool }, makeConfig());
+    expect(result).toEqual({
+      status: 'found',
+      resolvedTo: 'r1',
+      toolName: 'lookup_thing',
+    });
+  });
+
+  it('rejects a tool flagged kind:write via __bernardMeta when not in the allowlist', async () => {
+    const tool = makeTool(() => ({ id: 'r1' }));
+    Object.defineProperty(tool, '__bernardMeta', {
+      value: { name: 'lookup_thing', kind: 'write' },
+      enumerable: false,
+    });
+    const result = await runReferenceLookup('my brother', { lookup_thing: tool }, makeConfig());
+    expect(result).toEqual({ status: 'none' });
+    expect(generateTextMock).not.toHaveBeenCalled();
+  });
+
   it('honors the BERNARD_LOOKUP_TOOLS extension', async () => {
     generateTextMock
       .mockResolvedValueOnce({

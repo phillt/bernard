@@ -13,6 +13,7 @@ import { createWaitTool } from './wait.js';
 import { createFileTools } from './file.js';
 import { createRoutineTool } from './routine.js';
 import { createSpecialistTool } from './specialist.js';
+import { toolToAISDK } from '../framework/tools/adapter.js';
 import type { ToolOptions } from './types.js';
 import type { MemoryStore } from '../memory.js';
 import type { RoutineStore } from '../routines.js';
@@ -41,9 +42,13 @@ export function createTools(
   config?: BernardConfig,
 ): Record<string, any> {
   return {
-    shell: createShellTool(options),
-    memory: createMemoryTool(memoryStore),
-    scratch: createScratchTool(memoryStore),
+    // Migrated to BernardTool (Phase B). `toolToAISDK` preserves model-facing
+    // bytes via each tool's `serializeForModel`; the source BernardTool is
+    // attached via `__bernardSource` so `augmentTools` can detect errors
+    // deterministically from the envelope.
+    shell: toolToAISDK(createShellTool(options)),
+    memory: toolToAISDK(createMemoryTool(memoryStore)),
+    scratch: toolToAISDK(createScratchTool(memoryStore)),
     routine: createRoutineTool(routineStore),
     specialist: createSpecialistTool(specialistStore, candidateStore, config),
     datetime: createDateTimeTool(),
