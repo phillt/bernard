@@ -199,7 +199,6 @@ async function main(): Promise<void> {
     const config = {
       ...loadConfig(),
       reactMode: false,
-      criticMode: false,
     };
     const toolOptions = {
       shellTimeout: config.shellTimeout,
@@ -288,7 +287,6 @@ async function main(): Promise<void> {
     const config = {
       ...loadConfig(),
       reactMode: false,
-      criticMode: false,
     };
     const toolOptions = {
       shellTimeout: config.shellTimeout,

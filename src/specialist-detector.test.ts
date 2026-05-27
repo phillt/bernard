@@ -46,7 +46,6 @@ function makeConfig() {
     maxSteps: 25,
     ragEnabled: true,
     theme: 'bernard',
-    criticMode: false,
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
     anthropicApiKey: 'sk-test',

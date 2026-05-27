@@ -29,7 +29,6 @@ A local CLI AI agent that executes terminal commands, manages scheduled tasks, r
   - [Routines](#routines)
   - [Specialists](#specialists)
   - [Specialist Suggestions](#specialist-suggestions)
-  - [Critic Mode](#critic-mode)
 - [Cron Jobs (Scheduled Tasks)](#cron-jobs-scheduled-tasks)
   - [Creating Jobs](#creating-jobs)
   - [Managing Jobs](#managing-jobs)
@@ -160,7 +159,6 @@ Bernard loads `.env` from the current directory first, then falls back to `~/.be
 | `BERNARD_TOKEN_WINDOW`            | Context window size for compression (0 = auto-detect)    | `0`                       |
 | `BERNARD_MAX_STEPS`               | Max agent loop iterations per request                    | `25`                      |
 | `BERNARD_RAG_ENABLED`             | Enable the RAG memory system                             | `true`                    |
-| `BERNARD_CRITIC_MODE`             | Enable critic mode for response verification             | `false`                   |
 | `BERNARD_AUTO_CREATE_SPECIALISTS` | Auto-create specialists above confidence threshold       | `false`                   |
 | `BERNARD_AUTO_CREATE_THRESHOLD`   | Confidence threshold for auto-creating specialists (0-1) | `0.8`                     |
 | `BERNARD_DEBUG`                   | Enable debug logging                                     | unset                     |
@@ -273,7 +271,7 @@ Features:
 | `/create-task`    | Create a task routine (`task-` prefixed) with guided AI assistance                                               |
 | `/specialists`    | List saved specialists                                                                                           |
 | `/candidates`     | Review auto-detected specialist suggestions _(v0.6.0+)_                                                          |
-| `/agent-options`  | Toggle agent behaviors (critic mode, coordinator/ReAct, prompt rewriter, tool details, auto-create specialists)  |
+| `/agent-options`  | Toggle agent behaviors (coordinator/ReAct, prompt rewriter, tool details, auto-create specialists)               |
 | `/options`        | View and modify runtime options (max-tokens, max-steps, shell-timeout, token-window); also includes debug report |
 | `/exit`           | Quit Bernard (also: `exit`, `quit`)                                                                              |
 
@@ -541,30 +539,6 @@ Candidates are auto-dismissed after 30 days if not reviewed. Up to 10 pending ca
 
 Storage: one JSON file per candidate in `~/.local/share/bernard/specialist-candidates/`.
 
-### Critic Mode _(v0.6.0+)_
-
-Critic mode adds planning, proactive scratch/memory usage, and post-response verification. Toggle it during a session:
-
-```bash
-/agent-options   # Interactive menu; toggle "Critic mode"
-```
-
-When enabled:
-
-- **Planning** — Bernard writes a plan to scratch before multi-step tasks
-- **Proactive scratch** — Accumulates findings in scratch during complex work
-- **Verification** — After tool-using responses, a critic agent reviews the work and prints a verdict (PASS/WARN/FAIL)
-
-The critic checks that claimed actions match actual tool calls and flags any discrepancies. It adds one extra LLM call after tool-using responses. Simple knowledge answers are not verified.
-
-**PAC System (Plan-Act-Critic)** — When critic mode is enabled, sub-agents and specialists also get critic verification via a reusable PAC loop. The PAC loop runs the critic after each sub-agent/specialist execution, and if the critic finds issues, it retries the task with feedback (up to 2 retries). This applies to:
-
-- Sub-agents (`agent` tool)
-- Specialist runs (`specialist_run` tool)
-- Cron job executions (daemon mode)
-
-Default: off. Recommended for high-stakes work (deployments, git operations, multi-file edits).
-
 ---
 
 ## Cron Jobs (Scheduled Tasks)
@@ -759,8 +733,6 @@ Summarization and domain-specific fact extraction run in parallel. Scratch notes
 
 **Auto-continue on truncation:** If a response hits the `max-tokens` limit and is cut off, Bernard automatically continues where it left off (up to 3 continuations). After completing, it shows a recommended `max-tokens` value based on actual usage. If the response is still incomplete after 3 continuations, a warning is shown with instructions to increase the limit via `/options max-tokens <value>`.
 
-When critic mode is enabled (toggle via `/agent-options`), Bernard writes plans to scratch before complex tasks and verifies outcomes after tool use. See [Critic Mode](#critic-mode).
-
 ### RAG Memory
 
 Bernard has a Retrieval-Augmented Generation (RAG) system that provides long-term memory beyond the current session:
@@ -891,7 +863,6 @@ src/
 ├── repl.ts               # Interactive REPL loop
 ├── agent.ts              # Agent class (generateText loop)
 ├── config.ts             # Config loading and validation
-├── critic.ts             # Critic agent for response verification
 ├── output.ts             # Terminal formatting (Chalk)
 ├── menu.ts               # Reusable numbered-list selection UI
 ├── theme.ts              # Color theme definitions and switching
@@ -907,7 +878,6 @@ src/
 ├── specialist-matcher.ts    # Keyword scorer for specialist auto-dispatch
 ├── mcp.ts                # MCP server manager
 ├── overlap-checker.ts    # Token-based Jaccard overlap for specialist dedup
-├── pac.ts                # Plan-Act-Critic loop wrapper
 ├── paths.ts              # Centralized XDG file path resolution
 ├── rag-worker.ts         # Background RAG fact extraction + candidate detection
 ├── setup.ts              # First-time setup wizard

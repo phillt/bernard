@@ -283,7 +283,6 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     maxSteps: 25,
     ragEnabled: false,
     theme: 'bernard',
-    criticMode: false,
     reactMode: false,
     toolDetails: false,
     autoCreateSpecialists: false,
@@ -1203,27 +1202,19 @@ describe('REPL /agent-options boolean toggles (critic, react, rewriter)', () => 
   });
 
   // Menu path: /agent-options → top-level selection:
-  //   3. Critic mode
-  //   4. Coordinator (ReAct) mode
-  //   5. Prompt rewriter
+  //   3. Coordinator (ReAct) mode
+  //   4. Prompt rewriter
   const cases = [
     {
-      name: 'Critic mode',
-      topIndex: '3',
-      key: 'criticMode' as const,
-      onFragment: '[CRITIC:ON]',
-      offFragment: '[CRITIC:OFF]',
-    },
-    {
       name: 'Coordinator (ReAct) mode',
-      topIndex: '4',
+      topIndex: '3',
       key: 'reactMode' as const,
       onFragment: '[REACT:ON]',
       offFragment: '[REACT:OFF]',
     },
     {
       name: 'Prompt rewriter',
-      topIndex: '5',
+      topIndex: '4',
       key: 'promptRewriter' as const,
       onFragment: '[REWRITER:ON]',
       offFragment: '[REWRITER:OFF]',

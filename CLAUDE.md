@@ -14,7 +14,7 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 
 - **src/index.ts** — CLI entry point (Commander, shebang)
 - **src/repl.ts** — Interactive REPL loop (readline)
-- **src/agent.ts** — Agent loop using AI SDK `generateText` + `maxSteps` + auto-continue on truncation + optional critic verification
+- **src/agent.ts** — Agent loop using AI SDK `generateText` + `maxSteps` + auto-continue on truncation
 - **src/config.ts** — .env loading, defaults, validation
 - **src/output.ts** — Chalk-based terminal formatting
 - **src/menu.ts** — Ephemeral arrow-key selection UI rendered via `setPinnedRegion('menu', ...)` (`selectFromMenu`, `promptValue`). Arrow keys move the highlight; Enter commits; Esc/q/Ctrl-C cancel; digits 1-9 commit immediately. Non-TTY or `BERNARD_PLAIN_MENU=1` falls back to a numbered-list + `rl.question` path.
@@ -31,8 +31,6 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - **src/tool-profiles.ts** — `ToolProfileStore`: per-tool profiles with guidelines and good/bad examples, auto-learned from errors
 - **src/tools/augment.ts** — `augmentTools()`: transparent execute-wrapper that observes every tool call, records errors, and patches fixes on retry
 - **src/cron/notes-store.ts** — `CronNotesStore`: per-job persistent notes (JSON per job, capped at 100 entries, atomic writes). Daemon runner injects `cron_notes_read` / `cron_notes_write` scoped to `job.id` + `runId` so cron runs can avoid duplicate work across restarts; `cron_logs_get` appends a `## Notes written during this run` section.
-- **src/critic.ts** — Standalone critic functions: `extractToolCallLog`, `runCritic`, and critic constants/types
-- **src/pac.ts** — Plan-Act-Critic loop wrapper (`runPACLoop`) for sub-agents and specialists
 - **src/overlap-checker.ts** — Token-based Jaccard overlap detection for specialist candidates
 - **src/reference-resolver.ts** — Pre-turn LLM pass that resolves user-named entities (e.g. "my daughter") against persistent memory; returns `resolved`, `ambiguous` (menu), `unknown` (prompts user), or `noop`. Invoked from `src/repl.ts` before `agent.processInput` and rendered as a `## Resolved References` block in the system prompt (agent-visible, user-hidden).
 - **src/reference-tool-lookup.ts** — Pre-fallback module that runs only when the resolver returns `unknown`. Picks one read-only allowlisted lookup tool (MCP `*_search`/`*_list`/`*_read`/etc., plus `web_search`/`web_read`) via an LLM call, executes it with a 5 s hard timeout enforced via `Promise.race` (so even MCP tools that ignore `abortSignal` can't stall the REPL), and interprets the result into `{none|found|ambiguous}`. The `select` and `interpret` LLM calls respect the parent abort signal (Esc cancels) but are otherwise bounded by the AI SDK's API timeout. On `found`, the REPL shows a Save/Edit/Skip menu before persisting to memory. Fails open at every stage. Gated by `config.referenceLookup` (default on).
@@ -109,7 +107,6 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_TOKEN_WINDOW` — Context window size for compression, 0 = auto-detect (default: 0)
 - `BERNARD_MAX_STEPS` — Max agent loop iterations per request (default: 25)
 - `BERNARD_HOME` — Override all XDG directories with a single flat path
-- `BERNARD_CRITIC_MODE` — Enable critic mode for verification (default: false)
 - `BERNARD_REACT_MODE` — Enable coordinator (ReAct) mode for iterative reasoning with subagent delegation (default: false). When on, the per-turn step budget is `min(BERNARD_MAX_STEPS * 3, 150)` to accommodate the think → act → evaluate → decide loop, and an enforcement loop may re-prompt up to 2 extra times if the plan still has unresolved steps. Worst-case step count per turn is therefore `effectiveMaxSteps * 3`. Subagent budgets are unaffected.
 - `BERNARD_SUBAGENT_RESULT_MAX_CHARS` — Max characters returned from a sub-agent / specialist into the parent agent's context, default 4000. The user still sees full output in the terminal.
 - `BERNARD_AUTO_CREATE_SPECIALISTS` — Auto-create specialists above confidence threshold (default: false)

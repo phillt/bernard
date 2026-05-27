@@ -22,8 +22,6 @@ export interface BernardConfig {
   theme: string;
   /** Maximum number of sequential LLM calls (steps) per agent loop. */
   maxSteps: number;
-  /** Whether critic mode (planning + verification) is active. */
-  criticMode: boolean;
   /** Whether coordinator (ReAct) mode is active for iterative reasoning with subagent delegation. */
   reactMode: boolean;
   /** Whether tool-call arguments and full tool result output are shown in the terminal. Tool names and call lines are always shown. */
@@ -126,7 +124,7 @@ export const OPTIONS_REGISTRY: Record<
 /**
  * Persists user preferences to the config directory.
  *
- * Preserves the existing `autoUpdate` and `criticMode` flags when the caller omits them.
+ * Preserves the existing `autoUpdate` and `reactMode` flags when the caller omits them.
  */
 export function savePreferences(prefs: {
   provider: string;
@@ -137,7 +135,6 @@ export function savePreferences(prefs: {
   maxSteps?: number;
   theme?: string;
   autoUpdate?: boolean;
-  criticMode?: boolean;
   reactMode?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
@@ -156,7 +153,6 @@ export function savePreferences(prefs: {
   if (prefs.maxSteps !== undefined) data.maxSteps = prefs.maxSteps;
   if (prefs.theme !== undefined) data.theme = prefs.theme;
   if (prefs.autoUpdate !== undefined) data.autoUpdate = prefs.autoUpdate;
-  if (prefs.criticMode !== undefined) data.criticMode = prefs.criticMode;
   if (prefs.reactMode !== undefined) data.reactMode = prefs.reactMode;
   if (prefs.toolDetails !== undefined) data.toolDetails = prefs.toolDetails;
   if (prefs.autoCreateSpecialists !== undefined)
@@ -165,7 +161,7 @@ export function savePreferences(prefs: {
   if (prefs.promptRewriter !== undefined) data.promptRewriter = prefs.promptRewriter;
   if (prefs.referenceLookup !== undefined) data.referenceLookup = prefs.referenceLookup;
 
-  // Preserve autoUpdate, criticMode, and auto-create settings from existing prefs when callers don't pass them
+  // Preserve autoUpdate, reactMode, and auto-create settings from existing prefs when callers don't pass them
   let existing: Record<string, unknown> | undefined;
   try {
     existing = JSON.parse(fs.readFileSync(PREFS_PATH, 'utf-8'));
@@ -175,7 +171,6 @@ export function savePreferences(prefs: {
 
   const booleanKeys = [
     'autoUpdate',
-    'criticMode',
     'reactMode',
     'toolDetails',
     'promptRewriter',
@@ -232,7 +227,6 @@ export function loadPreferences(): {
   maxSteps?: number;
   theme?: string;
   autoUpdate?: boolean;
-  criticMode?: boolean;
   reactMode?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
@@ -252,7 +246,6 @@ export function loadPreferences(): {
       maxSteps: typeof parsed.maxSteps === 'number' ? parsed.maxSteps : undefined,
       theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
       autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
-      criticMode: typeof parsed.criticMode === 'boolean' ? parsed.criticMode : undefined,
       reactMode: typeof parsed.reactMode === 'boolean' ? parsed.reactMode : undefined,
       toolDetails: typeof parsed.toolDetails === 'boolean' ? parsed.toolDetails : undefined,
       autoCreateSpecialists:
@@ -711,9 +704,6 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
 
   const ragEnabled = process.env.BERNARD_RAG_ENABLED !== 'false';
   const theme = prefs.theme || 'bernard';
-  const criticMode =
-    prefs.criticMode ??
-    (process.env.BERNARD_CRITIC_MODE === 'true' || process.env.BERNARD_CRITIC_MODE === '1');
 
   const reactMode =
     prefs.reactMode ??
@@ -771,7 +761,6 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     maxSteps,
     ragEnabled,
     theme,
-    criticMode,
     reactMode,
     toolDetails,
     autoCreateSpecialists,

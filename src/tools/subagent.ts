@@ -9,7 +9,6 @@ import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, _resetPool, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
 import { resolveProviderAndModel, defaultProviderErrorMessage } from '../config.js';
-import { runPACLoop } from '../pac.js';
 import type { AgentContext } from '../framework/context.js';
 import { capSubagentResult } from './result-cap.js';
 import { appendActivitySummary } from './activity-summary.js';
@@ -17,7 +16,6 @@ import { makeLastStepTextOnly } from './task.js';
 import { makeRepairHook } from '../tool-call-repair.js';
 
 const SUBAGENT_STEP_RATIO = 0.5;
-const SUBAGENT_PAC_RETRY_STEPS = 10;
 
 const SUB_AGENT_SYSTEM_PROMPT = `You are a sub-agent of Bernard, a CLI AI assistant. You have been delegated a specific, scoped task.
 
@@ -151,41 +149,6 @@ export function createSubAgentTool(ctx: AgentContext) {
           repair: repairHook,
           hooks: [printHook],
         });
-
-        if (config.criticMode) {
-          const pacResult = await runPACLoop({
-            config,
-            userInput: userMessage,
-            initialResult: result,
-            regenerate: async (extraMessages) => {
-              const retryMaxSteps = SUBAGENT_PAC_RETRY_STEPS;
-              return runAgent({
-                model: getModelForConfig(config, resolvedProvider, resolvedModel),
-                providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
-                tools: baseTools,
-                maxSteps: retryMaxSteps,
-                maxTokens: config.maxTokens,
-                system: enrichedPrompt,
-                messages: [{ role: 'user', content: userMessage }, ...extraMessages],
-                abortSignal: execOptions.abortSignal,
-                prepareStep: makeLastStepTextOnly(retryMaxSteps),
-                repair: repairHook,
-                hooks: [printHook],
-              });
-            },
-            prefix,
-            abortSignal: execOptions.abortSignal,
-          });
-
-          printSubAgentEnd(id);
-          return capSubagentResult(
-            appendActivitySummary(
-              pacResult.finalResult.text,
-              pacResult.finalResult.steps,
-              'subagent',
-            ),
-          );
-        }
 
         printSubAgentEnd(id);
         return capSubagentResult(

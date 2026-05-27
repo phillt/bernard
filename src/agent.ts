@@ -11,17 +11,20 @@ import { toolToAISDK } from './framework/tools/adapter.js';
 import {
   printInfo,
   printWarning,
-  printCriticRetry,
   startSpinner,
   buildSpinnerMessage,
   clearPinnedRegion,
   type SpinnerStats,
 } from './output.js';
 import { runAgent } from './framework/runner.js';
+import {
+  buildStrategy,
+  type IterateFn,
+  type StrategyContext,
+} from './framework/strategies/index.js';
 import { tokenStatsHook } from './framework/hooks/token-stats.js';
 import { outputHook } from './framework/hooks/output.js';
 import { debugLog } from './logger.js';
-import { extractToolCallLog, runCritic, CRITIC_MAX_RETRIES } from './critic.js';
 import {
   shouldCompress,
   compressHistory,
@@ -212,44 +215,14 @@ Do NOT use sub-agents for tasks that are sequential or depend on each other's re
 
 **agent vs. task** — Use \`agent\` for open-ended work where you need a narrative report. Use \`task\` when you need a discrete, machine-readable JSON result — tasks are truly single-step/atomic (1 LLM call + tools), return Zod-validated structured JSON, and are ideal for routine chaining where you need to branch on success/error. Tasks are the preferred delegation mechanism when you need a discrete, verifiable result. Both share the same concurrency pool.`;
 
-const CRITIC_MODE_PROMPT = `## Reliability Mode (Active)
-
-You are operating with enhanced reliability. Follow these additional rules:
-
-### Enhanced Planning (Scratch-Based)
-In addition to stating your plan in text, persist it to scratch for reliability:
-1. Write your plan to scratch (key: "plan") listing steps and expected outcomes.
-2. Reference and update the scratch plan during execution.
-3. After completion, delete the plan from scratch to keep it clean.
-
-### Proactive Scratch Usage
-- At the start of multi-step work, write your approach to scratch before making any tool calls.
-- When gathering information from multiple sources, accumulate findings in scratch before synthesizing a response.
-- Before answering complex questions, check if scratch contains relevant notes from earlier in this session.
-
-### Proactive Memory Usage
-- After completing a task, consider whether any reusable patterns, user preferences, or project facts should be saved to persistent memory.
-- Before starting work, check if persistent memory contains relevant context that could inform your approach.
-
-### Verification
-- After any mutation (file write, git commit, API call), immediately verify the outcome with a read-only command.
-- Your work will be reviewed by a critic agent afterward. Only claim what you can prove with tool output.`;
-
 // ReAct primitives live in ./react.js so tools/* can use them without forming
 // a circular import via agent.ts. Re-exported here because agent.test.ts and
 // other callers import them from './agent.js'.
+import { REACT_COORDINATOR_PROMPT } from './react.js';
 export {
   REACT_COORDINATOR_PROMPT,
   shouldEnforcePlan,
   REACT_MAX_STEPS_CEILING,
-  computeEffectiveMaxSteps,
-  REACT_ENFORCEMENT_MAX_RETRIES,
-  REACT_AUTO_CANCEL_NOTE,
-  buildEnforcementFeedback,
-} from './react.js';
-import {
-  REACT_COORDINATOR_PROMPT,
-  shouldEnforcePlan,
   computeEffectiveMaxSteps,
   REACT_ENFORCEMENT_MAX_RETRIES,
   REACT_AUTO_CANCEL_NOTE,
@@ -279,14 +252,6 @@ export function buildSystemPrompt(
 ): string {
   let prompt = BASE_SYSTEM_PROMPT + `\n\nCurrent date and time: ${formatCurrentDateTime()}.`;
   prompt += `\nYou are running as provider: ${config.provider}, model: ${config.model}. The user can switch with /provider and /model.`;
-
-  if (config.criticMode) {
-    prompt += '\n\n' + CRITIC_MODE_PROMPT;
-  }
-
-  if (config.reactMode) {
-    prompt += '\n\n' + REACT_COORDINATOR_PROMPT;
-  }
 
   prompt += buildMemoryContext({ memoryStore, ragResults, includeScratch: true });
 
@@ -593,11 +558,16 @@ export class Agent {
         systemPrompt += '\n\n' + profilesBlock;
       }
 
-      // Pre-flight token guard: emergency truncate if estimated tokens exceed 90% of context window
+      // Pre-flight token guard: emergency truncate if estimated tokens exceed 90% of context window.
+      // ReActStrategy appends `REACT_COORDINATOR_PROMPT` as a system suffix on every call, so when
+      // reactMode is on the actual system prompt is larger than `systemPrompt`. Include the suffix
+      // in the estimate to avoid undercounting and skipping a needed truncation.
       const HARD_LIMIT_RATIO = 0.9;
       const contextWindow = getContextWindow(this.config.model, this.config.tokenWindow);
+      const effectiveSystemPromptChars =
+        systemPrompt.length + (this.config.reactMode ? REACT_COORDINATOR_PROMPT.length + 2 : 0);
       const estimatedTokens =
-        estimateHistoryTokens(this.history) + Math.ceil(systemPrompt.length / 4);
+        estimateHistoryTokens(this.history) + Math.ceil(effectiveSystemPromptChars / 4);
       const hardLimit = contextWindow * HARD_LIMIT_RATIO;
       let preflightTruncated = false;
 
@@ -639,216 +609,137 @@ export class Agent {
       const shimmedTools = applyShimRouting(tools, ctxToToolWrapperDeps(this.ctx));
       const augmentedTools = augmentTools(shimmedTools, this.toolProfileStore);
 
-      // Coordinator (ReAct) mode triples the step budget for the main agent,
-      // clamped to REACT_MAX_STEPS_CEILING to bound worst-case cost.
-      // Subagents are unaffected — they keep their own step budgets.
-      const effectiveMaxSteps = computeEffectiveMaxSteps(
-        this.config.maxSteps,
-        this.config.reactMode,
-      );
-
-      const callGenerateText = (messages?: CoreMessage[]) =>
-        runAgent({
-          model: getModelForConfig(this.config, this.config.provider, this.config.model),
-          providerOptions: getProviderOptionsForConfig(this.config, this.config.provider),
-          tools: augmentedTools,
-          maxSteps: effectiveMaxSteps,
-          maxTokens: this.config.maxTokens,
-          system: systemPrompt,
-          messages: messages ?? this.history,
-          abortSignal: this.abortController!.signal,
-          repair: makeRepairHook({
-            config: this.config,
-            label: 'main',
-            abortSignal: this.abortController!.signal,
-          }),
-          hooks: [tokenStatsHook(this), outputHook()],
-        });
-
-      // Shared retry path for critic and ReAct enforcement loops: truncate the
-      // last tool results, push them + a feedback message into history, and
-      // re-invoke the model. Returns null when the retry itself errors.
-      const pushAndRetry = async (
-        previousResult: Awaited<ReturnType<typeof callGenerateText>>,
-        feedback: string,
-        debugTag: string,
-      ): Promise<Awaited<ReturnType<typeof callGenerateText>> | null> => {
-        try {
-          const truncatedResultMessages = truncateToolResults(
-            previousResult.response.messages as CoreMessage[],
-          );
-          this.history.push(...truncatedResultMessages);
-          this.history.push({ role: 'user' as const, content: feedback });
-          return await callGenerateText();
-        } catch (retryErr) {
-          debugLog(debugTag, retryErr instanceof Error ? retryErr.message : String(retryErr));
-          return null;
+      // Per-call closure that builds the spec from the base components plus
+      // any per-iteration overrides (system suffix, maxSteps) supplied by the
+      // strategy, then runs `runAgent`. Owns the auto-continue and
+      // token-overflow recovery loops because both are framed as part of "one
+      // iterate call" from the strategy's point of view.
+      const iterate: IterateFn = async (opts) => {
+        if (opts.extra.length > 0) {
+          this.history.push(...opts.extra);
         }
+
+        const baseSystem = opts.systemSuffix
+          ? `${systemPrompt}\n\n${opts.systemSuffix}`
+          : systemPrompt;
+        const maxSteps = opts.maxStepsOverride ?? this.config.maxSteps;
+
+        const call = (messages?: CoreMessage[]) =>
+          runAgent({
+            model: getModelForConfig(this.config, this.config.provider, this.config.model),
+            providerOptions: getProviderOptionsForConfig(this.config, this.config.provider),
+            tools: augmentedTools,
+            maxSteps,
+            maxTokens: this.config.maxTokens,
+            system: baseSystem,
+            messages: messages ?? this.history,
+            abortSignal: this.abortController!.signal,
+            repair: makeRepairHook({
+              config: this.config,
+              label: 'main',
+              abortSignal: this.abortController!.signal,
+            }),
+            hooks: [tokenStatsHook(this), outputHook()],
+          });
+
+        let result;
+        try {
+          result = await call();
+        } catch (apiErr: unknown) {
+          if (this.abortController?.signal.aborted) throw apiErr;
+
+          const apiMessage = apiErr instanceof Error ? apiErr.message : String(apiErr);
+
+          if (isTokenOverflowError(apiMessage)) {
+            const retryRatio = preflightTruncated ? 0.6 : 0.8;
+            printInfo('Context too large, truncating and retrying...');
+            this.history = emergencyTruncate(
+              this.history,
+              contextWindow * retryRatio,
+              baseSystem,
+              userInput,
+            );
+            result = await call();
+          } else {
+            throw apiErr;
+          }
+        }
+
+        const MAX_CONTINUATIONS = 3;
+        let continuations = 0;
+        let continuationTokens = 0;
+
+        while (result.finishReason === 'length' && continuations < MAX_CONTINUATIONS) {
+          if (this.abortController?.signal.aborted) break;
+          continuationTokens += result.usage?.completionTokens ?? 0;
+          continuations++;
+
+          printWarning(
+            `Response truncated (hit ${this.config.maxTokens} token limit). Auto-continuing... (${continuations}/${MAX_CONTINUATIONS})`,
+          );
+
+          const partialMessages = truncateToolResults(result.response.messages as CoreMessage[]);
+          this.history.push(...partialMessages);
+          this.history.push({
+            role: 'user' as const,
+            content:
+              '[Your previous response was cut off. Please continue exactly where you left off.]',
+          });
+
+          if (this.spinnerStats) {
+            startSpinner(() => buildSpinnerMessage(this.spinnerStats!));
+          }
+
+          result = await call();
+        }
+
+        if (continuations > 0) {
+          const totalCompletionTokens = continuationTokens + (result.usage?.completionTokens ?? 0);
+          const recommended = Math.ceil((totalCompletionTokens * 1.25) / 1024) * 1024;
+
+          if (result.finishReason === 'length') {
+            printWarning(
+              `Response still incomplete after ${MAX_CONTINUATIONS} continuations. ` +
+                `Increase the token limit: /options max-tokens ${recommended}`,
+            );
+          } else {
+            printInfo(
+              `Tip: Response needed ~${totalCompletionTokens} tokens (limit: ${this.config.maxTokens}). ` +
+                `To avoid future truncation: /options max-tokens ${recommended}`,
+            );
+          }
+        }
+
+        if (result.finishReason === 'tool-calls' && result.steps.length >= maxSteps) {
+          this.lastStepLimitHit = true;
+          this.stepLimitHitCount++;
+          const msg =
+            this.stepLimitHitCount >= 2
+              ? `Stopped at loop limit of ${maxSteps}. Use /options max-steps to adjust permanently.`
+              : `Stopped at loop limit of ${maxSteps}.`;
+          printWarning(msg);
+        } else {
+          this.lastStepLimitHit = false;
+        }
+
+        return result;
+      };
+
+      const strategyCtx: StrategyContext = {
+        config: this.config,
+        userInput,
+        abortSignal: this.abortController!.signal,
+        planStore: this.planStore,
+        getStepLimitHit: () => this.lastStepLimitHit,
+        iterate,
       };
 
       let result;
       try {
-        result = await callGenerateText();
+        result = await buildStrategy(this.config).run(strategyCtx);
       } catch (apiErr: unknown) {
         if (this.abortController?.signal.aborted) return;
-
-        const apiMessage = apiErr instanceof Error ? apiErr.message : String(apiErr);
-
-        // Token overflow — emergency truncate and retry once
-        if (isTokenOverflowError(apiMessage)) {
-          // If pre-flight already truncated, use a more aggressive 60% target
-          const retryRatio = preflightTruncated ? 0.6 : 0.8;
-          printInfo('Context too large, truncating and retrying...');
-          this.history = emergencyTruncate(
-            this.history,
-            contextWindow * retryRatio,
-            systemPrompt,
-            userInput,
-          );
-          result = await callGenerateText();
-        } else {
-          throw apiErr;
-        }
-      }
-
-      // Auto-continue when the model hit the maxTokens limit mid-response
-      const MAX_CONTINUATIONS = 3;
-      let continuations = 0;
-      let continuationTokens = 0;
-
-      while (result.finishReason === 'length' && continuations < MAX_CONTINUATIONS) {
-        if (this.abortController?.signal.aborted) break;
-        continuationTokens += result.usage?.completionTokens ?? 0;
-        continuations++;
-
-        printWarning(
-          `Response truncated (hit ${this.config.maxTokens} token limit). Auto-continuing... (${continuations}/${MAX_CONTINUATIONS})`,
-        );
-
-        // Append partial response to history so continuation has context
-        const partialMessages = truncateToolResults(result.response.messages as CoreMessage[]);
-        this.history.push(...partialMessages);
-        this.history.push({
-          role: 'user' as const,
-          content:
-            '[Your previous response was cut off. Please continue exactly where you left off.]',
-        });
-
-        // Restart spinner for the continuation call
-        if (this.spinnerStats) {
-          startSpinner(() => buildSpinnerMessage(this.spinnerStats!));
-        }
-
-        result = await callGenerateText();
-      }
-
-      if (continuations > 0) {
-        const totalCompletionTokens = continuationTokens + (result.usage?.completionTokens ?? 0);
-        const recommended = Math.ceil((totalCompletionTokens * 1.25) / 1024) * 1024;
-
-        if (result.finishReason === 'length') {
-          printWarning(
-            `Response still incomplete after ${MAX_CONTINUATIONS} continuations. ` +
-              `Increase the token limit: /options max-tokens ${recommended}`,
-          );
-        } else {
-          printInfo(
-            `Tip: Response needed ~${totalCompletionTokens} tokens (limit: ${this.config.maxTokens}). ` +
-              `To avoid future truncation: /options max-tokens ${recommended}`,
-          );
-        }
-      }
-
-      // Detect maxSteps exhaustion
-      if (result.finishReason === 'tool-calls' && result.steps.length >= effectiveMaxSteps) {
-        this.lastStepLimitHit = true;
-        this.stepLimitHitCount++;
-        const msg =
-          this.stepLimitHitCount >= 2
-            ? `Stopped at loop limit of ${effectiveMaxSteps}. Use /options max-steps to adjust permanently.`
-            : `Stopped at loop limit of ${effectiveMaxSteps}.`;
-        printWarning(msg);
-      }
-
-      // Run critic verification if enabled and tool calls were made
-      if (
-        this.config.criticMode &&
-        !this.abortController?.signal.aborted &&
-        !this.lastStepLimitHit
-      ) {
-        let toolLog = extractToolCallLog(result.steps);
-        if (toolLog.length > 0) {
-          let retryCount = 0;
-
-          while (retryCount <= CRITIC_MAX_RETRIES) {
-            if (this.abortController?.signal.aborted) break;
-
-            const criticResult = await runCritic(this.config, userInput, result.text, toolLog, {
-              isRetry: retryCount > 0,
-              abortSignal: this.abortController?.signal,
-            });
-
-            // null (error) or PASS — stop looping
-            if (!criticResult || criticResult.verdict === 'PASS') break;
-
-            // Exhausted retries — warn and stop
-            if (retryCount >= CRITIC_MAX_RETRIES) {
-              printInfo('Critic still unsatisfied after maximum retries.');
-              break;
-            }
-
-            retryCount++;
-            printCriticRetry(retryCount, CRITIC_MAX_RETRIES);
-
-            const retryResult = await pushAndRetry(
-              result,
-              `The critic agent reviewed your work and found issues:\n\nVERDICT: ${criticResult.verdict}\n${criticResult.explanation}\n\nPlease address these issues and try again.`,
-              'agent:critic:retry-error',
-            );
-            if (!retryResult) break;
-            result = retryResult;
-            toolLog = extractToolCallLog(result.steps);
-
-            // If no tool calls in retry, nothing more to verify
-            if (toolLog.length === 0) break;
-          }
-        }
-      }
-
-      // Coordinator (ReAct) plan enforcement — re-prompt when steps are still
-      // pending/in_progress. Bounded retries mirror the critic loop.
-      if (
-        shouldEnforcePlan({
-          reactMode: this.config.reactMode,
-          aborted: this.abortController?.signal.aborted === true,
-          stepLimitHit: this.lastStepLimitHit,
-          hasSteps: this.planStore.unresolvedCount() > 0,
-        })
-      ) {
-        let enforcementAttempts = 0;
-        while (
-          !this.planStore.isComplete() &&
-          enforcementAttempts < REACT_ENFORCEMENT_MAX_RETRIES
-        ) {
-          if (this.abortController?.signal.aborted) break;
-          enforcementAttempts++;
-          printWarning(
-            `Plan has ${this.planStore.unresolvedCount()} unresolved step(s). Prompting to resolve... (${enforcementAttempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`,
-          );
-
-          const retryResult = await pushAndRetry(
-            result,
-            buildEnforcementFeedback(this.planStore.render()),
-            'agent:react:enforcement-error',
-          );
-          if (!retryResult) break;
-          result = retryResult;
-        }
-
-        if (!this.planStore.isComplete()) {
-          this.planStore.cancelAllUnresolved(REACT_AUTO_CANCEL_NOTE);
-          printInfo('Auto-cancelled unresolved plan steps after enforcement retries.');
-        }
+        throw apiErr;
       }
 
       // Track token usage for compression decisions — use last step's prompt tokens

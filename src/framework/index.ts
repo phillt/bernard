@@ -11,3 +11,4 @@ export * from './tools/types.js';
 export * from './tools/adapter.js';
 export * from './tools/registry.js';
 export * from './tools/mcp.js';
+export * from './strategies/index.js';

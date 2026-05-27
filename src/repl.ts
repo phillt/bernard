@@ -217,9 +217,8 @@ export async function startRepl(
   let isPasting = false;
   function getPromptStr(): string {
     const { ansi } = getTheme();
-    const criticLabel = config.criticMode ? `${ansi.warning}\u25C6${ansi.reset} ` : '';
     const reactLabel = config.reactMode ? `${ansi.prompt}\u25B7${ansi.reset} ` : '';
-    return `${criticLabel}${reactLabel}${ansi.prompt}bernard>${ansi.reset} `;
+    return `${reactLabel}${ansi.prompt}bernard>${ansi.reset} `;
   }
 
   if (process.stdin.isTTY) {
@@ -277,7 +276,7 @@ export async function startRepl(
   }
 
   async function toggleBooleanPref(
-    key: 'criticMode' | 'reactMode' | 'toolDetails' | 'promptRewriter' | 'autoCreateSpecialists',
+    key: 'reactMode' | 'toolDetails' | 'promptRewriter' | 'autoCreateSpecialists',
     label: string,
     onMsg: string,
     offMsg: string,
@@ -426,7 +425,6 @@ export async function startRepl(
 
     console.log(t.text('\n  Settings:'));
     console.log(t.muted(`    Theme: ${getActiveThemeKey()}`));
-    console.log(t.muted(`    Critic mode: ${config.criticMode ? 'on' : 'off'}`));
     console.log(t.muted(`    Coordinator mode: ${config.reactMode ? 'on' : 'off'}`));
     console.log(t.muted(`    Tool details: ${config.toolDetails ? 'on' : 'off'}`));
     console.log(t.muted(`    Prompt rewriter: ${config.promptRewriter ? 'on' : 'off'}`));
@@ -1930,11 +1928,10 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         return;
       }
 
-      // Backwards-compat shims: the standalone toggles (/critic, /react, /tool-details, /debug)
+      // Backwards-compat shims: the standalone toggles (/react, /tool-details, /debug)
       // were consolidated into /agent-options and /options. Print a short pointer so users typing
       // the old command aren't silently dropped into the prompt.
       const legacyToggle = {
-        '/critic': 'Critic mode → /agent-options',
         '/react': 'Coordinator (ReAct) mode → /agent-options',
         '/tool-details': 'Tool-call details → /agent-options',
         '/debug': 'Debug logging → /options',
@@ -1947,12 +1944,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
 
       if (trimmed === '/agent-options') {
         type BooleanOpt = {
-          key:
-            | 'autoCreateSpecialists'
-            | 'criticMode'
-            | 'reactMode'
-            | 'promptRewriter'
-            | 'toolDetails';
+          key: 'autoCreateSpecialists' | 'reactMode' | 'promptRewriter' | 'toolDetails';
           label: string;
           description: string;
           onMsg: string;
@@ -1977,14 +1969,6 @@ Remember: the systemPrompt should read like a persona definition — who this sp
                 );
               }
             },
-          },
-          {
-            key: 'criticMode',
-            label: 'Critic mode',
-            description:
-              'Plan the response, verify it with a critic pass, and retry on failure before replying.',
-            onMsg: '  [CRITIC:ON] Responses will be planned and verified.',
-            offMsg: '  [CRITIC:OFF] Critic mode disabled.',
           },
           {
             key: 'reactMode',
