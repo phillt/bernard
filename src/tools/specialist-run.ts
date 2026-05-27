@@ -2,14 +2,13 @@ import { tool, type CoreMessage } from 'ai';
 import { z } from 'zod';
 import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
 import { createTools } from './index.js';
-import { printSpecialistStart, printSpecialistEnd, printWarning, printInfo } from '../output.js';
+import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { runAgent } from '../framework/runner.js';
 import { outputHook } from '../framework/hooks/output.js';
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
 import { resolveProviderAndModel, defaultProviderErrorMessage } from '../config.js';
-import { runPACLoop } from '../pac.js';
 import type { AgentContext } from '../framework/context.js';
 import { capSubagentResult } from './result-cap.js';
 import { appendActivitySummary } from './activity-summary.js';
@@ -19,18 +18,13 @@ import { createPlanTool } from './plan.js';
 import { createThinkTool } from './think.js';
 import { createEvaluateTool } from './evaluate.js';
 import {
-  REACT_COORDINATOR_PROMPT,
-  shouldEnforcePlan,
-  computeEffectiveMaxSteps,
-  REACT_ENFORCEMENT_MAX_RETRIES,
-  REACT_AUTO_CANCEL_NOTE,
-  buildEnforcementFeedback,
-} from '../react.js';
-import { truncateToolResults } from '../context.js';
+  buildStrategy,
+  type IterateFn,
+  type StrategyContext,
+} from '../framework/strategies/index.js';
 import { makeRepairHook } from '../tool-call-repair.js';
 
 const SPECIALIST_STEP_RATIO = 0.5;
-const SPECIALIST_PAC_RETRY_STEPS = 10;
 const SPECIALIST_ENFORCEMENT_STEP_RATIO = 0.25;
 
 const SPECIALIST_EXECUTION_RULES = `
@@ -152,16 +146,14 @@ export function createSpecialistRunTool(ctx: AgentContext) {
           }
         }
 
-        // Build system prompt from specialist profile
+        // Build system prompt from specialist profile. ReAct coordinator
+        // prompt injection is owned by ReActStrategy (via `systemSuffix`).
         let systemPrompt = specialist.systemPrompt;
         if (specialist.guidelines.length > 0) {
           systemPrompt +=
             '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
         }
         systemPrompt += SPECIALIST_EXECUTION_RULES;
-        if (config.reactMode) {
-          systemPrompt += '\n\n' + REACT_COORDINATOR_PROMPT;
-        }
         systemPrompt += buildMemoryContext({
           memoryStore,
           ragResults,
@@ -171,7 +163,6 @@ export function createSpecialistRunTool(ctx: AgentContext) {
         const printHook = outputHook(prefix);
 
         const baseMaxSteps = Math.ceil(config.maxSteps * SPECIALIST_STEP_RATIO);
-        const maxSteps = computeEffectiveMaxSteps(baseMaxSteps, config.reactMode);
         const repairHook = makeRepairHook({
           config,
           provider: resolvedProvider,
@@ -179,105 +170,55 @@ export function createSpecialistRunTool(ctx: AgentContext) {
           label: 'specialist',
           abortSignal: execOptions.abortSignal,
         });
-        let result = await runAgent({
-          model: getModelForConfig(config, resolvedProvider, resolvedModel),
-          providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
-          tools: specialistTools,
-          maxSteps,
-          maxTokens: config.maxTokens,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: userMessage }],
-          abortSignal: execOptions.abortSignal,
-          prepareStep: makeLastStepTextOnly(maxSteps),
-          repair: repairHook,
-          hooks: [printHook],
-        });
 
-        if (config.criticMode) {
-          const pacResult = await runPACLoop({
-            config,
-            userInput: userMessage,
-            initialResult: result,
-            regenerate: async (extraMessages) => {
-              return runAgent({
-                model: getModelForConfig(config, resolvedProvider, resolvedModel),
-                providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
-                tools: specialistTools,
-                maxSteps: SPECIALIST_PAC_RETRY_STEPS,
-                maxTokens: config.maxTokens,
-                system: systemPrompt,
-                messages: [{ role: 'user', content: userMessage }, ...extraMessages],
-                abortSignal: execOptions.abortSignal,
-                prepareStep: makeLastStepTextOnly(SPECIALIST_PAC_RETRY_STEPS),
-                repair: repairHook,
-                hooks: [printHook],
-              });
-            },
-            prefix,
+        let stepLimitHit = false;
+
+        // Per-iterate closure: rebuilds messages from scratch each call so the
+        // enforcement retry passes a fresh `[user, ...extra]` rather than
+        // accumulating history. Recomputes prepareStep against the active
+        // step budget so the textOnly-last-step guard tracks the iteration's
+        // maxSteps (initial vs. enforcement retry).
+        const iterate: IterateFn = async (opts) => {
+          const system = opts.systemSuffix
+            ? `${systemPrompt}\n\n${opts.systemSuffix}`
+            : systemPrompt;
+          const maxSteps = opts.maxStepsOverride ?? baseMaxSteps;
+          const messages: CoreMessage[] = [
+            { role: 'user', content: userMessage },
+            ...opts.extra,
+          ];
+          const r = await runAgent({
+            model: getModelForConfig(config, resolvedProvider, resolvedModel),
+            providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
+            tools: specialistTools,
+            maxSteps,
+            maxTokens: config.maxTokens,
+            system,
+            messages,
             abortSignal: execOptions.abortSignal,
+            prepareStep: makeLastStepTextOnly(maxSteps),
+            repair: repairHook,
+            hooks: [printHook],
           });
-          result = { ...result, ...pacResult.finalResult } as typeof result;
-        }
+          stepLimitHit =
+            r.finishReason === 'tool-calls' && (r.steps?.length ?? 0) >= maxSteps;
+          return r;
+        };
 
-        const stepLimitHit =
-          result.finishReason === 'tool-calls' && (result.steps?.length ?? 0) >= maxSteps;
-        if (
-          shouldEnforcePlan({
-            reactMode: config.reactMode,
-            aborted: execOptions.abortSignal?.aborted === true,
-            stepLimitHit,
-            hasSteps: planStore.unresolvedCount() > 0,
-          })
-        ) {
-          let attempts = 0;
-          while (!planStore.isComplete() && attempts < REACT_ENFORCEMENT_MAX_RETRIES) {
-            if (execOptions.abortSignal?.aborted) break;
-            attempts++;
-            printWarning(
-              `[${prefix}] Plan has ${planStore.unresolvedCount()} unresolved step(s). Prompting to resolve... (${attempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`,
-            );
-            const feedback = buildEnforcementFeedback(planStore.render());
+        const strategyCtx: StrategyContext = {
+          config,
+          userInput: userMessage,
+          abortSignal: execOptions.abortSignal,
+          prefix,
+          planStore,
+          getStepLimitHit: () => stepLimitHit,
+          baseMaxSteps,
+          iterate,
+        };
 
-            try {
-              const retryMessages: CoreMessage[] = [
-                { role: 'user', content: userMessage },
-                ...truncateToolResults(result.response.messages as CoreMessage[]),
-                { role: 'user', content: feedback },
-              ];
-              const retryMaxSteps = computeEffectiveMaxSteps(
-                Math.ceil(config.maxSteps * SPECIALIST_ENFORCEMENT_STEP_RATIO),
-                config.reactMode,
-              );
-              result = await runAgent({
-                model: getModelForConfig(config, resolvedProvider, resolvedModel),
-                providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
-                tools: specialistTools,
-                maxSteps: retryMaxSteps,
-                maxTokens: config.maxTokens,
-                system: systemPrompt,
-                messages: retryMessages,
-                abortSignal: execOptions.abortSignal,
-                prepareStep: makeLastStepTextOnly(retryMaxSteps),
-                repair: repairHook,
-                hooks: [printHook],
-              });
-            } catch (retryErr) {
-              debugLog(
-                'specialist:react:enforcement-error',
-                retryErr instanceof Error ? retryErr.message : String(retryErr),
-              );
-              break;
-            }
-          }
-          if (!planStore.isComplete()) {
-            const cancelled = planStore.cancelAllUnresolved(REACT_AUTO_CANCEL_NOTE);
-            if (cancelled > 0) {
-              printInfo(
-                `[${prefix}] Auto-cancelled ${cancelled} unresolved plan step(s) after enforcement retries.`,
-              );
-            }
-          }
-        }
+        const result = await buildStrategy(config, {
+          enforcementStepRatio: SPECIALIST_ENFORCEMENT_STEP_RATIO,
+        }).run(strategyCtx);
 
         printSpecialistEnd(id);
         return capSubagentResult(

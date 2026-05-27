@@ -96,23 +96,6 @@ async function main(): Promise<void> {
 
   const SCENARIOS: Scenario[] = [
     {
-      id: 'critic',
-      description: 'src/critic.ts — single-shot, no tools, no hooks.',
-      build: () => {
-        const fires: Array<{ hookId: string; payloadKeys: string[] }> = [];
-        return {
-          spec: {
-            model: null as any, // filled per-run with the recorder
-            providerOptions: { anthropic: { thinking: { type: 'enabled' } } },
-            messages: baseMessages,
-            maxTokens: 4096,
-            system: 'critic system prompt',
-          },
-          hookFires: fires,
-        };
-      },
-    },
-    {
       id: 'cron-initial',
       description: 'src/cron/runner.ts — repair + cronStepRecorderHook.',
       build: () => {
@@ -203,31 +186,6 @@ async function main(): Promise<void> {
             maxTokens: 4096,
             system: 'subagent system prompt',
             messages: baseMessages,
-            prepareStep: (() => undefined) as any,
-            repair: (() => undefined) as any,
-            hooks: [makeRecordingHook('output(sub:1)', fires)],
-          },
-          hookFires: fires,
-        };
-      },
-    },
-    {
-      id: 'subagent-pac-retry',
-      description: 'src/tools/subagent.ts — PAC retry shares same hook instance.',
-      build: () => {
-        const fires: Array<{ hookId: string; payloadKeys: string[] }> = [];
-        return {
-          spec: {
-            model: null as any,
-            tools: {},
-            maxSteps: 10,
-            maxTokens: 4096,
-            system: 'subagent system prompt',
-            messages: [
-              ...baseMessages,
-              { role: 'assistant' as const, content: 'first attempt' },
-              { role: 'user' as const, content: 'critic feedback' },
-            ],
             prepareStep: (() => undefined) as any,
             repair: (() => undefined) as any,
             hooks: [makeRecordingHook('output(sub:1)', fires)],

@@ -73,7 +73,6 @@ describe('getAvailableProviders', () => {
       maxSteps: 25,
       ragEnabled: true,
       theme: 'bernard',
-      criticMode: false,
       autoCreateSpecialists: false,
       autoCreateThreshold: 0.8,
     };
@@ -90,7 +89,6 @@ describe('getAvailableProviders', () => {
       maxSteps: 25,
       ragEnabled: true,
       theme: 'bernard',
-      criticMode: false,
       autoCreateSpecialists: false,
       autoCreateThreshold: 0.8,
       anthropicApiKey: 'sk-ant-test',
@@ -109,7 +107,6 @@ describe('getAvailableProviders', () => {
       maxSteps: 25,
       ragEnabled: true,
       theme: 'bernard',
-      criticMode: false,
       autoCreateSpecialists: false,
       autoCreateThreshold: 0.8,
       anthropicApiKey: 'sk-ant-test',
@@ -583,114 +580,6 @@ describe('resetAllOptions', () => {
   });
 });
 
-describe('savePreferences criticMode preservation', () => {
-  beforeEach(() => {
-    fsMock.existsSync.mockReturnValue(true);
-    fsMock.writeFileSync.mockReturnValue(undefined);
-    fsMock.mkdirSync.mockReturnValue(undefined);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('preserves criticMode from existing prefs when caller omits it', () => {
-    fsMock.readFileSync.mockReturnValue(
-      JSON.stringify({ provider: 'anthropic', model: 'test', criticMode: true }),
-    );
-
-    savePreferences({ provider: 'anthropic', model: 'test' });
-
-    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
-    expect(writtenData.criticMode).toBe(true);
-  });
-
-  it('does not set criticMode when neither caller nor existing prefs have it', () => {
-    fsMock.readFileSync.mockReturnValue(JSON.stringify({ provider: 'anthropic', model: 'test' }));
-
-    savePreferences({ provider: 'anthropic', model: 'test' });
-
-    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
-    expect(writtenData.criticMode).toBeUndefined();
-  });
-
-  it('preserves criticMode when autoUpdate is passed but criticMode is not', () => {
-    fsMock.readFileSync.mockReturnValue(
-      JSON.stringify({ provider: 'anthropic', model: 'test', criticMode: true }),
-    );
-
-    savePreferences({ provider: 'anthropic', model: 'test', autoUpdate: true });
-
-    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
-    expect(writtenData.criticMode).toBe(true);
-    expect(writtenData.autoUpdate).toBe(true);
-  });
-
-  it('uses caller-provided criticMode over existing prefs', () => {
-    fsMock.readFileSync.mockReturnValue(
-      JSON.stringify({ provider: 'anthropic', model: 'test', criticMode: true }),
-    );
-
-    savePreferences({ provider: 'anthropic', model: 'test', criticMode: false });
-
-    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
-    expect(writtenData.criticMode).toBe(false);
-  });
-});
-
-describe('loadConfig criticMode from env var', () => {
-  beforeEach(() => {
-    fsMock.existsSync.mockReturnValue(false);
-    fsMock.readFileSync.mockImplementation(() => {
-      throw new Error('ENOENT');
-    });
-    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
-    vi.stubEnv('OPENAI_API_KEY', '');
-    vi.stubEnv('XAI_API_KEY', '');
-    vi.stubEnv('BERNARD_PROVIDER', '');
-    vi.stubEnv('BERNARD_MODEL', '');
-    vi.stubEnv('BERNARD_MAX_TOKENS', '');
-    vi.stubEnv('BERNARD_SHELL_TIMEOUT', '');
-    vi.stubEnv('BERNARD_TOKEN_WINDOW', '');
-    vi.stubEnv('BERNARD_MAX_STEPS', '');
-    vi.stubEnv('BERNARD_CRITIC_MODE', '');
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
-  });
-
-  it('enables criticMode when BERNARD_CRITIC_MODE is "true"', () => {
-    vi.stubEnv('BERNARD_CRITIC_MODE', 'true');
-    const config = loadConfig();
-    expect(config.criticMode).toBe(true);
-  });
-
-  it('enables criticMode when BERNARD_CRITIC_MODE is "1"', () => {
-    vi.stubEnv('BERNARD_CRITIC_MODE', '1');
-    const config = loadConfig();
-    expect(config.criticMode).toBe(true);
-  });
-
-  it('defaults criticMode to false when env var is unset', () => {
-    const config = loadConfig();
-    expect(config.criticMode).toBe(false);
-  });
-
-  it('prefs.criticMode takes precedence over env var', () => {
-    vi.stubEnv('BERNARD_CRITIC_MODE', 'true');
-    let callCount = 0;
-    fsMock.readFileSync.mockImplementation(() => {
-      callCount++;
-      if (callCount <= 1) throw new Error('ENOENT');
-      return JSON.stringify({ provider: 'anthropic', model: 'test', criticMode: false });
-    });
-    const config = loadConfig();
-    expect(config.criticMode).toBe(false);
-  });
-});
-
 describe('loadConfig promptRewriter', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(false);
@@ -869,7 +758,6 @@ describe('loadConfig correctionEnabled from env var', () => {
     vi.stubEnv('BERNARD_SHELL_TIMEOUT', '');
     vi.stubEnv('BERNARD_TOKEN_WINDOW', '');
     vi.stubEnv('BERNARD_MAX_STEPS', '');
-    vi.stubEnv('BERNARD_CRITIC_MODE', '');
     vi.stubEnv('BERNARD_CORRECTION_ENABLED', '');
   });
 
@@ -930,7 +818,6 @@ describe('resolveProviderAndModel', () => {
     ragEnabled: true,
     theme: 'bernard',
     maxSteps: 25,
-    criticMode: false,
     reactMode: false,
     toolDetails: false,
     autoCreateSpecialists: false,

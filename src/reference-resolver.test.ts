@@ -61,7 +61,6 @@ function makeConfig(): BernardConfig {
     maxSteps: 25,
     ragEnabled: false,
     theme: 'bernard',
-    criticMode: false,
     reactMode: false,
     toolDetails: false,
     autoCreateSpecialists: false,

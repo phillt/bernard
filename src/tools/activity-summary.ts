@@ -1,7 +1,25 @@
-import { extractToolCallLog } from '../critic.js';
-
 const ARG_PREVIEW = 200;
 const RESULT_PREVIEW = 400;
+
+interface ToolCallEntry {
+  toolName: string;
+  args: unknown;
+  result: unknown;
+}
+
+function extractToolCallLog(
+  steps: { toolCalls: any[]; toolResults: any[] }[],
+): ToolCallEntry[] {
+  const entries: ToolCallEntry[] = [];
+  for (const step of steps) {
+    for (let i = 0; i < step.toolCalls.length; i++) {
+      const tc = step.toolCalls[i];
+      const tr = step.toolResults[i];
+      entries.push({ toolName: tc.toolName, args: tc.args, result: tr?.result });
+    }
+  }
+  return entries;
+}
 
 function previewValue(v: unknown, limit: number): string {
   const s = typeof v === 'string' ? v : JSON.stringify(v ?? null);

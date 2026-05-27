@@ -23,7 +23,6 @@ import { CronNotesStore } from './notes-store.js';
 import { createScopedCronNotesTools } from './scoped-notes-tools.js';
 import { sendNotification } from './notify.js';
 import type { CronJob } from './types.js';
-import { runPACLoop } from '../pac.js';
 import { makeRepairHook } from '../tool-call-repair.js';
 
 const DAEMON_SYSTEM_PROMPT = `You are Bernard, running as a background cron job in daemon mode. There is no interactive user present — you execute autonomously and have a limited step budget (20 steps), so work efficiently.
@@ -255,33 +254,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       hooks: [recorderHook],
     });
 
-    // Run PAC loop when critic mode is enabled
-    let finalOutput: string;
-    if (config.criticMode) {
-      const pacResult = await runPACLoop({
-        config,
-        userInput: job.prompt,
-        initialResult: result,
-        regenerate: async (extraMessages) => {
-          return runAgent({
-            model: getModelForConfig(config, config.provider, config.model),
-            providerOptions: getProviderOptionsForConfig(config, config.provider),
-            tools,
-            maxSteps: 20,
-            maxTokens: config.maxTokens,
-            system: enrichedPrompt,
-            messages: [{ role: 'user', content: job.prompt }, ...extraMessages],
-            repair: repairHook,
-            hooks: [recorderHook],
-          });
-        },
-      });
-      finalOutput = pacResult.finalResult.text || '(no text output)';
-    } else {
-      finalOutput = result.text || '(no text output)';
-    }
-
-    const output = finalOutput;
+    const output = result.text || '(no text output)';
 
     try {
       const totalUsage = steps.reduce(

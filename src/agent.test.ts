@@ -42,7 +42,6 @@ vi.mock('./output.js', () => ({
   printToolResult: vi.fn(),
   printInfo: vi.fn(),
   printWarning: vi.fn(),
-  printCriticRetry: vi.fn(),
   startSpinner: vi.fn(),
   stopSpinner: vi.fn(),
   buildSpinnerMessage: vi.fn(() => ''),
@@ -98,7 +97,6 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     maxSteps: 25,
     ragEnabled: true,
     theme: 'bernard',
-    criticMode: false,
     reactMode: false,
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
@@ -498,41 +496,13 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('Specialist Match Advisory');
   });
 
-  it('includes coordinator prompt when reactMode is true', () => {
-    const prompt = buildSystemPrompt(makeConfig({ reactMode: true }), store);
-    expect(prompt).toContain('Coordinator Mode (Active)');
-    expect(prompt).toContain('Delegate scoped work');
-    expect(prompt).toContain('Reason before acting');
-  });
-
-  it('coordinator prompt mandates plan, think, and evaluate tools', () => {
-    const prompt = buildSystemPrompt(makeConfig({ reactMode: true }), store);
-    expect(prompt).toContain('`plan`');
-    expect(prompt).toContain('`think`');
-    expect(prompt).toContain('`evaluate`');
-    expect(prompt).toContain('terminal state');
-    expect(prompt).toContain('cancelled');
-    expect(prompt).toContain('error');
-  });
-
-  it('coordinator prompt describes the think -> act -> evaluate -> decide loop', () => {
-    const prompt = buildSystemPrompt(makeConfig({ reactMode: true }), store);
-    expect(prompt).toContain('think \u2192 act \u2192 evaluate \u2192 decide');
-    expect(prompt).toContain('Stop and evaluate');
-    expect(prompt).toContain('course-correct');
-  });
-
-  it('coordinator prompt mandates reflective scratch notes and final synthesis', () => {
-    const prompt = buildSystemPrompt(makeConfig({ reactMode: true }), store);
-    expect(prompt).toContain('reflective notes in `scratch`');
-    expect(prompt).toContain('step-{id}');
-    expect(prompt).toContain('Synthesize the final response from scratch');
-    expect(prompt).toContain('not from the conversation tail');
-  });
-
-  it('excludes coordinator prompt when reactMode is false', () => {
-    const prompt = buildSystemPrompt(makeConfig({ reactMode: false }), store);
-    expect(prompt).not.toContain('Coordinator Mode');
+  it('excludes coordinator prompt regardless of reactMode (now injected by ReActStrategy)', () => {
+    expect(buildSystemPrompt(makeConfig({ reactMode: true }), store)).not.toContain(
+      'Coordinator Mode',
+    );
+    expect(buildSystemPrompt(makeConfig({ reactMode: false }), store)).not.toContain(
+      'Coordinator Mode',
+    );
   });
 });
 
