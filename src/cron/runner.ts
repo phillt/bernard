@@ -1,10 +1,11 @@
 import * as crypto from 'node:crypto';
-import { generateText } from 'ai';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
 import { loadConfig } from '../config.js';
 import { assembleContext } from '../framework/context.js';
+import { runAgent } from '../framework/runner.js';
+import { cronStepRecorderHook } from '../framework/hooks/cron-step-recorder.js';
 import { RAGStore } from '../rag.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { debugLog } from '../logger.js';
@@ -136,7 +137,6 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
   const startedAt = new Date().toISOString();
   const startMs = Date.now();
   const steps: CronLogStep[] = [];
-  let stepIndex = 0;
 
   try {
     const notifyTool = tool({
@@ -237,49 +237,13 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       enrichedPrompt += `\nConnected MCP servers: ${serverNames.join(', ')}`;
     }
 
-    const onStepFinish = ({
-      text,
-      toolCalls,
-      toolResults,
-      usage,
-      finishReason,
-    }: {
-      text: string;
-      toolCalls: { toolName: string; toolCallId: string; args: unknown }[];
-      toolResults: { toolName: string; toolCallId: string; result: unknown }[];
-      usage?: { promptTokens: number; completionTokens: number };
-      finishReason?: string;
-    }) => {
-      const truncatedResults = (toolResults ?? []).map((tr) => ({
-        toolName: tr.toolName,
-        toolCallId: tr.toolCallId,
-        result: truncateResult(tr.result, 10240),
-      }));
-      steps.push({
-        stepIndex: stepIndex++,
-        timestamp: new Date().toISOString(),
-        text: text || '',
-        toolCalls: (toolCalls ?? []).map((tc) => ({
-          toolName: tc.toolName,
-          toolCallId: tc.toolCallId,
-          args: tc.args as Record<string, unknown>,
-        })),
-        toolResults: truncatedResults,
-        usage: {
-          promptTokens: usage?.promptTokens ?? 0,
-          completionTokens: usage?.completionTokens ?? 0,
-          totalTokens: (usage?.promptTokens ?? 0) + (usage?.completionTokens ?? 0),
-        },
-        finishReason: finishReason || 'unknown',
-      });
-    };
-
+    const recorderHook = cronStepRecorderHook(steps);
     const repairHook = makeRepairHook({
       config,
       label: 'cron',
     });
 
-    const result = await generateText({
+    const result = await runAgent({
       model: getModelForConfig(config, config.provider, config.model),
       providerOptions: getProviderOptionsForConfig(config, config.provider),
       tools,
@@ -287,8 +251,8 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       maxTokens: config.maxTokens,
       system: enrichedPrompt,
       messages: [{ role: 'user', content: job.prompt }],
-      experimental_repairToolCall: repairHook,
-      onStepFinish,
+      repair: repairHook,
+      hooks: [recorderHook],
     });
 
     // Run PAC loop when critic mode is enabled
@@ -299,7 +263,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         userInput: job.prompt,
         initialResult: result,
         regenerate: async (extraMessages) => {
-          return generateText({
+          return runAgent({
             model: getModelForConfig(config, config.provider, config.model),
             providerOptions: getProviderOptionsForConfig(config, config.provider),
             tools,
@@ -307,8 +271,8 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
             maxTokens: config.maxTokens,
             system: enrichedPrompt,
             messages: [{ role: 'user', content: job.prompt }, ...extraMessages],
-            experimental_repairToolCall: repairHook,
-            onStepFinish,
+            repair: repairHook,
+            hooks: [recorderHook],
           });
         },
       });
@@ -381,12 +345,4 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
   } finally {
     await mcpManager.close();
   }
-}
-
-/** @internal Truncates string results that exceed `maxLen` to keep log entries bounded. */
-function truncateResult(result: unknown, maxLen: number): unknown {
-  if (typeof result === 'string' && result.length > maxLen) {
-    return result.slice(0, maxLen) + `... (truncated, ${result.length} chars total)`;
-  }
-  return result;
 }

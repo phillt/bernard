@@ -1,14 +1,10 @@
-import { generateText, tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
 import { createTools } from './index.js';
-import {
-  printSubAgentStart,
-  printSubAgentEnd,
-  printToolCall,
-  printToolResult,
-  printAssistantText,
-} from '../output.js';
+import { printSubAgentStart, printSubAgentEnd } from '../output.js';
+import { runAgent } from '../framework/runner.js';
+import { outputHook } from '../framework/hooks/output.js';
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, _resetPool, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
@@ -132,17 +128,7 @@ export function createSubAgentTool(ctx: AgentContext) {
             includeScratch: true,
           });
 
-        const onStepFinish = ({ text, toolCalls, toolResults }: any) => {
-          for (const tc of toolCalls ?? []) {
-            printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
-          }
-          for (const tr of toolResults ?? []) {
-            printToolResult(tr.toolName, tr.result, prefix);
-          }
-          if (text) {
-            printAssistantText(text, prefix);
-          }
-        };
+        const printHook = outputHook(prefix);
 
         const maxSteps = Math.ceil(config.maxSteps * SUBAGENT_STEP_RATIO);
         const repairHook = makeRepairHook({
@@ -152,7 +138,7 @@ export function createSubAgentTool(ctx: AgentContext) {
           label: 'subagent',
           abortSignal: execOptions.abortSignal,
         });
-        const result = await generateText({
+        const result = await runAgent({
           model: getModelForConfig(config, resolvedProvider, resolvedModel),
           providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
           tools: baseTools,
@@ -161,9 +147,9 @@ export function createSubAgentTool(ctx: AgentContext) {
           system: enrichedPrompt,
           messages: [{ role: 'user', content: userMessage }],
           abortSignal: execOptions.abortSignal,
-          experimental_prepareStep: makeLastStepTextOnly(maxSteps),
-          experimental_repairToolCall: repairHook,
-          onStepFinish,
+          prepareStep: makeLastStepTextOnly(maxSteps),
+          repair: repairHook,
+          hooks: [printHook],
         });
 
         if (config.criticMode) {
@@ -173,7 +159,7 @@ export function createSubAgentTool(ctx: AgentContext) {
             initialResult: result,
             regenerate: async (extraMessages) => {
               const retryMaxSteps = SUBAGENT_PAC_RETRY_STEPS;
-              return generateText({
+              return runAgent({
                 model: getModelForConfig(config, resolvedProvider, resolvedModel),
                 providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
                 tools: baseTools,
@@ -182,9 +168,9 @@ export function createSubAgentTool(ctx: AgentContext) {
                 system: enrichedPrompt,
                 messages: [{ role: 'user', content: userMessage }, ...extraMessages],
                 abortSignal: execOptions.abortSignal,
-                experimental_prepareStep: makeLastStepTextOnly(retryMaxSteps),
-                experimental_repairToolCall: repairHook,
-                onStepFinish,
+                prepareStep: makeLastStepTextOnly(retryMaxSteps),
+                repair: repairHook,
+                hooks: [printHook],
               });
             },
             prefix,

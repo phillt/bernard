@@ -1,4 +1,4 @@
-import { generateText } from 'ai';
+import { runAgent } from './framework/runner.js';
 import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import {
   printCriticStart,
@@ -127,7 +127,7 @@ ${truncatedLog
   })
   .join('\n\n')}`;
 
-    const result = await generateText({
+    const result = await runAgent({
       model: getModelForConfig(config, config.provider, config.model),
       providerOptions: getProviderOptionsForConfig(config, config.provider),
       system: CRITIC_SYSTEM_PROMPT,
