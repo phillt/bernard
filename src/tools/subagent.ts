@@ -1,7 +1,7 @@
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
 import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
-import { createTools, type ToolOptions } from './index.js';
+import { createTools } from './index.js';
 import {
   printSubAgentStart,
   printSubAgentEnd,
@@ -12,14 +12,9 @@ import {
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, _resetPool, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
-import {
-  type BernardConfig,
-  resolveProviderAndModel,
-  defaultProviderErrorMessage,
-} from '../config.js';
-import type { MemoryStore } from '../memory.js';
-import type { RAGStore } from '../rag.js';
+import { resolveProviderAndModel, defaultProviderErrorMessage } from '../config.js';
 import { runPACLoop } from '../pac.js';
+import type { AgentContext } from '../framework/context.js';
 import { capSubagentResult } from './result-cap.js';
 import { appendActivitySummary } from './activity-summary.js';
 import { makeLastStepTextOnly } from './task.js';
@@ -60,19 +55,14 @@ export function _resetSubAgentState(): void {
  * budget and no conversation history, so task descriptions must be fully
  * self-contained. Up to {@link MAX_CONCURRENT_AGENTS} may run concurrently.
  *
- * @param config - Bernard configuration (provider, model, token limits).
- * @param options - Shell execution options forwarded to child tool sets.
- * @param memoryStore - Shared memory store for persistent/scratch context.
- * @param mcpTools - Optional MCP-provided tools available to sub-agents.
- * @param ragStore - Optional RAG store for retrieval-augmented context.
+ * @param ctx - Assembled AgentContext (config, stores, mcp, toolOptions, optional RAG).
  */
-export function createSubAgentTool(
-  config: BernardConfig,
-  options: ToolOptions,
-  memoryStore: MemoryStore,
-  mcpTools?: Record<string, any>,
-  ragStore?: RAGStore,
-) {
+export function createSubAgentTool(ctx: AgentContext) {
+  const { config } = ctx;
+  const options = ctx.toolOptions;
+  const memoryStore = ctx.stores.memory;
+  const mcpTools = ctx.mcp.tools;
+  const ragStore = ctx.rag;
   return tool({
     description:
       'Delegate a task to an independent sub-agent that runs in parallel. Sub-agents have NO conversation history and limited steps — your task description must be fully self-contained and highly prescriptive. Specify exact commands, file paths, expected output format, edge cases, and success/failure criteria. Call multiple times in one response for parallel execution.',

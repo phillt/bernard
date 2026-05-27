@@ -88,6 +88,7 @@ import { RoutineStore } from './routines.js';
 import { SpecialistStore, getBuiltinSpecialistIds } from './specialists.js';
 import { runCorrectionAgent } from './correction.js';
 import { CandidateStore } from './specialist-candidates.js';
+import { assembleContext } from './framework/context.js';
 import {
   bootstrapPendingCandidates,
   buildCandidateContextBlock,
@@ -952,19 +953,19 @@ export async function startRepl(
     alertContext = alertContext ? alertContext + '\n\n' + contextBlock : contextBlock;
   }
 
-  const agent = new Agent(
+  const agentCtx = assembleContext({
     config,
     toolOptions,
-    memoryStore,
-    mcpTools,
-    mcpServerNames,
-    alertContext,
-    initialHistory,
-    ragStore,
-    routineStore,
-    specialistStore,
-    candidateStore,
-  );
+    mcp: { tools: mcpTools, serverNames: mcpServerNames },
+    rag: ragStore,
+    stores: {
+      memory: memoryStore,
+      routines: routineStore,
+      specialists: specialistStore,
+      candidates: candidateStore,
+    },
+  });
+  const agent = new Agent(agentCtx, { alertContext, initialHistory });
 
   let cleanedUp = false;
   const cleanup = async () => {
@@ -1015,20 +1016,7 @@ export async function startRepl(
         const pending = correctionStore.listPending();
         if (pending.length > 0) {
           printInfo(`Reviewing ${pending.length} tool-wrapper failure(s) for learning...`);
-          const result = await runCorrectionAgent(
-            {
-              config,
-              toolOptions,
-              memoryStore,
-              specialistStore: agent.getSpecialistStore(),
-              correctionStore,
-              ragStore,
-              routineStore,
-              candidateStore,
-              mcpTools,
-            },
-            pending,
-          );
+          const result = await runCorrectionAgent({ ctx: agentCtx }, pending);
           if (result.applied > 0) {
             printInfo(
               `  Learned from ${result.applied}/${result.processed} failure(s); examples updated.`,

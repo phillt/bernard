@@ -1,7 +1,7 @@
 import { generateText, tool, type CoreMessage } from 'ai';
 import { z } from 'zod';
 import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
-import { createTools, type ToolOptions } from './index.js';
+import { createTools } from './index.js';
 import {
   printSpecialistStart,
   printSpecialistEnd,
@@ -14,15 +14,9 @@ import {
 import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
-import {
-  type BernardConfig,
-  resolveProviderAndModel,
-  defaultProviderErrorMessage,
-} from '../config.js';
-import type { MemoryStore } from '../memory.js';
-import type { RAGStore } from '../rag.js';
-import type { SpecialistStore } from '../specialists.js';
+import { resolveProviderAndModel, defaultProviderErrorMessage } from '../config.js';
 import { runPACLoop } from '../pac.js';
+import type { AgentContext } from '../framework/context.js';
 import { capSubagentResult } from './result-cap.js';
 import { appendActivitySummary } from './activity-summary.js';
 import { makeLastStepTextOnly } from './task.js';
@@ -68,21 +62,15 @@ Rules:
  * The specialist's system prompt and guidelines are used as the persona. Shares
  * the concurrency pool with sub-agents and tasks.
  *
- * @param config - Bernard configuration (provider, model, token limits).
- * @param options - Shell execution options forwarded to child tool sets.
- * @param memoryStore - Shared memory store for persistent/scratch context.
- * @param specialistStore - Store for looking up specialist profiles.
- * @param mcpTools - Optional MCP-provided tools available to specialist runs.
- * @param ragStore - Optional RAG store for retrieval-augmented context.
+ * @param ctx - Assembled AgentContext (config, stores, mcp, toolOptions, optional RAG).
  */
-export function createSpecialistRunTool(
-  config: BernardConfig,
-  options: ToolOptions,
-  memoryStore: MemoryStore,
-  specialistStore: SpecialistStore,
-  mcpTools?: Record<string, any>,
-  ragStore?: RAGStore,
-) {
+export function createSpecialistRunTool(ctx: AgentContext) {
+  const { config } = ctx;
+  const options = ctx.toolOptions;
+  const memoryStore = ctx.stores.memory;
+  const specialistStore = ctx.stores.specialists;
+  const mcpTools = ctx.mcp.tools;
+  const ragStore = ctx.rag;
   return tool({
     description:
       "Invoke a saved specialist agent to handle a task using its custom persona, instructions, and behavioral guidelines. The specialist runs as an independent sub-agent with its own system prompt. Use this when the task matches an existing specialist's domain.",

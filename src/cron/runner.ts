@@ -4,7 +4,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
 import { loadConfig } from '../config.js';
-import { MemoryStore } from '../memory.js';
+import { assembleContext } from '../framework/context.js';
 import { RAGStore } from '../rag.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { debugLog } from '../logger.js';
@@ -89,7 +89,6 @@ export interface RunJobResult {
  */
 export async function runJob(job: CronJob, log: (msg: string) => void): Promise<RunJobResult> {
   const config = loadConfig();
-  const memoryStore = new MemoryStore();
   const store = new CronStore();
 
   // Conditionally create RAGStore for memory context enrichment
@@ -118,6 +117,18 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     const message = err instanceof Error ? err.message : String(err);
     log(`MCP initialization failed, continuing without MCP tools: ${message}`);
   }
+
+  const ctx = assembleContext({
+    config,
+    toolOptions: {
+      shellTimeout: config.shellTimeout,
+      confirmDangerous: async () => false, // Auto-deny in daemon mode
+      // askUser intentionally omitted — no interactive user; the ask_user tool returns {unavailable}.
+    },
+    mcp: { tools: mcpTools, serverNames },
+    rag: ragStore,
+  });
+  const memoryStore = ctx.stores.memory;
 
   const logStore = new CronLogStore();
   const runId = crypto.randomUUID();

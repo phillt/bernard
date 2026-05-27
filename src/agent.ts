@@ -58,7 +58,9 @@ import { createThinkTool } from './tools/think.js';
 import { createAskUserTool } from './tools/ask-user.js';
 import { createEvaluateTool } from './tools/evaluate.js';
 import { applyShimRouting } from './tools/wrap-with-specialist.js';
+import { ctxToToolWrapperDeps } from './tools/tool-wrapper-run.js';
 import { makeRepairHook } from './tool-call-repair.js';
+import type { AgentContext } from './framework/context.js';
 
 /**
  * Directs the model to publish brief reasoning via the `think` tool so the
@@ -399,35 +401,25 @@ export class Agent {
   private lastStepLimitHit: boolean = false;
   private planStore: PlanStore = new PlanStore();
 
-  constructor(
-    config: BernardConfig,
-    toolOptions: ToolOptions,
-    memoryStore: MemoryStore,
-    mcpTools?: Record<string, any>,
-    mcpServerNames?: string[],
-    alertContext?: string,
-    initialHistory?: CoreMessage[],
-    ragStore?: RAGStore,
-    routineStore?: RoutineStore,
-    specialistStore?: SpecialistStore,
-    candidateStore?: CandidateStoreReader,
-    correctionStore?: CorrectionCandidateStore,
-  ) {
-    this.config = config;
-    this.toolOptions = toolOptions;
-    this.memoryStore = memoryStore;
-    this.mcpTools = mcpTools;
-    this.mcpServerNames = mcpServerNames;
-    this.alertContext = alertContext;
-    this.ragStore = ragStore;
-    this.routineStore = routineStore ?? new RoutineStore();
-    this.specialistStore = specialistStore ?? new SpecialistStore();
-    this.candidateStore = candidateStore;
-    this.correctionStore = correctionStore ?? new CorrectionCandidateStore();
-    this.toolProfileStore = new ToolProfileStore();
-    if (initialHistory) {
-      this.history = [...initialHistory];
-      this.lastPromptTokens = Math.ceil(JSON.stringify(initialHistory).length / 4);
+  private ctx: AgentContext;
+
+  constructor(ctx: AgentContext, opts?: { alertContext?: string; initialHistory?: CoreMessage[] }) {
+    this.ctx = ctx;
+    this.config = ctx.config;
+    this.toolOptions = ctx.toolOptions;
+    this.memoryStore = ctx.stores.memory;
+    this.mcpTools = ctx.mcp.tools;
+    this.mcpServerNames = ctx.mcp.serverNames;
+    this.alertContext = opts?.alertContext;
+    this.ragStore = ctx.rag;
+    this.routineStore = ctx.stores.routines;
+    this.specialistStore = ctx.stores.specialists;
+    this.candidateStore = ctx.stores.candidates;
+    this.correctionStore = ctx.stores.correction;
+    this.toolProfileStore = ctx.stores.toolProfiles;
+    if (opts?.initialHistory) {
+      this.history = [...opts.initialHistory];
+      this.lastPromptTokens = Math.ceil(JSON.stringify(opts.initialHistory).length / 4);
     }
   }
 
@@ -623,40 +615,10 @@ export class Agent {
       );
       const tools = {
         ...baseTools,
-        agent: createSubAgentTool(
-          this.config,
-          this.toolOptions,
-          this.memoryStore,
-          this.mcpTools,
-          this.ragStore,
-        ),
-        task: createTaskTool(
-          this.config,
-          this.toolOptions,
-          this.memoryStore,
-          this.mcpTools,
-          this.ragStore,
-          this.routineStore,
-        ),
-        specialist_run: createSpecialistRunTool(
-          this.config,
-          this.toolOptions,
-          this.memoryStore,
-          this.specialistStore,
-          this.mcpTools,
-          this.ragStore,
-        ),
-        tool_wrapper_run: createToolWrapperRunTool(
-          this.config,
-          this.toolOptions,
-          this.memoryStore,
-          this.specialistStore,
-          this.correctionStore,
-          this.mcpTools,
-          this.ragStore,
-          this.routineStore,
-          this.candidateStore,
-        ),
+        agent: createSubAgentTool(this.ctx),
+        task: createTaskTool(this.ctx),
+        specialist_run: createSpecialistRunTool(this.ctx),
+        tool_wrapper_run: createToolWrapperRunTool(this.ctx),
         think: createThinkTool(),
         ask_user: createAskUserTool(this.toolOptions.askUser),
         ...(this.config.reactMode
@@ -671,17 +633,7 @@ export class Agent {
       // wrapper specialists transparently, then wrap every tool's execute to
       // observe errors and record profiles. Shim routing happens only at the
       // main-agent level — sub-agents and specialists keep raw tools.
-      const shimmedTools = applyShimRouting(tools, {
-        config: this.config,
-        options: this.toolOptions,
-        memoryStore: this.memoryStore,
-        specialistStore: this.specialistStore,
-        correctionStore: this.correctionStore,
-        mcpTools: this.mcpTools,
-        ragStore: this.ragStore,
-        routineStore: this.routineStore,
-        candidateStore: this.candidateStore,
-      });
+      const shimmedTools = applyShimRouting(tools, ctxToToolWrapperDeps(this.ctx));
       const augmentedTools = augmentTools(shimmedTools, this.toolProfileStore);
 
       // Coordinator (ReAct) mode triples the step budget for the main agent,

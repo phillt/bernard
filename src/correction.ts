@@ -1,12 +1,6 @@
-import type { BernardConfig } from './config.js';
-import type { MemoryStore } from './memory.js';
-import type { RAGStore } from './rag.js';
-import type { RoutineStore } from './routines.js';
-import type { ToolOptions } from './tools/types.js';
-import type { CandidateStoreReader } from './specialist-candidates.js';
-import { SpecialistStore } from './specialists.js';
-import { CorrectionCandidateStore, type CorrectionCandidate } from './correction-candidates.js';
+import { type CorrectionCandidate } from './correction-candidates.js';
 import { createToolWrapperRunTool } from './tools/tool-wrapper-run.js';
+import type { AgentContext } from './framework/context.js';
 import { parseStructuredOutput, WrapperResultSchema } from './structured-output.js';
 import { z } from 'zod';
 import { debugLog } from './logger.js';
@@ -29,16 +23,8 @@ const CorrectionOutcomeSchema = z.object({
 type CorrectionOutcome = z.infer<typeof CorrectionOutcomeSchema>;
 
 export interface RunCorrectionDeps {
-  config: BernardConfig;
-  toolOptions: ToolOptions;
-  memoryStore: MemoryStore;
-  specialistStore: SpecialistStore;
-  correctionStore: CorrectionCandidateStore;
-  ragStore?: RAGStore;
-  routineStore?: RoutineStore;
-  candidateStore?: CandidateStoreReader;
-  mcpTools?: Record<string, any>;
-  /** Optional pre-built tool for testing. Falls back to createToolWrapperRunTool(...) when absent. */
+  ctx: AgentContext;
+  /** Optional pre-built tool for testing. Falls back to createToolWrapperRunTool(ctx) when absent. */
   toolWrapperRun?: { execute: (args: any, opts: any) => Promise<any> };
 }
 
@@ -69,29 +55,18 @@ export async function runCorrectionAgent(
   applied: number;
   skipped: number;
 }> {
-  const pending = prefetchedPending ?? deps.correctionStore.listPending();
+  const correctionStore = deps.ctx.stores.correction;
+  const pending = prefetchedPending ?? correctionStore.listPending();
   if (pending.length === 0) return { processed: 0, applied: 0, skipped: 0 };
 
-  const correctionSpecialist = deps.specialistStore.get(CORRECTION_SPECIALIST_ID);
+  const correctionSpecialist = deps.ctx.stores.specialists.get(CORRECTION_SPECIALIST_ID);
   if (!correctionSpecialist) {
     debugLog('correction:skip', `No specialist named "${CORRECTION_SPECIALIST_ID}" — skipping.`);
     return { processed: 0, applied: 0, skipped: pending.length };
   }
 
   const batch = pending.slice(0, MAX_CANDIDATES_PER_RUN);
-  const toolWrapperRun =
-    deps.toolWrapperRun ??
-    createToolWrapperRunTool(
-      deps.config,
-      deps.toolOptions,
-      deps.memoryStore,
-      deps.specialistStore,
-      deps.correctionStore,
-      deps.mcpTools,
-      deps.ragStore,
-      deps.routineStore,
-      deps.candidateStore,
-    );
+  const toolWrapperRun = deps.toolWrapperRun ?? createToolWrapperRunTool(deps.ctx);
 
   let applied = 0;
   let processed = 0;
@@ -116,19 +91,19 @@ export async function runCorrectionAgent(
       const outcome = extractOutcome(text);
       if (outcome && outcome.applied) {
         applied++;
-        deps.correctionStore.update(candidate.id, {
+        correctionStore.update(candidate.id, {
           status: 'applied',
           validated: true,
           notes: outcome.notes,
         });
       } else if (outcome && outcome.validated) {
-        deps.correctionStore.update(candidate.id, {
+        correctionStore.update(candidate.id, {
           status: 'rejected',
           validated: true,
           notes: outcome.notes ?? 'Validated but not applied (agent declined commit).',
         });
       } else {
-        deps.correctionStore.update(candidate.id, {
+        correctionStore.update(candidate.id, {
           status: 'invalid',
           validated: false,
           notes: outcome?.notes ?? 'Correction agent could not validate a fix.',
@@ -137,7 +112,7 @@ export async function runCorrectionAgent(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       debugLog('correction:error', { candidateId: candidate.id, message });
-      deps.correctionStore.update(candidate.id, {
+      correctionStore.update(candidate.id, {
         status: 'invalid',
         validated: false,
         notes: `Correction agent errored: ${message}`,

@@ -103,6 +103,29 @@ import {
 } from './tool-wrapper-run.js';
 import { _resetPool } from './agent-pool.js';
 import { DEFAULT_SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
+import type { AgentContext } from '../framework/context.js';
+
+function makeCtx(
+  config: any,
+  options: any,
+  memoryStore: any,
+  specialistStore: any,
+  correctionStore: any,
+): AgentContext {
+  return {
+    config,
+    toolOptions: options,
+    stores: {
+      memory: memoryStore,
+      specialists: specialistStore,
+      correction: correctionStore,
+      routines: {} as any,
+      candidates: {} as any,
+      toolProfiles: {} as any,
+    },
+    mcp: { tools: {}, serverNames: [] },
+  };
+}
 
 const { generateText } = await import('ai');
 const { acquireSlot, releaseSlot } = await import('./agent-pool.js');
@@ -564,11 +587,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     specialistStore.get.mockReturnValue(undefined);
 
     const toolDef = createToolWrapperRunTool(
-      config,
-      options,
-      memoryStore,
-      specialistStore,
-      correctionStore,
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
     );
     const result = await toolDef.execute(
       { specialistId: 'missing', input: 'do something' },
@@ -587,11 +606,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     specialistStore.get.mockReturnValue(makeToolWrapperSpecialist({ kind: 'persona' }));
 
     const toolDef = createToolWrapperRunTool(
-      config,
-      options,
-      memoryStore,
-      specialistStore,
-      correctionStore,
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
     );
     const result = await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'do something' },
@@ -609,11 +624,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     specialistStore.get.mockReturnValue(noKindSpec);
 
     const toolDef = createToolWrapperRunTool(
-      config,
-      options,
-      memoryStore,
-      specialistStore,
-      correctionStore,
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
     );
     const result = await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'do something' },
@@ -636,11 +647,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     });
 
     const toolDef = createToolWrapperRunTool(
-      config,
-      options,
-      memoryStore,
-      specialistStore,
-      correctionStore,
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
     );
     const result = await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'do something' },
@@ -660,11 +667,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     vi.mocked(acquireSlot).mockReturnValue(null);
 
     const toolDef = createToolWrapperRunTool(
-      config,
-      options,
-      memoryStore,
-      specialistStore,
-      correctionStore,
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
     );
     const result = await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'do something' },
@@ -687,11 +690,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     } as any);
 
     const toolDef = createToolWrapperRunTool(
-      config,
-      options,
-      memoryStore,
-      specialistStore,
-      correctionStore,
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
     );
     const result = await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'list files' },
@@ -724,11 +723,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     } as any);
 
     const toolDef = createToolWrapperRunTool(
-      config,
-      options,
-      memoryStore,
-      specialistStore,
-      correctionStore,
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
     );
     await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'run bad command' },
@@ -756,11 +751,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     } as any);
 
     const toolDef = createToolWrapperRunTool(
-      config,
-      options,
-      memoryStore,
-      specialistStore,
-      correctionStore,
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
     );
     await toolDef.execute(
       { specialistId: 'specialist-creator', input: 'create something' },
@@ -777,11 +768,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     vi.mocked(generateText).mockRejectedValue(new Error('network timeout'));
 
     const toolDef = createToolWrapperRunTool(
-      config,
-      options,
-      memoryStore,
-      specialistStore,
-      correctionStore,
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
     );
     const result = await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'do something' },
@@ -802,11 +789,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     vi.mocked(generateText).mockRejectedValue(new Error('api crash'));
 
     const toolDef = createToolWrapperRunTool(
-      config,
-      options,
-      memoryStore,
-      specialistStore,
-      correctionStore,
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
     );
     await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'do something' },
@@ -829,11 +812,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     } as any);
 
     const toolDef = createToolWrapperRunTool(
-      config,
-      options,
-      memoryStore,
-      specialistStore,
-      correctionStore,
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
     );
     await toolDef.execute({ specialistId: 'shell-wrapper', input: 'list' }, DEFAULT_EXEC_OPTIONS);
 
@@ -849,11 +828,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
       steps: [],
     } as any);
     const toolDef = createToolWrapperRunTool(
-      config,
-      options,
-      memoryStore,
-      specialistStore,
-      correctionStore,
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
     );
     await toolDef.execute(
       { specialistId: 'shell-wrapper', input: 'success run' },

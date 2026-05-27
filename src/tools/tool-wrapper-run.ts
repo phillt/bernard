@@ -19,10 +19,12 @@ import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js
 import { type BernardConfig, resolveProviderAndModel } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
-import type { RoutineStore } from '../routines.js';
-import type { SpecialistStore, Specialist } from '../specialists.js';
-import type { CandidateStoreReader } from '../specialist-candidates.js';
+import { RoutineStore } from '../routines.js';
+import type { Specialist, SpecialistStore } from '../specialists.js';
+import { CandidateStore, type CandidateStoreReader } from '../specialist-candidates.js';
 import type { CorrectionCandidateStore } from '../correction-candidates.js';
+import { ToolProfileStore } from '../tool-profiles.js';
+import type { AgentContext } from '../framework/context.js';
 import { osPromptBlock } from '../os-info.js';
 import {
   STRUCTURED_OUTPUT_RULES,
@@ -143,6 +145,39 @@ export interface ToolWrapperDeps {
   candidateStore?: CandidateStoreReader;
 }
 
+/** Derives the legacy {@link ToolWrapperDeps} shape from an {@link AgentContext}. */
+export function ctxToToolWrapperDeps(ctx: AgentContext): ToolWrapperDeps {
+  return {
+    config: ctx.config,
+    options: ctx.toolOptions,
+    memoryStore: ctx.stores.memory,
+    specialistStore: ctx.stores.specialists,
+    correctionStore: ctx.stores.correction,
+    mcpTools: ctx.mcp.tools,
+    ragStore: ctx.rag,
+    routineStore: ctx.stores.routines,
+    candidateStore: ctx.stores.candidates,
+  };
+}
+
+/** Lifts {@link ToolWrapperDeps} into a full {@link AgentContext} for child factories. */
+export function depsToCtx(deps: ToolWrapperDeps): AgentContext {
+  return {
+    config: deps.config,
+    stores: {
+      memory: deps.memoryStore,
+      routines: deps.routineStore ?? new RoutineStore(),
+      specialists: deps.specialistStore,
+      candidates: deps.candidateStore ?? new CandidateStore(),
+      correction: deps.correctionStore,
+      toolProfiles: new ToolProfileStore(),
+    },
+    mcp: { tools: deps.mcpTools ?? {}, serverNames: [] },
+    rag: deps.ragStore,
+    toolOptions: deps.options,
+  };
+}
+
 /** Per-call inputs to a tool-wrapper dispatch. */
 export interface DispatchToolWrapperArgs {
   specialistId: string;
@@ -242,29 +277,13 @@ export async function dispatchToolWrapper(
       candidateStore,
       config,
     );
+    const innerCtx = depsToCtx(deps);
     const fullRegistry: Record<string, any> = {
       ...baseTools,
-      agent: createSubAgentTool(config, options, memoryStore, mcpTools, ragStore),
-      task: createTaskTool(config, options, memoryStore, mcpTools, ragStore, routineStore),
-      specialist_run: createSpecialistRunTool(
-        config,
-        options,
-        memoryStore,
-        specialistStore,
-        mcpTools,
-        ragStore,
-      ),
-      tool_wrapper_run: createToolWrapperRunTool(
-        config,
-        options,
-        memoryStore,
-        specialistStore,
-        correctionStore,
-        mcpTools,
-        ragStore,
-        routineStore,
-        candidateStore,
-      ),
+      agent: createSubAgentTool(innerCtx),
+      task: createTaskTool(innerCtx),
+      specialist_run: createSpecialistRunTool(innerCtx),
+      tool_wrapper_run: createToolWrapperRunTool(innerCtx),
     };
     const childTools = buildChildTools(specialist, fullRegistry);
 
@@ -440,17 +459,8 @@ export function renderWrapperParentView(
  *   - strips `reasoning` and caps the JSON envelope before returning to the
  *     parent agent — the full reasoning lives in the JSONL trace only
  */
-export function createToolWrapperRunTool(
-  config: BernardConfig,
-  options: ToolOptions,
-  memoryStore: MemoryStore,
-  specialistStore: SpecialistStore,
-  correctionStore: CorrectionCandidateStore,
-  mcpTools?: Record<string, any>,
-  ragStore?: RAGStore,
-  routineStore?: RoutineStore,
-  candidateStore?: CandidateStoreReader,
-) {
+export function createToolWrapperRunTool(ctx: AgentContext) {
+  const deps = ctxToToolWrapperDeps(ctx);
   return tool({
     description:
       'Dispatch to a saved tool-wrapper specialist that handles a concrete tool or CLI (e.g. shell-wrapper, file-wrapper). Returns JSON {status, result, error?}. Use this for tool-heavy operations where domain-specific examples and error handling reduce misuse. Also used to invoke meta specialists (specialist-creator, correction-agent).',
@@ -482,17 +492,7 @@ export function createToolWrapperRunTool(
           model,
           abortSignal: execOptions.abortSignal,
         },
-        {
-          config,
-          options,
-          memoryStore,
-          specialistStore,
-          correctionStore,
-          mcpTools,
-          ragStore,
-          routineStore,
-          candidateStore,
-        },
+        deps,
       );
       return renderWrapperParentView(wrapped);
     },
