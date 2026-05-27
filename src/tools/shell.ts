@@ -1,9 +1,10 @@
-import { tool } from 'ai';
 import { z } from 'zod';
 import { execSync } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ToolOptions, ShellResult } from './types.js';
+import type { BernardTool } from '../framework/tools/types.js';
+import { ok, err } from '../framework/tools/types.js';
 
 const DANGEROUS_PATTERNS = [
   /\brm\s+(-[^\s]*\s+)*-[^\s]*r/, // rm with -r flag
@@ -79,26 +80,36 @@ export function isSafelisted(command: string): boolean {
   });
 }
 
+const SHELL_DESCRIPTION =
+  'Execute a shell command in the current working directory and return its output. Use this for git commands, running scripts, and any terminal task. For reading and editing files, prefer file_read_lines and file_edit_lines.';
+
+const SHELL_PARAMETERS = z.object({
+  command: z.string().describe('The shell command to execute'),
+});
+
+type ShellArgs = z.infer<typeof SHELL_PARAMETERS>;
+
 /**
  * Creates the shell execution tool that runs commands in the user's terminal.
  *
  * Dangerous commands are intercepted and require explicit user confirmation
  * before execution, unless they match a safelist of Bernard-owned operations.
  *
+ * Returns a {@link BernardTool}; the AI-SDK adapter preserves the historical
+ * `{output, is_error}` shape via `serializeForModel`.
+ *
  * @param options - Shell timeout and dangerous-command confirmation callback.
  */
-export function createShellTool(options: ToolOptions) {
-  return tool({
-    description:
-      'Execute a shell command in the current working directory and return its output. Use this for git commands, running scripts, and any terminal task. For reading and editing files, prefer file_read_lines and file_edit_lines.',
-    parameters: z.object({
-      command: z.string().describe('The shell command to execute'),
-    }),
-    execute: async ({ command }, execOptions): Promise<ShellResult> => {
+export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, ShellResult> {
+  return {
+    meta: { name: 'shell', kind: 'dangerous', category: 'shell' },
+    description: SHELL_DESCRIPTION,
+    parameters: SHELL_PARAMETERS,
+    execute: async ({ command }, execOptions) => {
       if (isDangerous(command) && !isSafelisted(command)) {
         const confirmed = await options.confirmDangerous(command, execOptions?.abortSignal);
         if (!confirmed) {
-          return { output: 'Command cancelled by user.', is_error: false };
+          return ok({ output: 'Command cancelled by user.', is_error: false });
         }
       }
 
@@ -109,15 +120,17 @@ export function createShellTool(options: ToolOptions) {
           maxBuffer: 1024 * 1024 * 10, // 10MB
           stdio: ['pipe', 'pipe', 'pipe'],
         });
-        return { output: stdout || '(no output)', is_error: false };
-      } catch (err: unknown) {
-        const execError = err as { stderr?: string; stdout?: string; message?: string };
+        return ok({ output: stdout || '(no output)', is_error: false });
+      } catch (e: unknown) {
+        const execError = e as { stderr?: string; stdout?: string; message?: string };
         const stderr = execError.stderr || '';
         const stdout = execError.stdout || '';
         const output =
           [stdout, stderr].filter(Boolean).join('\n') || execError.message || 'Command failed';
-        return { output, is_error: true };
+        return err({ type: 'exec_failed', message: output, snippet: output.slice(0, 200) });
       }
     },
-  });
+    serializeForModel: (r) =>
+      r.status === 'ok' ? r.result : { output: r.error.message, is_error: true },
+  };
 }

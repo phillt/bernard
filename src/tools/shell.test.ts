@@ -115,28 +115,37 @@ describe('createShellTool', () => {
     confirmDangerous = vi.fn();
   });
 
-  it('executes a safe command and returns output', async () => {
+  it('executes a safe command and returns ok envelope', async () => {
     vi.mocked(execSync).mockReturnValue('hello world');
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
-    const result = await shellTool.execute({ command: 'echo hello' }, {} as any);
-    expect(result).toEqual({ output: 'hello world', is_error: false });
+    const result = await shellTool.execute({ command: 'echo hello' }, {});
+    expect(result).toEqual({
+      status: 'ok',
+      result: { output: 'hello world', is_error: false },
+    });
     expect(confirmDangerous).not.toHaveBeenCalled();
   });
 
   it('returns "(no output)" for empty stdout', async () => {
     vi.mocked(execSync).mockReturnValue('');
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
-    const result = await shellTool.execute({ command: 'true' }, {} as any);
-    expect(result).toEqual({ output: '(no output)', is_error: false });
+    const result = await shellTool.execute({ command: 'true' }, {});
+    expect(result).toEqual({
+      status: 'ok',
+      result: { output: '(no output)', is_error: false },
+    });
   });
 
   it('calls confirmDangerous for dangerous commands', async () => {
     confirmDangerous.mockResolvedValue(true);
     vi.mocked(execSync).mockReturnValue('done');
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
-    const result = await shellTool.execute({ command: 'rm -rf /tmp/test' }, {} as any);
+    const result = await shellTool.execute({ command: 'rm -rf /tmp/test' }, {});
     expect(confirmDangerous).toHaveBeenCalledWith('rm -rf /tmp/test', undefined);
-    expect(result).toEqual({ output: 'done', is_error: false });
+    expect(result).toEqual({
+      status: 'ok',
+      result: { output: 'done', is_error: false },
+    });
   });
 
   it('forwards the abort signal to confirmDangerous', async () => {
@@ -146,7 +155,7 @@ describe('createShellTool', () => {
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
     await shellTool.execute({ command: 'rm -rf /tmp/test' }, {
       abortSignal: controller.signal,
-    } as any);
+    });
     expect(confirmDangerous).toHaveBeenCalledWith('rm -rf /tmp/test', controller.signal);
   });
 
@@ -154,30 +163,52 @@ describe('createShellTool', () => {
     vi.mocked(execSync).mockReturnValue('');
     const tmpFile = `${BERNARD_TMP_PREFIX}task.sh`;
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
-    const result = await shellTool.execute({ command: `rm -f ${tmpFile}` }, {} as any);
+    const result = await shellTool.execute({ command: `rm -f ${tmpFile}` }, {});
     expect(confirmDangerous).not.toHaveBeenCalled();
     expect(execSync).toHaveBeenCalled();
-    expect(result.is_error).toBe(false);
+    expect(result.status).toBe('ok');
   });
 
-  it('cancels command when user declines', async () => {
+  it('cancels command when user declines (ok envelope, not error)', async () => {
     confirmDangerous.mockResolvedValue(false);
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
-    const result = await shellTool.execute({ command: 'rm -rf /tmp/test' }, {} as any);
-    expect(result).toEqual({ output: 'Command cancelled by user.', is_error: false });
+    const result = await shellTool.execute({ command: 'rm -rf /tmp/test' }, {});
+    expect(result).toEqual({
+      status: 'ok',
+      result: { output: 'Command cancelled by user.', is_error: false },
+    });
     expect(execSync).not.toHaveBeenCalled();
   });
 
-  it('returns error on command failure', async () => {
+  it('returns error envelope on command failure', async () => {
     vi.mocked(execSync).mockImplementation(() => {
-      const err = new Error('Command failed') as any;
-      err.stderr = 'permission denied';
-      err.stdout = '';
-      throw err;
+      const e = new Error('Command failed') as any;
+      e.stderr = 'permission denied';
+      e.stdout = '';
+      throw e;
     });
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
-    const result = await shellTool.execute({ command: 'cat /root/secret' }, {} as any);
-    expect(result.is_error).toBe(true);
-    expect(result.output).toContain('permission denied');
+    const result = await shellTool.execute({ command: 'cat /root/secret' }, {});
+    expect(result.status).toBe('error');
+    if (result.status === 'error') {
+      expect(result.error.type).toBe('exec_failed');
+      expect(result.error.message).toContain('permission denied');
+      expect(result.error.snippet).toContain('permission denied');
+    }
+  });
+
+  it('serializeForModel preserves {output, is_error} bytes on ok and error', async () => {
+    const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
+    const okOut = shellTool.serializeForModel({
+      status: 'ok',
+      result: { output: 'hello', is_error: false },
+    });
+    expect(okOut).toEqual({ output: 'hello', is_error: false });
+
+    const errOut = shellTool.serializeForModel({
+      status: 'error',
+      error: { type: 'exec_failed', message: 'permission denied' },
+    });
+    expect(errOut).toEqual({ output: 'permission denied', is_error: true });
   });
 });

@@ -1,5 +1,6 @@
 import { generateText } from 'ai';
 import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
+import { readToolMeta } from './framework/tools/adapter.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 
@@ -84,11 +85,21 @@ function describeTool(name: string, tool: any): ToolDescriptor {
   return { name, description, schema };
 }
 
+/**
+ * Returns true when the tool carries `meta.kind === 'read'` via the framework
+ * adapter. This is the canonical signal once tools are migrated to
+ * `BernardTool`; on day one only `task` qualifies, so the behavior change is
+ * additive (the suffix allowlist still covers MCP + legacy tools).
+ */
+function isReadKindTool(tool: unknown): boolean {
+  return readToolMeta(tool)?.kind === 'read';
+}
+
 function collectAllowedTools(tools: Record<string, any>, extraAllowed: string[]): ToolDescriptor[] {
   const out: ToolDescriptor[] = [];
   for (const [name, tool] of Object.entries(tools)) {
     if (!tool || typeof tool.execute !== 'function') continue;
-    if (!isAllowedLookupTool(name, extraAllowed)) continue;
+    if (!isAllowedLookupTool(name, extraAllowed) && !isReadKindTool(tool)) continue;
     out.push(describeTool(name, tool));
   }
   return out;

@@ -257,11 +257,11 @@ describe('task tool', () => {
   it('returns structured JSON on success', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"found 3 files"}' });
     const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
-    const result = await taskTool.execute!(
+    const envelope = await taskTool.execute(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
     );
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(taskTool.serializeForModel(envelope) as string);
     expect(parsed.status).toBe('success');
     expect(parsed.output).toBe('found 3 files');
   });
@@ -269,11 +269,11 @@ describe('task tool', () => {
   it('returns error for non-JSON output', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Just some plain text response' });
     const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
-    const result = await taskTool.execute!(
+    const envelope = await taskTool.execute(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
     );
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(taskTool.serializeForModel(envelope) as string);
     expect(parsed.status).toBe('error');
     expect(parsed.output).toBe('Task did not produce valid structured output');
     expect(parsed.details).toBe('Just some plain text response');
@@ -282,11 +282,11 @@ describe('task tool', () => {
   it('returns error JSON on API failure (does not throw)', async () => {
     mockGenerateText.mockRejectedValue(new Error('API rate limit'));
     const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
-    const result = await taskTool.execute!(
+    const envelope = await taskTool.execute(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
     );
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(taskTool.serializeForModel(envelope) as string);
     expect(parsed.status).toBe('error');
     expect(parsed.output).toContain('API rate limit');
   });
@@ -309,8 +309,8 @@ describe('task tool', () => {
     );
 
     // 5th should hit the limit
-    const result = await taskTool.execute!({ task: 'overflow' }, execOptions);
-    const parsed = JSON.parse(result);
+    const envelope = await taskTool.execute({ task: 'overflow' }, execOptions);
+    const parsed = JSON.parse(taskTool.serializeForModel(envelope) as string);
     expect(parsed.status).toBe('error');
     expect(parsed.output).toContain('Maximum concurrent agents');
 
@@ -456,12 +456,12 @@ describe('task tool', () => {
     const taskTool = createTaskTool(
       makeCtx(makeConfig(), toolOptions, memoryStore, { rag: mockRagStore as any }),
     );
-    const result = await taskTool.execute!(
+    const envelope = await taskTool.execute(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
     );
 
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(taskTool.serializeForModel(envelope) as string);
     expect(parsed.status).toBe('success');
     expect(parsed.output).toBe('done');
   });
@@ -522,12 +522,12 @@ describe('task tool', () => {
 
     it('returns error JSON when override provider has no API key', async () => {
       const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
-      const result = await taskTool.execute!(
+      const envelope = await taskTool.execute(
         { task: 'test', provider: 'xai' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
       );
 
-      const parsed = JSON.parse(result);
+      const parsed = JSON.parse(taskTool.serializeForModel(envelope) as string);
       expect(parsed.status).toBe('error');
       expect(parsed.output).toContain('No API key found');
       expect(parsed.output).toContain('xai');
@@ -565,12 +565,12 @@ describe('task tool', () => {
       const taskTool = createTaskTool(
         makeCtx(makeConfig(), toolOptions, memoryStore, { routines: routineStore }),
       );
-      const result = await taskTool.execute!(
+      const envelope = await taskTool.execute(
         { task: 'task-nonexistent', taskId: 'task-nonexistent' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
       );
 
-      const parsed = JSON.parse(result);
+      const parsed = JSON.parse(taskTool.serializeForModel(envelope) as string);
       expect(parsed.status).toBe('error');
       expect(parsed.output).toContain('not found');
       expect(mockGenerateText).not.toHaveBeenCalled();
@@ -600,12 +600,12 @@ describe('task tool', () => {
 
     it('returns error when taskId references a routine that does not exist', async () => {
       const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
-      const result = await taskTool.execute!(
+      const envelope = await taskTool.execute(
         { taskId: 'task-check-issues' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
       );
 
-      const parsed = JSON.parse(result);
+      const parsed = JSON.parse(taskTool.serializeForModel(envelope) as string);
       expect(parsed.status).toBe('error');
       expect(parsed.output).toContain('not found');
       expect(mockGenerateText).not.toHaveBeenCalled();

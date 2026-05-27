@@ -14,6 +14,7 @@ import { createDateTimeTool, formatCurrentDateTime } from '../tools/datetime.js'
 import { createWebReadTool } from '../tools/web.js';
 import { createWaitTool } from '../tools/wait.js';
 import { createTimeTools } from '../tools/time.js';
+import { toolToAISDK } from '../framework/tools/adapter.js';
 import { MCPManager } from '../mcp.js';
 import { CronStore } from './store.js';
 import { CronLogStore, type CronLogStep } from './log-store.js';
@@ -190,9 +191,9 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     const notesStore = new CronNotesStore();
 
     const tools = {
-      shell: shellTool,
-      memory: createMemoryTool(memoryStore),
-      scratch: createScratchTool(memoryStore),
+      shell: toolToAISDK(shellTool),
+      memory: toolToAISDK(createMemoryTool(memoryStore)),
+      scratch: toolToAISDK(createScratchTool(memoryStore)),
       datetime: createDateTimeTool(),
       web_read: createWebReadTool(),
       wait: createWaitTool(),

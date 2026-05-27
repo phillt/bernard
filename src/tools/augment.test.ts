@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { z } from 'zod';
 import { augmentTools } from './augment.js';
+import { toolToAISDK } from '../framework/tools/adapter.js';
+import { ok, err, type BernardTool } from '../framework/tools/types.js';
 
 vi.mock('../tool-profiles.js', () => ({
   classifyShellCommand: vi.fn((cmd: string) => {
@@ -562,6 +565,67 @@ describe('augmentTools', () => {
       const calledArgs = store.recordBadExample.mock.calls[0][1] as string;
       expect(typeof calledArgs).toBe('string');
       expect(calledArgs.length).toBeLessThanOrEqual(300);
+    });
+  });
+
+  describe('envelope-aware path (migrated BernardTools)', () => {
+    function makeBernardTool(opts: {
+      name: string;
+      result: 'ok' | 'error';
+      message?: string;
+    }): BernardTool<{ x: number }, { val: number }> {
+      return {
+        meta: { name: opts.name, kind: 'read' },
+        description: opts.name,
+        parameters: z.object({ x: z.number() }),
+        execute: async () =>
+          opts.result === 'ok'
+            ? ok({ val: 1 })
+            : err({ type: 'exec_failed', message: opts.message ?? 'boom', snippet: 'boom-snip' }),
+        serializeForModel: (r) => (r.status === 'ok' ? r.result : `Error: ${r.error.message}`),
+      };
+    }
+
+    it('records error envelope WITHOUT calling detectToolError heuristic', async () => {
+      const aisdk = toolToAISDK(makeBernardTool({ name: 'demo', result: 'error', message: 'fail' }));
+      const augmented = augmentTools({ demo: aisdk }, store);
+      await augmented.demo.execute({ x: 1 }, {});
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(store.recordBadExample).toHaveBeenCalledTimes(1);
+      // Heuristic detector must not be consulted for migrated tools.
+      expect(detectToolError).not.toHaveBeenCalled();
+    });
+
+    it('records nothing on ok envelope', async () => {
+      const aisdk = toolToAISDK(makeBernardTool({ name: 'demo', result: 'ok' }));
+      const augmented = augmentTools({ demo: aisdk }, store);
+      await augmented.demo.execute({ x: 1 }, {});
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(store.recordBadExample).not.toHaveBeenCalled();
+      expect(detectToolError).not.toHaveBeenCalled();
+    });
+
+    it('returns the model-facing serialized form, not the raw envelope', async () => {
+      const aisdk = toolToAISDK(makeBernardTool({ name: 'demo', result: 'error', message: 'oops' }));
+      const augmented = augmentTools({ demo: aisdk }, store);
+      const out = await augmented.demo.execute({ x: 1 }, {});
+      expect(out).toBe('Error: oops');
+    });
+
+    it('patches the most recent unfixed bad example on success (envelope path)', async () => {
+      store.get.mockReturnValue({
+        badExamples: [
+          { args: '{"x":2}', errorSnippet: 'old', fix: '(awaiting successful retry)' },
+        ],
+      });
+      const aisdk = toolToAISDK(makeBernardTool({ name: 'demo', result: 'ok' }));
+      const augmented = augmentTools({ demo: aisdk }, store);
+      await augmented.demo.execute({ x: 1 }, {});
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(store.patchLastBadWithFix).toHaveBeenCalledWith('demo', JSON.stringify({ x: 1 }));
     });
   });
 

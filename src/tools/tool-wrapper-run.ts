@@ -4,6 +4,7 @@ import { getModelForConfig, getProviderOptionsForConfig } from '../providers/ind
 import { createTools, type ToolOptions } from './index.js';
 import { createSubAgentTool } from './subagent.js';
 import { createTaskTool } from './task.js';
+import { toolToAISDK } from '../framework/tools/adapter.js';
 import { createSpecialistRunTool } from './specialist-run.js';
 import { makeLastStepTextOnly } from './task.js';
 import {
@@ -282,7 +283,7 @@ export async function dispatchToolWrapper(
     const fullRegistry: Record<string, any> = {
       ...baseTools,
       agent: createSubAgentTool(innerCtx),
-      task: createTaskTool(innerCtx),
+      task: toolToAISDK(createTaskTool(innerCtx)),
       specialist_run: createSpecialistRunTool(innerCtx),
       tool_wrapper_run: createToolWrapperRunTool(innerCtx),
     };

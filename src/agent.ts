@@ -7,6 +7,7 @@ import {
 import { createTools, type ToolOptions } from './tools/index.js';
 import { createSubAgentTool } from './tools/subagent.js';
 import { createTaskTool } from './tools/task.js';
+import { toolToAISDK } from './framework/tools/adapter.js';
 import {
   printAssistantText,
   printToolCall,
@@ -616,7 +617,7 @@ export class Agent {
       const tools = {
         ...baseTools,
         agent: createSubAgentTool(this.ctx),
-        task: createTaskTool(this.ctx),
+        task: toolToAISDK(createTaskTool(this.ctx)),
         specialist_run: createSpecialistRunTool(this.ctx),
         tool_wrapper_run: createToolWrapperRunTool(this.ctx),
         think: createThinkTool(),
