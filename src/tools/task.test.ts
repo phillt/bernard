@@ -60,8 +60,26 @@ import {
 import { _resetPool } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 import { RoutineStore } from '../routines.js';
+import { assembleContext } from '../framework/context.js';
 
 const { getModelForConfig: mockGetModel } = await import('../providers/index.js');
+
+function makeCtx(
+  config: BernardConfig,
+  toolOptions: ToolOptions,
+  memoryStore: MemoryStore,
+  opts: { rag?: any; routines?: RoutineStore } = {},
+) {
+  return assembleContext({
+    config,
+    toolOptions,
+    rag: opts.rag,
+    stores: {
+      memory: memoryStore,
+      ...(opts.routines ? { routines: opts.routines } : {}),
+    },
+  });
+}
 
 function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
   return {
@@ -195,7 +213,7 @@ describe('task tool', () => {
   });
 
   it('has correct description and execute function', () => {
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     expect(taskTool).toBeDefined();
     expect(taskTool.description).toContain('isolated');
     expect(taskTool.description).toContain('structured JSON');
@@ -205,7 +223,7 @@ describe('task tool', () => {
 
   it('calls generateText with proportional maxSteps and prepareStep', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await taskTool.execute!(
       { task: 'List files' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -238,7 +256,7 @@ describe('task tool', () => {
 
   it('returns structured JSON on success', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"found 3 files"}' });
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     const result = await taskTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -250,7 +268,7 @@ describe('task tool', () => {
 
   it('returns error for non-JSON output', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Just some plain text response' });
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     const result = await taskTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -263,7 +281,7 @@ describe('task tool', () => {
 
   it('returns error JSON on API failure (does not throw)', async () => {
     mockGenerateText.mockRejectedValue(new Error('API rate limit'));
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     const result = await taskTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -282,7 +300,7 @@ describe('task tool', () => {
         }),
     );
 
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     const execOptions = { toolCallId: '1', messages: [], abortSignal: undefined as any };
 
     // Start 4 concurrent tasks
@@ -303,7 +321,7 @@ describe('task tool', () => {
 
   it('includes context in user message when provided', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await taskTool.execute!(
       { task: 'Analyze code', context: 'Focus on error handling' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -315,7 +333,7 @@ describe('task tool', () => {
   it('passes abortSignal to inner generateText', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
     const controller = new AbortController();
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await taskTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: controller.signal },
@@ -326,7 +344,7 @@ describe('task tool', () => {
 
   it('calls printTaskStart and printTaskEnd lifecycle hooks', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await taskTool.execute!(
       { task: 'List files' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -337,7 +355,7 @@ describe('task tool', () => {
 
   it('calls printTaskEnd even on error', async () => {
     mockGenerateText.mockRejectedValue(new Error('fail'));
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await taskTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -347,7 +365,7 @@ describe('task tool', () => {
 
   it('uses task-specific system prompt with auto-context', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await taskTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -371,11 +389,7 @@ describe('task tool', () => {
     };
 
     const taskTool = createTaskTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      undefined,
-      mockRagStore as any,
+      makeCtx(makeConfig(), toolOptions, memoryStore, { rag: mockRagStore as any }),
     );
     await taskTool.execute!(
       { task: 'check preferences' },
@@ -394,11 +408,7 @@ describe('task tool', () => {
     };
 
     const taskTool = createTaskTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      undefined,
-      mockRagStore as any,
+      makeCtx(makeConfig(), toolOptions, memoryStore, { rag: mockRagStore as any }),
     );
     await taskTool.execute!(
       { task: 'check disk usage' },
@@ -422,12 +432,10 @@ describe('task tool', () => {
     });
 
     const taskTool = createTaskTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      undefined,
-      mockRagStore as any,
-      routineStore,
+      makeCtx(makeConfig(), toolOptions, memoryStore, {
+        rag: mockRagStore as any,
+        routines: routineStore,
+      }),
     );
     await taskTool.execute!(
       { taskId: 'task-check-issues' },
@@ -446,11 +454,7 @@ describe('task tool', () => {
     };
 
     const taskTool = createTaskTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      undefined,
-      mockRagStore as any,
+      makeCtx(makeConfig(), toolOptions, memoryStore, { rag: mockRagStore as any }),
     );
     const result = await taskTool.execute!(
       { task: 'test' },
@@ -464,7 +468,7 @@ describe('task tool', () => {
 
   it('includes error handling guidance', async () => {
     mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
-    const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await taskTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -478,7 +482,7 @@ describe('task tool', () => {
     it('uses override provider/model when specified', async () => {
       mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
       const config = makeConfig({ xaiApiKey: 'xai-test' });
-      const taskTool = createTaskTool(config, toolOptions, memoryStore);
+      const taskTool = createTaskTool(makeCtx(config, toolOptions, memoryStore));
       await taskTool.execute!(
         { task: 'test', provider: 'xai', model: 'grok-code-fast-1' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -489,7 +493,7 @@ describe('task tool', () => {
 
     it('falls back to global config when no override', async () => {
       mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
-      const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+      const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
       await taskTool.execute!(
         { task: 'test' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -505,7 +509,7 @@ describe('task tool', () => {
     it('uses provider default model when provider overridden but model not (avoids cross-provider mismatch)', async () => {
       mockGenerateText.mockResolvedValue({ text: '{"status":"success","output":"done"}' });
       const config = makeConfig({ xaiApiKey: 'xai-test' });
-      const taskTool = createTaskTool(config, toolOptions, memoryStore);
+      const taskTool = createTaskTool(makeCtx(config, toolOptions, memoryStore));
       await taskTool.execute!(
         { task: 'test', provider: 'xai' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -517,7 +521,7 @@ describe('task tool', () => {
     });
 
     it('returns error JSON when override provider has no API key', async () => {
-      const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+      const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
       const result = await taskTool.execute!(
         { task: 'test', provider: 'xai' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -543,12 +547,7 @@ describe('task tool', () => {
       });
 
       const taskTool = createTaskTool(
-        makeConfig(),
-        toolOptions,
-        memoryStore,
-        undefined,
-        undefined,
-        routineStore,
+        makeCtx(makeConfig(), toolOptions, memoryStore, { routines: routineStore }),
       );
       await taskTool.execute!(
         { task: 'task-check-issues', taskId: 'task-check-issues' },
@@ -564,12 +563,7 @@ describe('task tool', () => {
       vi.spyOn(routineStore, 'get').mockReturnValue(undefined);
 
       const taskTool = createTaskTool(
-        makeConfig(),
-        toolOptions,
-        memoryStore,
-        undefined,
-        undefined,
-        routineStore,
+        makeCtx(makeConfig(), toolOptions, memoryStore, { routines: routineStore }),
       );
       const result = await taskTool.execute!(
         { task: 'task-nonexistent', taskId: 'task-nonexistent' },
@@ -593,12 +587,7 @@ describe('task tool', () => {
       });
 
       const taskTool = createTaskTool(
-        makeConfig(),
-        toolOptions,
-        memoryStore,
-        undefined,
-        undefined,
-        routineStore,
+        makeCtx(makeConfig(), toolOptions, memoryStore, { routines: routineStore }),
       );
       await taskTool.execute!(
         { taskId: 'task-check-issues' },
@@ -609,8 +598,8 @@ describe('task tool', () => {
       expect(call.messages[0].content).toContain('List all open GitHub issues');
     });
 
-    it('returns error when taskId provided but routineStore is missing', async () => {
-      const taskTool = createTaskTool(makeConfig(), toolOptions, memoryStore);
+    it('returns error when taskId references a routine that does not exist', async () => {
+      const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
       const result = await taskTool.execute!(
         { taskId: 'task-check-issues' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -618,7 +607,7 @@ describe('task tool', () => {
 
       const parsed = JSON.parse(result);
       expect(parsed.status).toBe('error');
-      expect(parsed.output).toContain('routine store is not available');
+      expect(parsed.output).toContain('not found');
       expect(mockGenerateText).not.toHaveBeenCalled();
     });
 
@@ -633,12 +622,7 @@ describe('task tool', () => {
       });
 
       const taskTool = createTaskTool(
-        makeConfig(),
-        toolOptions,
-        memoryStore,
-        undefined,
-        undefined,
-        routineStore,
+        makeCtx(makeConfig(), toolOptions, memoryStore, { routines: routineStore }),
       );
       await taskTool.execute!(
         { task: 'only critical bugs', taskId: 'task-check-issues' },

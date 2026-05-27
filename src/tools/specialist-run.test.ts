@@ -71,8 +71,24 @@ import { createSpecialistRunTool } from './specialist-run.js';
 import { _resetPool } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 import { SpecialistStore } from '../specialists.js';
+import { assembleContext } from '../framework/context.js';
 
 const { getModelForConfig: mockGetModel } = await import('../providers/index.js');
+
+function makeCtx(
+  config: BernardConfig,
+  toolOptions: ToolOptions,
+  memoryStore: MemoryStore,
+  specialistStore: SpecialistStore,
+  opts: { rag?: any } = {},
+) {
+  return assembleContext({
+    config,
+    toolOptions,
+    rag: opts.rag,
+    stores: { memory: memoryStore, specialists: specialistStore },
+  });
+}
 
 function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
   return {
@@ -121,14 +137,18 @@ describe('specialist-run tool', () => {
   });
 
   it('has correct description and execute function', () => {
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     expect(tool).toBeDefined();
     expect(tool.description).toContain('specialist');
     expect(tool.execute).toBeDefined();
   });
 
   it('returns error when specialist not found', async () => {
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     const result = await tool.execute!(
       { specialistId: 'nonexistent', task: 'Do something' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -143,7 +163,9 @@ describe('specialist-run tool', () => {
     // Mock the specialist store to return our specialist
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     await tool.execute!(
       { specialistId: 'email-triage', task: 'Triage these emails' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -163,7 +185,9 @@ describe('specialist-run tool', () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     await tool.execute!(
       {
         specialistId: 'email-triage',
@@ -181,7 +205,9 @@ describe('specialist-run tool', () => {
     mockGenerateText.mockResolvedValue({ text: 'Email triage complete: 3 urgent, 5 normal' });
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     const result = await tool.execute!(
       { specialistId: 'email-triage', task: 'Triage emails' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -194,7 +220,9 @@ describe('specialist-run tool', () => {
     mockGenerateText.mockRejectedValue(new Error('API rate limit'));
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     const result = await tool.execute!(
       { specialistId: 'email-triage', task: 'Triage emails' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -213,7 +241,9 @@ describe('specialist-run tool', () => {
         }),
     );
 
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     const execOptions = { toolCallId: '1', messages: [], abortSignal: undefined as any };
 
     // Start 4 concurrent agents
@@ -238,7 +268,9 @@ describe('specialist-run tool', () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     await tool.execute!(
       { specialistId: 'email-triage', task: 'Triage emails' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -251,7 +283,9 @@ describe('specialist-run tool', () => {
     mockGenerateText.mockRejectedValue(new Error('fail'));
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     await tool.execute!(
       { specialistId: 'email-triage', task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -264,7 +298,9 @@ describe('specialist-run tool', () => {
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
     const controller = new AbortController();
 
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     await tool.execute!(
       { specialistId: 'email-triage', task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: controller.signal },
@@ -278,7 +314,9 @@ describe('specialist-run tool', () => {
     const noGuidelinesSpec = { ...mockSpecialist, guidelines: [] };
     vi.spyOn(specialistStore, 'get').mockReturnValue(noGuidelinesSpec);
 
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     await tool.execute!(
       { specialistId: 'email-triage', task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -301,12 +339,9 @@ describe('specialist-run tool', () => {
     };
 
     const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-      undefined,
-      mockRagStore as any,
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore, {
+        rag: mockRagStore as any,
+      }),
     );
     await tool.execute!(
       { specialistId: 'email-triage', task: 'check preferences' },
@@ -326,12 +361,9 @@ describe('specialist-run tool', () => {
     };
 
     const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-      undefined,
-      mockRagStore as any,
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore, {
+        rag: mockRagStore as any,
+      }),
     );
     const result = await tool.execute!(
       { specialistId: 'email-triage', task: 'test' },
@@ -349,12 +381,9 @@ describe('specialist-run tool', () => {
     };
 
     const tool = createSpecialistRunTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      specialistStore,
-      undefined,
-      mockRagStore as any,
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore, {
+        rag: mockRagStore as any,
+      }),
     );
     await tool.execute!(
       { specialistId: 'email-triage', task: 'triage urgent emails' },
@@ -368,7 +397,9 @@ describe('specialist-run tool', () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     await tool.execute!(
       { specialistId: 'email-triage', task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -381,7 +412,9 @@ describe('specialist-run tool', () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-    const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
     await tool.execute!(
       { specialistId: 'email-triage', task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -397,7 +430,9 @@ describe('specialist-run tool', () => {
       vi.spyOn(specialistStore, 'get').mockReturnValue(specWithModel);
 
       const config = makeConfig({ xaiApiKey: 'xai-test' });
-      const tool = createSpecialistRunTool(config, toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(config, toolOptions, memoryStore, specialistStore),
+      );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -412,7 +447,9 @@ describe('specialist-run tool', () => {
       vi.spyOn(specialistStore, 'get').mockReturnValue(specWithModel);
 
       const config = makeConfig({ openaiApiKey: 'sk-openai', xaiApiKey: 'xai-test' });
-      const tool = createSpecialistRunTool(config, toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(config, toolOptions, memoryStore, specialistStore),
+      );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test', provider: 'openai', model: 'gpt-4o-mini' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -425,7 +462,9 @@ describe('specialist-run tool', () => {
       mockGenerateText.mockResolvedValue({ text: 'Done' });
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-      const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+      );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -442,7 +481,9 @@ describe('specialist-run tool', () => {
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
       const config = makeConfig(); // only has anthropicApiKey
-      const tool = createSpecialistRunTool(config, toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(config, toolOptions, memoryStore, specialistStore),
+      );
       const result = await tool.execute!(
         { specialistId: 'email-triage', task: 'test', provider: 'xai' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -461,7 +502,9 @@ describe('specialist-run tool', () => {
       vi.spyOn(specialistStore, 'get').mockReturnValue(specProviderOnly);
 
       const config = makeConfig({ xaiApiKey: 'xai-test' });
-      const tool = createSpecialistRunTool(config, toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(config, toolOptions, memoryStore, specialistStore),
+      );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -477,7 +520,9 @@ describe('specialist-run tool', () => {
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
       const config = makeConfig({ openaiApiKey: 'sk-openai' });
-      const tool = createSpecialistRunTool(config, toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(config, toolOptions, memoryStore, specialistStore),
+      );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test', provider: 'openai' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -496,7 +541,9 @@ describe('specialist-run tool', () => {
       vi.spyOn(specialistStore, 'get').mockReturnValue(specWithModel);
 
       const config = makeConfig(); // only has anthropicApiKey
-      const tool = createSpecialistRunTool(config, toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(config, toolOptions, memoryStore, specialistStore),
+      );
       const result = await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -511,7 +558,9 @@ describe('specialist-run tool', () => {
       mockGenerateText.mockResolvedValue({ text: 'Done' });
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-      const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+      );
       const result = await tool.execute!(
         { specialistId: 'email-triage', task: 'test', provider: '', model: '   ' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -526,7 +575,9 @@ describe('specialist-run tool', () => {
       const specWithBlankProvider = { ...mockSpecialist, provider: '', model: '' };
       vi.spyOn(specialistStore, 'get').mockReturnValue(specWithBlankProvider);
 
-      const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+      );
       const result = await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -550,7 +601,9 @@ describe('specialist-run tool', () => {
       });
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-      const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+      );
       const result = (await tool.execute!(
         { specialistId: 'email-triage', task: 'review the PR' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -567,7 +620,9 @@ describe('specialist-run tool', () => {
       mockGenerateText.mockResolvedValue({ text: '', steps: [] });
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-      const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+      );
       const result = (await tool.execute!(
         { specialistId: 'email-triage', task: 'noop' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -581,7 +636,9 @@ describe('specialist-run tool', () => {
       mockGenerateText.mockResolvedValue({ text: 'Done' });
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-      const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+      );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -608,10 +665,7 @@ describe('specialist-run tool', () => {
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
       const tool = createSpecialistRunTool(
-        makeConfig({ criticMode: false }),
-        toolOptions,
-        memoryStore,
-        specialistStore,
+        makeCtx(makeConfig({ criticMode: false }), toolOptions, memoryStore, specialistStore),
       );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'review' },
@@ -645,10 +699,7 @@ describe('specialist-run tool', () => {
       });
 
       const tool = createSpecialistRunTool(
-        makeConfig({ criticMode: true }),
-        toolOptions,
-        memoryStore,
-        specialistStore,
+        makeCtx(makeConfig({ criticMode: true }), toolOptions, memoryStore, specialistStore),
       );
       const result = (await tool.execute!(
         { specialistId: 'email-triage', task: 'review' },
@@ -684,10 +735,7 @@ describe('specialist-run tool', () => {
       });
 
       const tool = createSpecialistRunTool(
-        makeConfig({ criticMode: true }),
-        toolOptions,
-        memoryStore,
-        specialistStore,
+        makeCtx(makeConfig({ criticMode: true }), toolOptions, memoryStore, specialistStore),
       );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'review' },
@@ -716,7 +764,9 @@ describe('specialist-run tool', () => {
       mockGenerateText.mockResolvedValue({ text: 'Done' });
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
-      const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+      );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -734,10 +784,7 @@ describe('specialist-run tool', () => {
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
       const tool = createSpecialistRunTool(
-        makeConfig({ reactMode: true }),
-        toolOptions,
-        memoryStore,
-        specialistStore,
+        makeCtx(makeConfig({ reactMode: true }), toolOptions, memoryStore, specialistStore),
       );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
@@ -755,10 +802,7 @@ describe('specialist-run tool', () => {
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
       const offTool = createSpecialistRunTool(
-        makeConfig(),
-        toolOptions,
-        memoryStore,
-        specialistStore,
+        makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
       );
       await offTool.execute!(
         { specialistId: 'email-triage', task: 'test' },
@@ -769,10 +813,7 @@ describe('specialist-run tool', () => {
       mockGenerateText.mockClear();
 
       const onTool = createSpecialistRunTool(
-        makeConfig({ reactMode: true }),
-        toolOptions,
-        memoryStore,
-        specialistStore,
+        makeCtx(makeConfig({ reactMode: true }), toolOptions, memoryStore, specialistStore),
       );
       await onTool.execute!(
         { specialistId: 'email-triage', task: 'test' },
@@ -786,10 +827,7 @@ describe('specialist-run tool', () => {
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
       const tool = createSpecialistRunTool(
-        makeConfig({ reactMode: true }),
-        toolOptions,
-        memoryStore,
-        specialistStore,
+        makeCtx(makeConfig({ reactMode: true }), toolOptions, memoryStore, specialistStore),
       );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
@@ -824,10 +862,7 @@ describe('specialist-run tool', () => {
       });
 
       const tool = createSpecialistRunTool(
-        makeConfig({ reactMode: true }),
-        toolOptions,
-        memoryStore,
-        specialistStore,
+        makeCtx(makeConfig({ reactMode: true }), toolOptions, memoryStore, specialistStore),
       );
       const result = (await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
@@ -856,10 +891,7 @@ describe('specialist-run tool', () => {
       });
 
       const tool = createSpecialistRunTool(
-        makeConfig({ reactMode: true }),
-        toolOptions,
-        memoryStore,
-        specialistStore,
+        makeCtx(makeConfig({ reactMode: true }), toolOptions, memoryStore, specialistStore),
       );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
@@ -886,7 +918,9 @@ describe('specialist-run tool', () => {
         return { text: '', steps: [], response: { messages: [] } };
       });
 
-      const tool = createSpecialistRunTool(makeConfig(), toolOptions, memoryStore, specialistStore);
+      const tool = createSpecialistRunTool(
+        makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+      );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },

@@ -51,8 +51,24 @@ vi.mock('ai', async (importOriginal) => {
 
 import { createSubAgentTool, _resetSubAgentState } from './subagent.js';
 import { MemoryStore } from '../memory.js';
+import { assembleContext } from '../framework/context.js';
 
 const { getModelForConfig: mockGetModel } = await import('../providers/index.js');
+
+function makeCtx(
+  config: BernardConfig,
+  toolOptions: ToolOptions,
+  memoryStore: MemoryStore,
+  opts: { rag?: any; mcpTools?: any } = {},
+) {
+  return assembleContext({
+    config,
+    toolOptions,
+    rag: opts.rag,
+    mcp: opts.mcpTools ? { tools: opts.mcpTools } : undefined,
+    stores: { memory: memoryStore },
+  });
+}
 
 function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
   return {
@@ -89,7 +105,7 @@ describe('subagent tool', () => {
   });
 
   it('has correct description and execute function', () => {
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     expect(agentTool).toBeDefined();
     expect(agentTool.description).toContain('sub-agent');
     expect(agentTool.description).toContain('self-contained');
@@ -98,7 +114,7 @@ describe('subagent tool', () => {
 
   it('calls generateText with task in messages and proportional maxSteps', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await agentTool.execute!(
       { task: 'List files' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -111,7 +127,7 @@ describe('subagent tool', () => {
 
   it('uses the correct model from config', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -122,7 +138,7 @@ describe('subagent tool', () => {
 
   it('includes context in user message when provided', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await agentTool.execute!(
       { task: 'Analyze code', context: 'Focus on error handling' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -133,7 +149,7 @@ describe('subagent tool', () => {
 
   it('returns result.text on success with appended activity log', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Analysis complete: all good' });
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     const result = await agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -144,7 +160,7 @@ describe('subagent tool', () => {
 
   it('returns error string (not throw) on API failure', async () => {
     mockGenerateText.mockRejectedValue(new Error('API rate limit'));
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     const result = await agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -163,7 +179,7 @@ describe('subagent tool', () => {
         }),
     );
 
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     const execOptions = { toolCallId: '1', messages: [], abortSignal: undefined as any };
 
     // Start 4 concurrent agents
@@ -184,7 +200,7 @@ describe('subagent tool', () => {
   it('passes abortSignal to inner generateText', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     const controller = new AbortController();
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: controller.signal },
@@ -195,7 +211,7 @@ describe('subagent tool', () => {
 
   it('calls printSubAgentStart and printSubAgentEnd lifecycle hooks', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await agentTool.execute!(
       { task: 'List files' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -206,7 +222,7 @@ describe('subagent tool', () => {
 
   it('calls printSubAgentEnd even on error', async () => {
     mockGenerateText.mockRejectedValue(new Error('fail'));
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -216,7 +232,7 @@ describe('subagent tool', () => {
 
   it('assigns incrementing IDs to sub-agents', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     const execOptions = { toolCallId: '1', messages: [], abortSignal: undefined as any };
 
     await agentTool.execute!({ task: 'first' }, execOptions);
@@ -239,11 +255,7 @@ describe('subagent tool', () => {
     };
 
     const agentTool = createSubAgentTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      undefined,
-      mockRagStore as any,
+      makeCtx(makeConfig(), toolOptions, memoryStore, { rag: mockRagStore as any }),
     );
     await agentTool.execute!(
       { task: 'check preferences' },
@@ -262,7 +274,7 @@ describe('subagent tool', () => {
     vi.mocked(fs.readFileSync).mockReturnValue('dark mode enabled');
     memoryStore = new MemoryStore();
 
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -277,7 +289,7 @@ describe('subagent tool', () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     memoryStore.writeScratch('plan', 'step 1 done');
 
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -290,7 +302,7 @@ describe('subagent tool', () => {
 
   it('works without ragStore (graceful degradation)', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -308,11 +320,7 @@ describe('subagent tool', () => {
     };
 
     const agentTool = createSubAgentTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      undefined,
-      mockRagStore as any,
+      makeCtx(makeConfig(), toolOptions, memoryStore, { rag: mockRagStore as any }),
     );
     const result = await agentTool.execute!(
       { task: 'test' },
@@ -327,7 +335,7 @@ describe('subagent tool', () => {
 
   it('includes tool execution integrity rule in system prompt', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -340,7 +348,7 @@ describe('subagent tool', () => {
 
   it('includes error handling guidance prohibiting identical retries', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -351,7 +359,7 @@ describe('subagent tool', () => {
 
   it('includes eventual consistency guidance', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
-    const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await agentTool.execute!(
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -367,11 +375,7 @@ describe('subagent tool', () => {
     };
 
     const agentTool = createSubAgentTool(
-      makeConfig(),
-      toolOptions,
-      memoryStore,
-      undefined,
-      mockRagStore as any,
+      makeCtx(makeConfig(), toolOptions, memoryStore, { rag: mockRagStore as any }),
     );
     await agentTool.execute!(
       { task: 'check disk usage' },
@@ -385,7 +389,7 @@ describe('subagent tool', () => {
     it('uses override provider/model when specified', async () => {
       mockGenerateText.mockResolvedValue({ text: 'Done' });
       const config = makeConfig({ xaiApiKey: 'xai-test' });
-      const agentTool = createSubAgentTool(config, toolOptions, memoryStore);
+      const agentTool = createSubAgentTool(makeCtx(config, toolOptions, memoryStore));
       await agentTool.execute!(
         { task: 'test', provider: 'xai', model: 'grok-code-fast-1' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -396,7 +400,7 @@ describe('subagent tool', () => {
 
     it('falls back to global config when no override', async () => {
       mockGenerateText.mockResolvedValue({ text: 'Done' });
-      const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+      const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
       await agentTool.execute!(
         { task: 'test' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -412,7 +416,7 @@ describe('subagent tool', () => {
     it('uses provider default model when provider overridden but model not (avoids cross-provider mismatch)', async () => {
       mockGenerateText.mockResolvedValue({ text: 'Done' });
       const config = makeConfig({ xaiApiKey: 'xai-test' });
-      const agentTool = createSubAgentTool(config, toolOptions, memoryStore);
+      const agentTool = createSubAgentTool(makeCtx(config, toolOptions, memoryStore));
       await agentTool.execute!(
         { task: 'test', provider: 'xai' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -424,7 +428,7 @@ describe('subagent tool', () => {
     });
 
     it('returns error when override provider has no API key', async () => {
-      const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+      const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
       const result = await agentTool.execute!(
         { task: 'test', provider: 'xai' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -448,7 +452,7 @@ describe('subagent tool', () => {
         ],
       });
 
-      const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+      const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
       const result = (await agentTool.execute!(
         { task: 'review the PR' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -464,7 +468,7 @@ describe('subagent tool', () => {
     it('emits "(no tool calls)" when text and steps are both empty', async () => {
       mockGenerateText.mockResolvedValue({ text: '', steps: [] });
 
-      const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+      const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
       const result = (await agentTool.execute!(
         { task: 'noop' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },
@@ -477,7 +481,7 @@ describe('subagent tool', () => {
     it('forces a text-only final step via experimental_prepareStep', async () => {
       mockGenerateText.mockResolvedValue({ text: 'Done' });
 
-      const agentTool = createSubAgentTool(makeConfig(), toolOptions, memoryStore);
+      const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
       await agentTool.execute!(
         { task: 'test' },
         { toolCallId: '1', messages: [], abortSignal: undefined as any },

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildSystemPrompt, Agent } from './agent.js';
 import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
+import { assembleContext } from './framework/context.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
@@ -113,6 +114,15 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
 
 const toolOptions = { shellTimeout: 30000, confirmDangerous: async () => true };
 
+function makeAgent(config: BernardConfig, opts: any, store: MemoryStore): Agent {
+  const ctx = assembleContext({
+    config,
+    toolOptions: opts,
+    stores: { memory: store },
+  });
+  return new Agent(ctx);
+}
+
 describe('critic mode', () => {
   let store: MemoryStore;
 
@@ -163,7 +173,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 50, completionTokens: 20 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('Create a file');
 
       // Should have been called twice: main + critic
@@ -189,7 +199,7 @@ describe('critic mode', () => {
         usage: { promptTokens: 100, completionTokens: 50 },
       });
 
-      const agent = new Agent(makeConfig({ criticMode: false }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: false }), toolOptions, store);
       await agent.processInput('List files');
 
       expect(mockGenerateText).toHaveBeenCalledTimes(1);
@@ -203,7 +213,7 @@ describe('critic mode', () => {
         usage: { promptTokens: 100, completionTokens: 50 },
       });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('What is the meaning of life?');
 
       // Only one call — no critic needed
@@ -225,7 +235,7 @@ describe('critic mode', () => {
         })
         .mockRejectedValueOnce(new Error('API error'));
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       // Should not throw — critic failure is non-fatal
       await expect(agent.processInput('Say hi')).resolves.toBeUndefined();
     });
@@ -262,7 +272,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 50, completionTokens: 20 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('Do multi-step work');
 
       // Verify critic received all 3 tool calls in order
@@ -317,7 +327,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 50, completionTokens: 20 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       // Should not throw — the tr?.result guard handles undefined
       await expect(agent.processInput('Run commands')).resolves.toBeUndefined();
 
@@ -350,7 +360,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 50, completionTokens: 20 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('Generate long output');
 
       const criticCall = mockGenerateText.mock.calls[1][0];
@@ -385,7 +395,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 50, completionTokens: 20 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('Read big file');
 
       const criticCall = mockGenerateText.mock.calls[1][0];
@@ -416,7 +426,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 50, completionTokens: 20 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('Read big file');
 
       const criticCall = mockGenerateText.mock.calls[1][0];
@@ -451,7 +461,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 50, completionTokens: 20 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('Run many commands');
 
       const criticCall = mockGenerateText.mock.calls[1][0];
@@ -485,7 +495,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 50, completionTokens: 20 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('Run long command');
 
       const criticCall = mockGenerateText.mock.calls[1][0];
@@ -519,7 +529,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 50, completionTokens: 20 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('Do work');
 
       const criticCall = mockGenerateText.mock.calls[1][0];
@@ -555,7 +565,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 50, completionTokens: 20 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('list files');
 
       expect(mockVerdict).toHaveBeenCalledWith('VERDICT: PASS\nAll good.', undefined);
@@ -606,7 +616,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 50, completionTokens: 20 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('Create a file');
 
       // 4 calls: main + critic(WARN) + retry + critic(PASS)
@@ -650,7 +660,7 @@ describe('critic mode', () => {
         // 6. Critic FAIL (at max retries, loop exits)
         .mockResolvedValueOnce(makeCriticFail());
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('Do something');
 
       // 6 calls: main + critic + retry + critic + retry + critic
@@ -678,7 +688,7 @@ describe('critic mode', () => {
         // 2. Critic throws error
         .mockRejectedValueOnce(new Error('API error'));
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await expect(agent.processInput('Say hi')).resolves.toBeUndefined();
 
       // Only 2 calls: main + critic (errored)
@@ -709,7 +719,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 50, completionTokens: 20 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('List files');
 
       // 2 calls: main + critic(PASS)
@@ -746,7 +756,7 @@ describe('critic mode', () => {
           usage: { promptTokens: 120, completionTokens: 40 },
         });
 
-      const agent = new Agent(makeConfig({ criticMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ criticMode: true }), toolOptions, store);
       await agent.processInput('Do something');
 
       // 3 calls: main + critic(WARN) + retry(no tools, loop exits)

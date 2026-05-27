@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runCorrectionAgent, extractOutcome } from './correction.js';
 import type { RunCorrectionDeps } from './correction.js';
 import type { CorrectionCandidate } from './correction-candidates.js';
+import type { AgentContext } from './framework/context.js';
 
 vi.mock('./logger.js', () => ({ debugLog: vi.fn() }));
 vi.mock('./output.js', () => ({ printInfo: vi.fn() }));
@@ -12,14 +13,35 @@ vi.mock('./output.js', () => ({ printInfo: vi.fn() }));
 // Helpers
 // ---------------------------------------------------------------------------
 
-function createMockDeps(overrides?: Partial<RunCorrectionDeps>): RunCorrectionDeps {
-  return {
+type MockDeps = RunCorrectionDeps & {
+  specialistStore: { get: ReturnType<typeof vi.fn> };
+  correctionStore: { listPending: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> };
+};
+
+function createMockDeps(overrides?: Partial<RunCorrectionDeps>): MockDeps {
+  const specialistStore = { get: vi.fn() };
+  const correctionStore = {
+    listPending: vi.fn(() => [] as CorrectionCandidate[]),
+    update: vi.fn(),
+  };
+  const ctx: AgentContext = {
     config: {} as any,
     toolOptions: {} as any,
-    memoryStore: {} as any,
-    specialistStore: { get: vi.fn() } as any,
-    correctionStore: { listPending: vi.fn(() => []), update: vi.fn() } as any,
+    stores: {
+      memory: {} as any,
+      specialists: specialistStore as any,
+      correction: correctionStore as any,
+      routines: {} as any,
+      candidates: {} as any,
+      toolProfiles: {} as any,
+    },
+    mcp: { tools: {}, serverNames: [] },
+  };
+  return {
+    ctx,
     ...overrides,
+    specialistStore,
+    correctionStore,
   };
 }
 
@@ -116,7 +138,7 @@ describe('extractOutcome', () => {
 // ---------------------------------------------------------------------------
 
 describe('runCorrectionAgent', () => {
-  let deps: RunCorrectionDeps;
+  let deps: MockDeps;
 
   beforeEach(() => {
     vi.clearAllMocks();

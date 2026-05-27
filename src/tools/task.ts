@@ -1,7 +1,7 @@
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
 import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
-import { createTools, type ToolOptions } from './index.js';
+import { createTools } from './index.js';
 import { extractJsonBlock } from '../structured-output.js';
 import {
   printTaskStart,
@@ -14,9 +14,7 @@ import { debugLog } from '../logger.js';
 import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
 import { type BernardConfig, resolveProviderAndModel } from '../config.js';
-import type { MemoryStore } from '../memory.js';
-import type { RAGStore } from '../rag.js';
-import type { RoutineStore } from '../routines.js';
+import type { AgentContext } from '../framework/context.js';
 
 export const TASK_SYSTEM_PROMPT = `You are a task executor for Bernard, a CLI AI assistant. You have been given a focused, isolated task.
 
@@ -124,14 +122,13 @@ export function wrapTaskResult(text: string): TaskResult {
  * agent/task tools (preventing recursion). The final step forces text-only output
  * via `experimental_prepareStep` to ensure structured JSON is produced.
  */
-export function createTaskTool(
-  config: BernardConfig,
-  options: ToolOptions,
-  memoryStore: MemoryStore,
-  mcpTools?: Record<string, any>,
-  ragStore?: RAGStore,
-  routineStore?: RoutineStore,
-) {
+export function createTaskTool(ctx: AgentContext) {
+  const { config } = ctx;
+  const options = ctx.toolOptions;
+  const memoryStore = ctx.stores.memory;
+  const mcpTools = ctx.mcp.tools;
+  const ragStore = ctx.rag;
+  const routineStore = ctx.stores.routines;
   return tool({
     description:
       'Execute a focused, isolated task with structured JSON output {status, output, details?}. Tasks have no conversation history and a limited step budget. Use when you need a discrete, machine-readable result — especially during routine execution for chaining outcomes.',
