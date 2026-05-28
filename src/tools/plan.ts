@@ -11,14 +11,14 @@ const stepInputSchema = z.object({
     .min(1, 'description must not be empty')
     .max(STEP_FIELD_MAX, `description must be at most ${STEP_FIELD_MAX} characters`)
     .describe(
-      `What this step accomplishes. Single line of plain text — no embedded newlines, no code blocks. Keep under ${STEP_FIELD_MAX} characters; split long steps into multiple smaller steps.`,
+      `What this step accomplishes. Single line of plain text — no newlines (neither literal nor escaped as \\n), no code blocks. Keep under ${STEP_FIELD_MAX} characters; split long steps into multiple smaller steps.`,
     ),
   verification: z
     .string()
     .min(1, 'verification must not be empty')
     .max(STEP_FIELD_MAX, `verification must be at most ${STEP_FIELD_MAX} characters`)
     .describe(
-      `Concrete check that proves the step succeeded — a command to run, a file to read, a URL to GET, an output substring to look for. Must be observable, not subjective. Single line of plain text — no embedded newlines, no code blocks. Keep under ${STEP_FIELD_MAX} characters.`,
+      `Concrete check that proves the step succeeded — a command to run, a file to read, a URL to GET, an output substring to look for. Must be observable, not subjective. Single line of plain text — no newlines (neither literal nor escaped as \\n), no code blocks. Keep under ${STEP_FIELD_MAX} characters.`,
     ),
 });
 
@@ -43,8 +43,7 @@ export function createPlanTool(planStore: PlanStore) {
   };
 
   return tool({
-    description:
-      "Track and manage a structured plan for the current turn. Required in coordinator mode. Each step has a `verification` criterion (set at creation) describing how you'll prove it succeeded. Actions: 'create' seeds a plan with step objects {description, verification}; 'add' appends one such step; 'update' transitions a step's status; 'view' shows the plan. Marking 'done' requires `signoff` (attesting verification was performed). Marking 'cancelled' or 'error' requires `note` (the reason). The plan is visible to the user. Each `description` and `verification` must be a single line of plain text — no embedded newlines, no code blocks, no multi-paragraph prose. Keep each entry under ~400 characters; if a step needs more context, split it into multiple smaller steps.",
+    description: `Track and manage a structured plan for the current turn. Required in coordinator mode. Each step has a \`verification\` criterion (set at creation) describing how you'll prove it succeeded. Actions: 'create' seeds a plan with step objects {description, verification}; 'add' appends one such step; 'update' transitions a step's status; 'view' shows the plan. Marking 'done' requires \`signoff\` (attesting verification was performed). Marking 'cancelled' or 'error' requires \`note\` (the reason). The plan is visible to the user. Each \`description\` and \`verification\` must be a single line of plain text — no newlines (neither literal nor escaped as \\n), no code blocks, no multi-paragraph prose. Keep each entry under ${STEP_FIELD_MAX} characters; if a step needs more context, split it into multiple smaller steps.`,
     parameters: z.object({
       action: z.enum(['create', 'update', 'add', 'view']).describe('The action to perform'),
       steps: z
