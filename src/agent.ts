@@ -340,8 +340,18 @@ export class Agent {
               const baseSystem = iterOpts.systemSuffix
                 ? `${systemForEstimate}\n\n${iterOpts.systemSuffix}`
                 : systemForEstimate;
+              // Recompute context-message size from the live stores instead of
+              // reusing the preflight value. A tool may have written a memory
+              // or scratch entry between preflight and this retry; reusing
+              // `contextMsgChars` would under-count and leave the retry payload
+              // over the wire limit.
+              const retryContextMsgs = buildMainContextMessages(this.ctx, inputBase);
+              const retryContextMsgChars = retryContextMsgs.reduce(
+                (n, m) => n + (typeof m.content === 'string' ? m.content.length : 0),
+                0,
+              );
               const baseSystemPlusContext =
-                baseSystem + (contextMsgChars > 0 ? '\n'.repeat(contextMsgChars) : '');
+                baseSystem + (retryContextMsgChars > 0 ? '\n'.repeat(retryContextMsgChars) : '');
               this.history = emergencyTruncate(
                 this.history,
                 contextWindow * retryRatio,
