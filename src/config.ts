@@ -2,7 +2,7 @@ import * as dotenv from 'dotenv';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { PREFS_PATH, KEYS_PATH, ENV_PATH, LEGACY_DIR } from './paths.js';
-import { loadCustomProviders, type CustomProvider } from './custom-providers.js';
+import { loadCustomProviders, validateBaseURL, type CustomProvider } from './custom-providers.js';
 
 /** Resolved runtime configuration for a Bernard session. */
 export interface BernardConfig {
@@ -54,6 +54,13 @@ export interface BernardConfig {
   apiKeys?: Record<string, string>;
   /** Loaded snapshot of user-defined custom providers from `custom-providers.json`. */
   customProviders: Record<string, CustomProvider>;
+  /**
+   * One-shot override for the active built-in provider's endpoint URL.
+   * Only set when the user passes `--allow-provider-base-url` together with
+   * `--provider-base-url <url>` on the CLI. Never persisted; never read from
+   * env or preferences. See `bernard add-provider` for the persistent path.
+   */
+  providerBaseUrl?: string;
 }
 
 const DEFAULT_PROVIDER = 'anthropic';
@@ -640,7 +647,12 @@ export function defaultProviderErrorMessage(
  * @param overrides - Optional CLI-supplied provider/model that take highest priority.
  * @throws {Error} If the selected provider has no API key configured.
  */
-export function loadConfig(overrides?: { provider?: string; model?: string }): BernardConfig {
+export function loadConfig(overrides?: {
+  provider?: string;
+  model?: string;
+  providerBaseUrl?: string;
+  allowProviderBaseUrl?: boolean;
+}): BernardConfig {
   // Load .env from cwd first, then XDG config dir, then legacy ~/.bernard/
   const cwdEnv = path.join(process.cwd(), '.env');
   const legacyEnv = path.join(LEGACY_DIR, '.env');
@@ -765,6 +777,13 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
+  const providerBaseUrl = resolveProviderBaseUrl(
+    overrides?.providerBaseUrl,
+    overrides?.allowProviderBaseUrl,
+    provider,
+    customProviders,
+  );
+
   const config: BernardConfig = {
     provider,
     model,
@@ -788,10 +807,44 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     xaiApiKey: process.env.XAI_API_KEY,
     apiKeys: { ...storedKeys },
     customProviders,
+    providerBaseUrl,
   };
 
   validateConfig(config);
   return config;
+}
+
+/**
+ * Validates and resolves the provider base URL override.
+ *
+ * Returns the URL string when the override is active and valid, or `undefined`
+ * when no override is in play. Throws on misuse so the user sees the error at
+ * startup rather than encountering a surprise routing change mid-session.
+ */
+function resolveProviderBaseUrl(
+  url: string | undefined,
+  allow: boolean | undefined,
+  provider: string,
+  customProviders: Record<string, CustomProvider>,
+): string | undefined {
+  if (url === undefined) return undefined;
+  if (!allow) {
+    throw new Error(
+      '--provider-base-url requires the explicit opt-in flag --allow-provider-base-url. ' +
+        'This guard exists so a stray flag cannot silently re-route your provider traffic.',
+    );
+  }
+  const trimmed = url.trim();
+  const err = validateBaseURL(trimmed);
+  if (err) throw new Error(`--provider-base-url: ${err}`);
+  if (Object.hasOwn(customProviders, provider)) {
+    throw new Error(
+      `--provider-base-url cannot be combined with custom provider "${provider}" — ` +
+        `that provider already defines its own base URL. Either pick a built-in provider ` +
+        `(anthropic, openai, xai) or edit the custom provider with \`bernard add-provider\`.`,
+    );
+  }
+  return trimmed;
 }
 
 function validateConfig(config: BernardConfig): void {
