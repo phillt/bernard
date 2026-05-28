@@ -467,6 +467,111 @@ describe('loadConfig', () => {
   });
 });
 
+describe('loadConfig providerBaseUrl override', () => {
+  beforeEach(() => {
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    vi.stubEnv('OPENAI_API_KEY', 'sk-openai-test');
+    vi.stubEnv('XAI_API_KEY', '');
+    vi.stubEnv('BERNARD_PROVIDER', '');
+    vi.stubEnv('BERNARD_MODEL', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('returns undefined when neither flag is supplied', () => {
+    const config = loadConfig({ provider: 'openai' });
+    expect(config.providerBaseUrl).toBeUndefined();
+  });
+
+  it('is a no-op when only --allow-provider-base-url is supplied (no URL)', () => {
+    const config = loadConfig({ provider: 'openai', allowProviderBaseUrl: true });
+    expect(config.providerBaseUrl).toBeUndefined();
+  });
+
+  it('rejects --provider-base-url without --allow-provider-base-url', () => {
+    expect(() =>
+      loadConfig({ provider: 'openai', providerBaseUrl: 'https://proxy.example/v1' }),
+    ).toThrow(/--allow-provider-base-url/);
+  });
+
+  it('rejects an empty URL even with opt-in', () => {
+    expect(() =>
+      loadConfig({
+        provider: 'openai',
+        providerBaseUrl: '',
+        allowProviderBaseUrl: true,
+      }),
+    ).toThrow(/--provider-base-url:/);
+  });
+
+  it('rejects a non-URL string', () => {
+    expect(() =>
+      loadConfig({
+        provider: 'openai',
+        providerBaseUrl: 'not-a-url',
+        allowProviderBaseUrl: true,
+      }),
+    ).toThrow(/not a valid URL/);
+  });
+
+  it('rejects a non-http(s) URL', () => {
+    expect(() =>
+      loadConfig({
+        provider: 'openai',
+        providerBaseUrl: 'ftp://proxy.example/v1',
+        allowProviderBaseUrl: true,
+      }),
+    ).toThrow(/http or https/);
+  });
+
+  it('accepts a valid URL and trims whitespace', () => {
+    const config = loadConfig({
+      provider: 'openai',
+      providerBaseUrl: '  https://proxy.example/v1  ',
+      allowProviderBaseUrl: true,
+    });
+    expect(config.providerBaseUrl).toBe('https://proxy.example/v1');
+  });
+
+  it('rejects the override when the active provider is custom', () => {
+    fsMock.readFileSync.mockImplementation((p: unknown) => {
+      if (typeof p === 'string' && p.endsWith('custom-providers.json')) {
+        return JSON.stringify({
+          providers: {
+            mygw: {
+              name: 'mygw',
+              sdk: 'openai',
+              baseURL: 'https://gw.example/v1',
+              defaultModel: 'gpt-4o',
+              models: ['gpt-4o'],
+              createdAt: '2026-01-01T00:00:00.000Z',
+              updatedAt: '2026-01-01T00:00:00.000Z',
+            },
+          },
+        });
+      }
+      if (typeof p === 'string' && p.endsWith('keys.json')) {
+        return JSON.stringify({ mygw: 'dummy' });
+      }
+      throw new Error('ENOENT');
+    });
+    expect(() =>
+      loadConfig({
+        provider: 'mygw',
+        providerBaseUrl: 'https://x.example/v1',
+        allowProviderBaseUrl: true,
+      }),
+    ).toThrow(/cannot be combined with custom provider/);
+  });
+});
+
 describe('saveOption', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(true);
