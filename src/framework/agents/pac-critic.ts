@@ -4,12 +4,13 @@ import { parseStructuredOutput } from '../../structured-output.js';
 import { createDateTimeTool } from '../../tools/datetime.js';
 import { createEvaluateTool } from '../../tools/evaluate.js';
 import { createFileTools } from '../../tools/file.js';
-import { createMemoryTool, createScratchTool } from '../../tools/memory.js';
 import { createWebReadTool } from '../../tools/web.js';
 import { createWebSearchTool } from '../../tools/web-search.js';
 import { toolToAISDK } from '../tools/adapter.js';
 import { outputHook } from '../hooks/output.js';
+import { createReadOnlyMemoryTool, createReadOnlyScratchTool } from '../pac/read-only-memory.js';
 import { NormalStrategy } from '../strategies/normal.js';
+import { makeLastStepTextOnly } from './task.js';
 import { SUBAGENT_STEP_RATIO } from './sub.js';
 import type { AgentDefinition } from './types.js';
 
@@ -65,8 +66,8 @@ function buildCriticTools(ctx: import('../context.js').AgentContext): Record<str
   const fileTools = createFileTools();
   return {
     evaluate: createEvaluateTool(),
-    memory: toolToAISDK(createMemoryTool(ctx.stores.memory)),
-    scratch: toolToAISDK(createScratchTool(ctx.stores.memory)),
+    memory: toolToAISDK(createReadOnlyMemoryTool(ctx.stores.memory)),
+    scratch: toolToAISDK(createReadOnlyScratchTool(ctx.stores.memory)),
     file_read_lines: fileTools.file_read_lines,
     web_search: createWebSearchTool(),
     web_read: createWebReadTool(),
@@ -93,7 +94,13 @@ export const pacCriticDefinition: AgentDefinition<PacCriticInput, PacCriticVerdi
   },
 
   stepBudget(config) {
-    return Math.max(2, Math.ceil(config.maxSteps * SUBAGENT_STEP_RATIO * PAC_CRITIC_STEP_FRACTION));
+    // Floor (not ceil) so the three phase budgets never sum above the legacy
+    // single-`sub` budget. Minimum 2 so the critic can call one tool and then
+    // emit its JSON verdict in a final text-only step.
+    return Math.max(
+      2,
+      Math.floor(config.maxSteps * SUBAGENT_STEP_RATIO * PAC_CRITIC_STEP_FRACTION),
+    );
   },
 
   buildUserMessage(input): CoreMessage {
@@ -101,14 +108,16 @@ export const pacCriticDefinition: AgentDefinition<PacCriticInput, PacCriticVerdi
     if (input.context) parts.push(`Context: ${input.context}`);
     parts.push(`Plan (from Planner):\n${input.plan}`);
     parts.push(`Actor's report:\n${input.actorOutput}`);
-    parts.push(
-      'Verify the success criteria. Emit your final JSON verdict per the format rules.',
-    );
+    parts.push('Verify the success criteria. Emit your final JSON verdict per the format rules.');
     return { role: 'user', content: parts.join('\n\n') };
   },
 
   hooks(_ctx, input) {
     return [outputHook(`sub:${input.slotId}/critic`)];
+  },
+
+  prepareStep(_ctx, _input, maxSteps) {
+    return makeLastStepTextOnly(maxSteps);
   },
 
   formatResult(result): PacCriticVerdict {
@@ -117,10 +126,13 @@ export const pacCriticDefinition: AgentDefinition<PacCriticInput, PacCriticVerdi
     if (parsed) {
       return { verdict: parsed.verdict, reason: parsed.reason, raw: text };
     }
-    // Fail-open: a flaky/unparseable critic must not block legitimate output.
+    // Fail-closed: an unparseable critic must not be treated as a silent pass,
+    // because that would defeat the whole verification phase. Surface it as a
+    // fail so `runPAC` either re-plans (if budget remains) or emits the FAIL
+    // footer to the parent agent.
     return {
-      verdict: 'pass',
-      reason: 'critic output unparseable; defaulting to pass',
+      verdict: 'fail',
+      reason: 'critic output unparseable; treating as fail',
       raw: text,
     };
   },

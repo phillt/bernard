@@ -2,13 +2,14 @@ import type { CoreMessage, Tool } from 'ai';
 import { buildMemoryContext } from '../../memory-context.js';
 import { createDateTimeTool } from '../../tools/datetime.js';
 import { createFileTools } from '../../tools/file.js';
-import { createMemoryTool, createScratchTool } from '../../tools/memory.js';
 import { createThinkTool } from '../../tools/think.js';
 import { createWebReadTool } from '../../tools/web.js';
 import { createWebSearchTool } from '../../tools/web-search.js';
 import { toolToAISDK } from '../tools/adapter.js';
 import { outputHook } from '../hooks/output.js';
+import { createReadOnlyMemoryTool, createReadOnlyScratchTool } from '../pac/read-only-memory.js';
 import { NormalStrategy } from '../strategies/normal.js';
+import { makeLastStepTextOnly } from './task.js';
 import { SUBAGENT_STEP_RATIO } from './sub.js';
 import type { AgentDefinition } from './types.js';
 
@@ -62,8 +63,8 @@ function buildPlannerTools(ctx: import('../context.js').AgentContext): Record<st
   const fileTools = createFileTools();
   return {
     think: createThinkTool(),
-    memory: toolToAISDK(createMemoryTool(ctx.stores.memory)),
-    scratch: toolToAISDK(createScratchTool(ctx.stores.memory)),
+    memory: toolToAISDK(createReadOnlyMemoryTool(ctx.stores.memory)),
+    scratch: toolToAISDK(createReadOnlyScratchTool(ctx.stores.memory)),
     file_read_lines: fileTools.file_read_lines,
     web_search: createWebSearchTool(),
     web_read: createWebReadTool(),
@@ -93,7 +94,13 @@ export const pacPlannerDefinition: AgentDefinition<PacPlannerInput, string> = {
   },
 
   stepBudget(config) {
-    return Math.max(2, Math.ceil(config.maxSteps * SUBAGENT_STEP_RATIO * PAC_PLANNER_STEP_FRACTION));
+    // Floor (not ceil) so the three phase budgets never sum above the legacy
+    // single-`sub` budget. Minimum 2 to leave room for one tool call + a final
+    // text step.
+    return Math.max(
+      2,
+      Math.floor(config.maxSteps * SUBAGENT_STEP_RATIO * PAC_PLANNER_STEP_FRACTION),
+    );
   },
 
   buildUserMessage(input): CoreMessage {
@@ -110,6 +117,10 @@ export const pacPlannerDefinition: AgentDefinition<PacPlannerInput, string> = {
 
   hooks(_ctx, input) {
     return [outputHook(`sub:${input.slotId}/plan`)];
+  },
+
+  prepareStep(_ctx, _input, maxSteps) {
+    return makeLastStepTextOnly(maxSteps);
   },
 
   formatResult(result) {

@@ -1,11 +1,10 @@
 import { definitions } from '../agents/registry.js';
 import { runDefinition, type RunDefinitionOpts } from '../agents/run.js';
 import type { AgentContext } from '../context.js';
-import type {
-  PacPlannerInput,
-} from '../agents/pac-planner.js';
+import type { PacPlannerInput } from '../agents/pac-planner.js';
 import type { PacActorInput } from '../agents/pac-actor.js';
 import type { PacCriticInput, PacCriticVerdict } from '../agents/pac-critic.js';
+import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from '../../tools/result-cap.js';
 
 /**
  * Maximum number of retry cycles after a Critic FAIL verdict. Each retry runs
@@ -105,7 +104,7 @@ export async function runPAC(
 
     if (verdict.verdict === 'pass') {
       return {
-        formatted: actorOutput,
+        formatted: capSubagentResult(actorOutput),
         verdict: 'pass',
         reason: verdict.reason,
         retries: attempt,
@@ -130,9 +129,15 @@ export async function runPAC(
     }
   }
 
+  // Build the FAIL footer first so we can reserve space for it inside the
+  // SUBAGENT_RESULT_MAX_CHARS budget. Otherwise an actor output at the cap
+  // would push the footer past the cap and downstream capping would silently
+  // truncate the FAIL signal away.
   const footer = `\n\n## Critic Verdict: FAIL\n${verdict.reason}`;
+  const bodyBudget = Math.max(0, SUBAGENT_RESULT_MAX_CHARS - footer.length);
+  const cappedBody = capSubagentResult(actorOutput, bodyBudget);
   return {
-    formatted: actorOutput + footer,
+    formatted: cappedBody + footer,
     verdict: 'fail',
     reason: verdict.reason,
     retries: PAC_MAX_RETRIES,

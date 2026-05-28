@@ -1,7 +1,6 @@
 import type { CoreMessage } from 'ai';
 import { buildMemoryContext } from '../../memory-context.js';
 import { debugLog } from '../../logger.js';
-import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
 import type { AgentContext } from '../context.js';
@@ -73,7 +72,10 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
   },
 
   stepBudget(config) {
-    return Math.max(3, Math.ceil(config.maxSteps * SUBAGENT_STEP_RATIO * PAC_ACTOR_STEP_FRACTION));
+    // Floor (not ceil) so the three phase budgets never sum above the legacy
+    // single-`sub` budget. Minimum 3 because the Actor needs room for tool
+    // calls plus a final report.
+    return Math.max(3, Math.floor(config.maxSteps * SUBAGENT_STEP_RATIO * PAC_ACTOR_STEP_FRACTION));
   },
 
   buildUserMessage(input): CoreMessage {
@@ -92,9 +94,11 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
   },
 
   formatResult(result) {
-    return capSubagentResult(
-      appendActivitySummary(result.text, result.steps as unknown[], 'subagent'),
-    );
+    // No cap here — `runPAC` owns the final cap so it can reserve room for the
+    // optional `## Critic Verdict: FAIL` footer. The full actor output is also
+    // what the Critic phase needs to verify against the plan's success
+    // criteria.
+    return appendActivitySummary(result.text, result.steps as unknown[], 'subagent');
   },
 };
 

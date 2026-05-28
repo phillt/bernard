@@ -30,7 +30,9 @@ interface CannedResponse {
   formatted: unknown;
 }
 
-function setupQueue(responses: CannedResponse[]): { calls: Array<{ defId: string; input: unknown }> } {
+function setupQueue(responses: CannedResponse[]): {
+  calls: Array<{ defId: string; input: unknown }>;
+} {
   const calls: Array<{ defId: string; input: unknown }> = [];
   let i = 0;
   runDefinitionMock.mockImplementation(async (_ctx, def, input) => {
