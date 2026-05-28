@@ -1,5 +1,6 @@
 import { dispatchToolWrapper, type ToolWrapperDeps } from './tool-wrapper-run.js';
 import { debugLog } from '../logger.js';
+import { preserveMeta } from '../framework/tools/adapter.js';
 
 /**
  * Builds the natural-language input handed to a wrapper specialist when the
@@ -85,7 +86,7 @@ export function wrapToolWithSpecialist<TArgs>(
     return baseTool;
   }
 
-  return {
+  const shim = {
     ...baseTool,
     execute: async (args: TArgs, execOptions: any): Promise<unknown> => {
       const specialist = deps.specialistStore.get(specialistId);
@@ -120,6 +121,9 @@ export function wrapToolWithSpecialist<TArgs>(
       }
     },
   };
+  // Object spread drops the non-enumerable `__bernardMeta` from baseTool —
+  // copy it onto the shim so downstream readers still see the tool's class.
+  return preserveMeta(shim, baseTool);
 }
 
 /**

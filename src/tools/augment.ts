@@ -1,7 +1,7 @@
 import { type ToolProfileStore, classifyShellCommand, detectToolError } from '../tool-profiles.js';
 import { debugLog } from '../logger.js';
 import { printInfo } from '../output.js';
-import { readBernardSource } from '../framework/tools/adapter.js';
+import { readBernardSource, preserveMeta } from '../framework/tools/adapter.js';
 import type { ToolResult } from '../framework/tools/types.js';
 
 /**
@@ -103,15 +103,55 @@ export function augmentTools(
       // execute (which returns a ToolResult envelope), record based on the
       // discriminator, then call serializeForModel to produce the bytes the
       // model sees — exactly what toolToAISDK would have done.
-      augmented[toolName] = {
+      augmented[toolName] = preserveMeta(
+        {
+          ...toolDef,
+          execute: async (args: unknown, execOptions: unknown) => {
+            let envelope: ToolResult<unknown>;
+            try {
+              envelope = await source.execute(args, execOptions as never);
+            } catch (thrown: unknown) {
+              // Infrastructure-level throws (reconnect, network, etc.) are not
+              // usage errors — don't record them as bad examples.
+              debugLog(
+                `augment:${toolName}:threw`,
+                thrown instanceof Error ? thrown.message : String(thrown),
+              );
+              throw thrown;
+            }
+
+            const profileKey = resolveProfileKey(toolName, args);
+            const argsSnippet = safeSerialize(args);
+            const errSnippet =
+              envelope.status === 'error'
+                ? `${envelope.error.message}${envelope.error.snippet ? `\n${envelope.error.snippet}` : ''}`.slice(
+                    0,
+                    200,
+                  )
+                : undefined;
+            setImmediate(() =>
+              recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet),
+            );
+
+            return source.serializeForModel(envelope);
+          },
+        },
+        toolDef,
+      );
+      continue;
+    }
+
+    // Legacy heuristic path for AI-SDK / MCP / dispatch tools that have not
+    // been migrated. Behavior is unchanged from pre-Phase-B.
+    const originalExecute = toolDef.execute;
+    augmented[toolName] = preserveMeta(
+      {
         ...toolDef,
         execute: async (args: unknown, execOptions: unknown) => {
-          let envelope: ToolResult<unknown>;
+          let result: unknown;
           try {
-            envelope = await source.execute(args, execOptions as never);
+            result = await originalExecute(args, execOptions);
           } catch (thrown: unknown) {
-            // Infrastructure-level throws (reconnect, network, etc.) are not
-            // usage errors — don't record them as bad examples.
             debugLog(
               `augment:${toolName}:threw`,
               thrown instanceof Error ? thrown.message : String(thrown),
@@ -121,56 +161,22 @@ export function augmentTools(
 
           const profileKey = resolveProfileKey(toolName, args);
           const argsSnippet = safeSerialize(args);
-          const errSnippet =
-            envelope.status === 'error'
-              ? `${envelope.error.message}${envelope.error.snippet ? `\n${envelope.error.snippet}` : ''}`.slice(
-                  0,
-                  200,
-                )
-              : undefined;
-          setImmediate(() =>
-            recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet),
-          );
+          const capturedResult = result;
+          setImmediate(() => {
+            try {
+              const errorInfo = detectToolError(toolName, capturedResult);
+              const errSnippet = errorInfo.isError ? errorInfo.snippet : undefined;
+              recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet);
+            } catch {
+              // detectToolError throws are swallowed; recording must never propagate.
+            }
+          });
 
-          return source.serializeForModel(envelope);
+          return result;
         },
-      };
-      continue;
-    }
-
-    // Legacy heuristic path for AI-SDK / MCP / dispatch tools that have not
-    // been migrated. Behavior is unchanged from pre-Phase-B.
-    const originalExecute = toolDef.execute;
-    augmented[toolName] = {
-      ...toolDef,
-      execute: async (args: unknown, execOptions: unknown) => {
-        let result: unknown;
-        try {
-          result = await originalExecute(args, execOptions);
-        } catch (thrown: unknown) {
-          debugLog(
-            `augment:${toolName}:threw`,
-            thrown instanceof Error ? thrown.message : String(thrown),
-          );
-          throw thrown;
-        }
-
-        const profileKey = resolveProfileKey(toolName, args);
-        const argsSnippet = safeSerialize(args);
-        const capturedResult = result;
-        setImmediate(() => {
-          try {
-            const errorInfo = detectToolError(toolName, capturedResult);
-            const errSnippet = errorInfo.isError ? errorInfo.snippet : undefined;
-            recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet);
-          } catch {
-            // detectToolError throws are swallowed; recording must never propagate.
-          }
-        });
-
-        return result;
       },
-    };
+      toolDef,
+    );
   }
 
   return augmented;

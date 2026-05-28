@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { CronNotesStore, MAX_NOTE_LENGTH } from './notes-store.js';
 import { formatEntryCompact } from '../tools/cron-notes.js';
 import { debugLog } from '../logger.js';
+import { attachMeta } from '../framework/tools/adapter.js';
 
 /**
  * Builds `cron_notes_read` and `cron_notes_write` tools pre-scoped to a single
@@ -15,38 +16,56 @@ export function createScopedCronNotesTools(
   jobId: string,
   runId: string,
 ) {
-  const scopedNotesRead = tool({
-    description:
-      'Read notes previously written for this cron job by prior runs. Call this before acting to avoid duplicate work.',
-    parameters: z.object({}),
-    execute: async (): Promise<string> => {
-      debugLog('cron_notes_read:scoped:execute', { jobId });
-      const notes = notesStore.read(jobId);
-      if (notes.entries.length === 0) {
-        return `No prior notes for this job.`;
-      }
-      const label = notes.entries.length === 1 ? 'entry' : 'entries';
-      const lines = notes.entries.map(formatEntryCompact);
-      return `Prior notes (${notes.entries.length} ${label}):\n${lines.join('\n')}`;
-    },
-  });
-
-  const scopedNotesWrite = tool({
-    description:
-      "Append a short factual note recording a significant action this run took (e.g. 'Sent email to user@example.com', 'Created issue #123'). Keep it to one line.",
-    parameters: z.object({
-      text: z
-        .string()
-        .min(1)
-        .max(MAX_NOTE_LENGTH)
-        .describe('Short factual description of the action'),
+  const scopedNotesRead = attachMeta(
+    tool({
+      description:
+        'Read notes previously written for this cron job by prior runs. Call this before acting to avoid duplicate work.',
+      parameters: z.object({}),
+      execute: async (): Promise<string> => {
+        debugLog('cron_notes_read:scoped:execute', { jobId });
+        const notes = notesStore.read(jobId);
+        if (notes.entries.length === 0) {
+          return `No prior notes for this job.`;
+        }
+        const label = notes.entries.length === 1 ? 'entry' : 'entries';
+        const lines = notes.entries.map(formatEntryCompact);
+        return `Prior notes (${notes.entries.length} ${label}):\n${lines.join('\n')}`;
+      },
     }),
-    execute: async ({ text }): Promise<string> => {
-      debugLog('cron_notes_write:scoped:execute', { jobId, runId, text });
-      notesStore.append(jobId, text, runId);
-      return `Note appended (run ${runId.slice(0, 8)}).`;
+    {
+      name: 'cron_notes_read',
+      kind: 'read',
+      deterministic: false,
+      sideEffect: 'local',
+      cacheable: false,
     },
-  });
+  );
+
+  const scopedNotesWrite = attachMeta(
+    tool({
+      description:
+        "Append a short factual note recording a significant action this run took (e.g. 'Sent email to user@example.com', 'Created issue #123'). Keep it to one line.",
+      parameters: z.object({
+        text: z
+          .string()
+          .min(1)
+          .max(MAX_NOTE_LENGTH)
+          .describe('Short factual description of the action'),
+      }),
+      execute: async ({ text }): Promise<string> => {
+        debugLog('cron_notes_write:scoped:execute', { jobId, runId, text });
+        notesStore.append(jobId, text, runId);
+        return `Note appended (run ${runId.slice(0, 8)}).`;
+      },
+    }),
+    {
+      name: 'cron_notes_write',
+      kind: 'write',
+      deterministic: false,
+      sideEffect: 'local',
+      cacheable: false,
+    },
+  );
 
   return {
     cron_notes_read: scopedNotesRead,
