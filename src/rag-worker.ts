@@ -64,7 +64,8 @@ async function main(): Promise<void> {
   try {
     const candidateStore = new CandidateStore();
     if (candidateStore.listPending().length < MAX_PENDING_CANDIDATES) {
-      const specialistStore = new SpecialistStore();
+      // Only calls .list() below — bundled seeding is the REPL's job (#163).
+      const specialistStore = new SpecialistStore({ seed: false });
       const candidate = await detectSpecialistCandidate(
         payload.serialized,
         config,

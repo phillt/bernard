@@ -7,6 +7,8 @@ import { MCPManager } from '../mcp.js';
 import { CronStore } from './store.js';
 import { CronLogStore, type CronLogStep } from './log-store.js';
 import { CronNotesStore } from './notes-store.js';
+import { SpecialistStore } from '../specialists.js';
+import { ToolProfileStore } from '../tool-profiles.js';
 import type { CronJob } from './types.js';
 import {
   definitions,
@@ -75,6 +77,13 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     },
     mcp: { tools: mcpTools, serverNames },
     rag: ragStore,
+    // Cron's agent definition only touches ctx.stores.memory (see src/framework/agents/cron.ts).
+    // Skip seeding for the two stores cron never uses so the daemon doesn't race the REPL on
+    // first-run bundled-specialist / tool-profile writes (issue #163).
+    stores: {
+      specialists: new SpecialistStore({ seed: false }),
+      toolProfiles: new ToolProfileStore({ seed: false }),
+    },
   });
 
   const logStore = new CronLogStore();
