@@ -349,8 +349,13 @@ describe('specialist-run tool', () => {
     );
 
     const call = mockGenerateText.mock.calls[0][0];
-    expect(call.system).toContain('Recalled Context');
-    expect(call.system).toContain('User prefers dark mode');
+    const ctx = (call.messages || [])
+      .filter((m: any) => m.role === 'user' && typeof m.content === 'string')
+      .map((m: any) => m.content)
+      .join('\n');
+    expect(ctx).toContain('<recalled_context>');
+    expect(ctx).toContain('User prefers dark mode');
+    expect(call.system).not.toContain('User prefers dark mode');
   });
 
   it('gracefully degrades when RAG search throws', async () => {

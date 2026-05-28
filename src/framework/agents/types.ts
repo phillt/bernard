@@ -75,6 +75,18 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
   /** Build the seed user message when no explicit `seedMessages` is provided. */
   buildUserMessage(input: TInput): CoreMessage;
 
+  /**
+   * Per-turn lower-privilege reference data prepended to the messages array
+   * each iterate call. Used to inject memory, RAG hits, scratch notes, MCP
+   * names, routine/specialist listings, resolved references, and alert
+   * context as a `role:'user'` `<system_provided_context>` message instead of
+   * stitching them into the SYSTEM prompt (see issue #172).
+   *
+   * Rebuilt on every iterate call — NOT persisted into the caller's history.
+   * Returning an empty array (or omitting the method) skips injection.
+   */
+  contextMessages?(ctx: AgentContext, input: TInput): Promise<CoreMessage[]> | CoreMessage[];
+
   /** Hooks composed onto onStepFinish (output, token-stats, cron-step-recorder, etc.). */
   hooks(ctx: AgentContext, input: TInput): AgentHook[];
 

@@ -1,5 +1,5 @@
 import type { CoreMessage } from 'ai';
-import { buildMemoryContext } from '../../memory-context.js';
+import { buildContextMessage } from '../../context-message.js';
 import { debugLog } from '../../logger.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
@@ -51,16 +51,18 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
   repairLabel: 'subagent',
   prefix: (input) => `sub:${input.slotId}/act`,
 
-  async systemPrompt(ctx, input) {
+  systemPrompt() {
+    return PAC_ACTOR_SYSTEM_PROMPT;
+  },
+
+  async contextMessages(ctx, input) {
     const ragResults = await searchRag(ctx, input.task);
-    return (
-      PAC_ACTOR_SYSTEM_PROMPT +
-      buildMemoryContext({
-        memoryStore: ctx.stores.memory,
-        ragResults,
-        includeScratch: true,
-      })
-    );
+    const msg = buildContextMessage({
+      memoryStore: ctx.stores.memory,
+      ragResults,
+      includeScratch: true,
+    });
+    return msg ? [msg] : [];
   },
 
   tools(ctx) {

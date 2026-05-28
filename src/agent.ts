@@ -12,6 +12,7 @@ import { runDefinition, registerBuiltinDefinitions } from './framework/agents/in
 import {
   mainAgentDefinition,
   buildMainSystemPrompt,
+  buildMainContextMessages,
   type MainInput,
 } from './framework/agents/main.js';
 import { type IterateFn } from './framework/strategies/index.js';
@@ -275,16 +276,37 @@ export class Agent {
       const input: MainInput = { ...inputBase, systemPrompt: systemForEstimate };
       const HARD_LIMIT_RATIO = 0.9;
       const contextWindow = getContextWindow(this.config.model, this.config.tokenWindow);
+      // The per-turn `<system_provided_context>` message is no longer in the
+      // SYSTEM prompt (issue #172) — account for it separately in the
+      // preflight estimate so token budgeting stays accurate.
+      const contextMsgsForEstimate = buildMainContextMessages(this.ctx, inputBase);
+      const contextMsgChars = contextMsgsForEstimate.reduce(
+        (n, m) => n + (typeof m.content === 'string' ? m.content.length : 0),
+        0,
+      );
       const effectiveSystemPromptChars =
         systemForEstimate.length +
+        contextMsgChars +
         (this.config.reactMode ? REACT_COORDINATOR_PROMPT.length + 2 : 0);
       const estimatedTokens =
         estimateHistoryTokens(this.history) + Math.ceil(effectiveSystemPromptChars / 4);
       const hardLimit = contextWindow * HARD_LIMIT_RATIO;
+      // `emergencyTruncate` deducts the length of its `systemPromptStr` arg
+      // from the available budget. Pass a string that includes both the
+      // SYSTEM prompt AND the per-turn context message, otherwise post-#172
+      // truncation under-counts by the context-message size and the resulting
+      // history can still exceed the wire-payload limit.
+      const systemPlusContextForBudget =
+        systemForEstimate + (contextMsgChars > 0 ? '\n'.repeat(contextMsgChars) : '');
       let preflightTruncated = false;
       if (estimatedTokens > hardLimit) {
         printInfo('Context approaching limit, emergency truncating...');
-        this.history = emergencyTruncate(this.history, hardLimit, systemForEstimate, userInput);
+        this.history = emergencyTruncate(
+          this.history,
+          hardLimit,
+          systemPlusContextForBudget,
+          userInput,
+        );
         preflightTruncated = true;
       }
 
@@ -313,13 +335,17 @@ export class Agent {
               printInfo('Context too large, truncating and retrying...');
               // Build the effective base system prompt the same way the inner
               // iterate would: `systemForEstimate` + optional strategy suffix.
+              // Also include the per-turn context-message size so the retry
+              // budget matches the actual wire payload (issue #172 follow-up).
               const baseSystem = iterOpts.systemSuffix
                 ? `${systemForEstimate}\n\n${iterOpts.systemSuffix}`
                 : systemForEstimate;
+              const baseSystemPlusContext =
+                baseSystem + (contextMsgChars > 0 ? '\n'.repeat(contextMsgChars) : '');
               this.history = emergencyTruncate(
                 this.history,
                 contextWindow * retryRatio,
-                baseSystem,
+                baseSystemPlusContext,
                 userInput,
               );
               result = await inner(innerOpts);

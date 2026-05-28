@@ -70,7 +70,7 @@ import { interactiveUpdate, getLocalVersion } from './update.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
-import { generateText } from 'ai';
+import { generateText, type CoreMessage } from 'ai';
 import {
   getModelForConfig,
   getModelProfile,
@@ -112,7 +112,7 @@ import {
   printWarning,
   setToolDetailsVisible,
 } from './output.js';
-import { buildMemoryContext } from './memory-context.js';
+import { buildContextMessage } from './context-message.js';
 import { debugLog } from './logger.js';
 import {
   loadImage,
@@ -1110,15 +1110,22 @@ export async function startRepl(
 
       const autoContext = `\n\nWorking directory: ${process.cwd()}\nAvailable tools: ${Object.keys(baseTools).join(', ')}`;
 
-      const systemPrompt =
-        TASK_SYSTEM_PROMPT +
-        autoContext +
-        buildMemoryContext({ memoryStore, ragResults, includeScratch: false });
+      // Memory/RAG moves to a lower-privilege user-role message (issue #172).
+      const systemPrompt = TASK_SYSTEM_PROMPT + autoContext;
+      const contextMsg = buildContextMessage({
+        memoryStore,
+        ragResults,
+        includeScratch: false,
+      });
 
       let userMessage = `Task: ${description}`;
       if (context) {
         userMessage += `\n\nAdditional context: ${context}`;
       }
+
+      const messagesPayload: CoreMessage[] = contextMsg
+        ? [contextMsg, { role: 'user', content: userMessage }]
+        : [{ role: 'user', content: userMessage }];
 
       const taskMaxSteps = getTaskMaxSteps(config);
       const result = await generateText({
@@ -1128,7 +1135,7 @@ export async function startRepl(
         maxSteps: taskMaxSteps,
         maxTokens: config.maxTokens,
         system: systemPrompt,
-        messages: [{ role: 'user', content: userMessage }],
+        messages: messagesPayload,
         abortSignal: taskAbortController.signal,
         experimental_prepareStep: makeLastStepTextOnly(taskMaxSteps),
         onStepFinish: ({ text, toolCalls, toolResults }) => {

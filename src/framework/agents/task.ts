@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { CoreMessage } from 'ai';
 import type { BernardConfig } from '../../config.js';
-import { buildMemoryContext } from '../../memory-context.js';
+import { buildContextMessage } from '../../context-message.js';
 import { debugLog } from '../../logger.js';
 import { extractJsonBlock } from '../../structured-output.js';
 import { createTools } from '../../tools/index.js';
@@ -131,19 +131,20 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
   historyMode: 'ephemeral',
   prefix: (input) => `task:${input.slotId}`,
 
-  async systemPrompt(ctx, input) {
+  systemPrompt(ctx) {
     const baseTools = createTools(ctx.toolOptions, ctx.stores.memory, ctx.mcp.tools);
     const autoContext = `\n\nWorking directory: ${process.cwd()}\nAvailable tools: ${Object.keys(baseTools).join(', ')}`;
+    return TASK_SYSTEM_PROMPT + autoContext;
+  },
+
+  async contextMessages(ctx, input) {
     const ragResults = await searchRag(ctx, input.task);
-    return (
-      TASK_SYSTEM_PROMPT +
-      autoContext +
-      buildMemoryContext({
-        memoryStore: ctx.stores.memory,
-        ragResults,
-        includeScratch: false,
-      })
-    );
+    const msg = buildContextMessage({
+      memoryStore: ctx.stores.memory,
+      ragResults,
+      includeScratch: false,
+    });
+    return msg ? [msg] : [];
   },
 
   tools(ctx) {

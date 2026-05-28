@@ -1,5 +1,5 @@
 import type { CoreMessage } from 'ai';
-import { buildMemoryContext } from '../../memory-context.js';
+import { buildContextMessage } from '../../context-message.js';
 import { debugLog } from '../../logger.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
@@ -56,16 +56,18 @@ export const subAgentDefinition: AgentDefinition<SubAgentInput, string> = {
   repairLabel: 'subagent',
   prefix: (input) => `sub:${input.slotId}`,
 
-  async systemPrompt(ctx, input) {
+  systemPrompt() {
+    return SUB_AGENT_SYSTEM_PROMPT;
+  },
+
+  async contextMessages(ctx, input) {
     const ragResults = await searchRag(ctx, input.task);
-    return (
-      SUB_AGENT_SYSTEM_PROMPT +
-      buildMemoryContext({
-        memoryStore: ctx.stores.memory,
-        ragResults,
-        includeScratch: true,
-      })
-    );
+    const msg = buildContextMessage({
+      memoryStore: ctx.stores.memory,
+      ragResults,
+      includeScratch: true,
+    });
+    return msg ? [msg] : [];
   },
 
   tools(ctx) {

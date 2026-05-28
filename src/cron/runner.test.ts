@@ -34,14 +34,23 @@ const mockMcpManager = vi.hoisted(() => ({
 
 let capturedTools: Record<string, any> = {};
 let capturedSystem: string = '';
+let capturedMessages: any[] = [];
 
 const mockGenerateText = vi.hoisted(() =>
   vi.fn().mockImplementation(async (opts: any) => {
     capturedTools = opts.tools || {};
     capturedSystem = opts.system || '';
+    capturedMessages = opts.messages || [];
     return { text: 'done', response: { messages: [] } };
   }),
 );
+
+function capturedContextText(): string {
+  return capturedMessages
+    .filter((m) => m.role === 'user' && typeof m.content === 'string')
+    .map((m) => m.content as string)
+    .join('\n');
+}
 
 vi.mock('ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('ai')>();
@@ -161,6 +170,7 @@ describe('runJob', () => {
     vi.clearAllMocks();
     capturedTools = {};
     capturedSystem = '';
+    capturedMessages = [];
     mockRagSearch.mockResolvedValue([]);
     mockMemoryStore.getAllMemoryContents.mockReturnValue(new Map());
     mockMemoryStore.getAllScratchContents.mockReturnValue(new Map());
@@ -211,35 +221,41 @@ describe('runJob', () => {
 
   // --- Memory/RAG injection tests ---
 
-  it('includes RAG context in daemon system prompt when ragEnabled', async () => {
+  it('includes RAG context in daemon context message when ragEnabled', async () => {
     mockRagSearch.mockResolvedValue([
       { fact: 'Server runs on port 3000', similarity: 0.9, domain: 'general' },
     ]);
 
     await runJob(testJob, vi.fn());
 
-    expect(capturedSystem).toContain('Recalled Context');
-    expect(capturedSystem).toContain('Server runs on port 3000');
+    const ctx = capturedContextText();
+    expect(ctx).toContain('<recalled_context>');
+    expect(ctx).toContain('Server runs on port 3000');
+    expect(capturedSystem).not.toContain('Server runs on port 3000');
   });
 
-  it('includes persistent memory in daemon system prompt', async () => {
+  it('includes persistent memory in daemon context message', async () => {
     mockMemoryStore.getAllMemoryContents.mockReturnValue(
       new Map([['project', 'uses vitest for testing']]),
     );
 
     await runJob(testJob, vi.fn());
 
-    expect(capturedSystem).toContain('Persistent Memory');
-    expect(capturedSystem).toContain('uses vitest for testing');
+    const ctx = capturedContextText();
+    expect(ctx).toContain('<persistent_memory>');
+    expect(ctx).toContain('uses vitest for testing');
+    expect(capturedSystem).not.toContain('uses vitest for testing');
   });
 
-  it('includes scratch notes in daemon system prompt', async () => {
+  it('includes scratch notes in daemon context message', async () => {
     mockMemoryStore.getAllScratchContents.mockReturnValue(new Map([['plan', 'step 1 done']]));
 
     await runJob(testJob, vi.fn());
 
-    expect(capturedSystem).toContain('Scratch Notes');
-    expect(capturedSystem).toContain('step 1 done');
+    const ctx = capturedContextText();
+    expect(ctx).toContain('<scratch_notes>');
+    expect(ctx).toContain('step 1 done');
+    expect(capturedSystem).not.toContain('step 1 done');
   });
 
   it('runs without RAG when ragEnabled is false', async () => {
@@ -257,7 +273,7 @@ describe('runJob', () => {
 
     expect(mockRagSearch).not.toHaveBeenCalled();
     expect(capturedSystem).toContain('daemon mode');
-    expect(capturedSystem).not.toContain('Recalled Context');
+    expect(capturedContextText()).not.toContain('<recalled_context>');
   });
 
   it('uses job prompt as RAG search query', async () => {
@@ -272,7 +288,7 @@ describe('runJob', () => {
     const result = await runJob(testJob, vi.fn());
 
     expect(result.success).toBe(true);
-    expect(capturedSystem).not.toContain('Recalled Context');
+    expect(capturedContextText()).not.toContain('<recalled_context>');
   });
 
   it('still contains base daemon prompt when memory context is added', async () => {
@@ -281,7 +297,7 @@ describe('runJob', () => {
     await runJob(testJob, vi.fn());
 
     expect(capturedSystem).toContain('daemon mode');
-    expect(capturedSystem).toContain('Recalled Context');
+    expect(capturedContextText()).toContain('<recalled_context>');
   });
 
   it('includes web_read, wait, time_range, and time_range_total in tools', async () => {
@@ -302,12 +318,15 @@ describe('runJob', () => {
     );
   });
 
-  it('includes connected MCP server names in system prompt', async () => {
+  it('includes connected MCP server names in context message', async () => {
     mockMcpManager.getConnectedServerNames.mockReturnValue(['email', 'calendar']);
 
     await runJob(testJob, vi.fn());
 
-    expect(capturedSystem).toContain('Connected MCP servers: email, calendar');
+    const ctx = capturedContextText();
+    expect(ctx).toContain('email');
+    expect(ctx).toContain('calendar');
+    expect(ctx).toContain('<connected_mcp_servers>');
   });
 
   it('includes tool execution integrity rules in system prompt', async () => {

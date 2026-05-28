@@ -1,7 +1,7 @@
 import type { CoreMessage, Tool } from 'ai';
 import { defaultProviderErrorMessage, resolveProviderAndModel } from '../../config.js';
 import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
-import { buildMemoryContext } from '../../memory-context.js';
+import { buildContextMessage } from '../../context-message.js';
 import { osPromptBlock } from '../../os-info.js';
 import {
   STRUCTURED_OUTPUT_RULES,
@@ -69,11 +69,6 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
     if (input.wantStructured) {
       systemPrompt += STRUCTURED_OUTPUT_RULES;
     }
-    systemPrompt += buildMemoryContext({
-      memoryStore: ctx.stores.memory,
-      ragResults: undefined,
-      includeScratch: true,
-    });
     if (Object.keys(input.childTools).length > 0) {
       systemPrompt += `\n\nAvailable tools for this run: ${Object.keys(input.childTools).join(', ')}`;
     } else {
@@ -81,6 +76,14 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
         '\n\nNo tools are available for this run. Produce the structured output based on reasoning alone.';
     }
     return systemPrompt;
+  },
+
+  contextMessages(ctx) {
+    const msg = buildContextMessage({
+      memoryStore: ctx.stores.memory,
+      includeScratch: true,
+    });
+    return msg ? [msg] : [];
   },
 
   tools(_ctx, input) {

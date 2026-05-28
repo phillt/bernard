@@ -1,6 +1,6 @@
 import { tool, type CoreMessage, type Tool } from 'ai';
 import { z } from 'zod';
-import { buildMemoryContext } from '../../memory-context.js';
+import { buildContextMessage } from '../../context-message.js';
 import { createShellTool } from '../../tools/shell.js';
 import { createMemoryTool, createScratchTool } from '../../tools/memory.js';
 import { createDateTimeTool, formatCurrentDateTime } from '../../tools/datetime.js';
@@ -99,19 +99,20 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
   historyMode: 'ephemeral',
   repairLabel: 'cron',
 
-  systemPrompt(ctx, input) {
-    let enrichedPrompt =
-      DAEMON_SYSTEM_PROMPT +
-      buildMemoryContext({
-        memoryStore: ctx.stores.memory,
-        ragResults: input.ragResults,
-        includeScratch: true,
-      });
-    enrichedPrompt += `\n\nCurrent date and time: ${formatCurrentDateTime()}`;
-    if (input.serverNames.length > 0) {
-      enrichedPrompt += `\nConnected MCP servers: ${input.serverNames.join(', ')}`;
-    }
-    return enrichedPrompt;
+  systemPrompt() {
+    // Memory/RAG/scratch/MCP names move to `contextMessages` (issue #172) —
+    // only static daemon guidance + the date/time stay in the SYSTEM prompt.
+    return `${DAEMON_SYSTEM_PROMPT}\n\nCurrent date and time: ${formatCurrentDateTime()}`;
+  },
+
+  contextMessages(ctx, input) {
+    const msg = buildContextMessage({
+      memoryStore: ctx.stores.memory,
+      ragResults: input.ragResults,
+      includeScratch: true,
+      mcpServerNames: input.serverNames,
+    });
+    return msg ? [msg] : [];
   },
 
   tools(ctx, input) {

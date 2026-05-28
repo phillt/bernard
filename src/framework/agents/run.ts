@@ -87,6 +87,16 @@ export async function runDefinition<TInput, TFormatted>(
           return () => arr;
         })();
 
+  // Per-turn lower-privilege context (issue #172). Resolved fresh on every
+  // iterate so memory updates / new RAG hits are reflected, and NOT persisted
+  // into the caller's history.
+  const getContextMessages = async (): Promise<CoreMessage[]> => {
+    if (!def.contextMessages) return [];
+    return Promise.resolve(def.contextMessages(ctx, input));
+  };
+
+  // `messages` here is a placeholder — `innerIterate` rebuilds the messages
+  // array on every call, so the seed alone is sufficient for the baseSpec.
   const baseSpec: AgentSpec = {
     model: resolved.model,
     providerOptions: resolved.providerOptions,
@@ -103,7 +113,9 @@ export async function runDefinition<TInput, TFormatted>(
 
   let stepLimitHit = false;
   const innerIterate: IterateFn = async (iterOpts: IterateOpts) => {
-    const messages = composeMessages(def.historyMode, getSeed(), iterOpts.extra);
+    const contextMsgs = await getContextMessages();
+    const seedWithContext = insertContextBeforeLastUser(contextMsgs, getSeed());
+    const messages = composeMessages(def.historyMode, seedWithContext, iterOpts.extra);
     const sysWithSuffix = iterOpts.systemSuffix ? `${system}\n\n${iterOpts.systemSuffix}` : system;
     const callMaxSteps = iterOpts.maxStepsOverride ?? baseMaxSteps;
     const r = await runAgent({
@@ -160,6 +172,32 @@ function resolveModel<TInput, TFormatted>(
     provider: resolution.provider,
     modelName: resolution.model,
   };
+}
+
+/**
+ * Inserts the per-turn `<system_provided_context>` message(s) immediately
+ * BEFORE the current (last) user message in the seed, rather than at index 0.
+ *
+ * For multi-turn persistent histories this matters: prepending at index 0
+ * would place metadata for the CURRENT turn (resolved references for the
+ * current question, fresh RAG hits, the latest alert context) ahead of every
+ * historical turn — temporally disconnected from the question it annotates.
+ * Inserting next to the current user message keeps the metadata adjacent to
+ * the turn it describes.
+ *
+ * If the seed contains no user message (unusual), falls back to prepending.
+ */
+function insertContextBeforeLastUser(
+  contextMsgs: CoreMessage[],
+  seed: CoreMessage[],
+): CoreMessage[] {
+  if (contextMsgs.length === 0) return seed;
+  for (let i = seed.length - 1; i >= 0; i--) {
+    if (seed[i].role === 'user') {
+      return [...seed.slice(0, i), ...contextMsgs, ...seed.slice(i)];
+    }
+  }
+  return [...contextMsgs, ...seed];
 }
 
 function composeMessages(
