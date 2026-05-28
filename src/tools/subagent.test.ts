@@ -191,7 +191,18 @@ describe('subagent tool', () => {
     expect(result).toContain('Maximum concurrent sub-agents');
     expect(result).toContain('4');
 
-    // Clean up pending promises
+    // Wait until all 4 prior calls have actually reached generateText. The
+    // dispatch wrapper has more async hops than the old inline runner, so the
+    // 5th can return its "Maximum concurrent" error before the prior 4 have
+    // pushed their resolvers — without this drain, cleanup is a no-op and the
+    // test hangs on Promise.all below.
+    // Bounded so a regression that prevents resolvers from being pushed (e.g.
+    // an exception inside one of the four prior `execute` calls) surfaces as
+    // an assertion failure here instead of a CI timeout.
+    for (let i = 0; i < 200 && resolvers.length < 4; i++) {
+      await new Promise((r) => setImmediate(r));
+    }
+    expect(resolvers.length).toBe(4);
     for (const r of resolvers) r({ text: 'done' });
     await Promise.all(promises);
   });

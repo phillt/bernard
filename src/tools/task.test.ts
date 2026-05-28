@@ -313,7 +313,16 @@ describe('task tool', () => {
     expect(parsed.status).toBe('error');
     expect(parsed.output).toContain('Maximum concurrent agents');
 
-    // Clean up
+    // Clean up — wait for all 4 in-flight tasks to reach the generateText
+    // call (they go through an extra async hop in runDefinition before
+    // pushing their resolver) before resolving.
+    // Bounded so a regression that prevents resolvers from being pushed (e.g.
+    // an exception inside one of the four prior `execute` calls) surfaces as
+    // an assertion failure here instead of a CI timeout.
+    for (let i = 0; i < 200 && resolvers.length < 4; i++) {
+      await new Promise((r) => setImmediate(r));
+    }
+    expect(resolvers.length).toBe(4);
     for (const r of resolvers) r({ text: '{"status":"success","output":"done"}' });
     await Promise.all(promises);
   });
