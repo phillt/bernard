@@ -56,7 +56,9 @@ interface FakeInput {
   text: string;
 }
 
-function fakeDefinition(over: Partial<AgentDefinition<FakeInput, string>> = {}): AgentDefinition<FakeInput, string> {
+function fakeDefinition(
+  over: Partial<AgentDefinition<FakeInput, string>> = {},
+): AgentDefinition<FakeInput, string> {
   return {
     id: 'fake',
     historyMode: 'ephemeral',
@@ -124,9 +126,14 @@ describe('runDefinition', () => {
     const def = fakeDefinition();
     const ctx = makeCtx();
     ctx.config = { ...ctx.config, openaiApiKey: 'sk-openai' } as BernardConfig;
-    const out = await runDefinition(ctx, def, { text: 'x' }, {
-      overrides: { provider: 'openai', model: 'gpt-4o-mini' },
-    });
+    const out = await runDefinition(
+      ctx,
+      def,
+      { text: 'x' },
+      {
+        overrides: { provider: 'openai', model: 'gpt-4o-mini' },
+      },
+    );
     expect(out.resolved.provider).toBe('openai');
     expect(out.resolved.modelName).toBe('gpt-4o-mini');
   });
@@ -173,10 +180,15 @@ describe('runDefinition wrapIterate + seedMessages getter', () => {
         finishReason: 'stop',
       });
 
-    await runDefinition(ctx, def, { text: 'x' }, {
-      seedMessages: () => history,
-      wrapIterate,
-    });
+    await runDefinition(
+      ctx,
+      def,
+      { text: 'x' },
+      {
+        seedMessages: () => history,
+        wrapIterate,
+      },
+    );
 
     expect(callCount).toBeGreaterThanOrEqual(1);
     // The wrap only calls inner once per outer call; the test asserts that the

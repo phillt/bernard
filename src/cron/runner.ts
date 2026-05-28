@@ -1,7 +1,7 @@
 import * as crypto from 'node:crypto';
 import { loadConfig } from '../config.js';
 import { assembleContext } from '../framework/context.js';
-import { RAGStore } from '../rag.js';
+import { RAGStore, type RAGSearchResult } from '../rag.js';
 import { debugLog } from '../logger.js';
 import { MCPManager } from '../mcp.js';
 import { CronStore } from './store.js';
@@ -9,7 +9,6 @@ import { CronLogStore, type CronLogStep } from './log-store.js';
 import { CronNotesStore } from './notes-store.js';
 import type { CronJob } from './types.js';
 import {
-  cronDefinition,
   definitions,
   registerBuiltinDefinitions,
   type CronInput,
@@ -86,7 +85,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
   const notesStore = new CronNotesStore();
 
   // RAG search using job prompt as query (same scoping as the previous inline runner).
-  let ragResults;
+  let ragResults: RAGSearchResult[] | undefined;
   if (ragStore) {
     try {
       ragResults = await ragStore.search(job.prompt);

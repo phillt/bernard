@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import {
-  definitions,
-  registerBuiltinDefinitions,
-} from '../index.js';
+import { definitions, registerBuiltinDefinitions } from '../index.js';
 
 /**
- * Drift detector for the seven kind-level agent definitions registered at
+ * Drift detector for the six kind-level agent definitions registered at
  * startup. Snapshots the stable fields (id, historyMode, repairLabel) so an
  * unintended addition / removal / renaming surfaces immediately. Per-instance
  * variation flows through TInput and is not snapshotted here.
+ *
+ * Correction is intentionally NOT a registered kind — it runs through
+ * `tool_wrapper_run` against the bundled `correction-agent` specialist.
  */
 describe('built-in agent definitions', () => {
   it('registers the expected six kinds with stable ids and history modes', () => {

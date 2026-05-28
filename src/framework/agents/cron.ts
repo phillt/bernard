@@ -14,6 +14,7 @@ import { CronNotesStore } from '../../cron/notes-store.js';
 import { createScopedCronNotesTools } from '../../cron/scoped-notes-tools.js';
 import { sendNotification } from '../../cron/notify.js';
 import type { CronJob } from '../../cron/types.js';
+import type { RAGSearchResult } from '../../rag.js';
 import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
 import { cronStepRecorderHook } from '../hooks/cron-step-recorder.js';
 import { NormalStrategy } from '../strategies/normal.js';
@@ -83,7 +84,7 @@ export interface CronInput {
   log: (msg: string) => void;
   serverNames: string[];
   mcpTools: Record<string, Tool>;
-  ragResults?: ReturnType<typeof JSON.parse>;
+  ragResults?: RAGSearchResult[];
 }
 
 /**

@@ -6,8 +6,10 @@ import type { AgentDefinition } from './types.js';
  * module and calls {@link DefinitionRegistry.register}.
  *
  * Entries are kind-level (`'main'`, `'sub'`, `'specialist'`, `'task'`,
- * `'tool-wrapper'`, `'cron'`, `'correction'`) — per-instance variation flows
- * through the definition's `TInput`, not through more registry entries.
+ * `'tool-wrapper'`, `'cron'`) — per-instance variation flows through the
+ * definition's `TInput`, not through more registry entries. Correction is not
+ * a registered kind; it runs through `tool_wrapper_run` against the bundled
+ * `correction-agent` specialist.
  */
 export class DefinitionRegistry {
   private readonly entries = new Map<string, AgentDefinition<any, any>>();
@@ -19,9 +21,7 @@ export class DefinitionRegistry {
     this.entries.set(def.id, def as AgentDefinition<any, any>);
   }
 
-  get<TInput = unknown, TFormatted = unknown>(
-    id: string,
-  ): AgentDefinition<TInput, TFormatted> {
+  get<TInput = unknown, TFormatted = unknown>(id: string): AgentDefinition<TInput, TFormatted> {
     const def = this.entries.get(id);
     if (!def) {
       throw new Error(

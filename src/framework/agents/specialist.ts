@@ -1,8 +1,5 @@
 import type { CoreMessage, Tool } from 'ai';
-import {
-  defaultProviderErrorMessage,
-  resolveProviderAndModel,
-} from '../../config.js';
+import { defaultProviderErrorMessage, resolveProviderAndModel } from '../../config.js';
 import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
 import { buildMemoryContext } from '../../memory-context.js';
 import { debugLog } from '../../logger.js';
@@ -72,8 +69,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     }
     let systemPrompt = specialist.systemPrompt;
     if (specialist.guidelines.length > 0) {
-      systemPrompt +=
-        '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
+      systemPrompt += '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
     }
     systemPrompt += SPECIALIST_EXECUTION_RULES;
     return ragEnrich(ctx, input, systemPrompt);
@@ -132,11 +128,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     });
     if (!resolution.ok) {
       throw new Error(
-        defaultProviderErrorMessage(
-          resolution.provider,
-          resolution.envVar,
-          resolution.isCustom,
-        ),
+        defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom),
       );
     }
     return {
@@ -170,10 +162,7 @@ async function ragEnrich(
         });
       }
     } catch (err) {
-      debugLog(
-        'specialist:rag:error',
-        err instanceof Error ? err.message : String(err),
-      );
+      debugLog('specialist:rag:error', err instanceof Error ? err.message : String(err));
     }
   }
   return (

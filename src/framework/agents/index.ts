@@ -15,16 +15,16 @@ import { subAgentDefinition } from './sub.js';
 import { taskDefinition } from './task.js';
 import { toolWrapperDefinition } from './tool-wrapper.js';
 
-export type {
-  AgentDefinition,
-  HistoryMode,
-  ModelOverrides,
-  ResolvedModel,
-} from './types.js';
+export type { AgentDefinition, HistoryMode, ModelOverrides, ResolvedModel } from './types.js';
 export { runDefinition } from './run.js';
 export type { RunDefinitionOpts, RunDefinitionResult } from './run.js';
 export { definitions, DefinitionRegistry } from './registry.js';
-export { subAgentDefinition, type SubAgentInput, SUB_AGENT_SYSTEM_PROMPT, SUBAGENT_STEP_RATIO } from './sub.js';
+export {
+  subAgentDefinition,
+  type SubAgentInput,
+  SUB_AGENT_SYSTEM_PROMPT,
+  SUBAGENT_STEP_RATIO,
+} from './sub.js';
 export {
   taskDefinition,
   type TaskInput,

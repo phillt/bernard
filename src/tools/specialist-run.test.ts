@@ -253,9 +253,13 @@ describe('specialist-run tool', () => {
     // Clean up — wait for all 4 in-flight specialists to reach the
     // generateText call (extra async hop through runDefinition) before
     // resolving them.
-    while (resolvers.length < 4) {
+    // Bounded so a regression that prevents resolvers from being pushed (e.g.
+    // an exception inside one of the four prior `execute` calls) surfaces as
+    // an assertion failure here instead of a CI timeout.
+    for (let i = 0; i < 200 && resolvers.length < 4; i++) {
       await new Promise((r) => setImmediate(r));
     }
+    expect(resolvers.length).toBe(4);
     for (const r of resolvers) r({ text: 'done' });
     await Promise.all(promises);
   });

@@ -1,19 +1,11 @@
 import type { CoreMessage } from 'ai';
-import {
-  defaultProviderErrorMessage,
-  resolveProviderAndModel,
-} from '../../config.js';
+import { defaultProviderErrorMessage, resolveProviderAndModel } from '../../config.js';
 import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
 import { makeRepairHook } from '../../tool-call-repair.js';
 import type { AgentContext } from '../context.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
-import type {
-  AgentDefinition,
-  HistoryMode,
-  ModelOverrides,
-  ResolvedModel,
-} from './types.js';
+import type { AgentDefinition, HistoryMode, ModelOverrides, ResolvedModel } from './types.js';
 
 export interface RunDefinitionOpts {
   abortSignal?: AbortSignal;
@@ -54,10 +46,12 @@ export interface RunDefinitionResult<TFormatted> {
  * Sole entry point for running an {@link AgentDefinition}. Assembles an
  * {@link AgentSpec} from `def` + `input` + `ctx`, dispatches the definition's
  * strategy with an `iterate` closure that respects `historyMode`, then applies
- * `def.formatResult` (with `resultCap` enforcement) to the final result.
+ * `def.formatResult` to the final result. Individual definitions enforce
+ * size caps (e.g. `capSubagentResult`) inline within their `formatResult`.
  *
- * Phase E note: all seven agent-loop sites — main agent, subagent, specialist,
- * task, tool-wrapper, cron, correction — fund this one function. Cross-cutting
+ * Phase E note: all six registered kinds — main agent, subagent, specialist,
+ * task, tool-wrapper, cron — fund this one function (correction reuses the
+ * tool-wrapper definition via `tool_wrapper_run`). Cross-cutting
  * changes (model selection, repair-hook wiring, abort handling, hook chain)
  * happen here, not at the call sites.
  */
@@ -110,9 +104,7 @@ export async function runDefinition<TInput, TFormatted>(
   let stepLimitHit = false;
   const innerIterate: IterateFn = async (iterOpts: IterateOpts) => {
     const messages = composeMessages(def.historyMode, getSeed(), iterOpts.extra);
-    const sysWithSuffix = iterOpts.systemSuffix
-      ? `${system}\n\n${iterOpts.systemSuffix}`
-      : system;
+    const sysWithSuffix = iterOpts.systemSuffix ? `${system}\n\n${iterOpts.systemSuffix}` : system;
     const callMaxSteps = iterOpts.maxStepsOverride ?? baseMaxSteps;
     const r = await runAgent({
       ...baseSpec,
@@ -159,11 +151,7 @@ function resolveModel<TInput, TFormatted>(
   });
   if (!resolution.ok) {
     throw new Error(
-      defaultProviderErrorMessage(
-        resolution.provider,
-        resolution.envVar,
-        resolution.isCustom,
-      ),
+      defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom),
     );
   }
   return {

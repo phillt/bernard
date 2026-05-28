@@ -9,7 +9,8 @@ import type { ExecutionStrategy } from '../strategies/types.js';
 /**
  * Whether the caller persists conversation history across runs (main agent) or
  * rebuilds the seed messages fresh each call (subagent, specialist, task,
- * tool-wrapper, cron, correction).
+ * tool-wrapper, cron). Correction runs route through `tool_wrapper_run` and
+ * therefore use the tool-wrapper definition rather than a dedicated kind.
  */
 export type HistoryMode = 'persistent' | 'ephemeral';
 
@@ -41,10 +42,12 @@ export interface ResolvedModel {
 }
 
 /**
- * Declarative description of one agent kind. Each kind (main, sub, specialist,
- * task, tool-wrapper, cron, correction) registers exactly one definition; per-
+ * Declarative description of one agent kind. Each registered kind (main, sub,
+ * specialist, task, tool-wrapper, cron) registers exactly one definition; per-
  * instance variation (specialist id, cron job, correction candidate) flows
- * through {@link TInput}, not through more registry entries.
+ * through {@link TInput}, not through more registry entries. Correction is not
+ * a registered kind — it runs through `tool_wrapper_run` against the bundled
+ * `correction-agent` specialist via the tool-wrapper definition.
  *
  * All methods receive {@link AgentContext} and the per-call {@link TInput} so
  * lookups against stores happen at dispatch time and runtime edits to e.g. a
@@ -80,11 +83,7 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
    * `{ model: getModelForConfig(config, p, m), providerOptions: ..., provider, modelName }`
    * where `p`/`m` honour {@link ModelOverrides} when supplied.
    */
-  resolveModel?(
-    ctx: AgentContext,
-    input: TInput,
-    overrides?: ModelOverrides,
-  ): ResolvedModel;
+  resolveModel?(ctx: AgentContext, input: TInput, overrides?: ModelOverrides): ResolvedModel;
 
   /**
    * Optional AI-SDK `experimental_prepareStep` hook (e.g. force text-only on
@@ -96,9 +95,6 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
     input: TInput,
     maxSteps: number,
   ): Parameters<typeof import('ai').generateText>[0]['experimental_prepareStep'];
-
-  /** Optional ceiling on the returned text length (applied inside `formatResult`). */
-  resultCap?: number;
 
   /**
    * Post-processing applied to the final `AgentResult`. Receives the raw result

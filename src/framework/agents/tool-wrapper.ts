@@ -1,8 +1,5 @@
 import type { CoreMessage, Tool } from 'ai';
-import {
-  defaultProviderErrorMessage,
-  resolveProviderAndModel,
-} from '../../config.js';
+import { defaultProviderErrorMessage, resolveProviderAndModel } from '../../config.js';
 import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
 import { buildMemoryContext } from '../../memory-context.js';
 import { osPromptBlock } from '../../os-info.js';
@@ -11,7 +8,6 @@ import {
   wrapWrapperResult,
   type WrapperResult,
 } from '../../structured-output.js';
-import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
 import type { AgentDefinition, ResolvedModel } from './types.js';
@@ -66,8 +62,7 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
     }
     let systemPrompt = specialist.systemPrompt;
     if (specialist.guidelines.length > 0) {
-      systemPrompt +=
-        '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
+      systemPrompt += '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
     }
     systemPrompt += '\n\n' + osPromptBlock();
     systemPrompt += formatExamples(specialist);
@@ -126,11 +121,7 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
     });
     if (!resolution.ok) {
       throw new Error(
-        defaultProviderErrorMessage(
-          resolution.provider,
-          resolution.envVar,
-          resolution.isCustom,
-        ),
+        defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom),
       );
     }
     return {

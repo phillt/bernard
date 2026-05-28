@@ -72,10 +72,15 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
 
       try {
         const def = definitions.get<SubAgentInput, string>('sub');
-        const { formatted } = await runDefinition(ctx, def, { task, context, slotId: id }, {
-          abortSignal: execOptions.abortSignal,
-          overrides: { provider: resolution.provider, model: resolution.model },
-        });
+        const { formatted } = await runDefinition(
+          ctx,
+          def,
+          { task, context, slotId: id },
+          {
+            abortSignal: execOptions.abortSignal,
+            overrides: { provider: resolution.provider, model: resolution.model },
+          },
+        );
         printSubAgentEnd(id);
         return formatted;
       } catch (err: unknown) {

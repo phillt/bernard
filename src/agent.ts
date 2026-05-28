@@ -8,10 +8,7 @@ import {
   clearPinnedRegion,
   type SpinnerStats,
 } from './output.js';
-import {
-  runDefinition,
-  registerBuiltinDefinitions,
-} from './framework/agents/index.js';
+import { runDefinition, registerBuiltinDefinitions } from './framework/agents/index.js';
 import {
   mainAgentDefinition,
   buildMainSystemPrompt,
@@ -295,103 +292,103 @@ export class Agent {
       // inner iterate: push strategy-supplied extras into persistent history,
       // recover from token-overflow API errors via emergency-truncate, and
       // auto-continue when the model truncates due to `maxTokens`.
-      const wrapIterate = (inner: IterateFn): IterateFn => async (iterOpts) => {
-        if (iterOpts.extra.length > 0) {
-          this.history.push(...iterOpts.extra);
-        }
-        // Already-pushed extras are visible via the seedMessages getter; pass
-        // `extra: []` so the inner iterate doesn't double-append.
-        const innerOpts = { ...iterOpts, extra: [] as CoreMessage[] };
+      const wrapIterate =
+        (inner: IterateFn): IterateFn =>
+        async (iterOpts) => {
+          if (iterOpts.extra.length > 0) {
+            this.history.push(...iterOpts.extra);
+          }
+          // Already-pushed extras are visible via the seedMessages getter; pass
+          // `extra: []` so the inner iterate doesn't double-append.
+          const innerOpts = { ...iterOpts, extra: [] as CoreMessage[] };
 
-        let result;
-        try {
-          result = await inner(innerOpts);
-        } catch (apiErr: unknown) {
-          if (this.abortController?.signal.aborted) throw apiErr;
-          const apiMessage = apiErr instanceof Error ? apiErr.message : String(apiErr);
-          if (isTokenOverflowError(apiMessage)) {
-            const retryRatio = preflightTruncated ? 0.6 : 0.8;
-            printInfo('Context too large, truncating and retrying...');
-            // Build the effective base system prompt the same way the inner
-            // iterate would: `systemForEstimate` + optional strategy suffix.
-            const baseSystem = iterOpts.systemSuffix
-              ? `${systemForEstimate}\n\n${iterOpts.systemSuffix}`
-              : systemForEstimate;
-            this.history = emergencyTruncate(
-              this.history,
-              contextWindow * retryRatio,
-              baseSystem,
-              userInput,
-            );
+          let result;
+          try {
             result = await inner(innerOpts);
-          } else {
-            throw apiErr;
-          }
-        }
-
-        const MAX_CONTINUATIONS = 3;
-        let continuations = 0;
-        let continuationTokens = 0;
-        const maxStepsForCall = iterOpts.maxStepsOverride ?? this.config.maxSteps;
-
-        while (result.finishReason === 'length' && continuations < MAX_CONTINUATIONS) {
-          if (this.abortController?.signal.aborted) break;
-          continuationTokens += result.usage?.completionTokens ?? 0;
-          continuations++;
-
-          printWarning(
-            `Response truncated (hit ${this.config.maxTokens} token limit). Auto-continuing... (${continuations}/${MAX_CONTINUATIONS})`,
-          );
-
-          const partialMessages = truncateToolResults(result.response.messages as CoreMessage[]);
-          this.history.push(...partialMessages);
-          this.history.push({
-            role: 'user' as const,
-            content:
-              '[Your previous response was cut off. Please continue exactly where you left off.]',
-          });
-
-          if (this.spinnerStats) {
-            startSpinner(() => buildSpinnerMessage(this.spinnerStats!));
+          } catch (apiErr: unknown) {
+            if (this.abortController?.signal.aborted) throw apiErr;
+            const apiMessage = apiErr instanceof Error ? apiErr.message : String(apiErr);
+            if (isTokenOverflowError(apiMessage)) {
+              const retryRatio = preflightTruncated ? 0.6 : 0.8;
+              printInfo('Context too large, truncating and retrying...');
+              // Build the effective base system prompt the same way the inner
+              // iterate would: `systemForEstimate` + optional strategy suffix.
+              const baseSystem = iterOpts.systemSuffix
+                ? `${systemForEstimate}\n\n${iterOpts.systemSuffix}`
+                : systemForEstimate;
+              this.history = emergencyTruncate(
+                this.history,
+                contextWindow * retryRatio,
+                baseSystem,
+                userInput,
+              );
+              result = await inner(innerOpts);
+            } else {
+              throw apiErr;
+            }
           }
 
-          result = await inner(innerOpts);
-        }
+          const MAX_CONTINUATIONS = 3;
+          let continuations = 0;
+          let continuationTokens = 0;
+          const maxStepsForCall = iterOpts.maxStepsOverride ?? this.config.maxSteps;
 
-        if (continuations > 0) {
-          const totalCompletionTokens = continuationTokens + (result.usage?.completionTokens ?? 0);
-          const recommended = Math.ceil((totalCompletionTokens * 1.25) / 1024) * 1024;
+          while (result.finishReason === 'length' && continuations < MAX_CONTINUATIONS) {
+            if (this.abortController?.signal.aborted) break;
+            continuationTokens += result.usage?.completionTokens ?? 0;
+            continuations++;
 
-          if (result.finishReason === 'length') {
             printWarning(
-              `Response still incomplete after ${MAX_CONTINUATIONS} continuations. ` +
-                `Increase the token limit: /options max-tokens ${recommended}`,
+              `Response truncated (hit ${this.config.maxTokens} token limit). Auto-continuing... (${continuations}/${MAX_CONTINUATIONS})`,
             );
-          } else {
-            printInfo(
-              `Tip: Response needed ~${totalCompletionTokens} tokens (limit: ${this.config.maxTokens}). ` +
-                `To avoid future truncation: /options max-tokens ${recommended}`,
-            );
+
+            const partialMessages = truncateToolResults(result.response.messages as CoreMessage[]);
+            this.history.push(...partialMessages);
+            this.history.push({
+              role: 'user' as const,
+              content:
+                '[Your previous response was cut off. Please continue exactly where you left off.]',
+            });
+
+            if (this.spinnerStats) {
+              startSpinner(() => buildSpinnerMessage(this.spinnerStats!));
+            }
+
+            result = await inner(innerOpts);
           }
-        }
 
-        if (
-          result.finishReason === 'tool-calls' &&
-          result.steps.length >= maxStepsForCall
-        ) {
-          this.lastStepLimitHit = true;
-          this.stepLimitHitCount++;
-          const msg =
-            this.stepLimitHitCount >= 2
-              ? `Stopped at loop limit of ${maxStepsForCall}. Use /options max-steps to adjust permanently.`
-              : `Stopped at loop limit of ${maxStepsForCall}.`;
-          printWarning(msg);
-        } else {
-          this.lastStepLimitHit = false;
-        }
+          if (continuations > 0) {
+            const totalCompletionTokens =
+              continuationTokens + (result.usage?.completionTokens ?? 0);
+            const recommended = Math.ceil((totalCompletionTokens * 1.25) / 1024) * 1024;
 
-        return result;
-      };
+            if (result.finishReason === 'length') {
+              printWarning(
+                `Response still incomplete after ${MAX_CONTINUATIONS} continuations. ` +
+                  `Increase the token limit: /options max-tokens ${recommended}`,
+              );
+            } else {
+              printInfo(
+                `Tip: Response needed ~${totalCompletionTokens} tokens (limit: ${this.config.maxTokens}). ` +
+                  `To avoid future truncation: /options max-tokens ${recommended}`,
+              );
+            }
+          }
+
+          if (result.finishReason === 'tool-calls' && result.steps.length >= maxStepsForCall) {
+            this.lastStepLimitHit = true;
+            this.stepLimitHitCount++;
+            const msg =
+              this.stepLimitHitCount >= 2
+                ? `Stopped at loop limit of ${maxStepsForCall}. Use /options max-steps to adjust permanently.`
+                : `Stopped at loop limit of ${maxStepsForCall}.`;
+            printWarning(msg);
+          } else {
+            this.lastStepLimitHit = false;
+          }
+
+          return result;
+        };
 
       let runOut;
       try {
@@ -450,4 +447,3 @@ export class Agent {
     this.lastStepLimitHit = false;
   }
 }
-
