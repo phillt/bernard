@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { SPECIALISTS_DIR } from './paths.js';
 import { RESERVED_NAMES } from './reserved-names.js';
-import { atomicWriteFileSync } from './fs-utils.js';
+import { atomicWriteFileSync, seedOnce } from './fs-utils.js';
 
 /** Specialist category. `persona` is the historical default; `tool-wrapper` specialists front a concrete tool or CLI; `meta` specialists operate on other specialists (e.g. specialist-creator, correction-agent). */
 export type SpecialistKind = 'persona' | 'tool-wrapper' | 'meta';
@@ -146,9 +146,9 @@ export function getBuiltinSpecialistIds(): Set<string> {
  * All writes use atomic rename to prevent partial-read corruption.
  */
 export class SpecialistStore {
-  constructor() {
+  constructor(opts?: { seed?: boolean }) {
     fs.mkdirSync(SPECIALISTS_DIR, { recursive: true });
-    this.seedBundledSpecialists();
+    if (opts?.seed !== false) this.seedBundledSpecialists();
   }
 
   /**
@@ -161,26 +161,26 @@ export class SpecialistStore {
    */
   private seedBundledSpecialists(): void {
     const markerPath = path.join(SPECIALISTS_DIR, SEED_MARKER);
-    if (fs.existsSync(markerPath)) return;
     const bundledDir = findBuiltinSpecialistsDir();
     if (!bundledDir) return;
 
     try {
-      const files = fs.readdirSync(bundledDir).filter((f) => f.endsWith('.json'));
-      for (const file of files) {
-        const src = path.join(bundledDir, file);
-        const dest = path.join(SPECIALISTS_DIR, file);
-        if (fs.existsSync(dest)) continue; // never overwrite user-edited copies
-        try {
-          const raw = fs.readFileSync(src, 'utf-8');
-          // Parse once to catch obviously corrupt bundle files before seeding.
-          JSON.parse(raw);
-          atomicWriteFileSync(dest, raw);
-        } catch {
-          // skip individual bad files; continue seeding the rest
+      seedOnce(markerPath, () => {
+        const files = fs.readdirSync(bundledDir).filter((f) => f.endsWith('.json'));
+        for (const file of files) {
+          const src = path.join(bundledDir, file);
+          const dest = path.join(SPECIALISTS_DIR, file);
+          if (fs.existsSync(dest)) continue; // never overwrite user-edited copies
+          try {
+            const raw = fs.readFileSync(src, 'utf-8');
+            // Parse once to catch obviously corrupt bundle files before seeding.
+            JSON.parse(raw);
+            atomicWriteFileSync(dest, raw);
+          } catch {
+            // skip individual bad files; continue seeding the rest
+          }
         }
-      }
-      fs.writeFileSync(markerPath, new Date().toISOString(), 'utf-8');
+      });
     } catch {
       // seed is best-effort; never block startup
     }

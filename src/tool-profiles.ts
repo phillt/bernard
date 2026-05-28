@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { TOOL_PROFILES_DIR } from './paths.js';
-import { atomicWriteFileSync } from './fs-utils.js';
+import { atomicWriteFileSync, seedOnce } from './fs-utils.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -210,9 +210,9 @@ const SEEDED_PROFILES: Record<string, Pick<ToolProfile, 'guidelines' | 'goodExam
 export class ToolProfileStore {
   private dirReady = false;
 
-  constructor() {
+  constructor(opts?: { seed?: boolean }) {
     this.ensureDir();
-    this.seedDefaults();
+    if (opts?.seed !== false) this.seedDefaults();
   }
 
   private ensureDir(): void {
@@ -316,25 +316,25 @@ export class ToolProfileStore {
 
   private seedDefaults(): void {
     const markerPath = path.join(TOOL_PROFILES_DIR, SEED_MARKER);
-    if (fs.existsSync(markerPath)) return;
 
     try {
-      const now = new Date().toISOString();
-      for (const [toolKey, seed] of Object.entries(SEEDED_PROFILES)) {
-        if (this.get(toolKey)) continue;
-        const profile: ToolProfile = {
-          toolName: toolKey,
-          guidelines: seed.guidelines,
-          goodExamples: seed.goodExamples,
-          badExamples: [],
-          createdAt: now,
-          updatedAt: now,
-          errorCount: 0,
-          successCount: 0,
-        };
-        this.save(profile);
-      }
-      fs.writeFileSync(markerPath, now, 'utf-8');
+      seedOnce(markerPath, () => {
+        const now = new Date().toISOString();
+        for (const [toolKey, seed] of Object.entries(SEEDED_PROFILES)) {
+          if (this.get(toolKey)) continue;
+          const profile: ToolProfile = {
+            toolName: toolKey,
+            guidelines: seed.guidelines,
+            goodExamples: seed.goodExamples,
+            badExamples: [],
+            createdAt: now,
+            updatedAt: now,
+            errorCount: 0,
+            successCount: 0,
+          };
+          this.save(profile);
+        }
+      });
     } catch {
       // best-effort; never block startup
     }

@@ -11,7 +11,17 @@ vi.mock('node:fs', () => ({
   renameSync: vi.fn(),
 }));
 
-vi.mock('./fs-utils.js', () => ({ atomicWriteFileSync: vi.fn() }));
+vi.mock('./fs-utils.js', async () => {
+  const fsMock = await import('node:fs');
+  return {
+    atomicWriteFileSync: vi.fn(),
+    seedOnce: vi.fn((markerPath: string, seedFn: () => void) => {
+      if (fsMock.existsSync(markerPath)) return;
+      seedFn();
+      fsMock.writeFileSync(markerPath, new Date().toISOString(), 'utf-8');
+    }),
+  };
+});
 
 const fs = await import('node:fs');
 const fsUtils = await import('./fs-utils.js');
