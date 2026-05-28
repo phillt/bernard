@@ -95,8 +95,29 @@ export function legacyTool(t: Tool, meta: ToolMeta): BernardTool<unknown, unknow
 }
 
 /**
- * Reads the metadata attached to a `Tool` by `toolToAISDK`. Returns
- * `undefined` for tools that did not pass through the adapter (legacy or MCP).
+ * Attaches Bernard meta to an existing AI-SDK `Tool` without wrapping its
+ * `execute` function. Use this to declare meta on tools whose factories
+ * already return a plain `tool({...})` from the AI SDK — cheaper than going
+ * through `legacyTool` + `toolToAISDK` when the envelope shape is irrelevant.
+ *
+ * Returns the same tool reference for fluent chaining.
+ */
+export function attachMeta<T extends Tool>(t: T, meta: ToolMeta): T {
+  Object.defineProperty(t, '__bernardMeta', {
+    value: meta,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return t;
+}
+
+/**
+ * Reads the metadata attached to a `Tool` by `toolToAISDK` or `attachMeta`.
+ * Returns `undefined` for tools that did not pass through either helper.
+ * Surfaces all `ToolMeta` fields verbatim — including the newer
+ * `deterministic`, `sideEffect`, `cacheable`, `cacheTtlMs`, `sensitiveArgs`,
+ * and `sensitiveResult` properties when present.
  */
 export function readToolMeta(t: unknown): ToolMeta | undefined {
   if (!t || typeof t !== 'object') return undefined;

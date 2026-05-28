@@ -1,29 +1,39 @@
 import { tool, type UserContent } from 'ai';
 import { z } from 'zod';
+import { attachMeta } from '../framework/tools/adapter.js';
 
 /** Regex matching the [ISO-8601] prefix produced by timestampUserMessage. */
 const TIMESTAMP_PREFIX_RE = /^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] /;
 
 /** Creates a tool that returns the current local date and time as a human-readable string. */
 export function createDateTimeTool() {
-  return tool({
-    description:
-      'Get the current date and time including hours and minutes. Timestamps are automatically attached to user messages, so use this only when you need a precise mid-turn timestamp (e.g., after a long-running tool call).',
-    parameters: z.object({}),
-    execute: async (): Promise<string> => {
-      const now = new Date();
-      return now.toLocaleString('en-US', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        second: '2-digit',
-        timeZoneName: 'short',
-      });
+  return attachMeta(
+    tool({
+      description:
+        'Get the current date and time including hours and minutes. Timestamps are automatically attached to user messages, so use this only when you need a precise mid-turn timestamp (e.g., after a long-running tool call).',
+      parameters: z.object({}),
+      execute: async (): Promise<string> => {
+        const now = new Date();
+        return now.toLocaleString('en-US', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          second: '2-digit',
+          timeZoneName: 'short',
+        });
+      },
+    }),
+    {
+      name: 'datetime',
+      kind: 'read',
+      deterministic: false,
+      sideEffect: 'none',
+      cacheable: false,
     },
-  });
+  );
 }
 
 /** Returns a human-readable date+time string for use in system prompts. */

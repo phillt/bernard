@@ -102,7 +102,14 @@ type ShellArgs = z.infer<typeof SHELL_PARAMETERS>;
  */
 export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, ShellResult> {
   return {
-    meta: { name: 'shell', kind: 'dangerous', category: 'shell' },
+    meta: {
+      name: 'shell',
+      kind: 'dangerous',
+      category: 'shell',
+      deterministic: false,
+      sideEffect: 'local',
+      cacheable: false,
+    },
     description: SHELL_DESCRIPTION,
     parameters: SHELL_PARAMETERS,
     execute: async ({ command }, execOptions) => {

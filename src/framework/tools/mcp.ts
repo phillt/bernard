@@ -25,6 +25,8 @@ export function wrapMCPTool(
     name,
     kind: 'inert',
     category: `mcp.${serverName}`,
+    deterministic: false,
+    sideEffect: 'external-api',
     ...metaOverride,
   };
 

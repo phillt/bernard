@@ -1,15 +1,50 @@
 import type { z } from 'zod';
 
 /**
+ * Side-effect classification for a tool invocation. Used together with
+ * `deterministic` to decide whether a tool's results are safe to cache.
+ *
+ * - `none`         — pure computation, no observable side effects.
+ * - `local`        — affects local filesystem, in-process state, or local services.
+ * - `network`      — issues network requests, but only to fetch data.
+ * - `external-api` — mutates state on a third-party service.
+ */
+export type ToolSideEffect = 'none' | 'local' | 'network' | 'external-api';
+
+/**
  * Standard tool metadata. `name` is the registry key; `kind` enables capability
  * filtering (e.g. `byMetadata({kind: 'read'})` for the reference-resolver lookup
  * pass). `category` mirrors today's `classifyShellCommand` grouping for
  * tool-profile organization.
+ *
+ * The remaining fields classify a tool by determinism, side effects, and
+ * sensitivity. They are all optional so legacy declarations continue to
+ * compile; the meta-coverage test enforces presence at runtime.
  */
 export interface ToolMeta {
   name: string;
   kind: 'read' | 'write' | 'dangerous' | 'inert';
   category?: string;
+  /** Same args always produce the same result. Required for caching. */
+  deterministic?: boolean;
+  /** What the tool touches when it runs. */
+  sideEffect?: ToolSideEffect;
+  /** Explicit opt-in for caching when sideEffect != 'none'. */
+  cacheable?: boolean;
+  /** Cache TTL in ms. 0 = indefinite. Defaults to 5 minutes when omitted. */
+  cacheTtlMs?: number;
+  /** Argument field names whose values should be redacted in logs/cache keys. */
+  sensitiveArgs?: string[];
+  /** When true, the tool's result is redacted in logs. */
+  sensitiveResult?: boolean;
+}
+
+/**
+ * A tool is cacheable iff it is deterministic AND either has no side effects
+ * or was explicitly opted in via `cacheable: true`.
+ */
+export function isCacheable(meta: ToolMeta): boolean {
+  return meta.deterministic === true && (meta.sideEffect === 'none' || meta.cacheable === true);
 }
 
 export type ToolErrorType = 'invalid_args' | 'exec_failed' | 'timeout' | 'cancelled' | 'unknown';

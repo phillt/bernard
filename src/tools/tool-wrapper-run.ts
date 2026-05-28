@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { createTools, type ToolOptions } from './index.js';
 import { createSubAgentTool } from './subagent.js';
 import { createTaskTool } from './task.js';
-import { toolToAISDK } from '../framework/tools/adapter.js';
+import { toolToAISDK, attachMeta, readToolMeta } from '../framework/tools/adapter.js';
+import { redactArgs, REDACTED } from '../framework/tools/redact.js';
 import { createSpecialistRunTool } from './specialist-run.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
@@ -57,8 +58,15 @@ export function captureLastToolCall(steps: any[] | undefined): string {
 
 /**
  * Builds a compact record of tool calls for the reasoning log.
+ *
+ * When a `toolRegistry` is provided, each call's args and result preview are
+ * scrubbed against the tool's `ToolMeta.sensitiveArgs` / `sensitiveResult`
+ * fields before persistence.
  */
-export function captureToolCalls(steps: any[] | undefined): Array<{
+export function captureToolCalls(
+  steps: any[] | undefined,
+  toolRegistry?: Record<string, unknown>,
+): Array<{
   tool: string;
   args: unknown;
   resultPreview: string;
@@ -71,11 +79,13 @@ export function captureToolCalls(steps: any[] | undefined): Array<{
     for (let i = 0; i < calls.length; i++) {
       const tc = calls[i];
       const tr = results[i];
+      const meta = toolRegistry ? readToolMeta(toolRegistry[tc.toolName]) : undefined;
       const resultText = tr?.result === undefined ? '' : String(tr.result);
+      const rawPreview = resultText.slice(0, 300);
       out.push({
         tool: tc.toolName,
-        args: tc.args,
-        resultPreview: resultText.slice(0, 300),
+        args: meta ? redactArgs(tc.args, meta.sensitiveArgs) : tc.args,
+        resultPreview: meta?.sensitiveResult ? REDACTED : rawPreview,
       });
     }
   }
@@ -268,7 +278,7 @@ export async function dispatchToolWrapper(
       ts: new Date().toISOString(),
       specialistId,
       input,
-      toolCalls: captureToolCalls(result.steps as any[]),
+      toolCalls: captureToolCalls(result.steps as any[], childTools),
       finalOutput: wrapped.result,
       status:
         wrapped.status === 'ok'
@@ -353,42 +363,51 @@ export function renderWrapperParentView(
  */
 export function createToolWrapperRunTool(ctx: AgentContext) {
   const deps = ctxToToolWrapperDeps(ctx);
-  return tool({
-    description:
-      'Dispatch to a saved tool-wrapper specialist that handles a concrete tool or CLI (e.g. shell-wrapper, file-wrapper). Returns JSON {status, result, error?}. Use this for tool-heavy operations where domain-specific examples and error handling reduce misuse. Also used to invoke meta specialists (specialist-creator, correction-agent).',
-    parameters: z.object({
-      specialistId: z
-        .string()
-        .describe(
-          'The ID of the tool-wrapper or meta specialist to invoke (e.g. "shell-wrapper").',
-        ),
-      input: z
-        .string()
-        .describe(
-          'The natural-language request to hand to the specialist. Be specific — the specialist has no prior context.',
-        ),
-      context: z
-        .string()
-        .optional()
-        .describe('Optional additional context (file paths, prior findings, constraints).'),
-      provider: z.string().optional().describe('Optional provider override for this invocation.'),
-      model: z.string().optional().describe('Optional model override for this invocation.'),
+  return attachMeta(
+    tool({
+      description:
+        'Dispatch to a saved tool-wrapper specialist that handles a concrete tool or CLI (e.g. shell-wrapper, file-wrapper). Returns JSON {status, result, error?}. Use this for tool-heavy operations where domain-specific examples and error handling reduce misuse. Also used to invoke meta specialists (specialist-creator, correction-agent).',
+      parameters: z.object({
+        specialistId: z
+          .string()
+          .describe(
+            'The ID of the tool-wrapper or meta specialist to invoke (e.g. "shell-wrapper").',
+          ),
+        input: z
+          .string()
+          .describe(
+            'The natural-language request to hand to the specialist. Be specific — the specialist has no prior context.',
+          ),
+        context: z
+          .string()
+          .optional()
+          .describe('Optional additional context (file paths, prior findings, constraints).'),
+        provider: z.string().optional().describe('Optional provider override for this invocation.'),
+        model: z.string().optional().describe('Optional model override for this invocation.'),
+      }),
+      execute: async ({ specialistId, input, context, provider, model }, execOptions) => {
+        const wrapped = await dispatchToolWrapper(
+          {
+            specialistId,
+            input,
+            context,
+            provider,
+            model,
+            abortSignal: execOptions.abortSignal,
+          },
+          deps,
+        );
+        return renderWrapperParentView(wrapped);
+      },
     }),
-    execute: async ({ specialistId, input, context, provider, model }, execOptions) => {
-      const wrapped = await dispatchToolWrapper(
-        {
-          specialistId,
-          input,
-          context,
-          provider,
-          model,
-          abortSignal: execOptions.abortSignal,
-        },
-        deps,
-      );
-      return renderWrapperParentView(wrapped);
+    {
+      name: 'tool_wrapper_run',
+      kind: 'write',
+      deterministic: false,
+      sideEffect: 'local',
+      cacheable: false,
     },
-  });
+  );
 }
 
 export { toolWrapperDefinition };

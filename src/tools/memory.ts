@@ -23,7 +23,13 @@ type MemoryArgs = z.infer<typeof MEMORY_PARAMETERS>;
  */
 export function createMemoryTool(memoryStore: MemoryStore): BernardTool<MemoryArgs, string> {
   return {
-    meta: { name: 'memory', kind: 'write' },
+    meta: {
+      name: 'memory',
+      kind: 'write',
+      deterministic: false,
+      sideEffect: 'local',
+      cacheable: false,
+    },
     description: `Persistent memory that survives across sessions. Use this to remember user preferences, project knowledge, or anything worth recalling later. Stored as files on disk at ${MEMORY_DIR}.`,
     parameters: MEMORY_PARAMETERS,
     execute: async ({ action, key, content }) => {
@@ -72,7 +78,13 @@ export function createMemoryTool(memoryStore: MemoryStore): BernardTool<MemoryAr
  */
 export function createScratchTool(memoryStore: MemoryStore): BernardTool<MemoryArgs, string> {
   return {
-    meta: { name: 'scratch', kind: 'write' },
+    meta: {
+      name: 'scratch',
+      kind: 'write',
+      deterministic: false,
+      sideEffect: 'local',
+      cacheable: false,
+    },
     description:
       'Session scratch notes for tracking complex task progress, intermediate findings, and working plans. These notes survive context compression but are discarded when the session ends. Use this to keep track of multi-step work within a single session.',
     parameters: MEMORY_PARAMETERS,

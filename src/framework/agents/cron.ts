@@ -85,6 +85,13 @@ export interface CronInput {
   serverNames: string[];
   mcpTools: Record<string, Tool>;
   ragResults?: RAGSearchResult[];
+  /**
+   * Mutable slot populated inside `tools()` so `hooks()` (which the framework
+   * invokes immediately after) can hand the same registry to
+   * `cronStepRecorderHook` for sensitive-arg redaction. The runner doesn't
+   * need to set this — `tools()` will.
+   */
+  toolRegistry?: Record<string, Tool>;
 }
 
 /**
@@ -166,7 +173,7 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
       confirmDangerous: async () => false,
     });
 
-    return {
+    const registry: Record<string, Tool> = {
       shell: toolToAISDK(shellTool),
       memory: toolToAISDK(createMemoryTool(memoryStore)),
       scratch: toolToAISDK(createScratchTool(memoryStore)),
@@ -179,6 +186,8 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
       ...createScopedCronNotesTools(notesStore, job.id, runId),
       ...mcpTools,
     };
+    input.toolRegistry = registry;
+    return registry;
   },
 
   strategy() {
@@ -194,7 +203,7 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
   },
 
   hooks(_ctx, input) {
-    return [cronStepRecorderHook(input.steps)];
+    return [cronStepRecorderHook(input.steps, input.toolRegistry)];
   },
 
   resolveModel(ctx): ResolvedModel {

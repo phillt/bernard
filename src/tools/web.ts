@@ -2,6 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { parse } from 'node-html-parser';
 import TurndownService from 'turndown';
+import { attachMeta } from '../framework/tools/adapter.js';
 
 /** CSS selectors for elements stripped before HTML-to-markdown conversion. */
 const STRIP_SELECTORS = [
@@ -35,103 +36,112 @@ const USER_AGENT =
  * Output is truncated to {@link MAX_OUTPUT_CHARS} characters.
  */
 export function createWebReadTool() {
-  return tool({
-    description:
-      'Fetch a web page by URL and return its content as markdown. Useful for reading documentation, articles, Stack Overflow answers, GitHub pages, or any URL.',
-    parameters: z.object({
-      url: z.string().describe('The URL to fetch (must start with http:// or https://)'),
-      selector: z
-        .string()
-        .optional()
-        .describe(
-          'Optional CSS selector to extract specific content (e.g., "article", "main", ".post-body")',
-        ),
-    }),
-    execute: async ({ url, selector }): Promise<string> => {
-      // Validate URL
-      if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        return 'Error: URL must start with http:// or https://';
-      }
-
-      let response: Response;
-      try {
-        response = await fetch(url, {
-          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-          headers: {
-            'User-Agent': USER_AGENT,
-            Accept: 'text/html',
-          },
-        });
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        return `Error: Failed to fetch URL — ${message}`;
-      }
-
-      if (!response.ok) {
-        return `Error: HTTP ${response.status} ${response.statusText}`;
-      }
-
-      const contentType = response.headers.get('content-type') || '';
-      if (
-        !contentType.includes('text/html') &&
-        !contentType.includes('text/plain') &&
-        !contentType.includes('application/xhtml')
-      ) {
-        return `Error: Non-HTML content type (${contentType}). This tool only reads web pages.`;
-      }
-
-      let html: string;
-      try {
-        const buffer = await response.arrayBuffer();
-        if (buffer.byteLength > MAX_HTML_BYTES) {
-          html = new TextDecoder().decode(buffer.slice(0, MAX_HTML_BYTES));
-        } else {
-          html = new TextDecoder().decode(buffer);
+  return attachMeta(
+    tool({
+      description:
+        'Fetch a web page by URL and return its content as markdown. Useful for reading documentation, articles, Stack Overflow answers, GitHub pages, or any URL.',
+      parameters: z.object({
+        url: z.string().describe('The URL to fetch (must start with http:// or https://)'),
+        selector: z
+          .string()
+          .optional()
+          .describe(
+            'Optional CSS selector to extract specific content (e.g., "article", "main", ".post-body")',
+          ),
+      }),
+      execute: async ({ url, selector }): Promise<string> => {
+        // Validate URL
+        if (!url.startsWith('http://') && !url.startsWith('https://')) {
+          return 'Error: URL must start with http:// or https://';
         }
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        return `Error: Failed to read response body — ${message}`;
-      }
 
-      const root = parse(html);
+        let response: Response;
+        try {
+          response = await fetch(url, {
+            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+            headers: {
+              'User-Agent': USER_AGENT,
+              Accept: 'text/html',
+            },
+          });
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          return `Error: Failed to fetch URL — ${message}`;
+        }
 
-      // Strip junk elements
-      for (const sel of STRIP_SELECTORS) {
-        root.querySelectorAll(sel).forEach((el) => el.remove());
-      }
+        if (!response.ok) {
+          return `Error: HTTP ${response.status} ${response.statusText}`;
+        }
 
-      // Get page title
-      const title = root.querySelector('title')?.text.trim() ?? '';
+        const contentType = response.headers.get('content-type') || '';
+        if (
+          !contentType.includes('text/html') &&
+          !contentType.includes('text/plain') &&
+          !contentType.includes('application/xhtml')
+        ) {
+          return `Error: Non-HTML content type (${contentType}). This tool only reads web pages.`;
+        }
 
-      // Select content
-      let content: string;
-      if (selector) {
-        const selected = root.querySelector(selector);
-        content = selected ? selected.innerHTML : root.innerHTML;
-      } else {
-        // Try common content containers, fall back to root
-        const body = root.querySelector('body');
-        content = body ? body.innerHTML : root.innerHTML;
-      }
+        let html: string;
+        try {
+          const buffer = await response.arrayBuffer();
+          if (buffer.byteLength > MAX_HTML_BYTES) {
+            html = new TextDecoder().decode(buffer.slice(0, MAX_HTML_BYTES));
+          } else {
+            html = new TextDecoder().decode(buffer);
+          }
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          return `Error: Failed to read response body — ${message}`;
+        }
 
-      // Convert to markdown
-      const turndown = new TurndownService({
-        headingStyle: 'atx',
-        codeBlockStyle: 'fenced',
-      });
-      let markdown = turndown.turndown(content);
+        const root = parse(html);
 
-      // Prepend title
-      if (title) {
-        markdown = `# ${title}\n\n${markdown}`;
-      }
+        // Strip junk elements
+        for (const sel of STRIP_SELECTORS) {
+          root.querySelectorAll(sel).forEach((el) => el.remove());
+        }
 
-      // Truncate
-      if (markdown.length > MAX_OUTPUT_CHARS) {
-        markdown = markdown.slice(0, MAX_OUTPUT_CHARS) + '\n\n… (truncated)';
-      }
+        // Get page title
+        const title = root.querySelector('title')?.text.trim() ?? '';
 
-      return markdown;
+        // Select content
+        let content: string;
+        if (selector) {
+          const selected = root.querySelector(selector);
+          content = selected ? selected.innerHTML : root.innerHTML;
+        } else {
+          // Try common content containers, fall back to root
+          const body = root.querySelector('body');
+          content = body ? body.innerHTML : root.innerHTML;
+        }
+
+        // Convert to markdown
+        const turndown = new TurndownService({
+          headingStyle: 'atx',
+          codeBlockStyle: 'fenced',
+        });
+        let markdown = turndown.turndown(content);
+
+        // Prepend title
+        if (title) {
+          markdown = `# ${title}\n\n${markdown}`;
+        }
+
+        // Truncate
+        if (markdown.length > MAX_OUTPUT_CHARS) {
+          markdown = markdown.slice(0, MAX_OUTPUT_CHARS) + '\n\n… (truncated)';
+        }
+
+        return markdown;
+      },
+    }),
+    {
+      name: 'web_read',
+      kind: 'read',
+      deterministic: false,
+      sideEffect: 'network',
+      cacheable: false,
     },
-  });
+  );
 }

@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { parse } from 'node-html-parser';
+import { attachMeta } from '../framework/tools/adapter.js';
 
 /** One search result. Kept minimal so the LLM can cheaply decide which URLs to `web_read`. */
 export interface SearchResult {
@@ -135,41 +136,50 @@ function formatResults(results: SearchResult[]): string {
  * without API keys.
  */
 export function createWebSearchTool() {
-  return tool({
-    description:
-      'Search the web and return a ranked list of {title, url, snippet} results. Use before web_read when you do not yet know the right URL. Provider chain: Brave → Tavily → DuckDuckGo (no API key required for the fallback).',
-    parameters: z.object({
-      query: z
-        .string()
-        .describe('The search query. Prefer specific phrasing over generic keywords.'),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(MAX_LIMIT)
-        .optional()
-        .describe(`Maximum results to return (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}).`),
-    }),
-    execute: async ({ query, limit }): Promise<string> => {
-      const cappedLimit = Math.min(Math.max(1, limit ?? DEFAULT_LIMIT), MAX_LIMIT);
-      const attempts: Array<[string, () => Promise<SearchResult[] | undefined>]> = [
-        ['brave', () => searchBrave(query, cappedLimit)],
-        ['tavily', () => searchTavily(query, cappedLimit)],
-        ['duckduckgo', () => searchDuckDuckGo(query, cappedLimit)],
-      ];
-      const failures: string[] = [];
-      for (const [name, fn] of attempts) {
-        const results = await fn();
-        if (results && results.length > 0) {
-          return `Provider: ${name}\n\n${formatResults(results)}`;
+  return attachMeta(
+    tool({
+      description:
+        'Search the web and return a ranked list of {title, url, snippet} results. Use before web_read when you do not yet know the right URL. Provider chain: Brave → Tavily → DuckDuckGo (no API key required for the fallback).',
+      parameters: z.object({
+        query: z
+          .string()
+          .describe('The search query. Prefer specific phrasing over generic keywords.'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_LIMIT)
+          .optional()
+          .describe(`Maximum results to return (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}).`),
+      }),
+      execute: async ({ query, limit }): Promise<string> => {
+        const cappedLimit = Math.min(Math.max(1, limit ?? DEFAULT_LIMIT), MAX_LIMIT);
+        const attempts: Array<[string, () => Promise<SearchResult[] | undefined>]> = [
+          ['brave', () => searchBrave(query, cappedLimit)],
+          ['tavily', () => searchTavily(query, cappedLimit)],
+          ['duckduckgo', () => searchDuckDuckGo(query, cappedLimit)],
+        ];
+        const failures: string[] = [];
+        for (const [name, fn] of attempts) {
+          const results = await fn();
+          if (results && results.length > 0) {
+            return `Provider: ${name}\n\n${formatResults(results)}`;
+          }
+          failures.push(name);
         }
-        failures.push(name);
-      }
-      return (
-        `web_search returned no results (tried: ${failures.join(', ')}). ` +
-        'If you know a likely documentation URL, call web_read directly. ' +
-        'To enable higher-quality search, set BRAVE_API_KEY or TAVILY_API_KEY.'
-      );
+        return (
+          `web_search returned no results (tried: ${failures.join(', ')}). ` +
+          'If you know a likely documentation URL, call web_read directly. ' +
+          'To enable higher-quality search, set BRAVE_API_KEY or TAVILY_API_KEY.'
+        );
+      },
+    }),
+    {
+      name: 'web_search',
+      kind: 'read',
+      deterministic: false,
+      sideEffect: 'network',
+      cacheable: false,
     },
-  });
+  );
 }
