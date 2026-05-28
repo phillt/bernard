@@ -1345,7 +1345,7 @@ export async function startRepl(
           config.provider,
           config.model,
           getLocalVersion(),
-          config.customProviders?.[config.provider]?.baseURL,
+          config.providerBaseUrl ?? config.customProviders?.[config.provider]?.baseURL,
         );
         printInfo('Conversation history and scratch notes cleared.');
         void prompt();
@@ -1583,6 +1583,10 @@ export async function startRepl(
                 config.apiKeys = { ...(config.apiKeys ?? {}), [added.entry.name]: added.apiKey };
                 config.provider = added.entry.name;
                 config.model = added.entry.defaultModel;
+                // Drop any session-scoped --provider-base-url override: a custom
+                // provider already defines its own baseURL, and re-applying the
+                // CLI override to a different provider would mis-route traffic.
+                config.providerBaseUrl = undefined;
                 savePreferences({
                   provider: config.provider,
                   model: config.model,
@@ -1598,6 +1602,11 @@ export async function startRepl(
             } else {
               config.provider = value;
               config.model = getDefaultModel(config.provider, customProviders);
+              // Drop the session-scoped --provider-base-url override. It was tied
+              // to whichever provider was active at launch; silently re-applying
+              // it to a different built-in (e.g. openai gateway → anthropic)
+              // would route Anthropic traffic through an OpenAI endpoint.
+              config.providerBaseUrl = undefined;
               savePreferences({
                 provider: config.provider,
                 model: config.model,

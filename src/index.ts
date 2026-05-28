@@ -51,6 +51,14 @@ program
   .option('-r, --resume', 'Resume the previous conversation')
   .option('--alert <id>', 'Open with cron alert context')
   .option('--tool-details', 'Show full tool call args and result output (default: hidden)')
+  .option(
+    '--allow-provider-base-url',
+    'Opt-in flag required to enable --provider-base-url for this session',
+  )
+  .option(
+    '--provider-base-url <url>',
+    "Override the active built-in provider's endpoint URL for this session (requires --allow-provider-base-url)",
+  )
   .action(async (opts) => {
     try {
       await runFirstTimeSetup();
@@ -58,6 +66,8 @@ program
       const config = loadConfig({
         provider: opts.provider,
         model: opts.model,
+        providerBaseUrl: opts.providerBaseUrl,
+        allowProviderBaseUrl: opts.allowProviderBaseUrl,
       });
 
       if (opts.toolDetails) config.toolDetails = true;
@@ -98,7 +108,7 @@ The user has been notified and this session is open for them to review and act o
         config.provider,
         config.model,
         getLocalVersion(),
-        config.customProviders?.[config.provider]?.baseURL,
+        config.providerBaseUrl ?? config.customProviders?.[config.provider]?.baseURL,
       );
       const prefs = loadPreferences();
       startupUpdateCheck(!!prefs.autoUpdate);

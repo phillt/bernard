@@ -100,7 +100,22 @@ export function getModelForConfig(
       apiKey,
     });
   }
+  // Built-in providers map 1:1 to SDK names; route through the factory path
+  // when the user has supplied a session-scoped base-URL override so the
+  // request actually hits the new endpoint instead of the vendor default.
+  if (config.providerBaseUrl && isBuiltinSdk(provider)) {
+    const apiKey = getProviderApiKey(config, provider) ?? '';
+    return getModel(provider, model, {
+      sdk: provider,
+      baseURL: config.providerBaseUrl,
+      apiKey,
+    });
+  }
   return getModel(provider, model);
+}
+
+function isBuiltinSdk(provider: string): provider is SupportedSdk {
+  return provider === 'anthropic' || provider === 'openai' || provider === 'xai';
 }
 
 // Disable OpenAI strict-schemas: MCP tools commonly emit JSON Schema features

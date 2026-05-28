@@ -146,6 +146,25 @@ When the active provider is custom, the welcome banner prints an extra `Endpoint
 
 Reserved names: `anthropic`, `openai`, `xai` (these are the built-ins). Custom-provider keys are stored in `keys.json` and are **not** read from environment variables.
 
+### One-shot Base URL Override
+
+For ephemeral routing — testing an OpenAI-compatible gateway, a staging endpoint, or an internal proxy without registering a custom provider — you can override a built-in provider's base URL for a single session:
+
+```bash
+bernard -p openai \
+  --allow-provider-base-url \
+  --provider-base-url https://proxy.company.internal/v1
+```
+
+Rules:
+
+- Both flags are required. Passing `--provider-base-url` without `--allow-provider-base-url` is rejected with a clear error. The opt-in guard exists so a stray flag (e.g. left in shell history) cannot silently re-route your traffic.
+- The URL must be `http://` or `https://`.
+- The override only applies to built-in providers (`anthropic`, `openai`, `xai`). Combining it with a custom provider is rejected — custom providers already define their own base URL, edit them with `bernard add-provider`.
+- The override is **not** persisted to preferences or env. It is in effect only for the process started with that command. For a durable named endpoint, use `bernard add-provider` instead.
+
+The welcome banner shows the overridden URL on the `Endpoint:` line so it's obvious which endpoint the session is talking to.
+
 ### Environment Variables
 
 Bernard loads `.env` from the current directory first, then falls back to `~/.bernard/.env`.
