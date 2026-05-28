@@ -87,4 +87,47 @@ describe('seedOnce', () => {
     expect(fs.existsSync(marker)).toBe(false);
     expect(fs.existsSync(lock)).toBe(false);
   });
+
+  it('retries after wait deadline if the lock ages past staleMs (e.g. crashed holder)', () => {
+    // Backdate the lock so it will look stale on the SECOND attempt — first
+    // attempt waits the full waitMs, second attempt finds it stale and reclaims.
+    fs.writeFileSync(lock, 'held-by-dead-process', 'utf-8');
+    const ageMs = 100;
+    const past = new Date(Date.now() - ageMs);
+    fs.utimesSync(lock, past, past);
+
+    let calls = 0;
+    seedOnce(
+      marker,
+      () => {
+        calls++;
+      },
+      { waitMs: 200, staleMs: 250, maxAttempts: 3 },
+    );
+    expect(calls).toBe(1);
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
+  it('fails open (no throw, no seed) when the lock stays held past maxAttempts', () => {
+    fs.writeFileSync(lock, 'held', 'utf-8');
+    let calls = 0;
+    expect(() =>
+      seedOnce(
+        marker,
+        () => {
+          calls++;
+        },
+        { waitMs: 50, staleMs: 60_000, maxAttempts: 2 },
+      ),
+    ).not.toThrow();
+    expect(calls).toBe(0);
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('writes the marker atomically (no .tmp left behind on success)', () => {
+    seedOnce(marker, () => {});
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(fs.existsSync(marker + '.tmp')).toBe(false);
+  });
 });
