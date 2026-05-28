@@ -70,6 +70,14 @@ function makeCtx(
   });
 }
 
+function messagesText(messages: any[] | undefined): string {
+  if (!Array.isArray(messages)) return '';
+  return messages
+    .filter((m) => m.role === 'user' && typeof m.content === 'string')
+    .map((m) => m.content as string)
+    .join('\n');
+}
+
 function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
   return {
     provider: 'anthropic',
@@ -273,11 +281,13 @@ describe('subagent tool', () => {
     );
 
     const call = mockGenerateText.mock.calls[0][0];
-    expect(call.system).toContain('Recalled Context');
-    expect(call.system).toContain('User prefers dark mode');
+    const ctx = messagesText(call.messages);
+    expect(ctx).toContain('<recalled_context>');
+    expect(ctx).toContain('User prefers dark mode');
+    expect(call.system).not.toContain('User prefers dark mode');
   });
 
-  it('includes persistent memory in system prompt', async () => {
+  it('includes persistent memory in context message', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     vi.mocked(fs.readdirSync).mockReturnValue(['prefs.md'] as any);
     vi.mocked(fs.existsSync).mockReturnValue(true);
@@ -291,11 +301,13 @@ describe('subagent tool', () => {
     );
 
     const call = mockGenerateText.mock.calls[0][0];
-    expect(call.system).toContain('Persistent Memory');
-    expect(call.system).toContain('dark mode enabled');
+    const ctx = messagesText(call.messages);
+    expect(ctx).toContain('<persistent_memory>');
+    expect(ctx).toContain('dark mode enabled');
+    expect(call.system).not.toContain('dark mode enabled');
   });
 
-  it('includes scratch notes in system prompt', async () => {
+  it('includes scratch notes in context message', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     memoryStore.writeScratch('plan', 'step 1 done');
 
@@ -306,8 +318,10 @@ describe('subagent tool', () => {
     );
 
     const call = mockGenerateText.mock.calls[0][0];
-    expect(call.system).toContain('Scratch Notes');
-    expect(call.system).toContain('step 1 done');
+    const ctx = messagesText(call.messages);
+    expect(ctx).toContain('<scratch_notes>');
+    expect(ctx).toContain('step 1 done');
+    expect(call.system).not.toContain('step 1 done');
   });
 
   it('works without ragStore (graceful degradation)', async () => {
@@ -320,7 +334,7 @@ describe('subagent tool', () => {
 
     const call = mockGenerateText.mock.calls[0][0];
     expect(call.system).toContain('sub-agent of Bernard');
-    expect(call.system).not.toContain('Recalled Context');
+    expect(messagesText(call.messages)).not.toContain('<recalled_context>');
   });
 
   it('gracefully degrades when RAG search throws', async () => {

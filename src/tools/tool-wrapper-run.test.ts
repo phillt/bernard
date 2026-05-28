@@ -43,10 +43,6 @@ vi.mock('../logger.js', () => ({
   debugLog: vi.fn(),
 }));
 
-vi.mock('../memory-context.js', () => ({
-  buildMemoryContext: vi.fn(() => ''),
-}));
-
 vi.mock('./agent-pool.js', async (importOriginal) => {
   const actual = (await importOriginal()) as any;
   return {
@@ -158,7 +154,10 @@ function createMockCorrectionStore() {
 }
 
 function createMockMemoryStore() {
-  return {} as any;
+  return {
+    getAllMemoryContents: vi.fn(() => new Map()),
+    getAllScratchContents: vi.fn(() => new Map()),
+  } as any;
 }
 
 function createMockOptions() {

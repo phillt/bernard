@@ -1,7 +1,7 @@
 import type { CoreMessage, Tool } from 'ai';
 import { defaultProviderErrorMessage, resolveProviderAndModel } from '../../config.js';
 import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
-import { buildMemoryContext } from '../../memory-context.js';
+import { buildContextMessage } from '../../context-message.js';
 import { debugLog } from '../../logger.js';
 import { PlanStore } from '../../plan-store.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
@@ -72,7 +72,17 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
       systemPrompt += '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
     }
     systemPrompt += SPECIALIST_EXECUTION_RULES;
-    return ragEnrich(ctx, input, systemPrompt);
+    return systemPrompt;
+  },
+
+  async contextMessages(ctx, input) {
+    const ragResults = await searchRagForSpecialist(ctx, input);
+    const msg = buildContextMessage({
+      memoryStore: ctx.stores.memory,
+      ragResults,
+      includeScratch: true,
+    });
+    return msg ? [msg] : [];
   },
 
   async tools(ctx, input) {
@@ -146,31 +156,19 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
   },
 };
 
-async function ragEnrich(
-  ctx: AgentContext,
-  input: SpecialistInput,
-  basePrompt: string,
-): Promise<string> {
-  let ragResults;
-  if (ctx.rag) {
-    try {
-      ragResults = await ctx.rag.search(input.task);
-      if (ragResults.length > 0) {
-        debugLog('specialist:rag', {
-          query: input.task.slice(0, 100),
-          results: ragResults.length,
-        });
-      }
-    } catch (err) {
-      debugLog('specialist:rag:error', err instanceof Error ? err.message : String(err));
+async function searchRagForSpecialist(ctx: AgentContext, input: SpecialistInput) {
+  if (!ctx.rag) return undefined;
+  try {
+    const ragResults = await ctx.rag.search(input.task);
+    if (ragResults.length > 0) {
+      debugLog('specialist:rag', {
+        query: input.task.slice(0, 100),
+        results: ragResults.length,
+      });
     }
+    return ragResults;
+  } catch (err) {
+    debugLog('specialist:rag:error', err instanceof Error ? err.message : String(err));
+    return undefined;
   }
-  return (
-    basePrompt +
-    buildMemoryContext({
-      memoryStore: ctx.stores.memory,
-      ragResults,
-      includeScratch: true,
-    })
-  );
 }

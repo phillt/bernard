@@ -19,6 +19,7 @@ import { buildToolProfilesPrompt } from '../../tool-profiles.js';
 import { getModelProfile } from '../../providers/index.js';
 import { buildSystemPrompt } from '../../agent-prompt.js';
 import { SHARE_REASONING_PROMPT, REASONING_FAMILIES } from '../../agent-prompt.js';
+import { buildContextMessage } from '../../context-message.js';
 import type { RAGSearchResult } from '../../rag.js';
 import type { RoutineSummary } from '../../routines.js';
 import type { SpecialistSummary } from '../../specialists.js';
@@ -60,33 +61,25 @@ export interface MainInput {
 }
 
 /**
- * Builds the system prompt for the main agent: `buildSystemPrompt` (base +
- * memory + RAG + routines + specialists + matches + resolved refs) plus
- * optional alertContext, model-profile systemSuffix, share-reasoning block,
- * and tool-profile usage block. Pure function — call once per turn.
+ * Builds the system prompt for the main agent: `buildSystemPrompt` (static
+ * base, MCP/routine/specialist guidance, date/time/provider) plus
+ * model-profile systemSuffix, share-reasoning block, and tool-profile usage
+ * block. All operator-controlled — no memory, RAG, scratch, MCP names,
+ * routine/specialist lists, resolved references, or alert context. Those
+ * are emitted via {@link buildMainContextMessages} as a separate user-role
+ * `<system_provided_context>` message (issue #172).
  *
- * `profile` is passed in (rather than looked up here) so that the Agent
- * class can share a single `getModelProfile(...)` call between
- * `profile.wrapUserMessage(...)` and this builder.
+ * Pure function — call once per turn. `profile` is passed in (rather than
+ * looked up here) so that the Agent class can share a single
+ * `getModelProfile(...)` call between `profile.wrapUserMessage(...)` and
+ * this builder.
  */
 export function buildMainSystemPrompt(
   ctx: AgentContext,
-  input: Omit<MainInput, 'systemPrompt'>,
+  _input: Omit<MainInput, 'systemPrompt'>,
   profile: ReturnType<typeof getModelProfile>,
 ): string {
-  let systemPrompt = buildSystemPrompt(
-    ctx.config,
-    ctx.stores.memory,
-    ctx.mcp.serverNames,
-    input.ragResults,
-    input.routineSummaries,
-    input.specialistSummaries,
-    input.specialistMatches,
-    input.resolvedReferences,
-  );
-  if (input.alertContext) {
-    systemPrompt += '\n\n' + input.alertContext;
-  }
+  let systemPrompt = buildSystemPrompt(ctx.config);
   if (profile.systemSuffix) {
     systemPrompt += '\n\n' + profile.systemSuffix;
   }
@@ -98,6 +91,30 @@ export function buildMainSystemPrompt(
     systemPrompt += '\n\n' + profilesBlock;
   }
   return systemPrompt;
+}
+
+/**
+ * Builds the lower-privilege per-turn context message for the main agent.
+ * Returns 0 or 1 `CoreMessage`. Used both as the value returned from
+ * `mainAgentDefinition.contextMessages` and (for the Agent class's preflight
+ * token estimate) so the count reflects the actual wire payload.
+ */
+export function buildMainContextMessages(
+  ctx: AgentContext,
+  input: Omit<MainInput, 'systemPrompt'>,
+): CoreMessage[] {
+  const msg = buildContextMessage({
+    memoryStore: ctx.stores.memory,
+    ragResults: input.ragResults,
+    includeScratch: true,
+    mcpServerNames: ctx.mcp.serverNames,
+    routineSummaries: input.routineSummaries,
+    specialistSummaries: input.specialistSummaries,
+    specialistMatches: input.specialistMatches,
+    resolvedReferences: input.resolvedReferences,
+    alertContext: input.alertContext,
+  });
+  return msg ? [msg] : [];
 }
 
 /**
@@ -122,6 +139,10 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     // passes it through `input.systemPrompt` so a single `getModelProfile`
     // call shapes both the preflight estimate and the actual `runAgent` call.
     return input.systemPrompt;
+  },
+
+  contextMessages(ctx, input) {
+    return buildMainContextMessages(ctx, input);
   },
 
   tools(ctx, input): Record<string, Tool> {

@@ -1,5 +1,5 @@
 import type { CoreMessage, Tool } from 'ai';
-import { buildMemoryContext } from '../../memory-context.js';
+import { buildContextMessage } from '../../context-message.js';
 import { createDateTimeTool } from '../../tools/datetime.js';
 import { createFileTools } from '../../tools/file.js';
 import { createThinkTool } from '../../tools/think.js';
@@ -78,11 +78,16 @@ export const pacPlannerDefinition: AgentDefinition<PacPlannerInput, string> = {
   repairLabel: 'subagent',
   prefix: (input) => `sub:${input.slotId}/plan`,
 
-  systemPrompt(ctx) {
-    return (
-      PAC_PLANNER_SYSTEM_PROMPT +
-      buildMemoryContext({ memoryStore: ctx.stores.memory, includeScratch: true })
-    );
+  systemPrompt() {
+    return PAC_PLANNER_SYSTEM_PROMPT;
+  },
+
+  contextMessages(ctx) {
+    const msg = buildContextMessage({
+      memoryStore: ctx.stores.memory,
+      includeScratch: true,
+    });
+    return msg ? [msg] : [];
   },
 
   tools(ctx) {
