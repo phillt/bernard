@@ -24,6 +24,8 @@ export interface BernardConfig {
   maxSteps: number;
   /** Whether coordinator (ReAct) mode is active for iterative reasoning with subagent delegation. */
   reactMode: boolean;
+  /** Whether sub-agent delegations run through the PAC (Planner → Actor → Critic) pipeline. */
+  subagentPac: boolean;
   /** Whether tool-call arguments and full tool result output are shown in the terminal. Tool names and call lines are always shown. */
   toolDetails: boolean;
   /** Whether to auto-create specialists above the confidence threshold. */
@@ -136,6 +138,7 @@ export function savePreferences(prefs: {
   theme?: string;
   autoUpdate?: boolean;
   reactMode?: boolean;
+  subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
@@ -154,6 +157,7 @@ export function savePreferences(prefs: {
   if (prefs.theme !== undefined) data.theme = prefs.theme;
   if (prefs.autoUpdate !== undefined) data.autoUpdate = prefs.autoUpdate;
   if (prefs.reactMode !== undefined) data.reactMode = prefs.reactMode;
+  if (prefs.subagentPac !== undefined) data.subagentPac = prefs.subagentPac;
   if (prefs.toolDetails !== undefined) data.toolDetails = prefs.toolDetails;
   if (prefs.autoCreateSpecialists !== undefined)
     data.autoCreateSpecialists = prefs.autoCreateSpecialists;
@@ -172,6 +176,7 @@ export function savePreferences(prefs: {
   const booleanKeys = [
     'autoUpdate',
     'reactMode',
+    'subagentPac',
     'toolDetails',
     'promptRewriter',
     'referenceLookup',
@@ -228,6 +233,7 @@ export function loadPreferences(): {
   theme?: string;
   autoUpdate?: boolean;
   reactMode?: boolean;
+  subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
@@ -247,6 +253,7 @@ export function loadPreferences(): {
       theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
       autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
       reactMode: typeof parsed.reactMode === 'boolean' ? parsed.reactMode : undefined,
+      subagentPac: typeof parsed.subagentPac === 'boolean' ? parsed.subagentPac : undefined,
       toolDetails: typeof parsed.toolDetails === 'boolean' ? parsed.toolDetails : undefined,
       autoCreateSpecialists:
         typeof parsed.autoCreateSpecialists === 'boolean'
@@ -709,6 +716,12 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     prefs.reactMode ??
     (process.env.BERNARD_REACT_MODE === 'true' || process.env.BERNARD_REACT_MODE === '1');
 
+  // Sub-agent PAC pipeline runs by default; users can opt out with BERNARD_SUBAGENT_PAC=false.
+  const rawSubagentPac = process.env.BERNARD_SUBAGENT_PAC;
+  const subagentPac =
+    prefs.subagentPac ??
+    (rawSubagentPac === undefined ? true : !(rawSubagentPac === 'false' || rawSubagentPac === '0'));
+
   const toolDetails =
     prefs.toolDetails ??
     (process.env.BERNARD_TOOL_DETAILS === 'true' || process.env.BERNARD_TOOL_DETAILS === '1');
@@ -762,6 +775,7 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     ragEnabled,
     theme,
     reactMode,
+    subagentPac,
     toolDetails,
     autoCreateSpecialists,
     autoCreateThreshold,

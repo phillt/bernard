@@ -505,4 +505,39 @@ describe('subagent tool', () => {
       expect(earlyStep).toBeUndefined();
     });
   });
+
+  describe('PAC pipeline dispatch', () => {
+    it('runs three phases when subagentPac is enabled', async () => {
+      mockGenerateText
+        .mockResolvedValueOnce({ text: 'PLAN_TEXT' })
+        .mockResolvedValueOnce({ text: 'ACTOR_TEXT' })
+        .mockResolvedValueOnce({ text: '{"verdict":"pass","reason":"ok"}' });
+
+      const agentTool = createSubAgentTool(
+        makeCtx(makeConfig({ subagentPac: true }), toolOptions, memoryStore),
+      );
+      const result = (await agentTool.execute!(
+        { task: 'Do thing' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      )) as string;
+
+      expect(mockGenerateText).toHaveBeenCalledTimes(3);
+      expect(result).toContain('ACTOR_TEXT');
+      expect(result).not.toContain('Critic Verdict: FAIL');
+    });
+
+    it('runs a single agent loop when subagentPac is disabled (legacy path)', async () => {
+      mockGenerateText.mockResolvedValue({ text: 'LEGACY_TEXT' });
+
+      const agentTool = createSubAgentTool(
+        makeCtx(makeConfig({ subagentPac: false }), toolOptions, memoryStore),
+      );
+      await agentTool.execute!(
+        { task: 'Do thing' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      );
+
+      expect(mockGenerateText).toHaveBeenCalledTimes(1);
+    });
+  });
 });

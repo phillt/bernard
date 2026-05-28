@@ -9,6 +9,9 @@
  */
 import { cronDefinition } from './cron.js';
 import { mainAgentDefinition } from './main.js';
+import { pacActorDefinition } from './pac-actor.js';
+import { pacCriticDefinition } from './pac-critic.js';
+import { pacPlannerDefinition } from './pac-planner.js';
 import { definitions } from './registry.js';
 import { specialistDefinition } from './specialist.js';
 import { subAgentDefinition } from './sub.js';
@@ -52,6 +55,25 @@ export {
 } from './tool-wrapper.js';
 export { cronDefinition, type CronInput, DAEMON_SYSTEM_PROMPT } from './cron.js';
 export { mainAgentDefinition, type MainInput } from './main.js';
+export {
+  pacPlannerDefinition,
+  type PacPlannerInput,
+  PAC_PLANNER_STEP_FRACTION,
+  PAC_PLANNER_SYSTEM_PROMPT,
+} from './pac-planner.js';
+export {
+  pacActorDefinition,
+  type PacActorInput,
+  PAC_ACTOR_STEP_FRACTION,
+  PAC_ACTOR_SYSTEM_PROMPT,
+} from './pac-actor.js';
+export {
+  pacCriticDefinition,
+  type PacCriticInput,
+  type PacCriticVerdict,
+  PAC_CRITIC_STEP_FRACTION,
+  PAC_CRITIC_SYSTEM_PROMPT,
+} from './pac-critic.js';
 
 /**
  * Idempotently registers all built-in agent definitions on the process-wide
@@ -65,6 +87,15 @@ export function registerBuiltinDefinitions(): void {
   }
   if (!definitions.has(subAgentDefinition.id)) {
     definitions.register(subAgentDefinition);
+  }
+  if (!definitions.has(pacPlannerDefinition.id)) {
+    definitions.register(pacPlannerDefinition);
+  }
+  if (!definitions.has(pacActorDefinition.id)) {
+    definitions.register(pacActorDefinition);
+  }
+  if (!definitions.has(pacCriticDefinition.id)) {
+    definitions.register(pacCriticDefinition);
   }
   if (!definitions.has(taskDefinition.id)) {
     definitions.register(taskDefinition);

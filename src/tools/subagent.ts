@@ -7,6 +7,7 @@ import { definitions } from '../framework/agents/registry.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { registerBuiltinDefinitions } from '../framework/agents/index.js';
 import type { SubAgentInput } from '../framework/agents/sub.js';
+import { runPAC } from '../framework/pac/run-pac.js';
 import { acquireSlot, releaseSlot, _resetPool, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
 
 // Re-export the constant for callers that imported it from this module.
@@ -71,16 +72,21 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
       printSubAgentStart(id, task);
 
       try {
-        const def = definitions.get<SubAgentInput, string>('sub');
-        const { formatted } = await runDefinition(
-          ctx,
-          def,
-          { task, context, slotId: id },
-          {
-            abortSignal: execOptions.abortSignal,
-            overrides: { provider: resolution.provider, model: resolution.model },
-          },
-        );
+        const runOpts = {
+          abortSignal: execOptions.abortSignal,
+          overrides: { provider: resolution.provider, model: resolution.model },
+        };
+        let formatted: string;
+        if (ctx.config.subagentPac) {
+          // `runPAC` owns the final cap (and reserves space for the FAIL
+          // footer); re-capping here would risk truncating that footer away.
+          const pacResult = await runPAC(ctx, { task, context, slotId: id }, runOpts);
+          formatted = pacResult.formatted;
+        } else {
+          const def = definitions.get<SubAgentInput, string>('sub');
+          const result = await runDefinition(ctx, def, { task, context, slotId: id }, runOpts);
+          formatted = result.formatted;
+        }
         printSubAgentEnd(id);
         return formatted;
       } catch (err: unknown) {
