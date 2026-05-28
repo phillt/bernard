@@ -183,6 +183,31 @@ describe('makeRepairHook', () => {
     expect(result).not.toBeNull();
   });
 
+  it('hints at single-line short entries when the plan tool fails to parse', async () => {
+    vi.mocked(generateText).mockResolvedValue({
+      toolCalls: [{ toolName: 'plan', args: { action: 'view' } }],
+    } as any);
+
+    const ctx = makeRepairContext({
+      toolCall: { toolCallId: 'tc-plan', toolName: 'plan', args: 'broken' },
+      tools: { plan: { description: 'plan' } },
+      error: new (InvalidToolArgumentsError as any)(
+        "Invalid arguments for tool plan: JSON parsing failed: Expected ',' or '}' after property value in JSON at position 14399",
+      ),
+    });
+
+    const hook = makeRepairHook({ config: makeConfig(), label: 'main' });
+    await hook(ctx as any);
+
+    const callArgs = vi.mocked(generateText).mock.calls[0][0] as any;
+    const userMessage = callArgs.messages[callArgs.messages.length - 1];
+    expect(userMessage.content).toMatch(/single line/i);
+    expect(userMessage.content).toMatch(/newlines/i);
+    expect(userMessage.content).toMatch(/split/i);
+    // Should not fall through to the generic file_write truncation hint.
+    expect(userMessage.content).not.toMatch(/file_write/);
+  });
+
   it('only invokes generateText once per failed tool call (no looping)', async () => {
     vi.mocked(generateText).mockResolvedValue({
       toolCalls: [{ toolName: 'shell', args: { command: 'ls' } }],
