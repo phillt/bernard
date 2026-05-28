@@ -150,7 +150,9 @@ function checkMetaCoverage(tools: Record<string, unknown>): {
       missing.push(name);
       continue;
     }
-    if (meta.deterministic === undefined && meta.sideEffect === undefined) {
+    // Both fields are required so the cache layer and policy decisions can
+    // reason about the tool without falling back to "unknown" defaults.
+    if (meta.deterministic === undefined || meta.sideEffect === undefined) {
       incomplete.push(name);
     }
   }

@@ -30,15 +30,34 @@ const cache = new Map<string, CacheEntry>();
  * so `{a: undefined, b: 1}` and `{b: 1}` collide on the cache key even though
  * Zod's `.optional()` preserves the distinction at the object level. Replace
  * `undefined` with an explicit sentinel so the two shapes hash distinctly.
+ *
+ * Also serialize BigInt explicitly (JSON.stringify throws on it) so a tool
+ * that legitimately uses BigInt args doesn't crash the cache layer.
  */
 const UNDEF_SENTINEL = '__bernard.cache.undef__';
+const BIGINT_SENTINEL_PREFIX = '__bernard.cache.bigint:';
 function stringifyArgs(args: unknown): string {
-  return JSON.stringify(args, (_k, v) => (v === undefined ? UNDEF_SENTINEL : v));
+  return JSON.stringify(args, (_k, v) => {
+    if (v === undefined) return UNDEF_SENTINEL;
+    if (typeof v === 'bigint') return `${BIGINT_SENTINEL_PREFIX}${v.toString()}`;
+    return v;
+  });
 }
 
-function cacheKey(meta: ToolMeta, args: unknown): string {
+/**
+ * Returns a stable cache key for `(meta, args)`, or `null` when `args` cannot
+ * be safely keyed (circular references, exotic class instances that throw in
+ * `toJSON`, etc.). A `null` return signals the caller to treat the call as a
+ * cache miss without storing anything — the alternative (throwing) would
+ * propagate into every read/write site.
+ */
+function cacheKey(meta: ToolMeta, args: unknown): string | null {
   const safeArgs = redactArgs(args, meta.sensitiveArgs);
-  return `${meta.name}::${stringifyArgs(safeArgs)}`;
+  try {
+    return `${meta.name}::${stringifyArgs(safeArgs)}`;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -50,6 +69,7 @@ function cacheKey(meta: ToolMeta, args: unknown): string {
 export function getCachedResult(meta: ToolMeta, args: unknown): unknown | CacheMiss {
   if (!isCacheable(meta)) return CACHE_MISS;
   const key = cacheKey(meta, args);
+  if (key === null) return CACHE_MISS;
   const entry = cache.get(key);
   if (!entry) return CACHE_MISS;
   if (entry.expiresAt !== 0 && Date.now() > entry.expiresAt) {
@@ -66,9 +86,11 @@ export function getCachedResult(meta: ToolMeta, args: unknown): unknown | CacheM
  */
 export function setCachedResult(meta: ToolMeta, args: unknown, result: unknown): void {
   if (!isCacheable(meta)) return;
+  const key = cacheKey(meta, args);
+  if (key === null) return;
   const ttl = meta.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
   const expiresAt = ttl === 0 ? 0 : Date.now() + ttl;
-  cache.set(cacheKey(meta, args), { result, expiresAt });
+  cache.set(key, { result, expiresAt });
 }
 
 /** Clears all cached entries. Exposed for tests. */

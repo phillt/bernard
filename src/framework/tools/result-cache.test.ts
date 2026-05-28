@@ -83,6 +83,14 @@ describe('result-cache', () => {
     expect(getCachedResult(cacheableMeta, { b: 1 })).toBe('without');
   });
 
+  it('returns CACHE_MISS without throwing when args are not JSON-serializable', () => {
+    // Circular reference would make JSON.stringify throw.
+    const circular: Record<string, unknown> = { a: 1 };
+    circular.self = circular;
+    expect(() => setCachedResult(cacheableMeta, circular, 'unused')).not.toThrow();
+    expect(getCachedResult(cacheableMeta, circular)).toBe(CACHE_MISS);
+  });
+
   it('uses DEFAULT_CACHE_TTL_MS when cacheTtlMs is unset', () => {
     const meta: ToolMeta = {
       name: 'default_ttl_tool',
