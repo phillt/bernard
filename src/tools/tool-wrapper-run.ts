@@ -1,85 +1,38 @@
-import { tool } from 'ai';
+import { tool, type Tool } from 'ai';
 import { z } from 'zod';
-import { getModelForConfig, getProviderOptionsForConfig } from '../providers/index.js';
 import { createTools, type ToolOptions } from './index.js';
 import { createSubAgentTool } from './subagent.js';
 import { createTaskTool } from './task.js';
 import { toolToAISDK } from '../framework/tools/adapter.js';
 import { createSpecialistRunTool } from './specialist-run.js';
-import { makeLastStepTextOnly } from './task.js';
-import { runAgent } from '../framework/runner.js';
-import { outputHook } from '../framework/hooks/output.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
-import { buildMemoryContext } from '../memory-context.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
 import { type BernardConfig, resolveProviderAndModel } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
 import { RoutineStore } from '../routines.js';
-import type { Specialist, SpecialistStore } from '../specialists.js';
+import type { SpecialistStore } from '../specialists.js';
 import { CandidateStore, type CandidateStoreReader } from '../specialist-candidates.js';
 import type { CorrectionCandidateStore } from '../correction-candidates.js';
 import { ToolProfileStore } from '../tool-profiles.js';
 import type { AgentContext } from '../framework/context.js';
-import { osPromptBlock } from '../os-info.js';
-import {
-  STRUCTURED_OUTPUT_RULES,
-  wrapWrapperResult,
-  type WrapperResult,
-} from '../structured-output.js';
+import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
+import {
+  definitions,
+  registerBuiltinDefinitions,
+  toolWrapperDefinition,
+  buildChildTools,
+  formatExamples,
+  type ToolWrapperInput,
+} from '../framework/agents/index.js';
+import { runDefinition } from '../framework/agents/run.js';
 
-/** Fraction of config.maxSteps allocated to a tool-wrapper run. Mirrors task/specialist ratios. */
-const TOOL_WRAPPER_STEP_RATIO = 0.5;
-
-/** Formats good/bad examples as a markdown block appended to the child's system prompt. */
-export function formatExamples(specialist: Specialist): string {
-  const parts: string[] = [];
-  const good = specialist.goodExamples ?? [];
-  const bad = specialist.badExamples ?? [];
-  if (good.length > 0) {
-    parts.push('\n\n## Good Examples (follow these patterns)');
-    for (const ex of good) {
-      parts.push(`\n- Input: ${ex.input}\n  Call: ${ex.call}`);
-      if (ex.note) parts.push(`\n  Note: ${ex.note}`);
-    }
-  }
-  if (bad.length > 0) {
-    parts.push('\n\n## Bad Examples (AVOID these patterns)');
-    for (const ex of bad) {
-      parts.push(
-        `\n- Input: ${ex.input}\n  Bad call: ${ex.call}\n  Error observed: ${ex.error}\n  Correct approach: ${ex.fix}`,
-      );
-      if (ex.note) parts.push(`\n  Note: ${ex.note}`);
-    }
-  }
-  return parts.join('');
-}
-
-/**
- * Builds the full tool registry a tool-wrapper specialist could possibly
- * reach, then intersects with `targetTools` when set. Persona/tool-wrapper
- * specialists get strict isolation; meta specialists typically pass
- * `targetTools` that include dispatch tools (specialist, tool_wrapper_run)
- * for recursive orchestration.
- */
-export function buildChildTools(
-  specialist: Specialist,
-  fullRegistry: Record<string, any>,
-): Record<string, any> {
-  const targets = specialist.targetTools;
-  if (!targets || targets.length === 0) {
-    // No filter specified — expose everything. Common for meta specialists.
-    return fullRegistry;
-  }
-  const filtered: Record<string, any> = {};
-  for (const name of targets) {
-    if (fullRegistry[name]) filtered[name] = fullRegistry[name];
-  }
-  return filtered;
-}
+// Re-export the helpers that other modules (tests, parity scripts) already
+// import from this path. Implementations live in `framework/agents/tool-wrapper.ts`.
+export { buildChildTools, formatExamples };
 
 /**
  * Captures the last tool call observed in a `generateText` result.
@@ -194,15 +147,18 @@ export interface DispatchToolWrapperArgs {
  * `tool_wrapper_run` tool and the shim layer that routes raw tool calls
  * (e.g. `shell`) through their corresponding wrapper specialist.
  *
- * Returns a {@link WrapperResult} so callers can shape the parent-facing
- * response however they like (JSON envelope, raw result, error string).
- * Pool acquisition, reasoning logging, and correction-candidate enqueue
- * happen inside.
+ * The early guards (missing specialist, wrong kind, missing API key, pool
+ * exhausted) all return early without ever entering the framework. Once the
+ * pool slot is acquired, the call passes through `runDefinition(... 'tool-wrapper' ...)`;
+ * the cross-cutting concerns that don't fit the definition shape — reasoning
+ * log append, correction-candidate enqueue, the parent-facing
+ * {@link WrapperResult} — stay here.
  */
 export async function dispatchToolWrapper(
   args: DispatchToolWrapperArgs,
   deps: ToolWrapperDeps,
 ): Promise<WrapperResult> {
+  registerBuiltinDefinitions();
   const { specialistId, input, context, provider, model, abortSignal, runLabel } = args;
   const {
     config,
@@ -249,7 +205,6 @@ export async function dispatchToolWrapper(
       error: 'no_api_key',
     };
   }
-  const { provider: resolvedProvider, model: resolvedModel } = resolution;
 
   const slot = acquireSlot();
   if (!slot) {
@@ -261,7 +216,6 @@ export async function dispatchToolWrapper(
   }
 
   const id = slot.id;
-  const prefix = `wrap:${id}`;
   const label = runLabel ?? `[${kind}] ${specialist.name}`;
   printSpecialistStart(id, label, input);
 
@@ -276,7 +230,7 @@ export async function dispatchToolWrapper(
       config,
     );
     const innerCtx = depsToCtx(deps);
-    const fullRegistry: Record<string, any> = {
+    const fullRegistry: Record<string, Tool> = {
       ...baseTools,
       agent: createSubAgentTool(innerCtx),
       task: toolToAISDK(createTaskTool(innerCtx)),
@@ -284,64 +238,31 @@ export async function dispatchToolWrapper(
       tool_wrapper_run: createToolWrapperRunTool(innerCtx),
     };
     const childTools = buildChildTools(specialist, fullRegistry);
-
-    let systemPrompt = specialist.systemPrompt;
-    if (specialist.guidelines.length > 0) {
-      systemPrompt += '\n\nGuidelines:\n' + specialist.guidelines.map((g) => `- ${g}`).join('\n');
-    }
-    systemPrompt += '\n\n' + osPromptBlock();
-    systemPrompt += formatExamples(specialist);
-    // Default to structured output for tool-wrapper specialists unless explicitly disabled.
     const wantStructured = specialist.structuredOutput ?? kind === 'tool-wrapper';
-    if (wantStructured) {
-      systemPrompt += STRUCTURED_OUTPUT_RULES;
-    }
-    systemPrompt += buildMemoryContext({
-      memoryStore,
-      ragResults: undefined,
-      includeScratch: true,
-    });
-    if (Object.keys(childTools).length > 0) {
-      systemPrompt += `\n\nAvailable tools for this run: ${Object.keys(childTools).join(', ')}`;
-    } else {
-      systemPrompt +=
-        '\n\nNo tools are available for this run. Produce the structured output based on reasoning alone.';
-    }
 
-    let userMessage = `Request: ${input}`;
-    if (context) userMessage += `\n\nContext: ${context}`;
-
-    const maxSteps = Math.max(2, Math.ceil(config.maxSteps * TOOL_WRAPPER_STEP_RATIO));
-
-    // Lazy import to avoid a top-level cycle (tool-call-repair → providers).
-    const { makeRepairHook } = await import('../tool-call-repair.js');
-    const repairHook = makeRepairHook({
-      config,
-      provider: resolvedProvider,
-      model: resolvedModel,
-      label: 'tool-wrapper',
+    const def = definitions.get<ToolWrapperInput, WrapperResult>('tool-wrapper');
+    const defInput: ToolWrapperInput = context
+      ? {
+          specialistId,
+          input,
+          context,
+          slotId: id,
+          childTools,
+          wantStructured,
+        }
+      : {
+          specialistId,
+          input,
+          slotId: id,
+          childTools,
+          wantStructured,
+        };
+    const { result, formatted: wrapped } = await runDefinition(innerCtx, def, defInput, {
       abortSignal,
-    });
-
-    const result = await runAgent({
-      model: getModelForConfig(config, resolvedProvider, resolvedModel),
-      providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
-      tools: childTools,
-      maxSteps,
-      maxTokens: config.maxTokens,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userMessage }],
-      abortSignal,
-      prepareStep: wantStructured ? makeLastStepTextOnly(maxSteps) : undefined,
-      repair: repairHook,
-      hooks: [outputHook(prefix)],
+      overrides: { provider, model },
     });
 
     printSpecialistEnd(id);
-
-    const wrapped = wantStructured
-      ? wrapWrapperResult(result.text)
-      : { status: 'ok' as const, result: result.text };
 
     appendReasoningLog({
       ts: new Date().toISOString(),
@@ -397,13 +318,7 @@ export async function dispatchToolWrapper(
 /**
  * Strips internal fields (`reasoning`) from a wrapper result before it crosses
  * back into the parent agent's context, and caps the `result` field so the
- * outer JSON envelope stays parseable when the wrapper output is large. The
- * reasoning array is already persisted to the JSONL trace via
- * {@link appendReasoningLog}; the parent doesn't need it.
- *
- * The cap is applied to the `result` field *before* serialization rather than
- * to the serialized envelope, so a truncated payload never produces invalid
- * JSON.
+ * outer JSON envelope stays parseable when the wrapper output is large.
  */
 export function renderWrapperParentView(
   wrapped: WrapperResult,
@@ -435,17 +350,6 @@ export function renderWrapperParentView(
 /**
  * Creates the `tool_wrapper_run` tool for structured, isolated tool-wrapper
  * specialist execution with validated JSON output and failure-learning.
- *
- * Unlike `specialist_run` (plain-text persona execution), this dispatch:
- *   - only runs specialists with `kind` in `'tool-wrapper' | 'meta'`
- *   - restricts the child's tool set to the specialist's `targetTools`
- *   - injects OS context + good/bad examples + structured-output rules
- *   - forces a JSON final message via `experimental_prepareStep`
- *   - parses through a Zod schema and logs runs that reach `generateText`
- *     to the reasoning log (guard failures return early without logging)
- *   - enqueues a correction candidate on error for end-of-session learning
- *   - strips `reasoning` and caps the JSON envelope before returning to the
- *     parent agent — the full reasoning lives in the JSONL trace only
  */
 export function createToolWrapperRunTool(ctx: AgentContext) {
   const deps = ctxToToolWrapperDeps(ctx);
@@ -486,3 +390,5 @@ export function createToolWrapperRunTool(ctx: AgentContext) {
     },
   });
 }
+
+export { toolWrapperDefinition };

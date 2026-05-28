@@ -313,7 +313,12 @@ describe('task tool', () => {
     expect(parsed.status).toBe('error');
     expect(parsed.output).toContain('Maximum concurrent agents');
 
-    // Clean up
+    // Clean up — wait for all 4 in-flight tasks to reach the generateText
+    // call (they go through an extra async hop in runDefinition before
+    // pushing their resolver) before resolving.
+    while (resolvers.length < 4) {
+      await new Promise((r) => setImmediate(r));
+    }
     for (const r of resolvers) r({ text: '{"status":"success","output":"done"}' });
     await Promise.all(promises);
   });

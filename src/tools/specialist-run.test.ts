@@ -250,7 +250,12 @@ describe('specialist-run tool', () => {
     expect(result).toContain('Maximum concurrent agents');
     expect(result).toContain('4');
 
-    // Clean up pending promises
+    // Clean up — wait for all 4 in-flight specialists to reach the
+    // generateText call (extra async hop through runDefinition) before
+    // resolving them.
+    while (resolvers.length < 4) {
+      await new Promise((r) => setImmediate(r));
+    }
     for (const r of resolvers) r({ text: 'done' });
     await Promise.all(promises);
   });
