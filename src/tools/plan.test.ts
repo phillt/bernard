@@ -148,6 +148,47 @@ describe('plan tool', () => {
     expect(parsed.success).toBe(false);
   });
 
+  it('rejects create with description exceeding 400 chars at the schema layer', () => {
+    const tooLong = 'x'.repeat(401);
+    const parsed = tool.parameters.safeParse({
+      action: 'create',
+      steps: [{ description: tooLong, verification: 'check it' }],
+    });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(
+        parsed.error.issues.some((i) =>
+          /description must be at most 400 characters/.test(i.message),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it('rejects create with verification exceeding 400 chars at the schema layer', () => {
+    const tooLong = 'y'.repeat(401);
+    const parsed = tool.parameters.safeParse({
+      action: 'create',
+      steps: [{ description: 'do a thing', verification: tooLong }],
+    });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(
+        parsed.error.issues.some((i) =>
+          /verification must be at most 400 characters/.test(i.message),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it('accepts description and verification exactly at the 400-char limit', () => {
+    const atLimit = 'z'.repeat(400);
+    const parsed = tool.parameters.safeParse({
+      action: 'create',
+      steps: [{ description: atLimit, verification: atLimit }],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
   it('skips re-printing when repeated view actions yield identical render', async () => {
     await run({ action: 'create', steps: [s('a'), s('b')] });
     expect(printPlan).toHaveBeenCalledTimes(1);

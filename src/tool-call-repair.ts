@@ -66,7 +66,10 @@ export function makeRepairHook<TOOLS extends ToolSet>(
       const isNoSuchTool = NoSuchToolError.isInstance(error);
 
       let hint = '';
-      if (isInvalidArgs && looksLikeTruncationError(errorMessage)) {
+      if (isInvalidArgs && toolCall.toolName === 'plan') {
+        hint =
+          "\n\nThe `plan` tool requires each step's `description` and `verification` to be a single line of plain text with no embedded newlines (JSON forbids literal newlines inside string values — they must be escaped as `\\n`). Re-emit the call with short, single-line entries (under ~400 characters each). If a step needs more detail, split it into multiple smaller steps rather than packing a multi-line blob into one entry.";
+      } else if (isInvalidArgs && looksLikeTruncationError(errorMessage)) {
         hint =
           '\n\nThe arguments appear to have been truncated mid-string. For payloads larger than ~1 KB (file contents, scripts, JSON bodies), write the content to a file using `file_write` (or save a script with `file_write` and execute it with `shell`) instead of inlining it as a tool-call argument.';
       } else if (isNoSuchTool) {
