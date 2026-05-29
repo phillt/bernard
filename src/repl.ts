@@ -73,7 +73,7 @@ import { interactiveUpdate, getLocalVersion } from './update.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
-import { generateText, type CoreMessage } from 'ai';
+import { generateText } from 'ai';
 import {
   getModelForConfig,
   getModelProfile,
@@ -104,7 +104,6 @@ import { taskDefinition } from './tools/task.js';
 import { runDefinition } from './framework/agents/run.js';
 import type { TaskInput } from './framework/agents/task.js';
 import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './tools/agent-pool.js';
-import { createTools } from './tools/index.js';
 import { printTaskStart, printTaskEnd, printWarning, setToolDetailsVisible } from './output.js';
 import { debugLog } from './logger.js';
 import {
