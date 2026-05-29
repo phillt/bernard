@@ -71,7 +71,16 @@ export const subAgentDefinition: AgentDefinition<SubAgentInput, string> = {
   },
 
   tools(ctx) {
-    return createTools(ctx.toolOptions, ctx.stores.memory, ctx.mcp.tools);
+    return createTools(
+      ctx.toolOptions,
+      ctx.stores.memory,
+      ctx.mcp.tools,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ctx.provenance,
+    );
   },
 
   strategy() {

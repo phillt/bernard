@@ -39,6 +39,8 @@ import {
   stopSpinner,
   buildSpinnerMessage,
   formatTokenCount,
+  setPinnedRegion,
+  clearPinnedRegion,
   type SpinnerStats,
 } from './output.js';
 import type { ToolOptions, AskUserQuestion } from './tools/types.js';
@@ -66,6 +68,7 @@ import {
 } from './custom-providers.js';
 import type { SupportedSdk } from './providers/types.js';
 import { getTheme, setTheme, getThemeKeys, getActiveThemeKey, THEMES } from './theme.js';
+import type { SourceItem } from './provenance.js';
 import { interactiveUpdate, getLocalVersion } from './update.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
@@ -714,11 +717,81 @@ export async function startRepl(
     }
   }
 
+  /**
+   * Shift+Tab toggles the sources viewer for the last response. Issue #173.
+   *
+   * `\x1b[Z` is the canonical Shift+Tab CSI; Node's readline usually emits
+   * `{ name: 'tab', shift: true }` for it but a few terminals deliver the
+   * raw sequence without the shift flag — we check both.
+   *
+   * The first press pins a `<sources>` region above the prompt; the second
+   * press clears it. Esc also clears (handled by an existing escape branch).
+   * If the last turn registered no citations, the keystroke is a no-op.
+   */
+  let sourcesViewerOpen = false;
+  function buildSourcesPanel(sources: SourceItem[], title: string): string[] {
+    const t = getTheme();
+    const lines: string[] = [];
+    lines.push(t.accentBold(`▼ ${title}`));
+    for (const s of sources) {
+      const head = `${t.accent(`[^${s.id}]`)} ${t.dim(`(${s.kind})`)} ${s.label}`;
+      lines.push(head);
+      if (s.rawRef && s.rawRef !== s.label) {
+        lines.push(`    ${t.dim(s.rawRef)}`);
+      }
+      if (s.contentPreview) {
+        const preview = s.contentPreview.replace(/\s+/g, ' ').slice(0, 160);
+        lines.push(`    ${t.dim(preview)}`);
+      }
+    }
+    lines.push(t.dim('Shift+Tab or Esc to close'));
+    return lines;
+  }
+  function renderSourcesViewer(): void {
+    const cited = agent.getLastCitedSources();
+    if (cited.length === 0) {
+      // No cited sources — fall back to "all available" if any, so the user
+      // can still see what was retrieved this turn.
+      const all = agent.getLastSources();
+      if (all.length === 0) {
+        sourcesViewerOpen = false;
+        return;
+      }
+      setPinnedRegion(
+        'sources',
+        buildSourcesPanel(all, 'Available sources (last turn — none cited)'),
+      );
+      sourcesViewerOpen = true;
+      return;
+    }
+    setPinnedRegion('sources', buildSourcesPanel(cited, 'Cited sources (last response)'));
+    sourcesViewerOpen = true;
+  }
+  function closeSourcesViewer(): void {
+    if (!sourcesViewerOpen) return;
+    clearPinnedRegion('sources');
+    sourcesViewerOpen = false;
+  }
+
   process.stdin.on('keypress', (_str: string, key: any) => {
     if (!key) return;
 
+    // Shift+Tab → toggle the sources viewer. Check first so Esc/processing
+    // branches below don't intercept it.
+    const isShiftTab = (key.name === 'tab' && key.shift) || key.sequence === '\x1b[Z';
+    if (isShiftTab && !processing && !menuAbortController) {
+      if (sourcesViewerOpen) closeSourcesViewer();
+      else renderSourcesViewer();
+      return;
+    }
+
     if (key.name === 'escape' && menuAbortController) {
       menuAbortController.abort();
+      return;
+    }
+
+    if (key.name === 'escape' && sourcesViewerOpen && !processing) {
+      closeSourcesViewer();
       return;
     }
 
@@ -2299,6 +2372,8 @@ Remember: the systemPrompt should read like a persona definition — who this sp
 
     processing = true;
     interrupted = false;
+    // A new turn invalidates any pinned sources viewer from the previous one.
+    closeSourcesViewer();
     try {
       initSpinner();
       await agent.processInput(agentInput, inlineImages, resolvedEntries);

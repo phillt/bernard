@@ -14,6 +14,23 @@ Call the \`think\` tool to publish 1-3 sentences of your reasoning whenever you'
 /** Model families whose `systemSuffix` explicitly forbids chain-of-thought narration. */
 export const REASONING_FAMILIES = new Set(['openai-reasoning', 'xai-grok-reasoning']);
 
+/**
+ * Citation policy injected when {@link PolicyDecision.citations.requireForFactualClaims}
+ * is true. Tells the model how to attach `[^Sn]` markers to factual claims
+ * derived from registered sources (web/RAG/memory/file). Skipped for
+ * `REASONING_FAMILIES` because their `systemSuffix` already constrains how
+ * they may annotate their output. Issue #173.
+ */
+export const CITATIONS_PROMPT = `## Citations
+When a sentence states a fact you got from a registered source this turn (web_read, web_search, file_read_lines, memory.read, scratch.read, or recalled RAG context), END that sentence with a citation marker pointing at the source id, e.g. \`The README says X is the default. [^S1]\`. The available source ids and their labels are listed inside the \`<available_sources>\` subsection of \`<system_provided_context>\`, and each retrieval tool also prepends \`[Source: Sn …]\` to its return text. Use the \`cite\` tool (action: 'list' | 'get') to inspect the store before citing if you want to verify.
+
+Rules:
+- Only attach \`[^Sn]\` for an id that actually appears in this turn's source list.
+- If a claim has no matching registered source, either prefix it with \`[unverified]\` ("the build target is x86_64 [unverified]") or call \`ask_user\` to confirm. Do not invent a citation.
+- \`shell\` output and MCP tool results are NOT auto-registered. When you need to cite them, quote the relevant line inline instead of attaching a marker.
+- Opinions, recommendations, and high-level summaries don't need markers — citations are for factual / tool-derived claims.
+- One marker per claim is enough; don't spam multiple ids on the same sentence.`;
+
 export const BASE_SYSTEM_PROMPT = `# Identity
 
 You are Bernard, a local CLI AI agent with direct shell access, persistent memory, and a suite of tools for system tasks, web reading, and scheduling.

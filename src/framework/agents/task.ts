@@ -132,6 +132,9 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
   prefix: (input) => `task:${input.slotId}`,
 
   systemPrompt(ctx) {
+    // Pass no provenance for the prompt-key-discovery call — it only
+    // enumerates names. Tools registered for actual use are built below
+    // with `ctx.provenance`.
     const baseTools = createTools(ctx.toolOptions, ctx.stores.memory, ctx.mcp.tools);
     const autoContext = `\n\nWorking directory: ${process.cwd()}\nAvailable tools: ${Object.keys(baseTools).join(', ')}`;
     return TASK_SYSTEM_PROMPT + autoContext;
@@ -148,7 +151,16 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
   },
 
   tools(ctx) {
-    return createTools(ctx.toolOptions, ctx.stores.memory, ctx.mcp.tools);
+    return createTools(
+      ctx.toolOptions,
+      ctx.stores.memory,
+      ctx.mcp.tools,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ctx.provenance,
+    );
   },
 
   strategy() {

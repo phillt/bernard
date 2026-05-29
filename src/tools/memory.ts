@@ -3,6 +3,7 @@ import type { MemoryStore } from '../memory.js';
 import { MEMORY_DIR } from '../paths.js';
 import type { BernardTool } from '../framework/tools/types.js';
 import { ok, err } from '../framework/tools/types.js';
+import type { ProvenanceStore } from '../provenance.js';
 
 const MEMORY_PARAMETERS = z.object({
   action: z.enum(['list', 'read', 'write', 'delete']).describe('The action to perform'),
@@ -21,7 +22,10 @@ type MemoryArgs = z.infer<typeof MEMORY_PARAMETERS>;
  *
  * @param memoryStore - The backing MemoryStore instance.
  */
-export function createMemoryTool(memoryStore: MemoryStore): BernardTool<MemoryArgs, string> {
+export function createMemoryTool(
+  memoryStore: MemoryStore,
+  provenance?: ProvenanceStore,
+): BernardTool<MemoryArgs, string> {
   return {
     meta: {
       name: 'memory',
@@ -44,6 +48,15 @@ export function createMemoryTool(memoryStore: MemoryStore): BernardTool<MemoryAr
             return err({ type: 'invalid_args', message: 'key is required for read action.' });
           const value = memoryStore.readMemory(key);
           if (value === null) return ok(`No memory found for key "${key}".`);
+          if (provenance) {
+            const id = provenance.add({
+              kind: 'memory',
+              label: `memory:${key}`,
+              contentPreview: value,
+              rawRef: `memory:${key}`,
+            });
+            return ok(`[Source: ${id}]\n${value}`);
+          }
           return ok(value);
         }
         case 'write': {
@@ -76,7 +89,10 @@ export function createMemoryTool(memoryStore: MemoryStore): BernardTool<MemoryAr
  *
  * @param memoryStore - The backing MemoryStore instance.
  */
-export function createScratchTool(memoryStore: MemoryStore): BernardTool<MemoryArgs, string> {
+export function createScratchTool(
+  memoryStore: MemoryStore,
+  provenance?: ProvenanceStore,
+): BernardTool<MemoryArgs, string> {
   return {
     meta: {
       name: 'scratch',
@@ -100,6 +116,15 @@ export function createScratchTool(memoryStore: MemoryStore): BernardTool<MemoryA
             return err({ type: 'invalid_args', message: 'key is required for read action.' });
           const value = memoryStore.readScratch(key);
           if (value === null) return ok(`No scratch note found for key "${key}".`);
+          if (provenance) {
+            const id = provenance.add({
+              kind: 'memory',
+              label: `scratch:${key}`,
+              contentPreview: value,
+              rawRef: `scratch:${key}`,
+            });
+            return ok(`[Source: ${id}]\n${value}`);
+          }
           return ok(value);
         }
         case 'write': {

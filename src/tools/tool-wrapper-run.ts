@@ -18,6 +18,7 @@ import { CandidateStore, type CandidateStoreReader } from '../specialist-candida
 import type { CorrectionCandidateStore } from '../correction-candidates.js';
 import { ToolProfileStore } from '../tool-profiles.js';
 import type { AgentContext } from '../framework/context.js';
+import { ProvenanceStore } from '../provenance.js';
 import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
@@ -104,6 +105,12 @@ export interface ToolWrapperDeps {
   routineStore?: RoutineStore;
   candidateStore?: CandidateStoreReader;
   toolProfileStore?: ToolProfileStore;
+  /**
+   * Parent turn's ProvenanceStore. Forwarded so retrieval inside a
+   * tool-wrapper specialist (e.g. a `web_read` invoked by `web-wrapper`)
+   * shows up in the parent agent's Shift+Tab sources viewer. Issue #173.
+   */
+  provenance?: ProvenanceStore;
 }
 
 /** Derives the legacy {@link ToolWrapperDeps} shape from an {@link AgentContext}. */
@@ -119,6 +126,7 @@ export function ctxToToolWrapperDeps(ctx: AgentContext): ToolWrapperDeps {
     routineStore: ctx.stores.routines,
     candidateStore: ctx.stores.candidates,
     toolProfileStore: ctx.stores.toolProfiles,
+    provenance: ctx.provenance,
   };
 }
 
@@ -137,6 +145,7 @@ export function depsToCtx(deps: ToolWrapperDeps): AgentContext {
     mcp: { tools: deps.mcpTools ?? {}, serverNames: [] },
     rag: deps.ragStore,
     toolOptions: deps.options,
+    provenance: deps.provenance ?? new ProvenanceStore(),
   };
 }
 
@@ -230,6 +239,7 @@ export async function dispatchToolWrapper(
   printSpecialistStart(id, label, input);
 
   try {
+    const innerCtx = depsToCtx(deps);
     const baseTools = createTools(
       options,
       memoryStore,
@@ -238,8 +248,8 @@ export async function dispatchToolWrapper(
       specialistStore,
       candidateStore,
       config,
+      innerCtx.provenance,
     );
-    const innerCtx = depsToCtx(deps);
     const fullRegistry: Record<string, Tool> = {
       ...baseTools,
       agent: createSubAgentTool(innerCtx),
