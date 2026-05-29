@@ -108,19 +108,15 @@ export function buildMainSystemPrompt(
 }
 
 /**
- * Builds the lower-privilege per-turn context message for the main agent.
- * Returns 0 or 1 `CoreMessage`. Used both as the value returned from
- * `mainAgentDefinition.contextMessages` and (for the Agent class's preflight
- * token estimate) so the count reflects the actual wire payload.
+ * Builds the lower-privilege per-turn context-message extras for the main
+ * agent. Used both by the Agent class's preflight token estimate (via
+ * {@link buildMainContextMessages}) and by `mainAgentDefinition.contextInputs`
+ * — the framework merges these into a `buildContextMessage` call that also
+ * supplies the default `memoryStore` + `includeScratch: true` (issue #143).
  */
-export function buildMainContextMessages(
-  ctx: AgentContext,
-  input: Omit<MainInput, 'systemPrompt'>,
-): CoreMessage[] {
-  const msg = buildContextMessage({
-    memoryStore: ctx.stores.memory,
+function buildMainContextInputs(ctx: AgentContext, input: Omit<MainInput, 'systemPrompt'>) {
+  return {
     ragResults: input.ragResults,
-    includeScratch: true,
     mcpServerNames: ctx.mcp.serverNames,
     routineSummaries: input.routineSummaries,
     specialistSummaries: input.specialistSummaries,
@@ -128,6 +124,23 @@ export function buildMainContextMessages(
     resolvedReferences: input.resolvedReferences,
     alertContext: input.alertContext,
     provenance: ctx.provenance,
+  };
+}
+
+/**
+ * Preflight-estimate helper: returns the 0-or-1 `CoreMessage` array that the
+ * framework will inject for the main agent. The Agent class (`src/agent.ts`)
+ * calls this to size its token budget so the count reflects the actual wire
+ * payload that `runDefinition` will produce.
+ */
+export function buildMainContextMessages(
+  ctx: AgentContext,
+  input: Omit<MainInput, 'systemPrompt'>,
+): CoreMessage[] {
+  const msg = buildContextMessage({
+    memoryStore: ctx.stores.memory,
+    includeScratch: true,
+    ...buildMainContextInputs(ctx, input),
   });
   return msg ? [msg] : [];
 }
@@ -156,8 +169,8 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     return input.systemPrompt;
   },
 
-  contextMessages(ctx, input) {
-    return buildMainContextMessages(ctx, input);
+  contextInputs(ctx, input) {
+    return buildMainContextInputs(ctx, input);
   },
 
   tools(ctx, input): Record<string, Tool> {

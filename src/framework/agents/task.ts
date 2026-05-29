@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import type { CoreMessage } from 'ai';
 import type { BernardConfig } from '../../config.js';
-import { buildContextMessage } from '../../context-message.js';
 import { debugLog } from '../../logger.js';
 import { extractJsonBlock } from '../../structured-output.js';
 import { createTools } from '../../tools/index.js';
@@ -140,14 +139,11 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
     return TASK_SYSTEM_PROMPT + autoContext;
   },
 
-  async contextMessages(ctx, input) {
-    const ragResults = await searchRag(ctx, input.task);
-    const msg = buildContextMessage({
-      memoryStore: ctx.stores.memory,
-      ragResults,
+  async contextInputs(ctx, input) {
+    return {
+      ragResults: await searchRag(ctx, input.task),
       includeScratch: false,
-    });
-    return msg ? [msg] : [];
+    };
   },
 
   tools(ctx) {

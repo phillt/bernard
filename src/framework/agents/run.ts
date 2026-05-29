@@ -1,5 +1,6 @@
 import type { CoreMessage } from 'ai';
 import { defaultProviderErrorMessage, resolveProviderAndModel } from '../../config.js';
+import { buildContextMessage, type ContextMessageInputs } from '../../context-message.js';
 import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
 import { makeRepairHook } from '../../tool-call-repair.js';
 import type { AgentContext } from '../context.js';
@@ -87,12 +88,28 @@ export async function runDefinition<TInput, TFormatted>(
           return () => arr;
         })();
 
-  // Per-turn lower-privilege context (issue #172). Resolved fresh on every
-  // iterate so memory updates / new RAG hits are reflected, and NOT persisted
-  // into the caller's history.
+  // Per-turn lower-privilege context (issue #172 + #143). The framework
+  // ALWAYS wraps `memoryStore` + `includeScratch: true` by default so a new
+  // AgentDefinition inherits OWASP LLM01 channel separation without
+  // remembering to wire it up. Definitions only declare extras (RAG hits,
+  // MCP names, routine listings, etc.) via `contextInputs`. Returning `null`
+  // opts the definition out entirely (used by pac-critic, which exposes
+  // `memory.read` / `scratch.read` as tools instead).
+  //
+  // Resolved fresh on every iterate so memory updates / new RAG hits are
+  // reflected, and NOT persisted into the caller's history.
   const getContextMessages = async (): Promise<CoreMessage[]> => {
-    if (!def.contextMessages) return [];
-    return Promise.resolve(def.contextMessages(ctx, input));
+    let extras: Partial<ContextMessageInputs> | null = {};
+    if (def.contextInputs) {
+      extras = await Promise.resolve(def.contextInputs(ctx, input));
+    }
+    if (extras === null) return [];
+    const msg = buildContextMessage({
+      memoryStore: ctx.stores.memory,
+      includeScratch: true,
+      ...extras,
+    });
+    return msg ? [msg] : [];
   };
 
   // `messages` here is a placeholder — `innerIterate` rebuilds the messages

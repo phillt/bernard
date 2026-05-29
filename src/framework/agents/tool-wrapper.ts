@@ -1,7 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
 import { defaultProviderErrorMessage, resolveProviderAndModel } from '../../config.js';
 import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
-import { buildContextMessage } from '../../context-message.js';
 import { osPromptBlock } from '../../os-info.js';
 import {
   STRUCTURED_OUTPUT_RULES,
@@ -78,13 +77,7 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
     return systemPrompt;
   },
 
-  contextMessages(ctx) {
-    const msg = buildContextMessage({
-      memoryStore: ctx.stores.memory,
-      includeScratch: true,
-    });
-    return msg ? [msg] : [];
-  },
+  // contextInputs omitted: framework default injects memory + scratch.
 
   tools(_ctx, input) {
     return input.childTools;

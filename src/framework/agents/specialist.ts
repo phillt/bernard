@@ -1,7 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
 import { defaultProviderErrorMessage, resolveProviderAndModel } from '../../config.js';
 import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
-import { buildContextMessage } from '../../context-message.js';
 import { debugLog } from '../../logger.js';
 import { PlanStore } from '../../plan-store.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
@@ -75,14 +74,8 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     return systemPrompt;
   },
 
-  async contextMessages(ctx, input) {
-    const ragResults = await searchRagForSpecialist(ctx, input);
-    const msg = buildContextMessage({
-      memoryStore: ctx.stores.memory,
-      ragResults,
-      includeScratch: true,
-    });
-    return msg ? [msg] : [];
+  async contextInputs(ctx, input) {
+    return { ragResults: await searchRagForSpecialist(ctx, input) };
   },
 
   async tools(ctx, input) {

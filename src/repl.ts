@@ -100,23 +100,12 @@ import {
   promotePendingCandidates,
 } from './candidate-bootstrap.js';
 import { detectSpecialistCandidate } from './specialist-detector.js';
-import {
-  TASK_SYSTEM_PROMPT,
-  wrapTaskResult,
-  getTaskMaxSteps,
-  makeLastStepTextOnly,
-} from './tools/task.js';
+import { taskDefinition } from './tools/task.js';
+import { runDefinition } from './framework/agents/run.js';
+import type { TaskInput } from './framework/agents/task.js';
+import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './tools/agent-pool.js';
 import { createTools } from './tools/index.js';
-import {
-  printTaskStart,
-  printTaskEnd,
-  printToolCall,
-  printToolResult,
-  printAssistantText,
-  printWarning,
-  setToolDetailsVisible,
-} from './output.js';
-import { buildContextMessage } from './context-message.js';
+import { printTaskStart, printTaskEnd, printWarning, setToolDetailsVisible } from './output.js';
 import { debugLog } from './logger.js';
 import {
   loadImage,
@@ -1194,67 +1183,25 @@ export async function startRepl(
     printTaskStart(description);
     startSpinner('Running task...');
 
+    const slot = acquireSlot();
+    if (!slot) {
+      stopSpinner();
+      processing = false;
+      taskAbortController = null;
+      printError(`Maximum concurrent agents (${MAX_CONCURRENT_AGENTS}) reached.`);
+      return;
+    }
+
     try {
-      const baseTools = createTools(toolOptions, memoryStore, mcpTools);
-
-      // Optional RAG search for context
-      let ragResults;
-      if (ragStore) {
-        try {
-          ragResults = await ragStore.search(description);
-          if (ragResults.length > 0) {
-            debugLog('repl:task:rag', {
-              query: description.slice(0, 100),
-              results: ragResults.length,
-            });
-          }
-        } catch (err) {
-          debugLog('repl:task:rag:error', err instanceof Error ? err.message : String(err));
-        }
-      }
-
-      const autoContext = `\n\nWorking directory: ${process.cwd()}\nAvailable tools: ${Object.keys(baseTools).join(', ')}`;
-
-      // Memory/RAG moves to a lower-privilege user-role message (issue #172).
-      const systemPrompt = TASK_SYSTEM_PROMPT + autoContext;
-      const contextMsg = buildContextMessage({
-        memoryStore,
-        ragResults,
-        includeScratch: false,
-      });
-
-      let userMessage = `Task: ${description}`;
-      if (context) {
-        userMessage += `\n\nAdditional context: ${context}`;
-      }
-
-      const messagesPayload: CoreMessage[] = contextMsg
-        ? [contextMsg, { role: 'user', content: userMessage }]
-        : [{ role: 'user', content: userMessage }];
-
-      const taskMaxSteps = getTaskMaxSteps(config);
-      const result = await generateText({
-        model: getModelForConfig(config, config.provider, config.model),
-        providerOptions: getProviderOptionsForConfig(config, config.provider),
-        tools: baseTools,
-        maxSteps: taskMaxSteps,
-        maxTokens: config.maxTokens,
-        system: systemPrompt,
-        messages: messagesPayload,
-        abortSignal: taskAbortController.signal,
-        experimental_prepareStep: makeLastStepTextOnly(taskMaxSteps),
-        onStepFinish: ({ text, toolCalls, toolResults }) => {
-          for (const tc of toolCalls) {
-            printToolCall(tc.toolName, tc.args as Record<string, unknown>);
-          }
-          for (const tr of toolResults) {
-            printToolResult(tr.toolName, tr.result);
-          }
-          if (text) {
-            printAssistantText(text);
-          }
-        },
-      });
+      const input: TaskInput = context
+        ? { task: description, context, slotId: slot.id }
+        : { task: description, slotId: slot.id };
+      const { result, formatted: taskResult } = await runDefinition(
+        agent.getContext(),
+        taskDefinition,
+        input,
+        { abortSignal: taskAbortController.signal },
+      );
 
       if (result.finishReason === 'length') {
         const recommended = Math.ceil((config.maxTokens * 2) / 1024) * 1024;
@@ -1265,7 +1212,6 @@ export async function startRepl(
       }
 
       stopSpinner();
-      const taskResult = wrapTaskResult(result.text);
       printTaskEnd(JSON.stringify(taskResult));
 
       // Print the full output for the user
@@ -1287,6 +1233,7 @@ export async function startRepl(
         printError(message);
       }
     } finally {
+      releaseSlot();
       processing = false;
       taskAbortController = null;
       stopSpinner();

@@ -17,6 +17,19 @@ vi.mock('../../../tool-call-repair.js', () => ({
   makeRepairHook: vi.fn(() => vi.fn()),
 }));
 
+// Spy on buildContextMessage so the framework-default injection assertions can
+// inspect exactly what `runDefinition` passes in without needing a real
+// MemoryStore.
+vi.mock('../../../context-message.js', async () => {
+  const actual = await vi.importActual<typeof import('../../../context-message.js')>(
+    '../../../context-message.js',
+  );
+  return {
+    ...actual,
+    buildContextMessage: vi.fn(),
+  };
+});
+
 import { generateText, type CoreMessage } from 'ai';
 import { runDefinition } from '../run.js';
 import { DefinitionRegistry, definitions } from '../registry.js';
@@ -24,6 +37,7 @@ import type { AgentDefinition } from '../types.js';
 import { NormalStrategy } from '../../strategies/normal.js';
 import type { AgentContext } from '../../context.js';
 import type { BernardConfig } from '../../../config.js';
+import { buildContextMessage } from '../../../context-message.js';
 
 function makeConfig(): BernardConfig {
   return {
@@ -46,7 +60,7 @@ function makeConfig(): BernardConfig {
 function makeCtx(): AgentContext {
   return {
     config: makeConfig(),
-    stores: {} as any,
+    stores: { memory: { fake: true } } as any,
     mcp: { tools: {}, serverNames: [] },
     toolOptions: {} as any,
   };
@@ -81,6 +95,10 @@ beforeEach(() => {
     response: { messages: [] },
     finishReason: 'stop',
   });
+  // Default: buildContextMessage returns null (no content) so existing tests
+  // that don't care about the context message see an empty messages prefix.
+  // Individual tests override this for context-message assertions.
+  (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue(null);
 });
 
 describe('runDefinition', () => {
@@ -222,6 +240,92 @@ describe('runDefinition wrapIterate + seedMessages getter', () => {
     expect(innerCalls).toBe(1);
     // inner called twice — generateText should be invoked twice
     expect((generateText as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+  });
+});
+
+describe('runDefinition framework-default context injection (issue #143)', () => {
+  it('injects memory + scratch by default when contextInputs is omitted', async () => {
+    const def = fakeDefinition(); // no contextInputs
+    const ctx = makeCtx();
+    const sentinel: CoreMessage = {
+      role: 'user',
+      content: '<system_provided_context>fake</system_provided_context>',
+    };
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue(sentinel);
+
+    await runDefinition(ctx, def, { text: 'hi' });
+
+    expect(buildContextMessage).toHaveBeenCalledTimes(1);
+    const callArgs = (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArgs.memoryStore).toBe(ctx.stores.memory);
+    expect(callArgs.includeScratch).toBe(true);
+
+    const arg = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // Sentinel should be inserted before the user message.
+    expect(arg.messages).toEqual([sentinel, { role: 'user', content: 'hi' }]);
+  });
+
+  it('opts out entirely when contextInputs returns null', async () => {
+    const def = fakeDefinition({ contextInputs: () => null });
+    const ctx = makeCtx();
+    // Even if buildContextMessage would return something, it should not be called.
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      role: 'user',
+      content: 'should not appear',
+    } satisfies CoreMessage);
+
+    await runDefinition(ctx, def, { text: 'hi' });
+
+    expect(buildContextMessage).not.toHaveBeenCalled();
+    const arg = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(arg.messages).toEqual([{ role: 'user', content: 'hi' }]);
+  });
+
+  it('merges extras from contextInputs over the includeScratch default', async () => {
+    const def = fakeDefinition({
+      contextInputs: () => ({
+        includeScratch: false,
+        mcpServerNames: ['a', 'b'],
+      }),
+    });
+    const ctx = makeCtx();
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+    await runDefinition(ctx, def, { text: 'hi' });
+
+    expect(buildContextMessage).toHaveBeenCalledTimes(1);
+    const callArgs = (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArgs.memoryStore).toBe(ctx.stores.memory);
+    expect(callArgs.includeScratch).toBe(false);
+    expect(callArgs.mcpServerNames).toEqual(['a', 'b']);
+  });
+
+  it('awaits async contextInputs', async () => {
+    const def = fakeDefinition({
+      async contextInputs() {
+        await new Promise((r) => setTimeout(r, 0));
+        return { mcpServerNames: ['from-async'] };
+      },
+    });
+    const ctx = makeCtx();
+
+    await runDefinition(ctx, def, { text: 'hi' });
+
+    expect(buildContextMessage).toHaveBeenCalledTimes(1);
+    const callArgs = (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(callArgs.mcpServerNames).toEqual(['from-async']);
+    expect(callArgs.includeScratch).toBe(true);
+  });
+
+  it('drops the context message when buildContextMessage returns null even with defaults', async () => {
+    const def = fakeDefinition(); // default injection
+    const ctx = makeCtx();
+    (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+    await runDefinition(ctx, def, { text: 'hi' });
+
+    const arg = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(arg.messages).toEqual([{ role: 'user', content: 'hi' }]);
   });
 });
 
