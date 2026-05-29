@@ -186,7 +186,16 @@ export async function dispatchToolWrapper(
   deps: ToolWrapperDeps,
 ): Promise<WrapperResult> {
   registerBuiltinDefinitions();
-  const { specialistId, input, context, provider, model, abortSignal, runLabel, skipCorrectionEnqueue } = args;
+  const {
+    specialistId,
+    input,
+    context,
+    provider,
+    model,
+    abortSignal,
+    runLabel,
+    skipCorrectionEnqueue,
+  } = args;
   const {
     config,
     options,

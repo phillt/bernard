@@ -740,9 +740,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
   });
 
   it('does NOT enqueue a correction candidate for a non-correctable failure (HTTP 404)', async () => {
-    specialistStore.get.mockReturnValue(
-      makeToolWrapperSpecialist({ targetTools: ['web_read'] }),
-    );
+    specialistStore.get.mockReturnValue(makeToolWrapperSpecialist({ targetTools: ['web_read'] }));
     vi.mocked(generateText).mockResolvedValue({
       text: '{"status":"error","result":"page gone","error":"HTTP 404 Not Found"}',
       steps: [],

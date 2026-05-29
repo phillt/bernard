@@ -225,7 +225,11 @@ function gateCommit(outcome: CorrectionOutcome, candidate: CorrectionCandidate):
     if (outcome.validated && outcome.applied === false) {
       return { ok: false, rejected: true, reason: 'agent declined commit' };
     }
-    return { ok: false, rejected: false, reason: 'no proposedGoodCall returned by correction agent' };
+    return {
+      ok: false,
+      rejected: false,
+      reason: 'no proposedGoodCall returned by correction agent',
+    };
   }
   if (outcome.proposedGoodCall.specialistId !== candidate.specialistId) {
     return {
@@ -250,7 +254,11 @@ function gateCommit(outcome: CorrectionOutcome, candidate: CorrectionCandidate):
   const good = outcome.proposedGoodExample;
   const bad = outcome.proposedBadExample;
   if (!good && !bad) {
-    return { ok: false, rejected: false, reason: 'no proposedGoodExample or proposedBadExample to append' };
+    return {
+      ok: false,
+      rejected: false,
+      reason: 'no proposedGoodExample or proposedBadExample to append',
+    };
   }
   return { ok: true, good, bad };
 }

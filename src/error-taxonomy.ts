@@ -32,15 +32,18 @@ const PLAYBOOKS: Record<ToolErrorType, { user: string; model: string }> = {
   },
   exec_failed: {
     user: 'Command failed — model may retry with a corrected form.',
-    model: 'Re-examine the command; a quoting, path, or flag issue is likely. Retry with a corrected form.',
+    model:
+      'Re-examine the command; a quoting, path, or flag issue is likely. Retry with a corrected form.',
   },
   not_found: {
     user: 'Target was not found.',
-    model: 'The target (URL, file, command, or resource) was not found. Do not retry the same call — try a different target or report the miss.',
+    model:
+      'The target (URL, file, command, or resource) was not found. Do not retry the same call — try a different target or report the miss.',
   },
   auth: {
     user: 'Authentication failed — re-authenticate or check your API key.',
-    model: 'Authentication failed. Do not retry. Ask the user to re-authenticate (e.g. /provider for API keys) or surface the issue.',
+    model:
+      'Authentication failed. Do not retry. Ask the user to re-authenticate (e.g. /provider for API keys) or surface the issue.',
   },
   rate_limit: {
     user: 'Rate-limited — wait or switch provider with /provider.',
@@ -52,19 +55,23 @@ const PLAYBOOKS: Record<ToolErrorType, { user: string; model: string }> = {
   },
   timeout: {
     user: 'Timed out — operation took too long.',
-    model: 'Operation timed out. Consider a narrower query or splitting the work. Do not blindly retry.',
+    model:
+      'Operation timed out. Consider a narrower query or splitting the work. Do not blindly retry.',
   },
   transient: {
     user: 'Transient upstream error — try again in a moment.',
-    model: 'Transient upstream failure (network or 5xx). One retry is acceptable; if it persists, surface the issue.',
+    model:
+      'Transient upstream failure (network or 5xx). One retry is acceptable; if it persists, surface the issue.',
   },
   parse_failed: {
     user: 'Tool output failed to parse — internal model variance.',
-    model: 'The wrapper did not return parseable structured output. Treat as transient and retry once with simpler input.',
+    model:
+      'The wrapper did not return parseable structured output. Treat as transient and retry once with simpler input.',
   },
   pool_exhausted: {
     user: 'Bernard tool-wrapper pool is saturated — wait for in-flight calls to finish.',
-    model: 'Tool-wrapper pool is at capacity. Wait or sequence the call after current work completes. Do not retry immediately.',
+    model:
+      'Tool-wrapper pool is at capacity. Wait or sequence the call after current work completes. Do not retry immediately.',
   },
   cancelled: {
     user: 'Cancelled.',
@@ -72,7 +79,8 @@ const PLAYBOOKS: Record<ToolErrorType, { user: string; model: string }> = {
   },
   unknown: {
     user: 'Tool failed with an unrecognized error.',
-    model: 'The error did not match any known pattern. Read the snippet, consider whether one careful retry is justified, and otherwise surface to the user.',
+    model:
+      'The error did not match any known pattern. Read the snippet, consider whether one careful retry is justified, and otherwise surface to the user.',
   },
 };
 
