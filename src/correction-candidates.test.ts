@@ -192,15 +192,37 @@ describe('CorrectionCandidateStore', () => {
 
     it('returns undefined when at MAX_PENDING_CORRECTIONS', () => {
       const files = Array.from({ length: MAX_PENDING_CORRECTIONS }, (_, i) => `c${i}.json`);
+      vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readdirSync).mockReturnValue(files as any);
+      vi.mocked(fs.readFileSync).mockImplementation(
+        () => JSON.stringify(makeCandidate({ status: 'pending' })) as any,
+      );
+      store.refreshPendingCount();
       expect(store.enqueue(input)).toBeUndefined();
     });
 
     it('does not write when at MAX_PENDING_CORRECTIONS', () => {
       const files = Array.from({ length: MAX_PENDING_CORRECTIONS }, (_, i) => `c${i}.json`);
+      vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readdirSync).mockReturnValue(files as any);
+      vi.mocked(fs.readFileSync).mockImplementation(
+        () => JSON.stringify(makeCandidate({ status: 'pending' })) as any,
+      );
+      store.refreshPendingCount();
       store.enqueue(input);
       expect(fsUtils.atomicWriteFileSync).not.toHaveBeenCalled();
+    });
+
+    it('allows enqueue when pending count is below cap even if many dismissed exist', () => {
+      const files = Array.from({ length: MAX_PENDING_CORRECTIONS }, (_, i) => `c${i}.json`);
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(files as any);
+      vi.mocked(fs.readFileSync).mockImplementation(
+        () => JSON.stringify(makeCandidate({ status: 'dismissed' })) as any,
+      );
+      store.refreshPendingCount();
+      expect(store.enqueue(input)).toBeDefined();
+      expect(fsUtils.atomicWriteFileSync).toHaveBeenCalled();
     });
   });
 

@@ -14,12 +14,19 @@ vi.mock('./output.js', () => ({ printInfo: vi.fn() }));
 // ---------------------------------------------------------------------------
 
 type MockDeps = RunCorrectionDeps & {
-  specialistStore: { get: ReturnType<typeof vi.fn> };
+  specialistStore: {
+    get: ReturnType<typeof vi.fn>;
+    appendExamples: ReturnType<typeof vi.fn>;
+  };
   correctionStore: { listPending: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> };
 };
 
 function createMockDeps(overrides?: Partial<RunCorrectionDeps>): MockDeps {
-  const specialistStore = { get: vi.fn() };
+  const specialistStore = {
+    get: vi.fn(),
+    // Returns a truthy "updated specialist" so gateCommit treats appendExamples as success.
+    appendExamples: vi.fn(() => ({ id: 'shell-wrapper' })),
+  };
   const correctionStore = {
     listPending: vi.fn(() => [] as CorrectionCandidate[]),
     update: vi.fn(),
@@ -59,6 +66,30 @@ function createCandidate(id: string): CorrectionCandidate {
 }
 
 const VALID_SPECIALIST = { id: 'correction-agent', kind: 'meta', name: 'Correction Agent' };
+
+/**
+ * Correction-agent result the orchestrator should accept and commit:
+ *  - validated:true + applied:true
+ *  - proposedGoodCall.specialistId matches the candidate (shell-wrapper)
+ *  - validatedResult is a captured ok-envelope (no re-execution needed)
+ *  - both proposedGoodExample and proposedBadExample present
+ */
+const APPLIED_OK_PAYLOAD = JSON.stringify({
+  status: 'ok',
+  result: {
+    validated: true,
+    applied: true,
+    proposedGoodCall: { specialistId: 'shell-wrapper', input: 'do the thing' },
+    validatedResult: '{"status":"ok","result":"ran"}',
+    proposedGoodExample: { input: 'in', call: 'shell {"command":"ok"}' },
+    proposedBadExample: {
+      input: 'in',
+      call: 'shell {"command":"bad"}',
+      error: 'boom',
+      fix: 'use this',
+    },
+  },
+});
 
 // ---------------------------------------------------------------------------
 // extractOutcome
@@ -179,9 +210,7 @@ describe('runCorrectionAgent', () => {
 
   it('uses prefetchedPending instead of calling store.listPending', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi
-      .fn()
-      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
+    const mockExecute = vi.fn().mockResolvedValue(APPLIED_OK_PAYLOAD);
     deps.toolWrapperRun = { execute: mockExecute };
 
     await runCorrectionAgent(deps, [createCandidate('x')]);
@@ -201,9 +230,7 @@ describe('runCorrectionAgent', () => {
 
   it('processes at most 5 candidates (MAX_CANDIDATES_PER_RUN) when given 7', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi
-      .fn()
-      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
+    const mockExecute = vi.fn().mockResolvedValue(APPLIED_OK_PAYLOAD);
     deps.toolWrapperRun = { execute: mockExecute };
 
     const candidates = Array.from({ length: 7 }, (_, i) => createCandidate(`c${i}`));
@@ -211,14 +238,13 @@ describe('runCorrectionAgent', () => {
 
     expect(result.processed).toBe(5);
     expect(result.skipped).toBe(2);
+    // Orchestrator no longer re-executes — agent runs once per candidate.
     expect(mockExecute).toHaveBeenCalledTimes(5);
   });
 
   it('processes all candidates when count is below the batch limit', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi
-      .fn()
-      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
+    const mockExecute = vi.fn().mockResolvedValue(APPLIED_OK_PAYLOAD);
     deps.toolWrapperRun = { execute: mockExecute };
 
     const candidates = [createCandidate('a'), createCandidate('b'), createCandidate('c')];
@@ -232,31 +258,91 @@ describe('runCorrectionAgent', () => {
   // Outcome: applied
   // -------------------------------------------------------------------------
 
-  it('marks candidate as "applied" when outcome has applied:true', async () => {
+  it('marks candidate as "applied" when outcome has applied:true with proposedGoodCall + validatedResult.status:ok', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const mockExecute = vi
-      .fn()
-      .mockResolvedValue(
-        '{"status":"ok","result":{"validated":true,"applied":true,"notes":"fixed"}}',
-      );
+    const payload = JSON.stringify({
+      status: 'ok',
+      result: {
+        validated: true,
+        applied: true,
+        notes: 'fixed',
+        proposedGoodCall: { specialistId: 'shell-wrapper', input: 'good' },
+        validatedResult: '{"status":"ok","result":"ran"}',
+        proposedGoodExample: { input: 'in', call: 'shell ok' },
+        proposedBadExample: { input: 'in', call: 'shell bad', error: 'e', fix: 'f' },
+      },
+    });
+    const mockExecute = vi.fn().mockResolvedValue(payload);
     deps.toolWrapperRun = { execute: mockExecute };
 
     const candidate = createCandidate('id-applied');
     const result = await runCorrectionAgent(deps, [candidate]);
 
     expect(result.applied).toBe(1);
-    expect(deps.correctionStore.update).toHaveBeenCalledWith('id-applied', {
-      status: 'applied',
-      validated: true,
-      notes: 'fixed',
-    });
+    expect(deps.specialistStore.appendExamples).toHaveBeenCalledWith(
+      'shell-wrapper',
+      expect.objectContaining({ input: 'in', call: 'shell ok' }),
+      expect.objectContaining({ error: 'e', fix: 'f' }),
+    );
+    expect(deps.correctionStore.update).toHaveBeenCalledWith(
+      'id-applied',
+      expect.objectContaining({ status: 'applied', validated: true, notes: 'fixed' }),
+    );
   });
 
-  it('increments applied counter correctly', async () => {
+  it('marks candidate as "invalid" when applied:true but proposedGoodCall is missing', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
     const mockExecute = vi
       .fn()
       .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
+    deps.toolWrapperRun = { execute: mockExecute };
+
+    const result = await runCorrectionAgent(deps, [createCandidate('id-noreval')]);
+
+    expect(result.applied).toBe(0);
+    expect(deps.correctionStore.update).toHaveBeenCalledWith(
+      'id-noreval',
+      expect.objectContaining({
+        status: 'invalid',
+        validated: false,
+        notes: expect.stringContaining('no proposedGoodCall'),
+      }),
+    );
+  });
+
+  it('marks candidate as "invalid" when agent\'s captured validatedResult.status is "error"', async () => {
+    vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
+    const payload = JSON.stringify({
+      status: 'ok',
+      result: {
+        validated: true,
+        applied: true,
+        proposedGoodCall: { specialistId: 'shell-wrapper', input: 'good' },
+        // Agent honestly captured a failing envelope — orchestrator rejects.
+        validatedResult: '{"status":"error","error":"still broken"}',
+        proposedGoodExample: { input: 'in', call: 'shell ok' },
+      },
+    });
+    const mockExecute = vi.fn().mockResolvedValue(payload);
+    deps.toolWrapperRun = { execute: mockExecute };
+
+    const result = await runCorrectionAgent(deps, [createCandidate('id-revalfail')]);
+
+    expect(result.applied).toBe(0);
+    expect(deps.specialistStore.appendExamples).not.toHaveBeenCalled();
+    expect(deps.correctionStore.update).toHaveBeenCalledWith(
+      'id-revalfail',
+      expect.objectContaining({
+        status: 'invalid',
+        validated: false,
+        notes: expect.stringMatching(/did not succeed|validatedResult/),
+      }),
+    );
+  });
+
+  it('increments applied counter correctly', async () => {
+    vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
+    const mockExecute = vi.fn().mockResolvedValue(APPLIED_OK_PAYLOAD);
     deps.toolWrapperRun = { execute: mockExecute };
 
     const result = await runCorrectionAgent(deps, [createCandidate('a'), createCandidate('b')]);
@@ -380,7 +466,8 @@ describe('runCorrectionAgent', () => {
     const mockExecute = vi
       .fn()
       .mockRejectedValueOnce(new Error('first fails'))
-      .mockResolvedValueOnce('{"status":"ok","result":{"validated":true,"applied":true}}');
+      // Second candidate: agent succeeds with a captured ok-envelope
+      .mockResolvedValueOnce(APPLIED_OK_PAYLOAD);
     deps.toolWrapperRun = { execute: mockExecute };
 
     const candidates = [createCandidate('a'), createCandidate('b')];
@@ -397,11 +484,21 @@ describe('runCorrectionAgent', () => {
 
   it('processes 3 candidates with mixed outcomes and updates each correctly', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
+    const c1Payload = JSON.stringify({
+      status: 'ok',
+      result: {
+        validated: true,
+        applied: true,
+        notes: 'applied-note',
+        proposedGoodCall: { specialistId: 'shell-wrapper', input: 'good' },
+        validatedResult: '{"status":"ok","result":"ran"}',
+        proposedGoodExample: { input: 'in', call: 'shell ok' },
+        proposedBadExample: { input: 'in', call: 'shell bad', error: 'e', fix: 'f' },
+      },
+    });
     const mockExecute = vi
       .fn()
-      .mockResolvedValueOnce(
-        '{"status":"ok","result":{"validated":true,"applied":true,"notes":"applied-note"}}',
-      )
+      .mockResolvedValueOnce(c1Payload)
       .mockResolvedValueOnce('{"status":"ok","result":{"validated":true,"applied":false}}')
       .mockResolvedValueOnce('{"status":"error","result":"bad"}');
     deps.toolWrapperRun = { execute: mockExecute };
@@ -412,11 +509,10 @@ describe('runCorrectionAgent', () => {
     expect(result.processed).toBe(3);
     expect(result.applied).toBe(1);
 
-    expect(deps.correctionStore.update).toHaveBeenCalledWith('c1', {
-      status: 'applied',
-      validated: true,
-      notes: 'applied-note',
-    });
+    expect(deps.correctionStore.update).toHaveBeenCalledWith(
+      'c1',
+      expect.objectContaining({ status: 'applied', validated: true, notes: 'applied-note' }),
+    );
     expect(deps.correctionStore.update).toHaveBeenCalledWith('c2', {
       status: 'rejected',
       validated: true,
@@ -435,21 +531,18 @@ describe('runCorrectionAgent', () => {
 
   it('uses the injected toolWrapperRun.execute instead of the factory', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const injectedExecute = vi
-      .fn()
-      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
+    const injectedExecute = vi.fn().mockResolvedValue(APPLIED_OK_PAYLOAD);
     deps.toolWrapperRun = { execute: injectedExecute };
 
     await runCorrectionAgent(deps, [createCandidate('inj')]);
 
+    // Agent runs once per candidate; orchestrator does NOT re-execute.
     expect(injectedExecute).toHaveBeenCalledTimes(1);
   });
 
   it('calls toolWrapperRun.execute with the correction-agent specialistId', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const injectedExecute = vi
-      .fn()
-      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
+    const injectedExecute = vi.fn().mockResolvedValue(APPLIED_OK_PAYLOAD);
     deps.toolWrapperRun = { execute: injectedExecute };
 
     await runCorrectionAgent(deps, [createCandidate('chk')]);
@@ -460,9 +553,7 @@ describe('runCorrectionAgent', () => {
 
   it('passes a toolCallId containing the candidate id to execute', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
-    const injectedExecute = vi
-      .fn()
-      .mockResolvedValue('{"status":"ok","result":{"validated":true,"applied":true}}');
+    const injectedExecute = vi.fn().mockResolvedValue(APPLIED_OK_PAYLOAD);
     deps.toolWrapperRun = { execute: injectedExecute };
 
     await runCorrectionAgent(deps, [createCandidate('my-id')]);
@@ -478,7 +569,17 @@ describe('runCorrectionAgent', () => {
   it('handles execute returning a plain object (not a string) by JSON.stringify-ing it', async () => {
     vi.mocked(deps.specialistStore.get).mockReturnValue(VALID_SPECIALIST as any);
     // Return an object instead of a JSON string
-    const objResult = { status: 'ok', result: { validated: true, applied: true } };
+    const objResult = {
+      status: 'ok',
+      result: {
+        validated: true,
+        applied: true,
+        proposedGoodCall: { specialistId: 'shell-wrapper', input: 'good' },
+        validatedResult: { status: 'ok', result: 'ran' },
+        proposedGoodExample: { input: 'in', call: 'shell ok' },
+        proposedBadExample: { input: 'in', call: 'shell bad', error: 'e', fix: 'f' },
+      },
+    };
     const injectedExecute = vi.fn().mockResolvedValue(objResult);
     deps.toolWrapperRun = { execute: injectedExecute };
 
@@ -487,11 +588,10 @@ describe('runCorrectionAgent', () => {
 
     // Should parse correctly from the stringified object
     expect(result.applied).toBe(1);
-    expect(deps.correctionStore.update).toHaveBeenCalledWith('obj-return', {
-      status: 'applied',
-      validated: true,
-      notes: undefined,
-    });
+    expect(deps.correctionStore.update).toHaveBeenCalledWith(
+      'obj-return',
+      expect.objectContaining({ status: 'applied', validated: true }),
+    );
   });
 
   // -------------------------------------------------------------------------

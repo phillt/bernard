@@ -90,6 +90,7 @@ import { getDomain, getDomainIds } from './domains.js';
 import { RoutineStore } from './routines.js';
 import { SpecialistStore, getBuiltinSpecialistIds } from './specialists.js';
 import { runCorrectionAgent } from './correction.js';
+import { classifyError } from './error-taxonomy.js';
 import { CandidateStore } from './specialist-candidates.js';
 import { assembleContext } from './framework/context.js';
 import {
@@ -1038,6 +1039,33 @@ export async function startRepl(
     },
   });
   const agent = new Agent(agentCtx, { alertContext, initialHistory });
+
+  // Drain the correction-candidate backlog of non-correctable failures
+  // (HTTP 404, rate limits, pool exhaustion, etc.) before the agent runs.
+  // Best-effort, idempotent — only touches `status: 'pending'` rows.
+  if (config.correctionEnabled) {
+    try {
+      const dismissed = agent.getCorrectionStore().dismissNonCorrectable(classifyError, {
+        toolNameFor: (candidate) => {
+          const specialist = specialistStore.get(candidate.specialistId);
+          const tools = specialist?.targetTools ?? [];
+          if (tools.length > 0) return tools;
+          // Specialist was deleted between enqueue and now. Try to recover a
+          // useful toolName from the error text so we don't dismiss what was
+          // actually a learnable shell mistake.
+          if (/command not found|no such file or directory/i.test(candidate.error)) {
+            return ['shell'];
+          }
+          return [];
+        },
+      });
+      if (dismissed > 0) {
+        printInfo(`Dismissed ${dismissed} non-correctable correction candidate(s).`);
+      }
+    } catch (err) {
+      debugLog('correction:dismiss-error', err instanceof Error ? err.message : String(err));
+    }
+  }
 
   let cleanedUp = false;
   const cleanup = async () => {

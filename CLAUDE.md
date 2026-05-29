@@ -131,7 +131,7 @@ Specialists have a `kind` field: `persona` (default, historic behavior), `tool-w
 - **`tool_wrapper_run`** — Dispatch tool that the main agent uses to invoke tool-wrapper or meta specialists. Returns strict JSON `{status, result, error?, reasoning?}`. Isolates tools by `targetTools` so e.g. `shell-wrapper` cannot call `web_read`.
 - **`web_search`** — Provider chain (Brave → Tavily → DuckDuckGo scrape); returns `[{title,url,snippet}]`. Used by `web-wrapper` and `specialist-creator`.
 - **Bundled specialists** seeded on first run into `specialists/`: `shell-wrapper`, `file-wrapper`, `web-wrapper`, `correction-agent`, `specialist-creator`. Users can edit them freely; `.seeded-v1` marker prevents re-seeding.
-- **Correction flow**: when `tool_wrapper_run` returns `status: 'error'`, a candidate is enqueued in `correction-candidates/`. At REPL shutdown, the `correction-agent` proposes a fix, **validates it by actually executing `tool_wrapper_run`**, and only on successful validation appends new good/bad examples to the target specialist (capped at 10 each, oldest drops). This prevents hallucinated examples from entering system prompts.
+- **Correction flow**: when `tool_wrapper_run` returns `status: 'error'`, the error is classified via `src/error-taxonomy.ts`; only **correctable** failures (call-shape mistakes: `invalid_args`, `exec_failed`, `not_found` in shell context) get enqueued in `correction-candidates/`. Environmental failures (HTTP 404, `rate_limit`, `auth`, `pool_exhausted`, `parse_failed`, etc.) are dismissed at the boundary and never pollute the queue. At REPL startup the store also runs `dismissNonCorrectable(classifyError)` to drain pre-existing non-correctable rows. At REPL shutdown the `correction-agent` proposes a fix and emits `proposedGoodCall: {specialistId, input}` alongside `applied: true`; the orchestrator (`src/correction.ts`) then **independently re-executes** that call via `tool_wrapper_run` and only marks the candidate `applied` if the re-run returns `status: 'ok'`. Otherwise it's marked `invalid` with a `re-validation failed` note. Good/bad examples are capped at 10 each, oldest drops.
 - **Organic tool discovery**: the `specialist-creator` meta-agent researches unknown tools via `shell` (man/--help), `web_search`, and `web_read`, drafts a new tool-wrapper, validates it with `tool_wrapper_run`, and only then commits. Invoke via `tool_wrapper_run { specialistId: 'specialist-creator', input: 'create a specialist for jq' }`.
 
 ## Tool Augmentation Layer
@@ -140,7 +140,21 @@ A transparent layer that wraps every tool's `execute` function to observe errors
 
 - **Profiles**: Each tool gets a JSON profile at `tool-profiles/<key>.json` with guidelines, good/bad examples (max 5 each). Profiles are auto-created on first error — no pre-configuration needed for new tools or MCP servers.
 - **Shell sub-categories**: Shell commands are classified by prefix regex (`git` → `shell.git`, `gh` → `shell.gh`, `docker` → `shell.docker`, `npm` → `shell.npm`, `ls`/`find`/etc. → `shell.fs`, `curl`/`wget` → `shell.http`). Each sub-category has its own profile.
-- **Error learning**: When a tool returns an error, the actual args and error text are recorded as a bad example (no hallucination — only real observed errors). When the model retries successfully, the bad example's `fix` field is patched with the working args.
+- **Error learning**: When a tool returns an error, the error is classified via `src/error-taxonomy.ts`; only **correctable** errors (call-shape mistakes) become bad examples — environmental failures (HTTP 4xx/5xx, `rate_limit`, `pool_exhausted`, etc.) are dismissed so the playbook isn't polluted with "things the model can't fix." Successful tool calls always bump `successCount` (via `recordSuccess`), and when the model retries successfully after a recorded error, the bad example's `fix` field is patched with the working args.
 - **System prompt injection**: `buildToolProfilesPrompt()` renders a compact `## Tool Usage Profiles` block showing guidelines and the 2 most recent bad examples per tool (~800 tokens worst case).
 - **MCP tools**: Augmented automatically. Identified by `__` in tool name (the `@ai-sdk/mcp` convention). Profiles stored at `mcp.<name>.json`.
 - **Seeded defaults**: Guidelines for `shell.git`, `shell.fs`, `shell.npm`, `web_read`, `file_read_lines`, `file_edit_lines` ship built-in and are seeded on first run (`.seeded-v1` marker).
+
+## Failure Taxonomy
+
+`src/error-taxonomy.ts` is a central classifier that turns a raw tool error (message, optional `toolName`/`errno`/`httpStatus`) into `{category, correctable, retryable, severity, playbook: {user, model}}`. Categories: `invalid_args | exec_failed | not_found | auth | rate_limit | permission | timeout | transient | parse_failed | pool_exhausted | cancelled | unknown`. `not_found` is correctable only when `toolName === 'shell'` (a command-not-found mistake the model can fix) — for web tools a 404 is "the URL is gone," not learnable.
+
+The same classification drives four surfaces:
+
+- **Correction queue gate**: `src/tools/tool-wrapper-run.ts` only enqueues a candidate when `cls.correctable === true`. Non-correctable failures are logged and dropped.
+- **Profile gate**: `src/tools/augment.ts` only records bad examples when `cls.correctable === true`; success always bumps `recordSuccess`.
+- **User render**: the wrapper-routing shim (`src/tools/wrap-with-specialist.ts`) calls `printToolFailure(category, snippet, playbook.user, severity)` so the terminal shows a two-line `category: snippet → recovery hint` block whose color follows severity.
+- **Model hint**: the same shim prepends `[failure: <category>] <playbook.model>` to the error string the model sees on its next turn.
+- **Cron alerts**: `src/cron/runner.ts` classifies any job-level throw and fires `sendNotification({severity, ...})` with the user-facing playbook so headless jobs surface failures with the right urgency.
+
+Severity map — `critical`: `auth`, `permission`; `normal`: `rate_limit`, `not_found`, `invalid_args`, `exec_failed`; `low`: everything else.

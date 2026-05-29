@@ -574,6 +574,34 @@ describe('ToolProfileStore', () => {
     });
   });
 
+  describe('recordSuccess', () => {
+    it('increments successCount without storing an example', () => {
+      const profile = makeProfile({ toolName: 'shell.gh', successCount: 12 });
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(profile));
+
+      store.recordSuccess('shell.gh');
+
+      const saved = JSON.parse(
+        vi.mocked(fsUtils.atomicWriteFileSync).mock.calls.at(-1)![1] as string,
+      );
+      expect(saved.successCount).toBe(13);
+      expect(saved.goodExamples).toEqual([]);
+    });
+
+    it('creates the profile if missing and starts the counter at 1', () => {
+      vi.mocked(fs.readFileSync).mockImplementation(() => {
+        throw new Error('ENOENT');
+      });
+
+      store.recordSuccess('shell.gh');
+
+      const saved = JSON.parse(
+        vi.mocked(fsUtils.atomicWriteFileSync).mock.calls.at(-1)![1] as string,
+      );
+      expect(saved.successCount).toBe(1);
+    });
+  });
+
   describe('patchLastBadWithFix', () => {
     it('patches the last bad example when fix is awaiting', () => {
       const profile = makeProfile({

@@ -22,6 +22,7 @@ import { ProvenanceStore } from '../provenance.js';
 import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
+import { classifyError } from '../error-taxonomy.js';
 import {
   definitions,
   registerBuiltinDefinitions,
@@ -159,6 +160,13 @@ export interface DispatchToolWrapperArgs {
   abortSignal?: AbortSignal;
   /** Label shown to the user when announcing the wrapper run. Defaults to `[<kind>] <name>`. */
   runLabel?: string;
+  /**
+   * When true, errors from this dispatch are NOT enqueued onto the
+   * correction-candidate queue. Used by the orchestrator's re-validation pass
+   * in `correction.ts` so a failed re-run doesn't recursively spawn a new
+   * candidate — the original candidate is already being handled.
+   */
+  skipCorrectionEnqueue?: boolean;
 }
 
 /**
@@ -178,7 +186,16 @@ export async function dispatchToolWrapper(
   deps: ToolWrapperDeps,
 ): Promise<WrapperResult> {
   registerBuiltinDefinitions();
-  const { specialistId, input, context, provider, model, abortSignal, runLabel } = args;
+  const {
+    specialistId,
+    input,
+    context,
+    provider,
+    model,
+    abortSignal,
+    runLabel,
+    skipCorrectionEnqueue,
+  } = args;
   const {
     config,
     options,
@@ -300,14 +317,29 @@ export async function dispatchToolWrapper(
       ...(wrapped.reasoning !== undefined ? { reasoning: wrapped.reasoning } : {}),
     });
 
-    if (wrapped.status === 'error' && kind === 'tool-wrapper') {
+    if (wrapped.status === 'error' && kind === 'tool-wrapper' && !skipCorrectionEnqueue) {
       try {
-        correctionStore.enqueue({
-          specialistId,
-          input,
-          attemptedCall: captureLastToolCall(result.steps as any[]),
-          error: wrapped.error ?? String(wrapped.result),
-        });
+        const errorMessage = wrapped.error ?? String(wrapped.result);
+        const attemptedCall = captureLastToolCall(result.steps as any[]);
+        // The first targetTool is the canonical tool this wrapper fronts;
+        // it lets the classifier distinguish shell "command not found"
+        // (correctable) from web 404 (not).
+        const wrappedToolName = specialist.targetTools?.[0];
+        const cls = classifyError({ message: errorMessage, toolName: wrappedToolName });
+        if (cls.correctable) {
+          correctionStore.enqueue({
+            specialistId,
+            input,
+            attemptedCall,
+            error: errorMessage,
+            category: cls.category,
+          });
+        } else {
+          debugLog('tool-wrapper:correction-dismiss', {
+            specialistId,
+            category: cls.category,
+          });
+        }
       } catch (err) {
         debugLog(
           'tool-wrapper:correction-enqueue:error',

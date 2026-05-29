@@ -1,6 +1,8 @@
 import { dispatchToolWrapper, type ToolWrapperDeps } from './tool-wrapper-run.js';
 import { debugLog } from '../logger.js';
 import { preserveMeta } from '../framework/tools/adapter.js';
+import { classifyError } from '../error-taxonomy.js';
+import { printToolFailure } from '../output.js';
 
 /**
  * Builds the natural-language input handed to a wrapper specialist when the
@@ -109,6 +111,25 @@ export function wrapToolWithSpecialist<TArgs>(
           },
           deps,
         );
+        if (wrapped.status === 'error') {
+          // Use the same fallback for display that the classifier consumes, so
+          // wrappers that report the diagnostic via `result` (parse_failed
+          // paths etc.) still surface a usable snippet to the user instead of
+          // an empty line. PR #189 review feedback.
+          const snippet = wrapped.error ?? String(wrapped.result ?? '');
+          const cls = classifyError({ message: snippet, toolName });
+          printToolFailure(cls.category, snippet, cls.playbook.user, cls.severity);
+          // Prepend a one-line model-facing hint so the next turn's
+          // tool-result message carries category + recovery guidance.
+          // augment.ts strips this `[failure: ...]` prefix before recording
+          // bad examples so the hint doesn't pollute the tool-profile bytes.
+          const hint = `[failure: ${cls.category}] ${cls.playbook.model}`;
+          const annotated = {
+            ...wrapped,
+            error: wrapped.error ? `${hint}\n${wrapped.error}` : hint,
+          };
+          return formatWrappedResult(annotated, toolName);
+        }
         return formatWrappedResult(wrapped, toolName);
       } catch (err) {
         // Defensive: if the dispatch itself throws, fall back to the raw tool

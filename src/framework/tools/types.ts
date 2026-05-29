@@ -47,7 +47,26 @@ export function isCacheable(meta: ToolMeta): boolean {
   return meta.deterministic === true && (meta.sideEffect === 'none' || meta.cacheable === true);
 }
 
-export type ToolErrorType = 'invalid_args' | 'exec_failed' | 'timeout' | 'cancelled' | 'unknown';
+/**
+ * Failure taxonomy for tool calls. `invalid_args` and `exec_failed` are
+ * call-shape mistakes the model can learn from (and feed the correction
+ * loop); the rest are environmental / irreducible and are excluded from
+ * learning by `error-taxonomy.ts`. `not_found` is context-dependent —
+ * shell "command not found" is learnable; HTTP 404 is not.
+ */
+export type ToolErrorType =
+  | 'invalid_args'
+  | 'exec_failed'
+  | 'not_found'
+  | 'auth'
+  | 'rate_limit'
+  | 'permission'
+  | 'timeout'
+  | 'transient'
+  | 'parse_failed'
+  | 'pool_exhausted'
+  | 'cancelled'
+  | 'unknown';
 
 export interface ToolError {
   type: ToolErrorType;
