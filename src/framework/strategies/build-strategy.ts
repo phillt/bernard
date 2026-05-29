@@ -1,4 +1,5 @@
 import type { BernardConfig } from '../../config.js';
+import { isReactEffective } from '../../policy/effective.js';
 import type { PolicyDecision } from '../../policy/types.js';
 import { NormalStrategy } from './normal.js';
 import { ReActStrategy } from './react.js';
@@ -70,9 +71,14 @@ registerStrategy((inner, config, opts) => {
   // Prefer the Policy Engine's per-turn decision; fall back to the global
   // `BERNARD_REACT_MODE` config flag when the engine hasn't supplied one
   // (e.g. specialist sub-agents, which don't run through the engine).
-  const reactWanted =
-    opts.strategyId === 'react' || (opts.strategyId === undefined && config.reactMode);
+  const reactWanted = isReactEffective(config, { strategyId: opts.strategyId });
+  // Forward `effectiveReactMode: true` so the constructed strategy's runtime
+  // guard (and its `shouldEnforcePlan` call) doesn't re-consult the global
+  // flag and silently no-op when the policy override wanted ReAct.
   return reactWanted
-    ? new ReActStrategy(inner, { enforcementStepRatio: opts.enforcementStepRatio })
+    ? new ReActStrategy(inner, {
+        enforcementStepRatio: opts.enforcementStepRatio,
+        effectiveReactMode: true,
+      })
     : null;
 });

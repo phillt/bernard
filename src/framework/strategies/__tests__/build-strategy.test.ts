@@ -50,9 +50,31 @@ describe('buildStrategy', () => {
     );
   });
 
+  it('opts.strategyId="react" actually injects coordinator prompt at runtime (not just by type)', async () => {
+    // Regression for Copilot review: instance-check alone was insufficient
+    // because ReActStrategy.run used to short-circuit on ctx.config.reactMode,
+    // making the override a runtime no-op despite the right type.
+    const config = makeConfig({ reactMode: false, maxSteps: 40 });
+    const strategy = buildStrategy(config, { strategyId: 'react' });
+    const ctx = makeCtx(config);
+    await strategy.run(ctx);
+    const firstCall = (ctx.iterate as any).mock.calls[0][0];
+    expect(firstCall.systemSuffix).toContain('Coordinator Mode');
+    expect(firstCall.maxStepsOverride).toBe(120);
+  });
+
   it('opts.strategyId="normal" forces NormalStrategy even when config.reactMode is true', () => {
     expect(buildStrategy(makeConfig({ reactMode: true }), { strategyId: 'normal' })).toBeInstanceOf(
       NormalStrategy,
     );
+  });
+
+  it('opts.strategyId="normal" runs as Normal at runtime even with reactMode=true', async () => {
+    const config = makeConfig({ reactMode: true });
+    const strategy = buildStrategy(config, { strategyId: 'normal' });
+    const ctx = makeCtx(config);
+    await strategy.run(ctx);
+    const firstCall = (ctx.iterate as any).mock.calls[0][0];
+    expect(firstCall.systemSuffix).toBeUndefined();
   });
 });

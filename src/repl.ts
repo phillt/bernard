@@ -1015,7 +1015,10 @@ export async function startRepl(
         const pending = correctionStore.listPending();
         if (pending.length > 0) {
           printInfo(`Reviewing ${pending.length} tool-wrapper failure(s) for learning...`);
-          const result = await runCorrectionAgent({ ctx: agentCtx }, pending);
+          // Read the live ctx off the agent so the correction pass sees
+          // the latest policyDecision and any other per-turn refinements
+          // made by `processInput`; `agentCtx` is the startup snapshot.
+          const result = await runCorrectionAgent({ ctx: agent.getContext() }, pending);
           if (result.applied > 0) {
             printInfo(
               `  Learned from ${result.applied}/${result.processed} failure(s); examples updated.`,

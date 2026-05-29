@@ -1,21 +1,17 @@
 import type { PolicyDecision, SubPolicy } from './types.js';
 
 /**
- * Component identifiers used as keys in the per-component model map. Listed
- * here (not just in the sub-policy body) so downstream call sites in
- * different files can share the same constants when issue #170 wires them up.
+ * Component identifiers used as keys in the per-component model map.
+ *
+ * Only the components whose call sites currently receive `AgentContext`
+ * (and can therefore read `ctx.policyDecision`) are listed: `main` and
+ * sub-agents. Issue #170 will extend this set as it threads policy access
+ * through the other model-selection call sites (`wrapper`, `cron`,
+ * `prompt-rewriter`, `repair`, `reference-resolver`, `specialist-detector`,
+ * `context-compression`) — each one gets added together with its wiring so
+ * the policy contract never advertises a slot that nothing reads.
  */
-export const MODEL_COMPONENTS = [
-  'main',
-  'sub',
-  'wrapper',
-  'cron',
-  'prompt-rewriter',
-  'repair',
-  'reference-resolver',
-  'specialist-detector',
-  'context-compression',
-] as const;
+export const MODEL_COMPONENTS = ['main', 'sub'] as const;
 
 export type ModelComponent = (typeof MODEL_COMPONENTS)[number];
 

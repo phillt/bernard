@@ -158,6 +158,17 @@ export class Agent {
     return this.lastPolicyResult;
   }
 
+  /**
+   * Returns the live `AgentContext` (with the most recent `policyDecision`
+   * threaded in by `processInput`). The Agent class re-points `this.ctx`
+   * on every turn, so callers that need to invoke a definition outside the
+   * normal turn loop (e.g. the correction agent at REPL shutdown) should
+   * read this fresh rather than caching the value handed back at startup.
+   */
+  getContext(): AgentContext {
+    return this.ctx;
+  }
+
   /** Returns step limit hit info from last processInput, or null if limit wasn't hit. */
   getStepLimitHit(): { currentLimit: number; hitCount: number } | null {
     if (!this.lastStepLimitHit) return null;
@@ -199,6 +210,9 @@ export class Agent {
 
     if (policyResult.decision.scratch?.resetPlanOnly) {
       this.planStore.clear();
+    }
+    if (policyResult.decision.scratch?.resetAll) {
+      this.memoryStore.clearScratch();
     }
     clearPinnedRegion('plan');
 
@@ -501,5 +515,10 @@ export class Agent {
     this.lastRAGResults = [];
     this.stepLimitHitCount = 0;
     this.lastStepLimitHit = false;
+    this.planStore.clear();
+    this.lastPolicyResult = undefined;
+    if (this.ctx.policyDecision) {
+      this.ctx = { ...this.ctx, policyDecision: undefined };
+    }
   }
 }

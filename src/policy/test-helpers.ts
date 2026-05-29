@@ -2,17 +2,17 @@ import type { BernardConfig } from '../config.js';
 import type { PolicyInput } from './types.js';
 
 /**
- * Builds a {@link PolicyInput} for tests. Constructs only the
- * `BernardConfig` fields sub-policies currently read (provider, model,
- * reactMode); the rest are filled with safe defaults via a cast so tests
- * stay short.
+ * Builds a {@link PolicyInput} for tests. The default config is a fully-typed
+ * `BernardConfig` value (no `as` cast) so missing fields surface as compile
+ * errors when the type evolves; callers can selectively override any field
+ * via `overrides.config`.
  */
 export function makePolicyInput(overrides?: {
   userInput?: string;
   config?: Partial<BernardConfig>;
   turnIndex?: number;
 }): PolicyInput {
-  const config = {
+  const baseConfig: BernardConfig = {
     provider: 'anthropic',
     model: 'claude-sonnet-4-5-20250929',
     maxTokens: 4096,
@@ -31,11 +31,10 @@ export function makePolicyInput(overrides?: {
     referenceLookup: true,
     referenceLookupTools: [],
     customProviders: {},
-    ...overrides?.config,
-  } as BernardConfig;
+  };
   return {
     userInput: overrides?.userInput ?? 'hello',
-    config,
+    config: { ...baseConfig, ...overrides?.config },
     turnIndex: overrides?.turnIndex,
   };
 }
