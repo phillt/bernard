@@ -1,5 +1,4 @@
 import type { CoreMessage } from 'ai';
-import { buildContextMessage } from '../../context-message.js';
 import { debugLog } from '../../logger.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
@@ -55,14 +54,8 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
     return PAC_ACTOR_SYSTEM_PROMPT;
   },
 
-  async contextMessages(ctx, input) {
-    const ragResults = await searchRag(ctx, input.task);
-    const msg = buildContextMessage({
-      memoryStore: ctx.stores.memory,
-      ragResults,
-      includeScratch: true,
-    });
-    return msg ? [msg] : [];
+  async contextInputs(ctx, input) {
+    return { ragResults: await searchRag(ctx, input.task) };
   },
 
   tools(ctx) {

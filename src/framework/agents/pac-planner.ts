@@ -1,5 +1,4 @@
 import type { CoreMessage, Tool } from 'ai';
-import { buildContextMessage } from '../../context-message.js';
 import { createDateTimeTool } from '../../tools/datetime.js';
 import { createFileTools } from '../../tools/file.js';
 import { createThinkTool } from '../../tools/think.js';
@@ -82,13 +81,7 @@ export const pacPlannerDefinition: AgentDefinition<PacPlannerInput, string> = {
     return PAC_PLANNER_SYSTEM_PROMPT;
   },
 
-  contextMessages(ctx) {
-    const msg = buildContextMessage({
-      memoryStore: ctx.stores.memory,
-      includeScratch: true,
-    });
-    return msg ? [msg] : [];
-  },
+  // contextInputs omitted: framework default injects memory + scratch.
 
   tools(ctx) {
     return buildPlannerTools(ctx);

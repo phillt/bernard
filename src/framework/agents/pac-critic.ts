@@ -85,6 +85,14 @@ export const pacCriticDefinition: AgentDefinition<PacCriticInput, PacCriticVerdi
     return PAC_CRITIC_SYSTEM_PROMPT;
   },
 
+  // The Critic intentionally opts out of the framework's default
+  // `<system_provided_context>` injection (issue #143). Memory + scratch are
+  // exposed as read-only tools (`memory.read` / `scratch.read` via
+  // `buildCriticTools`) so the Critic must explicitly look up whatever it
+  // needs to verify against — keeps verification grounded in the task and the
+  // Actor's report rather than ambient memory.
+  contextInputs: () => null,
+
   tools(ctx) {
     return buildCriticTools(ctx);
   },

@@ -1,5 +1,6 @@
 import type { CoreMessage, LanguageModel, Tool } from 'ai';
 import type { BernardConfig } from '../../config.js';
+import type { ContextMessageInputs } from '../../context-message.js';
 import type { RepairLabel } from '../../tool-call-repair.js';
 import type { AgentContext } from '../context.js';
 import type { AgentHook } from '../hooks/types.js';
@@ -76,16 +77,39 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
   buildUserMessage(input: TInput): CoreMessage;
 
   /**
-   * Per-turn lower-privilege reference data prepended to the messages array
-   * each iterate call. Used to inject memory, RAG hits, scratch notes, MCP
-   * names, routine/specialist listings, resolved references, and alert
-   * context as a `role:'user'` `<system_provided_context>` message instead of
-   * stitching them into the SYSTEM prompt (see issue #172).
+   * Per-turn extras merged into the framework-managed
+   * `<system_provided_context>` block. The framework always wraps
+   * `memoryStore` + `includeScratch: true` by default — definitions only
+   * declare what they add on top (RAG hits, MCP server names, routine /
+   * specialist listings, resolved references, alert context, provenance).
+   * Issue #143.
+   *
+   * Returning `null` is an explicit opt-out (no context message is injected
+   * at all). This is the contract used by `pac-critic`, which exposes
+   * `memory.read` / `scratch.read` as tools instead of injecting memory
+   * up-front.
+   *
+   * Omitting this method entirely gets the safe default: a context message
+   * with `<persistent_memory>` + `<scratch_notes>` populated from
+   * `ctx.stores.memory`. Adding a brand-new `AgentDefinition` therefore
+   * inherits OWASP LLM01 channel separation without any per-definition
+   * wiring (issue #172 + #143).
    *
    * Rebuilt on every iterate call — NOT persisted into the caller's history.
-   * Returning an empty array (or omitting the method) skips injection.
+   *
+   * `memoryStore` is intentionally omitted from the return type: definitions
+   * MUST NOT shadow the framework-injected store, because doing so would
+   * silently drop `<persistent_memory>` + `<scratch_notes>` and re-introduce
+   * the LLM01 vector this contract exists to prevent. To opt out entirely,
+   * return `null`.
    */
-  contextMessages?(ctx: AgentContext, input: TInput): Promise<CoreMessage[]> | CoreMessage[];
+  contextInputs?(
+    ctx: AgentContext,
+    input: TInput,
+  ):
+    | Partial<Omit<ContextMessageInputs, 'memoryStore'>>
+    | null
+    | Promise<Partial<Omit<ContextMessageInputs, 'memoryStore'>> | null>;
 
   /** Hooks composed onto onStepFinish (output, token-stats, cron-step-recorder, etc.). */
   hooks(ctx: AgentContext, input: TInput): AgentHook[];

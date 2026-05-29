@@ -1,6 +1,5 @@
 import { tool, type CoreMessage, type Tool } from 'ai';
 import { z } from 'zod';
-import { buildContextMessage } from '../../context-message.js';
 import { createShellTool } from '../../tools/shell.js';
 import { createMemoryTool, createScratchTool } from '../../tools/memory.js';
 import { createDateTimeTool, formatCurrentDateTime } from '../../tools/datetime.js';
@@ -112,14 +111,11 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     return `${DAEMON_SYSTEM_PROMPT}\n\nCurrent date and time: ${formatCurrentDateTime()}`;
   },
 
-  contextMessages(ctx, input) {
-    const msg = buildContextMessage({
-      memoryStore: ctx.stores.memory,
+  contextInputs(_ctx, input) {
+    return {
       ragResults: input.ragResults,
-      includeScratch: true,
       mcpServerNames: input.serverNames,
-    });
-    return msg ? [msg] : [];
+    };
   },
 
   tools(ctx, input) {
