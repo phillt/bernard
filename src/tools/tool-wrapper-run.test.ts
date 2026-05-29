@@ -709,16 +709,19 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
 
   // ── Correction enqueue on tool-wrapper error ─────────────────────────────────
 
-  it('enqueues a correction candidate when tool-wrapper returns status:error', async () => {
+  it('enqueues a correction candidate when tool-wrapper returns a correctable status:error', async () => {
     specialistStore.get.mockReturnValue(makeToolWrapperSpecialist());
+    // Use an error message that classifies as `exec_failed` (correctable) so
+    // the failure-taxonomy gate enqueues it.
+    const correctableError = 'command failed with exit code 1: syntax error near unexpected token';
     vi.mocked(generateText).mockResolvedValue({
-      text: '{"status":"error","result":"command failed","error":"exit_code_1"}',
+      text: `{"status":"error","result":"command failed","error":"${correctableError}"}`,
       steps: [],
     } as any);
     vi.mocked(wrapWrapperResult).mockReturnValue({
       status: 'error',
       result: 'command failed',
-      error: 'exit_code_1',
+      error: correctableError,
     } as any);
 
     const toolDef = createToolWrapperRunTool(
@@ -733,6 +736,32 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     const candidate = correctionStore.enqueue.mock.calls[0][0];
     expect(candidate.specialistId).toBe('shell-wrapper');
     expect(candidate.input).toBe('run bad command');
+    expect(candidate.category).toBe('exec_failed');
+  });
+
+  it('does NOT enqueue a correction candidate for a non-correctable failure (HTTP 404)', async () => {
+    specialistStore.get.mockReturnValue(
+      makeToolWrapperSpecialist({ targetTools: ['web_read'] }),
+    );
+    vi.mocked(generateText).mockResolvedValue({
+      text: '{"status":"error","result":"page gone","error":"HTTP 404 Not Found"}',
+      steps: [],
+    } as any);
+    vi.mocked(wrapWrapperResult).mockReturnValue({
+      status: 'error',
+      result: 'page gone',
+      error: 'HTTP 404 Not Found',
+    } as any);
+
+    const toolDef = createToolWrapperRunTool(
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
+    );
+    await toolDef.execute(
+      { specialistId: 'web-wrapper', input: 'fetch missing url' },
+      DEFAULT_EXEC_OPTIONS,
+    );
+
+    expect(correctionStore.enqueue).not.toHaveBeenCalled();
   });
 
   // ── No correction enqueue for meta specialists ────────────────────────────────

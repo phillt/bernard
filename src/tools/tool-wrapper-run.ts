@@ -22,6 +22,7 @@ import { ProvenanceStore } from '../provenance.js';
 import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
+import { classifyError } from '../error-taxonomy.js';
 import {
   definitions,
   registerBuiltinDefinitions,
@@ -302,12 +303,27 @@ export async function dispatchToolWrapper(
 
     if (wrapped.status === 'error' && kind === 'tool-wrapper') {
       try {
-        correctionStore.enqueue({
-          specialistId,
-          input,
-          attemptedCall: captureLastToolCall(result.steps as any[]),
-          error: wrapped.error ?? String(wrapped.result),
-        });
+        const errorMessage = wrapped.error ?? String(wrapped.result);
+        const attemptedCall = captureLastToolCall(result.steps as any[]);
+        // The first targetTool is the canonical tool this wrapper fronts;
+        // it lets the classifier distinguish shell "command not found"
+        // (correctable) from web 404 (not).
+        const wrappedToolName = specialist.targetTools?.[0];
+        const cls = classifyError({ message: errorMessage, toolName: wrappedToolName });
+        if (cls.correctable) {
+          correctionStore.enqueue({
+            specialistId,
+            input,
+            attemptedCall,
+            error: errorMessage,
+            category: cls.category,
+          });
+        } else {
+          debugLog('tool-wrapper:correction-dismiss', {
+            specialistId,
+            category: cls.category,
+          });
+        }
       } catch (err) {
         debugLog(
           'tool-wrapper:correction-enqueue:error',

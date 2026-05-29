@@ -1,3 +1,5 @@
+import type { ToolErrorType } from '../framework/tools/types.js';
+
 /** A recurring task that Bernard executes on a cron schedule. */
 export interface CronJob {
   /** Unique identifier (UUID). */
@@ -18,6 +20,8 @@ export interface CronJob {
   lastRunStatus?: 'success' | 'error' | 'running';
   /** Truncated agent response from the most recent execution. */
   lastResult?: string;
+  /** Failure-taxonomy category from the most recent failed execution, if any. */
+  lastErrorCategory?: ToolErrorType;
 }
 
 /** A notification generated when a cron job completes and produces output. */

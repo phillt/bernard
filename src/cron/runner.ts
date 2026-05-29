@@ -7,6 +7,8 @@ import { MCPManager } from '../mcp.js';
 import { CronStore } from './store.js';
 import { CronLogStore, type CronLogStep } from './log-store.js';
 import { CronNotesStore } from './notes-store.js';
+import { sendNotification } from './notify.js';
+import { classifyError } from '../error-taxonomy.js';
 import { SpecialistStore } from '../specialists.js';
 import { ToolProfileStore } from '../tool-profiles.js';
 import type { CronJob } from './types.js';
@@ -155,6 +157,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     return { success: true, output };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
+    const cls = classifyError({ message });
 
     try {
       const totalUsage = steps.reduce(
@@ -175,12 +178,39 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         durationMs: Date.now() - startMs,
         success: false,
         error: message,
+        errorCategory: cls.category,
         finalOutput: '',
         steps,
         totalUsage,
       });
     } catch {
       // best-effort logging
+    }
+
+    // Best-effort failure alert. Headless cron has no user looking at stdout,
+    // so the desktop notification is how the user finds out something broke.
+    // Severity comes straight from the taxonomy: auth/permission ring loud,
+    // transient/rate-limit ring quiet.
+    try {
+      store.updateJob(job.id, { lastErrorCategory: cls.category });
+      const alert = store.createAlert({
+        jobId: job.id,
+        jobName: job.name,
+        message: `${cls.category}: ${message.split('\n')[0].slice(0, 200)}`,
+        prompt: job.prompt,
+        response: '',
+      });
+      sendNotification({
+        title: `Bernard cron failed: ${job.name}`,
+        message: `${cls.category} — ${cls.playbook.user}`,
+        severity: cls.severity,
+        alertId: alert.id,
+        log,
+      });
+    } catch (alertErr) {
+      log(
+        `Warning: failed to send failure alert: ${alertErr instanceof Error ? alertErr.message : String(alertErr)}`,
+      );
     }
 
     return { success: false, output: `Error: ${message}` };

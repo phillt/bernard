@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { LOGS_DIR } from '../paths.js';
+import type { ToolErrorType } from '../framework/tools/types.js';
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const DEFAULT_KEEP = 500;
 
@@ -26,6 +27,8 @@ export interface CronLogEntry {
   durationMs: number;
   success: boolean;
   error?: string;
+  /** Failure-taxonomy category set by the runner when `success === false`. */
+  errorCategory?: ToolErrorType;
   finalOutput: string;
   steps: CronLogStep[];
   totalUsage: { promptTokens: number; completionTokens: number; totalTokens: number };

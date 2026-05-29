@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { TOOL_PROFILES_DIR } from './paths.js';
 import { atomicWriteFileSync, seedOnce } from './fs-utils.js';
+import type { ToolErrorType } from './framework/tools/types.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -19,6 +20,8 @@ export interface ToolProfileBadExample {
   errorSnippet: string;
   fix: string;
   note?: string;
+  /** Failure taxonomy category. Only correctable categories are stored. */
+  category?: ToolErrorType;
 }
 
 export interface ToolProfile {
@@ -256,16 +259,33 @@ export class ToolProfileStore {
     atomicWriteFileSync(this.filePath(profile.toolName), JSON.stringify(updated, null, 2));
   }
 
-  recordBadExample(toolKey: string, args: string, errorSnippet: string): void {
+  recordBadExample(
+    toolKey: string,
+    args: string,
+    errorSnippet: string,
+    category?: ToolErrorType,
+  ): void {
     const profile = this.getOrCreate(toolKey);
     const bad: ToolProfileBadExample = {
       summary: `Failed: ${args.slice(0, 80)}`,
       args: args.slice(0, 200),
       errorSnippet,
       fix: '(awaiting successful retry)',
+      ...(category ? { category } : {}),
     };
     const updated = [...profile.badExamples, bad].slice(-MAX_PROFILE_EXAMPLES);
     this.save({ ...profile, badExamples: updated, errorCount: profile.errorCount + 1 });
+  }
+
+  /**
+   * Increments `successCount` on a tool's profile without touching the
+   * examples list. Called from `augment.ts` on every successful tool call so
+   * the success/error ratio is observable. Distinct from `recordGoodExample`,
+   * which both stores a sample and bumps the counter.
+   */
+  recordSuccess(toolKey: string): void {
+    const profile = this.getOrCreate(toolKey);
+    this.save({ ...profile, successCount: profile.successCount + 1 });
   }
 
   recordGoodExample(toolKey: string, args: string, note?: string): void {

@@ -3,6 +3,8 @@ import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { CORRECTION_CANDIDATES_DIR } from './paths.js';
 import { atomicWriteFileSync } from './fs-utils.js';
+import type { ToolErrorType } from './framework/tools/types.js';
+import type { Classification } from './error-taxonomy.js';
 
 /**
  * A record of a failed tool-wrapper invocation that the correction agent
@@ -26,7 +28,19 @@ export interface CorrectionCandidate {
   proposedBad?: string;
   /** True only after the proposed good example executed successfully. */
   validated: boolean;
-  status: 'pending' | 'applied' | 'rejected' | 'invalid';
+  /**
+   * Lifecycle:
+   *  - `pending`   — newly enqueued, awaiting review.
+   *  - `applied`   — correction-agent proposed a fix, orchestrator re-validated
+   *                  it, and examples were written to the target specialist.
+   *  - `rejected`  — correction-agent validated the fix but declined to commit.
+   *  - `invalid`   — correction-agent could not validate a fix.
+   *  - `dismissed` — error was classified as non-correctable (e.g. HTTP 404,
+   *                  rate limit) and dropped without consulting the agent.
+   */
+  status: 'pending' | 'applied' | 'rejected' | 'invalid' | 'dismissed';
+  /** Failure taxonomy category, set at enqueue time when known. */
+  category?: ToolErrorType;
   /** Free-form notes from the correction agent (why it rejected, etc.). */
   notes?: string;
 }
@@ -86,14 +100,15 @@ export class CorrectionCandidateStore {
     input: string;
     attemptedCall: string;
     error: string;
+    category?: ToolErrorType;
   }): CorrectionCandidate | undefined {
-    // Lightweight count: just count .json files instead of reading+parsing all of them.
-    // Slightly over-counts (includes non-pending), but never under-counts pending.
+    // Lightweight count: just count pending .json files. Dismissed/applied/etc.
+    // candidates count against the cap but don't represent active queue pressure;
+    // a separate cleanup pass can reclaim space if needed. Counting pending only
+    // means non-correctable dismissals never block correctable enqueues.
     try {
-      const fileCount = fs
-        .readdirSync(CORRECTION_CANDIDATES_DIR)
-        .filter((f) => f.endsWith('.json')).length;
-      if (fileCount >= MAX_PENDING_CORRECTIONS) return undefined;
+      const pendingCount = this.listPending().length;
+      if (pendingCount >= MAX_PENDING_CORRECTIONS) return undefined;
     } catch {
       return undefined;
     }
@@ -106,6 +121,7 @@ export class CorrectionCandidateStore {
       createdAt: new Date().toISOString(),
       validated: false,
       status: 'pending',
+      ...(input.category ? { category: input.category } : {}),
     };
     try {
       atomicWriteFileSync(
@@ -127,6 +143,35 @@ export class CorrectionCandidateStore {
       JSON.stringify(merged, null, 2),
     );
     return merged;
+  }
+
+  /**
+   * One-shot backlog drain: re-classifies every `pending` candidate by running
+   * `classify` on its stored error and marks any non-correctable one
+   * `dismissed`. Idempotent — only touches `status: 'pending'` rows. Returns
+   * the number dismissed.
+   *
+   * Lives here (not in `correction.ts`) so the REPL can call it before the
+   * correction-agent runs at session close, draining the cohort of HTTP 404s
+   * and rate-limit hits that have accumulated in the queue.
+   */
+  dismissNonCorrectable(
+    classify: (input: { message: string; toolName?: string }) => Classification,
+    opts?: { toolNameFor?: (candidate: CorrectionCandidate) => string | undefined },
+  ): number {
+    let dismissed = 0;
+    for (const candidate of this.listPending()) {
+      const toolName = opts?.toolNameFor?.(candidate);
+      const cls = classify({ message: candidate.error, toolName });
+      if (cls.correctable) continue;
+      this.update(candidate.id, {
+        status: 'dismissed',
+        category: cls.category,
+        notes: `Auto-dismissed: classified as ${cls.category} (not correctable).`,
+      });
+      dismissed++;
+    }
+    return dismissed;
   }
 
   delete(id: string): boolean {

@@ -219,10 +219,14 @@ describe('wrapToolWithSpecialist', () => {
       { abortSignal: undefined },
     );
 
-    expect(result).toEqual({
-      output: 'Error (exit_code_1): permission denied',
-      is_error: true,
-    });
+    // The shim prepends a taxonomy hint `[failure: <category>] ...` to the
+    // error so the model sees a category + recovery playbook on the next turn.
+    expect(result).toMatchObject({ is_error: true });
+    const output = (result as { output: string }).output;
+    expect(output).toContain('Error (');
+    expect(output).toContain('exit_code_1');
+    expect(output).toContain('permission denied');
+    expect(output).toContain('[failure:');
     expect(JSON.stringify(result)).not.toContain('should not leak');
   });
 

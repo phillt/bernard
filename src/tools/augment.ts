@@ -3,6 +3,7 @@ import { debugLog } from '../logger.js';
 import { printInfo } from '../output.js';
 import { readBernardSource, preserveMeta } from '../framework/tools/adapter.js';
 import type { ToolResult } from '../framework/tools/types.js';
+import { classifyError } from '../error-taxonomy.js';
 
 /**
  * Returns the profile key for a given tool invocation. Shell commands are
@@ -44,12 +45,29 @@ function recordOutcome(
 ): void {
   try {
     if (errorSnippet !== undefined) {
-      profileStore.recordBadExample(profileKey, argsSnippet, errorSnippet);
-      debugLog(`augment:${toolName}:error`, { profileKey, snippet: errorSnippet });
-      printInfo(`  ~ profile ${profileKey} — recorded error`);
+      // Gate bad-example recording on correctability: environmental failures
+      // (HTTP 404, rate limits, pool exhaustion, parse_failed) are not
+      // call-shape mistakes the model can learn from, so we skip them.
+      const cls = classifyError({ message: errorSnippet, toolName });
+      if (cls.correctable) {
+        profileStore.recordBadExample(profileKey, argsSnippet, errorSnippet, cls.category);
+        debugLog(`augment:${toolName}:error`, {
+          profileKey,
+          category: cls.category,
+          snippet: errorSnippet,
+        });
+        printInfo(`  ~ profile ${profileKey} — recorded error (${cls.category})`);
+      } else {
+        debugLog(`augment:${toolName}:error:dismissed`, {
+          profileKey,
+          category: cls.category,
+        });
+      }
       return;
     }
-    // On success, patch the most recent unfixed bad example if there is one.
+    // Success path: always bump successCount so the ratio is observable, then
+    // patch the most recent unfixed bad example if there is one.
+    profileStore.recordSuccess(profileKey);
     const profile = profileStore.get(profileKey);
     if (
       profile?.badExamples.length &&

@@ -1,6 +1,8 @@
 import { dispatchToolWrapper, type ToolWrapperDeps } from './tool-wrapper-run.js';
 import { debugLog } from '../logger.js';
 import { preserveMeta } from '../framework/tools/adapter.js';
+import { classifyError } from '../error-taxonomy.js';
+import { printToolFailure } from '../output.js';
 
 /**
  * Builds the natural-language input handed to a wrapper specialist when the
@@ -109,6 +111,21 @@ export function wrapToolWithSpecialist<TArgs>(
           },
           deps,
         );
+        if (wrapped.status === 'error') {
+          const cls = classifyError({
+            message: wrapped.error ?? String(wrapped.result ?? ''),
+            toolName,
+          });
+          printToolFailure(cls.category, wrapped.error ?? '', cls.playbook.user, cls.severity);
+          // Prepend a one-line model-facing hint so the next turn's
+          // tool-result message carries category + recovery guidance.
+          const hint = `[failure: ${cls.category}] ${cls.playbook.model}`;
+          const annotated = {
+            ...wrapped,
+            error: wrapped.error ? `${hint}\n${wrapped.error}` : hint,
+          };
+          return formatWrappedResult(annotated, toolName);
+        }
         return formatWrappedResult(wrapped, toolName);
       } catch (err) {
         // Defensive: if the dispatch itself throws, fall back to the raw tool

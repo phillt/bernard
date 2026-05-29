@@ -343,6 +343,28 @@ export function printWarning(message: string): void {
 }
 
 /**
+ * Two-line tool-failure render with category label, one-line error snippet,
+ * and a recovery hint from the failure-taxonomy playbook. Severity controls
+ * color: `critical` and `normal` use `error`; `low` uses `warning`.
+ *
+ * Sits at the boundary where the user actually sees a failed tool call —
+ * the wrapper shim (and, eventually, bare-tool error paths in the agent loop).
+ */
+export function printToolFailure(
+  category: string,
+  snippet: string,
+  hint: string,
+  severity: 'low' | 'normal' | 'critical' = 'normal',
+): void {
+  stopSpinner();
+  const firstLine = snippet.split('\n')[0]?.slice(0, 200) ?? '';
+  const theme = getTheme();
+  const colorFn = severity === 'low' ? theme.warning : theme.error;
+  emit(colorFn(`  ${category}: ${firstLine}`));
+  emit(theme.muted(`  → ${hint}`));
+}
+
+/**
  * Prints a dimmed summary of a prior conversation for session-resume context.
  *
  * Each message is truncated to {@link MAX_REPLAY_LENGTH} characters.

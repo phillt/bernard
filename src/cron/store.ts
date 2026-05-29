@@ -109,7 +109,14 @@ export class CronStore {
     updates: Partial<
       Pick<
         CronJob,
-        'name' | 'schedule' | 'prompt' | 'enabled' | 'lastRun' | 'lastRunStatus' | 'lastResult'
+        | 'name'
+        | 'schedule'
+        | 'prompt'
+        | 'enabled'
+        | 'lastRun'
+        | 'lastRunStatus'
+        | 'lastResult'
+        | 'lastErrorCategory'
       >
     >,
   ): CronJob | undefined {

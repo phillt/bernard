@@ -19,6 +19,17 @@ const CorrectionOutcomeSchema = z.object({
   applied: z.boolean(),
   /** Short explanation for logging. */
   notes: z.string().optional(),
+  /**
+   * The proposed-good call the orchestrator can re-execute to independently
+   * verify the agent's `applied: true` claim. Required for orchestrator-side
+   * validation; missing values cause the candidate to be marked `invalid`.
+   */
+  proposedGoodCall: z
+    .object({
+      specialistId: z.string(),
+      input: z.string(),
+    })
+    .optional(),
 });
 type CorrectionOutcome = z.infer<typeof CorrectionOutcomeSchema>;
 
@@ -90,12 +101,29 @@ export async function runCorrectionAgent(
       const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
       const outcome = extractOutcome(text);
       if (outcome && outcome.applied) {
-        applied++;
-        correctionStore.update(candidate.id, {
-          status: 'applied',
-          validated: true,
-          notes: outcome.notes,
-        });
+        // Trust-but-verify: independently re-execute the proposed-good call
+        // before accepting `applied: true`. If the agent didn't supply one or
+        // the re-run fails, mark `invalid` instead of `applied` — otherwise
+        // hallucinated examples sneak into the specialist's playbook.
+        const reval = await revalidateProposedCall(
+          toolWrapperRun,
+          outcome.proposedGoodCall,
+          candidate.id,
+        );
+        if (reval.ok) {
+          applied++;
+          correctionStore.update(candidate.id, {
+            status: 'applied',
+            validated: true,
+            notes: outcome.notes,
+          });
+        } else {
+          correctionStore.update(candidate.id, {
+            status: 'invalid',
+            validated: false,
+            notes: `Correction agent claimed applied:true but re-validation failed: ${reval.reason}`,
+          });
+        }
       } else if (outcome && outcome.validated) {
         correctionStore.update(candidate.id, {
           status: 'rejected',
@@ -126,6 +154,32 @@ export async function runCorrectionAgent(
   return { processed, applied, skipped };
 }
 
+async function revalidateProposedCall(
+  toolWrapperRun: { execute: (args: any, opts: any) => any },
+  proposed: CorrectionOutcome['proposedGoodCall'],
+  candidateId: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!proposed) {
+    return { ok: false, reason: 'no proposedGoodCall returned by correction agent' };
+  }
+  try {
+    const raw = await toolWrapperRun.execute(
+      { specialistId: proposed.specialistId, input: proposed.input },
+      { toolCallId: `correction-reval-${candidateId}`, messages: [] },
+    );
+    const text = typeof raw === 'string' ? raw : JSON.stringify(raw);
+    const wrapper = parseStructuredOutput(text, WrapperResultSchema);
+    if (wrapper && wrapper.status === 'ok') return { ok: true };
+    const err = wrapper && wrapper.status === 'error' ? wrapper.error : 'unparseable result';
+    return { ok: false, reason: `re-run returned ${err}`.slice(0, 200) };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `re-run threw: ${err instanceof Error ? err.message : String(err)}`.slice(0, 200),
+    };
+  }
+}
+
 function formatCandidatePrompt(candidate: CorrectionCandidate): string {
   return [
     `Candidate ID: ${candidate.id}`,
@@ -134,7 +188,7 @@ function formatCandidatePrompt(candidate: CorrectionCandidate): string {
     `Attempted call: ${candidate.attemptedCall}`,
     `Error observed: ${candidate.error}`,
     '',
-    'Diagnose the failure, propose a corrected tool call (proposedGood) and record the bad one (proposedBad), validate the fix by running tool_wrapper_run against the target specialist, and — only if validation returns status: "ok" — append the good/bad pair to the target specialist via the specialist tool (action: "update"). Report the final outcome.',
+    'Diagnose the failure, propose a corrected tool call (proposedGood) and record the bad one (proposedBad), validate the fix by running tool_wrapper_run against the target specialist, and — only if validation returns status: "ok" — append the good/bad pair to the target specialist via the specialist tool (action: "update"). Report the final outcome and include `proposedGoodCall: {specialistId, input}` so the orchestrator can re-verify your fix.',
   ].join('\n');
 }
 
