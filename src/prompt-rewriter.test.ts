@@ -45,7 +45,7 @@ function makeConfig(overrides: Partial<BernardConfig> = {}): BernardConfig {
     maxSteps: 25,
     ragEnabled: false,
     theme: 'bernard',
-    reactMode: false,
+    coordinatorMode: 'off',
     toolDetails: false,
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,

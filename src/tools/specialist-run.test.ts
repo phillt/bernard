@@ -685,7 +685,7 @@ describe('specialist-run tool', () => {
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
       const tool = createSpecialistRunTool(
-        makeCtx(makeConfig({ reactMode: true }), toolOptions, memoryStore, specialistStore),
+        makeCtx(makeConfig({ coordinatorMode: 'on' }), toolOptions, memoryStore, specialistStore),
       );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
@@ -714,7 +714,7 @@ describe('specialist-run tool', () => {
       mockGenerateText.mockClear();
 
       const onTool = createSpecialistRunTool(
-        makeCtx(makeConfig({ reactMode: true }), toolOptions, memoryStore, specialistStore),
+        makeCtx(makeConfig({ coordinatorMode: 'on' }), toolOptions, memoryStore, specialistStore),
       );
       await onTool.execute!(
         { specialistId: 'email-triage', task: 'test' },
@@ -728,7 +728,7 @@ describe('specialist-run tool', () => {
       vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
 
       const tool = createSpecialistRunTool(
-        makeCtx(makeConfig({ reactMode: true }), toolOptions, memoryStore, specialistStore),
+        makeCtx(makeConfig({ coordinatorMode: 'on' }), toolOptions, memoryStore, specialistStore),
       );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
@@ -763,7 +763,7 @@ describe('specialist-run tool', () => {
       });
 
       const tool = createSpecialistRunTool(
-        makeCtx(makeConfig({ reactMode: true }), toolOptions, memoryStore, specialistStore),
+        makeCtx(makeConfig({ coordinatorMode: 'on' }), toolOptions, memoryStore, specialistStore),
       );
       const result = (await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },
@@ -792,7 +792,7 @@ describe('specialist-run tool', () => {
       });
 
       const tool = createSpecialistRunTool(
-        makeCtx(makeConfig({ reactMode: true }), toolOptions, memoryStore, specialistStore),
+        makeCtx(makeConfig({ coordinatorMode: 'on' }), toolOptions, memoryStore, specialistStore),
       );
       await tool.execute!(
         { specialistId: 'email-triage', task: 'test' },

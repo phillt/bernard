@@ -25,7 +25,7 @@ function makeCtx(
 ): StrategyContext & { iterate: ReturnType<typeof vi.fn> } {
   const { config: configOverride, ...rest } = overrides;
   return {
-    config: { reactMode: true, maxSteps: 10, ...configOverride } as BernardConfig,
+    config: { coordinatorMode: 'on', maxSteps: 10, ...configOverride } as BernardConfig,
     userInput: 'do stuff',
     iterate: vi.fn(async () => baseResult),
     ...rest,
@@ -41,7 +41,7 @@ describe('ReActStrategy', () => {
   it('delegates to inner unchanged when reactMode is off', async () => {
     const inner = new NormalStrategy();
     const innerSpy = vi.spyOn(inner, 'run');
-    const ctx = makeCtx({ config: { reactMode: false } });
+    const ctx = makeCtx({ config: { coordinatorMode: 'off' } });
     await new ReActStrategy(inner).run(ctx);
     expect(innerSpy).toHaveBeenCalledTimes(1);
     expect(ctx.iterate).toHaveBeenCalledTimes(1);
@@ -121,7 +121,7 @@ describe('ReActStrategy', () => {
 
   it('uses reduced enforcement budget when enforcementStepRatio < 1', async () => {
     const planStore = new PlanStore();
-    const ctx = makeCtx({ planStore, config: { reactMode: true, maxSteps: 40 } });
+    const ctx = makeCtx({ planStore, config: { coordinatorMode: 'on', maxSteps: 40 } });
     let call = 0;
     ctx.iterate.mockImplementation(async () => {
       call++;
@@ -142,7 +142,7 @@ describe('ReActStrategy', () => {
     const ctx = makeCtx({
       planStore,
       baseMaxSteps: 13,
-      config: { reactMode: true, maxSteps: 25 },
+      config: { coordinatorMode: 'on', maxSteps: 25 },
     });
     let call = 0;
     ctx.iterate.mockImplementation(async () => {

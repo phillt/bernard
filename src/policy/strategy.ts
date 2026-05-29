@@ -1,16 +1,41 @@
+import { DefaultQualifier, type Qualifier } from '../qualifier/index.js';
 import type { PolicyDecision, SubPolicy } from './types.js';
 
 type StrategyId = NonNullable<PolicyDecision['strategyId']>;
 
 /**
- * Selects the execution strategy for the main agent. Today: mirrors
- * `config.reactMode`. Future work (#167) introduces a Qualifier that
- * inspects `userInput` to choose `pac` / `single-shot` / etc.; this
- * sub-policy is the only place that needs to change.
+ * Singleton qualifier instance — stateless, safe to share. Tests can build
+ * a fresh `DefaultQualifier` if they need to swap behavior.
+ */
+const defaultQualifier: Qualifier = new DefaultQualifier();
+
+/**
+ * Selects the execution strategy for the main agent (#167).
+ *
+ * Reads `config.coordinatorMode`:
+ *  - `'on'`   → always ReAct, reason `coordinator-mode-on`
+ *  - `'off'`  → always Normal, reason `coordinator-mode-off`
+ *  - `'auto'` → delegates to the Qualifier (`src/qualifier/`), which
+ *               classifies the user message using rule-based features
+ *               grounded in LLM-routing research (RouteLLM, FrugalGPT,
+ *               Topaz, MoMA, RouterArena). The qualifier's reason code
+ *               propagates up unchanged so downstream telemetry can name
+ *               the signal that fired.
  */
 export const strategyPolicy: SubPolicy<{ id: StrategyId }> = (input) => {
-  if (input.config.reactMode) {
-    return { id: 'react', reason: 'react-mode-flag' };
+  switch (input.config.coordinatorMode) {
+    case 'on':
+      return { id: 'react', reason: 'coordinator-mode-on' };
+    case 'off':
+      return { id: 'normal', reason: 'coordinator-mode-off' };
+    case 'auto':
+    default: {
+      const result = defaultQualifier.qualify({
+        userText: input.userInput,
+        config: input.config,
+        context: { turnIndex: input.turnIndex },
+      });
+      return { id: result.strategyId, reason: result.reason };
+    }
   }
-  return { id: 'normal', reason: 'react-mode-disabled' };
 };

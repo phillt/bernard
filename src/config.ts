@@ -22,8 +22,13 @@ export interface BernardConfig {
   theme: string;
   /** Maximum number of sequential LLM calls (steps) per agent loop. */
   maxSteps: number;
-  /** Whether coordinator (ReAct) mode is active for iterative reasoning with subagent delegation. */
-  reactMode: boolean;
+  /**
+   * Coordinator (ReAct) mode selector. `'on'` forces every turn through
+   * ReAct; `'off'` forces NormalStrategy; `'auto'` delegates to the Qualifier
+   * (`src/qualifier/`) which classifies each ask and picks a strategy per
+   * turn. The Policy Engine reads this field via `strategyPolicy` (#167).
+   */
+  coordinatorMode: 'on' | 'off' | 'auto';
   /** Whether sub-agent delegations run through the PAC (Planner → Actor → Critic) pipeline. */
   subagentPac: boolean;
   /** Whether tool-call arguments and full tool result output are shown in the terminal. Tool names and call lines are always shown. */
@@ -70,6 +75,26 @@ const DEFAULT_TOKEN_WINDOW = 0;
 const DEFAULT_MAX_STEPS = 25;
 const DEFAULT_AUTO_CREATE_SPECIALISTS = false;
 const DEFAULT_AUTO_CREATE_THRESHOLD = 0.8;
+const DEFAULT_COORDINATOR_MODE: 'on' | 'off' | 'auto' = 'auto';
+
+/** Type guard for `coordinatorMode` string values. */
+function isCoordinatorMode(v: unknown): v is 'on' | 'off' | 'auto' {
+  return v === 'on' || v === 'off' || v === 'auto';
+}
+
+/**
+ * Maps a legacy `reactMode` boolean (used by older preferences files and the
+ * deprecated `BERNARD_REACT_MODE` env var) onto the tri-state `coordinatorMode`.
+ * Explicit booleans become `'on'`/`'off'`; missing values stay `undefined` so
+ * the caller can fall through to the next layer.
+ */
+function legacyReactModeToCoordinator(
+  value: boolean | undefined,
+): 'on' | 'off' | undefined {
+  if (value === true) return 'on';
+  if (value === false) return 'off';
+  return undefined;
+}
 
 /**
  * Normalizes a threshold value to the 0-1 range.
@@ -133,7 +158,7 @@ export const OPTIONS_REGISTRY: Record<
 /**
  * Persists user preferences to the config directory.
  *
- * Preserves the existing `autoUpdate` and `reactMode` flags when the caller omits them.
+ * Preserves the existing `autoUpdate` and `coordinatorMode` flags when the caller omits them.
  */
 export function savePreferences(prefs: {
   provider: string;
@@ -144,7 +169,7 @@ export function savePreferences(prefs: {
   maxSteps?: number;
   theme?: string;
   autoUpdate?: boolean;
-  reactMode?: boolean;
+  coordinatorMode?: 'on' | 'off' | 'auto';
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
@@ -163,7 +188,7 @@ export function savePreferences(prefs: {
   if (prefs.maxSteps !== undefined) data.maxSteps = prefs.maxSteps;
   if (prefs.theme !== undefined) data.theme = prefs.theme;
   if (prefs.autoUpdate !== undefined) data.autoUpdate = prefs.autoUpdate;
-  if (prefs.reactMode !== undefined) data.reactMode = prefs.reactMode;
+  if (prefs.coordinatorMode !== undefined) data.coordinatorMode = prefs.coordinatorMode;
   if (prefs.subagentPac !== undefined) data.subagentPac = prefs.subagentPac;
   if (prefs.toolDetails !== undefined) data.toolDetails = prefs.toolDetails;
   if (prefs.autoCreateSpecialists !== undefined)
@@ -172,7 +197,7 @@ export function savePreferences(prefs: {
   if (prefs.promptRewriter !== undefined) data.promptRewriter = prefs.promptRewriter;
   if (prefs.referenceLookup !== undefined) data.referenceLookup = prefs.referenceLookup;
 
-  // Preserve autoUpdate, reactMode, and auto-create settings from existing prefs when callers don't pass them
+  // Preserve autoUpdate, coordinatorMode, and auto-create settings from existing prefs when callers don't pass them
   let existing: Record<string, unknown> | undefined;
   try {
     existing = JSON.parse(fs.readFileSync(PREFS_PATH, 'utf-8'));
@@ -182,7 +207,6 @@ export function savePreferences(prefs: {
 
   const booleanKeys = [
     'autoUpdate',
-    'reactMode',
     'subagentPac',
     'toolDetails',
     'promptRewriter',
@@ -191,6 +215,19 @@ export function savePreferences(prefs: {
   for (const k of booleanKeys) {
     if (prefs[k] === undefined && existing && typeof existing[k] === 'boolean') {
       data[k] = existing[k];
+    }
+  }
+  if (prefs.coordinatorMode === undefined && existing) {
+    if (isCoordinatorMode(existing.coordinatorMode)) {
+      data.coordinatorMode = existing.coordinatorMode;
+    } else {
+      // Migrate legacy `reactMode` boolean. Only carries through when the old
+      // field actually existed — otherwise we leave coordinatorMode unset so
+      // loadConfig picks up the default.
+      const migrated = legacyReactModeToCoordinator(
+        typeof existing.reactMode === 'boolean' ? existing.reactMode : undefined,
+      );
+      if (migrated) data.coordinatorMode = migrated;
     }
   }
 
@@ -239,7 +276,7 @@ export function loadPreferences(): {
   maxSteps?: number;
   theme?: string;
   autoUpdate?: boolean;
-  reactMode?: boolean;
+  coordinatorMode?: 'on' | 'off' | 'auto';
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
@@ -250,6 +287,13 @@ export function loadPreferences(): {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
     const parsed = JSON.parse(data);
+    // Prefer the new field; fall back to the legacy `reactMode` boolean so
+    // existing installs migrate transparently on first load.
+    const coordinatorMode = isCoordinatorMode(parsed.coordinatorMode)
+      ? parsed.coordinatorMode
+      : legacyReactModeToCoordinator(
+          typeof parsed.reactMode === 'boolean' ? parsed.reactMode : undefined,
+        );
     return {
       provider: typeof parsed.provider === 'string' ? parsed.provider : undefined,
       model: typeof parsed.model === 'string' ? parsed.model : undefined,
@@ -259,7 +303,7 @@ export function loadPreferences(): {
       maxSteps: typeof parsed.maxSteps === 'number' ? parsed.maxSteps : undefined,
       theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
       autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
-      reactMode: typeof parsed.reactMode === 'boolean' ? parsed.reactMode : undefined,
+      coordinatorMode,
       subagentPac: typeof parsed.subagentPac === 'boolean' ? parsed.subagentPac : undefined,
       toolDetails: typeof parsed.toolDetails === 'boolean' ? parsed.toolDetails : undefined,
       autoCreateSpecialists:
@@ -724,9 +768,23 @@ export function loadConfig(overrides?: {
   const ragEnabled = process.env.BERNARD_RAG_ENABLED !== 'false';
   const theme = prefs.theme || 'bernard';
 
-  const reactMode =
-    prefs.reactMode ??
-    (process.env.BERNARD_REACT_MODE === 'true' || process.env.BERNARD_REACT_MODE === '1');
+  // Tri-state coordinator mode (#167). Precedence: explicit pref >
+  // BERNARD_COORDINATOR_MODE env > deprecated BERNARD_REACT_MODE env > default.
+  const envCoordinator = isCoordinatorMode(process.env.BERNARD_COORDINATOR_MODE)
+    ? (process.env.BERNARD_COORDINATOR_MODE as 'on' | 'off' | 'auto')
+    : undefined;
+  const envLegacyReact = (() => {
+    const raw = process.env.BERNARD_REACT_MODE;
+    if (raw === undefined) return undefined;
+    if (raw === 'true' || raw === '1') return true;
+    if (raw === 'false' || raw === '0') return false;
+    return undefined;
+  })();
+  const coordinatorMode: 'on' | 'off' | 'auto' =
+    prefs.coordinatorMode ??
+    envCoordinator ??
+    legacyReactModeToCoordinator(envLegacyReact) ??
+    DEFAULT_COORDINATOR_MODE;
 
   // Sub-agent PAC pipeline runs by default; users can opt out with BERNARD_SUBAGENT_PAC=false.
   const rawSubagentPac = process.env.BERNARD_SUBAGENT_PAC;
@@ -793,7 +851,7 @@ export function loadConfig(overrides?: {
     maxSteps,
     ragEnabled,
     theme,
-    reactMode,
+    coordinatorMode,
     subagentPac,
     toolDetails,
     autoCreateSpecialists,

@@ -21,7 +21,7 @@ export function makePolicyInput(overrides?: {
     ragEnabled: true,
     theme: 'bernard',
     maxSteps: 25,
-    reactMode: false,
+    coordinatorMode: 'off',
     subagentPac: true,
     toolDetails: false,
     autoCreateSpecialists: false,

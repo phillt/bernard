@@ -49,7 +49,7 @@ function makeConfig(): BernardConfig {
     maxSteps: 20,
     ragEnabled: false,
     theme: 'bernard',
-    reactMode: false,
+    coordinatorMode: 'off',
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
     anthropicApiKey: 'sk-test',
