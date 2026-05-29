@@ -13,10 +13,13 @@
  *   BERNARD_PROVIDER=anthropic       # provider override
  *   BERNARD_MODEL=claude-sonnet-4-6  # model override
  *
- * Each scenario seeds the ProvenanceStore with one or two synthetic web
- * sources before calling `agent.processInput`. The model's job is to
- * answer using those facts and attach `[^Sn]` markers. The harness then
- * measures:
+ * Each scenario seeds one or two memory keys with synthetic facts before
+ * calling `agent.processInput`. The prompt tells the model which keys to
+ * read; the `memory` tool auto-registers each successful read in the
+ * per-turn ProvenanceStore (which `processInput` clears at turn start, so
+ * pre-seeding the store directly would not work). The model's job is to
+ * answer using the recalled facts and attach `[^Sn]` markers. The harness
+ * then measures:
  *
  *   - citationCoverage: % of factual-scenario runs whose response contains
  *     at least one VALID `[^Sn]` marker.
@@ -59,62 +62,54 @@ async function main(): Promise<void> {
   const { CandidateStore } = await import('../src/specialist-candidates.js');
   const { CorrectionCandidateStore } = await import('../src/correction-candidates.js');
   const { ToolProfileStore } = await import('../src/tool-profiles.js');
-  const { ProvenanceStore } = await import('../src/provenance.js');
-
-  type SeedSource = { kind: 'web'; label: string; rawRef: string; contentPreview: string };
+  type SeedMemory = { key: string; content: string };
   type Scenario = {
     id: string;
     description: string;
-    /** When set, the harness pre-registers these in the ProvenanceStore. */
-    seedSources: SeedSource[];
+    /** Memory keys to write before the turn — read by the agent to register sources. */
+    seedMemory: SeedMemory[];
     prompt: string;
-    /** factual = should cite; opinion = should NOT cite (no sources seeded). */
+    /** factual = should cite; opinion = should NOT cite. */
     kind: 'factual' | 'opinion';
   };
 
   const SCENARIOS: Scenario[] = [
     {
       id: 'F-bernard-readme',
-      description: 'factual fact from seeded web source',
+      description: 'factual recall from a single memory key',
       kind: 'factual',
-      seedSources: [
+      seedMemory: [
         {
-          kind: 'web',
-          label: 'Bernard README',
-          rawRef: 'https://example.com/bernard',
-          contentPreview:
+          key: 'bernard-readme',
+          content:
             'Bernard is a local CLI AI agent built on the Vercel AI SDK. It supports Anthropic, OpenAI, and xAI providers and stores its data under XDG directories.',
         },
       ],
       prompt:
-        'According to the Bernard README I just read (registered as a source this turn), which AI SDK does Bernard build on, and what providers does it support? Answer in 1–2 sentences.',
+        'Read my "bernard-readme" memory and tell me, in 1–2 sentences: which AI SDK does Bernard build on, and what providers does it support?',
     },
     {
       id: 'F-two-sources',
-      description: 'two facts from two seeded sources',
+      description: 'two facts from two memory keys',
       kind: 'factual',
-      seedSources: [
+      seedMemory: [
         {
-          kind: 'web',
-          label: 'Mars facts',
-          rawRef: 'https://example.com/mars',
-          contentPreview: 'Mars has two small moons, Phobos and Deimos.',
+          key: 'mars-facts',
+          content: 'Mars has two small moons, Phobos and Deimos.',
         },
         {
-          kind: 'web',
-          label: 'Jupiter facts',
-          rawRef: 'https://example.com/jupiter',
-          contentPreview: 'Jupiter has 95 known moons, the four largest being the Galilean moons.',
+          key: 'jupiter-facts',
+          content: 'Jupiter has 95 known moons, the four largest being the Galilean moons.',
         },
       ],
       prompt:
-        'Using the planetary fact pages registered as sources this turn, how many moons does Mars have, and how many known moons does Jupiter have? One short sentence per planet.',
+        'Read my "mars-facts" and "jupiter-facts" memories, then answer: how many moons does Mars have, and how many known moons does Jupiter have? One short sentence per planet.',
     },
     {
       id: 'O-color-preference',
-      description: 'opinion question — no sources registered',
+      description: 'opinion question — no sources seeded',
       kind: 'opinion',
-      seedSources: [],
+      seedMemory: [],
       prompt:
         'Which colour do you find most calming, blue or green, and why? Just give a short personal opinion — no need to look anything up.',
     },
@@ -138,22 +133,21 @@ async function main(): Promise<void> {
       shellTimeout: config.shellTimeout,
       confirmDangerous: async () => false,
     };
-    const provenance = new ProvenanceStore();
-    for (const s of scenario.seedSources) {
-      provenance.add(s);
+    const memoryStore = new MemoryStore();
+    for (const m of scenario.seedMemory) {
+      memoryStore.writeMemory(m.key, m.content);
     }
     const ctx = assembleContext({
       config,
       toolOptions,
       stores: {
-        memory: new MemoryStore(),
+        memory: memoryStore,
         routines: new RoutineStore(),
         specialists: new SpecialistStore(),
         candidates: new CandidateStore(),
         correction: new CorrectionCandidateStore(),
         toolProfiles: new ToolProfileStore(),
       },
-      provenance,
     });
     const agent = new Agent(ctx);
 

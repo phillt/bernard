@@ -757,7 +757,10 @@ export async function startRepl(
         sourcesViewerOpen = false;
         return;
       }
-      setPinnedRegion('sources', buildSourcesPanel(all, 'Available sources (last turn — none cited)'));
+      setPinnedRegion(
+        'sources',
+        buildSourcesPanel(all, 'Available sources (last turn — none cited)'),
+      );
       sourcesViewerOpen = true;
       return;
     }
@@ -775,8 +778,7 @@ export async function startRepl(
 
     // Shift+Tab → toggle the sources viewer. Check first so Esc/processing
     // branches below don't intercept it.
-    const isShiftTab =
-      (key.name === 'tab' && key.shift) || key.sequence === '\x1b[Z';
+    const isShiftTab = (key.name === 'tab' && key.shift) || key.sequence === '\x1b[Z';
     if (isShiftTab && !processing && !menuAbortController) {
       if (sourcesViewerOpen) closeSourcesViewer();
       else renderSourcesViewer();

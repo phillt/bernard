@@ -15,12 +15,22 @@ describe('cite tool', () => {
   it('list returns every registered source with id/kind/label/preview', async () => {
     const store = new ProvenanceStore();
     store.add({ kind: 'web', label: 'Title A', contentPreview: 'preview A', rawRef: 'https://a' });
-    store.add({ kind: 'file', label: 'path:1-5', contentPreview: 'preview B', rawRef: '/tmp/x.txt:1-5' });
+    store.add({
+      kind: 'file',
+      label: 'path:1-5',
+      contentPreview: 'preview B',
+      rawRef: '/tmp/x.txt:1-5',
+    });
     const tool = createCiteTool(store);
     const out = await tool.execute!({ action: 'list' } as any, {} as any);
     const parsed = JSON.parse(out as string);
     expect(parsed.sources).toHaveLength(2);
-    expect(parsed.sources[0]).toMatchObject({ id: 'S1', kind: 'web', label: 'Title A', preview: 'preview A' });
+    expect(parsed.sources[0]).toMatchObject({
+      id: 'S1',
+      kind: 'web',
+      label: 'Title A',
+      preview: 'preview A',
+    });
     expect(parsed.sources[1]).toMatchObject({ id: 'S2', kind: 'file' });
   });
 

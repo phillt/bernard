@@ -16,10 +16,7 @@ export function createCiteTool(provenance: ProvenanceStore) {
         'Inspect the citation sources collected during this turn. action="list" returns every registered source (id, kind, label, preview); action="get" with an id returns the full details including the rawRef (URL, file path, memory key). Use this before attaching a [^Sn] citation marker if you want to verify the source matches the claim.',
       parameters: z.object({
         action: z.enum(['list', 'get']).describe('list — enumerate sources; get — fetch one'),
-        id: z
-          .string()
-          .optional()
-          .describe('Source id (e.g. "S1") — required when action is "get"'),
+        id: z.string().optional().describe('Source id (e.g. "S1") — required when action is "get"'),
       }),
       execute: async ({ action, id }): Promise<string> => {
         if (action === 'list') {

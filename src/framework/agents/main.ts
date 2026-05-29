@@ -19,7 +19,11 @@ import { buildToolProfilesPrompt } from '../../tool-profiles.js';
 import { getModelProfile } from '../../providers/index.js';
 import { isReactEffective } from '../../policy/effective.js';
 import { buildSystemPrompt } from '../../agent-prompt.js';
-import { SHARE_REASONING_PROMPT, REASONING_FAMILIES, CITATIONS_PROMPT } from '../../agent-prompt.js';
+import {
+  SHARE_REASONING_PROMPT,
+  REASONING_FAMILIES,
+  CITATIONS_PROMPT,
+} from '../../agent-prompt.js';
 import { buildContextMessage } from '../../context-message.js';
 import type { RAGSearchResult } from '../../rag.js';
 import type { RoutineSummary } from '../../routines.js';

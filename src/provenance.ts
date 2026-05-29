@@ -33,6 +33,10 @@ export type SourceItemInput = Omit<SourceItem, 'id' | 'timestamp'>;
 
 const MAX_PREVIEW = 200;
 
+function truncatePreview(s: string): string {
+  return s.length > MAX_PREVIEW ? s.slice(0, MAX_PREVIEW) + '…' : s;
+}
+
 /**
  * Per-turn collection of cite-able sources. Created on the AgentContext and
  * cleared at the start of every `Agent.processInput` turn. Shared by
@@ -46,19 +50,30 @@ export class ProvenanceStore {
 
   /**
    * Register a source. If a previous call already registered the same
-   * `kind`+`rawRef`, the existing id is returned and the store is left
-   * unchanged — prevents id spam when a tool re-reads the same URL.
+   * `kind`+`rawRef`, the existing id is returned (prevents id spam when a
+   * tool re-reads the same URL). When the duplicate call carries a richer
+   * preview/label — e.g. `web_search` registers a snippet, then `web_read`
+   * fetches the full page — the stored item is upgraded in place so the
+   * Shift+Tab viewer and `cite get` show the better detail.
    */
   add(item: SourceItemInput): string {
     const key = `${item.kind}:${item.rawRef}`;
+    const preview = truncatePreview(item.contentPreview);
     const existing = this.byRef.get(key);
-    if (existing) return existing;
+    if (existing) {
+      const stored = this.items.find((s) => s.id === existing);
+      if (stored) {
+        if (preview.length > stored.contentPreview.length) {
+          stored.contentPreview = preview;
+        }
+        if (item.label && item.label.length > stored.label.length) {
+          stored.label = item.label;
+        }
+      }
+      return existing;
+    }
 
     const id = `S${this.nextId++}`;
-    const preview =
-      item.contentPreview.length > MAX_PREVIEW
-        ? item.contentPreview.slice(0, MAX_PREVIEW) + '…'
-        : item.contentPreview;
     this.items.push({
       id,
       kind: item.kind,

@@ -13,9 +13,43 @@ describe('ProvenanceStore', () => {
   it('dedups on kind+rawRef and returns the existing id', () => {
     const s = new ProvenanceStore();
     const first = s.add({ kind: 'web', label: 'a', contentPreview: '', rawRef: 'https://a' });
-    const second = s.add({ kind: 'web', label: 'a2', contentPreview: 'different', rawRef: 'https://a' });
+    const second = s.add({
+      kind: 'web',
+      label: 'a2',
+      contentPreview: 'different',
+      rawRef: 'https://a',
+    });
     expect(second).toBe(first);
     expect(s.size()).toBe(1);
+  });
+
+  it('upgrades the stored preview/label when a duplicate carries richer detail', () => {
+    // web_search registers a snippet first; web_read then fetches the full page.
+    const s = new ProvenanceStore();
+    s.add({ kind: 'web', label: 'short', contentPreview: 'snippet', rawRef: 'https://x' });
+    s.add({
+      kind: 'web',
+      label: 'Full page title',
+      contentPreview: 'the full page content is longer than the snippet',
+      rawRef: 'https://x',
+    });
+    const item = s.list()[0];
+    expect(item.contentPreview).toBe('the full page content is longer than the snippet');
+    expect(item.label).toBe('Full page title');
+  });
+
+  it('does not regress a richer preview when a later call has a shorter one', () => {
+    const s = new ProvenanceStore();
+    s.add({
+      kind: 'web',
+      label: 'Full',
+      contentPreview: 'the full page content',
+      rawRef: 'https://x',
+    });
+    s.add({ kind: 'web', label: 's', contentPreview: 'snip', rawRef: 'https://x' });
+    const item = s.list()[0];
+    expect(item.contentPreview).toBe('the full page content');
+    expect(item.label).toBe('Full');
   });
 
   it('treats same rawRef but different kind as distinct sources', () => {

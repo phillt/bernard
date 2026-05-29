@@ -53,13 +53,23 @@ describe('ToolWrapperDeps provenance round-trip (issue #173)', () => {
 
   it('depsToCtx preserves the original store reference (shared by reference)', () => {
     const ctx = makeCtx();
-    ctx.provenance.add({ kind: 'web', label: 'parent', contentPreview: '', rawRef: 'https://parent' });
+    ctx.provenance.add({
+      kind: 'web',
+      label: 'parent',
+      contentPreview: '',
+      rawRef: 'https://parent',
+    });
     const deps = ctxToToolWrapperDeps(ctx);
     const innerCtx = depsToCtx(deps);
     expect(innerCtx.provenance).toBe(ctx.provenance);
     expect(innerCtx.provenance.size()).toBe(1);
     // mutations inside the inner ctx must be visible to the parent
-    innerCtx.provenance.add({ kind: 'web', label: 'child', contentPreview: '', rawRef: 'https://child' });
+    innerCtx.provenance.add({
+      kind: 'web',
+      label: 'child',
+      contentPreview: '',
+      rawRef: 'https://child',
+    });
     expect(ctx.provenance.size()).toBe(2);
   });
 
