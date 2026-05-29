@@ -1,0 +1,50 @@
+import type { BernardConfig } from '../config.js';
+
+/**
+ * Per-turn input the Policy Engine sees. Pure data — sub-policies must be
+ * deterministic over this shape. New fields are added here as sub-policies
+ * grow in sophistication (see issues #167, #169, #170, #171, #173, #175).
+ */
+export interface PolicyInput {
+  userInput: string;
+  config: BernardConfig;
+  turnIndex?: number;
+}
+
+/**
+ * Verbatim from issue #177. Every field is optional so future sub-policies
+ * can extend without forcing call sites to handle every key. Today this PR
+ * actively wires only `strategyId` and `scratch`; the rest carry default
+ * sub-policy values that mirror current behavior and will be consumed by
+ * downstream issues.
+ */
+export interface PolicyDecision {
+  strategyId?: 'normal' | 'react' | 'pac' | 'single-shot';
+  models?: Record<string, { provider: string; model: string }>;
+  concise?: { enabled: boolean; maxLines?: number; maxBullets?: number };
+  scratch?: { resetAll: boolean; resetPlanOnly: boolean; reason: string };
+  caching?: { enabled: boolean };
+  citations?: { requireForFactualClaims: boolean };
+  toolMode?: { mode: 'read-only' | 'write'; requireConfirmForWrite: boolean };
+}
+
+/**
+ * What a sub-policy emits: its own sub-decision shape (the value for one
+ * `PolicyDecision` key) plus a free-form `reason` string. Reason codes are
+ * stable identifiers (kebab-case), not free prose — they end up in
+ * `debugLog` and in the `/policy` REPL command output.
+ */
+export type SubDecision<T> = T & { reason: string };
+
+/** Pure per-turn function from input to one sub-decision. */
+export type SubPolicy<T> = (input: PolicyInput) => SubDecision<T>;
+
+export interface PolicyResult {
+  decision: PolicyDecision;
+  /** Map keyed by sub-policy name (e.g. `'strategy'`, `'scratch'`). */
+  reasons: Record<string, string>;
+}
+
+export interface PolicyEngine {
+  decide(input: PolicyInput): PolicyResult;
+}

@@ -149,6 +149,7 @@ export async function startRepl(
     { command: '/compact', description: 'Compress conversation history in-place' },
     { command: '/memory', description: 'List persistent memories' },
     { command: '/scratch', description: 'List session scratch notes' },
+    { command: '/policy', description: 'Show last policy decision and reason codes' },
     { command: '/mcp', description: 'List MCP servers and tools' },
     { command: '/cron', description: 'Show cron jobs and daemon status' },
     { command: '/rag', description: 'Show RAG memory stats and recent facts' },
@@ -1415,6 +1416,22 @@ export async function startRepl(
           printInfo('Scratch notes:');
           for (const key of keys) {
             printInfo(`  - ${key}`);
+          }
+        }
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/policy') {
+        const last = agent.getLastPolicyDecision();
+        if (!last) {
+          printInfo('No policy decision yet — send a message first.');
+        } else {
+          printInfo('Last policy decision:');
+          printInfo(JSON.stringify(last.decision, null, 2));
+          printInfo('Reason codes:');
+          for (const [key, reason] of Object.entries(last.reasons)) {
+            printInfo(`  ${key}: ${reason}`);
           }
         }
         void prompt();

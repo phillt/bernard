@@ -43,4 +43,16 @@ describe('buildStrategy', () => {
     expect(ctx.iterate as any).toHaveBeenCalledTimes(1);
     expect((ctx.iterate as any).mock.calls[0][0].systemSuffix).toBeUndefined();
   });
+
+  it('opts.strategyId="react" forces ReActStrategy even when config.reactMode is false', () => {
+    expect(buildStrategy(makeConfig({ reactMode: false }), { strategyId: 'react' })).toBeInstanceOf(
+      ReActStrategy,
+    );
+  });
+
+  it('opts.strategyId="normal" forces NormalStrategy even when config.reactMode is true', () => {
+    expect(buildStrategy(makeConfig({ reactMode: true }), { strategyId: 'normal' })).toBeInstanceOf(
+      NormalStrategy,
+    );
+  });
 });

@@ -6,6 +6,7 @@ import { CandidateStore, type CandidateStoreReader } from '../specialist-candida
 import { CorrectionCandidateStore } from '../correction-candidates.js';
 import { ToolProfileStore } from '../tool-profiles.js';
 import type { RAGStore } from '../rag.js';
+import type { PolicyDecision } from '../policy/types.js';
 import type { ToolOptions } from '../tools/types.js';
 
 export interface AgentContextStores {
@@ -28,6 +29,12 @@ export interface AgentContext {
   mcp: AgentContextMCP;
   rag?: RAGStore;
   toolOptions: ToolOptions;
+  /**
+   * Per-turn decision resolved by {@link DefaultPolicyEngine}. Set by the
+   * Agent class at the top of `processInput`; read by sub-systems that
+   * need to honour policy (today: `mainAgentDefinition.strategy`).
+   */
+  policyDecision?: PolicyDecision;
 }
 
 export interface AssembleContextInput {

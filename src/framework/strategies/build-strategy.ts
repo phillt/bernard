@@ -1,4 +1,5 @@
 import type { BernardConfig } from '../../config.js';
+import type { PolicyDecision } from '../../policy/types.js';
 import { NormalStrategy } from './normal.js';
 import { ReActStrategy } from './react.js';
 import type { ExecutionStrategy } from './types.js';
@@ -9,6 +10,13 @@ export interface BuildStrategyOpts {
    * the historical reduced enforcement budget; main agent leaves it undefined.
    */
   enforcementStepRatio?: number;
+  /**
+   * Per-turn strategy override from the Policy Engine. When undefined,
+   * wrappers fall back to `config.reactMode`. When defined, wrappers prefer
+   * this value — that's the seam future issues (#167) use to vary strategy
+   * per turn without flipping the global config flag.
+   */
+  strategyId?: PolicyDecision['strategyId'];
 }
 
 /**
@@ -58,8 +66,13 @@ export function buildStrategy(
 // ---- Bootstrap registrations -------------------------------------------------
 // Each new strategy adds one import + one registerStrategy call here.
 
-registerStrategy((inner, config, opts) =>
-  config.reactMode
+registerStrategy((inner, config, opts) => {
+  // Prefer the Policy Engine's per-turn decision; fall back to the global
+  // `BERNARD_REACT_MODE` config flag when the engine hasn't supplied one
+  // (e.g. specialist sub-agents, which don't run through the engine).
+  const reactWanted =
+    opts.strategyId === 'react' || (opts.strategyId === undefined && config.reactMode);
+  return reactWanted
     ? new ReActStrategy(inner, { enforcementStepRatio: opts.enforcementStepRatio })
-    : null,
-);
+    : null;
+});

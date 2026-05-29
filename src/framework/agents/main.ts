@@ -175,7 +175,7 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
   },
 
   strategy(ctx) {
-    return buildStrategy(ctx.config);
+    return buildStrategy(ctx.config, { strategyId: ctx.policyDecision?.strategyId });
   },
 
   stepBudget(config) {
