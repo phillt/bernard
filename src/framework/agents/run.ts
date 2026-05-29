@@ -99,15 +99,22 @@ export async function runDefinition<TInput, TFormatted>(
   // Resolved fresh on every iterate so memory updates / new RAG hits are
   // reflected, and NOT persisted into the caller's history.
   const getContextMessages = async (): Promise<CoreMessage[]> => {
-    let extras: Partial<ContextMessageInputs> | null = {};
+    let extras: Partial<Omit<ContextMessageInputs, 'memoryStore'>> | null = {};
     if (def.contextInputs) {
-      extras = await Promise.resolve(def.contextInputs(ctx, input));
+      try {
+        extras = await Promise.resolve(def.contextInputs(ctx, input));
+      } catch {
+        // Fail-soft: a thrown contextInputs (e.g. RAG search error) must not
+        // abort the turn. Drop the extras and fall back to the framework
+        // default memory + scratch contract.
+        extras = {};
+      }
     }
     if (extras === null) return [];
     const msg = buildContextMessage({
-      memoryStore: ctx.stores.memory,
-      includeScratch: true,
       ...extras,
+      memoryStore: ctx.stores.memory,
+      includeScratch: extras.includeScratch ?? true,
     });
     return msg ? [msg] : [];
   };

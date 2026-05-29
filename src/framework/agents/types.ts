@@ -96,11 +96,20 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
    * wiring (issue #172 + #143).
    *
    * Rebuilt on every iterate call — NOT persisted into the caller's history.
+   *
+   * `memoryStore` is intentionally omitted from the return type: definitions
+   * MUST NOT shadow the framework-injected store, because doing so would
+   * silently drop `<persistent_memory>` + `<scratch_notes>` and re-introduce
+   * the LLM01 vector this contract exists to prevent. To opt out entirely,
+   * return `null`.
    */
   contextInputs?(
     ctx: AgentContext,
     input: TInput,
-  ): Partial<ContextMessageInputs> | null | Promise<Partial<ContextMessageInputs> | null>;
+  ):
+    | Partial<Omit<ContextMessageInputs, 'memoryStore'>>
+    | null
+    | Promise<Partial<Omit<ContextMessageInputs, 'memoryStore'>> | null>;
 
   /** Hooks composed onto onStepFinish (output, token-stats, cron-step-recorder, etc.). */
   hooks(ctx: AgentContext, input: TInput): AgentHook[];

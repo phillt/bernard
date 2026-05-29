@@ -1180,28 +1180,31 @@ export async function startRepl(
     processing = true;
     interrupted = false;
     taskAbortController = new AbortController();
-    printTaskStart(description);
-    startSpinner('Running task...');
 
     const slot = acquireSlot();
     if (!slot) {
-      stopSpinner();
       processing = false;
       taskAbortController = null;
       printError(`Maximum concurrent agents (${MAX_CONCURRENT_AGENTS}) reached.`);
       return;
     }
 
+    printTaskStart(description);
+    startSpinner('Running task...');
+
+    // Provenance is per-turn (cleared at processInput entry). /task runs
+    // outside processInput, so clear here to isolate its citations from the
+    // last main-agent turn and from any prior /task in the same prompt.
+    const ctx = agent.getContext();
+    ctx.provenance.clear();
+
     try {
       const input: TaskInput = context
         ? { task: description, context, slotId: slot.id }
         : { task: description, slotId: slot.id };
-      const { result, formatted: taskResult } = await runDefinition(
-        agent.getContext(),
-        taskDefinition,
-        input,
-        { abortSignal: taskAbortController.signal },
-      );
+      const { result, formatted: taskResult } = await runDefinition(ctx, taskDefinition, input, {
+        abortSignal: taskAbortController.signal,
+      });
 
       if (result.finishReason === 'length') {
         const recommended = Math.ceil((config.maxTokens * 2) / 1024) * 1024;
@@ -1227,7 +1230,9 @@ export async function startRepl(
       }
     } catch (err: unknown) {
       stopSpinner();
-      if (!interrupted) {
+      if (interrupted) {
+        printTaskEnd(JSON.stringify({ status: 'cancelled', output: 'interrupted' }));
+      } else {
         const message = err instanceof Error ? err.message : String(err);
         printTaskEnd(JSON.stringify({ status: 'error', output: message }));
         printError(message);
