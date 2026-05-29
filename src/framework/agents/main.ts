@@ -17,6 +17,7 @@ import { augmentTools } from '../../tools/augment.js';
 import { toolToAISDK } from '../tools/adapter.js';
 import { buildToolProfilesPrompt } from '../../tool-profiles.js';
 import { getModelProfile } from '../../providers/index.js';
+import { isReactEffective } from '../../policy/effective.js';
 import { buildSystemPrompt } from '../../agent-prompt.js';
 import { SHARE_REASONING_PROMPT, REASONING_FAMILIES } from '../../agent-prompt.js';
 import { buildContextMessage } from '../../context-message.js';
@@ -155,6 +156,11 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
       ctx.stores.candidates,
       ctx.config,
     );
+    // Gate plan/evaluate on the SAME effective decision the strategy uses
+    // (see strategy(ctx) below). Reading `ctx.config.reactMode` directly
+    // would let `tools()` and `strategy()` drift apart the moment a
+    // sub-policy emits a `strategyId` that doesn't mirror the global flag.
+    const reactActive = isReactEffective(ctx.config, ctx.policyDecision);
     const tools: Record<string, Tool> = {
       ...baseTools,
       agent: createSubAgentTool(ctx),
@@ -163,7 +169,7 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
       tool_wrapper_run: createToolWrapperRunTool(ctx),
       think: createThinkTool(),
       ask_user: createAskUserTool(ctx.toolOptions.askUser),
-      ...(ctx.config.reactMode
+      ...(reactActive
         ? {
             plan: createPlanTool(input.planStore),
             evaluate: createEvaluateTool(),
@@ -175,7 +181,7 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
   },
 
   strategy(ctx) {
-    return buildStrategy(ctx.config);
+    return buildStrategy(ctx.config, { strategyId: ctx.policyDecision?.strategyId });
   },
 
   stepBudget(config) {

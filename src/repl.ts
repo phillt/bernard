@@ -149,6 +149,7 @@ export async function startRepl(
     { command: '/compact', description: 'Compress conversation history in-place' },
     { command: '/memory', description: 'List persistent memories' },
     { command: '/scratch', description: 'List session scratch notes' },
+    { command: '/policy', description: 'Show last policy decision and reason codes' },
     { command: '/mcp', description: 'List MCP servers and tools' },
     { command: '/cron', description: 'Show cron jobs and daemon status' },
     { command: '/rag', description: 'Show RAG memory stats and recent facts' },
@@ -1014,7 +1015,10 @@ export async function startRepl(
         const pending = correctionStore.listPending();
         if (pending.length > 0) {
           printInfo(`Reviewing ${pending.length} tool-wrapper failure(s) for learning...`);
-          const result = await runCorrectionAgent({ ctx: agentCtx }, pending);
+          // Read the live ctx off the agent so the correction pass sees
+          // the latest policyDecision and any other per-turn refinements
+          // made by `processInput`; `agentCtx` is the startup snapshot.
+          const result = await runCorrectionAgent({ ctx: agent.getContext() }, pending);
           if (result.applied > 0) {
             printInfo(
               `  Learned from ${result.applied}/${result.processed} failure(s); examples updated.`,
@@ -1415,6 +1419,22 @@ export async function startRepl(
           printInfo('Scratch notes:');
           for (const key of keys) {
             printInfo(`  - ${key}`);
+          }
+        }
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/policy') {
+        const last = agent.getLastPolicyDecision();
+        if (!last) {
+          printInfo('No policy decision yet — send a message first.');
+        } else {
+          printInfo('Last policy decision:');
+          printInfo(JSON.stringify(last.decision, null, 2));
+          printInfo('Reason codes:');
+          for (const [key, reason] of Object.entries(last.reasons)) {
+            printInfo(`  ${key}: ${reason}`);
           }
         }
         void prompt();

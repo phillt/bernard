@@ -44,6 +44,8 @@ import { type ImageAttachment, IMAGE_TOKEN_ESTIMATE } from './image.js';
 import { PlanStore } from './plan-store.js';
 import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
+import { DefaultPolicyEngine } from './policy/index.js';
+import type { PolicyEngine, PolicyResult } from './policy/index.js';
 
 // `buildSystemPrompt` lives in agent-prompt.ts (extracted to avoid a circular
 // import with framework/agents/main.ts). Re-exported here so existing imports
@@ -105,6 +107,8 @@ export class Agent {
   private stepLimitHitCount: number = 0;
   private lastStepLimitHit: boolean = false;
   private planStore: PlanStore = new PlanStore();
+  private policyEngine: PolicyEngine = new DefaultPolicyEngine();
+  private lastPolicyResult?: PolicyResult;
 
   private ctx: AgentContext;
 
@@ -149,6 +153,22 @@ export class Agent {
     this.abortController?.abort();
   }
 
+  /** Returns the most recent Policy Engine result, or undefined before any turn has run. */
+  getLastPolicyDecision(): PolicyResult | undefined {
+    return this.lastPolicyResult;
+  }
+
+  /**
+   * Returns the live `AgentContext` (with the most recent `policyDecision`
+   * threaded in by `processInput`). The Agent class re-points `this.ctx`
+   * on every turn, so callers that need to invoke a definition outside the
+   * normal turn loop (e.g. the correction agent at REPL shutdown) should
+   * read this fresh rather than caching the value handed back at startup.
+   */
+  getContext(): AgentContext {
+    return this.ctx;
+  }
+
   /** Returns step limit hit info from last processInput, or null if limit wasn't hit. */
   getStepLimitHit(): { currentLimit: number; hitCount: number } | null {
     if (!this.lastStepLimitHit) return null;
@@ -179,7 +199,21 @@ export class Agent {
     resolvedReferences?: ResolvedEntry[],
   ): Promise<void> {
     this.lastStepLimitHit = false;
-    this.planStore.clear();
+
+    // Resolve every cross-cutting heuristic for this turn in one place.
+    // Sub-systems read the decision off `this.ctx.policyDecision` (e.g.
+    // strategy selection in `mainAgentDefinition.strategy`) or off the
+    // result returned here. Reasons go to `debugLog('policy:decide', ...)`.
+    const policyResult = this.policyEngine.decide({ userInput, config: this.config });
+    this.lastPolicyResult = policyResult;
+    this.ctx = { ...this.ctx, policyDecision: policyResult.decision };
+
+    if (policyResult.decision.scratch?.resetPlanOnly) {
+      this.planStore.clear();
+    }
+    if (policyResult.decision.scratch?.resetAll) {
+      this.memoryStore.clearScratch();
+    }
     clearPinnedRegion('plan');
 
     const profile = getModelProfile(
@@ -481,5 +515,10 @@ export class Agent {
     this.lastRAGResults = [];
     this.stepLimitHitCount = 0;
     this.lastStepLimitHit = false;
+    this.planStore.clear();
+    this.lastPolicyResult = undefined;
+    if (this.ctx.policyDecision) {
+      this.ctx = { ...this.ctx, policyDecision: undefined };
+    }
   }
 }

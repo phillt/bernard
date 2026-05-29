@@ -21,6 +21,15 @@ export interface ReActStrategyOpts {
    * `SPECIALIST_ENFORCEMENT_STEP_RATIO`.
    */
   enforcementStepRatio?: number;
+  /**
+   * Effective ReAct flag for this turn, resolved by the Policy Engine when
+   * available (see `src/policy/effective.ts`). When set, `run()` uses this
+   * instead of `ctx.config.reactMode`, which is required so a per-turn
+   * `strategyId: 'react'` override actually engages coordinator behavior
+   * even when the global flag is off. Defaults to `ctx.config.reactMode` to
+   * preserve behavior for sub-agent paths that don't go through the engine.
+   */
+  effectiveReactMode?: boolean;
 }
 
 /**
@@ -39,7 +48,8 @@ export class ReActStrategy implements ExecutionStrategy {
   ) {}
 
   async run(ctx: StrategyContext): Promise<AgentResult> {
-    if (!ctx.config.reactMode) return this.inner.run(ctx);
+    const reactActive = this.opts.effectiveReactMode ?? ctx.config.reactMode;
+    if (!reactActive) return this.inner.run(ctx);
 
     const baseMaxSteps = ctx.baseMaxSteps ?? ctx.config.maxSteps;
     const initialMaxSteps = computeEffectiveMaxSteps(baseMaxSteps, true);
@@ -60,7 +70,7 @@ export class ReActStrategy implements ExecutionStrategy {
     if (
       !planStore ||
       !shouldEnforcePlan({
-        reactMode: ctx.config.reactMode,
+        reactMode: reactActive,
         aborted: ctx.abortSignal?.aborted === true,
         stepLimitHit: ctx.getStepLimitHit?.() === true,
         hasSteps: planStore.unresolvedCount() > 0,
