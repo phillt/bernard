@@ -21,18 +21,20 @@ export function toolToAISDK<TArgs, TData>(t: BernardTool<TArgs, TData>): Tool {
       return t.serializeForModel(envelope);
     },
   });
+  // `configurable: true` lets later passes (augment, shim) re-attach the same
+  // meta onto a spread copy without throwing. The property is still
+  // non-enumerable so object spread keeps stripping it — re-attachment is the
+  // explicit contract.
   Object.defineProperty(aisdk, '__bernardMeta', {
     value: t.meta,
     enumerable: false,
-    configurable: false,
+    configurable: true,
     writable: false,
   });
-  // Stash the source BernardTool so augmentation can re-run execute and
-  // inspect the raw envelope without rebuilding the adapter chain.
   Object.defineProperty(aisdk, '__bernardSource', {
     value: t,
     enumerable: false,
-    configurable: false,
+    configurable: true,
     writable: false,
   });
   return aisdk;
@@ -95,8 +97,42 @@ export function legacyTool(t: Tool, meta: ToolMeta): BernardTool<unknown, unknow
 }
 
 /**
- * Reads the metadata attached to a `Tool` by `toolToAISDK`. Returns
- * `undefined` for tools that did not pass through the adapter (legacy or MCP).
+ * Attaches Bernard meta to an existing AI-SDK `Tool` without wrapping its
+ * `execute` function. Use this to declare meta on tools whose factories
+ * already return a plain `tool({...})` from the AI SDK — cheaper than going
+ * through `legacyTool` + `toolToAISDK` when the envelope shape is irrelevant.
+ *
+ * Returns the same tool reference for fluent chaining.
+ */
+export function attachMeta<T extends Tool>(t: T, meta: ToolMeta): T {
+  Object.defineProperty(t, '__bernardMeta', {
+    value: meta,
+    enumerable: false,
+    configurable: true,
+    writable: false,
+  });
+  return t;
+}
+
+/**
+ * Re-attaches Bernard meta to a spread copy of a tool. Object spread (e.g.
+ * `{ ...tool, execute: wrapped }`) silently drops `__bernardMeta` because the
+ * property is non-enumerable; passes that rebuild a tool's `execute` (the
+ * augmentation layer, the wrap-with-specialist shim) must call this on the
+ * copy so downstream `readToolMeta` keeps working.
+ */
+export function preserveMeta<T extends Tool>(copy: T, source: unknown): T {
+  const meta = readToolMeta(source);
+  if (meta) attachMeta(copy, meta);
+  return copy;
+}
+
+/**
+ * Reads the metadata attached to a `Tool` by `toolToAISDK` or `attachMeta`.
+ * Returns `undefined` for tools that did not pass through either helper.
+ * Surfaces all `ToolMeta` fields verbatim — including the newer
+ * `deterministic`, `sideEffect`, `cacheable`, `cacheTtlMs`, `sensitiveArgs`,
+ * and `sensitiveResult` properties when present.
  */
 export function readToolMeta(t: unknown): ToolMeta | undefined {
   if (!t || typeof t !== 'object') return undefined;

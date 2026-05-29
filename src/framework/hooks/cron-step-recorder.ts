@@ -1,5 +1,7 @@
 import type { CronLogStep } from '../../cron/log-store.js';
 import type { AgentHook } from './types.js';
+import { readToolMeta } from '../tools/adapter.js';
+import { redactArgs, REDACTED } from '../tools/redact.js';
 
 /**
  * Maximum chars to keep per tool-result string before truncating in the log.
@@ -23,25 +25,41 @@ function truncateResult(result: unknown, maxLen: number): unknown {
  *
  * The hook owns its own monotonically-increasing `stepIndex`; callers should
  * create a fresh hook (and a fresh `steps` array) per cron run.
+ *
+ * When `toolRegistry` is supplied, each tool call's args and result are scrubbed
+ * against the tool's `ToolMeta.sensitiveArgs` / `sensitiveResult` fields before
+ * persistence.
  */
-export function cronStepRecorderHook(steps: CronLogStep[]): AgentHook {
+export function cronStepRecorderHook(
+  steps: CronLogStep[],
+  toolRegistry?: Record<string, unknown>,
+): AgentHook {
   let stepIndex = 0;
   return {
     onStepFinish: ({ text, toolCalls, toolResults, usage, finishReason }) => {
-      const truncatedResults = (toolResults ?? []).map((tr) => ({
-        toolName: tr.toolName,
-        toolCallId: tr.toolCallId,
-        result: truncateResult(tr.result, CRON_RESULT_MAX_LEN),
-      }));
+      const truncatedResults = (toolResults ?? []).map((tr) => {
+        const meta = toolRegistry ? readToolMeta(toolRegistry[tr.toolName]) : undefined;
+        return {
+          toolName: tr.toolName,
+          toolCallId: tr.toolCallId,
+          result: meta?.sensitiveResult ? REDACTED : truncateResult(tr.result, CRON_RESULT_MAX_LEN),
+        };
+      });
       steps.push({
         stepIndex: stepIndex++,
         timestamp: new Date().toISOString(),
         text: text || '',
-        toolCalls: (toolCalls ?? []).map((tc) => ({
-          toolName: tc.toolName,
-          toolCallId: tc.toolCallId,
-          args: tc.args as Record<string, unknown>,
-        })),
+        toolCalls: (toolCalls ?? []).map((tc) => {
+          const meta = toolRegistry ? readToolMeta(toolRegistry[tc.toolName]) : undefined;
+          const args = meta
+            ? (redactArgs(tc.args, meta.sensitiveArgs) as Record<string, unknown>)
+            : (tc.args as Record<string, unknown>);
+          return {
+            toolName: tc.toolName,
+            toolCallId: tc.toolCallId,
+            args,
+          };
+        }),
         toolResults: truncatedResults,
         usage: {
           promptTokens: usage?.promptTokens ?? 0,

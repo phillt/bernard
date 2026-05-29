@@ -7,7 +7,7 @@ import { createDateTimeTool, formatCurrentDateTime } from '../../tools/datetime.
 import { createWebReadTool } from '../../tools/web.js';
 import { createWaitTool } from '../../tools/wait.js';
 import { createTimeTools } from '../../tools/time.js';
-import { toolToAISDK } from '../tools/adapter.js';
+import { toolToAISDK, attachMeta } from '../tools/adapter.js';
 import { CronStore } from '../../cron/store.js';
 import { type CronLogStep } from '../../cron/log-store.js';
 import { CronNotesStore } from '../../cron/notes-store.js';
@@ -85,6 +85,13 @@ export interface CronInput {
   serverNames: string[];
   mcpTools: Record<string, Tool>;
   ragResults?: RAGSearchResult[];
+  /**
+   * Mutable slot populated inside `tools()` so `hooks()` (which the framework
+   * invokes immediately after) can hand the same registry to
+   * `cronStepRecorderHook` for sensitive-arg redaction. The runner doesn't
+   * need to set this — `tools()` will.
+   */
+  toolRegistry?: Record<string, Tool>;
 }
 
 /**
@@ -120,53 +127,71 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     const memoryStore = ctx.stores.memory;
     const config = ctx.config;
 
-    const notifyTool = tool({
-      description:
-        'Send a desktop notification to alert the user. Use this when you find something that requires user attention. Clicking the notification will open a terminal with the alert context.',
-      parameters: z.object({
-        message: z.string().describe('The alert message to show the user'),
-        severity: z
-          .enum(['low', 'normal', 'critical'])
-          .describe('Urgency level of the notification'),
+    const notifyTool = attachMeta(
+      tool({
+        description:
+          'Send a desktop notification to alert the user. Use this when you find something that requires user attention. Clicking the notification will open a terminal with the alert context.',
+        parameters: z.object({
+          message: z.string().describe('The alert message to show the user'),
+          severity: z
+            .enum(['low', 'normal', 'critical'])
+            .describe('Urgency level of the notification'),
+        }),
+        execute: async ({ message, severity }): Promise<string> => {
+          const alert = store.createAlert({
+            jobId: job.id,
+            jobName: job.name,
+            message,
+            prompt: job.prompt,
+            response: '',
+          });
+          sendNotification({
+            title: `Bernard: ${job.name}`,
+            message,
+            severity,
+            alertId: alert.id,
+            log,
+          });
+          return `Notification sent for alert ${alert.id}. Terminal will open when the user clicks the notification.`;
+        },
       }),
-      execute: async ({ message, severity }): Promise<string> => {
-        const alert = store.createAlert({
-          jobId: job.id,
-          jobName: job.name,
-          message,
-          prompt: job.prompt,
-          response: '',
-        });
-        sendNotification({
-          title: `Bernard: ${job.name}`,
-          message,
-          severity,
-          alertId: alert.id,
-          log,
-        });
-        return `Notification sent for alert ${alert.id}. Terminal will open when the user clicks the notification.`;
+      {
+        name: 'notify',
+        kind: 'write',
+        deterministic: false,
+        sideEffect: 'local',
+        cacheable: false,
       },
-    });
+    );
 
-    const selfDisableTool = tool({
-      description:
-        "Disable this cron job so it will not run again. Use when the job's task is complete and no further executions are needed.",
-      parameters: z.object({
-        reason: z.string().describe('Brief reason for disabling (logged for the user)'),
+    const selfDisableTool = attachMeta(
+      tool({
+        description:
+          "Disable this cron job so it will not run again. Use when the job's task is complete and no further executions are needed.",
+        parameters: z.object({
+          reason: z.string().describe('Brief reason for disabling (logged for the user)'),
+        }),
+        execute: async ({ reason }): Promise<string> => {
+          const updated = store.updateJob(job.id, { enabled: false });
+          if (!updated) return `Error: could not disable job ${job.id}.`;
+          return `Job "${job.name}" disabled. Reason: ${reason}`;
+        },
       }),
-      execute: async ({ reason }): Promise<string> => {
-        const updated = store.updateJob(job.id, { enabled: false });
-        if (!updated) return `Error: could not disable job ${job.id}.`;
-        return `Job "${job.name}" disabled. Reason: ${reason}`;
+      {
+        name: 'cron_self_disable',
+        kind: 'write',
+        deterministic: false,
+        sideEffect: 'local',
+        cacheable: false,
       },
-    });
+    );
 
     const shellTool = createShellTool({
       shellTimeout: config.shellTimeout,
       confirmDangerous: async () => false,
     });
 
-    return {
+    const registry: Record<string, Tool> = {
       shell: toolToAISDK(shellTool),
       memory: toolToAISDK(createMemoryTool(memoryStore)),
       scratch: toolToAISDK(createScratchTool(memoryStore)),
@@ -179,6 +204,8 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
       ...createScopedCronNotesTools(notesStore, job.id, runId),
       ...mcpTools,
     };
+    input.toolRegistry = registry;
+    return registry;
   },
 
   strategy() {
@@ -194,7 +221,7 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
   },
 
   hooks(_ctx, input) {
-    return [cronStepRecorderHook(input.steps)];
+    return [cronStepRecorderHook(input.steps, input.toolRegistry)];
   },
 
   resolveModel(ctx): ResolvedModel {

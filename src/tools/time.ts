@@ -1,5 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import { attachMeta } from '../framework/tools/adapter.js';
 
 /**
  * Converts a military/24-hour time integer to total minutes since midnight.
@@ -45,37 +46,60 @@ export function formatHours(totalMinutes: number): string {
 /** Creates tools for calculating durations between military/24-hour time ranges. */
 export function createTimeTools() {
   return {
-    time_range: tool({
-      description:
-        'Calculate the duration between two military/24-hour times. Handles next-day wrap (e.g. 2300 to 0100 = 2 hours).',
-      parameters: z.object({
-        start: z
-          .number()
-          .describe('Start time in military format (e.g. 800 for 8:00 AM, 1530 for 3:30 PM)'),
-        end: z.number().describe('End time in military format'),
+    time_range: attachMeta(
+      tool({
+        description:
+          'Calculate the duration between two military/24-hour times. Handles next-day wrap (e.g. 2300 to 0100 = 2 hours).',
+        parameters: z.object({
+          start: z
+            .number()
+            .describe('Start time in military format (e.g. 800 for 8:00 AM, 1530 for 3:30 PM)'),
+          end: z.number().describe('End time in military format'),
+        }),
+        execute: async ({ start, end }): Promise<string> => {
+          const minutes = calcRangeMinutes(start, end);
+          return formatHours(minutes);
+        },
       }),
-      execute: async ({ start, end }): Promise<string> => {
-        const minutes = calcRangeMinutes(start, end);
-        return formatHours(minutes);
+      {
+        name: 'time_range',
+        kind: 'read',
+        deterministic: true,
+        sideEffect: 'none',
+        cacheable: true,
+        cacheTtlMs: 0,
       },
-    }),
+    ),
 
-    time_range_total: tool({
-      description: 'Calculate the total duration across multiple military time ranges.',
-      parameters: z.object({
-        ranges: z
-          .array(
-            z.object({
-              start: z.number().describe('Start time in military format'),
-              end: z.number().describe('End time in military format'),
-            }),
-          )
-          .describe('Array of time ranges'),
+    time_range_total: attachMeta(
+      tool({
+        description: 'Calculate the total duration across multiple military time ranges.',
+        parameters: z.object({
+          ranges: z
+            .array(
+              z.object({
+                start: z.number().describe('Start time in military format'),
+                end: z.number().describe('End time in military format'),
+              }),
+            )
+            .describe('Array of time ranges'),
+        }),
+        execute: async ({ ranges }): Promise<string> => {
+          const total = ranges.reduce(
+            (sum, { start, end }) => sum + calcRangeMinutes(start, end),
+            0,
+          );
+          return formatHours(total);
+        },
       }),
-      execute: async ({ ranges }): Promise<string> => {
-        const total = ranges.reduce((sum, { start, end }) => sum + calcRangeMinutes(start, end), 0);
-        return formatHours(total);
+      {
+        name: 'time_range_total',
+        kind: 'read',
+        deterministic: true,
+        sideEffect: 'none',
+        cacheable: true,
+        cacheTtlMs: 0,
       },
-    }),
+    ),
   };
 }

@@ -1,5 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import { attachMeta } from '../framework/tools/adapter.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
@@ -167,290 +168,315 @@ function detectLineEnding(content: string): string {
 /** Creates file_read_lines and file_edit_lines tools. */
 export function createFileTools() {
   return {
-    file_read_lines: tool({
-      description:
-        'Read a file with line numbers. Returns structured line-numbered content for precise referencing. Use offset/limit to paginate large files.',
-      parameters: z.object({
-        path: z.string().describe('File path to read (relative or absolute)'),
-        offset: z
-          .number()
-          .int()
-          .min(1)
-          .optional()
-          .describe('Start line number (1-based, default 1)'),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .optional()
-          .describe('Maximum lines to return (default 1000)'),
-      }),
-      execute: async ({
-        path: filePath,
-        offset = 1,
-        limit = 1000,
-      }): Promise<
-        | {
-            path: string;
-            total_lines: number;
-            offset: number;
-            limit: number;
-            lines: Array<{ num: number; content: string }>;
-            truncated: boolean;
-          }
-        | { error: string }
-      > => {
-        try {
-          const absPath = path.resolve(filePath);
-
-          // Validate file exists
-          let stat: fs.Stats;
-          try {
-            stat = fs.statSync(absPath);
-          } catch (err: unknown) {
-            const code = (err as NodeJS.ErrnoException).code;
-            if (code === 'ENOENT') return { error: `File not found: ${absPath}` };
-            return { error: `Cannot access ${absPath}: ${(err as Error).message}` };
-          }
-
-          if (stat.isDirectory()) {
-            return { error: `Path is a directory, not a file: ${absPath}` };
-          }
-
-          if (stat.size > MAX_FILE_SIZE) {
-            return {
-              error: `File too large (${stat.size} bytes, max ${MAX_FILE_SIZE}): ${absPath}`,
-            };
-          }
-
-          // Read once — use buffer for binary check, then decode
-          const rawBuffer = fs.readFileSync(absPath);
-          if (isBinaryContent(rawBuffer)) {
-            return { error: `File appears to be binary: ${absPath}` };
-          }
-          const content = rawBuffer.toString('utf-8');
-          const allLines = splitLines(content);
-          const totalLines = allLines.length;
-
-          const startIdx = offset - 1;
-          const endIdx = Math.min(startIdx + limit, totalLines);
-          const sliced = startIdx < totalLines ? allLines.slice(startIdx, endIdx) : [];
-
-          const lines = sliced.map((line, i) => ({
-            num: startIdx + i + 1,
-            content: line,
-          }));
-
-          return {
-            path: absPath,
-            total_lines: totalLines,
-            offset,
-            limit,
-            lines,
-            truncated: endIdx < totalLines,
-          };
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { error: msg };
-        }
-      },
-    }),
-
-    file_edit_lines: tool({
-      description:
-        'Edit a file with precise line-based operations. Supports replace, insert, delete, and append actions. Multiple edits are applied atomically (all or nothing). Always read the file first with file_read_lines to get current line numbers.',
-      parameters: z.object({
-        path: z.string().describe('File path to edit (relative or absolute)'),
-        edits: z
-          .array(
-            z.object({
-              action: z
-                .enum(['replace', 'insert', 'delete', 'append'])
-                .describe(
-                  'replace: replace content at a line number; insert: insert before a line; delete: remove specific lines; append: add to end of file',
-                ),
-              line: z.number().int().min(1).optional().describe('Line number for replace action'),
-              before: z.number().int().min(1).optional().describe('Line number to insert before'),
-              lines: z.array(z.number().int().min(1)).optional().describe('Line numbers to delete'),
-              content: z
-                .string()
-                .optional()
-                .describe('New content for replace/insert/append (may contain \\n for multi-line)'),
-            }),
-          )
-          .min(1)
-          .describe('Array of edit operations to apply'),
-      }),
-      execute: async ({
-        path: filePath,
-        edits,
-      }): Promise<
-        | {
-            path: string;
-            old_hash: string;
-            new_hash: string;
-            edits_applied: number;
-            total_lines: number;
-            diff: string;
-          }
-        | { error: string }
-      > => {
-        try {
-          const absPath = path.resolve(filePath);
-
-          // Validate file exists
-          let stat: fs.Stats;
-          try {
-            stat = fs.statSync(absPath);
-          } catch (err: unknown) {
-            const code = (err as NodeJS.ErrnoException).code;
-            if (code === 'ENOENT') return { error: `File not found: ${absPath}` };
-            return { error: `Cannot access ${absPath}: ${(err as Error).message}` };
-          }
-
-          if (stat.isDirectory()) {
-            return { error: `Path is a directory, not a file: ${absPath}` };
-          }
-
-          if (stat.size > MAX_FILE_SIZE) {
-            return {
-              error: `File too large (${stat.size} bytes, max ${MAX_FILE_SIZE}): ${absPath}`,
-            };
-          }
-
-          // Read once — use buffer for binary check, then decode
-          const rawBuffer = fs.readFileSync(absPath);
-          if (isBinaryContent(rawBuffer)) {
-            return { error: `File appears to be binary: ${absPath}` };
-          }
-          const rawContent = rawBuffer.toString('utf-8');
-          const lineEnding = detectLineEnding(rawContent);
-          const hadTrailingNewline =
-            rawContent.length > 0 && (rawContent.endsWith('\n') || rawContent.endsWith('\r\n'));
-          const oldLines = splitLines(rawContent);
-          const totalLines = oldLines.length;
-          const oldHash = hashContent(rawContent);
-
-          // Validate all edits upfront
-          const validationErrors: string[] = [];
-
-          for (let i = 0; i < edits.length; i++) {
-            const e = edits[i];
-            const prefix = `Edit ${i + 1} (${e.action})`;
-
-            switch (e.action) {
-              case 'replace':
-                if (e.line === undefined) validationErrors.push(`${prefix}: "line" is required`);
-                else if (e.line > totalLines)
-                  validationErrors.push(
-                    `${prefix}: line ${e.line} out of bounds (file has ${totalLines} lines)`,
-                  );
-                if (e.content === undefined)
-                  validationErrors.push(`${prefix}: "content" is required`);
-                break;
-              case 'insert':
-                if (e.before === undefined)
-                  validationErrors.push(`${prefix}: "before" is required`);
-                else if (e.before > totalLines + 1)
-                  validationErrors.push(
-                    `${prefix}: before ${e.before} out of bounds (file has ${totalLines} lines, max ${totalLines + 1})`,
-                  );
-                if (e.content === undefined)
-                  validationErrors.push(`${prefix}: "content" is required`);
-                break;
-              case 'delete':
-                if (!e.lines || e.lines.length === 0)
-                  validationErrors.push(
-                    `${prefix}: "lines" array is required and must not be empty`,
-                  );
-                else {
-                  for (const ln of e.lines) {
-                    if (ln > totalLines)
-                      validationErrors.push(
-                        `${prefix}: line ${ln} out of bounds (file has ${totalLines} lines)`,
-                      );
-                  }
-                }
-                break;
-              case 'append':
-                if (e.content === undefined)
-                  validationErrors.push(`${prefix}: "content" is required`);
-                break;
+    file_read_lines: attachMeta(
+      tool({
+        description:
+          'Read a file with line numbers. Returns structured line-numbered content for precise referencing. Use offset/limit to paginate large files.',
+        parameters: z.object({
+          path: z.string().describe('File path to read (relative or absolute)'),
+          offset: z
+            .number()
+            .int()
+            .min(1)
+            .optional()
+            .describe('Start line number (1-based, default 1)'),
+          limit: z
+            .number()
+            .int()
+            .min(1)
+            .optional()
+            .describe('Maximum lines to return (default 1000)'),
+        }),
+        execute: async ({
+          path: filePath,
+          offset = 1,
+          limit = 1000,
+        }): Promise<
+          | {
+              path: string;
+              total_lines: number;
+              offset: number;
+              limit: number;
+              lines: Array<{ num: number; content: string }>;
+              truncated: boolean;
             }
-          }
-
-          // Check for conflicts
-          const conflicts = detectConflicts(edits);
-          validationErrors.push(...conflicts);
-
-          if (validationErrors.length > 0) {
-            return { error: validationErrors.join('; ') };
-          }
-
-          // Sort edits descending so high-line edits are applied first
-          const sorted = sortEditsDescending(edits);
-
-          // Apply edits to in-memory lines
-          const lines = [...oldLines];
-
-          for (const { original: e } of sorted) {
-            switch (e.action) {
-              case 'replace': {
-                const newLines = e.content!.split('\n');
-                lines.splice(e.line! - 1, 1, ...newLines);
-                break;
-              }
-              case 'insert':
-                lines.splice(e.before! - 1, 0, ...e.content!.split('\n'));
-                break;
-              case 'delete': {
-                // Sort delete line numbers descending within this edit
-                const delLines = [...e.lines!].sort((a, b) => b - a);
-                for (const ln of delLines) {
-                  lines.splice(ln - 1, 1);
-                }
-                break;
-              }
-              case 'append':
-                lines.push(...e.content!.split('\n'));
-                break;
-            }
-          }
-
-          // Write atomically: write to temp file, then rename (POSIX rename atomically replaces target)
-          const newContent =
-            lines.length > 0 ? lines.join(lineEnding) + (hadTrailingNewline ? lineEnding : '') : '';
-          const tmpPath = `${absPath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-
+          | { error: string }
+        > => {
           try {
-            fs.writeFileSync(tmpPath, newContent, 'utf-8');
-            fs.renameSync(tmpPath, absPath);
-          } catch (writeErr: unknown) {
+            const absPath = path.resolve(filePath);
+
+            // Validate file exists
+            let stat: fs.Stats;
             try {
-              fs.unlinkSync(tmpPath);
-            } catch {
-              // Best-effort cleanup
+              stat = fs.statSync(absPath);
+            } catch (err: unknown) {
+              const code = (err as NodeJS.ErrnoException).code;
+              if (code === 'ENOENT') return { error: `File not found: ${absPath}` };
+              return { error: `Cannot access ${absPath}: ${(err as Error).message}` };
             }
-            const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-            return { error: `Write failed: ${msg}` };
+
+            if (stat.isDirectory()) {
+              return { error: `Path is a directory, not a file: ${absPath}` };
+            }
+
+            if (stat.size > MAX_FILE_SIZE) {
+              return {
+                error: `File too large (${stat.size} bytes, max ${MAX_FILE_SIZE}): ${absPath}`,
+              };
+            }
+
+            // Read once — use buffer for binary check, then decode
+            const rawBuffer = fs.readFileSync(absPath);
+            if (isBinaryContent(rawBuffer)) {
+              return { error: `File appears to be binary: ${absPath}` };
+            }
+            const content = rawBuffer.toString('utf-8');
+            const allLines = splitLines(content);
+            const totalLines = allLines.length;
+
+            const startIdx = offset - 1;
+            const endIdx = Math.min(startIdx + limit, totalLines);
+            const sliced = startIdx < totalLines ? allLines.slice(startIdx, endIdx) : [];
+
+            const lines = sliced.map((line, i) => ({
+              num: startIdx + i + 1,
+              content: line,
+            }));
+
+            return {
+              path: absPath,
+              total_lines: totalLines,
+              offset,
+              limit,
+              lines,
+              truncated: endIdx < totalLines,
+            };
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { error: msg };
           }
-
-          const newHash = hashContent(newContent);
-          const diff = generateDiffSummary(oldLines, edits);
-
-          return {
-            path: absPath,
-            old_hash: oldHash,
-            new_hash: newHash,
-            edits_applied: edits.length,
-            total_lines: lines.length,
-            diff,
-          };
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { error: msg };
-        }
+        },
+      }),
+      {
+        name: 'file_read_lines',
+        kind: 'read',
+        deterministic: false,
+        sideEffect: 'local',
+        cacheable: false,
       },
-    }),
+    ),
+
+    file_edit_lines: attachMeta(
+      tool({
+        description:
+          'Edit a file with precise line-based operations. Supports replace, insert, delete, and append actions. Multiple edits are applied atomically (all or nothing). Always read the file first with file_read_lines to get current line numbers.',
+        parameters: z.object({
+          path: z.string().describe('File path to edit (relative or absolute)'),
+          edits: z
+            .array(
+              z.object({
+                action: z
+                  .enum(['replace', 'insert', 'delete', 'append'])
+                  .describe(
+                    'replace: replace content at a line number; insert: insert before a line; delete: remove specific lines; append: add to end of file',
+                  ),
+                line: z.number().int().min(1).optional().describe('Line number for replace action'),
+                before: z.number().int().min(1).optional().describe('Line number to insert before'),
+                lines: z
+                  .array(z.number().int().min(1))
+                  .optional()
+                  .describe('Line numbers to delete'),
+                content: z
+                  .string()
+                  .optional()
+                  .describe(
+                    'New content for replace/insert/append (may contain \\n for multi-line)',
+                  ),
+              }),
+            )
+            .min(1)
+            .describe('Array of edit operations to apply'),
+        }),
+        execute: async ({
+          path: filePath,
+          edits,
+        }): Promise<
+          | {
+              path: string;
+              old_hash: string;
+              new_hash: string;
+              edits_applied: number;
+              total_lines: number;
+              diff: string;
+            }
+          | { error: string }
+        > => {
+          try {
+            const absPath = path.resolve(filePath);
+
+            // Validate file exists
+            let stat: fs.Stats;
+            try {
+              stat = fs.statSync(absPath);
+            } catch (err: unknown) {
+              const code = (err as NodeJS.ErrnoException).code;
+              if (code === 'ENOENT') return { error: `File not found: ${absPath}` };
+              return { error: `Cannot access ${absPath}: ${(err as Error).message}` };
+            }
+
+            if (stat.isDirectory()) {
+              return { error: `Path is a directory, not a file: ${absPath}` };
+            }
+
+            if (stat.size > MAX_FILE_SIZE) {
+              return {
+                error: `File too large (${stat.size} bytes, max ${MAX_FILE_SIZE}): ${absPath}`,
+              };
+            }
+
+            // Read once — use buffer for binary check, then decode
+            const rawBuffer = fs.readFileSync(absPath);
+            if (isBinaryContent(rawBuffer)) {
+              return { error: `File appears to be binary: ${absPath}` };
+            }
+            const rawContent = rawBuffer.toString('utf-8');
+            const lineEnding = detectLineEnding(rawContent);
+            const hadTrailingNewline =
+              rawContent.length > 0 && (rawContent.endsWith('\n') || rawContent.endsWith('\r\n'));
+            const oldLines = splitLines(rawContent);
+            const totalLines = oldLines.length;
+            const oldHash = hashContent(rawContent);
+
+            // Validate all edits upfront
+            const validationErrors: string[] = [];
+
+            for (let i = 0; i < edits.length; i++) {
+              const e = edits[i];
+              const prefix = `Edit ${i + 1} (${e.action})`;
+
+              switch (e.action) {
+                case 'replace':
+                  if (e.line === undefined) validationErrors.push(`${prefix}: "line" is required`);
+                  else if (e.line > totalLines)
+                    validationErrors.push(
+                      `${prefix}: line ${e.line} out of bounds (file has ${totalLines} lines)`,
+                    );
+                  if (e.content === undefined)
+                    validationErrors.push(`${prefix}: "content" is required`);
+                  break;
+                case 'insert':
+                  if (e.before === undefined)
+                    validationErrors.push(`${prefix}: "before" is required`);
+                  else if (e.before > totalLines + 1)
+                    validationErrors.push(
+                      `${prefix}: before ${e.before} out of bounds (file has ${totalLines} lines, max ${totalLines + 1})`,
+                    );
+                  if (e.content === undefined)
+                    validationErrors.push(`${prefix}: "content" is required`);
+                  break;
+                case 'delete':
+                  if (!e.lines || e.lines.length === 0)
+                    validationErrors.push(
+                      `${prefix}: "lines" array is required and must not be empty`,
+                    );
+                  else {
+                    for (const ln of e.lines) {
+                      if (ln > totalLines)
+                        validationErrors.push(
+                          `${prefix}: line ${ln} out of bounds (file has ${totalLines} lines)`,
+                        );
+                    }
+                  }
+                  break;
+                case 'append':
+                  if (e.content === undefined)
+                    validationErrors.push(`${prefix}: "content" is required`);
+                  break;
+              }
+            }
+
+            // Check for conflicts
+            const conflicts = detectConflicts(edits);
+            validationErrors.push(...conflicts);
+
+            if (validationErrors.length > 0) {
+              return { error: validationErrors.join('; ') };
+            }
+
+            // Sort edits descending so high-line edits are applied first
+            const sorted = sortEditsDescending(edits);
+
+            // Apply edits to in-memory lines
+            const lines = [...oldLines];
+
+            for (const { original: e } of sorted) {
+              switch (e.action) {
+                case 'replace': {
+                  const newLines = e.content!.split('\n');
+                  lines.splice(e.line! - 1, 1, ...newLines);
+                  break;
+                }
+                case 'insert':
+                  lines.splice(e.before! - 1, 0, ...e.content!.split('\n'));
+                  break;
+                case 'delete': {
+                  // Sort delete line numbers descending within this edit
+                  const delLines = [...e.lines!].sort((a, b) => b - a);
+                  for (const ln of delLines) {
+                    lines.splice(ln - 1, 1);
+                  }
+                  break;
+                }
+                case 'append':
+                  lines.push(...e.content!.split('\n'));
+                  break;
+              }
+            }
+
+            // Write atomically: write to temp file, then rename (POSIX rename atomically replaces target)
+            const newContent =
+              lines.length > 0
+                ? lines.join(lineEnding) + (hadTrailingNewline ? lineEnding : '')
+                : '';
+            const tmpPath = `${absPath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+
+            try {
+              fs.writeFileSync(tmpPath, newContent, 'utf-8');
+              fs.renameSync(tmpPath, absPath);
+            } catch (writeErr: unknown) {
+              try {
+                fs.unlinkSync(tmpPath);
+              } catch {
+                // Best-effort cleanup
+              }
+              const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
+              return { error: `Write failed: ${msg}` };
+            }
+
+            const newHash = hashContent(newContent);
+            const diff = generateDiffSummary(oldLines, edits);
+
+            return {
+              path: absPath,
+              old_hash: oldHash,
+              new_hash: newHash,
+              edits_applied: edits.length,
+              total_lines: lines.length,
+              diff,
+            };
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { error: msg };
+          }
+        },
+      }),
+      {
+        name: 'file_edit_lines',
+        kind: 'write',
+        deterministic: false,
+        sideEffect: 'local',
+        cacheable: false,
+      },
+    ),
   };
 }

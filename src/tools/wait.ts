@@ -1,5 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import { attachMeta } from '../framework/tools/adapter.js';
 
 /** Upper bound for the wait tool's delay (5 minutes). */
 export const MAX_WAIT_SECONDS = 300;
@@ -8,22 +9,31 @@ export const MIN_WAIT_SECONDS = 0.1;
 
 /** Creates a tool that pauses execution for a specified number of seconds. */
 export function createWaitTool() {
-  return tool({
-    description:
-      'Pause execution for a specified number of seconds. ' +
-      'Use when a task requires waiting within the current turn ' +
-      '(e.g., server restart, build, deploy propagation). ' +
-      `Min: ${MIN_WAIT_SECONDS}s, max: ${MAX_WAIT_SECONDS}s.`,
-    parameters: z.object({
-      seconds: z
-        .number()
-        .min(MIN_WAIT_SECONDS)
-        .max(MAX_WAIT_SECONDS)
-        .describe('Number of seconds to wait (0.1–300)'),
+  return attachMeta(
+    tool({
+      description:
+        'Pause execution for a specified number of seconds. ' +
+        'Use when a task requires waiting within the current turn ' +
+        '(e.g., server restart, build, deploy propagation). ' +
+        `Min: ${MIN_WAIT_SECONDS}s, max: ${MAX_WAIT_SECONDS}s.`,
+      parameters: z.object({
+        seconds: z
+          .number()
+          .min(MIN_WAIT_SECONDS)
+          .max(MAX_WAIT_SECONDS)
+          .describe('Number of seconds to wait (0.1–300)'),
+      }),
+      execute: async ({ seconds }): Promise<string> => {
+        await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+        return `Waited ${seconds} second${seconds === 1 ? '' : 's'}.`;
+      },
     }),
-    execute: async ({ seconds }): Promise<string> => {
-      await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
-      return `Waited ${seconds} second${seconds === 1 ? '' : 's'}.`;
+    {
+      name: 'wait',
+      kind: 'inert',
+      deterministic: false,
+      sideEffect: 'none',
+      cacheable: false,
     },
-  });
+  );
 }
