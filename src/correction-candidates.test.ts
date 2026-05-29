@@ -197,6 +197,7 @@ describe('CorrectionCandidateStore', () => {
       vi.mocked(fs.readFileSync).mockImplementation(
         () => JSON.stringify(makeCandidate({ status: 'pending' })) as any,
       );
+      store.refreshPendingCount();
       expect(store.enqueue(input)).toBeUndefined();
     });
 
@@ -207,6 +208,7 @@ describe('CorrectionCandidateStore', () => {
       vi.mocked(fs.readFileSync).mockImplementation(
         () => JSON.stringify(makeCandidate({ status: 'pending' })) as any,
       );
+      store.refreshPendingCount();
       store.enqueue(input);
       expect(fsUtils.atomicWriteFileSync).not.toHaveBeenCalled();
     });
@@ -218,6 +220,7 @@ describe('CorrectionCandidateStore', () => {
       vi.mocked(fs.readFileSync).mockImplementation(
         () => JSON.stringify(makeCandidate({ status: 'dismissed' })) as any,
       );
+      store.refreshPendingCount();
       expect(store.enqueue(input)).toBeDefined();
       expect(fsUtils.atomicWriteFileSync).toHaveBeenCalled();
     });

@@ -39,11 +39,16 @@ function createMockStore() {
 }
 
 /**
- * Error snippet that the taxonomy classifies as correctable (`exec_failed`).
- * Used to keep tests focused on the recording behavior rather than on
- * taxonomy edge cases.
+ * Error snippet the taxonomy classifies as correctable (`exec_failed`) — only
+ * works in a shell context per PR #189 review (F6). Used for shell.* tests.
  */
 const CORRECTABLE_ERROR = 'command failed with exit code 1: syntax error';
+
+/**
+ * Error snippet the taxonomy classifies as `invalid_args` — correctable
+ * regardless of toolName. Used for non-shell augment tests.
+ */
+const NONSHELL_CORRECTABLE_ERROR = 'invalid tool arguments: missing required field "url"';
 
 describe('augmentTools', () => {
   let store: ReturnType<typeof createMockStore>;
@@ -206,7 +211,10 @@ describe('augmentTools', () => {
     });
 
     it('MCP tools (name contains __) get mcp. prefix as profile key', async () => {
-      vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: CORRECTABLE_ERROR });
+      vi.mocked(detectToolError).mockReturnValue({
+        isError: true,
+        snippet: NONSHELL_CORRECTABLE_ERROR,
+      });
 
       const tools = {
         myServer__myTool: { execute: vi.fn(async () => ({ error: 'err' })) },
@@ -219,13 +227,16 @@ describe('augmentTools', () => {
       expect(store.recordBadExample).toHaveBeenCalledWith(
         'mcp.myServer__myTool',
         expect.any(String),
-        CORRECTABLE_ERROR,
-        'exec_failed',
+        NONSHELL_CORRECTABLE_ERROR,
+        'invalid_args',
       );
     });
 
     it('non-shell non-MCP tools use their name as-is for profile key', async () => {
-      vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: CORRECTABLE_ERROR });
+      vi.mocked(detectToolError).mockReturnValue({
+        isError: true,
+        snippet: NONSHELL_CORRECTABLE_ERROR,
+      });
 
       const tools = { web_read: { execute: vi.fn(async () => ({ error: 'err' })) } };
 
@@ -236,8 +247,8 @@ describe('augmentTools', () => {
       expect(store.recordBadExample).toHaveBeenCalledWith(
         'web_read',
         expect.any(String),
-        CORRECTABLE_ERROR,
-        'exec_failed',
+        NONSHELL_CORRECTABLE_ERROR,
+        'invalid_args',
       );
     });
 
@@ -502,7 +513,10 @@ describe('augmentTools', () => {
     });
 
     it('store.recordBadExample is not called synchronously — only after setImmediate', async () => {
-      vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: CORRECTABLE_ERROR });
+      vi.mocked(detectToolError).mockReturnValue({
+        isError: true,
+        snippet: NONSHELL_CORRECTABLE_ERROR,
+      });
 
       const tools = { myTool: { execute: vi.fn(async () => 'result') } };
       const augmented = augmentTools(tools, store);
@@ -555,7 +569,10 @@ describe('augmentTools', () => {
     });
 
     it('tool name with __ uses mcp. prefix regardless of shell classification', async () => {
-      vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: CORRECTABLE_ERROR });
+      vi.mocked(detectToolError).mockReturnValue({
+        isError: true,
+        snippet: NONSHELL_CORRECTABLE_ERROR,
+      });
 
       const tools = {
         server__shell: { execute: vi.fn(async () => 'result') },
@@ -568,15 +585,18 @@ describe('augmentTools', () => {
       expect(store.recordBadExample).toHaveBeenCalledWith(
         'mcp.server__shell',
         expect.any(String),
-        CORRECTABLE_ERROR,
-        'exec_failed',
+        NONSHELL_CORRECTABLE_ERROR,
+        'invalid_args',
       );
     });
   });
 
   describe('safeSerialize', () => {
     it('args are serialized and truncated to 300 chars when very long', async () => {
-      vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: CORRECTABLE_ERROR });
+      vi.mocked(detectToolError).mockReturnValue({
+        isError: true,
+        snippet: NONSHELL_CORRECTABLE_ERROR,
+      });
 
       const longValue = 'x'.repeat(400);
       const tools = { myTool: { execute: vi.fn(async () => 'result') } };
@@ -589,7 +609,10 @@ describe('augmentTools', () => {
     });
 
     it('non-serializable args fall back to String()', async () => {
-      vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: CORRECTABLE_ERROR });
+      vi.mocked(detectToolError).mockReturnValue({
+        isError: true,
+        snippet: NONSHELL_CORRECTABLE_ERROR,
+      });
 
       // Create a circular reference to cause JSON.stringify to throw
       const circular: Record<string, unknown> = {};
@@ -628,7 +651,7 @@ describe('augmentTools', () => {
 
     it('records error envelope WITHOUT calling detectToolError heuristic', async () => {
       const aisdk = toolToAISDK(
-        makeBernardTool({ name: 'demo', result: 'error', message: CORRECTABLE_ERROR }),
+        makeBernardTool({ name: 'demo', result: 'error', message: NONSHELL_CORRECTABLE_ERROR }),
       );
       const augmented = augmentTools({ demo: aisdk }, store);
       await augmented.demo.execute({ x: 1 }, {});
@@ -673,7 +696,10 @@ describe('augmentTools', () => {
 
   describe('multiple tools', () => {
     it('augments all tools in the record independently', async () => {
-      vi.mocked(detectToolError).mockReturnValue({ isError: true, snippet: CORRECTABLE_ERROR });
+      vi.mocked(detectToolError).mockReturnValue({
+        isError: true,
+        snippet: NONSHELL_CORRECTABLE_ERROR,
+      });
 
       const tools = {
         tool1: { execute: vi.fn(async () => 'r1'), description: 'Tool 1' },

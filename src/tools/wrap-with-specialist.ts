@@ -112,13 +112,17 @@ export function wrapToolWithSpecialist<TArgs>(
           deps,
         );
         if (wrapped.status === 'error') {
-          const cls = classifyError({
-            message: wrapped.error ?? String(wrapped.result ?? ''),
-            toolName,
-          });
-          printToolFailure(cls.category, wrapped.error ?? '', cls.playbook.user, cls.severity);
+          // Use the same fallback for display that the classifier consumes, so
+          // wrappers that report the diagnostic via `result` (parse_failed
+          // paths etc.) still surface a usable snippet to the user instead of
+          // an empty line. PR #189 review feedback.
+          const snippet = wrapped.error ?? String(wrapped.result ?? '');
+          const cls = classifyError({ message: snippet, toolName });
+          printToolFailure(cls.category, snippet, cls.playbook.user, cls.severity);
           // Prepend a one-line model-facing hint so the next turn's
           // tool-result message carries category + recovery guidance.
+          // augment.ts strips this `[failure: ...]` prefix before recording
+          // bad examples so the hint doesn't pollute the tool-profile bytes.
           const hint = `[failure: ${cls.category}] ${cls.playbook.model}`;
           const annotated = {
             ...wrapped,

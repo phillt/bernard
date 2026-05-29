@@ -191,8 +191,17 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     // so the desktop notification is how the user finds out something broke.
     // Severity comes straight from the taxonomy: auth/permission ring loud,
     // transient/rate-limit ring quiet.
+    //
+    // Write `lastRunStatus: 'error'` here (rather than waiting for the
+    // scheduler's post-runJob update) so the alert and the user's first /cron
+    // status read see a consistent terminal state — otherwise a notification
+    // can arrive while jobs.json still reads `lastRunStatus: 'running'`.
     try {
-      store.updateJob(job.id, { lastErrorCategory: cls.category });
+      store.updateJob(job.id, {
+        lastErrorCategory: cls.category,
+        lastRunStatus: 'error',
+        lastResult: message.slice(0, 2000),
+      });
       const alert = store.createAlert({
         jobId: job.id,
         jobName: job.name,

@@ -6,6 +6,19 @@ import type { ToolResult } from '../framework/tools/types.js';
 import { classifyError } from '../error-taxonomy.js';
 
 /**
+ * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
+ * the error string the model sees, so the next turn's tool-result message
+ * carries category + recovery guidance. That hint is for the model, not for
+ * the profile playbook — strip it before classifying or storing as a bad
+ * example so the recorded bytes are the raw underlying error.
+ */
+const FAILURE_HINT_PREFIX = /^\[failure: [a-z_]+\][^\n]*\n?/;
+
+function stripFailureHint(snippet: string): string {
+  return snippet.replace(FAILURE_HINT_PREFIX, '');
+}
+
+/**
  * Returns the profile key for a given tool invocation. Shell commands are
  * classified into sub-categories; MCP tools are prefixed with `mcp.`.
  */
@@ -45,16 +58,21 @@ function recordOutcome(
 ): void {
   try {
     if (errorSnippet !== undefined) {
+      // Strip the wrapper-shim's `[failure: <category>] ...` hint before
+      // classification + storage. Otherwise the recorded bad-example bytes
+      // would include the hint, and a re-classification would briefly skew
+      // toward the hint's category instead of the underlying error.
+      const rawSnippet = stripFailureHint(errorSnippet);
       // Gate bad-example recording on correctability: environmental failures
       // (HTTP 404, rate limits, pool exhaustion, parse_failed) are not
       // call-shape mistakes the model can learn from, so we skip them.
-      const cls = classifyError({ message: errorSnippet, toolName });
+      const cls = classifyError({ message: rawSnippet, toolName });
       if (cls.correctable) {
-        profileStore.recordBadExample(profileKey, argsSnippet, errorSnippet, cls.category);
+        profileStore.recordBadExample(profileKey, argsSnippet, rawSnippet, cls.category);
         debugLog(`augment:${toolName}:error`, {
           profileKey,
           category: cls.category,
-          snippet: errorSnippet,
+          snippet: rawSnippet,
         });
         printInfo(`  ~ profile ${profileKey} — recorded error (${cls.category})`);
       } else {

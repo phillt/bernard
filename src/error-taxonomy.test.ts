@@ -109,7 +109,10 @@ describe('classifyError', () => {
     });
 
     it('detects generic shell exec failure', () => {
-      const cls = classifyError({ message: 'command failed with exit code 1: syntax error' });
+      const cls = classifyError({
+        message: 'command failed with exit code 1: syntax error',
+        toolName: 'shell',
+      });
       expect(cls.category).toBe('exec_failed');
       expect(cls.correctable).toBe(true);
     });

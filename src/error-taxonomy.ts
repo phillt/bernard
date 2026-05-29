@@ -145,9 +145,10 @@ function pickCategory(input: ClassifyInput): ToolErrorType {
   if (/Specialist did not produce valid structured output|parse_failed/i.test(m)) {
     return 'parse_failed';
   }
-  if (/\bcancelled\b|aborted by user/i.test(m)) return 'cancelled';
 
-  // HTTP signatures embedded in error strings (web.ts, gh CLI, etc.).
+  // HTTP signatures embedded in error strings (web.ts, gh CLI, etc.). Must run
+  // before the generic `cancelled` pattern so a wrapped message like
+  // "cancelled: HTTP 401" lands as `auth`, not `cancelled`.
   if (/\bHTTP\s*401\b|unauthori[sz]ed/i.test(m)) return 'auth';
   if (/\bHTTP\s*403\b|forbidden/i.test(m)) return 'permission';
   if (/\bHTTP\s*404\b|not\s*found/i.test(m)) {
@@ -160,6 +161,10 @@ function pickCategory(input: ClassifyInput): ToolErrorType {
   if (/\bHTTP\s*5\d\d\b|bad gateway|service unavailable|gateway timeout/i.test(m)) {
     return 'transient';
   }
+
+  // User-cancel signatures. Runs after HTTP/auth so wrapped strings like
+  // "cancelled: HTTP 401" still hit `auth`.
+  if (/\bcancelled\b|aborted by user/i.test(m)) return 'cancelled';
 
   // Filesystem / shell signatures.
   if (/permission denied|EACCES/i.test(m)) return 'permission';
@@ -177,8 +182,10 @@ function pickCategory(input: ClassifyInput): ToolErrorType {
   // Schema-validation signatures from generateText.
   if (/invalid (?:tool )?arguments?|schema validation|zod/i.test(m)) return 'invalid_args';
 
-  // Generic exec failure (shell, scripts).
-  if (/exit code|stderr|syntax error|command failed/i.test(m)) return 'exec_failed';
+  // Generic exec failure (shell, scripts). Patterns use word boundaries so a
+  // stray "stderr" substring in a web response body or MCP error doesn't
+  // mis-classify. `isCorrectable` further restricts learnability to shell.
+  if (/\bexit code\b|\bstderr\b|syntax error|command failed/i.test(m)) return 'exec_failed';
 
   return 'unknown';
 }
@@ -186,12 +193,20 @@ function pickCategory(input: ClassifyInput): ToolErrorType {
 function isCorrectable(category: ToolErrorType, toolName?: string): boolean {
   switch (category) {
     case 'invalid_args':
-    case 'exec_failed':
       return true;
+    case 'exec_failed':
+      // Only the shell tool (and its sub-categorized profiles like `shell.gh`)
+      // can learn from generic exec-failure patterns; a `stderr`-like substring
+      // in a web/MCP error body isn't a call-shape mistake the model can fix.
+      return isShellContext(toolName);
     case 'not_found':
       // shell command-not-found is a learnable mistake; a web/file 404 is not.
-      return toolName === 'shell';
+      return isShellContext(toolName);
     default:
       return false;
   }
+}
+
+function isShellContext(toolName?: string): boolean {
+  return toolName === 'shell' || (typeof toolName === 'string' && toolName.startsWith('shell.'));
 }

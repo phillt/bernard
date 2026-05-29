@@ -1050,7 +1050,15 @@ export async function startRepl(
         .dismissNonCorrectable(classifyError, {
           toolNameFor: (candidate) => {
             const specialist = specialistStore.get(candidate.specialistId);
-            return specialist?.targetTools?.[0];
+            const tools = specialist?.targetTools ?? [];
+            if (tools.length > 0) return tools;
+            // Specialist was deleted between enqueue and now. Try to recover a
+            // useful toolName from the error text so we don't dismiss what was
+            // actually a learnable shell mistake.
+            if (/command not found|no such file or directory/i.test(candidate.error)) {
+              return ['shell'];
+            }
+            return [];
           },
         });
       if (dismissed > 0) {

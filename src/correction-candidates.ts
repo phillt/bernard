@@ -54,8 +54,23 @@ export const MAX_PENDING_CORRECTIONS = 50;
  * Mirrors the `CandidateStore` pattern used for specialist candidates.
  */
 export class CorrectionCandidateStore {
+  /**
+   * In-memory count of `status: 'pending'` candidates on disk. Primed from
+   * disk on construction (one O(n) pass) and updated by every mutating
+   * method, so `enqueue`'s cap check is O(1) instead of O(n*size). Treated
+   * as a best-effort cache — when the underlying state is touched outside
+   * this instance, callers can refresh via {@link refreshPendingCount}.
+   */
+  private pendingCount = 0;
+
   constructor() {
     fs.mkdirSync(CORRECTION_CANDIDATES_DIR, { recursive: true });
+    this.refreshPendingCount();
+  }
+
+  /** Re-counts pending candidates on disk. O(n) — call after external writes. */
+  refreshPendingCount(): void {
+    this.pendingCount = this.listPending().length;
   }
 
   /** Returns all candidates newest-first, skipping corrupt files. */
@@ -102,16 +117,10 @@ export class CorrectionCandidateStore {
     error: string;
     category?: ToolErrorType;
   }): CorrectionCandidate | undefined {
-    // Lightweight count: just count pending .json files. Dismissed/applied/etc.
-    // candidates count against the cap but don't represent active queue pressure;
-    // a separate cleanup pass can reclaim space if needed. Counting pending only
-    // means non-correctable dismissals never block correctable enqueues.
-    try {
-      const pendingCount = this.listPending().length;
-      if (pendingCount >= MAX_PENDING_CORRECTIONS) return undefined;
-    } catch {
-      return undefined;
-    }
+    // O(1) cap check via the in-memory counter. Non-pending rows
+    // (applied/rejected/dismissed/invalid) don't count against the cap so a
+    // backlog drain frees space for new correctable candidates.
+    if (this.pendingCount >= MAX_PENDING_CORRECTIONS) return undefined;
     const candidate: CorrectionCandidate = {
       id: crypto.randomUUID(),
       specialistId: input.specialistId,
@@ -128,6 +137,7 @@ export class CorrectionCandidateStore {
         path.join(CORRECTION_CANDIDATES_DIR, `${candidate.id}.json`),
         JSON.stringify(candidate, null, 2),
       );
+      this.pendingCount++;
       return candidate;
     } catch {
       return undefined;
@@ -142,6 +152,12 @@ export class CorrectionCandidateStore {
       path.join(CORRECTION_CANDIDATES_DIR, `${id}.json`),
       JSON.stringify(merged, null, 2),
     );
+    // Maintain the pending counter as rows transition in/out of `pending`.
+    if (existing.status === 'pending' && merged.status !== 'pending') {
+      this.pendingCount = Math.max(0, this.pendingCount - 1);
+    } else if (existing.status !== 'pending' && merged.status === 'pending') {
+      this.pendingCount++;
+    }
     return merged;
   }
 
@@ -157,17 +173,41 @@ export class CorrectionCandidateStore {
    */
   dismissNonCorrectable(
     classify: (input: { message: string; toolName?: string }) => Classification,
-    opts?: { toolNameFor?: (candidate: CorrectionCandidate) => string | undefined },
+    opts?: {
+      /**
+       * Returns the candidate tool names to attribute this candidate to. We
+       * iterate them and keep the candidate if ANY classifies as correctable
+       * (most-permissive wins). When a specialist has been deleted, callers
+       * should still return a best-effort name (e.g. inferred from the error
+       * text) so a shell command-not-found doesn't get dismissed.
+       */
+      toolNameFor?: (candidate: CorrectionCandidate) => string[];
+    },
   ): number {
     let dismissed = 0;
     for (const candidate of this.listPending()) {
-      const toolName = opts?.toolNameFor?.(candidate);
-      const cls = classify({ message: candidate.error, toolName });
-      if (cls.correctable) continue;
+      const toolNames = opts?.toolNameFor?.(candidate) ?? [];
+      // Always include an undefined-toolName classification too — for
+      // categories that don't depend on toolName, this still produces the
+      // correct answer; for `not_found` / `exec_failed` it returns the
+      // conservative (non-correctable) answer so the loop still has to find
+      // a positive match to keep the candidate.
+      const attempts = toolNames.length > 0 ? toolNames : [undefined];
+      let kept = false;
+      let lastCategory: Classification['category'] = 'unknown';
+      for (const toolName of attempts) {
+        const cls = classify({ message: candidate.error, toolName });
+        lastCategory = cls.category;
+        if (cls.correctable) {
+          kept = true;
+          break;
+        }
+      }
+      if (kept) continue;
       this.update(candidate.id, {
         status: 'dismissed',
-        category: cls.category,
-        notes: `Auto-dismissed: classified as ${cls.category} (not correctable).`,
+        category: lastCategory,
+        notes: `Auto-dismissed: classified as ${lastCategory} (not correctable).`,
       });
       dismissed++;
     }
@@ -175,8 +215,12 @@ export class CorrectionCandidateStore {
   }
 
   delete(id: string): boolean {
+    const existing = this.get(id);
     try {
       fs.unlinkSync(path.join(CORRECTION_CANDIDATES_DIR, `${id}.json`));
+      if (existing?.status === 'pending') {
+        this.pendingCount = Math.max(0, this.pendingCount - 1);
+      }
       return true;
     } catch {
       return false;
