@@ -7,6 +7,7 @@ import type { SpecialistMatch } from './specialist-matcher.js';
 import { renderResolvedBlock, RAG_SOURCE_KEY, type ResolvedEntry } from './reference-resolver.js';
 import { sanitizeKey } from './memory.js';
 import { getDomain } from './domains.js';
+import type { ProvenanceStore } from './provenance.js';
 
 /**
  * Inputs for {@link buildContextMessage}. Mirrors the dynamic per-turn data
@@ -23,6 +24,12 @@ export interface ContextMessageInputs {
   specialistMatches?: SpecialistMatch[];
   resolvedReferences?: ResolvedEntry[];
   alertContext?: string;
+  /**
+   * Per-turn ProvenanceStore — populated by retrieval tools and the Agent
+   * class (RAG hits). Rendered as `<available_sources>` so the model knows
+   * which `[^Sn]` ids it can cite. Issue #173.
+   */
+  provenance?: ProvenanceStore;
 }
 
 /** Per-section renderer signature. Returns either the section body (no wrapping tag) or null to skip. */
@@ -82,6 +89,7 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
       render: () => renderResolvedReferences(inputs.resolvedReferences),
     },
     { tag: 'alert_context', render: () => renderAlertContext(inputs.alertContext) },
+    { tag: 'available_sources', render: () => renderAvailableSources(inputs.provenance) },
   ];
 
   for (const { tag, render } of renderers) {
@@ -223,6 +231,25 @@ function renderAlertContext(alertContext?: string): string | null {
   if (!alertContext) return null;
   const trimmed = alertContext.trim();
   return trimmed === '' ? null : escapeXml(trimmed);
+}
+
+/**
+ * Render the per-turn ProvenanceStore so the model can see which `[^Sn]`
+ * ids it may cite. Labels and previews are untrusted user/web/file content,
+ * so XML-escape before interpolation (issue #173 + OWASP LLM01).
+ */
+function renderAvailableSources(provenance?: ProvenanceStore): string | null {
+  if (!provenance || provenance.size() === 0) return null;
+  const intro =
+    'Sources available for citation this turn. Reference one by ending the relevant sentence with [^<id>] (e.g. [^S1]). When a factual claim has no matching source, prefix it with [unverified] or ask the user.';
+  const lines = [intro];
+  for (const s of provenance.list()) {
+    const preview = s.contentPreview ? ` — ${escapeXml(s.contentPreview)}` : '';
+    lines.push(
+      `- [^${s.id}] (${escapeXml(s.kind)}) ${escapeXml(s.label)} <${escapeXml(s.rawRef)}>${preview}`,
+    );
+  }
+  return lines.join('\n');
 }
 
 // Re-export so existing callers can still resolve sanitizeKey + RAG_SOURCE_KEY

@@ -8,6 +8,7 @@ import { ToolProfileStore } from '../tool-profiles.js';
 import type { RAGStore } from '../rag.js';
 import type { PolicyDecision } from '../policy/types.js';
 import type { ToolOptions } from '../tools/types.js';
+import { ProvenanceStore } from '../provenance.js';
 
 export interface AgentContextStores {
   memory: MemoryStore;
@@ -35,6 +36,13 @@ export interface AgentContext {
    * need to honour policy (today: `mainAgentDefinition.strategy`).
    */
   policyDecision?: PolicyDecision;
+  /**
+   * Per-turn collection of cite-able sources. Cleared at the start of every
+   * `Agent.processInput` turn. Shared by reference with sub-agent /
+   * tool-wrapper contexts so retrieval inside a wrapper specialist is
+   * visible in the parent's viewer. Issue #173.
+   */
+  provenance: ProvenanceStore;
 }
 
 export interface AssembleContextInput {
@@ -43,6 +51,7 @@ export interface AssembleContextInput {
   mcp?: Partial<AgentContextMCP>;
   rag?: RAGStore;
   stores?: Partial<AgentContextStores>;
+  provenance?: ProvenanceStore;
 }
 
 export function assembleContext(input: AssembleContextInput): AgentContext {
@@ -64,5 +73,6 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
     },
     rag: input.rag,
     toolOptions: input.toolOptions,
+    provenance: input.provenance ?? new ProvenanceStore(),
   };
 }

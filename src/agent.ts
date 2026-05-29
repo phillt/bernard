@@ -46,6 +46,7 @@ import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
 import { DefaultPolicyEngine } from './policy/index.js';
 import type { PolicyEngine, PolicyResult } from './policy/index.js';
+import { extractCitationMarkers, type SourceItem } from './provenance.js';
 
 // `buildSystemPrompt` lives in agent-prompt.ts (extracted to avoid a circular
 // import with framework/agents/main.ts). Re-exported here so existing imports
@@ -95,6 +96,8 @@ export class Agent {
   private ragStore?: RAGStore;
   private previousRAGFacts: Set<string> = new Set();
   private lastRAGResults: RAGSearchResult[] = [];
+  private lastSources: SourceItem[] = [];
+  private lastCitedSources: SourceItem[] = [];
   private abortController: AbortController | null = null;
   private lastPromptTokens: number = 0;
   // Public so tokenStatsHook (an external module) can mutate these in place
@@ -146,6 +149,24 @@ export class Agent {
   /** Returns the RAG search results from the most recent `processInput` call. */
   getLastRAGResults(): RAGSearchResult[] {
     return this.lastRAGResults;
+  }
+
+  /**
+   * Every source registered during the last turn (web, RAG, memory, file
+   * reads), regardless of whether the response cited it. Powers the
+   * Shift+Tab "Sources" viewer. Issue #173.
+   */
+  getLastSources(): SourceItem[] {
+    return this.lastSources;
+  }
+
+  /**
+   * Sources actually cited by the last response — every item whose id
+   * appeared as a `[^Sn]` marker in the model's text. Subset of
+   * {@link getLastSources}. Issue #173.
+   */
+  getLastCitedSources(): SourceItem[] {
+    return this.lastCitedSources;
   }
 
   /** Cancels the in-flight LLM request, if any. Safe to call when no request is active. */
@@ -242,6 +263,10 @@ export class Agent {
     this.abortController = new AbortController();
     this.lastStepPromptTokens = 0;
     this.lastRAGResults = [];
+    this.lastSources = [];
+    this.lastCitedSources = [];
+    // Fresh per-turn provenance — sources from prior turns don't leak across.
+    this.ctx.provenance.clear();
 
     try {
       // Check if context compression is needed
@@ -276,6 +301,19 @@ export class Agent {
           // Apply stickiness from previous turn
           ragResults = applyStickiness(rawResults, this.previousRAGFacts);
           this.lastRAGResults = ragResults;
+
+          // Register each RAG hit as a citeable source. The id is exposed
+          // to the model via the `<available_sources>` block built by
+          // `buildContextMessage` so it can attach `[^Sn]` markers when
+          // referencing recalled context.
+          for (const r of ragResults) {
+            this.ctx.provenance.add({
+              kind: 'rag',
+              label: r.fact.slice(0, 80),
+              contentPreview: r.fact,
+              rawRef: `rag:${r.domain}:${r.fact.slice(0, 60)}`,
+            });
+          }
 
           // Track for next turn
           this.previousRAGFacts = new Set(ragResults.map((r) => r.fact));
@@ -477,6 +515,22 @@ export class Agent {
       // Track token usage for compression decisions — use last step's prompt tokens
       // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)
       this.lastPromptTokens = this.lastStepPromptTokens ?? result.usage?.promptTokens ?? 0;
+
+      // Snapshot provenance for the REPL viewer. `lastSources` is everything
+      // registered this turn; `lastCitedSources` is the subset whose ids
+      // appeared as `[^Sn]` markers in the final text. Invalid markers are
+      // silently dropped by `extractCitationMarkers`. Issue #173.
+      this.lastSources = this.ctx.provenance.list();
+      const citedIds = extractCitationMarkers(result.text ?? '', this.ctx.provenance);
+      this.lastCitedSources = citedIds
+        .map((id) => this.ctx.provenance.get(id))
+        .filter((s): s is SourceItem => s !== undefined);
+      if (citedIds.length === 0 && this.lastSources.length > 0) {
+        debugLog('agent:citations', {
+          available: this.lastSources.length,
+          cited: 0,
+        });
+      }
 
       // Truncate large tool results before adding to history
       const truncatedMessages = truncateToolResults(result.response.messages as CoreMessage[]);

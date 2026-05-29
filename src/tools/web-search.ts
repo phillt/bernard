@@ -2,6 +2,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { parse } from 'node-html-parser';
 import { attachMeta } from '../framework/tools/adapter.js';
+import type { ProvenanceStore } from '../provenance.js';
 
 /** One search result. Kept minimal so the LLM can cheaply decide which URLs to `web_read`. */
 export interface SearchResult {
@@ -116,13 +117,13 @@ async function searchDuckDuckGo(query: string, limit: number): Promise<SearchRes
   }
 }
 
-function formatResults(results: SearchResult[]): string {
+function formatResults(results: SearchResult[], ids?: string[]): string {
   if (results.length === 0) return 'No results found.';
   return results
-    .map(
-      (r, i) =>
-        `${i + 1}. ${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet.slice(0, 300)}` : ''}`,
-    )
+    .map((r, i) => {
+      const idTag = ids?.[i] ? `[${ids[i]}] ` : '';
+      return `${i + 1}. ${idTag}${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet.slice(0, 300)}` : ''}`;
+    })
     .join('\n\n');
 }
 
@@ -135,7 +136,7 @@ function formatResults(results: SearchResult[]): string {
  * URL instead — this keeps the specialist-creator meta-agent productive even
  * without API keys.
  */
-export function createWebSearchTool() {
+export function createWebSearchTool(provenance?: ProvenanceStore) {
   return attachMeta(
     tool({
       description:
@@ -163,7 +164,17 @@ export function createWebSearchTool() {
         for (const [name, fn] of attempts) {
           const results = await fn();
           if (results && results.length > 0) {
-            return `Provider: ${name}\n\n${formatResults(results)}`;
+            const ids = provenance
+              ? results.map((r) =>
+                  provenance.add({
+                    kind: 'web',
+                    label: r.title || r.url,
+                    contentPreview: r.snippet,
+                    rawRef: r.url,
+                  }),
+                )
+              : undefined;
+            return `Provider: ${name}\n\n${formatResults(results, ids)}`;
           }
           failures.push(name);
         }

@@ -19,7 +19,7 @@ import { buildToolProfilesPrompt } from '../../tool-profiles.js';
 import { getModelProfile } from '../../providers/index.js';
 import { isReactEffective } from '../../policy/effective.js';
 import { buildSystemPrompt } from '../../agent-prompt.js';
-import { SHARE_REASONING_PROMPT, REASONING_FAMILIES } from '../../agent-prompt.js';
+import { SHARE_REASONING_PROMPT, REASONING_FAMILIES, CITATIONS_PROMPT } from '../../agent-prompt.js';
 import { buildContextMessage } from '../../context-message.js';
 import type { RAGSearchResult } from '../../rag.js';
 import type { RoutineSummary } from '../../routines.js';
@@ -87,6 +87,15 @@ export function buildMainSystemPrompt(
   if (!REASONING_FAMILIES.has(profile.family)) {
     systemPrompt += '\n\n' + SHARE_REASONING_PROMPT;
   }
+  // Citations policy: append the inline-marker instructions when the
+  // policy engine has decided we require citations for factual claims and
+  // the active model family does not forbid inline annotations. Issue #173.
+  if (
+    ctx.policyDecision?.citations?.requireForFactualClaims &&
+    !REASONING_FAMILIES.has(profile.family)
+  ) {
+    systemPrompt += '\n\n' + CITATIONS_PROMPT;
+  }
   const profilesBlock = buildToolProfilesPrompt(ctx.stores.toolProfiles);
   if (profilesBlock) {
     systemPrompt += '\n\n' + profilesBlock;
@@ -114,6 +123,7 @@ export function buildMainContextMessages(
     specialistMatches: input.specialistMatches,
     resolvedReferences: input.resolvedReferences,
     alertContext: input.alertContext,
+    provenance: ctx.provenance,
   });
   return msg ? [msg] : [];
 }
@@ -155,6 +165,7 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
       ctx.stores.specialists,
       ctx.stores.candidates,
       ctx.config,
+      ctx.provenance,
     );
     // Gate plan/evaluate on the SAME effective decision the strategy uses
     // (see strategy(ctx) below). Reading `ctx.config.reactMode` directly

@@ -13,6 +13,7 @@ import { createWaitTool } from './wait.js';
 import { createFileTools } from './file.js';
 import { createRoutineTool } from './routine.js';
 import { createSpecialistTool } from './specialist.js';
+import { createCiteTool } from './cite.js';
 import { toolToAISDK } from '../framework/tools/adapter.js';
 import type { ToolOptions } from './types.js';
 import type { MemoryStore } from '../memory.js';
@@ -20,6 +21,7 @@ import type { RoutineStore } from '../routines.js';
 import type { SpecialistStore } from '../specialists.js';
 import type { CandidateStoreReader } from '../specialist-candidates.js';
 import type { BernardConfig } from '../config.js';
+import type { ProvenanceStore } from '../provenance.js';
 
 export type { ToolOptions } from './types.js';
 
@@ -40,6 +42,7 @@ export function createTools(
   specialistStore?: SpecialistStore,
   candidateStore?: CandidateStoreReader,
   config?: BernardConfig,
+  provenance?: ProvenanceStore,
 ): Record<string, any> {
   return {
     // Migrated to BernardTool (Phase B). `toolToAISDK` preserves model-facing
@@ -47,8 +50,8 @@ export function createTools(
     // attached via `__bernardSource` so `augmentTools` can detect errors
     // deterministically from the envelope.
     shell: toolToAISDK(createShellTool(options)),
-    memory: toolToAISDK(createMemoryTool(memoryStore)),
-    scratch: toolToAISDK(createScratchTool(memoryStore)),
+    memory: toolToAISDK(createMemoryTool(memoryStore, provenance)),
+    scratch: toolToAISDK(createScratchTool(memoryStore, provenance)),
     routine: createRoutineTool(routineStore),
     specialist: createSpecialistTool(specialistStore, candidateStore, config),
     datetime: createDateTimeTool(),
@@ -58,10 +61,11 @@ export function createTools(
     ...createTimeTools(),
     mcp_config: createMCPConfigTool(),
     mcp_add_url: createMCPAddUrlTool(),
-    web_read: createWebReadTool(),
-    web_search: createWebSearchTool(),
+    web_read: createWebReadTool(provenance),
+    web_search: createWebSearchTool(provenance),
     wait: createWaitTool(),
-    ...createFileTools(),
+    ...createFileTools(provenance),
+    ...(provenance ? { cite: createCiteTool(provenance) } : {}),
     ...mcpTools,
   };
 }

@@ -4,6 +4,7 @@ import { attachMeta } from '../framework/tools/adapter.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
+import type { ProvenanceStore } from '../provenance.js';
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
@@ -166,7 +167,7 @@ function detectLineEnding(content: string): string {
 }
 
 /** Creates file_read_lines and file_edit_lines tools. */
-export function createFileTools() {
+export function createFileTools(provenance?: ProvenanceStore) {
   return {
     file_read_lines: attachMeta(
       tool({
@@ -199,6 +200,7 @@ export function createFileTools() {
               limit: number;
               lines: Array<{ num: number; content: string }>;
               truncated: boolean;
+              source_id?: string;
             }
           | { error: string }
         > => {
@@ -243,6 +245,24 @@ export function createFileTools() {
               content: line,
             }));
 
+            // Register the read range as a citeable source. Dedup keys
+            // off the path+range so re-reads of the same span share an id.
+            let sourceId: string | undefined;
+            if (provenance && lines.length > 0) {
+              const startLine = lines[0].num;
+              const endLine = lines[lines.length - 1].num;
+              const preview = lines
+                .slice(0, 5)
+                .map((l) => l.content)
+                .join('\n');
+              sourceId = provenance.add({
+                kind: 'file',
+                label: `${absPath}:${startLine}-${endLine}`,
+                contentPreview: preview,
+                rawRef: `${absPath}:${startLine}-${endLine}`,
+              });
+            }
+
             return {
               path: absPath,
               total_lines: totalLines,
@@ -250,6 +270,7 @@ export function createFileTools() {
               limit,
               lines,
               truncated: endIdx < totalLines,
+              ...(sourceId ? { source_id: sourceId } : {}),
             };
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);

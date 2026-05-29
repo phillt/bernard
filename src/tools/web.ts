@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { parse } from 'node-html-parser';
 import TurndownService from 'turndown';
 import { attachMeta } from '../framework/tools/adapter.js';
+import type { ProvenanceStore } from '../provenance.js';
 
 /** CSS selectors for elements stripped before HTML-to-markdown conversion. */
 const STRIP_SELECTORS = [
@@ -35,7 +36,7 @@ const USER_AGENT =
  * Non-content elements (nav, footer, scripts, etc.) are stripped before conversion.
  * Output is truncated to {@link MAX_OUTPUT_CHARS} characters.
  */
-export function createWebReadTool() {
+export function createWebReadTool(provenance?: ProvenanceStore) {
   return attachMeta(
     tool({
       description:
@@ -131,6 +132,18 @@ export function createWebReadTool() {
         // Truncate
         if (markdown.length > MAX_OUTPUT_CHARS) {
           markdown = markdown.slice(0, MAX_OUTPUT_CHARS) + '\n\n… (truncated)';
+        }
+
+        // Register the source so the model can cite it as [^S<id>] and so
+        // the REPL's Shift+Tab viewer can list it.
+        if (provenance) {
+          const id = provenance.add({
+            kind: 'web',
+            label: title || url,
+            contentPreview: markdown,
+            rawRef: url,
+          });
+          markdown = `[Source: ${id} — ${url}]\n\n${markdown}`;
         }
 
         return markdown;

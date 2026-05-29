@@ -92,6 +92,9 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
       ctx.mcp.tools,
       undefined,
       ctx.stores.specialists,
+      undefined,
+      undefined,
+      ctx.provenance,
     );
     const specialistTools: Record<string, Tool> = {
       ...baseTools,
