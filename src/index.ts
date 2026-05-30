@@ -21,6 +21,7 @@ import {
   resetAllOptions,
   getDefaultModel,
   providerEnvVar,
+  isModelMode,
 } from './config.js';
 import {
   loadCustomProviders,
@@ -295,6 +296,34 @@ program
       }
       rl.close();
     });
+  });
+
+program
+  .command('set-model-mode <mode>')
+  .description(
+    'Set multi-model assignment policy: off | optimize-tokens | balanced | optimize-performance',
+  )
+  .action((mode: string) => {
+    if (!isModelMode(mode)) {
+      printError(
+        `Unknown model mode "${mode}". Valid values: off, optimize-tokens, balanced, optimize-performance.`,
+      );
+      process.exit(1);
+    }
+    try {
+      const prefs = loadPreferences();
+      savePreferences({
+        ...prefs,
+        provider: prefs.provider || 'anthropic',
+        model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
+        modelMode: mode,
+      });
+      printInfo(`Model mode set to "${mode}".`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
   });
 
 program

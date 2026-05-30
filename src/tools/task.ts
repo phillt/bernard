@@ -163,7 +163,9 @@ export function createTaskTool(ctx: AgentContext): BernardTool<TaskArgs, TaskPay
           : { task: resolvedTask, slotId: id };
         const { formatted: taskResult } = await runDefinition(ctx, def, input, {
           abortSignal: execOptions.abortSignal,
-          overrides: { provider: resolution.provider, model: resolution.model },
+          // Forward only the user-supplied provider/model so resolveSiteModel
+          // can fall through to the modelMode tier table when neither is set.
+          overrides: { provider, model },
         });
 
         const envelope = ok<TaskPayload>(

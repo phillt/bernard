@@ -1,8 +1,8 @@
 import { generateText } from 'ai';
-import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import type { ModelProfile } from './providers/profiles.js';
 import type { ResolvedEntry } from './reference-resolver.js';
 import type { BernardConfig } from './config.js';
+import { resolveSiteModel } from './model-policy.js';
 import { debugLog } from './logger.js';
 
 /**
@@ -142,9 +142,10 @@ export async function rewritePrompt(
   debugLog('prompt-rewriter:request', { family: profile.family, inputChars: input.length });
 
   try {
+    const site = resolveSiteModel(config, 'rewriter');
     const result = await generateText({
-      model: getModelForConfig(config, config.provider, config.model),
-      providerOptions: getProviderOptionsForConfig(config, config.provider),
+      model: site.model,
+      providerOptions: site.providerOptions,
       system: buildSystemPrompt(profile),
       messages: [{ role: 'user', content: buildUserMessage(input, resolvedEntries) }],
       maxSteps: 1,

@@ -1,6 +1,5 @@
 import type { CoreMessage, Tool } from 'ai';
-import { defaultProviderErrorMessage, resolveProviderAndModel } from '../../config.js';
-import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
+import { resolveSiteModel } from '../../model-policy.js';
 import { osPromptBlock } from '../../os-info.js';
 import {
   STRUCTURED_OUTPUT_RULES,
@@ -108,23 +107,12 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
 
   resolveModel(ctx, input, overrides): ResolvedModel {
     const specialist = ctx.stores.specialists.get(input.specialistId);
-    const resolution = resolveProviderAndModel({
-      provider: overrides?.provider,
-      model: overrides?.model,
-      specialistProvider: specialist?.provider,
-      specialistModel: specialist?.model,
-      config: ctx.config,
-    });
-    if (!resolution.ok) {
-      throw new Error(
-        defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom),
-      );
-    }
+    const site = resolveSiteModel(ctx.config, 'tool-wrapper', { overrides, specialist });
     return {
-      model: getModelForConfig(ctx.config, resolution.provider, resolution.model),
-      providerOptions: getProviderOptionsForConfig(ctx.config, resolution.provider),
-      provider: resolution.provider,
-      modelName: resolution.model,
+      model: site.model,
+      providerOptions: site.providerOptions,
+      provider: site.provider,
+      modelName: site.modelName,
     };
   },
 

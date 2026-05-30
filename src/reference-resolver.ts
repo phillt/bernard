@@ -1,9 +1,9 @@
 import { generateText, type CoreMessage } from 'ai';
-import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import { debugLog } from './logger.js';
 import { sanitizeKey, REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import type { BernardConfig } from './config.js';
+import { resolveSiteModel } from './model-policy.js';
 
 /** Sentinel sourceKey used for resolutions drawn from the RAG knowledge base. */
 export const RAG_SOURCE_KEY = 'rag';
@@ -303,9 +303,10 @@ export async function resolveReferences(
   });
 
   try {
+    const site = resolveSiteModel(config, 'reference-resolver');
     const result = await generateText({
-      model: getModelForConfig(config, config.provider, config.model),
-      providerOptions: getProviderOptionsForConfig(config, config.provider),
+      model: site.model,
+      providerOptions: site.providerOptions,
       system: RESOLVER_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userMessage }],
       maxSteps: 1,

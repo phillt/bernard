@@ -8,6 +8,7 @@ import {
 } from '../specialists.js';
 import type { CandidateStoreReader } from '../specialist-candidates.js';
 import { type BernardConfig, PROVIDER_MODELS, isValidProvider } from '../config.js';
+import { resolveSiteModel } from '../model-policy.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 
 const goodExampleSchema = z.object({
@@ -188,6 +189,25 @@ export function createSpecialistTool(
               if (!PROVIDER_MODELS[config.provider]?.includes(model))
                 return `Error: Unknown model "${model}" for provider "${config.provider}". Valid models: ${PROVIDER_MODELS[config.provider].join(', ')}`;
             }
+            // Auto-assign policy-resolved provider/model when multi-model
+            // mode is active and the user didn't specify either (#170).
+            let resolvedProvider = provider;
+            let resolvedModel = model;
+            // Treat empty strings as "not set" so an LLM emitting "" doesn't
+            // bypass policy auto-assign and persist blanks on the record.
+            const explicitProvider = provider !== undefined && provider !== '';
+            const explicitModel = model !== undefined && model !== '';
+            if (!explicitProvider && !explicitModel && config && config.modelMode !== 'off') {
+              try {
+                const site = resolveSiteModel(config, 'specialist');
+                if (site.source === 'policy') {
+                  resolvedProvider = site.provider;
+                  resolvedModel = site.modelName;
+                }
+              } catch {
+                // Policy resolution is best-effort; fall through to no override.
+              }
+            }
             try {
               const specialist = store.createFull({
                 id,
@@ -195,8 +215,8 @@ export function createSpecialistTool(
                 description,
                 systemPrompt,
                 guidelines: guidelines ?? [],
-                provider,
-                model,
+                provider: resolvedProvider,
+                model: resolvedModel,
                 kind,
                 targetTools,
                 goodExamples: goodExamples as SpecialistExample[] | undefined,

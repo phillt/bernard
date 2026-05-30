@@ -55,6 +55,14 @@ vi.mock('./agent-pool.js', async (importOriginal) => {
 
 vi.mock('../config.js', () => ({
   resolveProviderAndModel: vi.fn(),
+  blankToUndefined: (v: string | undefined) => {
+    if (v === undefined) return undefined;
+    const trimmed = v.trim();
+    return trimmed === '' ? undefined : trimmed;
+  },
+  PROVIDER_MODELS: {},
+  defaultProviderErrorMessage: (provider: string) => `Set ${provider.toUpperCase()}_API_KEY`,
+  hasProviderKey: () => true,
 }));
 
 vi.mock('../os-info.js', () => ({

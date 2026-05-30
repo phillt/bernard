@@ -117,6 +117,8 @@ describe('bootstrapPendingCandidates', () => {
       'above threshold',
       'You are demo',
       [],
+      undefined,
+      undefined,
     );
     expect(candidateStore.updateStatus).toHaveBeenCalledWith('cand-above', 'accepted');
     expect(result.pending).toEqual([below]);
@@ -164,6 +166,8 @@ describe('promotePendingCandidates', () => {
       expect.anything(),
       expect.anything(),
       expect.anything(),
+      undefined,
+      undefined,
     );
     expect(candidateStore.updateStatus).toHaveBeenCalledWith('at', 'accepted');
     expect(candidateStore.updateStatus).not.toHaveBeenCalledWith('below', 'accepted');
@@ -191,6 +195,8 @@ describe('promoteCandidate', () => {
       'wraps demo',
       'Do demo things',
       ['be concise'],
+      undefined,
+      undefined,
     );
     expect(candidateStore.updateStatus).toHaveBeenCalledWith('cand-x', 'accepted');
     expect(mockPrintInfo).toHaveBeenCalledWith(

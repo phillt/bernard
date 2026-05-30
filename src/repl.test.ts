@@ -1061,6 +1061,8 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
         'Reviews code',
         'You review code',
         ['Be thorough'],
+        undefined,
+        undefined,
       );
     });
 
@@ -1178,6 +1180,8 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
         'Writes tests',
         'You write tests',
         ['Cover edge cases'],
+        undefined,
+        undefined,
       );
     });
 
@@ -1204,11 +1208,12 @@ describe('REPL /agent-options boolean toggles (rewriter)', () => {
 
   // Menu path: /agent-options → top-level selection:
   //   3. Coordinator (ReAct) mode  (3-way picker, covered in a separate suite below)
-  //   4. Prompt rewriter
+  //   4. Model mode                (4-way picker, covered in src/model-policy.test.ts behaviour)
+  //   5. Prompt rewriter
   const cases = [
     {
       name: 'Prompt rewriter',
-      topIndex: '4',
+      topIndex: '5',
       key: 'promptRewriter' as const,
       onFragment: '[REWRITER:ON]',
       offFragment: '[REWRITER:OFF]',

@@ -1,7 +1,7 @@
 import { generateText, type CoreMessage } from 'ai';
-import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
+import { resolveSiteModel } from './model-policy.js';
 import type { RAGStore } from './rag.js';
 import { DOMAIN_REGISTRY, getDomainIds } from './domains.js';
 import { estimateContentPartTokens } from './image.js';
@@ -158,13 +158,14 @@ export async function extractDomainFacts(
 
   const domainIds = getDomainIds();
 
+  const site = resolveSiteModel(config, 'compressor');
   const results = await Promise.allSettled(
     domainIds.map(async (domainId) => {
       const domain = DOMAIN_REGISTRY[domainId];
 
       const result = await generateText({
-        model: getModelForConfig(config, config.provider, config.model),
-        providerOptions: getProviderOptionsForConfig(config, config.provider),
+        model: site.model,
+        providerOptions: site.providerOptions,
         maxTokens: 2048,
         system: domain.extractionPrompt,
         messages: [
@@ -256,9 +257,10 @@ export async function compressHistory(
 
   try {
     // Run summarization and domain-specific fact extraction in parallel
+    const summarizerSite = resolveSiteModel(config, 'compressor');
     const summarizePromise = generateText({
-      model: getModelForConfig(config, config.provider, config.model),
-      providerOptions: getProviderOptionsForConfig(config, config.provider),
+      model: summarizerSite.model,
+      providerOptions: summarizerSite.providerOptions,
       maxTokens: 2048,
       system: SUMMARIZATION_PROMPT,
       messages: [{ role: 'user', content: `Summarize this conversation:\n\n${serialized}` }],

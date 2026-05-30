@@ -58,6 +58,14 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
   /** Stable kind id used by dispatch + logs. */
   id: string;
 
+  /**
+   * Logical site this definition belongs to for the multi-model assignment
+   * policy (#170). The default `resolveModel` in {@link runDefinition} passes
+   * this to {@link resolveSiteModel}; definitions that supply their own
+   * `resolveModel` may ignore it. Defaults to `'main'` when omitted.
+   */
+  site?: import('../../model-policy.js').ModelSite;
+
   /** Whether the caller persists conversation history (main only) or rebuilds it. */
   historyMode: HistoryMode;
 
