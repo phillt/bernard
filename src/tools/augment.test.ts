@@ -4,6 +4,7 @@ import { augmentTools } from './augment.js';
 import { attachMeta, toolToAISDK } from '../framework/tools/adapter.js';
 import { ok, err, type BernardTool } from '../framework/tools/types.js';
 import { clearCache as clearResultCache } from '../framework/tools/result-cache.js';
+import { ProvenanceStore } from '../provenance.js';
 
 vi.mock('../tool-profiles.js', () => ({
   classifyShellCommand: vi.fn((cmd: string) => {
@@ -1295,6 +1296,230 @@ describe('augmentTools', () => {
       expect(r1).toBe('Error: boom');
       expect(r2).toEqual({ val: 99 });
       expect(exec).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('evidence pointers (#141)', () => {
+    function makeEvidenceBernardTool(opts: {
+      name: string;
+      result: 'ok' | 'error';
+      sensitiveArgs?: string[];
+      sensitiveResult?: boolean;
+    }): BernardTool<Record<string, unknown>, { val: number }> {
+      return {
+        meta: {
+          name: opts.name,
+          kind: 'read',
+          ...(opts.sensitiveArgs ? { sensitiveArgs: opts.sensitiveArgs } : {}),
+          ...(opts.sensitiveResult ? { sensitiveResult: true } : {}),
+        },
+        description: opts.name,
+        parameters: z.object({}).passthrough(),
+        execute: async () =>
+          opts.result === 'ok'
+            ? ok({ val: 1 })
+            : err({ type: 'exec_failed', message: 'boom', snippet: 'boom-snip' }),
+        serializeForModel: (r) =>
+          r.status === 'ok' ? `model:${r.result.val}` : `Error: ${r.error.message}`,
+      };
+    }
+
+    /** Standard options enabling evidence registration. */
+    const evidenceOn = (provenance: ProvenanceStore) => ({
+      profileStore: store,
+      provenance,
+      evidenceEnabled: true,
+    });
+
+    it('envelope path: successful call registers a tool-result source', async () => {
+      const provenance = new ProvenanceStore();
+      const aisdk = toolToAISDK(makeEvidenceBernardTool({ name: 'demo', result: 'ok' }));
+      const augmented = augmentTools({ demo: aisdk }, evidenceOn(provenance));
+
+      await augmented.demo.execute({ x: 42 }, {});
+
+      const items = provenance.list();
+      expect(items).toHaveLength(1);
+      expect(items[0].kind).toBe('tool-result');
+      expect(items[0].label).toContain('demo');
+      expect(items[0].label).toContain('42');
+      expect(items[0].contentPreview).toContain('model:1');
+      expect(items[0].rawRef).toMatch(/^tool:demo:[0-9a-z]+$/);
+    });
+
+    it('envelope path: errored call does NOT register evidence', async () => {
+      const provenance = new ProvenanceStore();
+      const aisdk = toolToAISDK(makeEvidenceBernardTool({ name: 'demo', result: 'error' }));
+      const augmented = augmentTools({ demo: aisdk }, evidenceOn(provenance));
+
+      await augmented.demo.execute({ x: 1 }, {});
+
+      expect(provenance.list()).toHaveLength(0);
+    });
+
+    it('two identical successful calls dedup to one entry via ProvenanceStore', async () => {
+      const provenance = new ProvenanceStore();
+      const aisdk = toolToAISDK(makeEvidenceBernardTool({ name: 'demo', result: 'ok' }));
+      const augmented = augmentTools({ demo: aisdk }, evidenceOn(provenance));
+
+      await augmented.demo.execute({ x: 1 }, {});
+      await augmented.demo.execute({ x: 1 }, {});
+
+      expect(provenance.list()).toHaveLength(1);
+    });
+
+    it('two calls whose first 120 args chars match still register as distinct sources (hashed rawRef)', async () => {
+      const provenance = new ProvenanceStore();
+      const aisdk = toolToAISDK(makeEvidenceBernardTool({ name: 'demo', result: 'ok' }));
+      const augmented = augmentTools({ demo: aisdk }, evidenceOn(provenance));
+
+      const sharedPrefix = 'x'.repeat(130);
+      await augmented.demo.execute({ path: sharedPrefix + 'a' }, {});
+      await augmented.demo.execute({ path: sharedPrefix + 'b' }, {});
+
+      expect(provenance.list()).toHaveLength(2);
+    });
+
+    it('sensitiveArgs are redacted in the label/rawRef', async () => {
+      const provenance = new ProvenanceStore();
+      const aisdk = toolToAISDK(
+        makeEvidenceBernardTool({ name: 'demo', result: 'ok', sensitiveArgs: ['apiKey'] }),
+      );
+      const augmented = augmentTools({ demo: aisdk }, evidenceOn(provenance));
+
+      await augmented.demo.execute({ apiKey: 'sk-very-secret-12345', q: 'hello' }, {});
+
+      const items = provenance.list();
+      expect(items).toHaveLength(1);
+      expect(items[0].label).not.toContain('sk-very-secret');
+      expect(items[0].label).toContain('REDACTED');
+    });
+
+    it('sensitiveResult replaces the contentPreview with REDACTED', async () => {
+      const provenance = new ProvenanceStore();
+      const aisdk = toolToAISDK(
+        makeEvidenceBernardTool({ name: 'demo', result: 'ok', sensitiveResult: true }),
+      );
+      const augmented = augmentTools({ demo: aisdk }, evidenceOn(provenance));
+
+      await augmented.demo.execute({ x: 1 }, {});
+
+      const items = provenance.list();
+      expect(items).toHaveLength(1);
+      expect(items[0].contentPreview).toBe('[REDACTED]');
+      expect(items[0].contentPreview).not.toContain('model:1');
+    });
+
+    it('legacy path: successful call registers a tool-result source (synchronous)', async () => {
+      const provenance = new ProvenanceStore();
+      vi.mocked(detectToolError).mockReturnValue({ isError: false });
+      const tools = { legacy_tool: { execute: vi.fn(async () => 'plain string output') } };
+      const augmented = augmentTools(tools, evidenceOn(provenance));
+
+      await augmented.legacy_tool.execute({ url: 'https://example.com' }, {});
+      // No `await setImmediate` — legacy-path registration is synchronous so
+      // it can't race with the next turn's `provenance.clear()`.
+
+      const items = provenance.list();
+      expect(items).toHaveLength(1);
+      expect(items[0].kind).toBe('tool-result');
+      expect(items[0].label).toContain('legacy_tool');
+      expect(items[0].contentPreview).toContain('plain string output');
+    });
+
+    it('legacy path: result with is_error: true does NOT register evidence', async () => {
+      const provenance = new ProvenanceStore();
+      const tools = {
+        legacy_tool: { execute: vi.fn(async () => ({ output: 'oops', is_error: true })) },
+      };
+      const augmented = augmentTools(tools, evidenceOn(provenance));
+
+      await augmented.legacy_tool.execute({ x: 1 }, {});
+
+      expect(provenance.list()).toHaveLength(0);
+    });
+
+    it('legacy path: result with an `error` field does NOT register evidence', async () => {
+      const provenance = new ProvenanceStore();
+      const tools = { legacy_tool: { execute: vi.fn(async () => ({ error: 'boom' })) } };
+      const augmented = augmentTools(tools, evidenceOn(provenance));
+
+      await augmented.legacy_tool.execute({ x: 1 }, {});
+
+      expect(provenance.list()).toHaveLength(0);
+    });
+
+    it('legacy path: registration survives detectToolError throws (sync — outside the setImmediate catch)', async () => {
+      const provenance = new ProvenanceStore();
+      vi.mocked(detectToolError).mockImplementation(() => {
+        throw new Error('detector blew up');
+      });
+      const tools = { legacy_tool: { execute: vi.fn(async () => 'plain output') } };
+      const augmented = augmentTools(tools, evidenceOn(provenance));
+
+      await augmented.legacy_tool.execute({ x: 1 }, {});
+
+      expect(provenance.list()).toHaveLength(1);
+    });
+
+    it('cache hit re-registers evidence (survives cross-turn provenance.clear)', async () => {
+      const provenance = new ProvenanceStore();
+      // Cacheable BernardTool (deterministic + sideEffect:'none').
+      const tool: BernardTool<{ x: number }, { val: number }> = {
+        meta: {
+          name: 'cacheable',
+          kind: 'read',
+          deterministic: true,
+          sideEffect: 'none',
+          cacheable: true,
+        },
+        description: 'cacheable',
+        parameters: z.object({ x: z.number() }),
+        execute: vi.fn(async () => ok({ val: 99 })),
+        serializeForModel: (r) => (r.status === 'ok' ? `val:${r.result.val}` : 'err'),
+      };
+      const aisdk = toolToAISDK(tool);
+      const augmented = augmentTools({ cacheable: aisdk }, evidenceOn(provenance));
+
+      await augmented.cacheable.execute({ x: 1 }, {});
+      expect(provenance.list()).toHaveLength(1);
+
+      provenance.clear();
+      await augmented.cacheable.execute({ x: 1 }, {}); // cache hit
+      expect(provenance.list()).toHaveLength(1);
+    });
+
+    it('evidenceEnabled defaults to false when omitted, even with a store wired', async () => {
+      const provenance = new ProvenanceStore();
+      const aisdk = toolToAISDK(makeEvidenceBernardTool({ name: 'demo', result: 'ok' }));
+      const augmented = augmentTools(
+        { demo: aisdk },
+        { profileStore: store, provenance }, // no evidenceEnabled
+      );
+
+      await augmented.demo.execute({ x: 1 }, {});
+
+      expect(provenance.list()).toHaveLength(0);
+    });
+
+    it('evidenceEnabled: false short-circuits registration even with a store wired', async () => {
+      const provenance = new ProvenanceStore();
+      const aisdk = toolToAISDK(makeEvidenceBernardTool({ name: 'demo', result: 'ok' }));
+      const augmented = augmentTools(
+        { demo: aisdk },
+        { profileStore: store, provenance, evidenceEnabled: false },
+      );
+
+      await augmented.demo.execute({ x: 1 }, {});
+
+      expect(provenance.list()).toHaveLength(0);
+    });
+
+    it('no provenance store wired → no registration, no throw', async () => {
+      const aisdk = toolToAISDK(makeEvidenceBernardTool({ name: 'demo', result: 'ok' }));
+      const augmented = augmentTools({ demo: aisdk }, store);
+
+      await expect(augmented.demo.execute({ x: 1 }, {})).resolves.toBeDefined();
     });
   });
 });

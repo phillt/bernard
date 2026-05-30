@@ -30,6 +30,7 @@ describe('DefaultPolicyEngine', () => {
     });
     expect(decision.caching?.enabled).toBe(false);
     expect(decision.citations?.requireForFactualClaims).toBe(true);
+    expect(decision.evidence?.requireForVerifiedClaims).toBe(true);
     expect(decision.toolMode).toEqual({
       mode: 'read-only',
       requireConfirmForWrite: true,
@@ -41,7 +42,16 @@ describe('DefaultPolicyEngine', () => {
     const engine = new DefaultPolicyEngine();
     const { reasons } = engine.decide(makePolicyInput());
     expect(Object.keys(reasons).sort()).toEqual(
-      ['caching', 'citations', 'concise', 'models', 'scratch', 'strategy', 'toolMode'].sort(),
+      [
+        'caching',
+        'citations',
+        'concise',
+        'evidence',
+        'models',
+        'scratch',
+        'strategy',
+        'toolMode',
+      ].sort(),
     );
     for (const value of Object.values(reasons)) {
       expect(value).toMatch(/^[a-z0-9-]+$/);

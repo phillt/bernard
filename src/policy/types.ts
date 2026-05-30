@@ -28,6 +28,14 @@ export interface PolicyDecision {
   scratch?: { resetAll: boolean; resetPlanOnly: boolean; deletePlanKey: boolean; reason: string };
   caching?: { enabled: boolean };
   citations?: { requireForFactualClaims: boolean };
+  /**
+   * Issue #141: when on, every successful tool call this turn is registered
+   * in the per-turn ProvenanceStore as `kind: 'tool-result'` and the SYSTEM
+   * prompt instructs the model to attach `[^Sn]` markers to "verified" /
+   * "confirmed" / "checked" claims. Mirrors the citations policy in shape;
+   * the augment layer reads this flag via `AugmentOptions.evidenceEnabled`.
+   */
+  evidence?: { requireForVerifiedClaims: boolean };
   toolMode?: {
     mode: 'read-only' | 'write';
     requireConfirmForWrite: boolean;

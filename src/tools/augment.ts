@@ -8,6 +8,9 @@ import type { BlockActionInput, BlockOutcome, ConfirmActionInput, ToolOptions } 
 import type { ConfirmThreshold } from '../risk.js';
 import { riskFromMeta, shouldBlockInReadOnly, shouldConfirm } from '../risk.js';
 import { CACHE_MISS, getCachedResult, setCachedResult } from '../framework/tools/result-cache.js';
+import { redactArgs, REDACTED } from '../framework/tools/redact.js';
+import type { ProvenanceStore } from '../provenance.js';
+import type { ToolMeta } from '../framework/tools/types.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -145,6 +148,22 @@ export interface AugmentOptions {
    * always call `execute`. Defaults to enabled.
    */
   cacheEnabled?: boolean;
+  /**
+   * Per-turn ProvenanceStore for evidence-pointer registration (#141). When
+   * provided and {@link evidenceEnabled} is not `false`, every successful
+   * tool call is added as a `kind: 'tool-result'` source so the model can
+   * cite it with `[^Sn]` markers in "verified" / "confirmed" claims. Errors,
+   * denies, and cancellations are skipped. Dedup is handled by the store
+   * (keyed on `kind` + `rawRef`).
+   */
+  provenance?: ProvenanceStore;
+  /**
+   * Toggle for evidence-pointer registration (#141). Defaults to `true` when
+   * a {@link provenance} store is passed; set `false` to short-circuit the
+   * add even when a store is wired (e.g. the policy engine disabled the
+   * `evidence` sub-policy for this turn).
+   */
+  evidenceEnabled?: boolean;
 }
 
 function isProfileStore(v: AugmentOptions | ToolProfileStore): v is ToolProfileStore {
@@ -248,6 +267,64 @@ export function augmentTools(
   // allowlist on the confirm gate means a repeat call with the same args
   // doesn't re-prompt, so the extra gate trip is essentially free.
   const cacheEnabled = opts.cacheEnabled !== false;
+  // Evidence-pointer registration (#141). Active only when a ProvenanceStore
+  // is wired AND the policy hasn't disabled it. Errors during `add` are
+  // swallowed so a malformed source never aborts a real tool call.
+  const provenance = opts.provenance;
+  // Default closed: registration only runs when the policy engine explicitly
+  // opts in. The previous `?? true` fallback silently enabled evidence in
+  // contexts that never consult the policy (cron, bare depsToCtx callers),
+  // populating the shared store with entries the model was never told about.
+  const evidenceEnabled = provenance ? opts.evidenceEnabled === true : false;
+
+  /**
+   * Stable 53-bit djb2 hash for an args string. Used to derive an evidence
+   * `rawRef` that uniquely identifies the call. Truncating the raw args in
+   * the rawRef caused long-prefix collisions (two `shell` commands with the
+   * same first 120 chars deduped to one source) which silently dropped the
+   * second call's evidence.
+   */
+  const hashArgs = (s: string): string => {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) {
+      h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    }
+    return (h >>> 0).toString(36);
+  };
+
+  const registerEvidence = (
+    toolName: string,
+    args: unknown,
+    meta: ToolMeta | undefined,
+    resultText: string,
+  ): void => {
+    if (!evidenceEnabled || !provenance) return;
+    try {
+      // Redact declared-sensitive arg fields before they reach label/rawRef,
+      // matching the contract result-cache.ts / cron-step-recorder.ts /
+      // tool-wrapper-run.ts already follow. Without this, an MCP tool that
+      // declares `sensitiveArgs: ['apiKey']` would leak its key into the
+      // <available_sources> block the LLM sees every turn.
+      const safeArgs = redactArgs(args, meta?.sensitiveArgs);
+      const argsSnippet = safeSerialize(safeArgs);
+      // Same contract for result content: when the tool's output itself is
+      // sensitive (sensitiveResult: true) we never let it reach the model
+      // via <available_sources>.
+      const previewSrc = meta?.sensitiveResult ? REDACTED : resultText;
+      const labelTail = argsSnippet ? `: ${argsSnippet.slice(0, 80)}` : '';
+      provenance.add({
+        kind: 'tool-result',
+        label: `${toolName}${labelTail}`,
+        contentPreview: previewSrc,
+        rawRef: `tool:${toolName}:${hashArgs(argsSnippet)}`,
+      });
+    } catch (err) {
+      debugLog(
+        `augment:${toolName}:evidence:failed`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  };
 
   const augmented: Record<string, any> = {};
 
@@ -385,6 +462,15 @@ export function augmentTools(
                     undefined,
                   ),
                 );
+                // Evidence pointer (#141) for cache hits: without this, a
+                // cacheable tool whose TTL outlives a turn boundary returns
+                // a cached result the model is told (by EVIDENCE_PROMPT) it
+                // can cite — but the per-turn ProvenanceStore was cleared at
+                // turn start so no `[^Sn]` is available. Re-register so the
+                // post-clear turn has the source. ProvenanceStore dedups by
+                // (kind, rawRef), so intra-turn repeats are a no-op.
+                const cachedPreview = typeof cached === 'string' ? cached : safeSerialize(cached);
+                registerEvidence(toolName, args, source.meta, cachedPreview);
                 return cached;
               }
               debugLog(`cache:tool:miss`, { tool: toolName });
@@ -420,6 +506,14 @@ export function augmentTools(
             // never be served from cache on a subsequent identical call.
             if (toolIsCacheable && envelope.status === 'ok') {
               setCachedResult(source.meta, args, serialized);
+            }
+            // Evidence pointer (#141): register every successful tool call so
+            // the model can cite it for verified claims. Errored / denied /
+            // cancelled envelopes never become evidence.
+            if (envelope.status === 'ok') {
+              const previewSrc =
+                typeof serialized === 'string' ? serialized : safeSerialize(serialized);
+              registerEvidence(toolName, args, source.meta, previewSrc);
             }
             return serialized;
           },
@@ -459,6 +553,24 @@ export function augmentTools(
           const profileKey = resolveProfileKey(toolName, args);
           const argsSnippet = safeSerialize(args);
           const capturedResult = result;
+          // Evidence pointer (#141), synchronous: deferring this inside the
+          // setImmediate below races with `provenance.clear()` at the start
+          // of the next turn (back-to-back processInput, /task path, tests),
+          // and a throw from detectToolError would silently skip it. We use
+          // a cheap inline check for the legacy error shapes instead of
+          // calling detectToolError synchronously, which would also break
+          // the "result returned before recording" invariant the legacy
+          // path tests assert.
+          const looksLikeError =
+            capturedResult !== null &&
+            typeof capturedResult === 'object' &&
+            ((capturedResult as Record<string, unknown>).is_error === true ||
+              'error' in (capturedResult as Record<string, unknown>));
+          if (!looksLikeError) {
+            const previewSrc =
+              typeof capturedResult === 'string' ? capturedResult : safeSerialize(capturedResult);
+            registerEvidence(toolName, args, readToolMeta(toolDef), previewSrc);
+          }
           setImmediate(() => {
             try {
               const errorInfo = detectToolError(toolName, capturedResult);

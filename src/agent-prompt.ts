@@ -48,9 +48,21 @@ When a sentence states a fact you got from a registered source this turn (web_re
 Rules:
 - Only attach \`[^Sn]\` for an id that actually appears in this turn's source list.
 - If a claim has no matching registered source, either prefix it with \`[unverified]\` ("the build target is x86_64 [unverified]") or call \`ask_user\` to confirm. Do not invent a citation.
-- \`shell\` output and MCP tool results are NOT auto-registered. When you need to cite them, quote the relevant line inline instead of attaching a marker.
 - Opinions, recommendations, and high-level summaries don't need markers — citations are for factual / tool-derived claims.
 - One marker per claim is enough; don't spam multiple ids on the same sentence.`;
+
+export const EVIDENCE_PROMPT = `## Evidence Pointers
+Every successful tool call this turn (\`shell\`, \`file_*\`, \`web_*\`, MCP, etc.) is registered as a \`kind: 'tool-result'\` source in the same per-turn store as retrieval citations. Each entry captures **what was checked** (tool + args), **the key result snippet**, and **when** (timestamp). The ids appear in \`<available_sources>\` alongside \`web\` / \`file\` / \`memory\` sources.
+
+When you assert that something is **verified**, **confirmed**, **checked**, or otherwise grounded in a tool result you ran this turn, END that sentence with the \`[^Sn]\` marker for the tool call that proves it. Examples:
+- "Verified the commit landed on main. [^S3]"
+- "Confirmed the file no longer exists. [^S2]"
+- "Checked the endpoint — it returned 200. [^S4]"
+
+Rules:
+- Do not write "verified" / "confirmed" without a matching \`[^Sn]\` marker. If no tool call backs the claim, either run one (preferred) or prefix with \`[unverified]\`.
+- Use the marker for the tool call that produced the evidence — usually a read-only check after a mutation (e.g. \`git log\` after a commit, \`ls\` after a write).
+- Citations (\`web_read\` etc.) and evidence pointers share the same store and marker syntax; the \`kind\` field on each source disambiguates them.`;
 
 export const BASE_SYSTEM_PROMPT = `# Identity
 

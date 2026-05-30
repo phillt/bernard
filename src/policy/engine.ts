@@ -2,6 +2,7 @@ import { debugLog } from '../logger.js';
 import { cachingPolicy } from './caching.js';
 import { citationsPolicy } from './citations.js';
 import { concisePolicy } from './concise.js';
+import { evidencePolicy } from './evidence.js';
 import { modelPolicy } from './model.js';
 import { scratchPolicy } from './scratch.js';
 import { strategyPolicy } from './strategy.js';
@@ -26,6 +27,7 @@ export class DefaultPolicyEngine implements PolicyEngine {
     const scratch = scratchPolicy(input);
     const caching = cachingPolicy(input);
     const citations = citationsPolicy(input);
+    const evidence = evidencePolicy(input);
     const toolMode = toolModePolicy(input);
 
     const decision: PolicyDecision = {
@@ -44,6 +46,7 @@ export class DefaultPolicyEngine implements PolicyEngine {
       },
       caching: { enabled: caching.enabled },
       citations: { requireForFactualClaims: citations.requireForFactualClaims },
+      evidence: { requireForVerifiedClaims: evidence.requireForVerifiedClaims },
       toolMode: {
         mode: toolMode.mode,
         requireConfirmForWrite: toolMode.requireConfirmForWrite,
@@ -58,6 +61,7 @@ export class DefaultPolicyEngine implements PolicyEngine {
       scratch: scratch.reason,
       caching: caching.reason,
       citations: citations.reason,
+      evidence: evidence.reason,
       toolMode: toolMode.reason,
     };
 
