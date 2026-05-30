@@ -18,6 +18,7 @@ import {
   type CronInput,
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
+import { renderAgentStatusPlain, type AgentStatusInputs } from '../agent-status.js';
 
 export {
   /** Re-exported so existing imports against the runner module keep working. */
@@ -136,6 +137,26 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     };
     const { formatted: output } = await runDefinition(ctx, def, input);
 
+    // Agent Status snapshot for cron parity with the interactive Shift+Tab
+    // viewer (#140). Cron doesn't run the Policy Engine and doesn't expose a
+    // plan store, so only the fields cron actually populates carry data;
+    // everything else renders as `(none)`. Appended after the run's own output
+    // so existing log readers still parse `finalOutput` cleanly.
+    const statusInputs: AgentStatusInputs = {
+      goal: job.prompt,
+      permissions: {
+        toolMode: config.toolMode,
+        confirmMode: config.confirmMode,
+        sessionAllowedCount: 0,
+      },
+      constraints: null,
+      assumptions: [],
+      planStep: null,
+      planSummary: { done: 0, total: 0 },
+      lastVerification: ctx.verification.getLast(),
+    };
+    const finalOutputWithStatus = `${output}\n\n--- Agent Status ---\n${renderAgentStatusPlain(statusInputs)}`;
+
     try {
       const totalUsage = steps.reduce(
         (acc, s) => ({
@@ -154,7 +175,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         completedAt: new Date().toISOString(),
         durationMs: Date.now() - startMs,
         success: true,
-        finalOutput: output,
+        finalOutput: finalOutputWithStatus,
         steps,
         totalUsage,
       });

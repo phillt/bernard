@@ -84,6 +84,14 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
           // footer); re-capping here would risk truncating that footer away.
           const pacResult = await runPAC(ctx, { task, context, slotId: id }, runOpts);
           formatted = pacResult.formatted;
+          // Snapshot the verdict for the Agent Status overlay (#140). Last
+          // write wins across nested / parallel sub-agents — fine, this is a
+          // user-facing peek, not a log.
+          ctx.verification.setLast({
+            verdict: pacResult.verdict,
+            reason: pacResult.reason,
+            source: task.slice(0, 80),
+          });
         } else {
           const def = definitions.get<SubAgentInput, string>('sub');
           const result = await runDefinition(ctx, def, { task, context, slotId: id }, runOpts);

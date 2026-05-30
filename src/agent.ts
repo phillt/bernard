@@ -47,6 +47,8 @@ import type { AgentContext } from './framework/context.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem } from './provenance.js';
+import type { Step } from './plan-store.js';
+import type { VerificationEntry } from './agent-status.js';
 
 // `buildSystemPrompt` lives in agent-prompt.ts (extracted to avoid a circular
 // import with framework/agents/main.ts). Re-exported here so existing imports
@@ -112,6 +114,8 @@ export class Agent {
   private planStore: PlanStore = new PlanStore();
   private policyEngine: PolicyEngine = new DefaultPolicyEngine();
   private lastPolicyResult?: PolicyResult;
+  private lastUserInput: string | null = null;
+  private lastResolvedReferences: ResolvedEntry[] = [];
 
   private ctx: AgentContext;
 
@@ -179,6 +183,26 @@ export class Agent {
     return this.lastPolicyResult;
   }
 
+  /** Most recent raw user input. `null` before any turn. Issue #140. */
+  getLastUserInput(): string | null {
+    return this.lastUserInput;
+  }
+
+  /** Reference-resolver entries from the most recent turn. Issue #140. */
+  getLastResolvedReferences(): ResolvedEntry[] {
+    return this.lastResolvedReferences;
+  }
+
+  /** Most recent PAC critic verdict (or null). Issue #140. */
+  getLastVerification(): VerificationEntry | null {
+    return this.ctx.verification.getLast();
+  }
+
+  /** Snapshot of the current plan (in-memory, per-turn). Issue #140. */
+  getPlanSnapshot(): Step[] {
+    return this.planStore.view();
+  }
+
   /**
    * Returns the live `AgentContext` (with the most recent `policyDecision`
    * threaded in by `processInput`). The Agent class re-points `this.ctx`
@@ -220,6 +244,11 @@ export class Agent {
     resolvedReferences?: ResolvedEntry[],
   ): Promise<void> {
     this.lastStepLimitHit = false;
+    // Cache per-turn snapshot inputs for the Agent Status overlay (#140).
+    // Last-write-wins — the overlay is a snapshot, not a log.
+    this.lastUserInput = userInput;
+    this.lastResolvedReferences = resolvedReferences ?? [];
+    this.ctx.verification.clear();
 
     // Resolve every cross-cutting heuristic for this turn in one place.
     // Sub-systems read the decision off `this.ctx.policyDecision` (e.g.
