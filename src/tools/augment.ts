@@ -4,7 +4,7 @@ import { printInfo } from '../output.js';
 import { readBernardSource, readToolMeta, preserveMeta } from '../framework/tools/adapter.js';
 import type { ToolResult } from '../framework/tools/types.js';
 import { classifyError } from '../error-taxonomy.js';
-import type { BlockActionInput, ConfirmActionInput, ToolOptions } from './types.js';
+import type { BlockActionInput, BlockOutcome, ConfirmActionInput, ToolOptions } from './types.js';
 import type { ConfirmThreshold } from '../risk.js';
 import { riskFromMeta, shouldBlockInReadOnly, shouldConfirm } from '../risk.js';
 
@@ -177,14 +177,13 @@ const CANCELLED_LEGACY_RESULT = {
  * so the model's next turn can distinguish "user denied write at the
  * least-privilege gate" from "user cancelled this specific confirmation."
  */
-const DENIED_LEGACY_RESULT = {
-  output:
-    'Action denied — read-only mode. Ask the user to allow this tool or switch toolMode to write.',
-  is_error: true,
-};
-
 const READ_ONLY_DENIED_MESSAGE =
   'Action denied — read-only mode. Ask the user to allow this tool or switch toolMode to write.';
+
+const DENIED_LEGACY_RESULT = {
+  output: READ_ONLY_DENIED_MESSAGE,
+  is_error: true,
+};
 
 /**
  * Wraps every tool's `execute` function to observe results and record
@@ -265,7 +264,7 @@ export function augmentTools(
       reason: buildConfirmReason(toolName, args),
     };
     const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
-    let outcome: 'allow-once' | 'allow-tool-for-session' | 'deny';
+    let outcome: BlockOutcome;
     try {
       outcome = await blockAction(input, signal);
     } catch (err) {
