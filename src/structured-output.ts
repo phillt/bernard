@@ -128,7 +128,9 @@ export function wrapWrapperResult(text: string): WrapperResult {
 export function capReasoning(reasoning: string[]): string[] {
   return reasoning
     .slice(0, REASONING_MAX_ENTRIES)
-    .map((entry) => (entry.length > REASONING_MAX_CHARS ? entry.slice(0, REASONING_MAX_CHARS) : entry));
+    .map((entry) =>
+      entry.length > REASONING_MAX_CHARS ? entry.slice(0, REASONING_MAX_CHARS) : entry,
+    );
 }
 
 /** Maximum number of `reasoning` entries kept after parsing (#175). */
