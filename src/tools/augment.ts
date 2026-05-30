@@ -7,11 +7,7 @@ import { classifyError } from '../error-taxonomy.js';
 import type { BlockActionInput, BlockOutcome, ConfirmActionInput, ToolOptions } from './types.js';
 import type { ConfirmThreshold } from '../risk.js';
 import { riskFromMeta, shouldBlockInReadOnly, shouldConfirm } from '../risk.js';
-import {
-  CACHE_MISS,
-  getCachedResult,
-  setCachedResult,
-} from '../framework/tools/result-cache.js';
+import { CACHE_MISS, getCachedResult, setCachedResult } from '../framework/tools/result-cache.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to

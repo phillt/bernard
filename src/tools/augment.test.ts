@@ -1188,7 +1188,10 @@ describe('augmentTools', () => {
 
   describe('deterministic tool result cache (#171)', () => {
     function makeCacheableBernardTool(
-      execImpl: () => Promise<{ status: 'ok'; result: { val: number } } | { status: 'error'; error: { type: string; message: string } }>,
+      execImpl: () => Promise<
+        | { status: 'ok'; result: { val: number } }
+        | { status: 'error'; error: { type: string; message: string } }
+      >,
       opts: { cacheable?: boolean } = {},
     ): BernardTool<{ x: number }, { val: number }> {
       return {
@@ -1237,13 +1240,19 @@ describe('augmentTools', () => {
       expect(exec).toHaveBeenCalledTimes(2);
     });
 
-    it('does NOT cache when meta opts out (cacheable: false)', async () => {
+    it('does NOT cache when meta opts out (cacheable: false with side effects)', async () => {
       const exec = vi.fn(async () => ok({ val: 1 }));
-      // cacheable: false + deterministic: true + sideEffect: 'none' should
-      // still pass isCacheable per the predicate, but we also want to verify
-      // a non-cacheable shape (no deterministic flag) skips entirely.
+      // Genuine opt-out of the cache: deterministic but with sideEffect != 'none'
+      // and cacheable: false. isCacheable() rejects this shape so neither the
+      // hit nor the store path runs.
       const tool: BernardTool<{ x: number }, { val: number }> = {
-        meta: { name: 'nope', kind: 'read', deterministic: false, cacheable: false },
+        meta: {
+          name: 'nope',
+          kind: 'read',
+          deterministic: true,
+          sideEffect: 'local',
+          cacheable: false,
+        },
         description: 'nope',
         parameters: z.object({ x: z.number() }),
         execute: exec as any,
