@@ -29,8 +29,13 @@ const stepInputSchema = z.object({
  * `done` requires a `signoff` attesting that the verification was actually
  * performed. `cancelled`/`error` require `note` (no sign-off, since the step
  * did not succeed).
+ *
+ * `onPlanReplaced`, when provided, fires whenever `create` overwrites a
+ * non-empty plan within the same turn. Used by the main agent to wipe scratch
+ * (Rule C of #169) so notes from the abandoned plan don't bleed into the new
+ * one.
  */
-export function createPlanTool(planStore: PlanStore) {
+export function createPlanTool(planStore: PlanStore, onPlanReplaced?: () => void) {
   // Suppress redundant re-renders: the model often calls `view` repeatedly
   // (and may also re-issue an `update` that produces no visible change).
   // Compare against the last rendered string and skip printing when identical.
@@ -77,7 +82,7 @@ export function createPlanTool(planStore: PlanStore) {
           if (!steps || steps.length === 0) {
             return 'Error: steps is required for create action and must be non-empty.';
           }
-          const created = planStore.create(steps);
+          const created = planStore.create(steps, onPlanReplaced);
           printIfChanged();
           return `Plan created with ${created.length} step${created.length === 1 ? '' : 's'}.`;
         }

@@ -18,6 +18,7 @@ import { toolToAISDK } from '../tools/adapter.js';
 import { buildToolProfilesPrompt } from '../../tool-profiles.js';
 import { getModelProfile } from '../../providers/index.js';
 import { isReactEffective } from '../../policy/effective.js';
+import { debugLog } from '../../logger.js';
 import { buildSystemPrompt } from '../../agent-prompt.js';
 import {
   SHARE_REASONING_PROMPT,
@@ -201,7 +202,16 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
       ask_user: createAskUserTool(ctx.toolOptions.askUser),
       ...(reactActive
         ? {
-            plan: createPlanTool(input.planStore),
+            plan: createPlanTool(input.planStore, () => {
+              ctx.stores.memory.clearScratch();
+              // Match the payload shape used by `scratchPolicy` so log
+              // consumers can grep `scratch:reset` uniformly.
+              debugLog('scratch:reset', {
+                resetAll: true,
+                deletePlanKey: true,
+                reason: 'plan-replaced',
+              });
+            }),
             evaluate: createEvaluateTool(),
           }
         : {}),

@@ -45,6 +45,12 @@ export interface BernardConfig {
   referenceLookup: boolean;
   /** Extra tool-name allowlist for the reference-lookup pass (additive over built-in patterns). */
   referenceLookupTools: string[];
+  /**
+   * Jaccard-similarity threshold (0-1) below which the scratch-lifecycle policy
+   * (#169) treats a user turn as a subject change and clears all scratch.
+   * Lower = more conservative (only very dissimilar turns clear scratch).
+   */
+  scratchSubjectThreshold: number;
   /** Anthropic API key, if available. */
   anthropicApiKey?: string;
   /** OpenAI API key, if available. */
@@ -76,6 +82,7 @@ const DEFAULT_MAX_STEPS = 25;
 const DEFAULT_AUTO_CREATE_SPECIALISTS = false;
 const DEFAULT_AUTO_CREATE_THRESHOLD = 0.8;
 const DEFAULT_COORDINATOR_MODE: 'on' | 'off' | 'auto' = 'auto';
+const DEFAULT_SCRATCH_SUBJECT_THRESHOLD = 0.15;
 
 /** Type guard for `coordinatorMode` string values. */
 function isCoordinatorMode(v: unknown): v is 'on' | 'off' | 'auto' {
@@ -174,6 +181,7 @@ export function savePreferences(prefs: {
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   referenceLookup?: boolean;
+  scratchSubjectThreshold?: number;
 }): void {
   const dir = path.dirname(PREFS_PATH);
   if (!fs.existsSync(dir)) {
@@ -194,6 +202,8 @@ export function savePreferences(prefs: {
   if (prefs.autoCreateThreshold !== undefined) data.autoCreateThreshold = prefs.autoCreateThreshold;
   if (prefs.promptRewriter !== undefined) data.promptRewriter = prefs.promptRewriter;
   if (prefs.referenceLookup !== undefined) data.referenceLookup = prefs.referenceLookup;
+  if (prefs.scratchSubjectThreshold !== undefined)
+    data.scratchSubjectThreshold = prefs.scratchSubjectThreshold;
 
   // Preserve autoUpdate, coordinatorMode, and auto-create settings from existing prefs when callers don't pass them
   let existing: Record<string, unknown> | undefined;
@@ -257,6 +267,13 @@ export function savePreferences(prefs: {
   ) {
     data.autoCreateThreshold = existing.autoCreateThreshold;
   }
+  if (
+    prefs.scratchSubjectThreshold === undefined &&
+    existing &&
+    typeof existing.scratchSubjectThreshold === 'number'
+  ) {
+    data.scratchSubjectThreshold = existing.scratchSubjectThreshold;
+  }
   fs.writeFileSync(PREFS_PATH, JSON.stringify(data, null, 2) + '\n');
 }
 
@@ -281,6 +298,7 @@ export function loadPreferences(): {
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   referenceLookup?: boolean;
+  scratchSubjectThreshold?: number;
 } {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
@@ -314,6 +332,10 @@ export function loadPreferences(): {
         typeof parsed.promptRewriter === 'boolean' ? parsed.promptRewriter : undefined,
       referenceLookup:
         typeof parsed.referenceLookup === 'boolean' ? parsed.referenceLookup : undefined,
+      scratchSubjectThreshold:
+        typeof parsed.scratchSubjectThreshold === 'number'
+          ? parsed.scratchSubjectThreshold
+          : undefined,
     };
   } catch {
     return {};
@@ -833,6 +855,25 @@ export function loadConfig(overrides?: {
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
+  // Unlike `autoCreateThreshold` we don't rescale: `scratchSubjectThreshold`
+  // is documented as a 0-1 Jaccard score and the REPL prompt enforces the
+  // same range, so silently treating 15 → 0.15 would mask misconfiguration.
+  // Out-of-range or non-finite inputs fall back to the default.
+  const envScratchSubjectThreshold = parseFloat(
+    process.env.BERNARD_SCRATCH_SUBJECT_THRESHOLD ?? '',
+  );
+  const rawScratchSubjectThreshold =
+    prefs.scratchSubjectThreshold ??
+    (Number.isFinite(envScratchSubjectThreshold)
+      ? envScratchSubjectThreshold
+      : DEFAULT_SCRATCH_SUBJECT_THRESHOLD);
+  const scratchSubjectThreshold =
+    Number.isFinite(rawScratchSubjectThreshold) &&
+    rawScratchSubjectThreshold >= 0 &&
+    rawScratchSubjectThreshold <= 1
+      ? rawScratchSubjectThreshold
+      : DEFAULT_SCRATCH_SUBJECT_THRESHOLD;
+
   const providerBaseUrl = resolveProviderBaseUrl(
     overrides?.providerBaseUrl,
     overrides?.allowProviderBaseUrl,
@@ -858,6 +899,7 @@ export function loadConfig(overrides?: {
     promptRewriter,
     referenceLookup,
     referenceLookupTools,
+    scratchSubjectThreshold,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     xaiApiKey: process.env.XAI_API_KEY,

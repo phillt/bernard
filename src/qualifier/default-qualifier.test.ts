@@ -22,6 +22,7 @@ function makeConfig(): BernardConfig {
     promptRewriter: true,
     referenceLookup: true,
     referenceLookupTools: [],
+    scratchSubjectThreshold: 0.15,
     customProviders: {},
   };
 }

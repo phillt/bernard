@@ -69,6 +69,7 @@ function makeConfig(): BernardConfig {
     promptRewriter: false,
     referenceLookup: false,
     referenceLookupTools: [],
+    scratchSubjectThreshold: 0.15,
   };
 }
 

@@ -111,6 +111,26 @@ describe('PlanStore', () => {
     expect(store.isComplete()).toBe(true);
   });
 
+  it('onReplace fires when create overwrites a non-empty plan', () => {
+    store.create([s('first'), s('second')]);
+    let calls = 0;
+    store.create([s('a')], () => calls++);
+    expect(calls).toBe(1);
+    expect(store.view()).toHaveLength(1);
+    expect(store.view()[0].description).toBe('a');
+  });
+
+  it('onReplace does not fire when the plan was empty', () => {
+    let calls = 0;
+    store.create([s('a')], () => calls++);
+    expect(calls).toBe(0);
+  });
+
+  it('onReplace does not fire when create is called without a callback', () => {
+    store.create([s('first')]);
+    expect(() => store.create([s('a')])).not.toThrow();
+  });
+
   it('render includes verification, signoff, and note when present', () => {
     store.create([s('first', 'check exit code'), s('second', 'read file')]);
     store.update(1, 'done', { signoff: 'exit 0 observed' });

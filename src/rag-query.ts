@@ -15,6 +15,7 @@ const BOUNDARY_PREFIXES = [
   '[Context Summary',
   '[Previous session ended',
   '[Earlier conversation was truncated',
+  '[Your previous response was cut off',
 ];
 
 /**
