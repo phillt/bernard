@@ -15,9 +15,10 @@ export function getMaxConcurrentAgents(): number {
 /**
  * Sets the live cap on concurrent agents/tasks.
  *
- * Non-integer, non-finite, or out-of-range values are clamped to
- * `[1, MAX_CONCURRENT_AGENTS_LIMIT]`. The clamped value is returned so callers
- * (config loader, REPL prompt, CLI) can report what was actually applied.
+ * Non-finite values (`NaN`, `Infinity`) are ignored and the current cap is
+ * preserved. Finite non-integers are floored, and the result is clamped to
+ * `[1, MAX_CONCURRENT_AGENTS_LIMIT]`. The applied value is returned so callers
+ * (config loader, REPL prompt, CLI) can report what was actually set.
  */
 export function setMaxConcurrentAgents(n: number): number {
   if (!Number.isFinite(n)) return maxConcurrentAgents;

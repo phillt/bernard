@@ -825,6 +825,16 @@ describe('loadConfig maxConcurrentAgents (#133)', () => {
     expect(loadConfig().maxConcurrentAgents).toBe(4);
   });
 
+  it('rejects env values with trailing junk', () => {
+    vi.stubEnv('BERNARD_MAX_CONCURRENT_AGENTS', '12abc');
+    expect(loadConfig().maxConcurrentAgents).toBe(4);
+  });
+
+  it('rejects fractional env values', () => {
+    vi.stubEnv('BERNARD_MAX_CONCURRENT_AGENTS', '3.7');
+    expect(loadConfig().maxConcurrentAgents).toBe(4);
+  });
+
   it('prefs.maxConcurrentAgents takes precedence over env', () => {
     vi.stubEnv('BERNARD_MAX_CONCURRENT_AGENTS', '6');
     let callCount = 0;

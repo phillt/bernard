@@ -1016,11 +1016,18 @@ export function loadConfig(overrides?: {
   const toolMode = prefs.toolMode ?? envToolMode ?? DEFAULT_TOOL_MODE;
 
   // Configurable parallel sub-agent concurrency (#133). Precedence: pref > env > default.
-  // Out-of-range or non-finite values clamp to [1, MAX_CONCURRENT_AGENTS_LIMIT].
-  const envMaxConcurrent = parseInt(process.env.BERNARD_MAX_CONCURRENT_AGENTS ?? '', 10);
+  // Out-of-range values clamp to [1, MAX_CONCURRENT_AGENTS_LIMIT]. Env values must be a
+  // pure integer string ("12abc" / "3.7" / "" fall through to the default).
+  const envMaxConcurrentRaw = (process.env.BERNARD_MAX_CONCURRENT_AGENTS ?? '').trim();
+  const envMaxConcurrentParsed = Number.parseInt(envMaxConcurrentRaw, 10);
+  const envMaxConcurrent =
+    envMaxConcurrentRaw !== '' &&
+    Number.isFinite(envMaxConcurrentParsed) &&
+    String(envMaxConcurrentParsed) === envMaxConcurrentRaw
+      ? envMaxConcurrentParsed
+      : undefined;
   const rawMaxConcurrent =
-    prefs.maxConcurrentAgents ??
-    (Number.isFinite(envMaxConcurrent) ? envMaxConcurrent : DEFAULT_MAX_CONCURRENT_AGENTS);
+    prefs.maxConcurrentAgents ?? envMaxConcurrent ?? DEFAULT_MAX_CONCURRENT_AGENTS;
   const maxConcurrentAgents = normalizeMaxConcurrentAgents(rawMaxConcurrent);
 
   // Response-style picker (#133). Precedence: pref > env > 'default'.
