@@ -73,11 +73,11 @@ Keys for custom providers are stored in `keys.json` (same path as built-ins) and
 
 Per-provider tier → model mapping (in `src/model-policy.ts`):
 
-| Provider  | premium                          | mid                              | cheap                      |
-|-----------|----------------------------------|----------------------------------|----------------------------|
-| anthropic | claude-opus-4-6                  | claude-sonnet-4-5-20250929       | claude-haiku-4-5-20251001  |
-| openai    | gpt-5.2                          | gpt-4.1                          | gpt-4.1-mini               |
-| xai       | grok-4-1-fast-reasoning          | grok-4-fast-non-reasoning        | grok-3-mini                |
+| Provider  | premium                 | mid                        | cheap                     |
+| --------- | ----------------------- | -------------------------- | ------------------------- |
+| anthropic | claude-opus-4-6         | claude-sonnet-4-5-20250929 | claude-haiku-4-5-20251001 |
+| openai    | gpt-5.2                 | gpt-4.1                    | gpt-4.1-mini              |
+| xai       | grok-4-1-fast-reasoning | grok-4-fast-non-reasoning  | grok-3-mini               |
 
 Custom providers fall back to `config.model` for every site (no tier mapping). Invocation-level overrides and per-specialist `provider`/`model` records always win over the policy. When `modelMode !== 'off'` and a specialist is created without an explicit provider/model, the policy-resolved `specialist`-tier model is persisted onto the new record so later mode changes don't silently re-tier it.
 

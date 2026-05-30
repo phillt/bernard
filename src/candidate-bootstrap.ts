@@ -9,9 +9,7 @@ import { resolveSiteModel } from './model-policy.js';
  * Picks the policy-resolved (provider, model) for a newly auto-created
  * specialist, or `{}` when multi-model mode is off / policy can't resolve.
  */
-function pickAutoCreateModel(
-  config?: BernardConfig,
-): { provider?: string; model?: string } {
+function pickAutoCreateModel(config?: BernardConfig): { provider?: string; model?: string } {
   if (!config || config.modelMode === 'off') return {};
   try {
     const site = resolveSiteModel(config, 'specialist');

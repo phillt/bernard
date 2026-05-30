@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { BernardConfig } from './config.js';
 import type { Specialist } from './specialists.js';
-import { resolveSiteModel, _resetModelPolicyLogCacheForTests, type ModelMode } from './model-policy.js';
+import {
+  resolveSiteModel,
+  _resetModelPolicyLogCacheForTests,
+  type ModelMode,
+} from './model-policy.js';
 
 vi.mock('@ai-sdk/anthropic', () => ({
   anthropic: vi.fn((m: string) => ({ modelId: `anthropic:${m}` })),

@@ -102,9 +102,7 @@ function isCoordinatorMode(v: unknown): v is 'on' | 'off' | 'auto' {
 export function isModelMode(
   v: unknown,
 ): v is 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance' {
-  return (
-    v === 'off' || v === 'optimize-tokens' || v === 'balanced' || v === 'optimize-performance'
-  );
+  return v === 'off' || v === 'optimize-tokens' || v === 'balanced' || v === 'optimize-performance';
 }
 
 /**

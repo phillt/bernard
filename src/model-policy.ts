@@ -2,7 +2,6 @@ import type { LanguageModel } from 'ai';
 import type { BernardConfig } from './config.js';
 import type { Specialist } from './specialists.js';
 import {
-  PROVIDER_MODELS,
   defaultProviderErrorMessage,
   hasProviderKey,
   resolveProviderAndModel,
