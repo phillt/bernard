@@ -737,7 +737,7 @@ describe('augmentTools', () => {
       );
       const r = await augmented.t.execute({}, {});
       expect(execute).not.toHaveBeenCalled();
-      expect(r).toEqual({ output: 'Action cancelled by user.', is_error: false });
+      expect(r).toEqual({ output: 'Action cancelled by user.', is_error: true });
     });
 
     it('medium-risk tool with threshold=high → NOT prompted', async () => {
@@ -826,7 +826,7 @@ describe('augmentTools', () => {
       );
       const r = await augmented.t.execute({}, {});
       expect(execute).not.toHaveBeenCalled();
-      expect(r).toEqual({ output: 'Action cancelled by user.', is_error: false });
+      expect(r).toEqual({ output: 'Action cancelled by user.', is_error: true });
     });
 
     it('forwards abortSignal from execOptions into confirmAction', async () => {

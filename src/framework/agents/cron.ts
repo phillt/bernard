@@ -184,8 +184,10 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
 
     const shellTool = createShellTool({
       shellTimeout: config.shellTimeout,
+      // Cron is headless — dangerous shell commands are auto-denied at the
+      // tool level. The unified confirmation gate in `runDefinition` (#144)
+      // also auto-denies high-risk calls via `ctx.toolOptions.confirmAction`.
       confirmDangerous: async () => false,
-      confirmAction: async (input) => input.risk !== 'high',
     });
 
     const registry: Record<string, Tool> = {

@@ -23,7 +23,11 @@ export function isPureQuestion(text: string): boolean {
   if (!text) return false;
   if (hasToolInvocationKeyword(text)) return false;
   const trimmed = text.trim();
-  if (trimmed.endsWith('?')) return true;
+  // Require enough signal to be a real question. Trailing "?" alone is too
+  // permissive — "delete X?" or bare "?" would otherwise flip the per-turn
+  // threshold to `never` and bypass every confirmation. Require a leading
+  // question word, and a minimum body length to discount one-glyph input.
+  if (trimmed.length < 6) return false;
   return QUESTION_WORD_RE.test(trimmed);
 }
 

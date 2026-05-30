@@ -139,10 +139,14 @@ function buildConfirmReason(toolName: string, args: unknown): string {
  * Mirrors the `{output, is_error}` legacy shape for tools that historically
  * returned that (shell, file edit); for migrated `BernardTool`s the envelope's
  * `serializeForModel` decides how the cancellation is rendered.
+ *
+ * `is_error: true` is intentional — the model must distinguish a cancelled
+ * call from a successful one, otherwise it will continue the turn assuming
+ * the action took effect (e.g. that an email was sent or a file was deleted).
  */
 const CANCELLED_LEGACY_RESULT = {
   output: 'Action cancelled by user.',
-  is_error: false,
+  is_error: true,
 };
 
 /**

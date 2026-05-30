@@ -13,7 +13,6 @@ import { createAskUserTool } from '../../tools/ask-user.js';
 import { createEvaluateTool } from '../../tools/evaluate.js';
 import { applyShimRouting } from '../../tools/wrap-with-specialist.js';
 import { ctxToToolWrapperDeps } from '../../tools/tool-wrapper-run.js';
-import { augmentTools } from '../../tools/augment.js';
 import { toolToAISDK } from '../tools/adapter.js';
 import { buildToolProfilesPrompt } from '../../tool-profiles.js';
 import { getModelProfile } from '../../providers/index.js';
@@ -223,12 +222,10 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
           }
         : {}),
     };
-    const shimmed = applyShimRouting(tools, ctxToToolWrapperDeps(ctx));
-    return augmentTools(shimmed, {
-      profileStore: ctx.stores.toolProfiles,
-      confirmThreshold: ctx.policyDecision?.toolMode?.confirmThreshold,
-      confirmAction: ctx.toolOptions.confirmAction,
-    });
+    // `augmentTools` (profile-recording + confirmation gate) is applied
+    // centrally in `runDefinition`. We only need to return the shimmed tools
+    // — main is the only agent that applies the wrap-with-specialist shim.
+    return applyShimRouting(tools, ctxToToolWrapperDeps(ctx));
   },
 
   strategy(ctx) {
