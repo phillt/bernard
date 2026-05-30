@@ -45,11 +45,13 @@ export interface AgentContext {
    */
   provenance: ProvenanceStore;
   /**
-   * Per-session snapshot of the most recent PAC critic verdict. Written by
-   * sub-agent dispatch sites (`tools/subagent.ts`) and read by the Agent
-   * Status overlay (issue #140). Shared by reference with sub-agent /
-   * tool-wrapper contexts so a nested PAC run still updates the parent's
-   * snapshot.
+   * Per-turn snapshot of the most recent PAC critic verdict. Cleared at the
+   * top of every `Agent.processInput` (and on `Agent.clearHistory`) so a
+   * stale verdict never shows up in the Status panel after a new turn or
+   * session reset. Written by sub-agent dispatch sites (`tools/subagent.ts`)
+   * and read by the Agent Status overlay (issue #140). Shared by reference
+   * with sub-agent / tool-wrapper contexts so a nested PAC run still
+   * updates the parent's snapshot.
    */
   verification: VerificationStore;
 }

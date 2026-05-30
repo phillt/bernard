@@ -23,6 +23,7 @@ vi.mock('./specialist-run.js', () => ({ createSpecialistRunTool: vi.fn(() => ({}
 
 import { ctxToToolWrapperDeps, depsToCtx } from './tool-wrapper-run.js';
 import { ProvenanceStore } from '../provenance.js';
+import { VerificationStore } from '../agent-status.js';
 import type { AgentContext } from '../framework/context.js';
 
 function makeCtx(overrides: Partial<AgentContext> = {}): AgentContext {
@@ -40,6 +41,7 @@ function makeCtx(overrides: Partial<AgentContext> = {}): AgentContext {
     rag: undefined,
     toolOptions: {} as any,
     provenance: new ProvenanceStore(),
+    verification: new VerificationStore(),
   };
   return { ...base, ...overrides } as AgentContext;
 }
@@ -79,5 +81,37 @@ describe('ToolWrapperDeps provenance round-trip (issue #173)', () => {
     const innerCtx = depsToCtx(deps);
     expect(innerCtx.provenance).toBeInstanceOf(ProvenanceStore);
     expect(innerCtx.provenance.size()).toBe(0);
+  });
+});
+
+describe('ToolWrapperDeps verification round-trip (issue #140)', () => {
+  it('ctxToToolWrapperDeps forwards the same VerificationStore reference', () => {
+    const ctx = makeCtx();
+    const deps = ctxToToolWrapperDeps(ctx);
+    expect(deps.verification).toBe(ctx.verification);
+  });
+
+  it('depsToCtx preserves the original store reference (shared by reference)', () => {
+    const ctx = makeCtx();
+    const deps = ctxToToolWrapperDeps(ctx);
+    const innerCtx = depsToCtx(deps);
+    expect(innerCtx.verification).toBe(ctx.verification);
+    // A PAC verdict written inside the inner ctx must be visible to the
+    // parent's getLast() — that's the whole point of sharing the store.
+    innerCtx.verification.setLast({
+      verdict: 'pass',
+      reason: 'looks good',
+      source: 'nested sub-agent',
+    });
+    expect(ctx.verification.getLast()?.verdict).toBe('pass');
+    expect(ctx.verification.getLast()?.reason).toBe('looks good');
+  });
+
+  it('depsToCtx supplies a fresh store when deps.verification is absent', () => {
+    const deps = ctxToToolWrapperDeps(makeCtx());
+    delete (deps as any).verification;
+    const innerCtx = depsToCtx(deps);
+    expect(innerCtx.verification).toBeInstanceOf(VerificationStore);
+    expect(innerCtx.verification.getLast()).toBeNull();
   });
 });

@@ -181,12 +181,29 @@ export function buildAgentStatusPanel(inputs: AgentStatusInputs, t: Theme): stri
 /**
  * Plain-text variant of {@link buildAgentStatusPanel} for log files, cron
  * runs, and non-TTY contexts. Identical layout but without ANSI escapes.
+ *
+ * Implemented as a fully-typed Theme with identity style functions so that
+ * any future renderer call to a color helper (e.g. `accent`, `muted`)
+ * compiles and degrades to plain text instead of throwing.
  */
 export function renderAgentStatusPlain(inputs: AgentStatusInputs): string {
-  const noopTheme = {
-    dim: (s: string) => s,
-    success: (s: string) => s,
-    error: (s: string) => s,
-  } as unknown as Theme;
-  return buildAgentStatusPanel(inputs, noopTheme).join('\n');
+  return buildAgentStatusPanel(inputs, IDENTITY_THEME).join('\n');
 }
+
+const identity = (s: string) => s;
+
+const IDENTITY_THEME: Theme = {
+  name: 'plain',
+  accent: identity,
+  accentBold: identity,
+  muted: identity,
+  text: identity,
+  toolCall: identity,
+  error: identity,
+  success: identity,
+  dim: identity,
+  dimItalic: identity,
+  warning: identity,
+  prefixColors: [identity, identity, identity, identity],
+  ansi: { prompt: '', hintCmd: '', hintDesc: '', warning: '', reset: '' },
+};

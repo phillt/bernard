@@ -190,7 +190,7 @@ export class Agent {
 
   /** Reference-resolver entries from the most recent turn. Issue #140. */
   getLastResolvedReferences(): ResolvedEntry[] {
-    return this.lastResolvedReferences;
+    return [...this.lastResolvedReferences];
   }
 
   /** Most recent PAC critic verdict (or null). Issue #140. */
@@ -627,6 +627,14 @@ export class Agent {
     this.lastStepLimitHit = false;
     this.planStore.clear();
     this.lastPolicyResult = undefined;
+    // Drop per-turn snapshots so the Shift+Tab viewer doesn't show prior-
+    // session goal / assumptions / sources / verification after a reset.
+    this.lastUserInput = null;
+    this.lastResolvedReferences = [];
+    this.lastSources = [];
+    this.lastCitedSources = [];
+    this.ctx.verification.clear();
+    this.ctx.provenance.clear();
     if (this.ctx.policyDecision) {
       this.ctx = { ...this.ctx, policyDecision: undefined };
     }
