@@ -20,6 +20,7 @@ import { ToolProfileStore } from '../tool-profiles.js';
 import type { AgentContext } from '../framework/context.js';
 import type { PolicyDecision } from '../policy/types.js';
 import { ProvenanceStore } from '../provenance.js';
+import { VerificationStore } from '../agent-status.js';
 import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
@@ -114,6 +115,12 @@ export interface ToolWrapperDeps {
    */
   provenance?: ProvenanceStore;
   /**
+   * Parent turn's VerificationStore. Forwarded so a PAC run dispatched from
+   * inside a tool-wrapper still updates the parent agent's Agent Status
+   * overlay. Issue #140.
+   */
+  verification?: VerificationStore;
+  /**
    * Parent turn's policy decision. Forwarded so the inner wrapper
    * inherits the user's `toolMode` (#179) — otherwise the augment layer
    * defaults to `'write'` and any write tool the wrapper calls bypasses
@@ -138,6 +145,7 @@ export function ctxToToolWrapperDeps(ctx: AgentContext): ToolWrapperDeps {
     candidateStore: ctx.stores.candidates,
     toolProfileStore: ctx.stores.toolProfiles,
     provenance: ctx.provenance,
+    verification: ctx.verification,
     policyDecision: ctx.policyDecision,
   };
 }
@@ -158,6 +166,7 @@ export function depsToCtx(deps: ToolWrapperDeps): AgentContext {
     rag: deps.ragStore,
     toolOptions: deps.options,
     provenance: deps.provenance ?? new ProvenanceStore(),
+    verification: deps.verification ?? new VerificationStore(),
     ...(deps.policyDecision ? { policyDecision: deps.policyDecision } : {}),
   };
 }

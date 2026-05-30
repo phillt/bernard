@@ -9,6 +9,7 @@ import type { RAGStore } from '../rag.js';
 import type { PolicyDecision } from '../policy/types.js';
 import type { ToolOptions } from '../tools/types.js';
 import { ProvenanceStore } from '../provenance.js';
+import { VerificationStore } from '../agent-status.js';
 
 export interface AgentContextStores {
   memory: MemoryStore;
@@ -43,6 +44,16 @@ export interface AgentContext {
    * visible in the parent's viewer. Issue #173.
    */
   provenance: ProvenanceStore;
+  /**
+   * Per-turn snapshot of the most recent PAC critic verdict. Cleared at the
+   * top of every `Agent.processInput` (and on `Agent.clearHistory`) so a
+   * stale verdict never shows up in the Status panel after a new turn or
+   * session reset. Written by sub-agent dispatch sites (`tools/subagent.ts`)
+   * and read by the Agent Status overlay (issue #140). Shared by reference
+   * with sub-agent / tool-wrapper contexts so a nested PAC run still
+   * updates the parent's snapshot.
+   */
+  verification: VerificationStore;
 }
 
 export interface AssembleContextInput {
@@ -52,6 +63,7 @@ export interface AssembleContextInput {
   rag?: RAGStore;
   stores?: Partial<AgentContextStores>;
   provenance?: ProvenanceStore;
+  verification?: VerificationStore;
 }
 
 export function assembleContext(input: AssembleContextInput): AgentContext {
@@ -74,5 +86,6 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
     rag: input.rag,
     toolOptions: input.toolOptions,
     provenance: input.provenance ?? new ProvenanceStore(),
+    verification: input.verification ?? new VerificationStore(),
   };
 }

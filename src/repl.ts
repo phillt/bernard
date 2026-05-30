@@ -76,6 +76,12 @@ import {
 import type { SupportedSdk } from './providers/types.js';
 import { getTheme, setTheme, getThemeKeys, getActiveThemeKey, THEMES } from './theme.js';
 import type { SourceItem } from './provenance.js';
+import {
+  buildAgentStatusPanel,
+  pickActiveStep,
+  summarizePlan,
+  type AgentStatusInputs,
+} from './agent-status.js';
 import { interactiveUpdate, getLocalVersion } from './update.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
@@ -714,21 +720,40 @@ export async function startRepl(
   }
 
   /**
-   * Shift+Tab toggles the sources viewer for the last response. Issue #173.
+   * Shift+Tab cycles a pinned inspection viewer above the prompt. Issue #140
+   * extended the original `<sources>`-only viewer (#173) into a tab strip so
+   * we can add more panels (Agent Status now, room for more later).
    *
    * `\x1b[Z` is the canonical Shift+Tab CSI; Node's readline usually emits
    * `{ name: 'tab', shift: true }` for it but a few terminals deliver the
    * raw sequence without the shift flag — we check both.
    *
-   * The first press pins a `<sources>` region above the prompt; the second
-   * press clears it. Esc also clears (handled by an existing escape branch).
-   * If the last turn registered no citations, the keystroke is a no-op.
+   * Order: closed → status → sources → closed. Esc also closes (handled by an
+   * existing escape branch). A new turn invalidates whichever tab was open.
+   * Only one tab is pinned at a time, under the region id `'viewer'`.
    */
-  let sourcesViewerOpen = false;
+  type ViewerTab = 'status' | 'sources';
+  const VIEWER_TABS: ViewerTab[] = ['status', 'sources'];
+  const VIEWER_LABELS: Record<ViewerTab, string> = {
+    status: 'Agent Status',
+    sources: 'Sources',
+  };
+  let viewerTab: ViewerTab | null = null;
+
+  function buildViewerHeader(active: ViewerTab, title: string): string[] {
+    const t = getTheme();
+    const strip = VIEWER_TABS.map((tab) =>
+      tab === active ? t.accentBold(`[${VIEWER_LABELS[tab]}]`) : t.dim(VIEWER_LABELS[tab]),
+    ).join('  ');
+    return [`${t.accentBold(`▼ ${title}`)}  ${t.dim('·')}  ${strip}`];
+  }
+
   function buildSourcesPanel(sources: SourceItem[], title: string): string[] {
     const t = getTheme();
-    const lines: string[] = [];
-    lines.push(t.accentBold(`▼ ${title}`));
+    const lines: string[] = buildViewerHeader('sources', title);
+    if (sources.length === 0) {
+      lines.push(t.dim('(no sources from the last turn)'));
+    }
     for (const s of sources) {
       const head = `${t.accent(`[^${s.id}]`)} ${t.dim(`(${s.kind})`)} ${s.label}`;
       lines.push(head);
@@ -740,44 +765,79 @@ export async function startRepl(
         lines.push(`    ${t.dim(preview)}`);
       }
     }
-    lines.push(t.dim('Shift+Tab or Esc to close'));
+    lines.push(t.dim('Shift+Tab to cycle · Esc to close'));
     return lines;
   }
-  function renderSourcesViewer(): void {
-    const cited = agent.getLastCitedSources();
-    if (cited.length === 0) {
-      // No cited sources — fall back to "all available" if any, so the user
-      // can still see what was retrieved this turn.
+
+  function buildStatusPanel(): string[] {
+    const t = getTheme();
+    const planSteps = agent.getPlanSnapshot();
+    const inputs: AgentStatusInputs = {
+      goal: agent.getLastUserInput(),
+      permissions: {
+        toolMode: config.toolMode,
+        confirmMode: config.confirmMode,
+        sessionAllowedCount: sessionToolAllowlist.size,
+      },
+      constraints: agent.getLastPolicyDecision()?.decision ?? null,
+      assumptions: agent.getLastResolvedReferences(),
+      planStep: pickActiveStep(planSteps),
+      planSummary: summarizePlan(planSteps),
+      lastVerification: agent.getLastVerification(),
+    };
+    const lines = buildViewerHeader('status', 'Agent Status');
+    lines.push(...buildAgentStatusPanel(inputs, t));
+    lines.push(t.dim('Shift+Tab to cycle · Esc to close'));
+    return lines;
+  }
+
+  function renderViewer(tab: ViewerTab): void {
+    if (tab === 'status') {
+      setPinnedRegion('viewer', buildStatusPanel());
+    } else {
+      const cited = agent.getLastCitedSources();
       const all = agent.getLastSources();
-      if (all.length === 0) {
-        sourcesViewerOpen = false;
-        return;
-      }
-      setPinnedRegion(
-        'sources',
-        buildSourcesPanel(all, 'Available sources (last turn — none cited)'),
-      );
-      sourcesViewerOpen = true;
+      const sources = cited.length > 0 ? cited : all;
+      const title =
+        cited.length > 0
+          ? 'Cited sources (last response)'
+          : all.length > 0
+            ? 'Available sources (last turn — none cited)'
+            : 'Sources';
+      setPinnedRegion('viewer', buildSourcesPanel(sources, title));
+    }
+    viewerTab = tab;
+  }
+
+  function closeViewer(): void {
+    if (viewerTab === null) return;
+    clearPinnedRegion('viewer');
+    viewerTab = null;
+  }
+
+  function cycleViewer(): void {
+    // null → status → sources → null
+    if (viewerTab === null) {
+      renderViewer(VIEWER_TABS[0]);
       return;
     }
-    setPinnedRegion('sources', buildSourcesPanel(cited, 'Cited sources (last response)'));
-    sourcesViewerOpen = true;
-  }
-  function closeSourcesViewer(): void {
-    if (!sourcesViewerOpen) return;
-    clearPinnedRegion('sources');
-    sourcesViewerOpen = false;
+    const idx = VIEWER_TABS.indexOf(viewerTab);
+    const next = VIEWER_TABS[idx + 1];
+    if (!next) {
+      closeViewer();
+      return;
+    }
+    renderViewer(next);
   }
 
   process.stdin.on('keypress', (_str: string, key: any) => {
     if (!key) return;
 
-    // Shift+Tab → toggle the sources viewer. Check first so Esc/processing
+    // Shift+Tab → cycle the viewer tabs. Check first so Esc/processing
     // branches below don't intercept it.
     const isShiftTab = (key.name === 'tab' && key.shift) || key.sequence === '\x1b[Z';
     if (isShiftTab && !processing && !menuAbortController) {
-      if (sourcesViewerOpen) closeSourcesViewer();
-      else renderSourcesViewer();
+      cycleViewer();
       return;
     }
 
@@ -786,8 +846,8 @@ export async function startRepl(
       return;
     }
 
-    if (key.name === 'escape' && sourcesViewerOpen && !processing) {
-      closeSourcesViewer();
+    if (key.name === 'escape' && viewerTab !== null && !processing) {
+      closeViewer();
       return;
     }
 
@@ -2683,8 +2743,8 @@ Remember: the systemPrompt should read like a persona definition — who this sp
 
     processing = true;
     interrupted = false;
-    // A new turn invalidates any pinned sources viewer from the previous one.
-    closeSourcesViewer();
+    // A new turn invalidates any pinned viewer tab from the previous one.
+    closeViewer();
     try {
       initSpinner();
       await agent.processInput(agentInput, inlineImages, resolvedEntries);
