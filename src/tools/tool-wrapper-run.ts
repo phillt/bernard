@@ -18,6 +18,7 @@ import { CandidateStore, type CandidateStoreReader } from '../specialist-candida
 import type { CorrectionCandidateStore } from '../correction-candidates.js';
 import { ToolProfileStore } from '../tool-profiles.js';
 import type { AgentContext } from '../framework/context.js';
+import type { PolicyDecision } from '../policy/types.js';
 import { ProvenanceStore } from '../provenance.js';
 import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
@@ -112,6 +113,15 @@ export interface ToolWrapperDeps {
    * shows up in the parent agent's Shift+Tab sources viewer. Issue #173.
    */
   provenance?: ProvenanceStore;
+  /**
+   * Parent turn's policy decision. Forwarded so the inner wrapper
+   * inherits the user's `toolMode` (#179) — otherwise the augment layer
+   * defaults to `'write'` and any write tool the wrapper calls bypasses
+   * the read-only block gate entirely. The shared `sessionToolAllowlist`
+   * on `options` keeps the outer gate's "Allow once" / "Allow for tool"
+   * decision from re-prompting inside the wrapper.
+   */
+  policyDecision?: PolicyDecision;
 }
 
 /** Derives the legacy {@link ToolWrapperDeps} shape from an {@link AgentContext}. */
@@ -128,6 +138,7 @@ export function ctxToToolWrapperDeps(ctx: AgentContext): ToolWrapperDeps {
     candidateStore: ctx.stores.candidates,
     toolProfileStore: ctx.stores.toolProfiles,
     provenance: ctx.provenance,
+    policyDecision: ctx.policyDecision,
   };
 }
 
@@ -147,6 +158,7 @@ export function depsToCtx(deps: ToolWrapperDeps): AgentContext {
     rag: deps.ragStore,
     toolOptions: deps.options,
     provenance: deps.provenance ?? new ProvenanceStore(),
+    ...(deps.policyDecision ? { policyDecision: deps.policyDecision } : {}),
   };
 }
 

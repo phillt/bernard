@@ -79,6 +79,11 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       // (per #144 — "never send email unless explicitly authorized"). The agent receives a
       // cancelled-shape result and can decide whether to surface the gap to the user.
       confirmAction: async (input) => input.risk !== 'high',
+      // The read-only block gate (#179) is intentionally NOT wired here. Cron doesn't
+      // run the Policy Engine, so `ctx.policyDecision` is undefined; the augment layer
+      // then defaults `toolMode` to `'write'` and skips the block gate entirely. Cron
+      // jobs are user-scheduled and already opted-in to write operations — the REPL
+      // user did the consent at job-creation time.
       // askUser intentionally omitted — no interactive user; the ask_user tool returns {unavailable}.
     },
     mcp: { tools: mcpTools, serverNames },

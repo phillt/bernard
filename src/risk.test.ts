@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolMeta } from './framework/tools/types.js';
-import { isReadOnlyMCPSuffix, riskFromMeta, shouldConfirm } from './risk.js';
+import { isReadOnlyMCPSuffix, riskFromMeta, shouldBlockInReadOnly, shouldConfirm } from './risk.js';
 
 describe('isReadOnlyMCPSuffix', () => {
   it.each([
@@ -67,6 +67,19 @@ describe('riskFromMeta', () => {
     expect(riskFromMeta(meta({ kind: 'write', sideEffect: 'network' }))).toBe('medium');
     expect(riskFromMeta(meta({ kind: 'write', sideEffect: 'none' }))).toBe('medium');
   });
+
+  it('isWriteAction predicate downgrades reads on discriminator tools to low', () => {
+    const m = meta({
+      kind: 'write',
+      sideEffect: 'local',
+      isWriteAction: (args) =>
+        (args as { action?: string } | undefined)?.action !== 'read' &&
+        (args as { action?: string } | undefined)?.action !== 'list',
+    });
+    expect(riskFromMeta(m, { action: 'read' })).toBe('low');
+    expect(riskFromMeta(m, { action: 'list' })).toBe('low');
+    expect(riskFromMeta(m, { action: 'write' })).toBe('medium');
+  });
 });
 
 describe('shouldConfirm', () => {
@@ -96,5 +109,50 @@ describe('shouldConfirm', () => {
     for (const risk of ['low', 'medium', 'high'] as const) {
       expect(shouldConfirm(risk, 'always')).toBe(true);
     }
+  });
+});
+
+describe('shouldBlockInReadOnly', () => {
+  const meta = (m: Partial<ToolMeta>): ToolMeta => ({
+    name: 't',
+    kind: 'read',
+    deterministic: true,
+    sideEffect: 'none',
+    cacheable: false,
+    ...m,
+  });
+
+  it('blocks write and dangerous kinds', () => {
+    expect(shouldBlockInReadOnly(meta({ kind: 'write' }))).toBe(true);
+    expect(shouldBlockInReadOnly(meta({ kind: 'dangerous' }))).toBe(true);
+  });
+
+  it('allows read and inert kinds', () => {
+    expect(shouldBlockInReadOnly(meta({ kind: 'read' }))).toBe(false);
+    expect(shouldBlockInReadOnly(meta({ kind: 'inert' }))).toBe(false);
+  });
+
+  it('allows missing meta (fall through to confirmMode gate)', () => {
+    expect(shouldBlockInReadOnly(undefined)).toBe(false);
+  });
+
+  it('honors isWriteAction predicate to refine per-call write-ness', () => {
+    const m = meta({
+      kind: 'write',
+      isWriteAction: (args) =>
+        (args as { action?: string } | undefined)?.action !== 'read' &&
+        (args as { action?: string } | undefined)?.action !== 'list',
+    });
+    // Reads/lists fall through despite the static `kind: 'write'`.
+    expect(shouldBlockInReadOnly(m, { action: 'read' })).toBe(false);
+    expect(shouldBlockInReadOnly(m, { action: 'list' })).toBe(false);
+    // Writes still block.
+    expect(shouldBlockInReadOnly(m, { action: 'write' })).toBe(true);
+    expect(shouldBlockInReadOnly(m, { action: 'delete' })).toBe(true);
+  });
+
+  it('without args, isWriteAction is not consulted and static kind wins', () => {
+    const m = meta({ kind: 'write', isWriteAction: () => false });
+    expect(shouldBlockInReadOnly(m)).toBe(true);
   });
 });

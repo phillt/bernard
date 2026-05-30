@@ -3,33 +3,47 @@ import { isPureQuestion, toolModePolicy } from './tool-mode.js';
 import { makePolicyInput } from './test-helpers.js';
 
 describe('toolModePolicy', () => {
-  it('defaults to write-mode with confirm-on-write', () => {
+  it('defaults to read-only mode with confirm-on-write', () => {
     const result = toolModePolicy(makePolicyInput());
-    expect(result.mode).toBe('write');
+    expect(result.mode).toBe('read-only');
     expect(result.requireConfirmForWrite).toBe(true);
-    expect(result.reason).toBe('confirm-mode-auto');
+    expect(result.reason).toBe('config-read-only');
     expect(result.confirmThreshold).toBe('high');
   });
 
-  it('emits threshold=never when confirmMode=off', () => {
-    const result = toolModePolicy(makePolicyInput({ config: { confirmMode: 'off' } }));
+  it('emits mode=write when config.toolMode=write', () => {
+    const result = toolModePolicy(makePolicyInput({ config: { toolMode: 'write' } }));
+    expect(result.mode).toBe('write');
+    expect(result.reason).toBe('config-write');
+    // confirmMode is orthogonal — still emits the usual auto threshold.
+    expect(result.confirmThreshold).toBe('high');
+  });
+
+  it('emits threshold=never when confirmMode=off (mode still tracks toolMode)', () => {
+    const result = toolModePolicy(
+      makePolicyInput({ config: { confirmMode: 'off', toolMode: 'read-only' } }),
+    );
+    expect(result.mode).toBe('read-only');
     expect(result.confirmThreshold).toBe('never');
     expect(result.requireConfirmForWrite).toBe(false);
-    expect(result.reason).toBe('confirm-mode-off');
+    expect(result.reason).toBe('config-read-only');
   });
 
   it('emits threshold=medium when confirmMode=strict', () => {
-    const result = toolModePolicy(makePolicyInput({ config: { confirmMode: 'strict' } }));
+    const result = toolModePolicy(
+      makePolicyInput({ config: { confirmMode: 'strict', toolMode: 'write' } }),
+    );
+    expect(result.mode).toBe('write');
     expect(result.confirmThreshold).toBe('medium');
     expect(result.requireConfirmForWrite).toBe(true);
-    expect(result.reason).toBe('confirm-mode-strict');
+    expect(result.reason).toBe('config-write');
   });
 
-  it('pure question short-circuits to read-only + never (regardless of confirmMode)', () => {
+  it('pure question short-circuits to read-only + never (regardless of toolMode/confirmMode)', () => {
     const result = toolModePolicy(
       makePolicyInput({
         userInput: 'what time is it?',
-        config: { confirmMode: 'strict' },
+        config: { confirmMode: 'strict', toolMode: 'write' },
       }),
     );
     expect(result.mode).toBe('read-only');

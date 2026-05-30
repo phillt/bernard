@@ -42,16 +42,22 @@ export function isReadOnlyMCPSuffix(name: string): boolean {
 
 /**
  * Maps tool metadata to a {@link RiskLevel}. Honors an explicit
- * `meta.risk` override; otherwise derives from `kind` + `sideEffect`.
+ * `meta.risk` override; otherwise derives from `kind` + `sideEffect`,
+ * with `meta.isWriteAction(args)` as a per-call refinement (e.g.
+ * `memory.read` downgrades to `low` even though the tool's static
+ * `kind` is `write`).
+ *
  * Unknown / missing metadata defaults to `medium` — a safe middle ground
  * that prompts in `strict` mode but not in `auto`.
  */
-export function riskFromMeta(meta: ToolMeta | undefined): RiskLevel {
+export function riskFromMeta(meta: ToolMeta | undefined, args?: unknown): RiskLevel {
   if (!meta) return 'medium';
   if (meta.risk) return meta.risk;
   if (meta.kind === 'dangerous') return 'high';
   if (meta.kind === 'read' || meta.kind === 'inert') return 'low';
-  // kind === 'write'
+  // kind === 'write' — let the per-call predicate downgrade reads on
+  // discriminator-style tools (memory/scratch with action: 'read').
+  if (meta.isWriteAction && args !== undefined && !meta.isWriteAction(args)) return 'low';
   if (meta.sideEffect === 'external-api') return 'high';
   return 'medium';
 }
@@ -66,4 +72,25 @@ export function shouldConfirm(risk: RiskLevel, threshold: ConfirmThreshold | und
   if (threshold === 'high') return risk === 'high';
   // 'medium'
   return risk === 'high' || risk === 'medium';
+}
+
+/**
+ * True iff this tool call should be blocked under read-only mode (#179).
+ *
+ * `meta.kind` in `{'write','dangerous'}` → blocked. `'read'` / `'inert'` or
+ * missing meta → allowed. Missing meta falls through to allowed so legacy/
+ * foreign tools without classification don't get bricked silently; MCP tools
+ * already get `kind: 'write'` by default via `wrapMCPTool()` so unclassified
+ * MCP writes still trip this gate.
+ *
+ * When `meta.isWriteAction` is set, it overrides the static `kind` check for
+ * this specific invocation — so `memory({action:'read'})` falls through even
+ * though the `memory` tool's declared `kind` is `'write'`. `args` must be
+ * the same object the model passed (post any wrapper rewriting); when omitted
+ * the static behavior applies.
+ */
+export function shouldBlockInReadOnly(meta: ToolMeta | undefined, args?: unknown): boolean {
+  if (!meta) return false;
+  if (meta.isWriteAction && args !== undefined) return meta.isWriteAction(args);
+  return meta.kind === 'write' || meta.kind === 'dangerous';
 }

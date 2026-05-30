@@ -58,6 +58,16 @@ export interface BernardConfig {
    */
   confirmMode: 'off' | 'auto' | 'strict';
   /**
+   * Global least-privilege tool mode (#179). `'read-only'` (default) blocks any
+   * tool whose meta declares `kind: 'write' | 'dangerous'` behind an interactive
+   * enable-write prompt; users can allow once or unlock a single tool for the
+   * remainder of the session. `'write'` lets every tool run subject only to the
+   * `confirmMode` risk gate (#144). The two gates compose orthogonally — toolMode
+   * answers "is this allowed to run at all?" and confirmMode answers "do I want
+   * to be asked first?".
+   */
+  toolMode: 'read-only' | 'write';
+  /**
    * Whether concise-by-default response shaping is active (#175). When on, the
    * Policy Engine emits `concise.enabled = true` and the main agent's system
    * prompt receives a `## Concise Mode` block instructing the model to keep
@@ -107,6 +117,7 @@ const DEFAULT_AUTO_CREATE_SPECIALISTS = false;
 const DEFAULT_AUTO_CREATE_THRESHOLD = 0.8;
 const DEFAULT_COORDINATOR_MODE: 'on' | 'off' | 'auto' = 'auto';
 const DEFAULT_CONFIRM_MODE: 'off' | 'auto' | 'strict' = 'auto';
+const DEFAULT_TOOL_MODE: 'read-only' | 'write' = 'read-only';
 const DEFAULT_MODEL_MODE: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance' = 'off';
 const DEFAULT_SCRATCH_SUBJECT_THRESHOLD = 0.15;
 const DEFAULT_CONCISE_MODE = true;
@@ -119,6 +130,11 @@ function isCoordinatorMode(v: unknown): v is 'on' | 'off' | 'auto' {
 /** Type guard for `confirmMode` string values (#144). */
 export function isConfirmMode(v: unknown): v is 'off' | 'auto' | 'strict' {
   return v === 'off' || v === 'auto' || v === 'strict';
+}
+
+/** Type guard for `toolMode` string values (#179). */
+export function isToolMode(v: unknown): v is 'read-only' | 'write' {
+  return v === 'read-only' || v === 'write';
 }
 
 /** Type guard for `modelMode` string values (#170). */
@@ -224,6 +240,7 @@ export function savePreferences(prefs: {
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
+  toolMode?: 'read-only' | 'write';
 }): void {
   const dir = path.dirname(PREFS_PATH);
   if (!fs.existsSync(dir)) {
@@ -249,6 +266,7 @@ export function savePreferences(prefs: {
     data.scratchSubjectThreshold = prefs.scratchSubjectThreshold;
   if (prefs.conciseMode !== undefined) data.conciseMode = prefs.conciseMode;
   if (prefs.confirmMode !== undefined) data.confirmMode = prefs.confirmMode;
+  if (prefs.toolMode !== undefined) data.toolMode = prefs.toolMode;
 
   // Preserve autoUpdate, coordinatorMode, and auto-create settings from existing prefs when callers don't pass them
   let existing: Record<string, unknown> | undefined;
@@ -276,6 +294,9 @@ export function savePreferences(prefs: {
   }
   if (prefs.confirmMode === undefined && existing && isConfirmMode(existing.confirmMode)) {
     data.confirmMode = existing.confirmMode;
+  }
+  if (prefs.toolMode === undefined && existing && isToolMode(existing.toolMode)) {
+    data.toolMode = existing.toolMode;
   }
   if (prefs.coordinatorMode === undefined && existing) {
     if (isCoordinatorMode(existing.coordinatorMode)) {
@@ -354,6 +375,7 @@ export function loadPreferences(): {
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
+  toolMode?: 'read-only' | 'write';
 } {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
@@ -394,6 +416,7 @@ export function loadPreferences(): {
           : undefined,
       conciseMode: typeof parsed.conciseMode === 'boolean' ? parsed.conciseMode : undefined,
       confirmMode: isConfirmMode(parsed.confirmMode) ? parsed.confirmMode : undefined,
+      toolMode: isToolMode(parsed.toolMode) ? parsed.toolMode : undefined,
     };
   } catch {
     return {};
@@ -916,6 +939,12 @@ export function loadConfig(overrides?: {
     : undefined;
   const confirmMode = prefs.confirmMode ?? envConfirmMode ?? DEFAULT_CONFIRM_MODE;
 
+  // Least-privilege tool mode (#179). Precedence: pref > env > default 'read-only'.
+  const envToolMode = isToolMode(process.env.BERNARD_TOOL_MODE)
+    ? (process.env.BERNARD_TOOL_MODE as 'read-only' | 'write')
+    : undefined;
+  const toolMode = prefs.toolMode ?? envToolMode ?? DEFAULT_TOOL_MODE;
+
   // Concise-by-default response shaping (#175); opt-out via BERNARD_CONCISE_MODE=false.
   const rawConcise = process.env.BERNARD_CONCISE_MODE;
   const conciseMode =
@@ -981,6 +1010,7 @@ export function loadConfig(overrides?: {
     correctionEnabled,
     promptRewriter,
     confirmMode,
+    toolMode,
     referenceLookup,
     referenceLookupTools,
     scratchSubjectThreshold,

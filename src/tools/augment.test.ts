@@ -885,6 +885,256 @@ describe('augmentTools', () => {
     });
   });
 
+  describe('read-only block gate (#179)', () => {
+    function makeLegacyToolWithMeta(
+      kind: 'read' | 'write' | 'dangerous' | 'inert',
+      sideEffect: 'none' | 'local' | 'external-api' = 'local',
+    ) {
+      const execute = vi.fn(async () => ({ output: 'done', is_error: false }));
+      const t: any = { execute, description: 't', parameters: {} };
+      attachMeta(t, { name: 't', kind, deterministic: false, sideEffect, cacheable: false });
+      return { t, execute };
+    }
+
+    const DENIED = {
+      output:
+        'Action denied — read-only mode. Ask the user to allow this tool or switch toolMode to write.',
+      is_error: true,
+    };
+
+    it('default toolMode (write) → block gate never fires even on dangerous tools', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('dangerous');
+      const blockAction = vi.fn(async () => 'allow-once' as const);
+      const augmented = augmentTools({ t }, { profileStore: store, blockAction });
+      await augmented.t.execute({}, {});
+      expect(blockAction).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('read-only + write tool + allow-once → tool runs; second call re-prompts', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('write', 'local');
+      const blockAction = vi.fn(async () => 'allow-once' as const);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, toolMode: 'read-only', blockAction },
+      );
+      await augmented.t.execute({}, {});
+      await augmented.t.execute({}, {});
+      expect(blockAction).toHaveBeenCalledTimes(2);
+      expect(execute).toHaveBeenCalledTimes(2);
+    });
+
+    it('read-only + allow-tool-for-session → first call prompts, second skips, other tool still prompts', async () => {
+      const { t: alpha, execute: alphaExec } = makeLegacyToolWithMeta('write', 'local');
+      const { t: beta, execute: betaExec } = makeLegacyToolWithMeta('write', 'local');
+      const blockAction = vi.fn(async () => 'allow-tool-for-session' as const);
+      const augmented = augmentTools(
+        { alpha, beta },
+        { profileStore: store, toolMode: 'read-only', blockAction },
+      );
+      await augmented.alpha.execute({}, {});
+      await augmented.alpha.execute({}, {});
+      await augmented.beta.execute({}, {});
+      // alpha prompts once (then allowlisted), beta prompts once.
+      expect(blockAction).toHaveBeenCalledTimes(2);
+      expect(alphaExec).toHaveBeenCalledTimes(2);
+      expect(betaExec).toHaveBeenCalledTimes(1);
+    });
+
+    it('read-only + deny → returns DENIED result, execute NOT called', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('dangerous');
+      const blockAction = vi.fn(async () => 'deny' as const);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, toolMode: 'read-only', blockAction },
+      );
+      const r = await augmented.t.execute({}, {});
+      expect(execute).not.toHaveBeenCalled();
+      expect(r).toEqual(DENIED);
+    });
+
+    it('read-only + read tool → block gate skipped', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('read');
+      const blockAction = vi.fn(async () => 'deny' as const);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, toolMode: 'read-only', blockAction },
+      );
+      await augmented.t.execute({}, {});
+      expect(blockAction).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('read-only + missing blockAction + write tool → fails closed (denied)', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('write', 'local');
+      const augmented = augmentTools({ t }, { profileStore: store, toolMode: 'read-only' });
+      const r = await augmented.t.execute({}, {});
+      expect(execute).not.toHaveBeenCalled();
+      expect(r).toEqual(DENIED);
+    });
+
+    it('block gate runs BEFORE confirm gate (allow-once still hits confirm prompt)', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('dangerous');
+      const order: string[] = [];
+      const blockAction = vi.fn(async () => {
+        order.push('block');
+        return 'allow-once' as const;
+      });
+      const confirmAction = vi.fn(async () => {
+        order.push('confirm');
+        return false;
+      });
+      const augmented = augmentTools(
+        { t },
+        {
+          profileStore: store,
+          toolMode: 'read-only',
+          blockAction,
+          confirmThreshold: 'high',
+          confirmAction,
+        },
+      );
+      const r = await augmented.t.execute({}, {});
+      expect(order).toEqual(['block', 'confirm']);
+      expect(execute).not.toHaveBeenCalled();
+      // Distinct cancellation message — confirm-cancel, not denied.
+      expect(r).toEqual({ output: 'Action cancelled by user.', is_error: true });
+    });
+
+    it('envelope-aware path: deny returns serialized denied envelope (distinct error type)', async () => {
+      const source: BernardTool<{ x: number }, { val: number }> = {
+        meta: {
+          name: 'demo',
+          kind: 'write',
+          deterministic: false,
+          sideEffect: 'local',
+          cacheable: false,
+        },
+        description: 'demo',
+        parameters: z.object({ x: z.number() }),
+        execute: vi.fn(async () => ok({ val: 1 })) as any,
+        serializeForModel: (r) =>
+          r.status === 'ok' ? `ok:${r.result.val}` : `err:${r.error.type}:${r.error.message}`,
+      };
+      const aisdk = toolToAISDK(source);
+      const blockAction = vi.fn(async () => 'deny' as const);
+      const augmented = augmentTools(
+        { demo: aisdk },
+        { profileStore: store, toolMode: 'read-only', blockAction },
+      );
+      const out = await augmented.demo.execute({ x: 1 }, {});
+      expect(blockAction).toHaveBeenCalled();
+      expect(source.execute).not.toHaveBeenCalled();
+      // Distinct error type 'denied' (not 'cancelled') so envelope consumers
+      // can tell read-only denial apart from confirm-gate cancel without
+      // parsing the message text.
+      expect(out).toBe(
+        'err:denied:Action denied — read-only mode. Ask the user to allow this tool or switch toolMode to write.',
+      );
+    });
+
+    it('blockAction throws → fails closed (denied)', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('write', 'local');
+      const blockAction = vi.fn(async () => {
+        throw new Error('boom');
+      });
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, toolMode: 'read-only', blockAction },
+      );
+      const r = await augmented.t.execute({}, {});
+      expect(execute).not.toHaveBeenCalled();
+      expect(r).toEqual(DENIED);
+    });
+
+    it('forwards abortSignal from execOptions into blockAction', async () => {
+      const { t } = makeLegacyToolWithMeta('write', 'local');
+      const blockAction = vi.fn(async () => 'allow-once' as const);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, toolMode: 'read-only', blockAction },
+      );
+      const controller = new AbortController();
+      await augmented.t.execute({}, { abortSignal: controller.signal });
+      expect(blockAction).toHaveBeenCalledWith(expect.any(Object), controller.signal);
+    });
+
+    it('missing meta → block gate falls through (allowed)', async () => {
+      const execute = vi.fn(async () => 'ok');
+      const t: any = { execute, description: '', parameters: {} };
+      const blockAction = vi.fn(async () => 'deny' as const);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, toolMode: 'read-only', blockAction },
+      );
+      await augmented.t.execute({}, {});
+      expect(blockAction).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('shared sessionToolAllowlist survives across augmentTools invocations', async () => {
+      // Simulates the REPL's per-process-lifetime allowlist: one Set, two
+      // separate augmentTools calls (the second models a sub-agent or a
+      // tool-wrapper dispatch with its own runDefinition).
+      const shared = new Set<string>();
+      const { t: t1, execute: e1 } = makeLegacyToolWithMeta('write', 'local');
+      const { t: t2, execute: e2 } = makeLegacyToolWithMeta('write', 'local');
+      const blockAction = vi.fn(async () => 'allow-tool-for-session' as const);
+      const outerAug = augmentTools(
+        { t: t1 },
+        {
+          profileStore: store,
+          toolMode: 'read-only',
+          blockAction,
+          sessionToolAllowlist: shared,
+        },
+      );
+      await outerAug.t.execute({}, {});
+      expect(blockAction).toHaveBeenCalledTimes(1);
+      expect(e1).toHaveBeenCalledTimes(1);
+      // Simulate a nested augmentTools call (sub-agent / wrapper). Same
+      // toolName should now bypass the block gate via the shared set.
+      const innerAug = augmentTools(
+        { t: t2 },
+        {
+          profileStore: store,
+          toolMode: 'read-only',
+          blockAction,
+          sessionToolAllowlist: shared,
+        },
+      );
+      await innerAug.t.execute({}, {});
+      expect(blockAction).toHaveBeenCalledTimes(1);
+      expect(e2).toHaveBeenCalledTimes(1);
+    });
+
+    it('isWriteAction predicate bypasses block gate for read-shaped invocations', async () => {
+      const execute = vi.fn(async () => ({ output: 'ok', is_error: false }));
+      const t: any = { execute, description: 't', parameters: {} };
+      attachMeta(t, {
+        name: 't',
+        kind: 'write',
+        deterministic: false,
+        sideEffect: 'local',
+        cacheable: false,
+        isWriteAction: (args: unknown) =>
+          (args as { action?: string } | undefined)?.action !== 'read',
+      });
+      const blockAction = vi.fn(async () => 'deny' as const);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, toolMode: 'read-only', blockAction },
+      );
+      await augmented.t.execute({ action: 'read' }, {});
+      expect(blockAction).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalled();
+      // Write action still trips the gate.
+      const r = await augmented.t.execute({ action: 'write' }, {});
+      expect(blockAction).toHaveBeenCalledTimes(1);
+      expect(r).toEqual(DENIED);
+    });
+  });
+
   describe('multiple tools', () => {
     it('augments all tools in the record independently', async () => {
       vi.mocked(detectToolError).mockReturnValue({

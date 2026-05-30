@@ -33,6 +33,14 @@ export function createMemoryTool(
       deterministic: false,
       sideEffect: 'local',
       cacheable: false,
+      // memory.list / memory.read are pure reads despite the tool's static
+      // `kind: 'write'`. Without this refinement, the read-only block gate
+      // (#179) would prompt the user on every recall lookup and confirmMode
+      // strict would pop a confirm menu on every list — both intolerable.
+      isWriteAction: (args) => {
+        const action = (args as { action?: string } | undefined)?.action;
+        return action === 'write' || action === 'delete';
+      },
     },
     description: `Persistent memory that survives across sessions. Use this to remember user preferences, project knowledge, or anything worth recalling later. Stored as files on disk at ${MEMORY_DIR}.`,
     parameters: MEMORY_PARAMETERS,
@@ -100,6 +108,12 @@ export function createScratchTool(
       deterministic: false,
       sideEffect: 'local',
       cacheable: false,
+      // scratch.list / scratch.read are pure reads — see memory tool above
+      // for the rationale on this predicate (#179 + #144 both consult it).
+      isWriteAction: (args) => {
+        const action = (args as { action?: string } | undefined)?.action;
+        return action === 'write' || action === 'delete';
+      },
     },
     description:
       'Session scratch notes for tracking complex task progress, intermediate findings, and working plans. These notes survive context compression but are discarded when the session ends. Use this to keep track of multi-step work within a single session.',

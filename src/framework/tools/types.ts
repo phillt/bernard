@@ -53,6 +53,16 @@ export interface ToolMeta {
    * or a `write` tool that's exceptionally destructive) can declare here.
    */
   risk?: ToolRisk;
+  /**
+   * Per-call refinement of `kind` for tools whose write-ness depends on a
+   * discriminator argument (e.g. `memory`/`scratch` with `action: 'read'`
+   * vs `action: 'write'`). Returns `true` iff THIS specific invocation
+   * mutates state. When set, the read-only block gate (#179) consults this
+   * instead of the static `kind`; the confirmation gate (#144) likewise
+   * downgrades to `low` risk when the predicate returns `false`. Unset
+   * tools keep the static `kind`-based behavior.
+   */
+  isWriteAction?: (args: unknown) => boolean;
 }
 
 /**
@@ -82,6 +92,7 @@ export type ToolErrorType =
   | 'parse_failed'
   | 'pool_exhausted'
   | 'cancelled'
+  | 'denied'
   | 'unknown';
 
 export interface ToolError {
