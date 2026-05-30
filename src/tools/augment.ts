@@ -469,8 +469,7 @@ export function augmentTools(
                 // turn start so no `[^Sn]` is available. Re-register so the
                 // post-clear turn has the source. ProvenanceStore dedups by
                 // (kind, rawRef), so intra-turn repeats are a no-op.
-                const cachedPreview =
-                  typeof cached === 'string' ? cached : safeSerialize(cached);
+                const cachedPreview = typeof cached === 'string' ? cached : safeSerialize(cached);
                 registerEvidence(toolName, args, source.meta, cachedPreview);
                 return cached;
               }
@@ -569,9 +568,7 @@ export function augmentTools(
               'error' in (capturedResult as Record<string, unknown>));
           if (!looksLikeError) {
             const previewSrc =
-              typeof capturedResult === 'string'
-                ? capturedResult
-                : safeSerialize(capturedResult);
+              typeof capturedResult === 'string' ? capturedResult : safeSerialize(capturedResult);
             registerEvidence(toolName, args, readToolMeta(toolDef), previewSrc);
           }
           setImmediate(() => {

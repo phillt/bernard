@@ -48,7 +48,6 @@ When a sentence states a fact you got from a registered source this turn (web_re
 Rules:
 - Only attach \`[^Sn]\` for an id that actually appears in this turn's source list.
 - If a claim has no matching registered source, either prefix it with \`[unverified]\` ("the build target is x86_64 [unverified]") or call \`ask_user\` to confirm. Do not invent a citation.
-- \`shell\` output and other tool results ARE auto-registered as \`kind: 'tool-result'\` sources — see the \`## Evidence Pointers\` section for how to cite them.
 - Opinions, recommendations, and high-level summaries don't need markers — citations are for factual / tool-derived claims.
 - One marker per claim is enough; don't spam multiple ids on the same sentence.`;
 
