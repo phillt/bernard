@@ -21,6 +21,7 @@ vi.mock('ai', async () => {
 });
 
 import { rewritePrompt, shouldSkipRewriter, skipRewriterReason } from './prompt-rewriter.js';
+import { clearLLMCache } from './llm-cache.js';
 import type { ModelProfile } from './providers/profiles.js';
 import type { ResolvedEntry } from './reference-resolver.js';
 import type { BernardConfig } from './config.js';
@@ -115,6 +116,7 @@ describe('shouldSkipRewriter — conversational heuristics', () => {
 describe('rewritePrompt — disabled config', () => {
   beforeEach(() => {
     generateTextMock.mockReset();
+    clearLLMCache();
   });
 
   it('returns noop and does not call generateText when promptRewriter is false', async () => {
@@ -132,6 +134,7 @@ describe('rewritePrompt — disabled config', () => {
 describe('rewritePrompt — skip conditions', () => {
   beforeEach(() => {
     generateTextMock.mockReset();
+    clearLLMCache();
   });
 
   it('skips short input', async () => {
@@ -156,6 +159,7 @@ describe('rewritePrompt — skip conditions', () => {
 describe('rewritePrompt — happy path', () => {
   beforeEach(() => {
     generateTextMock.mockReset();
+    clearLLMCache();
   });
 
   it('returns rewritten text when the model emits a valid response', async () => {
@@ -220,6 +224,7 @@ describe('rewritePrompt — happy path', () => {
 describe('rewritePrompt — fail-open paths', () => {
   beforeEach(() => {
     generateTextMock.mockReset();
+    clearLLMCache();
   });
 
   it('returns noop when generateText throws', async () => {
@@ -279,5 +284,48 @@ describe('rewritePrompt — fail-open paths', () => {
     await rewritePrompt(LONG_INPUT, makeProfile(), [], makeConfig(), ctrl.signal);
 
     expect(generateTextMock.mock.calls[0][0].abortSignal).toBe(ctrl.signal);
+  });
+});
+
+describe('rewritePrompt — LLM cache (#171)', () => {
+  beforeEach(() => {
+    generateTextMock.mockReset();
+    clearLLMCache();
+  });
+
+  it('reuses the cached response on a second identical call', async () => {
+    generateTextMock.mockResolvedValue({
+      text: '{"status":"rewritten","text":"Task: inspect src/foo.ts failing test and fix the root cause, whether in the assertion or the implementation."}',
+    });
+
+    const first = await rewritePrompt(LONG_INPUT, makeProfile(), [], makeConfig());
+    const second = await rewritePrompt(LONG_INPUT, makeProfile(), [], makeConfig());
+
+    expect(first.status).toBe('rewritten');
+    expect(second).toEqual(first);
+    expect(generateTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('bypasses the cache when cacheEnabled is false', async () => {
+    generateTextMock.mockResolvedValue({
+      text: '{"status":"rewritten","text":"Task: inspect src/foo.ts failing test and fix the root cause, whether in the assertion or the implementation."}',
+    });
+
+    const cfg = makeConfig({ cacheEnabled: false });
+    await rewritePrompt(LONG_INPUT, makeProfile(), [], cfg);
+    await rewritePrompt(LONG_INPUT, makeProfile(), [], cfg);
+
+    expect(generateTextMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('misses the cache when the input changes', async () => {
+    generateTextMock.mockResolvedValue({
+      text: '{"status":"rewritten","text":"Task: inspect src/foo.ts failing test and fix the root cause, whether in the assertion or the implementation."}',
+    });
+
+    await rewritePrompt(LONG_INPUT, makeProfile(), [], makeConfig());
+    await rewritePrompt(LONG_INPUT + ' (please)', makeProfile(), [], makeConfig());
+
+    expect(generateTextMock).toHaveBeenCalledTimes(2);
   });
 });

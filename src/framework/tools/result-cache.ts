@@ -1,6 +1,10 @@
-// TODO(#171): wire `getCachedResult` / `setCachedResult` into `augmentTools`
-// so deterministic, side-effect-free tools transparently hit the cache. Until
-// then the cache is exposed for future use and exercised by unit tests only.
+// In-process TTL cache for deterministic tool results (#171). Wired into
+// `augmentTools` (src/tools/augment.ts): the BernardTool branch consults
+// `getCachedResult` after the read-only / confirm gates and before the
+// underlying `execute`; on a successful envelope it stores the serialized
+// model bytes via `setCachedResult`. Cache hits skip both `execute` and
+// `serializeForModel`. Predicate `isCacheable` enforces opt-in via
+// `ToolMeta.deterministic` + (`sideEffect: 'none'` or `cacheable: true`).
 
 import { isCacheable, type ToolMeta } from './types.js';
 import { redactArgs } from './redact.js';

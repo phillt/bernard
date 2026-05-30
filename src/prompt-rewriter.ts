@@ -4,6 +4,7 @@ import type { ResolvedEntry } from './reference-resolver.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import { debugLog } from './logger.js';
+import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 
 /**
  * Model-specific Prompt Rewriter — a pre-turn LLM pass that restructures the
@@ -143,25 +144,50 @@ export async function rewritePrompt(
 
   try {
     const site = resolveSiteModel(config, 'rewriter');
-    const result = await generateText({
-      model: site.model,
-      providerOptions: site.providerOptions,
-      system: buildSystemPrompt(profile),
-      messages: [{ role: 'user', content: buildUserMessage(input, resolvedEntries) }],
-      maxSteps: 1,
-      maxTokens: REWRITER_MAX_TOKENS,
-      temperature: 0,
-      abortSignal,
-    });
+    const system = buildSystemPrompt(profile);
+    const userContent = buildUserMessage(input, resolvedEntries);
 
-    if (!result.text) {
-      debugLog('prompt-rewriter:empty-response', null);
-      return { status: 'noop' };
+    // LLM subcall cache (#171). Same (model, system, user content) → same
+    // result for the cache TTL. Temperature 0 means determinism is already
+    // assumed; the cache just skips the round-trip.
+    const cacheOn = config.cacheEnabled !== false;
+    const cacheKey: LLMCacheKey | null = cacheOn
+      ? {
+          siteName: 'rewriter',
+          modelId: site.model.modelId,
+          providerOptions: site.providerOptions,
+          system,
+          userContent,
+        }
+      : null;
+    let rawText: string;
+    const cached = cacheKey ? getCachedLLM(cacheKey) : undefined;
+    if (cached !== undefined) {
+      debugLog('cache:llm:hit', { site: 'rewriter' });
+      rawText = cached;
+    } else {
+      if (cacheKey) debugLog('cache:llm:miss', { site: 'rewriter' });
+      const result = await generateText({
+        model: site.model,
+        providerOptions: site.providerOptions,
+        system,
+        messages: [{ role: 'user', content: userContent }],
+        maxSteps: 1,
+        maxTokens: REWRITER_MAX_TOKENS,
+        temperature: 0,
+        abortSignal,
+      });
+      if (!result.text) {
+        debugLog('prompt-rewriter:empty-response', null);
+        return { status: 'noop' };
+      }
+      rawText = result.text;
+      if (cacheKey) setCachedLLM(cacheKey, rawText);
     }
 
-    const parsed = parseRewriterResponse(result.text);
+    const parsed = parseRewriterResponse(rawText);
     if (!parsed) {
-      debugLog('prompt-rewriter:parse-failed', result.text.slice(0, 200));
+      debugLog('prompt-rewriter:parse-failed', rawText.slice(0, 200));
       return { status: 'noop' };
     }
 

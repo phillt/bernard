@@ -2677,6 +2677,10 @@ Remember: the systemPrompt should read like a persona definition — who this sp
     interrupted = false;
     // A new turn invalidates any pinned sources viewer from the previous one.
     closeSourcesViewer();
+    // Per-turn RAG search cache invalidation (#171). Cross-turn updates to
+    // memory must be visible on the next search; same-turn duplicate lookups
+    // hit the cache to skip re-embedding.
+    ragStore?.clearTurnCache();
     try {
       initSpinner();
       await agent.processInput(agentInput, inlineImages, resolvedEntries);

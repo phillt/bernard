@@ -7,6 +7,11 @@ import { classifyError } from '../error-taxonomy.js';
 import type { BlockActionInput, BlockOutcome, ConfirmActionInput, ToolOptions } from './types.js';
 import type { ConfirmThreshold } from '../risk.js';
 import { riskFromMeta, shouldBlockInReadOnly, shouldConfirm } from '../risk.js';
+import {
+  CACHE_MISS,
+  getCachedResult,
+  setCachedResult,
+} from '../framework/tools/result-cache.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -136,6 +141,14 @@ export interface AugmentOptions {
    * tests that want isolation.
    */
   sessionToolAllowlist?: Set<string>;
+  /**
+   * Deterministic tool result cache toggle (#171). When omitted or `true`,
+   * tools whose `ToolMeta` passes `isCacheable` (deterministic + no side
+   * effects, or `cacheable: true`) hit the in-process TTL cache in
+   * `framework/tools/result-cache.ts`. Set `false` to bypass the cache and
+   * always call `execute`. Defaults to enabled.
+   */
+  cacheEnabled?: boolean;
 }
 
 function isProfileStore(v: AugmentOptions | ToolProfileStore): v is ToolProfileStore {
@@ -232,6 +245,13 @@ export function augmentTools(
   // across turns AND across nested sub-agent / tool-wrapper dispatches.
   // Falls back to a closure-local Set when none is provided (tests, cron).
   const sessionToolAllowlist = opts.sessionToolAllowlist ?? new Set<string>();
+  // Deterministic-tool result cache (#171). Default ON. The check runs AFTER
+  // the block/confirm gates so cacheable tools that also opted in with
+  // `sideEffect !== 'none'` (a rare combination) still honor read-only mode
+  // and risk-based confirms. The existing per-toolName:hash(args) session
+  // allowlist on the confirm gate means a repeat call with the same args
+  // doesn't re-prompt, so the extra gate trip is essentially free.
+  const cacheEnabled = opts.cacheEnabled !== false;
 
   const augmented: Record<string, any> = {};
 
@@ -346,6 +366,19 @@ export function augmentTools(
               };
               return source.serializeForModel(cancelled);
             }
+            // Deterministic-tool cache check (#171). `getCachedResult` no-ops
+            // when the tool's meta doesn't pass `isCacheable`, so only opted-in
+            // tools (e.g. time_range, time_range_total) can ever hit. The
+            // cached value is the already-serialized model bytes — see the
+            // setCachedResult call below.
+            if (cacheEnabled) {
+              const cached = getCachedResult(source.meta, args);
+              if (cached !== CACHE_MISS) {
+                debugLog(`cache:tool:hit`, { tool: toolName });
+                return cached;
+              }
+              debugLog(`cache:tool:miss`, { tool: toolName });
+            }
             let envelope: ToolResult<unknown>;
             try {
               envelope = await source.execute(args, execOptions as never);
@@ -372,7 +405,13 @@ export function augmentTools(
               recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet),
             );
 
-            return source.serializeForModel(envelope);
+            const serialized = source.serializeForModel(envelope);
+            // Only cache successful envelopes — denied/cancelled/error must
+            // never be served from cache on a subsequent identical call.
+            if (cacheEnabled && envelope.status === 'ok') {
+              setCachedResult(source.meta, args, serialized);
+            }
+            return serialized;
           },
         },
         toolDef,

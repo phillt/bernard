@@ -26,6 +26,7 @@ import {
   interpretLookupResult,
   executeLookupTool,
 } from './reference-tool-lookup.js';
+import { clearLLMCache } from './llm-cache.js';
 import type { BernardConfig } from './config.js';
 
 function makeConfig(overrides: Partial<BernardConfig> = {}): BernardConfig {
@@ -106,6 +107,7 @@ describe('isAllowedLookupTool', () => {
 describe('runReferenceLookup', () => {
   beforeEach(() => {
     generateTextMock.mockReset();
+    clearLLMCache();
   });
 
   it('returns none when referenceLookup is disabled', async () => {
@@ -262,6 +264,7 @@ describe('runReferenceLookup', () => {
 describe('interpretLookupResult', () => {
   beforeEach(() => {
     generateTextMock.mockReset();
+    clearLLMCache();
   });
 
   it('parses a found response', async () => {

@@ -80,6 +80,7 @@ export async function runDefinition<TInput, TFormatted>(
     toolMode: ctx.policyDecision?.toolMode?.mode,
     blockAction: ctx.toolOptions.blockAction,
     sessionToolAllowlist: ctx.toolOptions.sessionToolAllowlist,
+    cacheEnabled: config.cacheEnabled,
   });
   const hooks = def.hooks(ctx, input);
   const baseMaxSteps = def.stepBudget(config, input);

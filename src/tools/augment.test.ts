@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { augmentTools } from './augment.js';
 import { attachMeta, toolToAISDK } from '../framework/tools/adapter.js';
 import { ok, err, type BernardTool } from '../framework/tools/types.js';
+import { clearCache as clearResultCache } from '../framework/tools/result-cache.js';
 
 vi.mock('../tool-profiles.js', () => ({
   classifyShellCommand: vi.fn((cmd: string) => {
@@ -1182,6 +1183,109 @@ describe('augmentTools', () => {
       expect(r2).toBe('result-2');
       expect(exec1).toHaveBeenCalledWith({ a: 1 }, {});
       expect(exec2).toHaveBeenCalledWith({ b: 2 }, {});
+    });
+  });
+
+  describe('deterministic tool result cache (#171)', () => {
+    function makeCacheableBernardTool(
+      execImpl: () => Promise<{ status: 'ok'; result: { val: number } } | { status: 'error'; error: { type: string; message: string } }>,
+      opts: { cacheable?: boolean } = {},
+    ): BernardTool<{ x: number }, { val: number }> {
+      return {
+        meta: {
+          name: 'cacheable_tool',
+          kind: 'read',
+          deterministic: true,
+          sideEffect: 'none',
+          cacheable: opts.cacheable ?? true,
+          cacheTtlMs: 0, // indefinite for the test
+        },
+        description: 'cacheable',
+        parameters: z.object({ x: z.number() }),
+        execute: execImpl as any,
+        serializeForModel: (r) => (r.status === 'ok' ? r.result : `Error: ${r.error.message}`),
+      };
+    }
+
+    beforeEach(() => {
+      clearResultCache();
+    });
+
+    it('returns the cached serialized result on second call, skipping execute', async () => {
+      const exec = vi.fn(async () => ok({ val: 42 }));
+      const aisdk = toolToAISDK(makeCacheableBernardTool(exec));
+      const augmented = augmentTools({ cacheable_tool: aisdk }, store);
+
+      const r1 = await augmented.cacheable_tool.execute({ x: 1 }, {});
+      const r2 = await augmented.cacheable_tool.execute({ x: 1 }, {});
+
+      expect(r1).toEqual({ val: 42 });
+      expect(r2).toEqual({ val: 42 });
+      expect(exec).toHaveBeenCalledTimes(1);
+    });
+
+    it('different args miss the cache and call execute again', async () => {
+      const exec = vi.fn(async (args: { x: number }) => ok({ val: args.x * 10 }));
+      const aisdk = toolToAISDK(makeCacheableBernardTool(exec));
+      const augmented = augmentTools({ cacheable_tool: aisdk }, store);
+
+      const r1 = await augmented.cacheable_tool.execute({ x: 1 }, {});
+      const r2 = await augmented.cacheable_tool.execute({ x: 2 }, {});
+
+      expect(r1).toEqual({ val: 10 });
+      expect(r2).toEqual({ val: 20 });
+      expect(exec).toHaveBeenCalledTimes(2);
+    });
+
+    it('does NOT cache when meta opts out (cacheable: false)', async () => {
+      const exec = vi.fn(async () => ok({ val: 1 }));
+      // cacheable: false + deterministic: true + sideEffect: 'none' should
+      // still pass isCacheable per the predicate, but we also want to verify
+      // a non-cacheable shape (no deterministic flag) skips entirely.
+      const tool: BernardTool<{ x: number }, { val: number }> = {
+        meta: { name: 'nope', kind: 'read', deterministic: false, cacheable: false },
+        description: 'nope',
+        parameters: z.object({ x: z.number() }),
+        execute: exec as any,
+        serializeForModel: (r) => (r.status === 'ok' ? r.result : 'err'),
+      };
+      const aisdk = toolToAISDK(tool);
+      const augmented = augmentTools({ nope: aisdk }, store);
+
+      await augmented.nope.execute({ x: 1 }, {});
+      await augmented.nope.execute({ x: 1 }, {});
+
+      expect(exec).toHaveBeenCalledTimes(2);
+    });
+
+    it('cacheEnabled: false bypasses the cache for cacheable tools', async () => {
+      const exec = vi.fn(async () => ok({ val: 42 }));
+      const aisdk = toolToAISDK(makeCacheableBernardTool(exec));
+      const augmented = augmentTools(
+        { cacheable_tool: aisdk },
+        { profileStore: store, cacheEnabled: false },
+      );
+
+      await augmented.cacheable_tool.execute({ x: 1 }, {});
+      await augmented.cacheable_tool.execute({ x: 1 }, {});
+
+      expect(exec).toHaveBeenCalledTimes(2);
+    });
+
+    it('does NOT cache error envelopes — next call hits execute again', async () => {
+      const exec = vi
+        .fn()
+        .mockResolvedValueOnce(err({ type: 'exec_failed', message: 'boom' }))
+        .mockResolvedValueOnce(ok({ val: 99 }));
+      const aisdk = toolToAISDK(makeCacheableBernardTool(exec));
+      const augmented = augmentTools({ cacheable_tool: aisdk }, store);
+
+      const r1 = await augmented.cacheable_tool.execute({ x: 1 }, {});
+      const r2 = await augmented.cacheable_tool.execute({ x: 1 }, {});
+
+      expect(r1).toBe('Error: boom');
+      expect(r2).toEqual({ val: 99 });
+      expect(exec).toHaveBeenCalledTimes(2);
     });
   });
 });
