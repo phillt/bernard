@@ -2442,8 +2442,14 @@ Remember: the systemPrompt should read like a persona definition — who this sp
               signal,
             );
             if (val.cancelled) return;
-            const parsed = parseInt(val.raw, 10);
-            if (!Number.isFinite(parsed) || parsed < 1 || parsed > MAX_CONCURRENT_AGENTS_LIMIT) {
+            const raw = val.raw.trim();
+            const parsed = Number.parseInt(raw, 10);
+            if (
+              !Number.isFinite(parsed) ||
+              String(parsed) !== raw ||
+              parsed < 1 ||
+              parsed > MAX_CONCURRENT_AGENTS_LIMIT
+            ) {
               printError(`Value must be an integer between 1 and ${MAX_CONCURRENT_AGENTS_LIMIT}.`);
               return;
             }

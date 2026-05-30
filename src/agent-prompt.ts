@@ -58,7 +58,7 @@ export type ResponseStyle =
   | 'critical'
   | 'creative';
 
-/** All response-style ids except `'default'`. */
+/** Every {@link ResponseStyle} id, in menu order. Includes `'default'`. */
 export const RESPONSE_STYLE_IDS: ReadonlyArray<ResponseStyle> = [
   'default',
   'detailed',
