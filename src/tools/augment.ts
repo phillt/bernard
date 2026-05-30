@@ -8,7 +8,9 @@ import type { BlockActionInput, BlockOutcome, ConfirmActionInput, ToolOptions } 
 import type { ConfirmThreshold } from '../risk.js';
 import { riskFromMeta, shouldBlockInReadOnly, shouldConfirm } from '../risk.js';
 import { CACHE_MISS, getCachedResult, setCachedResult } from '../framework/tools/result-cache.js';
+import { redactArgs, REDACTED } from '../framework/tools/redact.js';
 import type { ProvenanceStore } from '../provenance.js';
+import type { ToolMeta } from '../framework/tools/types.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -269,21 +271,52 @@ export function augmentTools(
   // is wired AND the policy hasn't disabled it. Errors during `add` are
   // swallowed so a malformed source never aborts a real tool call.
   const provenance = opts.provenance;
-  const evidenceEnabled = provenance ? opts.evidenceEnabled !== false : false;
+  // Default closed: registration only runs when the policy engine explicitly
+  // opts in. The previous `?? true` fallback silently enabled evidence in
+  // contexts that never consult the policy (cron, bare depsToCtx callers),
+  // populating the shared store with entries the model was never told about.
+  const evidenceEnabled = provenance ? opts.evidenceEnabled === true : false;
+
+  /**
+   * Stable 53-bit djb2 hash for an args string. Used to derive an evidence
+   * `rawRef` that uniquely identifies the call. Truncating the raw args in
+   * the rawRef caused long-prefix collisions (two `shell` commands with the
+   * same first 120 chars deduped to one source) which silently dropped the
+   * second call's evidence.
+   */
+  const hashArgs = (s: string): string => {
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) {
+      h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    }
+    return (h >>> 0).toString(36);
+  };
 
   const registerEvidence = (
     toolName: string,
-    argsSnippet: string,
-    preview: string,
+    args: unknown,
+    meta: ToolMeta | undefined,
+    resultText: string,
   ): void => {
     if (!evidenceEnabled || !provenance) return;
     try {
-      const argTail = argsSnippet ? `: ${argsSnippet.slice(0, 80)}` : '';
+      // Redact declared-sensitive arg fields before they reach label/rawRef,
+      // matching the contract result-cache.ts / cron-step-recorder.ts /
+      // tool-wrapper-run.ts already follow. Without this, an MCP tool that
+      // declares `sensitiveArgs: ['apiKey']` would leak its key into the
+      // <available_sources> block the LLM sees every turn.
+      const safeArgs = redactArgs(args, meta?.sensitiveArgs);
+      const argsSnippet = safeSerialize(safeArgs);
+      // Same contract for result content: when the tool's output itself is
+      // sensitive (sensitiveResult: true) we never let it reach the model
+      // via <available_sources>.
+      const previewSrc = meta?.sensitiveResult ? REDACTED : resultText;
+      const labelTail = argsSnippet ? `: ${argsSnippet.slice(0, 80)}` : '';
       provenance.add({
         kind: 'tool-result',
-        label: `${toolName}${argTail}`,
-        contentPreview: preview,
-        rawRef: `tool:${toolName}:${argsSnippet.slice(0, 120)}`,
+        label: `${toolName}${labelTail}`,
+        contentPreview: previewSrc,
+        rawRef: `tool:${toolName}:${hashArgs(argsSnippet)}`,
       });
     } catch (err) {
       debugLog(
@@ -429,6 +462,16 @@ export function augmentTools(
                     undefined,
                   ),
                 );
+                // Evidence pointer (#141) for cache hits: without this, a
+                // cacheable tool whose TTL outlives a turn boundary returns
+                // a cached result the model is told (by EVIDENCE_PROMPT) it
+                // can cite — but the per-turn ProvenanceStore was cleared at
+                // turn start so no `[^Sn]` is available. Re-register so the
+                // post-clear turn has the source. ProvenanceStore dedups by
+                // (kind, rawRef), so intra-turn repeats are a no-op.
+                const cachedPreview =
+                  typeof cached === 'string' ? cached : safeSerialize(cached);
+                registerEvidence(toolName, args, source.meta, cachedPreview);
                 return cached;
               }
               debugLog(`cache:tool:miss`, { tool: toolName });
@@ -471,7 +514,7 @@ export function augmentTools(
             if (envelope.status === 'ok') {
               const previewSrc =
                 typeof serialized === 'string' ? serialized : safeSerialize(serialized);
-              registerEvidence(toolName, argsSnippet, previewSrc);
+              registerEvidence(toolName, args, source.meta, previewSrc);
             }
             return serialized;
           },
@@ -511,21 +554,31 @@ export function augmentTools(
           const profileKey = resolveProfileKey(toolName, args);
           const argsSnippet = safeSerialize(args);
           const capturedResult = result;
+          // Evidence pointer (#141), synchronous: deferring this inside the
+          // setImmediate below races with `provenance.clear()` at the start
+          // of the next turn (back-to-back processInput, /task path, tests),
+          // and a throw from detectToolError would silently skip it. We use
+          // a cheap inline check for the legacy error shapes instead of
+          // calling detectToolError synchronously, which would also break
+          // the "result returned before recording" invariant the legacy
+          // path tests assert.
+          const looksLikeError =
+            capturedResult !== null &&
+            typeof capturedResult === 'object' &&
+            ((capturedResult as Record<string, unknown>).is_error === true ||
+              'error' in (capturedResult as Record<string, unknown>));
+          if (!looksLikeError) {
+            const previewSrc =
+              typeof capturedResult === 'string'
+                ? capturedResult
+                : safeSerialize(capturedResult);
+            registerEvidence(toolName, args, readToolMeta(toolDef), previewSrc);
+          }
           setImmediate(() => {
             try {
               const errorInfo = detectToolError(toolName, capturedResult);
               const errSnippet = errorInfo.isError ? errorInfo.snippet : undefined;
               recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet);
-              // Evidence pointer (#141): deferred to setImmediate alongside
-              // profile recording so the "result returned before recording"
-              // invariant from the legacy-path tests still holds.
-              if (!errorInfo.isError) {
-                const previewSrc =
-                  typeof capturedResult === 'string'
-                    ? capturedResult
-                    : safeSerialize(capturedResult);
-                registerEvidence(toolName, argsSnippet, previewSrc);
-              }
             } catch {
               // detectToolError throws are swallowed; recording must never propagate.
             }
