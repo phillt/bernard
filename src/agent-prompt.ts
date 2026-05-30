@@ -42,6 +42,70 @@ Expand only when:
 
 When in doubt, ship the short version. The user can always ask for more.`;
 
+/**
+ * User-selectable response shape (issue #133). Orthogonal to concise mode:
+ * concise governs the length budget, style governs the form and perspective.
+ * Both blocks can inject in the same turn — the model is expected to honor
+ * them simultaneously (e.g. concise + detailed → tight but explanatory).
+ */
+export type ResponseStyle =
+  | 'default'
+  | 'detailed'
+  | 'short'
+  | 'step-by-step'
+  | 'simple'
+  | 'high-level'
+  | 'critical'
+  | 'creative';
+
+/** All response-style ids except `'default'`. */
+export const RESPONSE_STYLE_IDS: ReadonlyArray<ResponseStyle> = [
+  'default',
+  'detailed',
+  'short',
+  'step-by-step',
+  'simple',
+  'high-level',
+  'critical',
+  'creative',
+];
+
+const DETAILED_PROMPT = `## Response Style: Detailed & Thorough
+Explain the answer with the context, mechanism, and edge cases a reader needs to act on it confidently. Connect cause to effect — don't just state outcomes. Surface the assumptions you're making and the alternatives you considered. This shapes form, not length: the concise budget (if active) still applies; stay dense, not padded.`;
+
+const SHORT_PROMPT = `## Response Style: Short & Direct
+Lead with the answer in the first sentence. Skip preamble, recap, hedging, and closing pleasantries. Omit explanations unless they're necessary to act on the answer. If the user wants reasoning, they will ask.`;
+
+const STEP_BY_STEP_PROMPT = `## Response Style: Step-by-Step
+Present the answer as an ordered, numbered list of steps. One discrete action per step. Each step should be independently verifiable — the reader can stop after any step and know what state they're in. Add a brief preamble only when needed to frame what the steps will accomplish.`;
+
+const SIMPLE_PROMPT = `## Response Style: Simple & Easy to Understand
+Use plain language. Avoid jargon, acronyms, and library/framework names where a common word works. When a technical term is unavoidable, define it inline in parentheses the first time. Prefer concrete examples over abstract description. Optimize for a reader who is smart but unfamiliar with the domain.`;
+
+const HIGH_LEVEL_PROMPT = `## Response Style: High-Level Overview
+Focus on the big picture: what the thing is, why it exists, and how the major parts relate. Skip implementation specifics, exact APIs, line numbers, and configuration details unless the user asks. Give the map, not the turn-by-turn directions.`;
+
+const CRITICAL_PROMPT = `## Response Style: Critical & Honest
+Evaluate, don't just describe. Call out flaws, risks, missing assumptions, and edge cases the user may not have considered. If you disagree with the framing of the question, say so and explain why. Surface trade-offs and at least one credible alternative. Politeness should not soften an accurate assessment.`;
+
+const CREATIVE_PROMPT = `## Response Style: Creative & Idea-Focused
+Diverge before you converge. Offer multiple options or angles rather than a single recommendation. Mark your preferred option, but show the spread — including unconventional or contrarian ideas the user might not have asked for. Prioritize the generative move; the user can prune.`;
+
+/**
+ * Style id → injected prompt block (or null for `'default'`, meaning no style
+ * shaping is added). Consumed by `buildMainSystemPrompt`.
+ */
+export const RESPONSE_STYLE_PROMPTS: Record<ResponseStyle, string | null> = {
+  default: null,
+  detailed: DETAILED_PROMPT,
+  short: SHORT_PROMPT,
+  'step-by-step': STEP_BY_STEP_PROMPT,
+  simple: SIMPLE_PROMPT,
+  'high-level': HIGH_LEVEL_PROMPT,
+  critical: CRITICAL_PROMPT,
+  creative: CREATIVE_PROMPT,
+};
+
 export const CITATIONS_PROMPT = `## Citations
 When a sentence states a fact you got from a registered source this turn (web_read, web_search, file_read_lines, memory.read, scratch.read, or recalled RAG context), END that sentence with a citation marker pointing at the source id, e.g. \`The README says X is the default. [^S1]\`. The available source ids and their labels are listed inside the \`<available_sources>\` subsection of \`<system_provided_context>\`, and each retrieval tool also prepends \`[Source: Sn …]\` to its return text. Use the \`cite\` tool (action: 'list' | 'get') to inspect the store before citing if you want to verify.
 

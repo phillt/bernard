@@ -25,6 +25,7 @@ import {
   CITATIONS_PROMPT,
   CONCISE_PROMPT,
   EVIDENCE_PROMPT,
+  RESPONSE_STYLE_PROMPTS,
 } from '../../agent-prompt.js';
 import { buildContextMessage } from '../../context-message.js';
 import type { RAGSearchResult } from '../../rag.js';
@@ -115,6 +116,12 @@ export function buildMainSystemPrompt(
   // Issue #175. No model-family gate — concision is universal.
   if (ctx.policyDecision?.concise?.enabled) {
     systemPrompt += '\n\n' + CONCISE_PROMPT;
+  }
+  // Response-style shaping (#133): orthogonal to concise. The block describes
+  // the form/perspective the user wants; concise still governs length budget.
+  const stylePrompt = RESPONSE_STYLE_PROMPTS[ctx.config.responseStyle];
+  if (stylePrompt) {
+    systemPrompt += '\n\n' + stylePrompt;
   }
   const profilesBlock = buildToolProfilesPrompt(ctx.stores.toolProfiles);
   if (profilesBlock) {

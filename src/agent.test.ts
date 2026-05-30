@@ -6,7 +6,12 @@ import {
   computeEffectiveMaxSteps,
   REACT_MAX_STEPS_CEILING,
 } from './agent.js';
-import { CONCISE_PROMPT } from './agent-prompt.js';
+import {
+  CONCISE_PROMPT,
+  RESPONSE_STYLE_PROMPTS,
+  RESPONSE_STYLE_IDS,
+  type ResponseStyle,
+} from './agent-prompt.js';
 import { buildContextMessage } from './context-message.js';
 import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
@@ -305,6 +310,39 @@ describe('CONCISE_PROMPT (#175)', () => {
     expect(CONCISE_PROMPT).toMatch(/explain|in detail|long version/);
     expect(CONCISE_PROMPT).toMatch(/email|issue|design doc|script/);
     expect(CONCISE_PROMPT).toMatch(/correctness|safety/);
+  });
+});
+
+describe('RESPONSE_STYLE_PROMPTS (#133)', () => {
+  it('maps the default id to null (no injection)', () => {
+    expect(RESPONSE_STYLE_PROMPTS.default).toBeNull();
+  });
+
+  it('exposes a non-empty prompt for every non-default style', () => {
+    const nonDefault: ResponseStyle[] = RESPONSE_STYLE_IDS.filter((id) => id !== 'default');
+    expect(nonDefault.length).toBeGreaterThan(0);
+    for (const id of nonDefault) {
+      const text = RESPONSE_STYLE_PROMPTS[id];
+      expect(typeof text).toBe('string');
+      expect((text as string).length).toBeGreaterThan(0);
+      expect(text as string).toContain('## Response Style');
+    }
+  });
+
+  it('each style block names the style in its heading', () => {
+    expect(RESPONSE_STYLE_PROMPTS.detailed).toContain('Detailed');
+    expect(RESPONSE_STYLE_PROMPTS.short).toContain('Short');
+    expect(RESPONSE_STYLE_PROMPTS['step-by-step']).toContain('Step-by-Step');
+    expect(RESPONSE_STYLE_PROMPTS.simple).toContain('Simple');
+    expect(RESPONSE_STYLE_PROMPTS['high-level']).toContain('High-Level');
+    expect(RESPONSE_STYLE_PROMPTS.critical).toContain('Critical');
+    expect(RESPONSE_STYLE_PROMPTS.creative).toContain('Creative');
+  });
+
+  it('RESPONSE_STYLE_IDS contains exactly the keys of RESPONSE_STYLE_PROMPTS', () => {
+    const ids = new Set(RESPONSE_STYLE_IDS);
+    const keys = new Set(Object.keys(RESPONSE_STYLE_PROMPTS) as ResponseStyle[]);
+    expect(ids).toEqual(keys);
   });
 });
 

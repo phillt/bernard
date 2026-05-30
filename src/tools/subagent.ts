@@ -8,10 +8,7 @@ import { runDefinition } from '../framework/agents/run.js';
 import { registerBuiltinDefinitions } from '../framework/agents/index.js';
 import type { SubAgentInput } from '../framework/agents/sub.js';
 import { runPAC } from '../framework/pac/run-pac.js';
-import { acquireSlot, releaseSlot, _resetPool, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
-
-// Re-export the constant for callers that imported it from this module.
-export { MAX_CONCURRENT_AGENTS } from './agent-pool.js';
+import { acquireSlot, releaseSlot, _resetPool, getMaxConcurrentAgents } from './agent-pool.js';
 
 /**
  * Resets the shared concurrency pool state.
@@ -27,7 +24,7 @@ export function _resetSubAgentState(): void {
  *
  * Each sub-agent receives its own `runDefinition` invocation with the
  * {@link subAgentDefinition} (ephemeral history, half the main step budget).
- * Up to {@link MAX_CONCURRENT_AGENTS} may run concurrently — this wrapper
+ * Up to {@link getMaxConcurrentAgents} may run concurrently — this wrapper
  * owns the pool-slot dance because slot ids are also used as the per-call
  * log prefix.
  *
@@ -66,7 +63,7 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
 
       const slot = acquireSlot();
       if (!slot) {
-        return `Error: Maximum concurrent sub-agents (${MAX_CONCURRENT_AGENTS}) reached. Wait for existing sub-agents to finish.`;
+        return `Error: Maximum concurrent sub-agents (${getMaxConcurrentAgents()}) reached. Wait for existing sub-agents to finish.`;
       }
       const id = slot.id;
       printSubAgentStart(id, task);

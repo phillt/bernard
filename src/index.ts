@@ -22,7 +22,9 @@ import {
   getDefaultModel,
   providerEnvVar,
   isModelMode,
+  normalizeMaxConcurrentAgents,
 } from './config.js';
+import { setMaxConcurrentAgents, MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
 import {
   loadCustomProviders,
   saveCustomProvider,
@@ -325,6 +327,45 @@ program
         modelMode: mode,
       });
       printInfo(`Model mode set to "${mode}".`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('set-max-concurrent <n>')
+  .description(
+    `Set the maximum number of concurrent sub-agents / tasks / specialists (1-${MAX_CONCURRENT_AGENTS_LIMIT}, default 4)`,
+  )
+  .action((raw: string) => {
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || String(parsed) !== raw.trim()) {
+      printError(
+        `Invalid value "${raw}". Provide an integer between 1 and ${MAX_CONCURRENT_AGENTS_LIMIT}.`,
+      );
+      process.exit(1);
+    }
+    if (parsed < 1 || parsed > MAX_CONCURRENT_AGENTS_LIMIT) {
+      printError(
+        `Value out of range. Must be between 1 and ${MAX_CONCURRENT_AGENTS_LIMIT}, got ${parsed}.`,
+      );
+      process.exit(1);
+    }
+    try {
+      const normalized = normalizeMaxConcurrentAgents(parsed);
+      const prefs = loadPreferences();
+      const provider = prefs.provider || process.env.BERNARD_PROVIDER || 'anthropic';
+      const model = prefs.model || process.env.BERNARD_MODEL || getDefaultModel(provider);
+      savePreferences({
+        ...prefs,
+        provider,
+        model,
+        maxConcurrentAgents: normalized,
+      });
+      setMaxConcurrentAgents(normalized);
+      printInfo(`Max concurrent sub-agents set to ${normalized}.`);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);

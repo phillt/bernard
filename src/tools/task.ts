@@ -12,7 +12,7 @@ import {
   type TaskResult,
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
-import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
+import { acquireSlot, releaseSlot, getMaxConcurrentAgents } from './agent-pool.js';
 
 // Re-export helpers + types that other modules (repl.ts, sub.ts, tests) already
 // import from this path. The implementations live in `framework/agents/task.ts`.
@@ -149,7 +149,7 @@ export function createTaskTool(ctx: AgentContext): BernardTool<TaskArgs, TaskPay
       if (!slot) {
         return err({
           type: 'exec_failed',
-          message: `Maximum concurrent agents (${MAX_CONCURRENT_AGENTS}) reached. Wait for existing agents to finish.`,
+          message: `Maximum concurrent agents (${getMaxConcurrentAgents()}) reached. Wait for existing agents to finish.`,
         });
       }
 
