@@ -224,7 +224,11 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
         : {}),
     };
     const shimmed = applyShimRouting(tools, ctxToToolWrapperDeps(ctx));
-    return augmentTools(shimmed, ctx.stores.toolProfiles);
+    return augmentTools(shimmed, {
+      profileStore: ctx.stores.toolProfiles,
+      confirmThreshold: ctx.policyDecision?.toolMode?.confirmThreshold,
+      confirmAction: ctx.toolOptions.confirmAction,
+    });
   },
 
   strategy(ctx) {

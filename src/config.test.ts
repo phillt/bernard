@@ -732,6 +732,56 @@ describe('loadConfig promptRewriter', () => {
   });
 });
 
+describe('loadConfig confirmMode (#144)', () => {
+  beforeEach(() => {
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    vi.stubEnv('OPENAI_API_KEY', '');
+    vi.stubEnv('XAI_API_KEY', '');
+    vi.stubEnv('BERNARD_PROVIDER', '');
+    vi.stubEnv('BERNARD_MODEL', '');
+    vi.stubEnv('BERNARD_CONFIRM_MODE', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('defaults to "auto" when env var is unset', () => {
+    expect(loadConfig().confirmMode).toBe('auto');
+  });
+
+  it('parses "off" from BERNARD_CONFIRM_MODE', () => {
+    vi.stubEnv('BERNARD_CONFIRM_MODE', 'off');
+    expect(loadConfig().confirmMode).toBe('off');
+  });
+
+  it('parses "strict" from BERNARD_CONFIRM_MODE', () => {
+    vi.stubEnv('BERNARD_CONFIRM_MODE', 'strict');
+    expect(loadConfig().confirmMode).toBe('strict');
+  });
+
+  it('falls back to default when env var is invalid', () => {
+    vi.stubEnv('BERNARD_CONFIRM_MODE', 'paranoid');
+    expect(loadConfig().confirmMode).toBe('auto');
+  });
+
+  it('prefs.confirmMode takes precedence over env var', () => {
+    vi.stubEnv('BERNARD_CONFIRM_MODE', 'off');
+    let callCount = 0;
+    fsMock.readFileSync.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 1) throw new Error('ENOENT');
+      return JSON.stringify({ provider: 'anthropic', model: 'test', confirmMode: 'strict' });
+    });
+    expect(loadConfig().confirmMode).toBe('strict');
+  });
+});
+
 describe('isValidProvider', () => {
   it('returns true for known providers', () => {
     expect(isValidProvider('anthropic')).toBe(true);

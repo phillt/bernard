@@ -185,6 +185,7 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     const shellTool = createShellTool({
       shellTimeout: config.shellTimeout,
       confirmDangerous: async () => false,
+      confirmAction: async (input) => input.risk !== 'high',
     });
 
     const registry: Record<string, Tool> = {

@@ -75,6 +75,10 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     toolOptions: {
       shellTimeout: config.shellTimeout,
       confirmDangerous: async () => false,
+      // Cron is headless: silently proceed through low/medium-risk tool calls, auto-deny high-risk
+      // (per #144 — "never send email unless explicitly authorized"). The agent receives a
+      // cancelled-shape result and can decide whether to surface the gap to the user.
+      confirmAction: async (input) => input.risk !== 'high',
       // askUser intentionally omitted — no interactive user; the ask_user tool returns {unavailable}.
     },
     mcp: { tools: mcpTools, serverNames },

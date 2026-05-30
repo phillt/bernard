@@ -1,9 +1,12 @@
 import { type ToolProfileStore, classifyShellCommand, detectToolError } from '../tool-profiles.js';
 import { debugLog } from '../logger.js';
 import { printInfo } from '../output.js';
-import { readBernardSource, preserveMeta } from '../framework/tools/adapter.js';
+import { readBernardSource, readToolMeta, preserveMeta } from '../framework/tools/adapter.js';
 import type { ToolResult } from '../framework/tools/types.js';
 import { classifyError } from '../error-taxonomy.js';
+import type { ConfirmActionInput, ToolOptions } from './types.js';
+import type { ConfirmThreshold } from '../risk.js';
+import { riskFromMeta, shouldConfirm } from '../risk.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -101,6 +104,48 @@ function recordOutcome(
 }
 
 /**
+ * Optional wiring for the unified confirmation gate (#144). When both
+ * `confirmThreshold` and `confirmAction` are provided, each call whose risk
+ * crosses the threshold is routed through `confirmAction` before reaching
+ * the underlying `execute`. A `false` return cancels the call with a
+ * `{type: 'cancelled'}` envelope; the underlying tool is never invoked.
+ */
+export interface AugmentOptions {
+  profileStore: ToolProfileStore;
+  confirmThreshold?: ConfirmThreshold;
+  confirmAction?: ToolOptions['confirmAction'];
+}
+
+function isProfileStore(v: AugmentOptions | ToolProfileStore): v is ToolProfileStore {
+  return typeof (v as ToolProfileStore).get === 'function';
+}
+
+/**
+ * One-line description for the confirmation prompt. Shell carries the command
+ * verbatim (highest signal); everything else falls back to `toolName` with a
+ * truncated JSON tail when args exist.
+ */
+function buildConfirmReason(toolName: string, args: unknown): string {
+  if (toolName === 'shell' && args && typeof args === 'object') {
+    const cmd = (args as Record<string, unknown>).command;
+    if (typeof cmd === 'string') return `Dangerous command: ${cmd}`;
+  }
+  const snippet = args ? ` ${safeSerialize(args)}` : '';
+  return `${toolName}${snippet}`;
+}
+
+/**
+ * Cancelled-shape result returned when the user denies a confirmation prompt.
+ * Mirrors the `{output, is_error}` legacy shape for tools that historically
+ * returned that (shell, file edit); for migrated `BernardTool`s the envelope's
+ * `serializeForModel` decides how the cancellation is rendered.
+ */
+const CANCELLED_LEGACY_RESULT = {
+  output: 'Action cancelled by user.',
+  is_error: false,
+};
+
+/**
  * Wraps every tool's `execute` function to observe results and record
  * error examples to the profile store, and patch fixes when the model
  * retries successfully. The recording is fire-and-forget via `setImmediate`
@@ -119,12 +164,53 @@ function recordOutcome(
  * erased at this boundary. The SDK's `ToolSet` type is `Record<string, Tool>`
  * but `Tool`'s generic parameters make it impossible to write a single wrapper
  * without `any`.
+ *
+ * Accepts either a `ToolProfileStore` (legacy/test call shape) or an
+ * {@link AugmentOptions} bundle that adds the optional confirmation gate.
  */
 export function augmentTools(
   tools: Record<string, any>,
-  profileStore: ToolProfileStore,
+  options: AugmentOptions | ToolProfileStore,
 ): Record<string, any> {
+  const opts: AugmentOptions = isProfileStore(options) ? { profileStore: options } : options;
+  const profileStore = opts.profileStore;
+  const confirmThreshold = opts.confirmThreshold;
+  const confirmAction = opts.confirmAction;
   const augmented: Record<string, any> = {};
+
+  /**
+   * Returns `true` to proceed, `false` if the user cancelled. `undefined`
+   * confirmAction or threshold short-circuits to proceed.
+   */
+  const runGate = async (
+    toolName: string,
+    args: unknown,
+    toolDef: any,
+    execOptions: unknown,
+  ): Promise<boolean> => {
+    if (!confirmAction) return true;
+    const meta = readToolMeta(toolDef);
+    const risk = riskFromMeta(meta);
+    if (!shouldConfirm(risk, confirmThreshold)) return true;
+    const input: ConfirmActionInput = {
+      toolName,
+      args,
+      risk,
+      reason: buildConfirmReason(toolName, args),
+    };
+    const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+    try {
+      return await confirmAction(input, signal);
+    } catch (err) {
+      // A throwing confirmAction is a wiring bug — fail closed (deny) so
+      // the model gets a clear cancellation rather than silently bypassing.
+      debugLog(
+        `augment:${toolName}:confirm:threw`,
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
+    }
+  };
 
   for (const [toolName, toolDef] of Object.entries(tools)) {
     if (!toolDef || typeof toolDef.execute !== 'function') {
@@ -143,6 +229,13 @@ export function augmentTools(
         {
           ...toolDef,
           execute: async (args: unknown, execOptions: unknown) => {
+            if (!(await runGate(toolName, args, toolDef, execOptions))) {
+              const cancelled: ToolResult<unknown> = {
+                status: 'error',
+                error: { type: 'cancelled', message: 'Action cancelled by user.' },
+              };
+              return source.serializeForModel(cancelled);
+            }
             let envelope: ToolResult<unknown>;
             try {
               envelope = await source.execute(args, execOptions as never);
@@ -178,12 +271,18 @@ export function augmentTools(
     }
 
     // Legacy heuristic path for AI-SDK / MCP / dispatch tools that have not
-    // been migrated. Behavior is unchanged from pre-Phase-B.
+    // been migrated. Behavior is unchanged from pre-Phase-B, plus the
+    // pre-execute confirmation gate (#144). MCP / legacy tools return the
+    // raw result to the model, so the cancelled payload is a plain string
+    // marker rather than a serialized envelope.
     const originalExecute = toolDef.execute;
     augmented[toolName] = preserveMeta(
       {
         ...toolDef,
         execute: async (args: unknown, execOptions: unknown) => {
+          if (!(await runGate(toolName, args, toolDef, execOptions))) {
+            return CANCELLED_LEGACY_RESULT;
+          }
           let result: unknown;
           try {
             result = await originalExecute(args, execOptions);

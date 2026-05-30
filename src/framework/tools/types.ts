@@ -12,6 +12,14 @@ import type { z } from 'zod';
 export type ToolSideEffect = 'none' | 'local' | 'network' | 'external-api';
 
 /**
+ * Coarse risk tier for a tool, used by the unified confirmation gate
+ * (issue #144). Defined here (rather than in `src/risk.ts`) so `ToolMeta`
+ * doesn't pull in the larger risk-classification module — keep the type
+ * itself near the metadata that carries it.
+ */
+export type ToolRisk = 'low' | 'medium' | 'high';
+
+/**
  * Standard tool metadata. `name` is the registry key; `kind` enables capability
  * filtering (e.g. `byMetadata({kind: 'read'})` for the reference-resolver lookup
  * pass). `category` mirrors today's `classifyShellCommand` grouping for
@@ -37,6 +45,14 @@ export interface ToolMeta {
   sensitiveArgs?: string[];
   /** When true, the tool's result is redacted in logs. */
   sensitiveResult?: boolean;
+  /**
+   * Explicit override for the risk tier used by the confirmation gate
+   * (issue #144). When unset, `riskFromMeta` derives the tier from
+   * `kind` + `sideEffect`. Tools that don't fit the default mapping (a
+   * read-style tool with `external-api` side effects that's actually safe,
+   * or a `write` tool that's exceptionally destructive) can declare here.
+   */
+  risk?: ToolRisk;
 }
 
 /**

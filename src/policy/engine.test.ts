@@ -30,7 +30,11 @@ describe('DefaultPolicyEngine', () => {
     });
     expect(decision.caching?.enabled).toBe(false);
     expect(decision.citations?.requireForFactualClaims).toBe(true);
-    expect(decision.toolMode).toEqual({ mode: 'write', requireConfirmForWrite: true });
+    expect(decision.toolMode).toEqual({
+      mode: 'write',
+      requireConfirmForWrite: true,
+      confirmThreshold: 'high',
+    });
   });
 
   it('emits a reason code for every sub-policy', () => {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { augmentTools } from './augment.js';
 import { toolToAISDK } from '../framework/tools/adapter.js';
 import { ok, err, type BernardTool } from '../framework/tools/types.js';
+import { attachMeta } from '../framework/tools/adapter.js';
 
 vi.mock('../tool-profiles.js', () => ({
   classifyShellCommand: vi.fn((cmd: string) => {
@@ -691,6 +692,179 @@ describe('augmentTools', () => {
       await new Promise((resolve) => setImmediate(resolve));
 
       expect(store.patchLastBadWithFix).toHaveBeenCalledWith('demo', JSON.stringify({ x: 1 }));
+    });
+  });
+
+  describe('confirmation gate (#144)', () => {
+    function makeLegacyToolWithMeta(
+      kind: 'read' | 'write' | 'dangerous',
+      sideEffect: 'none' | 'local' | 'external-api' = 'local',
+    ) {
+      const execute = vi.fn(async () => ({ output: 'done', is_error: false }));
+      const t: any = { execute, description: 't', parameters: {} };
+      attachMeta(t, { name: 't', kind, deterministic: false, sideEffect, cacheable: false });
+      return { t, execute };
+    }
+
+    it('no confirmAction wired → executes without prompting', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('dangerous');
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, confirmThreshold: 'high' },
+      );
+      await augmented.t.execute({}, {});
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('high-risk tool with threshold=high → prompts; allowed → executes', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('dangerous');
+      const confirmAction = vi.fn(async () => true);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, confirmThreshold: 'high', confirmAction },
+      );
+      const r = await augmented.t.execute({ x: 1 }, {});
+      expect(confirmAction).toHaveBeenCalledWith(
+        expect.objectContaining({ toolName: 't', risk: 'high' }),
+        undefined,
+      );
+      expect(execute).toHaveBeenCalled();
+      expect(r).toEqual({ output: 'done', is_error: false });
+    });
+
+    it('high-risk tool with threshold=high → denied → returns cancelled, execute NOT called', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('dangerous');
+      const confirmAction = vi.fn(async () => false);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, confirmThreshold: 'high', confirmAction },
+      );
+      const r = await augmented.t.execute({}, {});
+      expect(execute).not.toHaveBeenCalled();
+      expect(r).toEqual({ output: 'Action cancelled by user.', is_error: false });
+    });
+
+    it('medium-risk tool with threshold=high → NOT prompted', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('write', 'local');
+      const confirmAction = vi.fn(async () => false);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, confirmThreshold: 'high', confirmAction },
+      );
+      await augmented.t.execute({}, {});
+      expect(confirmAction).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('medium-risk tool with threshold=medium → prompts', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('write', 'local');
+      const confirmAction = vi.fn(async () => true);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, confirmThreshold: 'medium', confirmAction },
+      );
+      await augmented.t.execute({}, {});
+      expect(confirmAction).toHaveBeenCalled();
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('low-risk tool with threshold=medium → NOT prompted', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('read');
+      const confirmAction = vi.fn(async () => false);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, confirmThreshold: 'medium', confirmAction },
+      );
+      await augmented.t.execute({}, {});
+      expect(confirmAction).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('threshold=never → never prompts', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('dangerous');
+      const confirmAction = vi.fn(async () => false);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, confirmThreshold: 'never', confirmAction },
+      );
+      await augmented.t.execute({}, {});
+      expect(confirmAction).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('envelope-aware path: deny returns serialized cancelled envelope', async () => {
+      const source: BernardTool<{ x: number }, { val: number }> = {
+        meta: {
+          name: 'demo',
+          kind: 'dangerous',
+          deterministic: false,
+          sideEffect: 'local',
+          cacheable: false,
+        },
+        description: 'demo',
+        parameters: z.object({ x: z.number() }),
+        execute: vi.fn(async () => ok({ val: 1 })) as any,
+        serializeForModel: (r) =>
+          r.status === 'ok' ? `ok:${r.result.val}` : `err:${r.error.type}:${r.error.message}`,
+      };
+      const aisdk = toolToAISDK(source);
+      const confirmAction = vi.fn(async () => false);
+      const augmented = augmentTools(
+        { demo: aisdk },
+        { profileStore: store, confirmThreshold: 'high', confirmAction },
+      );
+      const out = await augmented.demo.execute({ x: 1 }, {});
+      expect(confirmAction).toHaveBeenCalled();
+      expect(source.execute).not.toHaveBeenCalled();
+      expect(out).toBe('err:cancelled:Action cancelled by user.');
+    });
+
+    it('confirmAction throws → fails closed (denied)', async () => {
+      const { t, execute } = makeLegacyToolWithMeta('dangerous');
+      const confirmAction = vi.fn(async () => {
+        throw new Error('boom');
+      });
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, confirmThreshold: 'high', confirmAction },
+      );
+      const r = await augmented.t.execute({}, {});
+      expect(execute).not.toHaveBeenCalled();
+      expect(r).toEqual({ output: 'Action cancelled by user.', is_error: false });
+    });
+
+    it('forwards abortSignal from execOptions into confirmAction', async () => {
+      const { t } = makeLegacyToolWithMeta('dangerous');
+      const confirmAction = vi.fn(async () => true);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, confirmThreshold: 'high', confirmAction },
+      );
+      const controller = new AbortController();
+      await augmented.t.execute({}, { abortSignal: controller.signal });
+      expect(confirmAction).toHaveBeenCalledWith(expect.any(Object), controller.signal);
+    });
+
+    it('tool without meta defaults to medium-risk', async () => {
+      const execute = vi.fn(async () => 'ok');
+      const t: any = { execute, description: '', parameters: {} };
+      const confirmAction = vi.fn(async () => true);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, confirmThreshold: 'medium', confirmAction },
+      );
+      await augmented.t.execute({}, {});
+      expect(confirmAction).toHaveBeenCalledWith(
+        expect.objectContaining({ risk: 'medium' }),
+        undefined,
+      );
+    });
+
+    it('legacy backward-compat: passing a ToolProfileStore directly still works', async () => {
+      const tools = { myTool: { execute: vi.fn(async () => 'ok') } };
+      const augmented = augmentTools(tools, store);
+      const r = await augmented.myTool.execute({}, {});
+      expect(r).toBe('ok');
     });
   });
 

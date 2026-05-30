@@ -5,6 +5,9 @@ import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
 import { jsonSchema } from 'ai';
 import { printInfo, printError } from './output.js';
 import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
+import { attachMeta } from './framework/tools/adapter.js';
+import { isReadOnlyMCPSuffix } from './risk.js';
+import type { ToolMeta } from './framework/tools/types.js';
 
 /** Configuration for an MCP server launched via stdio subprocess. */
 interface MCPStdioConfig {
@@ -296,7 +299,7 @@ export class MCPManager {
       const originalExecute = baseTool.execute;
       const serverName = this.toolServerMap.get(name);
 
-      converted[name] = {
+      const wrapped = {
         ...baseTool,
         // Retry wrapper: on failure, reconnect the server and retry once.
         // If the retry also fails, the *retry* error is thrown (not the original)
@@ -317,6 +320,22 @@ export class MCPManager {
           }
         },
       };
+
+      // Risk-based confirmation gate (#144): tag every MCP tool with metadata
+      // so the augment layer can route it through `confirmAction` at the right
+      // threshold. Names ending in a read-only verb → `kind: 'read'` (low risk,
+      // never prompts). Everything else → `kind: 'write'` with `sideEffect:
+      // 'local'` (medium risk, prompts only in `strict` mode). Users can
+      // promote a tool to high via a future `mcp.json` override (out of scope).
+      const isRead = isReadOnlyMCPSuffix(name);
+      const meta: ToolMeta = {
+        name,
+        kind: isRead ? 'read' : 'write',
+        category: serverName ? `mcp.${serverName}` : 'mcp',
+        deterministic: false,
+        sideEffect: isRead ? 'network' : 'local',
+      };
+      converted[name] = attachMeta(wrapped, meta);
     }
     return converted;
   }

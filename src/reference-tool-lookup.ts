@@ -3,6 +3,7 @@ import { readToolMeta } from './framework/tools/adapter.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
+import { isReadOnlyMCPSuffix } from './risk.js';
 
 /**
  * Pre-fallback module that runs only when the resolver returns
@@ -34,13 +35,6 @@ const TOOL_RESULT_PREVIEW_CHARS = 4000;
 const MAX_TOOLS_IN_PROMPT = 8;
 
 /**
- * Suffix-based read-only allowlist. MCP tools whose name ends in any of these
- * verbs are treated as safe lookup candidates. Excludes write verbs like
- * `create`, `update`, `delete`, `send`, `post`.
- */
-const READONLY_SUFFIX_RE = /(?:^|_)(search|list|find|get|query|read|lookup)$/i;
-
-/**
  * Built-in (non-MCP) tools that are always allowed for resolver lookups.
  * Limited to read-only network tools — no shell, no file write, no memory.
  */
@@ -50,15 +44,15 @@ const ALWAYS_ALLOWED_BUILTINS = new Set(['web_search', 'web_read']);
  * Returns true when the named tool is safe for the resolver lookup pass.
  *
  * An MCP tool is identified by `__` in its name (the `@ai-sdk/mcp` convention).
- * MCP tools must additionally match {@link READONLY_SUFFIX_RE}. Built-in tools
- * are restricted to {@link ALWAYS_ALLOWED_BUILTINS} unless explicitly extended
- * via `extraAllowed` (sourced from `BERNARD_LOOKUP_TOOLS`).
+ * MCP tools must additionally match {@link isReadOnlyMCPSuffix}. Built-in
+ * tools are restricted to {@link ALWAYS_ALLOWED_BUILTINS} unless explicitly
+ * extended via `extraAllowed` (sourced from `BERNARD_LOOKUP_TOOLS`).
  */
 export function isAllowedLookupTool(name: string, extraAllowed: string[] = []): boolean {
   if (extraAllowed.includes(name)) return true;
   if (ALWAYS_ALLOWED_BUILTINS.has(name)) return true;
   if (name.includes('__')) {
-    return READONLY_SUFFIX_RE.test(name);
+    return isReadOnlyMCPSuffix(name);
   }
   return false;
 }

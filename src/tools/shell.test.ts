@@ -183,6 +183,35 @@ describe('createShellTool', () => {
     expect(execSync).not.toHaveBeenCalled();
   });
 
+  it('prefers confirmAction over confirmDangerous when both are wired (#144)', async () => {
+    const confirmAction = vi.fn().mockResolvedValue(true);
+    vi.mocked(execSync).mockReturnValue('done');
+    const shellTool = createShellTool({
+      shellTimeout: 30000,
+      confirmDangerous,
+      confirmAction,
+    });
+    await shellTool.execute({ command: 'rm -rf /tmp/test' }, {});
+    expect(confirmAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: 'shell',
+        args: { command: 'rm -rf /tmp/test' },
+        risk: 'high',
+        reason: expect.stringContaining('Dangerous command'),
+      }),
+      undefined,
+    );
+    expect(confirmDangerous).not.toHaveBeenCalled();
+  });
+
+  it('falls back to confirmDangerous when confirmAction is not wired (#144)', async () => {
+    confirmDangerous.mockResolvedValue(true);
+    vi.mocked(execSync).mockReturnValue('done');
+    const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
+    await shellTool.execute({ command: 'rm -rf /tmp/test' }, {});
+    expect(confirmDangerous).toHaveBeenCalledWith('rm -rf /tmp/test', undefined);
+  });
+
   it('returns error envelope on command failure', async () => {
     vi.mocked(execSync).mockImplementation(() => {
       const e = new Error('Command failed') as any;
