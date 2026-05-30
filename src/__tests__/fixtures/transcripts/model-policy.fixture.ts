@@ -23,9 +23,13 @@ export const modelPolicyFixture = defineFixture({
     },
     {
       type: 'model_site_resolves_to_tier',
-      config: { provider: 'anthropic', modelMode: 'off' },
+      config: {
+        provider: 'anthropic',
+        modelMode: 'off',
+        model: 'claude-some-custom-model',
+      },
       site: 'main',
-      expectedModelName: 'claude-sonnet-4-5-20250929',
+      expectedModelName: 'claude-some-custom-model',
     },
   ],
 });

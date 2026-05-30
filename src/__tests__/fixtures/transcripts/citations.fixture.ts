@@ -29,8 +29,10 @@ export const citationsFixture = defineFixture({
       expectResolved: ['S1', 'S2'],
     },
     {
-      type: 'unverified_text_has_no_marker',
+      type: 'citation_markers_resolve',
       text: 'The sky is blue. [^S99] is a fake marker that points nowhere.',
+      storeItems: [],
+      expectResolved: [],
     },
   ],
 });

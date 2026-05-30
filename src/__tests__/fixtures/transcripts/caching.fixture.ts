@@ -16,7 +16,7 @@ export const cachingFixture = defineFixture({
         name: 'fake_shell',
         kind: 'write',
         sideEffect: 'local',
-        deterministic: false,
+        deterministic: true,
       },
     },
     {

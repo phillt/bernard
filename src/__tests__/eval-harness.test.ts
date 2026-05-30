@@ -77,12 +77,16 @@ const MODEL_POLICY_KEYS = {
   apiKeys: { anthropic: 'sk-ant-test', openai: 'sk-openai-test', xai: 'xai-test' },
 } satisfies Partial<BernardConfig>;
 
-function tag(fixtureName: string, type: InvariantSpec['type']): string {
-  return `[fixture: ${fixtureName}] [invariant: ${type}]`;
+function tag(fixtureName: string, type: InvariantSpec['type'], idx: number): string {
+  return `[fixture: ${fixtureName}] [invariant: ${type}] [case: #${idx}]`;
 }
 
-function runInvariant(fixtureName: string, inv: InvariantSpec): void {
-  const t = tag(fixtureName, inv.type);
+function assertNever(x: never): never {
+  throw new Error(`eval-harness: unhandled invariant variant: ${JSON.stringify(x)}`);
+}
+
+function runInvariant(fixtureName: string, inv: InvariantSpec, idx: number): void {
+  const t = tag(fixtureName, inv.type, idx);
   switch (inv.type) {
     case 'system_prompt_excludes': {
       const prompt = buildSystemPrompt(BASE_CONFIG);
@@ -126,11 +130,6 @@ function runInvariant(fixtureName: string, inv: InvariantSpec): void {
       expect(resolved, t).toEqual(inv.expectResolved);
       return;
     }
-    case 'unverified_text_has_no_marker': {
-      const resolved = extractCitationMarkers(inv.text, new ProvenanceStore());
-      expect(resolved, `${t} unsupported text leaked a marker`).toEqual([]);
-      return;
-    }
     case 'tool_cache_excluded_when_write': {
       expect(isCacheable(inv.meta), `${t} write-effecting tool was marked cacheable`).toBe(false);
       return;
@@ -172,6 +171,8 @@ function runInvariant(fixtureName: string, inv: InvariantSpec): void {
       expect(decision.resetAll, t).toBe(inv.expectResetAll);
       return;
     }
+    default:
+      assertNever(inv);
   }
 }
 
@@ -182,7 +183,19 @@ describe.each(ALL_FIXTURES)('eval-harness — $name', (fixture) => {
     _resetModelPolicyLogCacheForTests();
   });
 
-  it.each(fixture.invariants.map((inv, idx) => ({ inv, idx })))('$inv.type [#$idx]', ({ inv }) => {
-    runInvariant(fixture.name, inv);
-  });
+  it.each(fixture.invariants.map((inv, idx) => ({ type: inv.type, idx, inv })))(
+    '$type [#$idx]',
+    ({ inv, idx }) => {
+      runInvariant(fixture.name, inv, idx);
+    },
+  );
+});
+
+describe('eval-harness — meta', () => {
+  it.each(ALL_FIXTURES.map((f) => ({ name: f.name, fixture: f })))(
+    '$name has at least one invariant',
+    ({ name, fixture }) => {
+      expect(fixture.invariants.length, `${name} declares no invariants`).toBeGreaterThan(0);
+    },
+  );
 });

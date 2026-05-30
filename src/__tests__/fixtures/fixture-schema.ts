@@ -43,7 +43,6 @@ export type InvariantSpec =
       storeItems: SourceItemInput[];
       expectResolved: string[];
     }
-  | { type: 'unverified_text_has_no_marker'; text: string }
   | { type: 'tool_cache_excluded_when_write'; meta: ToolMeta }
   | { type: 'tool_cache_deterministic'; meta: ToolMeta; args: unknown }
   | { type: 'llm_cache_key_partitions'; keyA: LLMCacheKey; keyB: LLMCacheKey }
