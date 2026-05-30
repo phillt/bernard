@@ -47,6 +47,7 @@ export class DefaultPolicyEngine implements PolicyEngine {
       toolMode: {
         mode: toolMode.mode,
         requireConfirmForWrite: toolMode.requireConfirmForWrite,
+        confirmThreshold: toolMode.confirmThreshold,
       },
     };
 

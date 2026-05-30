@@ -34,6 +34,7 @@ export function makePolicyInput(overrides?: {
     referenceLookupTools: [],
     scratchSubjectThreshold: 0.15,
     conciseMode: true,
+    confirmMode: 'auto',
     customProviders: {},
   };
   return {

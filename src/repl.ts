@@ -43,7 +43,8 @@ import {
   clearPinnedRegion,
   type SpinnerStats,
 } from './output.js';
-import type { ToolOptions, AskUserQuestion } from './tools/types.js';
+import type { ToolOptions, AskUserQuestion, ConfirmActionInput } from './tools/types.js';
+import type { RiskLevel } from './risk.js';
 import {
   PROVIDER_MODELS,
   getAvailableProviders,
@@ -919,6 +920,60 @@ export async function startRepl(
       return !result.cancelled && result.index === 0;
     });
 
+  // In-memory session allowlist for the unified confirm gate (#144). Cleared
+  // on REPL restart by design — there is no on-disk persistence in this PR.
+  // The key is `toolName:hash(args)` so repeated identical calls during the
+  // same session can skip the prompt after a one-time "Allow for session".
+  const sessionConfirmAllowlist = new Set<string>();
+
+  /** Deterministic JSON hash for args fingerprinting. djb2; no crypto dep needed. */
+  const stableHash = (value: unknown): string => {
+    const json = stableStringify(value);
+    let h = 5381;
+    for (let i = 0; i < json.length; i++) {
+      h = ((h << 5) + h + json.charCodeAt(i)) >>> 0;
+    }
+    return h.toString(16);
+  };
+
+  const stableStringify = (value: unknown): string => {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) {
+      return `[${value.map(stableStringify).join(',')}]`;
+    }
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    return `{${keys
+      .map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`)
+      .join(',')}}`;
+  };
+
+  const riskLabel = (risk: RiskLevel): string => {
+    switch (risk) {
+      case 'high':
+        return '⚠ High-risk action';
+      case 'medium':
+        return '⚠ Action confirmation';
+      case 'low':
+      default:
+        return 'Action confirmation';
+    }
+  };
+
+  const confirmActionFn = (input: ConfirmActionInput, signal?: AbortSignal): Promise<boolean> =>
+    withPausedSpinner(signal, async () => {
+      const fingerprint = `${input.toolName}:${stableHash(input.args)}`;
+      if (sessionConfirmAllowlist.has(fingerprint)) return true;
+      const result = await selectFromMenu(
+        rl,
+        [{ label: 'Allow once' }, { label: 'Allow for session' }, { label: 'Cancel' }],
+        { title: `${riskLabel(input.risk)}: ${input.reason}` },
+        signal,
+      );
+      if (result.cancelled) return false;
+      if (result.index === 1) sessionConfirmAllowlist.add(fingerprint);
+      return result.index === 0 || result.index === 1;
+    });
+
   const renderTabStrip = (currentIndex: number, total: number): string => {
     const theme = getTheme();
     const tabs: string[] = [];
@@ -967,6 +1022,7 @@ export async function startRepl(
   const toolOptions: ToolOptions = {
     shellTimeout: config.shellTimeout,
     confirmDangerous: confirmFn,
+    confirmAction: confirmActionFn,
     askUser: askUserFn,
   };
 

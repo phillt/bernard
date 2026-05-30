@@ -2,6 +2,7 @@ import type { CoreMessage } from 'ai';
 import { buildContextMessage, type ContextMessageInputs } from '../../context-message.js';
 import { resolveSiteModel } from '../../model-policy.js';
 import { makeRepairHook } from '../../tool-call-repair.js';
+import { augmentTools } from '../../tools/augment.js';
 import type { AgentContext } from '../context.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
@@ -65,7 +66,18 @@ export async function runDefinition<TInput, TFormatted>(
   const resolved = resolveModel(def, ctx, input, opts.overrides);
 
   const system = await Promise.resolve(def.systemPrompt(ctx, input));
-  const tools = await Promise.resolve(def.tools(ctx, input));
+  const rawTools = await Promise.resolve(def.tools(ctx, input));
+  // Central confirmation-gate install (#144). Every agent runs through this
+  // path, so applying the gate here (instead of inside each definition's
+  // `tools()`) means sub-agent / PAC / specialist / cron tool calls all
+  // respect `confirmThreshold` + `confirmAction`. The main agent's
+  // shim-routing happens upstream in `def.tools(ctx, input)` so `augmentTools`
+  // sees the shimmed tools and wraps them once.
+  const tools = augmentTools(rawTools, {
+    profileStore: ctx.stores.toolProfiles,
+    confirmThreshold: ctx.policyDecision?.toolMode?.confirmThreshold,
+    confirmAction: ctx.toolOptions.confirmAction,
+  });
   const hooks = def.hooks(ctx, input);
   const baseMaxSteps = def.stepBudget(config, input);
   const prepareStep = def.prepareStep?.(ctx, input, baseMaxSteps);

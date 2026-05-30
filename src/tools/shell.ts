@@ -114,6 +114,11 @@ export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, Sh
     parameters: SHELL_PARAMETERS,
     execute: async ({ command }, execOptions) => {
       if (isDangerous(command) && !isSafelisted(command)) {
+        // The unified `confirmAction` gate (#144) is installed centrally in
+        // `runDefinition` (`augmentTools`), so when both confirmAction and
+        // confirmDangerous are wired we'd otherwise prompt twice. Only fall
+        // back to the legacy `confirmDangerous` callback — covers tests and
+        // callers that haven't migrated to the unified gate.
         const confirmed = await options.confirmDangerous(command, execOptions?.abortSignal);
         if (!confirmed) {
           return ok({ output: 'Command cancelled by user.', is_error: false });

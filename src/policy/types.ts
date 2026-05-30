@@ -1,4 +1,5 @@
 import type { BernardConfig } from '../config.js';
+import type { ConfirmThreshold } from '../risk.js';
 
 /**
  * Per-turn input the Policy Engine sees. Pure data — sub-policies must be
@@ -27,7 +28,17 @@ export interface PolicyDecision {
   scratch?: { resetAll: boolean; resetPlanOnly: boolean; deletePlanKey: boolean; reason: string };
   caching?: { enabled: boolean };
   citations?: { requireForFactualClaims: boolean };
-  toolMode?: { mode: 'read-only' | 'write'; requireConfirmForWrite: boolean };
+  toolMode?: {
+    mode: 'read-only' | 'write';
+    requireConfirmForWrite: boolean;
+    /**
+     * Risk threshold that drives the unified confirmation gate (issue #144).
+     * See {@link ConfirmThreshold}. The augment layer compares each tool
+     * call's risk against this value and routes through `confirmAction`
+     * when `shouldConfirm` returns true.
+     */
+    confirmThreshold: ConfirmThreshold;
+  };
 }
 
 /**
