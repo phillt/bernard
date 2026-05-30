@@ -24,6 +24,7 @@ import {
   SHARE_REASONING_PROMPT,
   REASONING_FAMILIES,
   CITATIONS_PROMPT,
+  CONCISE_PROMPT,
 } from '../../agent-prompt.js';
 import { buildContextMessage } from '../../context-message.js';
 import type { RAGSearchResult } from '../../rag.js';
@@ -100,6 +101,11 @@ export function buildMainSystemPrompt(
     !REASONING_FAMILIES.has(profile.family)
   ) {
     systemPrompt += '\n\n' + CITATIONS_PROMPT;
+  }
+  // Concise-mode shaping: append the concise block when the policy enables it.
+  // Issue #175. No model-family gate — concision is universal.
+  if (ctx.policyDecision?.concise?.enabled) {
+    systemPrompt += '\n\n' + CONCISE_PROMPT;
   }
   const profilesBlock = buildToolProfilesPrompt(ctx.stores.toolProfiles);
   if (profilesBlock) {

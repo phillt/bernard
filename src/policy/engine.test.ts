@@ -17,7 +17,10 @@ describe('DefaultPolicyEngine', () => {
 
     expect(decision.strategyId).toBe('react');
     expect(Object.keys(decision.models ?? {}).sort()).toEqual([...MODEL_COMPONENTS].sort());
-    expect(decision.concise?.enabled).toBe(false);
+    // concisePolicy now reads config.conciseMode (default true in test helper).
+    expect(decision.concise?.enabled).toBe(true);
+    expect(decision.concise?.maxBullets).toBe(6);
+    expect(decision.concise?.maxLines).toBe(12);
     // First turn (no previousUserInput) → scratchPolicy clears everything.
     expect(decision.scratch).toEqual({
       resetAll: true,

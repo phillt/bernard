@@ -41,6 +41,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     referenceLookup: true,
     referenceLookupTools: [],
     scratchSubjectThreshold: 0.15,
+    conciseMode: true,
     anthropicApiKey: 'sk-ant',
     openaiApiKey: 'sk-openai',
     xaiApiKey: 'xai-key',

@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import {
+  capReasoning,
   extractJsonBlock,
   parseStructuredOutput,
+  REASONING_MAX_CHARS,
+  REASONING_MAX_ENTRIES,
   wrapWrapperResult,
   WrapperResultSchema,
   STRUCTURED_OUTPUT_RULES,
@@ -194,7 +197,38 @@ describe('wrapWrapperResult', () => {
     const longText = 'x'.repeat(600);
     const result = wrapWrapperResult(longText);
     expect(result.reasoning).toBeDefined();
-    expect(result.reasoning![0]).toHaveLength(500);
+    expect(result.reasoning![0]).toHaveLength(REASONING_MAX_CHARS);
+  });
+
+  it('caps reasoning to REASONING_MAX_ENTRIES on success', () => {
+    const reasoning = Array.from({ length: REASONING_MAX_ENTRIES + 4 }, (_, i) => `step ${i}`);
+    const text = JSON.stringify({ status: 'ok', result: 'done', reasoning });
+    const result = wrapWrapperResult(text);
+    expect(result.reasoning).toHaveLength(REASONING_MAX_ENTRIES);
+    expect(result.reasoning![0]).toBe('step 0');
+    expect(result.reasoning![REASONING_MAX_ENTRIES - 1]).toBe(`step ${REASONING_MAX_ENTRIES - 1}`);
+  });
+
+  it('trims each reasoning entry to REASONING_MAX_CHARS on success', () => {
+    const long = 'y'.repeat(REASONING_MAX_CHARS + 50);
+    const text = JSON.stringify({ status: 'ok', result: 'done', reasoning: [long] });
+    const result = wrapWrapperResult(text);
+    expect(result.reasoning![0]).toHaveLength(REASONING_MAX_CHARS);
+  });
+});
+
+describe('capReasoning', () => {
+  it('returns the input unchanged when already within bounds', () => {
+    const input = ['a', 'b'];
+    expect(capReasoning(input)).toEqual(['a', 'b']);
+  });
+
+  it('caps array length and entry size together', () => {
+    const long = 'z'.repeat(REASONING_MAX_CHARS + 10);
+    const input = Array.from({ length: REASONING_MAX_ENTRIES + 2 }, () => long);
+    const out = capReasoning(input);
+    expect(out).toHaveLength(REASONING_MAX_ENTRIES);
+    expect(out.every((s) => s.length === REASONING_MAX_CHARS)).toBe(true);
   });
 
   it('extracts valid JSON embedded in surrounding prose', () => {

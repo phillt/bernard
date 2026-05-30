@@ -94,6 +94,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
     scratchSubjectThreshold: 0.15,
+    conciseMode: true,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };

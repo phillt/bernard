@@ -108,16 +108,33 @@ export function wrapWrapperResult(text: string): WrapperResult {
     const { status, result, error, reasoning } = parsed;
     const out: WrapperResult = { status, result };
     if (error !== undefined) out.error = error;
-    if (reasoning !== undefined) out.reasoning = reasoning;
+    if (reasoning !== undefined) out.reasoning = capReasoning(reasoning);
     return out;
   }
   return {
     status: 'error',
     result: 'Specialist did not produce valid structured output',
     error: 'parse_failed',
-    reasoning: [text.trim().slice(0, 500)],
+    reasoning: [text.trim().slice(0, REASONING_MAX_CHARS)],
   };
 }
+
+/**
+ * Defense-in-depth cap on the `reasoning` array (#175). Keeps at most
+ * {@link REASONING_MAX_ENTRIES} entries and trims each to
+ * {@link REASONING_MAX_CHARS} characters. The prompt asks the model to stay
+ * within these bounds; this enforces them when it doesn't.
+ */
+export function capReasoning(reasoning: string[]): string[] {
+  return reasoning
+    .slice(0, REASONING_MAX_ENTRIES)
+    .map((entry) => (entry.length > REASONING_MAX_CHARS ? entry.slice(0, REASONING_MAX_CHARS) : entry));
+}
+
+/** Maximum number of `reasoning` entries kept after parsing (#175). */
+export const REASONING_MAX_ENTRIES = 5;
+/** Maximum length of a single `reasoning` entry after parsing (#175). */
+export const REASONING_MAX_CHARS = 200;
 
 /**
  * Rules appended to a tool-wrapper specialist's system prompt. Instructs the
@@ -137,7 +154,10 @@ Your FINAL message MUST be a single valid JSON object with this shape and nothin
 }
 
 Rules:
+- Be minimal. The JSON IS the output — no narrative, no explanations, no apologies outside the JSON.
 - Emit the JSON only once, as your last message.
-- \`reasoning\` is an array of short strings. One entry per significant tool call explaining WHY you chose it (not what it returned).
+- \`result\` is the concrete outcome (a path, a value, a short summary). Do NOT restate the user's request, and do NOT echo raw tool output the caller already has.
+- \`reasoning\` is OPTIONAL. Include at most ${REASONING_MAX_ENTRIES} entries, each one short sentence (≤25 words / ~${REASONING_MAX_CHARS} characters). Omit \`reasoning\` entirely when \`status\` is "ok" and the call was straightforward. Excess entries / overlong entries are truncated downstream — keep them short to stay in control of what survives.
+- One reasoning entry per significant tool call, explaining WHY you chose it (not what it returned).
 - Never include confidence scores — the downstream pipeline ignores them.
-- If a tool call fails irrecoverably, set \`status\` to "error", put the cause in \`error\`, and still include your reasoning.`;
+- If a tool call fails irrecoverably, set \`status\` to "error", put the cause in \`error\`, and include a brief \`reasoning\` entry naming the failed step.`;

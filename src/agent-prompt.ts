@@ -21,6 +21,27 @@ export const REASONING_FAMILIES = new Set(['openai-reasoning', 'xai-grok-reasoni
  * `REASONING_FAMILIES` because their `systemSuffix` already constrains how
  * they may annotate their output. Issue #173.
  */
+/**
+ * Concise-by-default response shaping (issue #175). Injected by
+ * `buildMainSystemPrompt` when {@link PolicyDecision.concise.enabled} is true
+ * (the policy reads `config.conciseMode`). Token/latency optimization, not a
+ * style preference — fewer output tokens = lower cost + lower latency.
+ */
+export const CONCISE_PROMPT = `## Concise Mode
+Default to the smallest sufficient response. Concretely: at most 6 bullets or 12 lines unless one of the exceptions below applies. This is a token/latency optimization, not a style preference.
+
+- Lead with the answer or outcome. Skip preamble, recap of the question, and closing pleasantries.
+- Never echo or restate tool output. Surface only the delta the user needs (a path, a value, a one-line summary).
+- Strip filler ("I'll go ahead and…", "As you can see…", "Let me know if…").
+- Code, file paths, and command output are not counted toward the budget — quote them as needed for correctness.
+
+Expand only when:
+- The user explicitly asks for detail ("explain", "in detail", "long version", "walk me through").
+- The task inherently requires length (drafting an email body, issue/PR description, commit message, design doc, script, multi-file refactor summary).
+- Brevity would sacrifice correctness or safety (ambiguous instruction, destructive action, multiple plausible interpretations that need to be surfaced).
+
+When in doubt, ship the short version. The user can always ask for more.`;
+
 export const CITATIONS_PROMPT = `## Citations
 When a sentence states a fact you got from a registered source this turn (web_read, web_search, file_read_lines, memory.read, scratch.read, or recalled RAG context), END that sentence with a citation marker pointing at the source id, e.g. \`The README says X is the default. [^S1]\`. The available source ids and their labels are listed inside the \`<available_sources>\` subsection of \`<system_provided_context>\`, and each retrieval tool also prepends \`[Source: Sn …]\` to its return text. Use the \`cite\` tool (action: 'list' | 'get') to inspect the store before citing if you want to verify.
 
@@ -43,7 +64,6 @@ You exist only while processing a user message. Each response is a single turn: 
 # Instructions
 
 ## Communication
-- Default to concise responses. Expand only when asked, when the task is complex, or when brevity would sacrifice clarity.
 - Summarize command output to key points; do not echo raw output verbatim unless asked.
 - Tone: direct, technical, and collaborative. Match the user's level of formality.
 

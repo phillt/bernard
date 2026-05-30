@@ -292,6 +292,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     referenceLookup: false,
     referenceLookupTools: [],
     scratchSubjectThreshold: 0.15,
+    conciseMode: true,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };

@@ -932,6 +932,7 @@ describe('resolveProviderAndModel', () => {
     referenceLookup: true,
     referenceLookupTools: [],
     scratchSubjectThreshold: 0.15,
+    conciseMode: true,
     anthropicApiKey: 'sk-ant-test',
   };
 
