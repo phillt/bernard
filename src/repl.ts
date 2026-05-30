@@ -43,7 +43,13 @@ import {
   clearPinnedRegion,
   type SpinnerStats,
 } from './output.js';
-import type { ToolOptions, AskUserQuestion, ConfirmActionInput } from './tools/types.js';
+import type {
+  ToolOptions,
+  AskUserQuestion,
+  BlockActionInput,
+  BlockOutcome,
+  ConfirmActionInput,
+} from './tools/types.js';
 import type { RiskLevel } from './risk.js';
 import {
   PROVIDER_MODELS,
@@ -974,6 +980,26 @@ export async function startRepl(
       return result.index === 0 || result.index === 1;
     });
 
+  // Read-only block gate (#179). The augment layer holds its own per-tool
+  // session allowlist; this callback only needs to surface the user's choice.
+  const blockActionFn = (input: BlockActionInput, signal?: AbortSignal): Promise<BlockOutcome> =>
+    withPausedSpinner(signal, async () => {
+      const result = await selectFromMenu(
+        rl,
+        [
+          { label: 'Allow once' },
+          { label: 'Enable for this tool, this session' },
+          { label: 'Deny' },
+        ],
+        {
+          title: `🔒 Read-only mode — this will modify external state: ${input.reason}`,
+        },
+        signal,
+      );
+      if (result.cancelled || result.index === 2) return 'deny';
+      return result.index === 1 ? 'allow-tool-for-session' : 'allow-once';
+    });
+
   const renderTabStrip = (currentIndex: number, total: number): string => {
     const theme = getTheme();
     const tabs: string[] = [];
@@ -1019,10 +1045,19 @@ export async function startRepl(
       return { answers: answered };
     });
 
+  // Shared per-REPL-session allowlist for the read-only block gate (#179).
+  // Owned by the REPL so an "Enable for this tool, this session" decision
+  // survives across turns and across nested sub-agent / tool-wrapper dispatches
+  // — otherwise each `augmentTools` invocation would start with an empty
+  // closure-local set and re-prompt the user every turn.
+  const sessionToolAllowlist = new Set<string>();
+
   const toolOptions: ToolOptions = {
     shellTimeout: config.shellTimeout,
     confirmDangerous: confirmFn,
     confirmAction: confirmActionFn,
+    blockAction: blockActionFn,
+    sessionToolAllowlist,
     askUser: askUserFn,
   };
 
@@ -2254,6 +2289,53 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           console.log();
         }
 
+        async function runToolModePrompt(): Promise<void> {
+          const modes: Array<{ value: 'read-only' | 'write'; label: string; desc: string }> = [
+            {
+              value: 'read-only',
+              label: 'Read-only (least privilege)',
+              desc: 'Write tools (shell mutations, file edits, MCP writes) are blocked until you explicitly enable them.',
+            },
+            {
+              value: 'write',
+              label: 'Write',
+              desc: 'Every tool may run; the confirm gate still prompts based on risk tier.',
+            },
+          ];
+          const entries: MenuEntry[] = modes.map((m) => ({
+            label: m.label,
+            description: m.desc,
+            active: config.toolMode === m.value,
+          }));
+          const signal = createMenuSignal();
+          try {
+            const result = await selectFromMenu(
+              rl,
+              entries,
+              { title: `Tool mode: ${config.toolMode}` },
+              signal,
+            );
+            if (result.cancelled) return;
+            const chosen = modes[result.index].value;
+            config.toolMode = chosen;
+            savePreferences({
+              ...loadPreferences(),
+              provider: config.provider,
+              model: config.model,
+              toolMode: chosen,
+            });
+            const labels: Record<typeof chosen, string> = {
+              'read-only':
+                '  [TOOL-MODE:READ-ONLY] Write tools blocked until enabled per call or for the session.',
+              write: '  [TOOL-MODE:WRITE] Write tools run subject to the confirm gate (#144) only.',
+            };
+            printInfo(labels[chosen]);
+          } finally {
+            clearMenuSignal();
+          }
+          console.log();
+        }
+
         async function runScratchThresholdPrompt(): Promise<void> {
           const signal = createMenuSignal();
           try {
@@ -2361,6 +2443,16 @@ Remember: the systemPrompt should read like a persona definition — who this sp
                 'Off = single model. Balanced / Optimize-tokens / Optimize-performance pick a model per site.',
             },
             action: runModelModePrompt,
+          },
+          {
+            kind: 'item',
+            item: {
+              label: 'Tool mode',
+              annotation: `= ${config.toolMode}`,
+              description:
+                'Read-only blocks write tools until enabled. Write lets every tool run subject to the confirm gate.',
+            },
+            action: runToolModePrompt,
           },
           ...systemBools.slice(1).map(toggleRow),
           {

@@ -77,6 +77,9 @@ export async function runDefinition<TInput, TFormatted>(
     profileStore: ctx.stores.toolProfiles,
     confirmThreshold: ctx.policyDecision?.toolMode?.confirmThreshold,
     confirmAction: ctx.toolOptions.confirmAction,
+    toolMode: ctx.policyDecision?.toolMode?.mode,
+    blockAction: ctx.toolOptions.blockAction,
+    sessionToolAllowlist: ctx.toolOptions.sessionToolAllowlist,
   });
   const hooks = def.hooks(ctx, input);
   const baseMaxSteps = def.stepBudget(config, input);

@@ -44,19 +44,22 @@ function thresholdForMode(mode: 'off' | 'auto' | 'strict'): ConfirmThreshold {
 }
 
 /**
- * Tool-mode + confirmation-threshold policy (issue #144).
+ * Tool-mode + confirmation-threshold policy (issues #144, #179).
  *
  * Per-turn rules:
  * 1. Pure-question turn → `mode: 'read-only'`, `confirmThreshold: 'never'`.
  *    The agent can still call read tools (it usually needs to) but never
  *    pauses for permission.
- * 2. Otherwise → `mode: 'write'`, threshold from `config.confirmMode`:
- *    - `off`    → `never`
- *    - `auto`   → `high`   (default; dangerous shell + external-API writes)
- *    - `strict` → `medium` (also gates local writes + unclassified MCP)
+ * 2. Otherwise → `mode` reflects the persistent `config.toolMode` (#179),
+ *    threshold reflects `config.confirmMode` (#144). The two gates are
+ *    orthogonal: toolMode answers "is this allowed at all?" and threshold
+ *    answers "do I want to confirm allowed actions?".
+ *      - confirmMode: off → threshold never
+ *      - confirmMode: auto → threshold high (default; dangerous shell + external-API writes)
+ *      - confirmMode: strict → threshold medium (also gates local writes + unclassified MCP)
  *
- * The threshold flows through `PolicyDecision.toolMode.confirmThreshold`
- * and is consumed by `augmentTools` in `src/tools/augment.ts`.
+ * Both fields flow through `PolicyDecision.toolMode` and are consumed by
+ * `augmentTools` in `src/tools/augment.ts`.
  */
 export const toolModePolicy: SubPolicy<ToolMode> = (input) => {
   if (isPureQuestion(input.userInput)) {
@@ -68,12 +71,13 @@ export const toolModePolicy: SubPolicy<ToolMode> = (input) => {
     };
   }
 
-  const mode = input.config.confirmMode ?? 'auto';
-  const confirmThreshold = thresholdForMode(mode);
+  const confirmModeValue = input.config.confirmMode ?? 'auto';
+  const confirmThreshold = thresholdForMode(confirmModeValue);
+  const toolMode = input.config.toolMode ?? 'read-only';
   return {
-    mode: 'write',
+    mode: toolMode,
     requireConfirmForWrite: confirmThreshold !== 'never',
     confirmThreshold,
-    reason: `confirm-mode-${mode}`,
+    reason: `config-${toolMode}`,
   };
 };

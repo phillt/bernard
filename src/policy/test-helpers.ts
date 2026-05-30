@@ -35,6 +35,7 @@ export function makePolicyInput(overrides?: {
     scratchSubjectThreshold: 0.15,
     conciseMode: true,
     confirmMode: 'auto',
+    toolMode: 'read-only',
     customProviders: {},
   };
   return {

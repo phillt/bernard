@@ -31,7 +31,7 @@ describe('DefaultPolicyEngine', () => {
     expect(decision.caching?.enabled).toBe(false);
     expect(decision.citations?.requireForFactualClaims).toBe(true);
     expect(decision.toolMode).toEqual({
-      mode: 'write',
+      mode: 'read-only',
       requireConfirmForWrite: true,
       confirmThreshold: 'high',
     });

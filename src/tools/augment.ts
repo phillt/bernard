@@ -4,9 +4,9 @@ import { printInfo } from '../output.js';
 import { readBernardSource, readToolMeta, preserveMeta } from '../framework/tools/adapter.js';
 import type { ToolResult } from '../framework/tools/types.js';
 import { classifyError } from '../error-taxonomy.js';
-import type { ConfirmActionInput, ToolOptions } from './types.js';
+import type { BlockActionInput, ConfirmActionInput, ToolOptions } from './types.js';
 import type { ConfirmThreshold } from '../risk.js';
-import { riskFromMeta, shouldConfirm } from '../risk.js';
+import { riskFromMeta, shouldBlockInReadOnly, shouldConfirm } from '../risk.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -109,11 +109,33 @@ function recordOutcome(
  * crosses the threshold is routed through `confirmAction` before reaching
  * the underlying `execute`. A `false` return cancels the call with a
  * `{type: 'cancelled'}` envelope; the underlying tool is never invoked.
+ *
+ * Read-only mode wiring (#179). When `toolMode === 'read-only'`, write tools
+ * (meta.kind in {write, dangerous}) are routed through `blockAction` before
+ * the confirm gate runs. A `'deny'` outcome cancels with a distinct denial
+ * message so the model can tell it apart from a confirmation cancel. A
+ * `'allow-tool-for-session'` outcome unlocks the tool name for the remainder
+ * of this augment-tools session (allowlist is per-`augmentTools` closure;
+ * REPL restart clears it). Defaults to `toolMode: 'write'` (no block gate)
+ * to preserve historic behavior for callers that don't opt in. When
+ * `toolMode: 'read-only'` is set but `blockAction` is undefined, every
+ * write call is auto-denied (fail-closed).
  */
 export interface AugmentOptions {
   profileStore: ToolProfileStore;
   confirmThreshold?: ConfirmThreshold;
   confirmAction?: ToolOptions['confirmAction'];
+  toolMode?: 'read-only' | 'write';
+  blockAction?: ToolOptions['blockAction'];
+  /**
+   * Shared per-REPL-session allowlist of tool names that bypass the block
+   * gate. When provided, used in place of a closure-local Set so the
+   * allowlist persists across `augmentTools` invocations (turns, nested
+   * sub-agent / tool-wrapper dispatches). Omitting it falls back to a
+   * fresh per-invocation Set — the legacy behavior, intentional for
+   * tests that want isolation.
+   */
+  sessionToolAllowlist?: Set<string>;
 }
 
 function isProfileStore(v: AugmentOptions | ToolProfileStore): v is ToolProfileStore {
@@ -148,6 +170,21 @@ const CANCELLED_LEGACY_RESULT = {
   output: 'Action cancelled by user.',
   is_error: true,
 };
+
+/**
+ * Legacy cancellation shape returned when a write call is denied under
+ * read-only mode (#179). Kept separate from {@link CANCELLED_LEGACY_RESULT}
+ * so the model's next turn can distinguish "user denied write at the
+ * least-privilege gate" from "user cancelled this specific confirmation."
+ */
+const DENIED_LEGACY_RESULT = {
+  output:
+    'Action denied — read-only mode. Ask the user to allow this tool or switch toolMode to write.',
+  is_error: true,
+};
+
+const READ_ONLY_DENIED_MESSAGE =
+  'Action denied — read-only mode. Ask the user to allow this tool or switch toolMode to write.';
 
 /**
  * Wraps every tool's `execute` function to observe results and record
@@ -185,7 +222,62 @@ export function augmentTools(
   // auto-deny-high callback never fires — silently re-opening the very gap #144 closes.
   const confirmThreshold: ConfirmThreshold | undefined =
     opts.confirmThreshold ?? (confirmAction ? 'high' : undefined);
+
+  // Read-only mode gate (#179). When unset, behave as `'write'` so existing
+  // callers that haven't migrated don't have their tool calls blocked.
+  const toolMode = opts.toolMode ?? 'write';
+  const blockAction = opts.blockAction;
+  // Per-tool session allowlist keyed by tool name. Prefer the shared Set
+  // passed in via `opts.sessionToolAllowlist` (owned by the REPL for the
+  // process lifetime) so an "allow-tool-for-session" decision survives
+  // across turns AND across nested sub-agent / tool-wrapper dispatches.
+  // Falls back to a closure-local Set when none is provided (tests, cron).
+  const sessionToolAllowlist = opts.sessionToolAllowlist ?? new Set<string>();
+
   const augmented: Record<string, any> = {};
+
+  /**
+   * Block gate (#179). Returns `true` to fall through to {@link runGate},
+   * `false` if the call was denied (caller returns a cancelled-shape result).
+   *
+   * Short-circuits to proceed when `toolMode === 'write'` or the tool's meta
+   * isn't classified as write/dangerous. When `toolMode === 'read-only'` but
+   * `blockAction` is undefined, fails closed (denies every write) so headless
+   * callers that forgot to wire the prompt don't silently leak side effects.
+   */
+  const runBlockGate = async (
+    toolName: string,
+    args: unknown,
+    toolDef: any,
+    execOptions: unknown,
+  ): Promise<boolean> => {
+    if (toolMode !== 'read-only') return true;
+    const meta = readToolMeta(toolDef);
+    if (!shouldBlockInReadOnly(meta, args)) return true;
+    if (sessionToolAllowlist.has(toolName)) return true;
+    if (!blockAction) {
+      debugLog(`augment:${toolName}:block:fail-closed`, { toolMode });
+      return false;
+    }
+    const input: BlockActionInput = {
+      toolName,
+      args,
+      reason: buildConfirmReason(toolName, args),
+    };
+    const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+    let outcome: 'allow-once' | 'allow-tool-for-session' | 'deny';
+    try {
+      outcome = await blockAction(input, signal);
+    } catch (err) {
+      // A throwing blockAction is a wiring bug — fail closed (deny) so the
+      // model gets a clear cancellation rather than silently bypassing.
+      debugLog(`augment:${toolName}:block:threw`, err instanceof Error ? err.message : String(err));
+      return false;
+    }
+    if (outcome === 'deny') return false;
+    if (outcome === 'allow-tool-for-session') sessionToolAllowlist.add(toolName);
+    return true;
+  };
 
   /**
    * Returns `true` to proceed, `false` if the user cancelled. `undefined`
@@ -199,7 +291,7 @@ export function augmentTools(
   ): Promise<boolean> => {
     if (!confirmAction) return true;
     const meta = readToolMeta(toolDef);
-    const risk = riskFromMeta(meta);
+    const risk = riskFromMeta(meta, args);
     if (!shouldConfirm(risk, confirmThreshold)) return true;
     const input: ConfirmActionInput = {
       toolName,
@@ -238,6 +330,16 @@ export function augmentTools(
         {
           ...toolDef,
           execute: async (args: unknown, execOptions: unknown) => {
+            if (!(await runBlockGate(toolName, args, toolDef, execOptions))) {
+              const denied: ToolResult<unknown> = {
+                status: 'error',
+                // Distinct from 'cancelled' so envelope consumers that branch
+                // on error.type can tell "user denied write under read-only
+                // mode" apart from "user cancelled this specific confirm."
+                error: { type: 'denied', message: READ_ONLY_DENIED_MESSAGE },
+              };
+              return source.serializeForModel(denied);
+            }
             if (!(await runGate(toolName, args, toolDef, execOptions))) {
               const cancelled: ToolResult<unknown> = {
                 status: 'error',
@@ -289,6 +391,9 @@ export function augmentTools(
       {
         ...toolDef,
         execute: async (args: unknown, execOptions: unknown) => {
+          if (!(await runBlockGate(toolName, args, toolDef, execOptions))) {
+            return DENIED_LEGACY_RESULT;
+          }
           if (!(await runGate(toolName, args, toolDef, execOptions))) {
             return CANCELLED_LEGACY_RESULT;
           }

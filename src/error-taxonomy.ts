@@ -77,6 +77,11 @@ const PLAYBOOKS: Record<ToolErrorType, { user: string; model: string }> = {
     user: 'Cancelled.',
     model: 'The previous call was cancelled by the user. Do not retry without instruction.',
   },
+  denied: {
+    user: 'Denied — read-only mode is enforcing least-privilege.',
+    model:
+      'The call was blocked by the read-only mode gate (#179). Do not retry the same write call. Either ask the user to allow this tool / switch toolMode to write, or take a read-only alternative path.',
+  },
   unknown: {
     user: 'Tool failed with an unrecognized error.',
     model:
@@ -96,6 +101,7 @@ const SEVERITY: Record<ToolErrorType, 'low' | 'normal' | 'critical'> = {
   parse_failed: 'low',
   pool_exhausted: 'low',
   cancelled: 'low',
+  denied: 'normal',
   unknown: 'low',
 };
 

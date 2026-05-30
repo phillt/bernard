@@ -32,6 +32,28 @@ export interface AskUserQuestion {
 /** Result of an `askUser` batch interaction. `answered` is aligned by index with the input questions. */
 export type AskUserBatchResult = { answers: string[] } | { cancelled: true; answered: string[] };
 
+/**
+ * Input passed to the read-only block callback (issue #179). Assembled by the
+ * augment layer when `toolMode === 'read-only'` and the call's meta classifies
+ * it as a write/dangerous tool.
+ */
+export interface BlockActionInput {
+  /** Registry name of the write tool that the read-only gate is blocking. */
+  toolName: string;
+  /** Raw arguments object the model passed. */
+  args: unknown;
+  /** One-line human description rendered to the user. */
+  reason: string;
+}
+
+/**
+ * User decision returned from the block callback:
+ *  - `allow-once`              — let this single call through; future calls re-prompt.
+ *  - `allow-tool-for-session`  — add this tool name to the session allowlist; same-tool calls bypass the block gate.
+ *  - `deny`                    — cancel the call.
+ */
+export type BlockOutcome = 'allow-once' | 'allow-tool-for-session' | 'deny';
+
 /** Options shared by all tool implementations. */
 export interface ToolOptions {
   /** Maximum time in milliseconds a shell command may run before being killed. */
@@ -53,6 +75,29 @@ export interface ToolOptions {
    * high-risk actions and silently pass through the rest.
    */
   confirmAction?: (input: ConfirmActionInput, signal?: AbortSignal) => Promise<boolean>;
+  /**
+   * Read-only mode block callback (issue #179). Invoked by the augment layer
+   * before each write/dangerous tool call when `policyDecision.toolMode.mode`
+   * is `'read-only'`. The callback returns the user's enable decision; on
+   * `'deny'` the underlying tool is never invoked (cancelled-shape result is
+   * returned to the model with a denial message that distinguishes it from a
+   * confirmation-prompt cancel).
+   *
+   * When omitted but `toolMode === 'read-only'`, write calls fail closed
+   * (auto-denied) — secure default for headless callers that forgot to wire
+   * the prompt. Cron explicitly passes `toolMode: 'write'` to opt out.
+   */
+  blockAction?: (input: BlockActionInput, signal?: AbortSignal) => Promise<BlockOutcome>;
+  /**
+   * Per-REPL-session allowlist of tool names that the user has chosen to
+   * unlock via "Enable for this tool, this session" at the block-gate menu
+   * (issue #179). Lives on `ToolOptions` (not inside the `augmentTools`
+   * closure) so the allowlist survives across turns and is shared with
+   * sub-agents and tool-wrapper specialists — otherwise the user gets
+   * re-prompted on every new turn or nested call, defeating the "session"
+   * label on the menu. Cleared on REPL restart (process exit).
+   */
+  sessionToolAllowlist?: Set<string>;
   /**
    * Callback that asks the user one or more questions in sequence. The
    * implementation owns any progress UI (e.g. a tab strip for batches of
