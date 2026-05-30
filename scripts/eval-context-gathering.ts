@@ -198,7 +198,7 @@ async function main(): Promise<void> {
 
     const config = {
       ...loadConfig(),
-      reactMode: false,
+      coordinatorMode: 'off' as const,
     };
     const toolOptions = {
       shellTimeout: config.shellTimeout,
@@ -286,7 +286,7 @@ async function main(): Promise<void> {
 
     const config = {
       ...loadConfig(),
-      reactMode: false,
+      coordinatorMode: 'off' as const,
     };
     const toolOptions = {
       shellTimeout: config.shellTimeout,

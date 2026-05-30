@@ -121,6 +121,37 @@ describe('DefaultQualifier — signals payload', () => {
   });
 });
 
+describe('DefaultQualifier — pure-question gate (broad-verb false positives)', () => {
+  // Regression for code-review finding: trivial single-question asks were
+  // escalating via the tool-keyword+bloom or bloom-only gates because
+  // common nouns ('format', 'test') overlap with TOOL_INVOCATION_VERBS and
+  // common applies ('use', 'implement') overlap with BLOOM_APPLY.
+  it("'what format should I use?' stays normal (single short question)", () => {
+    const r = qualify('what format should I use?');
+    expect(r.strategyId).toBe('normal');
+    expect(r.reason).toMatch(/^qualifier:(short-and-simple|default-light)$/);
+  });
+
+  it("'how do I call this API?' stays normal", () => {
+    const r = qualify('how do I call this API?');
+    expect(r.strategyId).toBe('normal');
+  });
+
+  it("'what test framework should I use?' stays normal", () => {
+    const r = qualify('what test framework should I use?');
+    expect(r.strategyId).toBe('normal');
+  });
+
+  it("a URL-bearing single-clause sentence with no real question is normal", () => {
+    // subQuestionCount must ignore URL '?' separators; the only escalation
+    // signal here was the spurious multi-question gate.
+    const r = qualify(
+      'fetch https://api.example.com?limit=10 and https://other.com?page=2',
+    );
+    expect(r.strategyId).toBe('normal');
+  });
+});
+
 describe('DefaultQualifier — edge cases', () => {
   it('handles empty user text without throwing', () => {
     const r = qualify('');

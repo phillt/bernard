@@ -128,7 +128,7 @@ async function main(): Promise<void> {
   };
 
   async function runOnce(scenario: Scenario, runIndex: number): Promise<RunResult> {
-    const config = { ...loadConfig(), reactMode: false };
+    const config = { ...loadConfig(), coordinatorMode: 'off' as const };
     const toolOptions = {
       shellTimeout: config.shellTimeout,
       confirmDangerous: async () => false,

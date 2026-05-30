@@ -93,10 +93,19 @@ describe('hasMultiStepLanguage', () => {
     expect(hasMultiStepLanguage('first do A, and finally do C')).toBe(true);
   });
 
-  it('matches connective conjunctions', () => {
-    expect(hasMultiStepLanguage('do X and then do Y')).toBe(true);
+  it('matches connective conjunctions when paired with a task verb', () => {
+    // The connective patterns deliberately require a following tool-invocation
+    // verb so plain conversational English doesn't escalate (see comment in
+    // `signals.ts` near `connectiveWithVerbRe`).
+    expect(hasMultiStepLanguage('write X and then run Y')).toBe(true);
     expect(hasMultiStepLanguage('build it; after that deploy it')).toBe(true);
     expect(hasMultiStepLanguage('refactor X and also update tests')).toBe(true);
+  });
+
+  it('does NOT match conversational use of the same connectives', () => {
+    expect(hasMultiStepLanguage('Python is fast and also readable')).toBe(false);
+    expect(hasMultiStepLanguage('I tried X and then Y happened')).toBe(false);
+    expect(hasMultiStepLanguage('what happened after that?')).toBe(false);
   });
 
   it('matches 2+ bullet list', () => {
@@ -116,9 +125,22 @@ describe('subQuestionCount', () => {
     expect(subQuestionCount('do the thing')).toBe(0);
   });
 
-  it('counts question marks', () => {
+  it('counts trailing-context question marks', () => {
     expect(subQuestionCount('what is 2+2?')).toBe(1);
     expect(subQuestionCount('what is 2+2? and 3+3? and 4+4?')).toBe(3);
+  });
+
+  it("ignores URL query-string '?' separators", () => {
+    expect(subQuestionCount('fetch https://api.example.com?limit=10')).toBe(0);
+    expect(
+      subQuestionCount(
+        'fetch https://api.example.com?limit=10 and https://other.com?page=2',
+      ),
+    ).toBe(0);
+    // A real trailing question still counts even when URLs are present:
+    expect(
+      subQuestionCount('does https://x.com?a=1 work?'),
+    ).toBe(1);
   });
 });
 

@@ -40,12 +40,22 @@ export class DefaultQualifier implements Qualifier {
       bloom,
     };
 
+    // Pure-question gate: a short ask that ends in `?` and contains no
+    // multi-step or multi-question signals shouldn't escalate purely on
+    // broad-verb overlap ("what format should I use?" trips both tool-kw
+    // 'format' and bloom-apply 'use' but is a single trivial question).
+    // Below TOKEN_LOW with exactly 1 question and no multi-step structure
+    // → bypass the tool-kw / bloom escalations and fall through to the
+    // light-path branch.
+    const isPureShortQuestion =
+      questions === 1 && tokens < TOKEN_LOW && !multiStep;
+
     // Escalation gates — any one hit promotes the turn to react. Ordered
     // so the strongest / most distinctive signal names the reason.
     if (multiStep) {
       return { strategyId: 'react', reason: 'qualifier:multi-step-language', signals };
     }
-    if (toolKw && (bloomEscalates || tokens > TOKEN_LOW)) {
+    if (!isPureShortQuestion && toolKw && (bloomEscalates || tokens > TOKEN_LOW)) {
       // Pure tool-keyword on a short ask ("run ls") doesn't need coordinator;
       // require either Apply/Analyze/Evaluate framing or non-trivial length.
       return { strategyId: 'react', reason: 'qualifier:tool-keyword-and-complexity', signals };
@@ -53,7 +63,7 @@ export class DefaultQualifier implements Qualifier {
     if (questions >= 2) {
       return { strategyId: 'react', reason: 'qualifier:multiple-questions', signals };
     }
-    if (bloomEscalates) {
+    if (!isPureShortQuestion && bloomEscalates) {
       return { strategyId: 'react', reason: `qualifier:bloom-${bloom}`, signals };
     }
 

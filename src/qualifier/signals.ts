@@ -66,6 +66,10 @@ const TOOL_INVOCATION_VERBS = [
   'test',
   'lint',
   'format',
+  'update',
+  'modify',
+  'replace',
+  'sync',
 ] as const;
 
 const TOOL_VERB_RE = new RegExp(
@@ -82,28 +86,49 @@ export function hasToolInvocationKeyword(text: string): boolean {
  * (`1.`, `2.`) at the start of a line, ordinal connectives (first/then/next),
  * conjunctive task chains (`and then`, `after that`), and explicit
  * step-by-step requests. Source: RouteLLM eval set + Hybrid-LLM baseline.
+ *
+ * The connective patterns (`and then`, `after that`) are deliberately paired
+ * with a following tool-invocation verb so plain conversational English
+ * ("Python is fast and then dynamic", "what happened after that?") doesn't
+ * escalate — only task chains like "build it and then deploy it" do.
  */
 const MULTI_STEP_PATTERNS: RegExp[] = [
   /^\s*\d+[.)]\s+/m, // numbered list ("1.", "2)")
   /^\s*[-*]\s+.+\n\s*[-*]\s+/m, // 2+ bullet list
   /\bstep[\s-]?by[\s-]?step\b/i,
   /\bfirst\b[^.]{0,80}\b(?:then|next|after that|finally)\b/i,
-  /\bafter that\b/i,
-  /\band then\b/i,
-  /\band also\b/i,
 ];
 
+// Connective + following tool-invocation verb within a few words. Built
+// lazily after TOOL_INVOCATION_VERBS is defined below.
+let CONNECTIVE_WITH_VERB_RE: RegExp | null = null;
+function connectiveWithVerbRe(): RegExp {
+  if (!CONNECTIVE_WITH_VERB_RE) {
+    const verbs = TOOL_INVOCATION_VERBS.join('|');
+    // "and then X", "after that X", "and also X" where X is a task verb
+    // within ~4 words (allows "and then please run", "after that, go fix").
+    CONNECTIVE_WITH_VERB_RE = new RegExp(
+      `\\b(?:and then|after that|and also)\\b[\\s,]*(?:\\w+\\s+){0,3}(?:${verbs})\\b`,
+      'i',
+    );
+  }
+  return CONNECTIVE_WITH_VERB_RE;
+}
+
 export function hasMultiStepLanguage(text: string): boolean {
-  return MULTI_STEP_PATTERNS.some((re) => re.test(text));
+  if (MULTI_STEP_PATTERNS.some((re) => re.test(text))) return true;
+  return connectiveWithVerbRe().test(text);
 }
 
 /**
- * Naive question-mark count. Treated as a cascade signal per FrugalGPT —
- * 2+ question marks usually indicates compound complexity (multiple
- * sub-questions in one message).
+ * Question-mark count, excluding URL query-string `?`s. Treated as a cascade
+ * signal per FrugalGPT — 2+ trailing-context question marks usually indicate
+ * compound complexity (multiple sub-questions in one message). A `?` that is
+ * immediately followed by a non-whitespace, non-punctuation character (e.g.
+ * `https://x.com?a=1`) is a URL query separator, not a sentence terminator.
  */
 export function subQuestionCount(text: string): number {
-  return (text.match(/\?/g) ?? []).length;
+  return (text.match(/\?(?=$|\s|["'\])}])/g) ?? []).length;
 }
 
 /**
