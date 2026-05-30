@@ -243,6 +243,63 @@ describe('RAGStore', () => {
     });
   });
 
+  describe('per-turn search cache (#171)', () => {
+    it('does not re-embed the same query within a turn', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode for all editors'], 'test');
+
+      const embedSpy = vi.spyOn(mockProvider!, 'embed');
+      await store.search('dark mode preference');
+      await store.search('dark mode preference');
+
+      // Only the first call should embed the query; the second hits the cache.
+      expect(embedSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('clearTurnCache forces re-embedding on the next search', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode for all editors'], 'test');
+
+      const embedSpy = vi.spyOn(mockProvider!, 'embed');
+      await store.search('dark mode preference');
+      store.clearTurnCache();
+      await store.search('dark mode preference');
+
+      expect(embedSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('addFacts invalidates the turn cache so new facts are visible', async () => {
+      const store = await createStore();
+      await store.addFacts(['Fact one about dark mode preference'], 'test');
+
+      const first = await store.search('dark mode preference');
+      // Add a new fact — should clear the per-turn cache.
+      await store.addFacts(['Fact two about dark mode preference also'], 'test');
+      const second = await store.search('dark mode preference');
+
+      expect(second.length).toBeGreaterThanOrEqual(first.length);
+    });
+
+    it('respects BERNARD_CACHE_ENABLED=false', async () => {
+      const original = process.env.BERNARD_CACHE_ENABLED;
+      process.env.BERNARD_CACHE_ENABLED = 'false';
+      try {
+        const store = await createStore();
+        await store.addFacts(['User prefers dark mode for all editors'], 'test');
+
+        const embedSpy = vi.spyOn(mockProvider!, 'embed');
+        await store.search('dark mode preference');
+        await store.search('dark mode preference');
+
+        // Cache disabled — both calls embed.
+        expect(embedSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        if (original === undefined) delete process.env.BERNARD_CACHE_ENABLED;
+        else process.env.BERNARD_CACHE_ENABLED = original;
+      }
+    });
+  });
+
   describe('persistence', () => {
     it('loads memories on construction', async () => {
       const memories = [

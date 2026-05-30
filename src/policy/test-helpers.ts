@@ -20,6 +20,7 @@ export function makePolicyInput(overrides?: {
     shellTimeout: 30000,
     tokenWindow: 0,
     ragEnabled: true,
+    cacheEnabled: true,
     theme: 'bernard',
     maxSteps: 25,
     coordinatorMode: 'off',

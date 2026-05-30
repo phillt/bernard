@@ -87,6 +87,14 @@ export class RAGStore {
   private similarityThreshold: number;
   private maxMemories: number;
   private ragTtlDays: number;
+  /**
+   * Per-turn search cache (#171). Maps the verbatim query string to the
+   * computed `RAGSearchResult[]`. Cleared at the REPL turn boundary via
+   * {@link clearTurnCache} so cross-turn updates to memory are visible. On a
+   * hit, access-metadata bumping is skipped — the first call in the turn
+   * already updated it.
+   */
+  private turnSearchCache = new Map<string, RAGSearchResult[]>();
 
   constructor(config?: RAGStoreConfig) {
     this.topKPerDomain = config?.topKPerDomain ?? DEFAULT_TOP_K_PER_DOMAIN;
@@ -185,6 +193,9 @@ export class RAGStore {
     if (added > 0) {
       this.prune();
       this.persist();
+      // New facts could change search results — invalidate the per-turn cache
+      // so subsequent same-turn lookups pick them up (#171).
+      this.turnSearchCache.clear();
     }
 
     debugLog('rag:addFacts', { added, total: this.memories.length, domain });
@@ -243,6 +254,19 @@ export class RAGStore {
   async search(query: string): Promise<RAGSearchResult[]> {
     if (this.memories.length === 0) return [];
 
+    // Per-turn cache (#171). Avoids re-embedding the same query when both
+    // the agent and the reference resolver run a RAG lookup in the same turn.
+    // Disabled via BERNARD_CACHE_ENABLED=false; read directly here so RAGStore
+    // doesn't need a config dependency.
+    const cacheOn = process.env.BERNARD_CACHE_ENABLED !== 'false';
+    if (cacheOn) {
+      const cached = this.turnSearchCache.get(query);
+      if (cached) {
+        debugLog('cache:rag:hit', { query: query.slice(0, 80), returned: cached.length });
+        return cached;
+      }
+    }
+
     const queryEmbedding = await this.embedQuery(query, 'rag:search');
     if (!queryEmbedding) return [];
 
@@ -271,11 +295,22 @@ export class RAGStore {
       this.persist();
     }
 
-    return capped.map((s) => ({
+    const results = capped.map((s) => ({
       fact: s.memory.fact,
       similarity: s.similarity,
       domain: s.memory.domain,
     }));
+    if (cacheOn) this.turnSearchCache.set(query, results);
+    return results;
+  }
+
+  /**
+   * Clears the per-turn search cache (#171). Called by the REPL at the start
+   * of each user turn so that any memory added or accessed in the previous
+   * turn is reflected in the next search.
+   */
+  clearTurnCache(): void {
+    this.turnSearchCache.clear();
   }
 
   /** List all facts as plain text lines. */
@@ -294,6 +329,7 @@ export class RAGStore {
   clear(): void {
     this.memories = [];
     this.persist();
+    this.turnSearchCache.clear();
   }
 
   /** Total number of stored memories. */
@@ -351,6 +387,7 @@ export class RAGStore {
     this.memories = this.memories.filter((m) => !idSet.has(m.id));
     const deleted = before - this.memories.length;
     if (deleted > 0) {
+      this.turnSearchCache.clear();
       this.persist();
     }
     return deleted;
@@ -365,6 +402,7 @@ export class RAGStore {
     );
     const expired = before - this.memories.length;
     if (expired > 0) {
+      this.turnSearchCache.clear();
       debugLog('rag:pruneExpired', { expired });
       this.persist();
     }

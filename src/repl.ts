@@ -2669,6 +2669,14 @@ Remember: the systemPrompt should read like a persona definition — who this sp
       }
     }
 
+    // Per-turn RAG search cache invalidation (#171). Cleared BEFORE the
+    // reference resolver / prompt rewriter run so their first RAG lookup of
+    // the new turn doesn't hit a stale entry from the previous turn (the
+    // resolver runs same-turn before the agent loop, so it would otherwise
+    // see facts written by the previous turn's agent only after they were
+    // already in the cache).
+    ragStore?.clearTurnCache();
+
     const resolvedEntries = await runReferenceResolver(trimmed);
     const rewritten = await runPromptRewriter(trimmed, resolvedEntries);
     const agentInput = rewritten ?? trimmed;

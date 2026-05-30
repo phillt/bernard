@@ -4,6 +4,7 @@ import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
+import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 
 /**
  * Pre-fallback module that runs only when the resolver returns
@@ -159,20 +160,42 @@ export async function selectLookupTool(
   if (candidates.length === 0) return null;
   try {
     const site = resolveSiteModel(config, 'reference-lookup');
-    const result = await generateText({
-      model: site.model,
-      providerOptions: site.providerOptions,
-      system: SELECT_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: buildSelectUserMessage(reference, candidates) }],
-      maxSteps: 1,
-      maxTokens: SELECT_MAX_TOKENS,
-      temperature: 0,
-      abortSignal,
-    });
-    if (!result.text) return null;
-    const parsed = parseSelectResponse(result.text);
+    const userContent = buildSelectUserMessage(reference, candidates);
+    const cacheOn = config.cacheEnabled !== false;
+    const cacheKey: LLMCacheKey | null = cacheOn
+      ? {
+          siteName: 'reference-lookup:select',
+          modelId: site.model.modelId,
+          providerOptions: site.providerOptions,
+          system: SELECT_SYSTEM_PROMPT,
+          userContent,
+        }
+      : null;
+    let rawText: string;
+    const cached = cacheKey ? getCachedLLM(cacheKey) : undefined;
+    if (cached !== undefined) {
+      if (abortSignal?.aborted) return null;
+      debugLog('cache:llm:hit', { site: 'reference-lookup:select' });
+      rawText = cached;
+    } else {
+      if (cacheKey) debugLog('cache:llm:miss', { site: 'reference-lookup:select' });
+      const result = await generateText({
+        model: site.model,
+        providerOptions: site.providerOptions,
+        system: SELECT_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: userContent }],
+        maxSteps: 1,
+        maxTokens: SELECT_MAX_TOKENS,
+        temperature: 0,
+        abortSignal,
+      });
+      if (!result.text) return null;
+      rawText = result.text;
+      if (cacheKey) setCachedLLM(cacheKey, rawText);
+    }
+    const parsed = parseSelectResponse(rawText);
     if (!parsed) {
-      debugLog('reference-tool-lookup:select-parse-failed', result.text.slice(0, 200));
+      debugLog('reference-tool-lookup:select-parse-failed', rawText.slice(0, 200));
       return null;
     }
     // The LLM may hallucinate a tool name not in the candidate list.
@@ -283,25 +306,42 @@ export async function interpretLookupResult(
 ): Promise<ReferenceLookupResult> {
   try {
     const site = resolveSiteModel(config, 'reference-lookup');
-    const result = await generateText({
-      model: site.model,
-      providerOptions: site.providerOptions,
-      system: INTERPRET_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content: `## Reference\n"${reference}"\n\n## Tool used\n${toolName}\n\n## Tool result\n${toolResult}`,
-        },
-      ],
-      maxSteps: 1,
-      maxTokens: INTERPRET_MAX_TOKENS,
-      temperature: 0,
-      abortSignal,
-    });
-    if (!result.text) return { status: 'none' };
-    const parsed = parseInterpretResponse(result.text);
+    const userContent = `## Reference\n"${reference}"\n\n## Tool used\n${toolName}\n\n## Tool result\n${toolResult}`;
+    const cacheOn = config.cacheEnabled !== false;
+    const cacheKey: LLMCacheKey | null = cacheOn
+      ? {
+          siteName: 'reference-lookup:interpret',
+          modelId: site.model.modelId,
+          providerOptions: site.providerOptions,
+          system: INTERPRET_SYSTEM_PROMPT,
+          userContent,
+        }
+      : null;
+    let rawText: string;
+    const cached = cacheKey ? getCachedLLM(cacheKey) : undefined;
+    if (cached !== undefined) {
+      if (abortSignal?.aborted) return { status: 'none' };
+      debugLog('cache:llm:hit', { site: 'reference-lookup:interpret' });
+      rawText = cached;
+    } else {
+      if (cacheKey) debugLog('cache:llm:miss', { site: 'reference-lookup:interpret' });
+      const result = await generateText({
+        model: site.model,
+        providerOptions: site.providerOptions,
+        system: INTERPRET_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: userContent }],
+        maxSteps: 1,
+        maxTokens: INTERPRET_MAX_TOKENS,
+        temperature: 0,
+        abortSignal,
+      });
+      if (!result.text) return { status: 'none' };
+      rawText = result.text;
+      if (cacheKey) setCachedLLM(cacheKey, rawText);
+    }
+    const parsed = parseInterpretResponse(rawText);
     if (!parsed) {
-      debugLog('reference-tool-lookup:interpret-parse-failed', result.text.slice(0, 200));
+      debugLog('reference-tool-lookup:interpret-parse-failed', rawText.slice(0, 200));
       return { status: 'none' };
     }
     if (parsed.status === 'found') {

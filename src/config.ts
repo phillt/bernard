@@ -50,6 +50,14 @@ export interface BernardConfig {
   /** Whether the model-specific prompt rewriter runs as a pre-turn LLM pass. */
   promptRewriter: boolean;
   /**
+   * Whether the in-process caching layer (#171) is active. Covers deterministic
+   * tool results, select LLM subcalls (rewriter, reference-lookup), and the
+   * per-turn RAG search cache. Default `true`; opt out via
+   * `BERNARD_CACHE_ENABLED=false`. Not persisted to preferences — environment
+   * toggle only.
+   */
+  cacheEnabled: boolean;
+  /**
    * Risk-based confirmation policy (#144). `'off'` never prompts; `'auto'`
    * (default) prompts only for `high`-risk tool calls (destructive shell,
    * external-API mutations); `'strict'` adds `medium` (all local writes
@@ -867,6 +875,7 @@ export function loadConfig(overrides?: {
     Number.isFinite(rawMaxSteps) && rawMaxSteps >= 1 ? Math.floor(rawMaxSteps) : DEFAULT_MAX_STEPS;
 
   const ragEnabled = process.env.BERNARD_RAG_ENABLED !== 'false';
+  const cacheEnabled = process.env.BERNARD_CACHE_ENABLED !== 'false';
   const theme = prefs.theme || 'bernard';
 
   // Tri-state coordinator mode (#167). Precedence: explicit pref >
@@ -1000,6 +1009,7 @@ export function loadConfig(overrides?: {
     tokenWindow,
     maxSteps,
     ragEnabled,
+    cacheEnabled,
     theme,
     coordinatorMode,
     modelMode,
