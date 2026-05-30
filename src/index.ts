@@ -312,10 +312,16 @@ program
     }
     try {
       const prefs = loadPreferences();
+      // savePreferences requires provider/model. When prefs don't carry them,
+      // fall back to the active env (BERNARD_PROVIDER/BERNARD_MODEL) so this
+      // command doesn't silently override a user who configured their provider
+      // via env vars only. Anthropic remains the last-resort default.
+      const provider = prefs.provider || process.env.BERNARD_PROVIDER || 'anthropic';
+      const model = prefs.model || process.env.BERNARD_MODEL || getDefaultModel(provider);
       savePreferences({
         ...prefs,
-        provider: prefs.provider || 'anthropic',
-        model: prefs.model || getDefaultModel(prefs.provider || 'anthropic'),
+        provider,
+        model,
         modelMode: mode,
       });
       printInfo(`Model mode set to "${mode}".`);

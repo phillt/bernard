@@ -7,7 +7,12 @@ import {
   type SpecialistBadExample,
 } from '../specialists.js';
 import type { CandidateStoreReader } from '../specialist-candidates.js';
-import { type BernardConfig, PROVIDER_MODELS, isValidProvider } from '../config.js';
+import {
+  type BernardConfig,
+  PROVIDER_MODELS,
+  isValidProvider,
+  blankToUndefined,
+} from '../config.js';
 import { resolveSiteModel } from '../model-policy.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 
@@ -179,25 +184,30 @@ export function createSpecialistTool(
             if (!name) return 'Error: name is required for create action.';
             if (!description) return 'Error: description is required for create action.';
             if (!systemPrompt) return 'Error: systemPrompt is required for create action.';
-            if (provider !== undefined) {
-              if (!isValidProvider(provider))
-                return `Error: Unknown provider "${provider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
-              if (model !== undefined && !PROVIDER_MODELS[provider]?.includes(model))
-                return `Error: Unknown model "${model}" for provider "${provider}". Valid models: ${PROVIDER_MODELS[provider].join(', ')}`;
-            } else if (model !== undefined && config) {
+            // Normalize blanks ("", "   ") to undefined so an LLM emitting ""
+            // doesn't fail validation and so policy auto-assign still fires.
+            const normProvider = blankToUndefined(provider);
+            const normModel = blankToUndefined(model);
+            if (normProvider !== undefined) {
+              if (!isValidProvider(normProvider))
+                return `Error: Unknown provider "${normProvider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
+              if (normModel !== undefined && !PROVIDER_MODELS[normProvider]?.includes(normModel))
+                return `Error: Unknown model "${normModel}" for provider "${normProvider}". Valid models: ${PROVIDER_MODELS[normProvider].join(', ')}`;
+            } else if (normModel !== undefined && config) {
               // Validate model against the global config's provider when no explicit provider given
-              if (!PROVIDER_MODELS[config.provider]?.includes(model))
-                return `Error: Unknown model "${model}" for provider "${config.provider}". Valid models: ${PROVIDER_MODELS[config.provider].join(', ')}`;
+              if (!PROVIDER_MODELS[config.provider]?.includes(normModel))
+                return `Error: Unknown model "${normModel}" for provider "${config.provider}". Valid models: ${PROVIDER_MODELS[config.provider].join(', ')}`;
             }
             // Auto-assign policy-resolved provider/model when multi-model
             // mode is active and the user didn't specify either (#170).
-            let resolvedProvider = provider;
-            let resolvedModel = model;
-            // Treat empty strings as "not set" so an LLM emitting "" doesn't
-            // bypass policy auto-assign and persist blanks on the record.
-            const explicitProvider = provider !== undefined && provider !== '';
-            const explicitModel = model !== undefined && model !== '';
-            if (!explicitProvider && !explicitModel && config && config.modelMode !== 'off') {
+            let resolvedProvider = normProvider;
+            let resolvedModel = normModel;
+            if (
+              normProvider === undefined &&
+              normModel === undefined &&
+              config &&
+              config.modelMode !== 'off'
+            ) {
               try {
                 const site = resolveSiteModel(config, 'specialist');
                 if (site.source === 'policy') {
