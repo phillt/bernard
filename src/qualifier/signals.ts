@@ -72,10 +72,7 @@ const TOOL_INVOCATION_VERBS = [
   'sync',
 ] as const;
 
-const TOOL_VERB_RE = new RegExp(
-  `\\b(?:${TOOL_INVOCATION_VERBS.join('|')})\\b`,
-  'i',
-);
+const TOOL_VERB_RE = new RegExp(`\\b(?:${TOOL_INVOCATION_VERBS.join('|')})\\b`, 'i');
 
 export function hasToolInvocationKeyword(text: string): boolean {
   return TOOL_VERB_RE.test(text);
@@ -136,7 +133,8 @@ export function subQuestionCount(text: string): number {
  * Apply/Analyze/Evaluate tiers where the user is asking for derived
  * insight rather than recall.
  */
-const REASONING_RE = /\b(?:explain why|analyze|analyse|compare|figure out|walk me through|reason through|why does|why is|how should)\b/i;
+const REASONING_RE =
+  /\b(?:explain why|analyze|analyse|compare|figure out|walk me through|reason through|why does|why is|how should)\b/i;
 
 export function hasReasoningRequest(text: string): boolean {
   return REASONING_RE.test(text);

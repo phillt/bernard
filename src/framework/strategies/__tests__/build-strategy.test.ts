@@ -45,9 +45,9 @@ describe('buildStrategy', () => {
   });
 
   it('opts.strategyId="react" forces ReActStrategy even when config.reactMode is false', () => {
-    expect(buildStrategy(makeConfig({ coordinatorMode: 'off' }), { strategyId: 'react' })).toBeInstanceOf(
-      ReActStrategy,
-    );
+    expect(
+      buildStrategy(makeConfig({ coordinatorMode: 'off' }), { strategyId: 'react' }),
+    ).toBeInstanceOf(ReActStrategy);
   });
 
   it('opts.strategyId="react" actually injects coordinator prompt at runtime (not just by type)', async () => {
@@ -64,9 +64,9 @@ describe('buildStrategy', () => {
   });
 
   it('opts.strategyId="normal" forces NormalStrategy even when config.reactMode is true', () => {
-    expect(buildStrategy(makeConfig({ coordinatorMode: 'on' }), { strategyId: 'normal' })).toBeInstanceOf(
-      NormalStrategy,
-    );
+    expect(
+      buildStrategy(makeConfig({ coordinatorMode: 'on' }), { strategyId: 'normal' }),
+    ).toBeInstanceOf(NormalStrategy);
   });
 
   it('opts.strategyId="normal" runs as Normal at runtime even with reactMode=true', async () => {

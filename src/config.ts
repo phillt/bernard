@@ -88,9 +88,7 @@ function isCoordinatorMode(v: unknown): v is 'on' | 'off' | 'auto' {
  * Explicit booleans become `'on'`/`'off'`; missing values stay `undefined` so
  * the caller can fall through to the next layer.
  */
-function legacyReactModeToCoordinator(
-  value: boolean | undefined,
-): 'on' | 'off' | undefined {
+function legacyReactModeToCoordinator(value: boolean | undefined): 'on' | 'off' | undefined {
   if (value === true) return 'on';
   if (value === false) return 'off';
   return undefined;

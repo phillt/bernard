@@ -133,14 +133,10 @@ describe('subQuestionCount', () => {
   it("ignores URL query-string '?' separators", () => {
     expect(subQuestionCount('fetch https://api.example.com?limit=10')).toBe(0);
     expect(
-      subQuestionCount(
-        'fetch https://api.example.com?limit=10 and https://other.com?page=2',
-      ),
+      subQuestionCount('fetch https://api.example.com?limit=10 and https://other.com?page=2'),
     ).toBe(0);
     // A real trailing question still counts even when URLs are present:
-    expect(
-      subQuestionCount('does https://x.com?a=1 work?'),
-    ).toBe(1);
+    expect(subQuestionCount('does https://x.com?a=1 work?')).toBe(1);
   });
 });
 

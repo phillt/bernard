@@ -47,8 +47,7 @@ export class DefaultQualifier implements Qualifier {
     // Below TOKEN_LOW with exactly 1 question and no multi-step structure
     // → bypass the tool-kw / bloom escalations and fall through to the
     // light-path branch.
-    const isPureShortQuestion =
-      questions === 1 && tokens < TOKEN_LOW && !multiStep;
+    const isPureShortQuestion = questions === 1 && tokens < TOKEN_LOW && !multiStep;
 
     // Escalation gates — any one hit promotes the turn to react. Ordered
     // so the strongest / most distinctive signal names the reason.

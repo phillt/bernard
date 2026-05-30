@@ -227,8 +227,12 @@ describe('buildSystemPrompt', () => {
   });
 
   it('excludes coordinator prompt regardless of reactMode (now injected by ReActStrategy)', () => {
-    expect(buildSystemPrompt(makeConfig({ coordinatorMode: 'on' }))).not.toContain('Coordinator Mode');
-    expect(buildSystemPrompt(makeConfig({ coordinatorMode: 'off' }))).not.toContain('Coordinator Mode');
+    expect(buildSystemPrompt(makeConfig({ coordinatorMode: 'on' }))).not.toContain(
+      'Coordinator Mode',
+    );
+    expect(buildSystemPrompt(makeConfig({ coordinatorMode: 'off' }))).not.toContain(
+      'Coordinator Mode',
+    );
   });
 
   // Issue #172: the SYSTEM prompt MUST NOT carry per-turn variable content
@@ -1303,7 +1307,11 @@ describe('Agent', () => {
         response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
         usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
       });
-      const agent = makeAgent(makeConfig({ coordinatorMode: 'on', maxSteps: 10 }), toolOptions, store);
+      const agent = makeAgent(
+        makeConfig({ coordinatorMode: 'on', maxSteps: 10 }),
+        toolOptions,
+        store,
+      );
       await agent.processInput('Hello');
       const call = mockGenerateText.mock.calls[0][0];
       expect(call.maxSteps).toBe(30);
@@ -1314,7 +1322,11 @@ describe('Agent', () => {
         response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
         usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
       });
-      const agent = makeAgent(makeConfig({ coordinatorMode: 'off', maxSteps: 10 }), toolOptions, store);
+      const agent = makeAgent(
+        makeConfig({ coordinatorMode: 'off', maxSteps: 10 }),
+        toolOptions,
+        store,
+      );
       await agent.processInput('Hello');
       const call = mockGenerateText.mock.calls[0][0];
       expect(call.maxSteps).toBe(10);

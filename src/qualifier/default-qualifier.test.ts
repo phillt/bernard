@@ -40,7 +40,7 @@ describe('DefaultQualifier — escalation gates', () => {
     expect(r.reason).toBe('qualifier:multi-step-language');
   });
 
-  it("numbered-list phrasing also fires multi-step", () => {
+  it('numbered-list phrasing also fires multi-step', () => {
     const r = qualify('1. clone the repo\n2. install deps\n3. run the tests');
     expect(r.strategyId).toBe('react');
     expect(r.reason).toBe('qualifier:multi-step-language');
@@ -82,13 +82,13 @@ describe('DefaultQualifier — light-path defaults', () => {
     expect(r.reason).toBe('qualifier:short-and-simple');
   });
 
-  it("greetings stay normal via short-and-simple", () => {
+  it('greetings stay normal via short-and-simple', () => {
     const r = qualify('hello there');
     expect(r.strategyId).toBe('normal');
     expect(r.reason).toBe('qualifier:short-and-simple');
   });
 
-  it("pure tool keyword on a short ask does NOT escalate (no complexity)", () => {
+  it('pure tool keyword on a short ask does NOT escalate (no complexity)', () => {
     // "run ls" — has tool keyword but tokens < 80 and bloom = remember.
     const r = qualify('run ls');
     expect(r.strategyId).toBe('normal');
@@ -142,12 +142,10 @@ describe('DefaultQualifier — pure-question gate (broad-verb false positives)',
     expect(r.strategyId).toBe('normal');
   });
 
-  it("a URL-bearing single-clause sentence with no real question is normal", () => {
+  it('a URL-bearing single-clause sentence with no real question is normal', () => {
     // subQuestionCount must ignore URL '?' separators; the only escalation
     // signal here was the spurious multi-question gate.
-    const r = qualify(
-      'fetch https://api.example.com?limit=10 and https://other.com?page=2',
-    );
+    const r = qualify('fetch https://api.example.com?limit=10 and https://other.com?page=2');
     expect(r.strategyId).toBe('normal');
   });
 });
