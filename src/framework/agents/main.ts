@@ -204,7 +204,13 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
         ? {
             plan: createPlanTool(input.planStore, () => {
               ctx.stores.memory.clearScratch();
-              debugLog('scratch:reset', { reason: 'plan-replaced' });
+              // Match the payload shape used by `scratchPolicy` so log
+              // consumers can grep `scratch:reset` uniformly.
+              debugLog('scratch:reset', {
+                resetAll: true,
+                deletePlanKey: true,
+                reason: 'plan-replaced',
+              });
             }),
             evaluate: createEvaluateTool(),
           }

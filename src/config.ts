@@ -855,15 +855,24 @@ export function loadConfig(overrides?: {
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
+  // Unlike `autoCreateThreshold` we don't rescale: `scratchSubjectThreshold`
+  // is documented as a 0-1 Jaccard score and the REPL prompt enforces the
+  // same range, so silently treating 15 → 0.15 would mask misconfiguration.
+  // Out-of-range or non-finite inputs fall back to the default.
   const envScratchSubjectThreshold = parseFloat(
     process.env.BERNARD_SCRATCH_SUBJECT_THRESHOLD ?? '',
   );
-  const scratchSubjectThreshold = normalizeThreshold(
+  const rawScratchSubjectThreshold =
     prefs.scratchSubjectThreshold ??
-      (Number.isFinite(envScratchSubjectThreshold)
-        ? envScratchSubjectThreshold
-        : DEFAULT_SCRATCH_SUBJECT_THRESHOLD),
-  );
+    (Number.isFinite(envScratchSubjectThreshold)
+      ? envScratchSubjectThreshold
+      : DEFAULT_SCRATCH_SUBJECT_THRESHOLD);
+  const scratchSubjectThreshold =
+    Number.isFinite(rawScratchSubjectThreshold) &&
+    rawScratchSubjectThreshold >= 0 &&
+    rawScratchSubjectThreshold <= 1
+      ? rawScratchSubjectThreshold
+      : DEFAULT_SCRATCH_SUBJECT_THRESHOLD;
 
   const providerBaseUrl = resolveProviderBaseUrl(
     overrides?.providerBaseUrl,

@@ -50,7 +50,7 @@ function jaccard(a: string[], b: string[]): number {
  *   - clear all scratch (subject change / explicit marker / first turn).
  *
  * Pure function over `PolicyInput`. State (previous user input) is threaded in
- * by `Agent.processInput` via `getLastUserText()`.
+ * by `Agent.processInput` via `extractRecentUserTexts(this.history, 1)[0]`.
  */
 export const scratchPolicy: SubPolicy<Scratch> = (input) => {
   const { userInput, previousUserInput, config } = input;

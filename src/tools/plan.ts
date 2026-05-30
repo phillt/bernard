@@ -29,8 +29,7 @@ const stepInputSchema = z.object({
  * `done` requires a `signoff` attesting that the verification was actually
  * performed. `cancelled`/`error` require `note` (no sign-off, since the step
  * did not succeed).
- */
-/**
+ *
  * `onPlanReplaced`, when provided, fires whenever `create` overwrites a
  * non-empty plan within the same turn. Used by the main agent to wipe scratch
  * (Rule C of #169) so notes from the abandoned plan don't bleed into the new
