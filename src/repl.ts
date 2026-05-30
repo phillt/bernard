@@ -77,6 +77,7 @@ import {
 import type { SupportedSdk } from './providers/types.js';
 import { getTheme, setTheme, getThemeKeys, getActiveThemeKey, THEMES } from './theme.js';
 import type { SourceItem } from './provenance.js';
+import { renderRubricLine } from './rubric.js';
 import {
   buildAgentStatusPanel,
   pickActiveStep,
@@ -2885,6 +2886,14 @@ Remember: the systemPrompt should read like a persona definition — who this sp
       initSpinner();
       await agent.processInput(agentInput, inlineImages, resolvedEntries);
       historyStore.save(agent.getHistory());
+      // Per-turn rubric footer (#145). One muted line showing the composed
+      // verdict + check counts. Suppressed when there is nothing to attest
+      // (no checks of any kind contributed this turn — e.g. a pure-question
+      // turn with no plan and no evaluate call).
+      const rubric = agent.getLastRubric();
+      if (rubric && rubric.checks.length > 0) {
+        printInfo(renderRubricLine(rubric));
+      }
     } catch (err: unknown) {
       if (!interrupted) {
         const message = err instanceof Error ? err.message : String(err);

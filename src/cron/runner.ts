@@ -19,6 +19,7 @@ import {
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { renderAgentStatusPlain, type AgentStatusInputs } from '../agent-status.js';
+import { verdictOf, type Check, type Verdict } from '../rubric.js';
 
 export {
   /** Re-exported so existing imports against the runner module keep working. */
@@ -166,6 +167,15 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         }),
         { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       );
+      // Per-run rubric (#145). Cron has no plan store and no attestation
+      // tracker target (no per-step `verification` strings), so we compose from
+      // what the run actually produced: post-write hook outcomes + the most
+      // recent `evaluate` tool's structured checks. Logged whether or not any
+      // checks were recorded — older readers tolerate missing fields.
+      const evalChecks = ctx.verification.getLast()?.checks ?? [];
+      const rubricChecks: Check[] = [...ctx.postWriteChecks, ...evalChecks];
+      const verdict: Verdict | undefined =
+        rubricChecks.length > 0 ? verdictOf(rubricChecks) : undefined;
       logStore.appendEntry({
         runId,
         jobId: job.id,
@@ -178,7 +188,15 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         finalOutput: finalOutputWithStatus,
         steps,
         totalUsage,
+        verdict,
+        rubricChecks: rubricChecks.length > 0 ? rubricChecks : undefined,
       });
+      // A clean-running job that nevertheless trips at least one warn-grade
+      // check is invisible to today's success/error alert routing. Log a
+      // structured warn line so the daemon log surfaces it.
+      if (verdict === 'warn') {
+        log(`Warning: job '${job.name}' completed but rubric verdict is WARN.`);
+      }
     } catch (logErr: unknown) {
       const logMsg = logErr instanceof Error ? logErr.message : String(logErr);
       log(`Warning: failed to write execution log: ${logMsg}`);
@@ -198,6 +216,21 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         }),
         { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
       );
+      // Failure branch always emits a `fail` verdict — the run threw, which
+      // is itself the strongest signal that something is unverified.
+      // Whatever post-write checks / evaluate checks accumulated before the
+      // throw still ride along so the log has the partial picture.
+      const evalChecksOnFail = ctx.verification.getLast()?.checks ?? [];
+      const failChecks: Check[] = [
+        ...ctx.postWriteChecks,
+        ...evalChecksOnFail,
+        {
+          id: 'run_threw',
+          label: 'job raised an exception',
+          status: 'fail',
+          evidence: cls.category,
+        },
+      ];
       logStore.appendEntry({
         runId,
         jobId: job.id,
@@ -212,6 +245,8 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         finalOutput: '',
         steps,
         totalUsage,
+        verdict: 'fail',
+        rubricChecks: failChecks,
       });
     } catch {
       // best-effort logging

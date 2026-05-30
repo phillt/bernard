@@ -1,3 +1,6 @@
+import type { Check, Rubric } from './rubric.js';
+import { verdictOf } from './rubric.js';
+
 /**
  * Status lifecycle for a plan step.
  *
@@ -5,6 +8,12 @@
  * Terminal: `done`, `cancelled`, `error`.
  */
 export type StepStatus = 'pending' | 'in_progress' | 'done' | 'cancelled' | 'error';
+
+/**
+ * Minimum signoff length for a `done` step to count as "really verified."
+ * Anything shorter (e.g. "ok", "done") downgrades the rubric to warn.
+ */
+const MIN_SIGNOFF_LEN = 10;
 
 export interface Step {
   id: number;
@@ -109,6 +118,89 @@ export class PlanStore {
       }
     }
     return count;
+  }
+
+  /**
+   * Derive a machine-checkable rubric from the current plan state (issue #145).
+   * Pure over the existing fields — no new step state required.
+   */
+  evaluateRubric(): Rubric {
+    const checks: Check[] = [];
+    const unresolved = this.unresolvedCount();
+    if (this.steps.length === 0) {
+      checks.push({
+        id: 'steps_terminal',
+        label: 'plan steps in terminal state',
+        status: 'skip',
+        evidence: 'no plan recorded',
+      });
+    } else if (unresolved === 0) {
+      checks.push({
+        id: 'steps_terminal',
+        label: 'plan steps in terminal state',
+        status: 'pass',
+        evidence: `${this.steps.length} step(s) terminal`,
+      });
+    } else {
+      checks.push({
+        id: 'steps_terminal',
+        label: 'plan steps in terminal state',
+        status: 'fail',
+        evidence: `${unresolved} unresolved`,
+      });
+    }
+
+    const doneSteps = this.steps.filter((s) => s.status === 'done');
+    if (doneSteps.length === 0) {
+      checks.push({
+        id: 'signoffs_present',
+        label: 'done steps have substantive signoff',
+        status: 'skip',
+        evidence: 'no done steps',
+      });
+    } else {
+      const weak = doneSteps.filter((s) => (s.signoff ?? '').trim().length < MIN_SIGNOFF_LEN);
+      if (weak.length === 0) {
+        checks.push({
+          id: 'signoffs_present',
+          label: 'done steps have substantive signoff',
+          status: 'pass',
+          evidence: `${doneSteps.length} signoff(s) ≥ ${MIN_SIGNOFF_LEN} chars`,
+        });
+      } else {
+        checks.push({
+          id: 'signoffs_present',
+          label: 'done steps have substantive signoff',
+          status: 'warn',
+          evidence: `${weak.length} weak signoff(s): step(s) ${weak.map((s) => s.id).join(',')}`,
+        });
+      }
+    }
+
+    const errored = this.steps.filter((s) => s.status === 'error');
+    if (errored.length === 0) {
+      checks.push({
+        id: 'no_error_steps',
+        label: 'no step ended in error',
+        status: 'pass',
+      });
+    } else if (errored.length === 1) {
+      checks.push({
+        id: 'no_error_steps',
+        label: 'no step ended in error',
+        status: 'warn',
+        evidence: `step ${errored[0].id}: ${errored[0].note ?? ''}`.trim(),
+      });
+    } else {
+      checks.push({
+        id: 'no_error_steps',
+        label: 'no step ended in error',
+        status: 'fail',
+        evidence: `${errored.length} errored: step(s) ${errored.map((s) => s.id).join(',')}`,
+      });
+    }
+
+    return { verdict: verdictOf(checks), checks };
   }
 
   /** Renders the plan as a human-readable list for re-prompts. */

@@ -26,8 +26,12 @@ export interface PacRunInput {
 export interface PacRunResult {
   /** The (possibly footer-augmented) Actor output passed back to the caller. */
   formatted: string;
-  /** Final critic verdict at the end of the pipeline. */
-  verdict: 'pass' | 'fail';
+  /**
+   * Final critic verdict at the end of the pipeline. `'warn'` means the
+   * pipeline completed without retrying — caveats are surfaced in `formatted`
+   * via a `## Critic Verdict: WARN` footer.
+   */
+  verdict: 'pass' | 'warn' | 'fail';
   /** Critic's reason for the final verdict. */
   reason: string;
   /** How many retry cycles were used (0 = single pass). */
@@ -106,6 +110,20 @@ export async function runPAC(
       return {
         formatted: capSubagentResult(actorOutput),
         verdict: 'pass',
+        reason: verdict.reason,
+        retries: attempt,
+      };
+    }
+
+    if (verdict.verdict === 'warn') {
+      // Warn means "completed but with caveats" — surface the caveat as a
+      // footer but do not retry. Reserve footer space inside the cap so the
+      // signal isn't truncated away.
+      const warnFooter = `\n\n## Critic Verdict: WARN\n${verdict.reason}`;
+      const warnBudget = Math.max(0, SUBAGENT_RESULT_MAX_CHARS - warnFooter.length);
+      return {
+        formatted: capSubagentResult(actorOutput, warnBudget) + warnFooter,
+        verdict: 'warn',
         reason: verdict.reason,
         retries: attempt,
       };

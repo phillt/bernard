@@ -2,6 +2,7 @@ import type { Theme } from './theme.js';
 import type { PolicyDecision } from './policy/types.js';
 import type { ResolvedEntry } from './reference-resolver.js';
 import type { Step } from './plan-store.js';
+import type { Check, Verdict } from './rubric.js';
 
 /**
  * Snapshot of "what Bernard believes its operating state is" for one turn.
@@ -34,10 +35,16 @@ export interface AgentStatusInputs {
 }
 
 export interface VerificationEntry {
-  verdict: 'pass' | 'fail';
+  verdict: Verdict;
   reason: string;
   /** Free-form label of what was verified (e.g. sub-agent task summary). */
   source: string;
+  /**
+   * Structured checks behind the verdict (issue #145). Present when the verdict
+   * was produced by a rubric-aware site (PAC critic, the `evaluate` tool with
+   * structured checks). Absent for legacy callers.
+   */
+  checks?: Check[];
 }
 
 /**
@@ -167,7 +174,12 @@ export function buildAgentStatusPanel(inputs: AgentStatusInputs, t: Theme): stri
 
   if (inputs.lastVerification) {
     const v = inputs.lastVerification;
-    const tag = v.verdict === 'pass' ? t.success('PASS') : t.error('FAIL');
+    const tag =
+      v.verdict === 'pass'
+        ? t.success('PASS')
+        : v.verdict === 'warn'
+          ? t.warning('WARN')
+          : t.error('FAIL');
     const body = ` — ${truncate(v.reason, 120)}`;
     const tail = v.source ? t.dim(`  (${truncate(v.source, 60)})`) : '';
     lines.push(row('Last verify', `${tag}${body}${tail}`, t));

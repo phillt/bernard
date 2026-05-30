@@ -4,6 +4,8 @@ import type { ToolMeta } from '../../framework/tools/types.js';
 import type { LLMCacheKey } from '../../llm-cache.js';
 import type { ModelSite } from '../../model-policy.js';
 import type { SourceItemInput } from '../../provenance.js';
+import type { Check, Verdict } from '../../rubric.js';
+import type { Step } from '../../plan-store.js';
 
 /**
  * Closed discriminated union of invariants the eval harness can assert.
@@ -57,6 +59,24 @@ export type InvariantSpec =
       userInput: string;
       previousUserInput: string | undefined;
       expectResetAll: boolean;
+    }
+  | {
+      type: 'rubric_verdict_of';
+      checks: Check[];
+      expected: Verdict;
+    }
+  | {
+      type: 'rubric_plan_evaluates_to';
+      steps: Array<Pick<Step, 'id' | 'description' | 'status'> & Partial<Step>>;
+      expectedVerdict: Verdict;
+      expectChecks?: Array<{ id: string; status: Check['status'] }>;
+    }
+  | {
+      type: 'rubric_post_write_hook';
+      meta: ToolMeta;
+      args: unknown;
+      result: unknown;
+      expected: { status: 'pass' | 'warn' | 'fail' } | null;
     };
 
 export type FixtureCategory =
@@ -66,7 +86,8 @@ export type FixtureCategory =
   | 'citations'
   | 'caching'
   | 'model-policy'
-  | 'scratch';
+  | 'scratch'
+  | 'evaluation-rubric';
 
 export interface Fixture {
   name: string;

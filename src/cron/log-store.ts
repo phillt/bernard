@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { LOGS_DIR } from '../paths.js';
 import type { ToolErrorType } from '../framework/tools/types.js';
+import type { Verdict, Check } from '../rubric.js';
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const DEFAULT_KEEP = 500;
 
@@ -32,6 +33,15 @@ export interface CronLogEntry {
   finalOutput: string;
   steps: CronLogStep[];
   totalUsage: { promptTokens: number; completionTokens: number; totalTokens: number };
+  /**
+   * Composed turn verdict (#145). Set on both success and exception branches.
+   * `'pass'` = all rubric checks passed; `'warn'` = at least one warned but
+   * none failed; `'fail'` = at least one check failed (or the run threw).
+   * Optional so older logs continue to parse cleanly.
+   */
+  verdict?: Verdict;
+  /** Individual checks that contributed to {@link verdict}. */
+  rubricChecks?: Check[];
 }
 
 /**

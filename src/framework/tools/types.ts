@@ -63,6 +63,21 @@ export interface ToolMeta {
    * tools keep the static `kind`-based behavior.
    */
   isWriteAction?: (args: unknown) => boolean;
+  /**
+   * Optional post-write schema/state check (issue #145). Runs after the tool
+   * returns `status: 'ok'` and contributes a structured `Check` to the turn's
+   * rubric. Used for "did we mutate external state, and did we confirm it
+   * post-write?" — e.g. `file_edit_lines` re-stats the path, `mcp_config`
+   * re-reads the config file. Return `null` to skip (not applicable for this
+   * call). Synchronous; should be fast and side-effect-free.
+   */
+  verifyOutput?: (args: unknown, result: unknown) => VerifyOutcome | null;
+}
+
+/** Outcome of a `ToolMeta.verifyOutput` check. */
+export interface VerifyOutcome {
+  status: 'pass' | 'warn' | 'fail';
+  evidence?: string;
 }
 
 /**

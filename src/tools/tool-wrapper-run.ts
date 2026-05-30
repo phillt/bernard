@@ -21,6 +21,8 @@ import type { AgentContext } from '../framework/context.js';
 import type { PolicyDecision } from '../policy/types.js';
 import { ProvenanceStore } from '../provenance.js';
 import { VerificationStore } from '../agent-status.js';
+import { VerificationTracker } from '../verification-tracker.js';
+import type { Check } from '../rubric.js';
 import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
@@ -121,6 +123,13 @@ export interface ToolWrapperDeps {
    */
   verification?: VerificationStore;
   /**
+   * Parent turn's verification tracker + post-write check sink. Forwarded so
+   * tool calls made from inside a wrapper contribute to the same per-turn
+   * rubric the main agent composes. Issue #145.
+   */
+  verificationTracker?: VerificationTracker;
+  postWriteChecks?: Check[];
+  /**
    * Parent turn's policy decision. Forwarded so the inner wrapper
    * inherits the user's `toolMode` (#179) — otherwise the augment layer
    * defaults to `'write'` and any write tool the wrapper calls bypasses
@@ -146,6 +155,8 @@ export function ctxToToolWrapperDeps(ctx: AgentContext): ToolWrapperDeps {
     toolProfileStore: ctx.stores.toolProfiles,
     provenance: ctx.provenance,
     verification: ctx.verification,
+    verificationTracker: ctx.verificationTracker,
+    postWriteChecks: ctx.postWriteChecks,
     policyDecision: ctx.policyDecision,
   };
 }
@@ -167,6 +178,8 @@ export function depsToCtx(deps: ToolWrapperDeps): AgentContext {
     toolOptions: deps.options,
     provenance: deps.provenance ?? new ProvenanceStore(),
     verification: deps.verification ?? new VerificationStore(),
+    verificationTracker: deps.verificationTracker ?? new VerificationTracker(),
+    postWriteChecks: deps.postWriteChecks ?? [],
     ...(deps.policyDecision ? { policyDecision: deps.policyDecision } : {}),
   };
 }

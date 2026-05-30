@@ -27,13 +27,13 @@ Rules:
 - You may use ONLY read-only verification tools (file_read_lines, memory.read, scratch.read, web_read, web_search, datetime, evaluate). DO NOT call shell, write to memory, edit files, or take any action that changes state.
 - Check the Actor's claims against actual observable state. If the Actor said "wrote file X with content Y" — read file X and confirm. If the Actor said "command returned Z" — re-run only if it is a safe read-only command, otherwise trust the Actor's transcript.
 - Use \`evaluate\` to publish a short verdict reasoning visible to the user.
-- Be strict but fair. PASS when every success criterion is met. FAIL when any success criterion is unmet, the Actor's evidence is missing, or the Actor reported unrecoverable errors.
+- Be strict but fair. PASS when every success criterion is met. WARN when the success criteria were met but there are caveats worth surfacing (partial coverage, unexpected output that did not block success, missing post-write check). FAIL when any success criterion is unmet, the Actor's evidence is missing, or the Actor reported unrecoverable errors.
 
 Output format (STRICT):
 Your FINAL message MUST be a single valid JSON object with this shape and nothing else — no prose before or after, no markdown code fences:
 
 {
-  "verdict": "pass" | "fail",
+  "verdict": "pass" | "warn" | "fail",
   "reason": "<one or two sentences explaining the verdict, citing specific criteria>"
 }
 
@@ -52,20 +52,20 @@ export interface PacCriticInput {
 
 /** Parsed verdict returned to the orchestrator. */
 export interface PacCriticVerdict {
-  verdict: 'pass' | 'fail';
+  verdict: 'pass' | 'warn' | 'fail';
   reason: string;
   raw: string;
 }
 
 const VerdictSchema = z.object({
-  verdict: z.enum(['pass', 'fail']),
+  verdict: z.enum(['pass', 'warn', 'fail']),
   reason: z.string(),
 });
 
 function buildCriticTools(ctx: import('../context.js').AgentContext): Record<string, Tool> {
   const fileTools = createFileTools();
   return {
-    evaluate: createEvaluateTool(),
+    evaluate: createEvaluateTool(ctx.verification),
     memory: toolToAISDK(createReadOnlyMemoryTool(ctx.stores.memory)),
     scratch: toolToAISDK(createReadOnlyScratchTool(ctx.stores.memory)),
     file_read_lines: fileTools.file_read_lines,

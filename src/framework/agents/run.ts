@@ -90,6 +90,11 @@ export async function runDefinition<TInput, TFormatted>(
     // told to cite (cron + sub-agents/wrappers do not inject EVIDENCE_PROMPT).
     provenance: ctx.provenance,
     evidenceEnabled: ctx.policyDecision?.evidence?.requireForVerifiedClaims === true,
+    // Rubric wiring (#145). Shared by reference into sub-agent / tool-wrapper
+    // contexts so post-write hooks fire and attestation tokens accumulate
+    // regardless of which level made the call.
+    verificationTracker: ctx.verificationTracker,
+    postWriteChecks: ctx.postWriteChecks,
   });
   const hooks = def.hooks(ctx, input);
   const baseMaxSteps = def.stepBudget(config, input);
