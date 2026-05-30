@@ -81,6 +81,11 @@ export async function runDefinition<TInput, TFormatted>(
     blockAction: ctx.toolOptions.blockAction,
     sessionToolAllowlist: ctx.toolOptions.sessionToolAllowlist,
     cacheEnabled: config.cacheEnabled,
+    // Evidence-pointer registration (#141). Shared by reference into
+    // sub-agent / tool-wrapper contexts so a `shell` call inside a wrapper
+    // surfaces in the parent's Shift+Tab overlay alongside main-agent calls.
+    provenance: ctx.provenance,
+    evidenceEnabled: ctx.policyDecision?.evidence?.requireForVerifiedClaims ?? true,
   });
   const hooks = def.hooks(ctx, input);
   const baseMaxSteps = def.stepBudget(config, input);

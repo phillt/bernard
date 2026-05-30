@@ -8,6 +8,7 @@ import type { BlockActionInput, BlockOutcome, ConfirmActionInput, ToolOptions } 
 import type { ConfirmThreshold } from '../risk.js';
 import { riskFromMeta, shouldBlockInReadOnly, shouldConfirm } from '../risk.js';
 import { CACHE_MISS, getCachedResult, setCachedResult } from '../framework/tools/result-cache.js';
+import type { ProvenanceStore } from '../provenance.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -145,6 +146,22 @@ export interface AugmentOptions {
    * always call `execute`. Defaults to enabled.
    */
   cacheEnabled?: boolean;
+  /**
+   * Per-turn ProvenanceStore for evidence-pointer registration (#141). When
+   * provided and {@link evidenceEnabled} is not `false`, every successful
+   * tool call is added as a `kind: 'tool-result'` source so the model can
+   * cite it with `[^Sn]` markers in "verified" / "confirmed" claims. Errors,
+   * denies, and cancellations are skipped. Dedup is handled by the store
+   * (keyed on `kind` + `rawRef`).
+   */
+  provenance?: ProvenanceStore;
+  /**
+   * Toggle for evidence-pointer registration (#141). Defaults to `true` when
+   * a {@link provenance} store is passed; set `false` to short-circuit the
+   * add even when a store is wired (e.g. the policy engine disabled the
+   * `evidence` sub-policy for this turn).
+   */
+  evidenceEnabled?: boolean;
 }
 
 function isProfileStore(v: AugmentOptions | ToolProfileStore): v is ToolProfileStore {
@@ -248,6 +265,33 @@ export function augmentTools(
   // allowlist on the confirm gate means a repeat call with the same args
   // doesn't re-prompt, so the extra gate trip is essentially free.
   const cacheEnabled = opts.cacheEnabled !== false;
+  // Evidence-pointer registration (#141). Active only when a ProvenanceStore
+  // is wired AND the policy hasn't disabled it. Errors during `add` are
+  // swallowed so a malformed source never aborts a real tool call.
+  const provenance = opts.provenance;
+  const evidenceEnabled = provenance ? opts.evidenceEnabled !== false : false;
+
+  const registerEvidence = (
+    toolName: string,
+    argsSnippet: string,
+    preview: string,
+  ): void => {
+    if (!evidenceEnabled || !provenance) return;
+    try {
+      const argTail = argsSnippet ? `: ${argsSnippet.slice(0, 80)}` : '';
+      provenance.add({
+        kind: 'tool-result',
+        label: `${toolName}${argTail}`,
+        contentPreview: preview,
+        rawRef: `tool:${toolName}:${argsSnippet.slice(0, 120)}`,
+      });
+    } catch (err) {
+      debugLog(
+        `augment:${toolName}:evidence:failed`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  };
 
   const augmented: Record<string, any> = {};
 
@@ -421,6 +465,14 @@ export function augmentTools(
             if (toolIsCacheable && envelope.status === 'ok') {
               setCachedResult(source.meta, args, serialized);
             }
+            // Evidence pointer (#141): register every successful tool call so
+            // the model can cite it for verified claims. Errored / denied /
+            // cancelled envelopes never become evidence.
+            if (envelope.status === 'ok') {
+              const previewSrc =
+                typeof serialized === 'string' ? serialized : safeSerialize(serialized);
+              registerEvidence(toolName, argsSnippet, previewSrc);
+            }
             return serialized;
           },
         },
@@ -464,6 +516,16 @@ export function augmentTools(
               const errorInfo = detectToolError(toolName, capturedResult);
               const errSnippet = errorInfo.isError ? errorInfo.snippet : undefined;
               recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet);
+              // Evidence pointer (#141): deferred to setImmediate alongside
+              // profile recording so the "result returned before recording"
+              // invariant from the legacy-path tests still holds.
+              if (!errorInfo.isError) {
+                const previewSrc =
+                  typeof capturedResult === 'string'
+                    ? capturedResult
+                    : safeSerialize(capturedResult);
+                registerEvidence(toolName, argsSnippet, previewSrc);
+              }
             } catch {
               // detectToolError throws are swallowed; recording must never propagate.
             }

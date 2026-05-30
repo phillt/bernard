@@ -24,6 +24,7 @@ import {
   REASONING_FAMILIES,
   CITATIONS_PROMPT,
   CONCISE_PROMPT,
+  EVIDENCE_PROMPT,
 } from '../../agent-prompt.js';
 import { buildContextMessage } from '../../context-message.js';
 import type { RAGSearchResult } from '../../rag.js';
@@ -100,6 +101,15 @@ export function buildMainSystemPrompt(
     !REASONING_FAMILIES.has(profile.family)
   ) {
     systemPrompt += '\n\n' + CITATIONS_PROMPT;
+  }
+  // Evidence-pointer policy: append the `## Evidence Pointers` block when the
+  // policy engine has decided we require markers for verified claims and the
+  // active model family does not forbid inline annotations. Issue #141.
+  if (
+    ctx.policyDecision?.evidence?.requireForVerifiedClaims &&
+    !REASONING_FAMILIES.has(profile.family)
+  ) {
+    systemPrompt += '\n\n' + EVIDENCE_PROMPT;
   }
   // Concise-mode shaping: append the concise block when the policy enables it.
   // Issue #175. No model-family gate — concision is universal.
