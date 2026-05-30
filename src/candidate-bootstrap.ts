@@ -3,6 +3,24 @@ import { CandidateStore, type SpecialistCandidate } from './specialist-candidate
 import { printInfo, printWarning } from './output.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
+import { resolveSiteModel } from './model-policy.js';
+
+/**
+ * Picks the policy-resolved (provider, model) for a newly auto-created
+ * specialist, or `{}` when multi-model mode is off / policy can't resolve.
+ */
+function pickAutoCreateModel(config?: BernardConfig): { provider?: string; model?: string } {
+  if (!config || config.modelMode === 'off') return {};
+  try {
+    const site = resolveSiteModel(config, 'specialist');
+    if (site.source === 'policy') {
+      return { provider: site.provider, model: site.modelName };
+    }
+  } catch {
+    /* fall through */
+  }
+  return {};
+}
 
 /** Promote a pending candidate to a full specialist, updating status and logging. */
 export function promoteCandidate(
@@ -13,13 +31,17 @@ export function promoteCandidate(
   specialistStore: SpecialistStore,
   candidateStore: CandidateStore,
   threshold: number,
+  config?: BernardConfig,
 ): void {
+  const { provider, model } = pickAutoCreateModel(config);
   specialistStore.create(
     candidate.draftId,
     candidate.name,
     candidate.description,
     candidate.systemPrompt,
     candidate.guidelines,
+    provider,
+    model,
   );
   candidateStore.updateStatus(candidate.id, 'accepted');
   debugLog('repl:auto-create', {
@@ -37,12 +59,13 @@ export function promotePendingCandidates(
   candidateStore: CandidateStore,
   specialistStore: SpecialistStore,
   threshold: number,
+  config?: BernardConfig,
 ): void {
   const pending = candidateStore.listPending();
   for (const c of pending) {
     if (c.confidence >= threshold) {
       try {
-        promoteCandidate(c, specialistStore, candidateStore, threshold);
+        promoteCandidate(c, specialistStore, candidateStore, threshold, config);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         debugLog('repl:auto-create', {
@@ -77,11 +100,12 @@ export function bootstrapPendingCandidates(
   candidateStore: CandidateStore,
   specialistStore: SpecialistStore,
   opts: Pick<BernardConfig, 'autoCreateSpecialists' | 'autoCreateThreshold'>,
+  config?: BernardConfig,
 ): BootstrapResult {
   candidateStore.pruneOld();
   candidateStore.reconcileSaved(specialistStore.list());
   if (opts.autoCreateSpecialists) {
-    promotePendingCandidates(candidateStore, specialistStore, opts.autoCreateThreshold);
+    promotePendingCandidates(candidateStore, specialistStore, opts.autoCreateThreshold, config);
   }
   const pending = candidateStore.listPending();
   if (pending.length === 0) {

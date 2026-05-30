@@ -62,6 +62,32 @@ bernard providers                # lists built-ins and custom side-by-side
 
 Keys for custom providers are stored in `keys.json` (same path as built-ins) and never injected into `process.env`. Built-in providers are unaffected.
 
+## Model Mode (multi-model assignment)
+
+`config.modelMode` (#170) tiers the (provider, model) used by each LLM call site within the active provider's model lineup. Four presets:
+
+- `off` (default) — every site uses `config.provider`/`config.model`. Legacy behavior, zero overhead.
+- `optimize-tokens` — aggressive cost-saving. Main uses **mid**, every sub-agent/wrapper/router site uses **cheap**.
+- `balanced` — main **premium**; specialist/tool-wrapper/compressor **mid**; rewriter/reference-resolver/reference-lookup/specialist-detector **cheap**.
+- `optimize-performance` — every site uses **premium**.
+
+Per-provider tier → model mapping (in `src/model-policy.ts`):
+
+| Provider  | premium                 | mid                        | cheap                     |
+| --------- | ----------------------- | -------------------------- | ------------------------- |
+| anthropic | claude-opus-4-6         | claude-sonnet-4-5-20250929 | claude-haiku-4-5-20251001 |
+| openai    | gpt-5.2                 | gpt-4.1                    | gpt-4.1-mini              |
+| xai       | grok-4-1-fast-reasoning | grok-4-fast-non-reasoning  | grok-3-mini               |
+
+Custom providers fall back to `config.model` for every site (no tier mapping). Invocation-level overrides and per-specialist `provider`/`model` records always win over the policy. When `modelMode !== 'off'` and a specialist is created without an explicit provider/model, the policy-resolved `specialist`-tier model is persisted onto the new record so later mode changes don't silently re-tier it.
+
+```bash
+bernard set-model-mode balanced            # CLI
+# REPL: /agent-options → Model mode
+```
+
+The single source of truth is `resolveSiteModel(config, site, opts?)` in `src/model-policy.ts`. Every `generateText` call site routes through it. Set `BERNARD_DEBUG=1` to see `model-policy:resolve` log entries per site.
+
 ## Key Patterns
 
 - **Vercel AI SDK** (`ai` package) provides unified tool calling across Anthropic/OpenAI/xAI
@@ -113,6 +139,7 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_HOME` — Override all XDG directories with a single flat path
 - `BERNARD_COORDINATOR_MODE` — Tri-state execution-strategy selector: `on | off | auto` (default: `auto`). `on` runs ReAct every turn (think → act → evaluate → decide loop with plan tool + enforcement, per-turn step budget `min(BERNARD_MAX_STEPS * 3, 150)`, up to 2 extra re-prompts if the plan still has unresolved steps — worst-case step count `effectiveMaxSteps * 3`, subagent budgets unaffected). `off` runs single-shot Normal every turn. `auto` runs the per-turn Qualifier (`src/qualifier/`) which classifies the user message via rule-based features grounded in LLM-routing research (RouteLLM, FrugalGPT, Topaz, MoMA, RouterArena) and emits `strategyId: 'normal' | 'react'` plus a kebab-case reason that flows through `policy:decide` + `qualifier:outcome` debug logs.
 - `BERNARD_REACT_MODE` — Deprecated alias for `BERNARD_COORDINATOR_MODE`: `true` → `on`, `false` → `off`. Use `BERNARD_COORDINATOR_MODE` directly.
+- `BERNARD_MODEL_MODE` — Multi-model assignment policy (#170): `off | optimize-tokens | balanced | optimize-performance` (default: `off`). See the "Model Mode" section above.
 - `BERNARD_SUBAGENT_PAC` — Route sub-agent dispatch through the PAC (Planner → Actor → Critic) pipeline instead of the legacy single-agent path (default: true). Each phase is a distinct `AgentDefinition` with its own ephemeral history, tool subset, and step budget (20% / 60% / 20% of the sub-agent allotment). On critic `fail` the orchestrator re-plans with critic feedback and re-runs the actor once (`PAC_MAX_RETRIES = 1`); after final failure the actor output is returned with a `## Critic Verdict: FAIL` footer. Set to `false` to fall back to the legacy `sub` definition. See `src/framework/pac/run-pac.ts`.
 - `BERNARD_SUBAGENT_RESULT_MAX_CHARS` — Max characters returned from a sub-agent / specialist into the parent agent's context, default 4000. The user still sees full output in the terminal.
 - `BERNARD_AUTO_CREATE_SPECIALISTS` — Auto-create specialists above confidence threshold (default: false)

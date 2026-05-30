@@ -74,7 +74,9 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
       try {
         const runOpts = {
           abortSignal: execOptions.abortSignal,
-          overrides: { provider: resolution.provider, model: resolution.model },
+          // Forward only the user-supplied provider/model so resolveSiteModel
+          // can fall through to the modelMode tier table when neither is set.
+          overrides: { provider, model },
         };
         let formatted: string;
         if (ctx.config.subagentPac) {

@@ -127,6 +127,7 @@ export interface TaskInput {
  */
 export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
   id: 'task',
+  site: 'specialist',
   historyMode: 'ephemeral',
   prefix: (input) => `task:${input.slotId}`,
 

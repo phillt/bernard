@@ -23,6 +23,7 @@ export function makePolicyInput(overrides?: {
     theme: 'bernard',
     maxSteps: 25,
     coordinatorMode: 'off',
+    modelMode: 'off',
     subagentPac: true,
     toolDetails: false,
     autoCreateSpecialists: false,

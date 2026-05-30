@@ -21,6 +21,7 @@ import {
   resetAllOptions,
   getDefaultModel,
   providerEnvVar,
+  isModelMode,
 } from './config.js';
 import {
   loadCustomProviders,
@@ -295,6 +296,40 @@ program
       }
       rl.close();
     });
+  });
+
+program
+  .command('set-model-mode <mode>')
+  .description(
+    'Set multi-model assignment policy: off | optimize-tokens | balanced | optimize-performance',
+  )
+  .action((mode: string) => {
+    if (!isModelMode(mode)) {
+      printError(
+        `Unknown model mode "${mode}". Valid values: off, optimize-tokens, balanced, optimize-performance.`,
+      );
+      process.exit(1);
+    }
+    try {
+      const prefs = loadPreferences();
+      // savePreferences requires provider/model. When prefs don't carry them,
+      // fall back to the active env (BERNARD_PROVIDER/BERNARD_MODEL) so this
+      // command doesn't silently override a user who configured their provider
+      // via env vars only. Anthropic remains the last-resort default.
+      const provider = prefs.provider || process.env.BERNARD_PROVIDER || 'anthropic';
+      const model = prefs.model || process.env.BERNARD_MODEL || getDefaultModel(provider);
+      savePreferences({
+        ...prefs,
+        provider,
+        model,
+        modelMode: mode,
+      });
+      printInfo(`Model mode set to "${mode}".`);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
   });
 
 program

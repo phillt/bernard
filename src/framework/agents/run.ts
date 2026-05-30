@@ -1,7 +1,6 @@
 import type { CoreMessage } from 'ai';
-import { defaultProviderErrorMessage, resolveProviderAndModel } from '../../config.js';
 import { buildContextMessage, type ContextMessageInputs } from '../../context-message.js';
-import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
+import { resolveSiteModel } from '../../model-policy.js';
 import { makeRepairHook } from '../../tool-call-repair.js';
 import type { AgentContext } from '../context.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
@@ -179,22 +178,12 @@ function resolveModel<TInput, TFormatted>(
   if (def.resolveModel) {
     return def.resolveModel(ctx, input, overrides);
   }
-  const { config } = ctx;
-  const resolution = resolveProviderAndModel({
-    provider: overrides?.provider,
-    model: overrides?.model,
-    config,
-  });
-  if (!resolution.ok) {
-    throw new Error(
-      defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom),
-    );
-  }
+  const site = resolveSiteModel(ctx.config, def.site ?? 'main', { overrides });
   return {
-    model: getModelForConfig(config, resolution.provider, resolution.model),
-    providerOptions: getProviderOptionsForConfig(config, resolution.provider),
-    provider: resolution.provider,
-    modelName: resolution.model,
+    model: site.model,
+    providerOptions: site.providerOptions,
+    provider: site.provider,
+    modelName: site.modelName,
   };
 }
 

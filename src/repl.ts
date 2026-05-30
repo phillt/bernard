@@ -74,11 +74,8 @@ import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
 import { generateText } from 'ai';
-import {
-  getModelForConfig,
-  getModelProfile,
-  getProviderOptionsForConfig,
-} from './providers/index.js';
+import { getModelProfile } from './providers/index.js';
+import { resolveSiteModel } from './model-policy.js';
 import { rewritePrompt } from './prompt-rewriter.js';
 import {
   serializeMessages,
@@ -1009,6 +1006,7 @@ export async function startRepl(
     candidateStore,
     specialistStore,
     config,
+    config,
   );
   if (contextBlock) {
     printInfo(
@@ -1308,10 +1306,11 @@ export async function startRepl(
             try {
               const serialized = serializeMessages(history);
 
+              const summarySite = resolveSiteModel(config, 'compressor');
               const [summaryResult, domainFacts, candidateResult] = await Promise.all([
                 generateText({
-                  model: getModelForConfig(config, config.provider, config.model),
-                  providerOptions: getProviderOptionsForConfig(config, config.provider),
+                  model: summarySite.model,
+                  providerOptions: summarySite.providerOptions,
                   maxTokens: 2048,
                   system: SUMMARIZATION_PROMPT,
                   messages: [
@@ -1372,6 +1371,7 @@ export async function startRepl(
                         specialistStore,
                         candidateStore,
                         config.autoCreateThreshold,
+                        config,
                       );
                     } else {
                       debugLog('repl:auto-create', {
@@ -2057,6 +2057,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
                   candidateStore,
                   specialistStore,
                   config.autoCreateThreshold,
+                  config,
                 );
               }
             },
@@ -2131,6 +2132,62 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           console.log();
         }
 
+        async function runModelModePrompt(): Promise<void> {
+          const modes: Array<{
+            value: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance';
+            label: string;
+            desc: string;
+          }> = [
+            {
+              value: 'off',
+              label: 'Off (single model)',
+              desc: 'Every site uses the active provider/model. Legacy behavior.',
+            },
+            {
+              value: 'balanced',
+              label: 'Balanced',
+              desc: 'Premium for main; mid-tier for sub-agents; cheap for rewriter/qualifier.',
+            },
+            {
+              value: 'optimize-tokens',
+              label: 'Optimize for token usage',
+              desc: 'Aggressive cost-saving: cheap for sub-agents and routing, mid-tier for main.',
+            },
+            {
+              value: 'optimize-performance',
+              label: 'Optimize for performance',
+              desc: 'Push every site to the strongest model in the provider lineup.',
+            },
+          ];
+          const entries: MenuEntry[] = modes.map((m) => ({
+            label: m.label,
+            description: m.desc,
+            active: config.modelMode === m.value,
+          }));
+          const signal = createMenuSignal();
+          try {
+            const result = await selectFromMenu(
+              rl,
+              entries,
+              { title: `Model mode: ${config.modelMode}` },
+              signal,
+            );
+            if (result.cancelled) return;
+            const chosen = modes[result.index].value;
+            config.modelMode = chosen;
+            savePreferences({
+              ...loadPreferences(),
+              provider: config.provider,
+              model: config.model,
+              modelMode: chosen,
+            });
+            printInfo(`  [MODEL-MODE:${chosen.toUpperCase()}] Site model assignment updated.`);
+          } finally {
+            clearMenuSignal();
+          }
+          console.log();
+        }
+
         async function runScratchThresholdPrompt(): Promise<void> {
           const signal = createMenuSignal();
           try {
@@ -2178,7 +2235,12 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             });
             printInfo(`  Auto-create threshold: ${normalized} (${Math.round(normalized * 100)}%)`);
             if (config.autoCreateSpecialists) {
-              promotePendingCandidates(candidateStore, specialistStore, config.autoCreateThreshold);
+              promotePendingCandidates(
+                candidateStore,
+                specialistStore,
+                config.autoCreateThreshold,
+                config,
+              );
             }
           } finally {
             clearMenuSignal();
@@ -2223,6 +2285,16 @@ Remember: the systemPrompt should read like a persona definition — who this sp
                 'On = always coordinator; Off = always normal; Auto = per-turn qualifier.',
             },
             action: runCoordinatorModePrompt,
+          },
+          {
+            kind: 'item',
+            item: {
+              label: 'Model mode',
+              annotation: `= ${config.modelMode}`,
+              description:
+                'Off = single model. Balanced / Optimize-tokens / Optimize-performance pick a model per site.',
+            },
+            action: runModelModePrompt,
           },
           ...systemBools.slice(1).map(toggleRow),
           {

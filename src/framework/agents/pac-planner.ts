@@ -73,6 +73,7 @@ function buildPlannerTools(ctx: import('../context.js').AgentContext): Record<st
 
 export const pacPlannerDefinition: AgentDefinition<PacPlannerInput, string> = {
   id: 'pac-planner',
+  site: 'specialist',
   historyMode: 'ephemeral',
   repairLabel: 'subagent',
   prefix: (input) => `sub:${input.slotId}/plan`,

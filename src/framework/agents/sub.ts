@@ -51,6 +51,7 @@ export interface SubAgentInput {
  */
 export const subAgentDefinition: AgentDefinition<SubAgentInput, string> = {
   id: 'sub',
+  site: 'specialist',
   historyMode: 'ephemeral',
   repairLabel: 'subagent',
   prefix: (input) => `sub:${input.slotId}`,

@@ -1,8 +1,8 @@
 import { generateText } from 'ai';
-import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import { readToolMeta } from './framework/tools/adapter.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
+import { resolveSiteModel } from './model-policy.js';
 
 /**
  * Pre-fallback module that runs only when the resolver returns
@@ -164,9 +164,10 @@ export async function selectLookupTool(
 ): Promise<SelectResult | null> {
   if (candidates.length === 0) return null;
   try {
+    const site = resolveSiteModel(config, 'reference-lookup');
     const result = await generateText({
-      model: getModelForConfig(config, config.provider, config.model),
-      providerOptions: getProviderOptionsForConfig(config, config.provider),
+      model: site.model,
+      providerOptions: site.providerOptions,
       system: SELECT_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: buildSelectUserMessage(reference, candidates) }],
       maxSteps: 1,
@@ -287,9 +288,10 @@ export async function interpretLookupResult(
   abortSignal?: AbortSignal,
 ): Promise<ReferenceLookupResult> {
   try {
+    const site = resolveSiteModel(config, 'reference-lookup');
     const result = await generateText({
-      model: getModelForConfig(config, config.provider, config.model),
-      providerOptions: getProviderOptionsForConfig(config, config.provider),
+      model: site.model,
+      providerOptions: site.providerOptions,
       system: INTERPRET_SYSTEM_PROMPT,
       messages: [
         {

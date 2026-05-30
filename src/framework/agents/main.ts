@@ -161,6 +161,7 @@ export function buildMainContextMessages(
  */
 export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
   id: 'main',
+  site: 'main',
   historyMode: 'persistent',
   repairLabel: 'main',
 

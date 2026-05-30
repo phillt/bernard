@@ -1,7 +1,7 @@
 import { generateText } from 'ai';
-import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
+import { resolveSiteModel } from './model-policy.js';
 import type { Specialist, SpecialistSummary } from './specialists.js';
 import type { SpecialistCandidate } from './specialist-candidates.js';
 import { checkOverlaps, computeConfidence, OVERLAP_THRESHOLD } from './overlap-checker.js';
@@ -125,9 +125,10 @@ export async function detectSpecialistCandidate(
       : '';
 
   try {
+    const site = resolveSiteModel(config, 'specialist-detector');
     const result = await generateText({
-      model: getModelForConfig(config, config.provider, config.model),
-      providerOptions: getProviderOptionsForConfig(config, config.provider),
+      model: site.model,
+      providerOptions: site.providerOptions,
       maxTokens: 2048,
       system: DETECTION_SYSTEM_PROMPT,
       messages: [

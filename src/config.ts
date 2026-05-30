@@ -29,6 +29,14 @@ export interface BernardConfig {
    * turn. The Policy Engine reads this field via `strategyPolicy` (#167).
    */
   coordinatorMode: 'on' | 'off' | 'auto';
+  /**
+   * Multi-model assignment policy (#170). `'off'` keeps every LLM call site
+   * pinned to `provider`/`model` (legacy behavior). `'optimize-tokens'`,
+   * `'balanced'`, and `'optimize-performance'` route each site through
+   * `resolveSiteModel` in `src/model-policy.ts` to pick a cheap / mid / premium
+   * tier of the active provider's model lineup.
+   */
+  modelMode: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance';
   /** Whether sub-agent delegations run through the PAC (Planner → Actor → Critic) pipeline. */
   subagentPac: boolean;
   /** Whether tool-call arguments and full tool result output are shown in the terminal. Tool names and call lines are always shown. */
@@ -82,11 +90,19 @@ const DEFAULT_MAX_STEPS = 25;
 const DEFAULT_AUTO_CREATE_SPECIALISTS = false;
 const DEFAULT_AUTO_CREATE_THRESHOLD = 0.8;
 const DEFAULT_COORDINATOR_MODE: 'on' | 'off' | 'auto' = 'auto';
+const DEFAULT_MODEL_MODE: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance' = 'off';
 const DEFAULT_SCRATCH_SUBJECT_THRESHOLD = 0.15;
 
 /** Type guard for `coordinatorMode` string values. */
 function isCoordinatorMode(v: unknown): v is 'on' | 'off' | 'auto' {
   return v === 'on' || v === 'off' || v === 'auto';
+}
+
+/** Type guard for `modelMode` string values (#170). */
+export function isModelMode(
+  v: unknown,
+): v is 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance' {
+  return v === 'off' || v === 'optimize-tokens' || v === 'balanced' || v === 'optimize-performance';
 }
 
 /**
@@ -175,6 +191,7 @@ export function savePreferences(prefs: {
   theme?: string;
   autoUpdate?: boolean;
   coordinatorMode?: 'on' | 'off' | 'auto';
+  modelMode?: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance';
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
@@ -195,6 +212,7 @@ export function savePreferences(prefs: {
   if (prefs.theme !== undefined) data.theme = prefs.theme;
   if (prefs.autoUpdate !== undefined) data.autoUpdate = prefs.autoUpdate;
   if (prefs.coordinatorMode !== undefined) data.coordinatorMode = prefs.coordinatorMode;
+  if (prefs.modelMode !== undefined) data.modelMode = prefs.modelMode;
   if (prefs.subagentPac !== undefined) data.subagentPac = prefs.subagentPac;
   if (prefs.toolDetails !== undefined) data.toolDetails = prefs.toolDetails;
   if (prefs.autoCreateSpecialists !== undefined)
@@ -224,6 +242,9 @@ export function savePreferences(prefs: {
     if (prefs[k] === undefined && existing && typeof existing[k] === 'boolean') {
       data[k] = existing[k];
     }
+  }
+  if (prefs.modelMode === undefined && existing && isModelMode(existing.modelMode)) {
+    data.modelMode = existing.modelMode;
   }
   if (prefs.coordinatorMode === undefined && existing) {
     if (isCoordinatorMode(existing.coordinatorMode)) {
@@ -292,6 +313,7 @@ export function loadPreferences(): {
   theme?: string;
   autoUpdate?: boolean;
   coordinatorMode?: 'on' | 'off' | 'auto';
+  modelMode?: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance';
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
@@ -320,6 +342,7 @@ export function loadPreferences(): {
       theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
       autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
       coordinatorMode,
+      modelMode: isModelMode(parsed.modelMode) ? parsed.modelMode : undefined,
       subagentPac: typeof parsed.subagentPac === 'boolean' ? parsed.subagentPac : undefined,
       toolDetails: typeof parsed.toolDetails === 'boolean' ? parsed.toolDetails : undefined,
       autoCreateSpecialists:
@@ -806,6 +829,16 @@ export function loadConfig(overrides?: {
     legacyReactModeToCoordinator(envLegacyReact) ??
     DEFAULT_COORDINATOR_MODE;
 
+  // Multi-model assignment mode (#170). Precedence: pref > env > default.
+  const envModelMode = isModelMode(process.env.BERNARD_MODEL_MODE)
+    ? (process.env.BERNARD_MODEL_MODE as
+        | 'off'
+        | 'optimize-tokens'
+        | 'balanced'
+        | 'optimize-performance')
+    : undefined;
+  const modelMode = prefs.modelMode ?? envModelMode ?? DEFAULT_MODEL_MODE;
+
   // Sub-agent PAC pipeline runs by default; users can opt out with BERNARD_SUBAGENT_PAC=false.
   const rawSubagentPac = process.env.BERNARD_SUBAGENT_PAC;
   const subagentPac =
@@ -891,6 +924,7 @@ export function loadConfig(overrides?: {
     ragEnabled,
     theme,
     coordinatorMode,
+    modelMode,
     subagentPac,
     toolDetails,
     autoCreateSpecialists,

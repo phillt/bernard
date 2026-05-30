@@ -1,6 +1,5 @@
 import type { CoreMessage, Tool } from 'ai';
-import { defaultProviderErrorMessage, resolveProviderAndModel } from '../../config.js';
-import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
+import { resolveSiteModel } from '../../model-policy.js';
 import { debugLog } from '../../logger.js';
 import { PlanStore } from '../../plan-store.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
@@ -125,23 +124,12 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
 
   resolveModel(ctx, input, overrides): ResolvedModel {
     const specialist = ctx.stores.specialists.get(input.specialistId);
-    const resolution = resolveProviderAndModel({
-      provider: overrides?.provider,
-      model: overrides?.model,
-      specialistProvider: specialist?.provider,
-      specialistModel: specialist?.model,
-      config: ctx.config,
-    });
-    if (!resolution.ok) {
-      throw new Error(
-        defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom),
-      );
-    }
+    const site = resolveSiteModel(ctx.config, 'specialist', { overrides, specialist });
     return {
-      model: getModelForConfig(ctx.config, resolution.provider, resolution.model),
-      providerOptions: getProviderOptionsForConfig(ctx.config, resolution.provider),
-      provider: resolution.provider,
-      modelName: resolution.model,
+      model: site.model,
+      providerOptions: site.providerOptions,
+      provider: site.provider,
+      modelName: site.modelName,
     };
   },
 
