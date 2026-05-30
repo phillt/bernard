@@ -387,6 +387,7 @@ export class RAGStore {
     this.memories = this.memories.filter((m) => !idSet.has(m.id));
     const deleted = before - this.memories.length;
     if (deleted > 0) {
+      this.turnSearchCache.clear();
       this.persist();
     }
     return deleted;
@@ -401,6 +402,7 @@ export class RAGStore {
     );
     const expired = before - this.memories.length;
     if (expired > 0) {
+      this.turnSearchCache.clear();
       debugLog('rag:pruneExpired', { expired });
       this.persist();
     }

@@ -49,6 +49,7 @@ function makeConfig(overrides: Partial<BernardConfig> = {}): BernardConfig {
     referenceLookupTools: [],
     scratchSubjectThreshold: 0.15,
     conciseMode: true,
+    cacheEnabled: true,
     ...overrides,
   };
 }

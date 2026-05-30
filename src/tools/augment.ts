@@ -2,7 +2,7 @@ import { type ToolProfileStore, classifyShellCommand, detectToolError } from '..
 import { debugLog } from '../logger.js';
 import { printInfo } from '../output.js';
 import { readBernardSource, readToolMeta, preserveMeta } from '../framework/tools/adapter.js';
-import type { ToolResult } from '../framework/tools/types.js';
+import { isCacheable, type ToolResult } from '../framework/tools/types.js';
 import { classifyError } from '../error-taxonomy.js';
 import type { BlockActionInput, BlockOutcome, ConfirmActionInput, ToolOptions } from './types.js';
 import type { ConfirmThreshold } from '../risk.js';
@@ -366,15 +366,29 @@ export function augmentTools(
               };
               return source.serializeForModel(cancelled);
             }
-            // Deterministic-tool cache check (#171). `getCachedResult` no-ops
-            // when the tool's meta doesn't pass `isCacheable`, so only opted-in
-            // tools (e.g. time_range, time_range_total) can ever hit. The
-            // cached value is the already-serialized model bytes — see the
-            // setCachedResult call below.
-            if (cacheEnabled) {
+            // Deterministic-tool cache check (#171). Only opted-in tools
+            // (deterministic + sideEffect:'none'|cacheable:true) participate;
+            // anything else skips both the lookup and the miss log so cache
+            // telemetry only reflects cacheable tools. The cached value is the
+            // already-serialized model bytes — see the setCachedResult call
+            // below.
+            const toolIsCacheable = cacheEnabled && isCacheable(source.meta);
+            if (toolIsCacheable) {
               const cached = getCachedResult(source.meta, args);
               if (cached !== CACHE_MISS) {
                 debugLog(`cache:tool:hit`, { tool: toolName });
+                // Bump successCount + patch any awaiting-fix bad example on
+                // cache hits too — without this, profile learning silently
+                // stalls for cacheable tools.
+                setImmediate(() =>
+                  recordOutcome(
+                    profileStore,
+                    toolName,
+                    resolveProfileKey(toolName, args),
+                    safeSerialize(args),
+                    undefined,
+                  ),
+                );
                 return cached;
               }
               debugLog(`cache:tool:miss`, { tool: toolName });
@@ -408,7 +422,7 @@ export function augmentTools(
             const serialized = source.serializeForModel(envelope);
             // Only cache successful envelopes — denied/cancelled/error must
             // never be served from cache on a subsequent identical call.
-            if (cacheEnabled && envelope.status === 'ok') {
+            if (toolIsCacheable && envelope.status === 'ok') {
               setCachedResult(source.meta, args, serialized);
             }
             return serialized;

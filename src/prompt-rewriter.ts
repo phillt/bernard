@@ -163,6 +163,12 @@ export async function rewritePrompt(
     let rawText: string;
     const cached = cacheKey ? getCachedLLM(cacheKey) : undefined;
     if (cached !== undefined) {
+      // Honor a pre-aborted signal even on cache hits so a cancelled turn
+      // doesn't sneak through with a rewritten prompt.
+      if (abortSignal?.aborted) {
+        debugLog('prompt-rewriter:aborted', null);
+        return { status: 'noop' };
+      }
       debugLog('cache:llm:hit', { site: 'rewriter' });
       rawText = cached;
     } else {

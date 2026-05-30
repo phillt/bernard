@@ -52,6 +52,7 @@ function makeConfig(overrides: Partial<BernardConfig> = {}): BernardConfig {
     autoCreateThreshold: 0.8,
     correctionEnabled: false,
     promptRewriter: true,
+    cacheEnabled: true,
     ...overrides,
   };
 }

@@ -174,6 +174,7 @@ export async function selectLookupTool(
     let rawText: string;
     const cached = cacheKey ? getCachedLLM(cacheKey) : undefined;
     if (cached !== undefined) {
+      if (abortSignal?.aborted) return null;
       debugLog('cache:llm:hit', { site: 'reference-lookup:select' });
       rawText = cached;
     } else {
@@ -319,6 +320,7 @@ export async function interpretLookupResult(
     let rawText: string;
     const cached = cacheKey ? getCachedLLM(cacheKey) : undefined;
     if (cached !== undefined) {
+      if (abortSignal?.aborted) return { status: 'none' };
       debugLog('cache:llm:hit', { site: 'reference-lookup:interpret' });
       rawText = cached;
     } else {
