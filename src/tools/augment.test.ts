@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { augmentTools } from './augment.js';
-import { toolToAISDK } from '../framework/tools/adapter.js';
+import { attachMeta, toolToAISDK } from '../framework/tools/adapter.js';
 import { ok, err, type BernardTool } from '../framework/tools/types.js';
-import { attachMeta } from '../framework/tools/adapter.js';
 
 vi.mock('../tool-profiles.js', () => ({
   classifyShellCommand: vi.fn((cmd: string) => {
@@ -708,10 +707,7 @@ describe('augmentTools', () => {
 
     it('no confirmAction wired → executes without prompting', async () => {
       const { t, execute } = makeLegacyToolWithMeta('dangerous');
-      const augmented = augmentTools(
-        { t },
-        { profileStore: store, confirmThreshold: 'high' },
-      );
+      const augmented = augmentTools({ t }, { profileStore: store, confirmThreshold: 'high' });
       await augmented.t.execute({}, {});
       expect(execute).toHaveBeenCalled();
     });

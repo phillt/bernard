@@ -959,10 +959,7 @@ export async function startRepl(
     }
   };
 
-  const confirmActionFn = (
-    input: ConfirmActionInput,
-    signal?: AbortSignal,
-  ): Promise<boolean> =>
+  const confirmActionFn = (input: ConfirmActionInput, signal?: AbortSignal): Promise<boolean> =>
     withPausedSpinner(signal, async () => {
       const fingerprint = `${input.toolName}:${stableHash(input.args)}`;
       if (sessionConfirmAllowlist.has(fingerprint)) return true;
