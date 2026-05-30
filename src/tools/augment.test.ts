@@ -712,6 +712,27 @@ describe('augmentTools', () => {
       expect(execute).toHaveBeenCalled();
     });
 
+    it('confirmAction wired without explicit threshold → defaults to high (cron contract)', async () => {
+      // Cron (#144) wires `confirmAction: (i) => i.risk !== 'high'` but has no
+      // policyDecision, so the threshold flows through as undefined. Without
+      // the default-to-high fallback the gate short-circuits and the auto-deny
+      // callback never fires.
+      const { t: highT, execute: highExec } = makeLegacyToolWithMeta('dangerous');
+      const { t: medT, execute: medExec } = makeLegacyToolWithMeta('write', 'local');
+      const confirmAction = vi.fn(async (input: { risk: string }) => input.risk !== 'high');
+      const augmented = augmentTools({ highT, medT }, { profileStore: store, confirmAction });
+      await augmented.medT.execute({}, {});
+      expect(confirmAction).not.toHaveBeenCalled();
+      expect(medExec).toHaveBeenCalled();
+      const r = await augmented.highT.execute({}, {});
+      expect(confirmAction).toHaveBeenCalledWith(
+        expect.objectContaining({ risk: 'high' }),
+        undefined,
+      );
+      expect(highExec).not.toHaveBeenCalled();
+      expect(r).toEqual({ output: 'Action cancelled by user.', is_error: true });
+    });
+
     it('high-risk tool with threshold=high → prompts; allowed → executes', async () => {
       const { t, execute } = makeLegacyToolWithMeta('dangerous');
       const confirmAction = vi.fn(async () => true);

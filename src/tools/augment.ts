@@ -178,8 +178,13 @@ export function augmentTools(
 ): Record<string, any> {
   const opts: AugmentOptions = isProfileStore(options) ? { profileStore: options } : options;
   const profileStore = opts.profileStore;
-  const confirmThreshold = opts.confirmThreshold;
   const confirmAction = opts.confirmAction;
+  // When a caller wires `confirmAction` but doesn't supply a threshold (e.g. cron,
+  // which is headless and never runs the Policy Engine), default to `'high'`.
+  // Otherwise `shouldConfirm(risk, undefined)` short-circuits to "proceed" and the
+  // auto-deny-high callback never fires — silently re-opening the very gap #144 closes.
+  const confirmThreshold: ConfirmThreshold | undefined =
+    opts.confirmThreshold ?? (confirmAction ? 'high' : undefined);
   const augmented: Record<string, any> = {};
 
   /**
