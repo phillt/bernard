@@ -11,6 +11,7 @@ export function makePolicyInput(overrides?: {
   userInput?: string;
   config?: Partial<BernardConfig>;
   turnIndex?: number;
+  previousUserInput?: string;
 }): PolicyInput {
   const baseConfig: BernardConfig = {
     provider: 'anthropic',
@@ -30,11 +31,13 @@ export function makePolicyInput(overrides?: {
     promptRewriter: true,
     referenceLookup: true,
     referenceLookupTools: [],
+    scratchSubjectThreshold: 0.15,
     customProviders: {},
   };
   return {
     userInput: overrides?.userInput ?? 'hello',
     config: { ...baseConfig, ...overrides?.config },
     turnIndex: overrides?.turnIndex,
+    previousUserInput: overrides?.previousUserInput,
   };
 }

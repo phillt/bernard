@@ -18,10 +18,12 @@ describe('DefaultPolicyEngine', () => {
     expect(decision.strategyId).toBe('react');
     expect(Object.keys(decision.models ?? {}).sort()).toEqual([...MODEL_COMPONENTS].sort());
     expect(decision.concise?.enabled).toBe(false);
+    // First turn (no previousUserInput) → scratchPolicy clears everything.
     expect(decision.scratch).toEqual({
-      resetAll: false,
+      resetAll: true,
       resetPlanOnly: true,
-      reason: 'per-turn-default',
+      deletePlanKey: true,
+      reason: 'first-turn',
     });
     expect(decision.caching?.enabled).toBe(false);
     expect(decision.citations?.requireForFactualClaims).toBe(true);
@@ -42,11 +44,13 @@ describe('DefaultPolicyEngine', () => {
   it('logs the decision via debugLog under the "policy:decide" label', () => {
     const engine = new DefaultPolicyEngine();
     engine.decide(makePolicyInput());
-    expect(logger.debugLog).toHaveBeenCalledTimes(1);
-    const [label, payload] = vi.mocked(logger.debugLog).mock.calls[0];
-    expect(label).toBe('policy:decide');
-    expect(payload).toHaveProperty('decision');
-    expect(payload).toHaveProperty('reasons');
+    // scratchPolicy also logs `scratch:reset`, so the engine's `policy:decide`
+    // is one of multiple calls. Find it explicitly.
+    const calls = vi.mocked(logger.debugLog).mock.calls;
+    const policyDecideCall = calls.find(([label]) => label === 'policy:decide');
+    expect(policyDecideCall).toBeDefined();
+    expect(policyDecideCall![1]).toHaveProperty('decision');
+    expect(policyDecideCall![1]).toHaveProperty('reasons');
   });
 
   it('reacts to config.coordinatorMode changes between calls', () => {

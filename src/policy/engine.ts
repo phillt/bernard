@@ -39,6 +39,7 @@ export class DefaultPolicyEngine implements PolicyEngine {
       scratch: {
         resetAll: scratch.resetAll,
         resetPlanOnly: scratch.resetPlanOnly,
+        deletePlanKey: scratch.deletePlanKey,
         reason: scratch.reason,
       },
       caching: { enabled: caching.enabled },

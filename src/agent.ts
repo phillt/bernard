@@ -225,12 +225,22 @@ export class Agent {
     // Sub-systems read the decision off `this.ctx.policyDecision` (e.g.
     // strategy selection in `mainAgentDefinition.strategy`) or off the
     // result returned here. Reasons go to `debugLog('policy:decide', ...)`.
-    const policyResult = this.policyEngine.decide({ userInput, config: this.config });
+    // History hasn't been mutated yet — the most recent user-text in history
+    // IS the previous turn's input (undefined on first turn).
+    const previousUserInput = extractRecentUserTexts(this.history, 1)[0];
+    const policyResult = this.policyEngine.decide({
+      userInput,
+      config: this.config,
+      previousUserInput,
+    });
     this.lastPolicyResult = policyResult;
     this.ctx = { ...this.ctx, policyDecision: policyResult.decision };
 
     if (policyResult.decision.scratch?.resetPlanOnly) {
       this.planStore.clear();
+    }
+    if (policyResult.decision.scratch?.deletePlanKey) {
+      this.memoryStore.deleteScratch('plan');
     }
     if (policyResult.decision.scratch?.resetAll) {
       this.memoryStore.clearScratch();

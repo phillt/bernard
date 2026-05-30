@@ -9,6 +9,8 @@ export interface PolicyInput {
   userInput: string;
   config: BernardConfig;
   turnIndex?: number;
+  /** Raw text of the most recent prior user turn; undefined on the first turn. */
+  previousUserInput?: string;
 }
 
 /**
@@ -22,7 +24,7 @@ export interface PolicyDecision {
   strategyId?: 'normal' | 'react' | 'pac' | 'single-shot';
   models?: Record<string, { provider: string; model: string }>;
   concise?: { enabled: boolean; maxLines?: number; maxBullets?: number };
-  scratch?: { resetAll: boolean; resetPlanOnly: boolean; reason: string };
+  scratch?: { resetAll: boolean; resetPlanOnly: boolean; deletePlanKey: boolean; reason: string };
   caching?: { enabled: boolean };
   citations?: { requireForFactualClaims: boolean };
   toolMode?: { mode: 'read-only' | 'write'; requireConfirmForWrite: boolean };

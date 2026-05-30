@@ -2131,6 +2131,33 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           console.log();
         }
 
+        async function runScratchThresholdPrompt(): Promise<void> {
+          const signal = createMenuSignal();
+          try {
+            const val = await promptValue(
+              rl,
+              { label: 'New subject-change threshold (0-1, e.g. 0.15)' },
+              signal,
+            );
+            if (val.cancelled) return;
+            const parsed = parseFloat(val.raw);
+            if (isNaN(parsed) || parsed < 0 || parsed > 1) {
+              printError('Threshold must be a number between 0 and 1 (e.g. 0.15)');
+              return;
+            }
+            config.scratchSubjectThreshold = parsed;
+            savePreferences({
+              ...loadPreferences(),
+              scratchSubjectThreshold: parsed,
+              provider: config.provider,
+              model: config.model,
+            });
+            printInfo(`  Scratch subject-change threshold: ${parsed}`);
+          } finally {
+            clearMenuSignal();
+          }
+        }
+
         async function runThresholdPrompt(): Promise<void> {
           const signal = createMenuSignal();
           try {
@@ -2198,6 +2225,16 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             action: runCoordinatorModePrompt,
           },
           ...systemBools.slice(1).map(toggleRow),
+          {
+            kind: 'item',
+            item: {
+              label: 'Scratch subject-change threshold',
+              annotation: `= ${config.scratchSubjectThreshold}`,
+              description:
+                'Jaccard similarity (0-1) below which a new turn clears all scratch. Lower = more conservative.',
+            },
+            action: runScratchThresholdPrompt,
+          },
           { kind: 'section', title: 'User-created' },
           {
             kind: 'item',

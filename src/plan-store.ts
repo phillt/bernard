@@ -38,7 +38,16 @@ const TERMINAL_STATUSES: ReadonlySet<StepStatus> = new Set<StepStatus>([
 export class PlanStore {
   private steps: Step[] = [];
 
-  create(inputs: StepInput[]): Step[] {
+  /**
+   * Replaces all steps. When called with a non-empty existing plan (the model
+   * is rewriting mid-turn), `onReplace` fires before the new steps are
+   * committed — the plan tool wires this to clear scratch (Rule C of #169) so
+   * the previous plan's working notes don't bleed into the new plan.
+   */
+  create(inputs: StepInput[], onReplace?: () => void): Step[] {
+    if (this.steps.length > 0 && onReplace) {
+      onReplace();
+    }
     this.steps = [];
     for (const input of inputs) {
       this.steps.push({
