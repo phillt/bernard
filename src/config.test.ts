@@ -923,7 +923,7 @@ describe('resolveProviderAndModel', () => {
     ragEnabled: true,
     theme: 'bernard',
     maxSteps: 25,
-    reactMode: false,
+    coordinatorMode: 'off',
     toolDetails: false,
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,

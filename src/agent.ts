@@ -44,7 +44,7 @@ import { type ImageAttachment, IMAGE_TOKEN_ESTIMATE } from './image.js';
 import { PlanStore } from './plan-store.js';
 import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
-import { DefaultPolicyEngine } from './policy/index.js';
+import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem } from './provenance.js';
 
@@ -356,10 +356,15 @@ export class Agent {
         (n, m) => n + (typeof m.content === 'string' ? m.content.length : 0),
         0,
       );
+      // Coordinator prompt is appended by `ReActStrategy.run` whenever the
+      // turn ends up React-effective — that's both `coordinatorMode === 'on'`
+      // and `'auto'` turns the Qualifier escalated. Mirror the same gate here
+      // so the preflight budget stays accurate.
+      const reactActiveForEstimate = isReactEffective(this.config, policyResult.decision);
       const effectiveSystemPromptChars =
         systemForEstimate.length +
         contextMsgChars +
-        (this.config.reactMode ? REACT_COORDINATOR_PROMPT.length + 2 : 0);
+        (reactActiveForEstimate ? REACT_COORDINATOR_PROMPT.length + 2 : 0);
       const estimatedTokens =
         estimateHistoryTokens(this.history) + Math.ceil(effectiveSystemPromptChars / 4);
       const hardLimit = contextWindow * HARD_LIMIT_RATIO;
@@ -531,6 +536,18 @@ export class Agent {
           cited: 0,
         });
       }
+
+      // Per-turn qualifier outcome (#167). One structured line that pairs the
+      // strategy the policy picked, the reason code, the realized step count,
+      // and whether enforcement / step-limit fired. Use this to retrofit a
+      // learned router later — every field is the data such training needs.
+      debugLog('qualifier:outcome', {
+        strategyId: policyResult.decision.strategyId ?? 'normal',
+        reason: policyResult.reasons.strategy ?? '',
+        steps: result.steps?.length ?? 0,
+        hitStepLimit: this.lastStepLimitHit,
+        coordinatorMode: this.config.coordinatorMode,
+      });
 
       // Truncate large tool results before adding to history
       const truncatedMessages = truncateToolResults(result.response.messages as CoreMessage[]);

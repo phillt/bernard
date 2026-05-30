@@ -98,7 +98,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     maxSteps: 25,
     ragEnabled: true,
     theme: 'bernard',
-    reactMode: false,
+    coordinatorMode: 'off',
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
     anthropicApiKey: 'sk-test',
@@ -227,8 +227,12 @@ describe('buildSystemPrompt', () => {
   });
 
   it('excludes coordinator prompt regardless of reactMode (now injected by ReActStrategy)', () => {
-    expect(buildSystemPrompt(makeConfig({ reactMode: true }))).not.toContain('Coordinator Mode');
-    expect(buildSystemPrompt(makeConfig({ reactMode: false }))).not.toContain('Coordinator Mode');
+    expect(buildSystemPrompt(makeConfig({ coordinatorMode: 'on' }))).not.toContain(
+      'Coordinator Mode',
+    );
+    expect(buildSystemPrompt(makeConfig({ coordinatorMode: 'off' }))).not.toContain(
+      'Coordinator Mode',
+    );
   });
 
   // Issue #172: the SYSTEM prompt MUST NOT carry per-turn variable content
@@ -1277,7 +1281,7 @@ describe('Agent', () => {
         response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
         usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
       });
-      const agent = makeAgent(makeConfig({ reactMode: false }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ coordinatorMode: 'off' }), toolOptions, store);
       await agent.processInput('Hello');
       const call = mockGenerateText.mock.calls[0][0];
       expect(call.tools).not.toHaveProperty('plan');
@@ -1290,7 +1294,7 @@ describe('Agent', () => {
         response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
         usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
       });
-      const agent = makeAgent(makeConfig({ reactMode: true }), toolOptions, store);
+      const agent = makeAgent(makeConfig({ coordinatorMode: 'on' }), toolOptions, store);
       await agent.processInput('Hello');
       const call = mockGenerateText.mock.calls[0][0];
       expect(call.tools).toHaveProperty('plan');
@@ -1303,7 +1307,11 @@ describe('Agent', () => {
         response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
         usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
       });
-      const agent = makeAgent(makeConfig({ reactMode: true, maxSteps: 10 }), toolOptions, store);
+      const agent = makeAgent(
+        makeConfig({ coordinatorMode: 'on', maxSteps: 10 }),
+        toolOptions,
+        store,
+      );
       await agent.processInput('Hello');
       const call = mockGenerateText.mock.calls[0][0];
       expect(call.maxSteps).toBe(30);
@@ -1314,7 +1322,11 @@ describe('Agent', () => {
         response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
         usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
       });
-      const agent = makeAgent(makeConfig({ reactMode: false, maxSteps: 10 }), toolOptions, store);
+      const agent = makeAgent(
+        makeConfig({ coordinatorMode: 'off', maxSteps: 10 }),
+        toolOptions,
+        store,
+      );
       await agent.processInput('Hello');
       const call = mockGenerateText.mock.calls[0][0];
       expect(call.maxSteps).toBe(10);
@@ -1329,7 +1341,7 @@ describe('Agent', () => {
       };
 
       it('re-prompts once when plan still has unresolved steps, then exits when resolved', async () => {
-        const agent = makeAgent(makeConfig({ reactMode: true }), toolOptions, store);
+        const agent = makeAgent(makeConfig({ coordinatorMode: 'on' }), toolOptions, store);
         const planStore = (agent as unknown as { planStore: any }).planStore;
         let call = 0;
         mockGenerateText.mockImplementation(async () => {
@@ -1353,7 +1365,7 @@ describe('Agent', () => {
       });
 
       it('does not re-prompt when plan is already complete', async () => {
-        const agent = makeAgent(makeConfig({ reactMode: true }), toolOptions, store);
+        const agent = makeAgent(makeConfig({ coordinatorMode: 'on' }), toolOptions, store);
         const planStore = (agent as unknown as { planStore: any }).planStore;
         mockGenerateText.mockImplementation(async () => {
           if (planStore.view().length === 0) {
@@ -1367,14 +1379,14 @@ describe('Agent', () => {
       });
 
       it('does not re-prompt when no plan was created', async () => {
-        const agent = makeAgent(makeConfig({ reactMode: true }), toolOptions, store);
+        const agent = makeAgent(makeConfig({ coordinatorMode: 'on' }), toolOptions, store);
         mockGenerateText.mockResolvedValue(baseResult);
         await agent.processInput('trivial');
         expect(mockGenerateText).toHaveBeenCalledTimes(1);
       });
 
       it('stops re-prompting when abort fires mid-loop', async () => {
-        const agent = makeAgent(makeConfig({ reactMode: true }), toolOptions, store);
+        const agent = makeAgent(makeConfig({ coordinatorMode: 'on' }), toolOptions, store);
         const planStore = (agent as unknown as { planStore: any }).planStore;
         let call = 0;
         mockGenerateText.mockImplementation(async () => {
@@ -1390,7 +1402,7 @@ describe('Agent', () => {
       });
 
       it('exhausts retries, auto-cancels remaining steps, and emits info when plan never resolves', async () => {
-        const agent = makeAgent(makeConfig({ reactMode: true }), toolOptions, store);
+        const agent = makeAgent(makeConfig({ coordinatorMode: 'on' }), toolOptions, store);
         const planStore = (agent as unknown as { planStore: any }).planStore;
         mockGenerateText.mockImplementation(async () => {
           if (planStore.view().length === 0)
@@ -1408,7 +1420,7 @@ describe('Agent', () => {
       });
 
       it('does not re-prompt when reactMode is false even with unresolved steps', async () => {
-        const agent = makeAgent(makeConfig({ reactMode: false }), toolOptions, store);
+        const agent = makeAgent(makeConfig({ coordinatorMode: 'off' }), toolOptions, store);
         const planStore = (agent as unknown as { planStore: any }).planStore;
         mockGenerateText.mockImplementation(async () => {
           if (planStore.view().length === 0)

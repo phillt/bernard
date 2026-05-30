@@ -24,10 +24,11 @@ export interface ReActStrategyOpts {
   /**
    * Effective ReAct flag for this turn, resolved by the Policy Engine when
    * available (see `src/policy/effective.ts`). When set, `run()` uses this
-   * instead of `ctx.config.reactMode`, which is required so a per-turn
-   * `strategyId: 'react'` override actually engages coordinator behavior
-   * even when the global flag is off. Defaults to `ctx.config.reactMode` to
-   * preserve behavior for sub-agent paths that don't go through the engine.
+   * instead of `ctx.config.coordinatorMode === 'on'`, which is required so a
+   * per-turn `strategyId: 'react'` override actually engages coordinator
+   * behavior even when the global toggle is `'off'` or `'auto'`. Defaults to
+   * `ctx.config.coordinatorMode === 'on'` to preserve behavior for sub-agent
+   * paths that don't go through the engine.
    */
   effectiveReactMode?: boolean;
 }
@@ -39,7 +40,7 @@ export interface ReActStrategyOpts {
  * - Post-loop plan enforcement: re-prompt up to {@link REACT_ENFORCEMENT_MAX_RETRIES}
  *   times when the plan still has unresolved steps; auto-cancel the rest.
  *
- * No-op when `config.reactMode` is false — just delegates to inner.
+ * No-op when coordinator mode is not active — just delegates to inner.
  */
 export class ReActStrategy implements ExecutionStrategy {
   constructor(
@@ -48,7 +49,7 @@ export class ReActStrategy implements ExecutionStrategy {
   ) {}
 
   async run(ctx: StrategyContext): Promise<AgentResult> {
-    const reactActive = this.opts.effectiveReactMode ?? ctx.config.reactMode;
+    const reactActive = this.opts.effectiveReactMode ?? ctx.config.coordinatorMode === 'on';
     if (!reactActive) return this.inner.run(ctx);
 
     const baseMaxSteps = ctx.baseMaxSteps ?? ctx.config.maxSteps;

@@ -13,7 +13,7 @@ describe('DefaultPolicyEngine', () => {
 
   it('populates every PolicyDecision key from its sub-policy', () => {
     const engine = new DefaultPolicyEngine();
-    const { decision } = engine.decide(makePolicyInput({ config: { reactMode: true } }));
+    const { decision } = engine.decide(makePolicyInput({ config: { coordinatorMode: 'on' } }));
 
     expect(decision.strategyId).toBe('react');
     expect(Object.keys(decision.models ?? {}).sort()).toEqual([...MODEL_COMPONENTS].sort());
@@ -49,13 +49,13 @@ describe('DefaultPolicyEngine', () => {
     expect(payload).toHaveProperty('reasons');
   });
 
-  it('reacts to config.reactMode changes between calls', () => {
+  it('reacts to config.coordinatorMode changes between calls', () => {
     const engine = new DefaultPolicyEngine();
-    const off = engine.decide(makePolicyInput({ config: { reactMode: false } }));
-    const on = engine.decide(makePolicyInput({ config: { reactMode: true } }));
+    const off = engine.decide(makePolicyInput({ config: { coordinatorMode: 'off' } }));
+    const on = engine.decide(makePolicyInput({ config: { coordinatorMode: 'on' } }));
     expect(off.decision.strategyId).toBe('normal');
-    expect(off.reasons.strategy).toBe('react-mode-disabled');
+    expect(off.reasons.strategy).toBe('coordinator-mode-off');
     expect(on.decision.strategyId).toBe('react');
-    expect(on.reasons.strategy).toBe('react-mode-flag');
+    expect(on.reasons.strategy).toBe('coordinator-mode-on');
   });
 });

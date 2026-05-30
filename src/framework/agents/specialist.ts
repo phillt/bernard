@@ -93,7 +93,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
       ...baseTools,
       plan: createPlanTool(input.planStore),
       think: createThinkTool(),
-      ...(ctx.config.reactMode ? { evaluate: createEvaluateTool() } : {}),
+      ...(ctx.config.coordinatorMode === 'on' ? { evaluate: createEvaluateTool() } : {}),
     };
     return specialistTools;
   },

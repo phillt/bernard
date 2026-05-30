@@ -210,7 +210,10 @@ export async function startRepl(
   let isPasting = false;
   function getPromptStr(): string {
     const { ansi } = getTheme();
-    const reactLabel = config.reactMode ? `${ansi.prompt}\u25B7${ansi.reset} ` : '';
+    // Show the coordinator-mode indicator only when the user has pinned it.
+    // `'auto'` is the default and stays unmarked \u2014 the qualifier decides per
+    // turn so a persistent prompt prefix would be misleading.
+    const reactLabel = config.coordinatorMode === 'on' ? `${ansi.prompt}\u25B7${ansi.reset} ` : '';
     return `${reactLabel}${ansi.prompt}bernard>${ansi.reset} `;
   }
 
@@ -269,7 +272,7 @@ export async function startRepl(
   }
 
   async function toggleBooleanPref(
-    key: 'reactMode' | 'toolDetails' | 'promptRewriter' | 'autoCreateSpecialists',
+    key: 'toolDetails' | 'promptRewriter' | 'autoCreateSpecialists',
     label: string,
     onMsg: string,
     offMsg: string,
@@ -418,7 +421,7 @@ export async function startRepl(
 
     console.log(t.text('\n  Settings:'));
     console.log(t.muted(`    Theme: ${getActiveThemeKey()}`));
-    console.log(t.muted(`    Coordinator mode: ${config.reactMode ? 'on' : 'off'}`));
+    console.log(t.muted(`    Coordinator mode: ${config.coordinatorMode}`));
     console.log(t.muted(`    Tool details: ${config.toolDetails ? 'on' : 'off'}`));
     console.log(t.muted(`    Prompt rewriter: ${config.promptRewriter ? 'on' : 'off'}`));
     const debugEnabled = process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
@@ -2032,7 +2035,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
 
       if (trimmed === '/agent-options') {
         type BooleanOpt = {
-          key: 'autoCreateSpecialists' | 'reactMode' | 'promptRewriter' | 'toolDetails';
+          key: 'autoCreateSpecialists' | 'promptRewriter' | 'toolDetails';
           label: string;
           description: string;
           onMsg: string;
@@ -2059,14 +2062,6 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             },
           },
           {
-            key: 'reactMode',
-            label: 'Coordinator (ReAct) mode',
-            description:
-              'Iterate think → act → evaluate; delegate subtasks to subagents for complex work.',
-            onMsg: '  [REACT:ON] Operating as coordinator with iterative reasoning and delegation.',
-            offMsg: '  [REACT:OFF] Coordinator mode disabled.',
-          },
-          {
             key: 'promptRewriter',
             label: 'Prompt rewriter',
             description: 'Restructure your prompt for the active model family before each turn.',
@@ -2083,6 +2078,58 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             onToggle: setToolDetailsVisible,
           },
         ];
+
+        async function runCoordinatorModePrompt(): Promise<void> {
+          const modes: Array<{ value: 'on' | 'off' | 'auto'; label: string; desc: string }> = [
+            {
+              value: 'auto',
+              label: 'Auto (qualifier picks per turn)',
+              desc: 'Classifier inspects each ask and chooses Normal or ReAct.',
+            },
+            {
+              value: 'on',
+              label: 'On (always coordinator)',
+              desc: 'Every turn runs ReAct with plan tool + enforcement.',
+            },
+            {
+              value: 'off',
+              label: 'Off (always normal)',
+              desc: 'Every turn runs single-shot Normal strategy.',
+            },
+          ];
+          const entries: MenuEntry[] = modes.map((m) => ({
+            label: m.label,
+            description: m.desc,
+            active: config.coordinatorMode === m.value,
+          }));
+          const signal = createMenuSignal();
+          try {
+            const result = await selectFromMenu(
+              rl,
+              entries,
+              { title: `Coordinator mode: ${config.coordinatorMode.toUpperCase()}` },
+              signal,
+            );
+            if (result.cancelled) return;
+            const chosen = modes[result.index].value;
+            config.coordinatorMode = chosen;
+            savePreferences({
+              ...loadPreferences(),
+              provider: config.provider,
+              model: config.model,
+              coordinatorMode: chosen,
+            });
+            const labels: Record<typeof chosen, string> = {
+              on: '  [COORDINATOR:ON] Every turn runs ReAct.',
+              off: '  [COORDINATOR:OFF] Every turn runs Normal.',
+              auto: '  [COORDINATOR:AUTO] Qualifier picks Normal or ReAct per turn.',
+            };
+            printInfo(labels[chosen]);
+          } finally {
+            clearMenuSignal();
+          }
+          console.log();
+        }
 
         async function runThresholdPrompt(): Promise<void> {
           const signal = createMenuSignal();
@@ -2139,6 +2186,16 @@ Remember: the systemPrompt should read like a persona definition — who this sp
               description: 'Minimum score (0-1) a pending specialist needs before auto-promotion.',
             },
             action: runThresholdPrompt,
+          },
+          {
+            kind: 'item',
+            item: {
+              label: 'Coordinator (ReAct) mode',
+              annotation: `= ${config.coordinatorMode}`,
+              description:
+                'On = always coordinator; Off = always normal; Auto = per-turn qualifier.',
+            },
+            action: runCoordinatorModePrompt,
           },
           ...systemBools.slice(1).map(toggleRow),
           { kind: 'section', title: 'User-created' },

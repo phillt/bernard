@@ -283,7 +283,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     maxSteps: 25,
     ragEnabled: false,
     theme: 'bernard',
-    reactMode: false,
+    coordinatorMode: 'off',
     toolDetails: false,
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
@@ -1187,7 +1187,7 @@ describe('REPL /agent-options auto-create re-evaluation', () => {
   });
 });
 
-describe('REPL /agent-options boolean toggles (critic, react, rewriter)', () => {
+describe('REPL /agent-options boolean toggles (rewriter)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     rlEmitter = makeRl();
@@ -1202,16 +1202,9 @@ describe('REPL /agent-options boolean toggles (critic, react, rewriter)', () => 
   });
 
   // Menu path: /agent-options → top-level selection:
-  //   3. Coordinator (ReAct) mode
+  //   3. Coordinator (ReAct) mode  (3-way picker, covered in a separate suite below)
   //   4. Prompt rewriter
   const cases = [
-    {
-      name: 'Coordinator (ReAct) mode',
-      topIndex: '3',
-      key: 'reactMode' as const,
-      onFragment: '[REACT:ON]',
-      offFragment: '[REACT:OFF]',
-    },
     {
       name: 'Prompt rewriter',
       topIndex: '4',
@@ -1360,6 +1353,118 @@ describe('REPL /agent-options boolean toggles (critic, react, rewriter)', () => 
       await replPromise.catch(() => {});
     },
   );
+});
+
+describe('REPL /agent-options Coordinator mode picker (tri-state)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rlEmitter = makeRl();
+    vi.spyOn(console, 'clear').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process, 'exit').mockImplementation((() => {}) as any);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // Picker order is: 1 = auto, 2 = on, 3 = off (see runCoordinatorModePrompt
+  // in src/repl.ts).
+  const cases = [
+    { pick: '1', expected: 'auto' as const, fragment: '[COORDINATOR:AUTO]' },
+    { pick: '2', expected: 'on' as const, fragment: '[COORDINATOR:ON]' },
+    { pick: '3', expected: 'off' as const, fragment: '[COORDINATOR:OFF]' },
+  ];
+
+  it.each(cases)(
+    'picking $expected updates config.coordinatorMode and persists it',
+    async ({ pick, expected, fragment }) => {
+      const { startRepl } = await import('./repl.js');
+      // Start from a different value so we can observe the change.
+      const start = expected === 'auto' ? 'off' : 'auto';
+      const config = makeConfig({ coordinatorMode: start });
+      const replPromise = startRepl(config);
+
+      await vi.waitFor(() => {
+        expect(rlEmitter.prompt).toHaveBeenCalled();
+      });
+      mockSavePreferences.mockClear();
+      mockPrintInfo.mockClear();
+      mockLoadPreferences.mockReturnValue({ theme: 'ocean' });
+
+      typeLine('/agent-options');
+
+      // Top-level menu → Coordinator (row 3 in the unified menu)
+      await vi.waitFor(() => {
+        expect(rlEmitter.question).toHaveBeenCalled();
+      });
+      const topCb = getMenuQuestionCallback();
+      rlEmitter.question.mockClear();
+      topCb('3');
+
+      // Tri-state picker
+      await vi.waitFor(() => {
+        expect(rlEmitter.question).toHaveBeenCalled();
+      });
+      const pickCb = getMenuQuestionCallback();
+      pickCb(pick);
+
+      await vi.waitFor(() => {
+        expect(mockPrintInfo).toHaveBeenCalledWith(expect.stringContaining(fragment));
+      });
+
+      expect(config.coordinatorMode).toBe(expected);
+      expect(mockSavePreferences).toHaveBeenCalledWith(
+        expect.objectContaining({
+          coordinatorMode: expected,
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-5-20250929',
+          theme: 'ocean',
+        }),
+      );
+
+      rlEmitter.emit('close');
+      await replPromise.catch(() => {});
+    },
+  );
+
+  it('cancel leaves config.coordinatorMode unchanged and does not persist', async () => {
+    const { startRepl } = await import('./repl.js');
+    const config = makeConfig({ coordinatorMode: 'auto' });
+    const replPromise = startRepl(config);
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+    mockSavePreferences.mockClear();
+    mockPrintInfo.mockClear();
+
+    typeLine('/agent-options');
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const topCb = getMenuQuestionCallback();
+    rlEmitter.question.mockClear();
+    topCb('3');
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.question).toHaveBeenCalled();
+    });
+    const pickCb = getMenuQuestionCallback();
+    pickCb('');
+
+    await vi.waitFor(() => {
+      expect(rlEmitter.prompt).toHaveBeenCalled();
+    });
+
+    expect(config.coordinatorMode).toBe('auto');
+    expect(mockSavePreferences).not.toHaveBeenCalled();
+
+    rlEmitter.emit('close');
+    await replPromise.catch(() => {});
+  });
 });
 
 describe('REPL /image command', () => {

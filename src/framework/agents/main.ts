@@ -54,7 +54,7 @@ export interface MainInput {
   alertContext?: string;
   /** Mutated in place by `tokenStatsHook`. The Agent class owns this object. */
   statsTarget: TokenStatsTarget;
-  /** PlanStore shared with the `plan` tool when `reactMode` is on. */
+  /** PlanStore shared with the `plan` tool when coordinator mode is active. */
   planStore: import('../../plan-store.js').PlanStore;
   /**
    * Pre-rendered system prompt. The Agent class builds it once via
@@ -149,9 +149,10 @@ export function buildMainContextMessages(
  * Main agent definition: persistent history (owned by the caller), full tool
  * registry + dispatch tools (`agent`, `task`, `specialist_run`,
  * `tool_wrapper_run`) + `think` + `ask_user` + (`plan` + `evaluate` when
- * `reactMode`), shim routing on low-level tools, error-augmentation,
- * `config.maxSteps`, `buildStrategy` (NormalStrategy or ReActStrategy
- * depending on `config.reactMode`).
+ * coordinator mode is active), shim routing on low-level tools,
+ * error-augmentation, `config.maxSteps`, `buildStrategy` (NormalStrategy or
+ * ReActStrategy depending on the per-turn policy decision /
+ * `config.coordinatorMode`).
  *
  * The definition does NOT own auto-continue, token-overflow recovery, or
  * history-mutation — those stay with the Agent class which provides a
@@ -185,9 +186,10 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
       ctx.provenance,
     );
     // Gate plan/evaluate on the SAME effective decision the strategy uses
-    // (see strategy(ctx) below). Reading `ctx.config.reactMode` directly
-    // would let `tools()` and `strategy()` drift apart the moment a
-    // sub-policy emits a `strategyId` that doesn't mirror the global flag.
+    // (see strategy(ctx) below). Reading `ctx.config.coordinatorMode`
+    // directly would let `tools()` and `strategy()` drift apart the moment a
+    // sub-policy (e.g. the Qualifier in 'auto' mode) emits a `strategyId`
+    // that doesn't mirror the global flag.
     const reactActive = isReactEffective(ctx.config, ctx.policyDecision);
     const tools: Record<string, Tool> = {
       ...baseTools,
