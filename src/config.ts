@@ -49,6 +49,14 @@ export interface BernardConfig {
   correctionEnabled: boolean;
   /** Whether the model-specific prompt rewriter runs as a pre-turn LLM pass. */
   promptRewriter: boolean;
+  /**
+   * Whether concise-by-default response shaping is active (#175). When on, the
+   * Policy Engine emits `concise.enabled = true` and the main agent's system
+   * prompt receives a `## Concise Mode` block instructing the model to keep
+   * responses to the smallest sufficient size. Token/latency optimization, not
+   * a style preference.
+   */
+  conciseMode: boolean;
   /** Whether the resolver attempts a tool-based lookup before prompting the user for unknown references. */
   referenceLookup: boolean;
   /** Extra tool-name allowlist for the reference-lookup pass (additive over built-in patterns). */
@@ -92,6 +100,7 @@ const DEFAULT_AUTO_CREATE_THRESHOLD = 0.8;
 const DEFAULT_COORDINATOR_MODE: 'on' | 'off' | 'auto' = 'auto';
 const DEFAULT_MODEL_MODE: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance' = 'off';
 const DEFAULT_SCRATCH_SUBJECT_THRESHOLD = 0.15;
+const DEFAULT_CONCISE_MODE = true;
 
 /** Type guard for `coordinatorMode` string values. */
 function isCoordinatorMode(v: unknown): v is 'on' | 'off' | 'auto' {
@@ -199,6 +208,7 @@ export function savePreferences(prefs: {
   promptRewriter?: boolean;
   referenceLookup?: boolean;
   scratchSubjectThreshold?: number;
+  conciseMode?: boolean;
 }): void {
   const dir = path.dirname(PREFS_PATH);
   if (!fs.existsSync(dir)) {
@@ -222,6 +232,7 @@ export function savePreferences(prefs: {
   if (prefs.referenceLookup !== undefined) data.referenceLookup = prefs.referenceLookup;
   if (prefs.scratchSubjectThreshold !== undefined)
     data.scratchSubjectThreshold = prefs.scratchSubjectThreshold;
+  if (prefs.conciseMode !== undefined) data.conciseMode = prefs.conciseMode;
 
   // Preserve autoUpdate, coordinatorMode, and auto-create settings from existing prefs when callers don't pass them
   let existing: Record<string, unknown> | undefined;
@@ -237,6 +248,7 @@ export function savePreferences(prefs: {
     'toolDetails',
     'promptRewriter',
     'referenceLookup',
+    'conciseMode',
   ] as const;
   for (const k of booleanKeys) {
     if (prefs[k] === undefined && existing && typeof existing[k] === 'boolean') {
@@ -321,6 +333,7 @@ export function loadPreferences(): {
   promptRewriter?: boolean;
   referenceLookup?: boolean;
   scratchSubjectThreshold?: number;
+  conciseMode?: boolean;
 } {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
@@ -359,6 +372,7 @@ export function loadPreferences(): {
         typeof parsed.scratchSubjectThreshold === 'number'
           ? parsed.scratchSubjectThreshold
           : undefined,
+      conciseMode: typeof parsed.conciseMode === 'boolean' ? parsed.conciseMode : undefined,
     };
   } catch {
     return {};
@@ -875,6 +889,14 @@ export function loadConfig(overrides?: {
     prefs.promptRewriter ??
     (rawRewriter === undefined ? true : !(rawRewriter === 'false' || rawRewriter === '0'));
 
+  // Concise-by-default response shaping (#175); opt-out via BERNARD_CONCISE_MODE=false.
+  const rawConcise = process.env.BERNARD_CONCISE_MODE;
+  const conciseMode =
+    prefs.conciseMode ??
+    (rawConcise === undefined
+      ? DEFAULT_CONCISE_MODE
+      : !(rawConcise === 'false' || rawConcise === '0'));
+
   // Reference tool-lookup runs by default; users can opt out with BERNARD_REFERENCE_LOOKUP=false.
   const rawReferenceLookup = process.env.BERNARD_REFERENCE_LOOKUP;
   const referenceLookup =
@@ -934,6 +956,7 @@ export function loadConfig(overrides?: {
     referenceLookup,
     referenceLookupTools,
     scratchSubjectThreshold,
+    conciseMode,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
     openaiApiKey: process.env.OPENAI_API_KEY,
     xaiApiKey: process.env.XAI_API_KEY,

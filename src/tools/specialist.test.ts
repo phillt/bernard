@@ -439,6 +439,7 @@ describe('createSpecialistTool', () => {
         autoCreateSpecialists: false,
         autoCreateThreshold: 0.8,
         scratchSubjectThreshold: 0.15,
+        conciseMode: true,
         anthropicApiKey: 'sk-test',
       };
       const toolWithConfig = createSpecialistTool(undefined, undefined, config);
@@ -472,6 +473,7 @@ describe('createSpecialistTool', () => {
         autoCreateSpecialists: false,
         autoCreateThreshold: 0.8,
         scratchSubjectThreshold: 0.15,
+        conciseMode: true,
         anthropicApiKey: 'sk-test',
       };
       const toolWithConfig = createSpecialistTool(undefined, undefined, config);
@@ -645,6 +647,7 @@ describe('createSpecialistTool', () => {
         autoCreateSpecialists: false,
         autoCreateThreshold: 0.8,
         scratchSubjectThreshold: 0.15,
+        conciseMode: true,
         anthropicApiKey: 'sk-test',
       };
       const toolWithConfig = createSpecialistTool(undefined, undefined, config);

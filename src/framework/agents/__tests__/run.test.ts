@@ -53,6 +53,7 @@ function makeConfig(): BernardConfig {
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
     scratchSubjectThreshold: 0.15,
+    conciseMode: true,
     anthropicApiKey: 'sk-test',
     customProviders: {},
   } as BernardConfig;

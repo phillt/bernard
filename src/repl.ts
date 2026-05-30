@@ -269,7 +269,7 @@ export async function startRepl(
   }
 
   async function toggleBooleanPref(
-    key: 'toolDetails' | 'promptRewriter' | 'autoCreateSpecialists',
+    key: 'toolDetails' | 'promptRewriter' | 'autoCreateSpecialists' | 'conciseMode',
     label: string,
     onMsg: string,
     offMsg: string,
@@ -2035,7 +2035,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
 
       if (trimmed === '/agent-options') {
         type BooleanOpt = {
-          key: 'autoCreateSpecialists' | 'promptRewriter' | 'toolDetails';
+          key: 'autoCreateSpecialists' | 'promptRewriter' | 'toolDetails' | 'conciseMode';
           label: string;
           description: string;
           onMsg: string;
@@ -2077,6 +2077,16 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             onMsg: '  [TOOL-DETAILS:ON] Full tool call args and results will be shown.',
             offMsg: '  [TOOL-DETAILS:OFF] Only tool names shown; args and results hidden.',
             onToggle: setToolDetailsVisible,
+          },
+          {
+            key: 'conciseMode',
+            label: 'Concise mode',
+            description:
+              'Default responses to the smallest sufficient size; expand only when asked or when the task needs length.',
+            onMsg:
+              '  [CONCISE:ON] Responses will be short by default; the model expands only when asked or when the task needs length.',
+            offMsg:
+              '  [CONCISE:OFF] Concision heuristic disabled; responses follow the base prompt without per-turn shaping.',
           },
         ];
 

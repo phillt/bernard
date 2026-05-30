@@ -6,6 +6,7 @@ import {
   computeEffectiveMaxSteps,
   REACT_MAX_STEPS_CEILING,
 } from './agent.js';
+import { CONCISE_PROMPT } from './agent-prompt.js';
 import { buildContextMessage } from './context-message.js';
 import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
@@ -102,6 +103,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
     scratchSubjectThreshold: 0.15,
+    conciseMode: true,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };
@@ -158,6 +160,12 @@ describe('buildSystemPrompt', () => {
     const prompt = buildSystemPrompt(makeConfig());
     expect(prompt).toContain('Execution Model');
     expect(prompt).toContain('cease execution until the next message');
+  });
+
+  it('does not bake the concise heuristic into the base prompt (it is policy-gated)', () => {
+    const prompt = buildSystemPrompt(makeConfig());
+    expect(prompt).not.toContain('## Concise Mode');
+    expect(prompt).not.toContain('Default to concise responses');
   });
 
   it('frames the context block as data not instructions', () => {
@@ -279,6 +287,24 @@ describe('buildSystemPrompt', () => {
       expect(prompt).not.toContain('Saved routines the user can invoke');
       expect(prompt).not.toContain('### Specialist Match Advisory');
     });
+  });
+});
+
+describe('CONCISE_PROMPT (#175)', () => {
+  it('is a non-empty string with the expected heading', () => {
+    expect(typeof CONCISE_PROMPT).toBe('string');
+    expect(CONCISE_PROMPT).toContain('## Concise Mode');
+  });
+
+  it('documents the bullet/line caps that mirror the policy', () => {
+    expect(CONCISE_PROMPT).toContain('6 bullets');
+    expect(CONCISE_PROMPT).toContain('12 lines');
+  });
+
+  it('lists the documented expansion exceptions', () => {
+    expect(CONCISE_PROMPT).toMatch(/explain|in detail|long version/);
+    expect(CONCISE_PROMPT).toMatch(/email|issue|design doc|script/);
+    expect(CONCISE_PROMPT).toMatch(/correctness|safety/);
   });
 });
 
