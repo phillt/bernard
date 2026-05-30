@@ -92,6 +92,54 @@ describe('scratchPolicy', () => {
     expect(result.reason).toBe('new-task-marker');
   });
 
+  it('does NOT match explicit-clear markers buried mid-sentence', () => {
+    // Anchored regex: phrases like these should be treated as ordinary content
+    // and route through the similarity check, not auto-wipe.
+    const cases = [
+      'show me the new task list',
+      'fix the unrelated test',
+      'this is for a new plan we discussed',
+      'ignore previous edits to foo.ts and continue',
+    ];
+    for (const userInput of cases) {
+      const result = scratchPolicy(
+        makePolicyInput({
+          userInput,
+          previousUserInput: 'we were working on the task list earlier',
+        }),
+      );
+      expect(result.reason).not.toBe('explicit-marker');
+    }
+  });
+
+  it('matches explicit-clear markers even with [timestamp] / Task: wrapper', () => {
+    const result = scratchPolicy(
+      makePolicyInput({
+        userInput: '[2026-05-29T10:00:00] Task: switching topics, write a haiku',
+        previousUserInput: 'fix the database migration',
+      }),
+    );
+    expect(result.reason).toBe('explicit-marker');
+    expect(result.resetAll).toBe(true);
+  });
+
+  it('short acknowledgements skip subject-change and count as same-task', () => {
+    // < 3 content tokens after stop-word filtering. These would otherwise
+    // Jaccard ~0 against a substantive prior turn and falsely trigger wipe.
+    const cases = ['ok continue', 'yes do it', 'and then?', 'looks good'];
+    for (const userInput of cases) {
+      const result = scratchPolicy(
+        makePolicyInput({
+          userInput,
+          previousUserInput: 'fix the database migration script and add tests',
+        }),
+      );
+      expect(result.reason).toBe('same-task');
+      expect(result.resetAll).toBe(false);
+      expect(result.deletePlanKey).toBe(false);
+    }
+  });
+
   it('honors configured scratchSubjectThreshold', () => {
     // With a very high threshold even similar-ish turns become subject-change.
     const result = scratchPolicy(

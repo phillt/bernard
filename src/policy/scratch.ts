@@ -6,15 +6,27 @@ type Scratch = NonNullable<PolicyDecision['scratch']>;
 
 /**
  * Matches explicit user markers that should clear all scratch unconditionally.
- * Word-boundary anchored so e.g. "newtask" won't trigger and "fix the unrelated
- * test" won't either (requires "unrelated" to stand alone). `/CLEAR` is special
- * since it lacks word characters on the left.
+ * Anchored to the start of the message (allowing Bernard's optional
+ * `[timestamp]` and `Task:` wrapper prefixes) so phrases buried mid-sentence —
+ * e.g. "show me the new task list", "fix the unrelated test", "this is for a
+ * new plan", "ignore previous edits to foo.ts" — do NOT trigger a wipe. The
+ * standalone "unrelated" and "ignore previous" alternatives were dropped:
+ * both produced ambiguous matches even at message start ("ignore previous
+ * edits" reads as a scoped operation, not a session reset).
  */
 const EXPLICIT_CLEAR_RE =
-  /(^|\s)(\/CLEAR|new\s+task|new\s+plan|different\s+(?:thing|topic)|unrelated|switching\s+topics?|ignore\s+previous)\b/i;
+  /^\s*(?:\[[^\]]+\]\s*)?(?:Task:\s*)?(\/CLEAR|new\s+task|new\s+plan|different\s+(?:thing|topic)|switching\s+topics?)\b/i;
 
 /** Bernard prefixes user messages with `[timestamp]\nTask: ...` (see timestampUserMessage). */
 const TASK_PREFIX_RE = /^\s*(?:\[[^\]]+\]\s*)?Task:/i;
+
+/**
+ * Below this many content tokens (after stop-word filtering) the user input is
+ * treated as a short acknowledgement / continuation ("ok continue", "yes do it",
+ * "and then?") and the Jaccard subject-change check is skipped — Jaccard would
+ * otherwise return ~0 against any substantive prior turn and falsely wipe.
+ */
+const MIN_TOKENS_FOR_SUBJECT_CHECK = 3;
 
 /**
  * Jaccard similarity over tokenized user inputs. Stop-words and pure numbers
@@ -62,9 +74,12 @@ function decide(
   if (EXPLICIT_CLEAR_RE.test(userInput)) {
     return { resetAll: true, deletePlanKey: true, reason: 'explicit-marker' };
   }
-  const similarity = jaccard(tokenize(userInput), tokenize(previousUserInput));
-  if (similarity < threshold) {
-    return { resetAll: true, deletePlanKey: true, reason: 'subject-change' };
+  const currentTokens = tokenize(userInput);
+  if (currentTokens.length >= MIN_TOKENS_FOR_SUBJECT_CHECK) {
+    const similarity = jaccard(currentTokens, tokenize(previousUserInput));
+    if (similarity < threshold) {
+      return { resetAll: true, deletePlanKey: true, reason: 'subject-change' };
+    }
   }
   if (TASK_PREFIX_RE.test(userInput)) {
     return { resetAll: false, deletePlanKey: true, reason: 'new-task-marker' };

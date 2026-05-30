@@ -931,6 +931,7 @@ describe('resolveProviderAndModel', () => {
     promptRewriter: true,
     referenceLookup: true,
     referenceLookupTools: [],
+    scratchSubjectThreshold: 0.15,
     anthropicApiKey: 'sk-ant-test',
   };
 

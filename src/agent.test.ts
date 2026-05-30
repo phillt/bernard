@@ -101,6 +101,7 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
     coordinatorMode: 'off',
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,
+    scratchSubjectThreshold: 0.15,
     anthropicApiKey: 'sk-test',
     ...overrides,
   };
@@ -883,8 +884,11 @@ describe('Agent', () => {
       addFacts: vi.fn(),
     };
 
-    // Simulate history providing prior user texts
-    mockExtractRecentUserTexts.mockReturnValueOnce(['what build tools do we use?']);
+    // Simulate history providing prior user texts. `extractRecentUserTexts` is
+    // called twice per turn — once by the scratch policy (window 1) and once by
+    // the RAG query builder (window 2) — so use a persistent mock rather than
+    // -Once to satisfy both call sites.
+    mockExtractRecentUserTexts.mockReturnValue(['what build tools do we use?']);
     mockBuildRAGQuery.mockReturnValueOnce('what build tools do we use?. how about compile?');
 
     const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
@@ -906,8 +910,9 @@ describe('Agent', () => {
       addFacts: vi.fn(),
     };
 
-    // No history — extractRecentUserTexts returns []
-    mockExtractRecentUserTexts.mockReturnValueOnce([]);
+    // No history — extractRecentUserTexts returns []. Use a persistent mock
+    // because both the scratch policy and the RAG query builder read it.
+    mockExtractRecentUserTexts.mockReturnValue([]);
     mockBuildRAGQuery.mockReturnValueOnce('Hello');
 
     const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
