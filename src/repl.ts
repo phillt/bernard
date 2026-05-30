@@ -61,6 +61,7 @@ import {
   saveOption,
   getProviderKeyStatus,
   normalizeThreshold,
+  normalizeMaxConcurrentAgents,
   saveProviderKey,
   type BernardConfig,
 } from './config.js';
@@ -113,7 +114,14 @@ import { detectSpecialistCandidate } from './specialist-detector.js';
 import { taskDefinition } from './tools/task.js';
 import { runDefinition } from './framework/agents/run.js';
 import type { TaskInput } from './framework/agents/task.js';
-import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './tools/agent-pool.js';
+import {
+  acquireSlot,
+  releaseSlot,
+  getMaxConcurrentAgents,
+  setMaxConcurrentAgents,
+  MAX_CONCURRENT_AGENTS_LIMIT,
+} from './tools/agent-pool.js';
+import type { ResponseStyle } from './agent-prompt.js';
 import { printTaskStart, printTaskEnd, printWarning, setToolDetailsVisible } from './output.js';
 import { debugLog } from './logger.js';
 import {
@@ -1336,7 +1344,7 @@ export async function startRepl(
     if (!slot) {
       processing = false;
       taskAbortController = null;
-      printError(`Maximum concurrent agents (${MAX_CONCURRENT_AGENTS}) reached.`);
+      printError(`Maximum concurrent agents (${getMaxConcurrentAgents()}) reached.`);
       return;
     }
 
@@ -2423,6 +2431,115 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           }
         }
 
+        async function runMaxConcurrentPrompt(): Promise<void> {
+          const signal = createMenuSignal();
+          try {
+            const val = await promptValue(
+              rl,
+              {
+                label: `Max concurrent sub-agents (1-${MAX_CONCURRENT_AGENTS_LIMIT}, default 4)`,
+              },
+              signal,
+            );
+            if (val.cancelled) return;
+            const raw = val.raw.trim();
+            const parsed = Number.parseInt(raw, 10);
+            if (
+              !Number.isFinite(parsed) ||
+              String(parsed) !== raw ||
+              parsed < 1 ||
+              parsed > MAX_CONCURRENT_AGENTS_LIMIT
+            ) {
+              printError(`Value must be an integer between 1 and ${MAX_CONCURRENT_AGENTS_LIMIT}.`);
+              return;
+            }
+            const normalized = normalizeMaxConcurrentAgents(parsed);
+            config.maxConcurrentAgents = normalized;
+            setMaxConcurrentAgents(normalized);
+            savePreferences({
+              ...loadPreferences(),
+              maxConcurrentAgents: normalized,
+              provider: config.provider,
+              model: config.model,
+            });
+            printInfo(`  Max concurrent sub-agents: ${normalized}`);
+          } finally {
+            clearMenuSignal();
+          }
+        }
+
+        async function runResponseStylePrompt(): Promise<void> {
+          const styles: Array<{ value: ResponseStyle; label: string; desc: string }> = [
+            {
+              value: 'default',
+              label: 'Default (no style block)',
+              desc: 'Base prompt only; no extra shape guidance is injected.',
+            },
+            {
+              value: 'detailed',
+              label: 'Detailed & Thorough',
+              desc: 'Context, mechanism, edge cases, and the reasoning that connects them.',
+            },
+            {
+              value: 'short',
+              label: 'Short & Direct',
+              desc: 'Answer first sentence, no preamble or recap, minimal explanation.',
+            },
+            {
+              value: 'step-by-step',
+              label: 'Step-by-Step',
+              desc: 'Numbered, ordered steps; one discrete action per step.',
+            },
+            {
+              value: 'simple',
+              label: 'Simple & Easy to Understand',
+              desc: 'Plain language, no jargon, concrete examples over abstractions.',
+            },
+            {
+              value: 'high-level',
+              label: 'High-Level Overview',
+              desc: 'Big picture and how parts relate; skip implementation specifics.',
+            },
+            {
+              value: 'critical',
+              label: 'Critical & Honest',
+              desc: 'Evaluative tone: flaws, risks, assumptions, alternatives.',
+            },
+            {
+              value: 'creative',
+              label: 'Creative & Idea-Focused',
+              desc: 'Multiple options or angles; mark a recommendation but show the spread.',
+            },
+          ];
+          const entries: MenuEntry[] = styles.map((s) => ({
+            label: s.label,
+            description: s.desc,
+            active: config.responseStyle === s.value,
+          }));
+          const signal = createMenuSignal();
+          try {
+            const result = await selectFromMenu(
+              rl,
+              entries,
+              { title: `Response style: ${config.responseStyle}` },
+              signal,
+            );
+            if (result.cancelled) return;
+            const chosen = styles[result.index].value;
+            config.responseStyle = chosen;
+            savePreferences({
+              ...loadPreferences(),
+              provider: config.provider,
+              model: config.model,
+              responseStyle: chosen,
+            });
+            printInfo(`  [RESPONSE-STYLE:${chosen.toUpperCase()}] Style block updated.`);
+          } finally {
+            clearMenuSignal();
+          }
+          console.log();
+        }
+
         async function runThresholdPrompt(): Promise<void> {
           const signal = createMenuSignal();
           try {
@@ -2524,6 +2641,25 @@ Remember: the systemPrompt should read like a persona definition — who this sp
                 'Jaccard similarity (0-1) below which a new turn clears all scratch. Lower = more conservative.',
             },
             action: runScratchThresholdPrompt,
+          },
+          {
+            kind: 'item',
+            item: {
+              label: 'Response style',
+              annotation: `= ${config.responseStyle}`,
+              description:
+                'Shape the model response (Detailed, Short, Step-by-Step, Simple, High-Level, Critical, Creative).',
+            },
+            action: runResponseStylePrompt,
+          },
+          {
+            kind: 'item',
+            item: {
+              label: 'Max concurrent sub-agents',
+              annotation: `= ${config.maxConcurrentAgents}`,
+              description: `Cap on parallel agent/task/specialist runs (1-${MAX_CONCURRENT_AGENTS_LIMIT}). Default 4.`,
+            },
+            action: runMaxConcurrentPrompt,
           },
           { kind: 'section', title: 'User-created' },
           {

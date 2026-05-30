@@ -11,7 +11,7 @@ import {
   type SpecialistInput,
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
-import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
+import { acquireSlot, releaseSlot, getMaxConcurrentAgents } from './agent-pool.js';
 
 /**
  * Creates the specialist execution tool for running tasks through a saved
@@ -77,7 +77,7 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
 
       const slot = acquireSlot();
       if (!slot) {
-        return `Error: Maximum concurrent agents (${MAX_CONCURRENT_AGENTS}) reached. Wait for existing agents to finish.`;
+        return `Error: Maximum concurrent agents (${getMaxConcurrentAgents()}) reached. Wait for existing agents to finish.`;
       }
 
       const id = slot.id;

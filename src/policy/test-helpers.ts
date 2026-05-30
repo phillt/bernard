@@ -37,6 +37,8 @@ export function makePolicyInput(overrides?: {
     conciseMode: true,
     confirmMode: 'auto',
     toolMode: 'read-only',
+    maxConcurrentAgents: 4,
+    responseStyle: 'default',
     customProviders: {},
   };
   return {

@@ -782,6 +782,124 @@ describe('loadConfig confirmMode (#144)', () => {
   });
 });
 
+describe('loadConfig maxConcurrentAgents (#133)', () => {
+  beforeEach(() => {
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    vi.stubEnv('OPENAI_API_KEY', '');
+    vi.stubEnv('XAI_API_KEY', '');
+    vi.stubEnv('BERNARD_PROVIDER', '');
+    vi.stubEnv('BERNARD_MODEL', '');
+    vi.stubEnv('BERNARD_MAX_CONCURRENT_AGENTS', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('defaults to 4 when env and prefs are unset', () => {
+    expect(loadConfig().maxConcurrentAgents).toBe(4);
+  });
+
+  it('parses BERNARD_MAX_CONCURRENT_AGENTS env var', () => {
+    vi.stubEnv('BERNARD_MAX_CONCURRENT_AGENTS', '12');
+    expect(loadConfig().maxConcurrentAgents).toBe(12);
+  });
+
+  it('clamps env var values above the limit', () => {
+    vi.stubEnv('BERNARD_MAX_CONCURRENT_AGENTS', '999');
+    expect(loadConfig().maxConcurrentAgents).toBe(20);
+  });
+
+  it('clamps env var values below 1', () => {
+    vi.stubEnv('BERNARD_MAX_CONCURRENT_AGENTS', '0');
+    expect(loadConfig().maxConcurrentAgents).toBe(1);
+  });
+
+  it('falls back to default for non-integer env values', () => {
+    vi.stubEnv('BERNARD_MAX_CONCURRENT_AGENTS', 'banana');
+    expect(loadConfig().maxConcurrentAgents).toBe(4);
+  });
+
+  it('rejects env values with trailing junk', () => {
+    vi.stubEnv('BERNARD_MAX_CONCURRENT_AGENTS', '12abc');
+    expect(loadConfig().maxConcurrentAgents).toBe(4);
+  });
+
+  it('rejects fractional env values', () => {
+    vi.stubEnv('BERNARD_MAX_CONCURRENT_AGENTS', '3.7');
+    expect(loadConfig().maxConcurrentAgents).toBe(4);
+  });
+
+  it('prefs.maxConcurrentAgents takes precedence over env', () => {
+    vi.stubEnv('BERNARD_MAX_CONCURRENT_AGENTS', '6');
+    let callCount = 0;
+    fsMock.readFileSync.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 1) throw new Error('ENOENT');
+      return JSON.stringify({
+        provider: 'anthropic',
+        model: 'test',
+        maxConcurrentAgents: 10,
+      });
+    });
+    expect(loadConfig().maxConcurrentAgents).toBe(10);
+  });
+});
+
+describe('loadConfig responseStyle (#133)', () => {
+  beforeEach(() => {
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    vi.stubEnv('OPENAI_API_KEY', '');
+    vi.stubEnv('XAI_API_KEY', '');
+    vi.stubEnv('BERNARD_PROVIDER', '');
+    vi.stubEnv('BERNARD_MODEL', '');
+    vi.stubEnv('BERNARD_RESPONSE_STYLE', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('defaults to "default" when env and prefs are unset', () => {
+    expect(loadConfig().responseStyle).toBe('default');
+  });
+
+  it('parses valid styles from BERNARD_RESPONSE_STYLE', () => {
+    vi.stubEnv('BERNARD_RESPONSE_STYLE', 'step-by-step');
+    expect(loadConfig().responseStyle).toBe('step-by-step');
+  });
+
+  it('falls back to default for invalid env values', () => {
+    vi.stubEnv('BERNARD_RESPONSE_STYLE', 'verbose');
+    expect(loadConfig().responseStyle).toBe('default');
+  });
+
+  it('prefs.responseStyle takes precedence over env', () => {
+    vi.stubEnv('BERNARD_RESPONSE_STYLE', 'short');
+    let callCount = 0;
+    fsMock.readFileSync.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 1) throw new Error('ENOENT');
+      return JSON.stringify({
+        provider: 'anthropic',
+        model: 'test',
+        responseStyle: 'critical',
+      });
+    });
+    expect(loadConfig().responseStyle).toBe('critical');
+  });
+});
+
 describe('isValidProvider', () => {
   it('returns true for known providers', () => {
     expect(isValidProvider('anthropic')).toBe(true);

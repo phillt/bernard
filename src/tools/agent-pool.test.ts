@@ -3,8 +3,11 @@ import {
   acquireSlot,
   releaseSlot,
   getActiveCount,
+  getMaxConcurrentAgents,
+  setMaxConcurrentAgents,
   _resetPool,
-  MAX_CONCURRENT_AGENTS,
+  DEFAULT_MAX_CONCURRENT_AGENTS,
+  MAX_CONCURRENT_AGENTS_LIMIT,
 } from './agent-pool.js';
 
 describe('agent-pool', () => {
@@ -21,20 +24,22 @@ describe('agent-pool', () => {
   });
 
   it('returns null when at capacity', () => {
-    for (let i = 0; i < MAX_CONCURRENT_AGENTS; i++) {
+    const cap = getMaxConcurrentAgents();
+    for (let i = 0; i < cap; i++) {
       expect(acquireSlot()).not.toBeNull();
     }
     expect(acquireSlot()).toBeNull();
-    expect(getActiveCount()).toBe(MAX_CONCURRENT_AGENTS);
+    expect(getActiveCount()).toBe(cap);
   });
 
   it('releases slots and allows re-acquisition', () => {
-    for (let i = 0; i < MAX_CONCURRENT_AGENTS; i++) {
+    const cap = getMaxConcurrentAgents();
+    for (let i = 0; i < cap; i++) {
       acquireSlot();
     }
     expect(acquireSlot()).toBeNull();
     releaseSlot();
-    expect(getActiveCount()).toBe(MAX_CONCURRENT_AGENTS - 1);
+    expect(getActiveCount()).toBe(cap - 1);
     expect(acquireSlot()).not.toBeNull();
   });
 
@@ -48,7 +53,67 @@ describe('agent-pool', () => {
     acquireSlot();
     _resetPool();
     expect(getActiveCount()).toBe(0);
+    expect(getMaxConcurrentAgents()).toBe(DEFAULT_MAX_CONCURRENT_AGENTS);
     const slot = acquireSlot();
     expect(slot).toEqual({ id: 1 });
+  });
+});
+
+describe('agent-pool concurrency configuration', () => {
+  beforeEach(() => {
+    _resetPool();
+  });
+
+  it('defaults to DEFAULT_MAX_CONCURRENT_AGENTS', () => {
+    expect(getMaxConcurrentAgents()).toBe(DEFAULT_MAX_CONCURRENT_AGENTS);
+  });
+
+  it('clamps values below 1 to 1', () => {
+    expect(setMaxConcurrentAgents(0)).toBe(1);
+    expect(getMaxConcurrentAgents()).toBe(1);
+    expect(setMaxConcurrentAgents(-5)).toBe(1);
+    expect(getMaxConcurrentAgents()).toBe(1);
+  });
+
+  it('clamps values above MAX_CONCURRENT_AGENTS_LIMIT', () => {
+    expect(setMaxConcurrentAgents(MAX_CONCURRENT_AGENTS_LIMIT + 1)).toBe(
+      MAX_CONCURRENT_AGENTS_LIMIT,
+    );
+    expect(getMaxConcurrentAgents()).toBe(MAX_CONCURRENT_AGENTS_LIMIT);
+    expect(setMaxConcurrentAgents(1000)).toBe(MAX_CONCURRENT_AGENTS_LIMIT);
+  });
+
+  it('accepts integer values in [1, limit]', () => {
+    expect(setMaxConcurrentAgents(1)).toBe(1);
+    expect(setMaxConcurrentAgents(8)).toBe(8);
+    expect(setMaxConcurrentAgents(MAX_CONCURRENT_AGENTS_LIMIT)).toBe(MAX_CONCURRENT_AGENTS_LIMIT);
+  });
+
+  it('floors non-integer values', () => {
+    expect(setMaxConcurrentAgents(7.9)).toBe(7);
+    expect(setMaxConcurrentAgents(2.3)).toBe(2);
+  });
+
+  it('ignores non-finite values', () => {
+    setMaxConcurrentAgents(8);
+    expect(setMaxConcurrentAgents(Number.NaN)).toBe(8);
+    expect(setMaxConcurrentAgents(Number.POSITIVE_INFINITY)).toBe(8);
+    expect(getMaxConcurrentAgents()).toBe(8);
+  });
+
+  it('acquireSlot honors the updated cap', () => {
+    setMaxConcurrentAgents(2);
+    expect(acquireSlot()).not.toBeNull();
+    expect(acquireSlot()).not.toBeNull();
+    expect(acquireSlot()).toBeNull();
+  });
+
+  it('raising the cap opens new slots immediately', () => {
+    setMaxConcurrentAgents(2);
+    acquireSlot();
+    acquireSlot();
+    expect(acquireSlot()).toBeNull();
+    setMaxConcurrentAgents(3);
+    expect(acquireSlot()).not.toBeNull();
   });
 });

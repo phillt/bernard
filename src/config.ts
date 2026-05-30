@@ -3,6 +3,12 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { PREFS_PATH, KEYS_PATH, ENV_PATH, LEGACY_DIR } from './paths.js';
 import { loadCustomProviders, validateBaseURL, type CustomProvider } from './custom-providers.js';
+import {
+  setMaxConcurrentAgents,
+  DEFAULT_MAX_CONCURRENT_AGENTS as POOL_DEFAULT_MAX,
+  MAX_CONCURRENT_AGENTS_LIMIT,
+} from './tools/agent-pool.js';
+import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
 
 /** Resolved runtime configuration for a Bernard session. */
 export interface BernardConfig {
@@ -83,6 +89,22 @@ export interface BernardConfig {
    * a style preference.
    */
   conciseMode: boolean;
+  /**
+   * Maximum concurrent sub-agents / tasks / specialists allowed in the shared
+   * pool (issue #133). Defaults to 4; users can raise up to
+   * `MAX_CONCURRENT_AGENTS_LIMIT` (20) via `BERNARD_MAX_CONCURRENT_AGENTS`,
+   * `bernard set-max-concurrent`, or the `/agent-options` REPL menu.
+   * `loadConfig` applies the resolved value to the live pool via
+   * `setMaxConcurrentAgents`.
+   */
+  maxConcurrentAgents: number;
+  /**
+   * User-selected response shape (issue #133). `'default'` injects nothing;
+   * the other ids append a matching `## Response Style` block from
+   * `RESPONSE_STYLE_PROMPTS` to the main system prompt. Orthogonal to
+   * `conciseMode`: concise governs length budget, style governs form.
+   */
+  responseStyle: ResponseStyle;
   /** Whether the resolver attempts a tool-based lookup before prompting the user for unknown references. */
   referenceLookup: boolean;
   /** Extra tool-name allowlist for the reference-lookup pass (additive over built-in patterns). */
@@ -129,6 +151,8 @@ const DEFAULT_TOOL_MODE: 'read-only' | 'write' = 'read-only';
 const DEFAULT_MODEL_MODE: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance' = 'off';
 const DEFAULT_SCRATCH_SUBJECT_THRESHOLD = 0.15;
 const DEFAULT_CONCISE_MODE = true;
+const DEFAULT_MAX_CONCURRENT_AGENTS = POOL_DEFAULT_MAX;
+const DEFAULT_RESPONSE_STYLE: ResponseStyle = 'default';
 
 /** Type guard for `coordinatorMode` string values. */
 function isCoordinatorMode(v: unknown): v is 'on' | 'off' | 'auto' {
@@ -150,6 +174,24 @@ export function isModelMode(
   v: unknown,
 ): v is 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance' {
   return v === 'off' || v === 'optimize-tokens' || v === 'balanced' || v === 'optimize-performance';
+}
+
+/** Type guard for `responseStyle` string values (#133). */
+export function isResponseStyle(v: unknown): v is ResponseStyle {
+  return typeof v === 'string' && (RESPONSE_STYLE_IDS as ReadonlyArray<string>).includes(v);
+}
+
+/**
+ * Clamps an arbitrary number to a valid `maxConcurrentAgents` value: integer
+ * in `[1, MAX_CONCURRENT_AGENTS_LIMIT]`. Returns the default for non-finite
+ * input so we never silently disable parallelism on a malformed env var.
+ */
+export function normalizeMaxConcurrentAgents(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_MAX_CONCURRENT_AGENTS;
+  const floored = Math.floor(value);
+  if (floored < 1) return 1;
+  if (floored > MAX_CONCURRENT_AGENTS_LIMIT) return MAX_CONCURRENT_AGENTS_LIMIT;
+  return floored;
 }
 
 /**
@@ -249,6 +291,8 @@ export function savePreferences(prefs: {
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
   toolMode?: 'read-only' | 'write';
+  maxConcurrentAgents?: number;
+  responseStyle?: ResponseStyle;
 }): void {
   const dir = path.dirname(PREFS_PATH);
   if (!fs.existsSync(dir)) {
@@ -275,6 +319,8 @@ export function savePreferences(prefs: {
   if (prefs.conciseMode !== undefined) data.conciseMode = prefs.conciseMode;
   if (prefs.confirmMode !== undefined) data.confirmMode = prefs.confirmMode;
   if (prefs.toolMode !== undefined) data.toolMode = prefs.toolMode;
+  if (prefs.maxConcurrentAgents !== undefined) data.maxConcurrentAgents = prefs.maxConcurrentAgents;
+  if (prefs.responseStyle !== undefined) data.responseStyle = prefs.responseStyle;
 
   // Preserve autoUpdate, coordinatorMode, and auto-create settings from existing prefs when callers don't pass them
   let existing: Record<string, unknown> | undefined;
@@ -305,6 +351,16 @@ export function savePreferences(prefs: {
   }
   if (prefs.toolMode === undefined && existing && isToolMode(existing.toolMode)) {
     data.toolMode = existing.toolMode;
+  }
+  if (
+    prefs.maxConcurrentAgents === undefined &&
+    existing &&
+    typeof existing.maxConcurrentAgents === 'number'
+  ) {
+    data.maxConcurrentAgents = existing.maxConcurrentAgents;
+  }
+  if (prefs.responseStyle === undefined && existing && isResponseStyle(existing.responseStyle)) {
+    data.responseStyle = existing.responseStyle;
   }
   if (prefs.coordinatorMode === undefined && existing) {
     if (isCoordinatorMode(existing.coordinatorMode)) {
@@ -384,6 +440,8 @@ export function loadPreferences(): {
   conciseMode?: boolean;
   confirmMode?: 'off' | 'auto' | 'strict';
   toolMode?: 'read-only' | 'write';
+  maxConcurrentAgents?: number;
+  responseStyle?: ResponseStyle;
 } {
   try {
     const data = fs.readFileSync(PREFS_PATH, 'utf-8');
@@ -425,6 +483,9 @@ export function loadPreferences(): {
       conciseMode: typeof parsed.conciseMode === 'boolean' ? parsed.conciseMode : undefined,
       confirmMode: isConfirmMode(parsed.confirmMode) ? parsed.confirmMode : undefined,
       toolMode: isToolMode(parsed.toolMode) ? parsed.toolMode : undefined,
+      maxConcurrentAgents:
+        typeof parsed.maxConcurrentAgents === 'number' ? parsed.maxConcurrentAgents : undefined,
+      responseStyle: isResponseStyle(parsed.responseStyle) ? parsed.responseStyle : undefined,
     };
   } catch {
     return {};
@@ -954,6 +1015,27 @@ export function loadConfig(overrides?: {
     : undefined;
   const toolMode = prefs.toolMode ?? envToolMode ?? DEFAULT_TOOL_MODE;
 
+  // Configurable parallel sub-agent concurrency (#133). Precedence: pref > env > default.
+  // Out-of-range values clamp to [1, MAX_CONCURRENT_AGENTS_LIMIT]. Env values must be a
+  // pure integer string ("12abc" / "3.7" / "" fall through to the default).
+  const envMaxConcurrentRaw = (process.env.BERNARD_MAX_CONCURRENT_AGENTS ?? '').trim();
+  const envMaxConcurrentParsed = Number.parseInt(envMaxConcurrentRaw, 10);
+  const envMaxConcurrent =
+    envMaxConcurrentRaw !== '' &&
+    Number.isFinite(envMaxConcurrentParsed) &&
+    String(envMaxConcurrentParsed) === envMaxConcurrentRaw
+      ? envMaxConcurrentParsed
+      : undefined;
+  const rawMaxConcurrent =
+    prefs.maxConcurrentAgents ?? envMaxConcurrent ?? DEFAULT_MAX_CONCURRENT_AGENTS;
+  const maxConcurrentAgents = normalizeMaxConcurrentAgents(rawMaxConcurrent);
+
+  // Response-style picker (#133). Precedence: pref > env > 'default'.
+  const envResponseStyle = isResponseStyle(process.env.BERNARD_RESPONSE_STYLE)
+    ? process.env.BERNARD_RESPONSE_STYLE
+    : undefined;
+  const responseStyle = prefs.responseStyle ?? envResponseStyle ?? DEFAULT_RESPONSE_STYLE;
+
   // Concise-by-default response shaping (#175); opt-out via BERNARD_CONCISE_MODE=false.
   const rawConcise = process.env.BERNARD_CONCISE_MODE;
   const conciseMode =
@@ -1021,6 +1103,8 @@ export function loadConfig(overrides?: {
     promptRewriter,
     confirmMode,
     toolMode,
+    maxConcurrentAgents,
+    responseStyle,
     referenceLookup,
     referenceLookupTools,
     scratchSubjectThreshold,
@@ -1034,6 +1118,11 @@ export function loadConfig(overrides?: {
   };
 
   validateConfig(config);
+  // Apply the resolved concurrency cap to the shared agent pool (#133). Done
+  // here so the very first sub-agent / task / specialist call respects user
+  // intent — the REPL and CLI also call setMaxConcurrentAgents on subsequent
+  // changes.
+  setMaxConcurrentAgents(config.maxConcurrentAgents);
   return config;
 }
 

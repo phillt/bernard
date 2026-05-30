@@ -49,7 +49,7 @@ vi.mock('./agent-pool.js', async (importOriginal) => {
     ...actual,
     acquireSlot: vi.fn(() => ({ id: 1 })),
     releaseSlot: vi.fn(),
-    MAX_CONCURRENT_AGENTS: 3,
+    getMaxConcurrentAgents: vi.fn(() => 3),
   };
 });
 

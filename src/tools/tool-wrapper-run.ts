@@ -8,7 +8,7 @@ import { redactArgs, REDACTED } from '../framework/tools/redact.js';
 import { createSpecialistRunTool } from './specialist-run.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
-import { acquireSlot, releaseSlot, MAX_CONCURRENT_AGENTS } from './agent-pool.js';
+import { acquireSlot, releaseSlot, getMaxConcurrentAgents } from './agent-pool.js';
 import { type BernardConfig, resolveProviderAndModel } from '../config.js';
 import type { MemoryStore } from '../memory.js';
 import type { RAGStore } from '../rag.js';
@@ -267,7 +267,7 @@ export async function dispatchToolWrapper(
   if (!slot) {
     return {
       status: 'error',
-      result: `Maximum concurrent agents (${MAX_CONCURRENT_AGENTS}) reached.`,
+      result: `Maximum concurrent agents (${getMaxConcurrentAgents()}) reached.`,
       error: 'pool_exhausted',
     };
   }
