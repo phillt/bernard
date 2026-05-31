@@ -1,4 +1,6 @@
 import { printToolCall, printToolResult, printAssistantText } from '../../output.js';
+import { detectToolError } from '../../tool-profiles.js';
+import { getOutputSink } from './output-sink.js';
 import type { AgentHook } from './types.js';
 
 /**
@@ -9,10 +11,58 @@ import type { AgentHook } from './types.js';
  * Extracted from the verbatim `onStepFinish` lambda that was previously
  * duplicated across `subagent.ts`, `specialist-run.ts`, `task.ts`, and
  * `tool-wrapper-run.ts`. The main agent uses this hook with no prefix.
+ *
+ * Phase C (#214): when an `OutputSink` is registered via `setOutputSink`,
+ * step events flow into the sink instead of the stdout printers. The sink
+ * branch never falls through to stdout — the Ink renderer owns the screen
+ * when a sink is active, and double-writing would tear the terminal. When
+ * no sink is registered (legacy readline REPL, cron jobs, most tests), the
+ * existing stdout path runs unchanged.
+ *
+ * Streaming text is NOT emitted from this hook — `onStepFinish` only fires
+ * at step completion. Per-token deltas for the main agent come from the
+ * runner's `streamText` branch (`src/framework/runner.ts`) which pushes
+ * `text-delta` events directly into the sink as they arrive. To avoid
+ * double-rendering the main agent's text (once per delta and once in bulk
+ * at step end), the sink branch here skips `text-delta` for the main agent
+ * (`prefix === undefined`) — sub-agents and wrappers still emit a single
+ * bulk `text-delta` per step since they don't stream.
  */
 export function outputHook(prefix?: string): AgentHook {
   return {
     onStepFinish: ({ text, toolCalls, toolResults }) => {
+      const sink = getOutputSink();
+      if (sink) {
+        for (const tc of toolCalls ?? []) {
+          sink.append({
+            kind: 'tool-call',
+            callId: tc.toolCallId,
+            toolName: tc.toolName,
+            args: tc.args,
+            agentLabel: prefix,
+          });
+        }
+        for (const tr of toolResults ?? []) {
+          // Per-tool shapes vary (`shell` uses `is_error`, `web_read` returns
+          // an "Error:" string, MCP tools surface text content, …) — defer to
+          // the same classifier the stdout printer uses so the Ink thread
+          // colors failed calls red consistently with the legacy path.
+          const errInfo = detectToolError(tr.toolName, tr.result);
+          sink.append({
+            kind: 'tool-result',
+            callId: tr.toolCallId,
+            result: tr.result,
+            isError: errInfo.isError,
+            agentLabel: prefix,
+          });
+        }
+        if (text && prefix !== undefined) {
+          // Sub-agent / wrapper bulk-render. Main agent (prefix === undefined)
+          // is handled by the runner's streamText loop pushing per-token deltas.
+          sink.append({ kind: 'text-delta', text, agentLabel: prefix });
+        }
+        return;
+      }
       for (const tc of toolCalls ?? []) {
         printToolCall(tc.toolName, tc.args as Record<string, unknown>, prefix);
       }

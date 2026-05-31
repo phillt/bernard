@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 /**
- * scripts/preview-ink.mjs — Phase B dev harness.
+ * scripts/preview-ink.mjs — Ink dev harness.
  *
  * Mounts the Ink <App> against a real Bernard agent so a developer can
- * end-to-end validate the #211 round-2 fixes (Shift-Tab Status full-screen,
- * Esc closes overlay without replay artifact) without touching their normal
+ * end-to-end validate the in-flight Ink REPL without touching their normal
  * Bernard state.
+ *
+ * Phase C (#214) note: <App> registers a MessageStore as the active output
+ * sink on mount, so this preview now exercises true token streaming on the
+ * main agent (text appears incrementally) and bulk-at-step rendering on
+ * sub-agents / tool-wrappers. When run outside the Ink tree (legacy REPL),
+ * no sink is registered and outputHook falls through to the existing stdout
+ * printers unchanged.
  *
  * Sets BERNARD_HOME=$(mktemp -d) on every launch so memory, history,
  * provenance, RAG state, etc. are isolated from the user's real install.
