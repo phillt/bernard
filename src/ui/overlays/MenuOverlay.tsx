@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
-import type { MenuEntry, MenuItem, MenuOptions } from '../../menu.js';
+import type { MenuEntry, MenuItem, MenuOptions } from '../menu-types.js';
 
 interface MenuOverlayProps {
   entries: MenuEntry[];

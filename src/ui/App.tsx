@@ -11,7 +11,7 @@ import type {
   BlockActionInput,
   BlockOutcome,
 } from '../tools/types.js';
-import type { MenuEntry, MenuItem, MenuOptions } from '../menu.js';
+import type { MenuEntry, MenuItem, MenuOptions } from './menu-types.js';
 import { Thread } from './Thread.js';
 import { Prompt } from './Prompt.js';
 import { Spinner } from './Spinner.js';
