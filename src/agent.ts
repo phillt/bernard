@@ -612,7 +612,7 @@ export class Agent {
       // missed. Scan every step plus the final text. Issues #173, #211.
       this.lastSources = this.ctx.provenance.list();
       const stepTexts = (result.steps ?? [])
-        .map((s: any) => (typeof s.text === 'string' ? s.text : ''))
+        .map((s) => (typeof s.text === 'string' ? s.text : ''))
         .join('\n');
       const citedScanText = stepTexts + '\n' + (result.text ?? '');
       const citedIds = extractCitationMarkers(citedScanText, this.ctx.provenance);
@@ -628,10 +628,16 @@ export class Agent {
 
       // Append a per-turn snapshot for the Shift+Tab full-screen viewer
       // (#211). Only record turns that actually had something to cite —
-      // empty turns would clutter the history view.
+      // empty turns would clutter the history view. `turnIndex` is the
+      // *conversation* turn position (0-based count of user messages in
+      // history), not the index within `turnProvenance` — otherwise turns
+      // that registered no sources would compress the indices and the
+      // viewer would show "Turn 2" for what the user typed as their 5th
+      // message. Derived from history so it's also correct on resume.
       if (this.lastSources.length > 0) {
+        const userTurnCount = this.history.filter((m) => m.role === 'user').length;
         this.turnProvenance.push({
-          turnIndex: this.turnProvenance.length,
+          turnIndex: Math.max(0, userTurnCount - 1),
           userInput: userInput,
           sources: this.lastSources.map((s) => ({ ...s })),
           citedIds: [...citedIds],
