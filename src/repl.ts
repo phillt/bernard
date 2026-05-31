@@ -63,8 +63,17 @@ import {
   normalizeThreshold,
   normalizeMaxConcurrentAgents,
   saveProviderKey,
+  applyProfileToConfig,
   type BernardConfig,
 } from './config.js';
+import {
+  listProfiles,
+  createProfile,
+  renameProfile,
+  deleteProfile,
+  switchActiveProfile,
+} from './profiles.js';
+import { runProfileWizard } from './profiles-wizard.js';
 import {
   loadCustomProviders,
   saveCustomProvider,
@@ -152,8 +161,26 @@ export async function startRepl(
   config: BernardConfig,
   alertContext?: string,
   resume?: boolean,
+  onboarding?: { isFreshInstall: boolean },
 ): Promise<void> {
   setToolDetailsVisible(config.toolDetails);
+
+  /**
+   * Re-fires the runtime side effects of `loadConfig` that live outside the
+   * `BernardConfig` object — the agent pool size is reseated inside
+   * `loadConfig`, but theme and tool-details visibility are owned by separate
+   * module-level singletons that only get pushed when `setTheme` /
+   * `setToolDetailsVisible` are called explicitly. Call this after every
+   * profile switch so the live REPL reflects the new profile's choices.
+   */
+  function reapplyRuntimeSettings(cfg: BernardConfig): void {
+    try {
+      setTheme(cfg.theme);
+    } catch {
+      /* unknown theme — keep current */
+    }
+    setToolDetailsVisible(cfg.toolDetails);
+  }
   const SLASH_COMMANDS = [
     { command: '/help', description: 'Show this help' },
     { command: '/clear', description: 'Clear conversation (--save/-s to summarize first)' },
@@ -184,6 +211,8 @@ export async function startRepl(
       command: '/agent-options',
       description: 'Configure agent behavior (toggles, thresholds, saved assets)',
     },
+    { command: '/profiles', description: 'List, switch, or create settings profiles' },
+    { command: '/manage-profiles', description: 'Rename or delete saved settings profiles' },
     { command: '/image', description: 'Attach an image: /image <path> [prompt]' },
     { command: '/exit', description: 'Quit Bernard' },
   ];
@@ -2705,6 +2734,204 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         return;
       }
 
+      if (trimmed === '/profiles') {
+        const profiles = listProfiles();
+        const entries: MenuEntry[] = profiles.map((p) => ({
+          label: p.name,
+          annotation: p.id !== p.name ? `(${p.id})` : undefined,
+          active: p.active,
+        }));
+        entries.push({ label: '+ Create new profile…' });
+        const signal = createMenuSignal();
+        let result;
+        try {
+          result = await selectFromMenu(
+            rl,
+            entries,
+            { title: 'Profiles — select one to switch, or create a new one' },
+            signal,
+          );
+        } finally {
+          clearMenuSignal();
+        }
+        if (result.cancelled) {
+          console.log();
+          void prompt();
+          return;
+        }
+
+        if (result.index === profiles.length) {
+          // Create-new path → wizard → switch.
+          const wiz = await runProfileWizard(
+            { rl, createSignal: createMenuSignal, clearSignal: clearMenuSignal },
+            { namePromptLabel: 'Name for the new profile' },
+          );
+          if (wiz.cancelled) {
+            printInfo('  Profile creation cancelled.');
+            console.log();
+            void prompt();
+            return;
+          }
+          // Transactional create+switch: if applyProfileToConfig throws (e.g. the
+          // wizard picked a provider without a configured key) we roll the on-disk
+          // activeProfileId back so a failed switch can't leave the user stuck on
+          // an unusable profile at next startup.
+          const priorActive = listProfiles().find((p) => p.active)?.id;
+          let createdId: string | undefined;
+          try {
+            const profile = createProfile(wiz.name, wiz.settings);
+            createdId = profile.id;
+            switchActiveProfile(profile.id);
+            applyProfileToConfig(config);
+            reapplyRuntimeSettings(config);
+            printInfo(`  Created profile "${profile.name}" and switched to it.`);
+          } catch (err) {
+            if (createdId && priorActive) {
+              try {
+                switchActiveProfile(priorActive);
+                applyProfileToConfig(config);
+                reapplyRuntimeSettings(config);
+              } catch {
+                /* best-effort rollback */
+              }
+            }
+            printError(`Failed to create profile: ${(err as Error).message}`);
+          }
+          console.log();
+          void prompt();
+          return;
+        }
+
+        const target = profiles[result.index];
+        if (target.active) {
+          printInfo(`  Already on profile "${target.name}".`);
+          console.log();
+          void prompt();
+          return;
+        }
+        // Transactional switch: roll the on-disk activeProfileId back if
+        // applyProfileToConfig throws after the file write succeeded.
+        const priorActive = profiles.find((p) => p.active)?.id;
+        try {
+          switchActiveProfile(target.id);
+          applyProfileToConfig(config);
+          reapplyRuntimeSettings(config);
+          printInfo(`  Switched to profile "${target.name}".`);
+        } catch (err) {
+          if (priorActive) {
+            try {
+              switchActiveProfile(priorActive);
+              applyProfileToConfig(config);
+              reapplyRuntimeSettings(config);
+            } catch {
+              /* best-effort rollback */
+            }
+          }
+          printError(`Failed to switch profile: ${(err as Error).message}`);
+        }
+        console.log();
+        void prompt();
+        return;
+      }
+
+      if (trimmed === '/manage-profiles') {
+        const profiles = listProfiles();
+        if (profiles.length === 0) {
+          printInfo('  No profiles configured.');
+          console.log();
+          void prompt();
+          return;
+        }
+        const entries: MenuEntry[] = profiles.map((p) => ({
+          label: p.name,
+          annotation: p.active ? '(active)' : undefined,
+        }));
+        const signal = createMenuSignal();
+        let pick;
+        try {
+          pick = await selectFromMenu(
+            rl,
+            entries,
+            { title: 'Manage profiles — select one' },
+            signal,
+          );
+        } finally {
+          clearMenuSignal();
+        }
+        if (pick.cancelled) {
+          console.log();
+          void prompt();
+          return;
+        }
+        const target = profiles[pick.index];
+
+        const actionSignal = createMenuSignal();
+        let actionRes;
+        try {
+          actionRes = await selectFromMenu(
+            rl,
+            [{ label: 'Rename' }, { label: 'Delete' }, { label: 'Back' }],
+            { title: `Profile "${target.name}" (${target.id})` },
+            actionSignal,
+          );
+        } finally {
+          clearMenuSignal();
+        }
+        if (actionRes.cancelled || actionRes.index === 2) {
+          console.log();
+          void prompt();
+          return;
+        }
+
+        if (actionRes.index === 0) {
+          const renameSignal = createMenuSignal();
+          let val;
+          try {
+            val = await promptValue(rl, { label: `New name for "${target.name}"` }, renameSignal);
+          } finally {
+            clearMenuSignal();
+          }
+          if (val.cancelled || !val.raw.trim()) {
+            console.log();
+            void prompt();
+            return;
+          }
+          try {
+            const updated = renameProfile(target.id, val.raw.trim());
+            printInfo(`  Renamed to "${updated.name}".`);
+          } catch (err) {
+            printError(`Failed to rename: ${(err as Error).message}`);
+          }
+        } else if (actionRes.index === 1) {
+          const confirmSignal = createMenuSignal();
+          let confirm;
+          try {
+            confirm = await selectFromMenu(
+              rl,
+              [
+                { label: `Delete "${target.name}"`, description: 'This cannot be undone.' },
+                { label: 'Cancel' },
+              ],
+              { title: 'Confirm deletion' },
+              confirmSignal,
+            );
+          } finally {
+            clearMenuSignal();
+          }
+          if (!confirm.cancelled && confirm.index === 0) {
+            try {
+              deleteProfile(target.id);
+              printInfo(`  Deleted profile "${target.name}".`);
+            } catch (err) {
+              printError(`Cannot delete: ${(err as Error).message}`);
+            }
+          }
+        }
+        console.log();
+        void prompt();
+        return;
+      }
+
       if (trimmed === '/task' || trimmed.startsWith('/task ')) {
         const taskDescription = trimmed.slice('/task'.length).trim();
         if (!taskDescription) {
@@ -2939,6 +3166,44 @@ Remember: the systemPrompt should read like a persona definition — who this sp
       .then(() => process.exit(0))
       .catch(() => process.exit(1));
   });
+
+  // Onboarding wizard for brand-new users (#207). Runs in TTY sessions only;
+  // skipped during `--alert` flows so we don't pre-empt an incident response,
+  // and skipped on `--resume` since the user is mid-conversation.
+  if (
+    onboarding?.isFreshInstall &&
+    !alertContext &&
+    !resume &&
+    process.stdin.isTTY &&
+    process.stdout.isTTY
+  ) {
+    try {
+      printInfo('  Welcome — let’s configure your default settings profile.');
+      printInfo('  Press Esc to skip any step and accept defaults.');
+      console.log();
+      const wiz = await runProfileWizard(
+        { rl, createSignal: createMenuSignal, clearSignal: clearMenuSignal },
+        { initialName: 'default', namePromptLabel: 'Profile name' },
+      );
+      if (!wiz.cancelled) {
+        // The default profile already exists (created during the first
+        // loadProfiles call). Apply the wizard's settings on top of it.
+        savePreferences({
+          provider: config.provider,
+          model: config.model,
+          ...wiz.settings,
+        });
+        applyProfileToConfig(config);
+        printInfo('  Default profile updated.');
+      } else {
+        printInfo('  Setup skipped — running with built-in defaults.');
+      }
+      console.log();
+    } catch (err) {
+      // Onboarding failures should never block the REPL from starting.
+      printError(`Onboarding wizard error: ${(err as Error).message}`);
+    }
+  }
 
   void prompt();
 }

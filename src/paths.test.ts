@@ -137,6 +137,8 @@ describe('paths', () => {
         paths.STATE_DIR,
         paths.LEGACY_DIR,
         paths.PREFS_PATH,
+        paths.PROFILES_PATH,
+        paths.PROFILES_MIGRATED_MARKER,
         paths.KEYS_PATH,
         paths.ENV_PATH,
         paths.MCP_CONFIG_PATH,
@@ -164,6 +166,8 @@ describe('paths', () => {
     it('config files are under CONFIG_DIR', async () => {
       const paths = await loadPaths();
       expect(paths.PREFS_PATH.startsWith(paths.CONFIG_DIR)).toBe(true);
+      expect(paths.PROFILES_PATH.startsWith(paths.CONFIG_DIR)).toBe(true);
+      expect(paths.PROFILES_MIGRATED_MARKER.startsWith(paths.CONFIG_DIR)).toBe(true);
       expect(paths.KEYS_PATH.startsWith(paths.CONFIG_DIR)).toBe(true);
       expect(paths.ENV_PATH.startsWith(paths.CONFIG_DIR)).toBe(true);
       expect(paths.MCP_CONFIG_PATH.startsWith(paths.CONFIG_DIR)).toBe(true);
