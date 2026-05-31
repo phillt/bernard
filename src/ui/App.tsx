@@ -8,7 +8,14 @@ import {
   getAvailableProviders,
   PROVIDER_MODELS,
   saveProviderKey,
+  OPTIONS_REGISTRY,
+  saveOption,
+  getProviderKeyStatus,
 } from '../config.js';
+import { getContextWindow } from '../context.js';
+import { getLocalVersion } from '../update.js';
+import { CONFIG_DIR, DATA_DIR, CACHE_DIR, STATE_DIR } from '../paths.js';
+import * as os from 'node:os';
 import {
   loadCustomProviders,
   saveCustomProvider,
@@ -661,6 +668,58 @@ export function App({
       return;
     }
 
+    if (text === '/options') {
+      const optEntries = Object.entries(OPTIONS_REGISTRY);
+      const menuEntries: MenuEntry[] = [
+        ...optEntries.map(([name, opt]) => {
+          const current = config[opt.configKey];
+          const tag = current === opt.default ? '(default)' : '(custom)';
+          return {
+            label: name,
+            annotation: `= ${current} ${tag}`,
+            description: opt.description,
+          };
+        }),
+        { type: 'section', title: 'Info' },
+        { label: 'Debug report', description: 'Print a diagnostic report for troubleshooting' },
+      ];
+      const optResult = await requestMenu(menuEntries, {
+        title: 'Options',
+        promptLabel: 'Select option',
+      });
+      if (optResult.cancelled) return;
+      if (optResult.index >= optEntries.length) {
+        showInfo('Bernard Diagnostic Report', buildDebugReportLines(config, agent, stores));
+        return;
+      }
+      const [name, opt] = optEntries[optResult.index];
+      const valResult = await requestTextInput({ label: `New value for ${name}` });
+      if (valResult.cancelled) return;
+      const val = parseInt(valResult.raw, 10);
+      const minVal = opt.default === 0 ? 0 : 1;
+      if (Number.isNaN(val) || val < minVal) {
+        flashToast(
+          `Invalid value. Must be ${minVal === 0 ? 'a non-negative integer' : 'a positive integer'}.`,
+          'error',
+        );
+        return;
+      }
+      saveOption(name, val);
+      (config as unknown as Record<string, unknown>)[opt.configKey] = val;
+      if (name === 'token-window') {
+        const modelWindow = getContextWindow(config.model);
+        if (val > modelWindow) {
+          flashToast(
+            `Set ${name} = ${val} (warning: exceeds ${config.model}'s context window ${modelWindow})`,
+            'warning',
+          );
+          return;
+        }
+      }
+      flashToast(`${name} set to ${val}`, 'success');
+      return;
+    }
+
     if (text === '/routines') {
       const all = stores.routines.list();
       if (all.length === 0) {
@@ -962,6 +1021,102 @@ export function App({
       )}
     </Box>
   );
+}
+
+function buildDebugReportLines(
+  config: BernardConfig,
+  agent: Agent,
+  stores: AppStores,
+): Array<{ text: string; dim?: boolean; bold?: boolean }> {
+  const lines: Array<{ text: string; dim?: boolean; bold?: boolean }> = [];
+  lines.push({ text: 'Runtime:', bold: true });
+  lines.push({ text: `  Bernard version: ${getLocalVersion()}`, dim: true });
+  lines.push({ text: `  Node.js version: ${process.version}`, dim: true });
+  lines.push({
+    text: `  OS: ${process.platform} ${process.arch} (${os.release()})`,
+    dim: true,
+  });
+
+  lines.push({ text: '' });
+  lines.push({ text: 'LLM:', bold: true });
+  lines.push({ text: `  Provider: ${config.provider}`, dim: true });
+  lines.push({ text: `  Model: ${config.model}`, dim: true });
+  lines.push({ text: `  maxTokens: ${config.maxTokens}`, dim: true });
+  lines.push({ text: `  shellTimeout: ${config.shellTimeout}ms`, dim: true });
+  lines.push({ text: `  tokenWindow: ${config.tokenWindow || 'auto-detect'}`, dim: true });
+
+  lines.push({ text: '' });
+  lines.push({ text: 'API Keys:', bold: true });
+  for (const { provider, hasKey } of getProviderKeyStatus()) {
+    lines.push({ text: `  ${provider}: ${hasKey ? 'configured' : 'not set'}`, dim: true });
+  }
+
+  lines.push({ text: '' });
+  lines.push({ text: 'MCP Servers:', bold: true });
+  const statuses = stores.mcp?.getServerStatuses() ?? [];
+  if (statuses.length === 0) {
+    lines.push({ text: '  (none configured)', dim: true });
+  } else {
+    for (const s of statuses) {
+      lines.push({
+        text: s.connected
+          ? `  ${s.name}: connected (${s.toolCount} tools)`
+          : `  ${s.name}: failed — ${s.error}`,
+        dim: true,
+      });
+    }
+  }
+
+  lines.push({ text: '' });
+  lines.push({ text: 'RAG:', bold: true });
+  lines.push({ text: `  Enabled: ${config.ragEnabled}`, dim: true });
+  if (stores.rag) {
+    lines.push({ text: `  Facts: ${stores.rag.count()}`, dim: true });
+  }
+
+  lines.push({ text: '' });
+  lines.push({ text: 'Memory:', bold: true });
+  lines.push({
+    text: `  Persistent memories: ${stores.memory.listMemory().length}`,
+    dim: true,
+  });
+
+  lines.push({ text: '' });
+  lines.push({ text: 'Cron:', bold: true });
+  lines.push({ text: `  Daemon: ${isDaemonRunning() ? 'running' : 'stopped'}`, dim: true });
+  let cronJobCount = 0;
+  try {
+    cronJobCount = new CronStore().loadJobs().length;
+  } catch {
+    // jobs.json missing — leave 0
+  }
+  lines.push({ text: `  Jobs: ${cronJobCount}`, dim: true });
+
+  lines.push({ text: '' });
+  lines.push({ text: 'Conversation:', bold: true });
+  lines.push({ text: `  Messages: ${agent.getHistory().length}`, dim: true });
+
+  lines.push({ text: '' });
+  lines.push({ text: 'Settings:', bold: true });
+  lines.push({ text: `  Theme: ${getActiveThemeKey()}`, dim: true });
+  lines.push({ text: `  Coordinator mode: ${config.coordinatorMode}`, dim: true });
+  lines.push({ text: `  Tool details: ${config.toolDetails ? 'on' : 'off'}`, dim: true });
+  lines.push({ text: `  Prompt rewriter: ${config.promptRewriter ? 'on' : 'off'}`, dim: true });
+  const debugEnabled =
+    process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
+  lines.push({ text: `  Debug mode: ${debugEnabled ? 'on' : 'off'}`, dim: true });
+
+  lines.push({ text: '' });
+  lines.push({ text: 'Paths:', bold: true });
+  if (process.env.BERNARD_HOME) {
+    lines.push({ text: `  BERNARD_HOME: ${process.env.BERNARD_HOME}`, dim: true });
+  }
+  lines.push({ text: `  Config: ${CONFIG_DIR}`, dim: true });
+  lines.push({ text: `  Data: ${DATA_DIR}`, dim: true });
+  lines.push({ text: `  Cache: ${CACHE_DIR}`, dim: true });
+  lines.push({ text: `  State: ${STATE_DIR}`, dim: true });
+
+  return lines;
 }
 
 const CREATE_SEED_PROMPTS: Record<string, string> = {
