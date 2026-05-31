@@ -4,6 +4,9 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import * as os from 'node:os';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import {
   RAG_DIR,
   MCP_CONFIG_PATH,
@@ -85,7 +88,6 @@ import {
 } from './custom-providers.js';
 import type { SupportedSdk } from './providers/types.js';
 import { getTheme, setTheme, getThemeKeys, getActiveThemeKey, THEMES } from './theme.js';
-import type { SourceItem } from './provenance.js';
 import { renderRubricLine } from './rubric.js';
 import {
   buildAgentStatusPanel,
@@ -97,6 +99,7 @@ import { interactiveUpdate, getLocalVersion } from './update.js';
 import { CronStore } from './cron/store.js';
 import { isDaemonRunning } from './cron/client.js';
 import { HistoryStore } from './history.js';
+import { ProvenanceHistoryStore } from './provenance-history.js';
 import { generateText } from 'ai';
 import { getModelProfile } from './providers/index.js';
 import { resolveSiteModel } from './model-policy.js';
@@ -777,6 +780,11 @@ export async function startRepl(
     sources: 'Sources',
   };
   let viewerTab: ViewerTab | null = null;
+  // Sources is rendered full-screen (replace-thread) rather than as a pinned
+  // overlay so users can audit citations across the whole conversation. The
+  // flag suppresses hint redraws while active; Esc returns to the thread.
+  // Issue #211.
+  let fullScreenSourcesActive = false;
 
   function buildViewerHeader(active: ViewerTab, title: string): string[] {
     const t = getTheme();
@@ -784,27 +792,6 @@ export async function startRepl(
       tab === active ? t.accentBold(`[${VIEWER_LABELS[tab]}]`) : t.dim(VIEWER_LABELS[tab]),
     ).join('  ');
     return [`${t.accentBold(`▼ ${title}`)}  ${t.dim('·')}  ${strip}`];
-  }
-
-  function buildSourcesPanel(sources: SourceItem[], title: string): string[] {
-    const t = getTheme();
-    const lines: string[] = buildViewerHeader('sources', title);
-    if (sources.length === 0) {
-      lines.push(t.dim('(no sources from the last turn)'));
-    }
-    for (const s of sources) {
-      const head = `${t.accent(`[^${s.id}]`)} ${t.dim(`(${s.kind})`)} ${s.label}`;
-      lines.push(head);
-      if (s.rawRef && s.rawRef !== s.label) {
-        lines.push(`    ${t.dim(s.rawRef)}`);
-      }
-      if (s.contentPreview) {
-        const preview = s.contentPreview.replace(/\s+/g, ' ').slice(0, 160);
-        lines.push(`    ${t.dim(preview)}`);
-      }
-    }
-    lines.push(t.dim('Shift+Tab to cycle · Esc to close'));
-    return lines;
   }
 
   function buildStatusPanel(): string[] {
@@ -829,32 +816,114 @@ export async function startRepl(
     return lines;
   }
 
+  function formatRelativeTime(ts: number): string {
+    const delta = Math.max(0, Date.now() - ts);
+    const sec = Math.floor(delta / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    const day = Math.floor(hr / 24);
+    return `${day}d ago`;
+  }
+
+  /**
+   * Paint the full-screen citation history view — every turn's sources for
+   * the current conversation, with cited entries highlighted. Replaces the
+   * thread until Esc is pressed. Issue #211.
+   */
+  function enterFullScreenSources(): void {
+    // Drop any pinned regions (status overlay, plan strip) so they don't
+    // bleed into the full-screen paint.
+    clearPinnedRegion('viewer');
+    clearPinnedRegion('plan');
+
+    const t = getTheme();
+    const turns = agent.getTurnProvenance();
+
+    // Clear screen and home cursor.
+    process.stdout.write('\x1b[2J\x1b[H');
+
+    const header = buildViewerHeader('sources', 'Citations — current conversation');
+    for (const line of header) process.stdout.write(line + '\n');
+    process.stdout.write('\n');
+
+    if (turns.length === 0) {
+      process.stdout.write(t.dim('No citations recorded in this conversation yet.') + '\n');
+    } else {
+      for (const turn of turns) {
+        const citedSet = new Set(turn.citedIds);
+        const inputSnip = turn.userInput.replace(/\s+/g, ' ').slice(0, 80);
+        const relTime = formatRelativeTime(turn.timestamp);
+        process.stdout.write(
+          t.accentBold(`Turn ${turn.turnIndex + 1}`) +
+            t.dim(` · ${relTime} · `) +
+            t.dim(`"${inputSnip}"`) +
+            '\n',
+        );
+        if (turn.sources.length === 0) {
+          process.stdout.write('  ' + t.dim('(no sources)') + '\n');
+        } else {
+          for (const s of turn.sources) {
+            const cited = citedSet.has(s.id);
+            const idLabel = cited ? t.accent(`[^${s.id}]`) : t.dim(`[^${s.id}]`);
+            const kindBadge = t.dim(`(${s.kind})`);
+            const head = `  ${idLabel} ${kindBadge} ${cited ? s.label : t.dim(s.label)}`;
+            process.stdout.write(head + '\n');
+            if (s.rawRef && s.rawRef !== s.label) {
+              process.stdout.write('      ' + t.dim(s.rawRef) + '\n');
+            }
+            if (s.contentPreview) {
+              const preview = s.contentPreview.replace(/\s+/g, ' ').slice(0, 160);
+              process.stdout.write('      ' + t.dim(preview) + '\n');
+            }
+          }
+        }
+        process.stdout.write('\n');
+      }
+    }
+
+    process.stdout.write(t.dim('Esc to return to thread · Shift+Tab to close') + '\n');
+
+    fullScreenSourcesActive = true;
+    viewerTab = 'sources';
+  }
+
+  function exitFullScreenSources(): void {
+    if (!fullScreenSourcesActive) return;
+    fullScreenSourcesActive = false;
+    viewerTab = null;
+    hintLineCount = 0;
+    // Clear screen and redraw the thread + prompt so the user lands back
+    // where they were.
+    process.stdout.write('\x1b[2J\x1b[H');
+    printConversationReplay(agent.getHistory());
+    process.stdout.write(getPromptStr());
+  }
+
   function renderViewer(tab: ViewerTab): void {
     if (tab === 'status') {
       setPinnedRegion('viewer', buildStatusPanel());
-    } else {
-      const cited = agent.getLastCitedSources();
-      const all = agent.getLastSources();
-      const sources = cited.length > 0 ? cited : all;
-      const title =
-        cited.length > 0
-          ? 'Cited sources (last response)'
-          : all.length > 0
-            ? 'Available sources (last turn — none cited)'
-            : 'Sources';
-      setPinnedRegion('viewer', buildSourcesPanel(sources, title));
+      viewerTab = tab;
+      return;
     }
-    viewerTab = tab;
+    // tab === 'sources' is now the full-screen replace-thread view.
+    enterFullScreenSources();
   }
 
   function closeViewer(): void {
+    if (fullScreenSourcesActive) {
+      exitFullScreenSources();
+      return;
+    }
     if (viewerTab === null) return;
     clearPinnedRegion('viewer');
     viewerTab = null;
   }
 
   function cycleViewer(): void {
-    // null → status → sources → null
+    // null → status (overlay) → sources (full-screen) → null
     if (viewerTab === null) {
       renderViewer(VIEWER_TABS[0]);
       return;
@@ -864,6 +933,11 @@ export async function startRepl(
     if (!next) {
       closeViewer();
       return;
+    }
+    // Moving from `status` to `sources` first tears down the pinned status
+    // overlay before painting full-screen so they don't overlap.
+    if (viewerTab === 'status') {
+      clearPinnedRegion('viewer');
     }
     renderViewer(next);
   }
@@ -923,7 +997,8 @@ export async function startRepl(
       !isPasting &&
       key.name !== 'paste-start' &&
       key.name !== 'paste-end' &&
-      key.name !== 'return'
+      key.name !== 'return' &&
+      !fullScreenSourcesActive
     ) {
       process.nextTick(() => {
         const line = (rl as any).line as string;
@@ -1160,6 +1235,7 @@ export async function startRepl(
   };
 
   const historyStore = new HistoryStore();
+  const provenanceHistoryStore = new ProvenanceHistoryStore();
   let initialHistory: import('ai').CoreMessage[] | undefined;
   if (resume) {
     const loaded = historyStore.load();
@@ -1217,6 +1293,20 @@ export async function startRepl(
     },
   });
   const agent = new Agent(agentCtx, { alertContext, initialHistory });
+
+  // Restore per-turn citation snapshots so the Shift+Tab full-screen
+  // viewer shows history from prior sessions on `bernard --resume` (#211).
+  if (resume) {
+    agent.setTurnProvenance(provenanceHistoryStore.load());
+  }
+
+  // Save both conversation history and per-turn citation snapshots together
+  // — they must stay in sync, and every save site already calls
+  // `historyStore.save(agent.getHistory())`. Issue #211.
+  function persistAgentState(): void {
+    historyStore.save(agent.getHistory());
+    provenanceHistoryStore.save(agent.getTurnProvenance());
+  }
 
   // Drain the correction-candidate backlog of non-correctable failures
   // (HTTP 404, rate limits, pool exhaustion, etc.) before the agent runs.
@@ -1346,7 +1436,7 @@ export async function startRepl(
     try {
       initSpinner();
       await agent.processInput(message);
-      historyStore.save(agent.getHistory());
+      persistAgentState();
     } catch (err: unknown) {
       if (!interrupted) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1595,6 +1685,7 @@ export async function startRepl(
 
         agent.clearHistory();
         historyStore.clear();
+        provenanceHistoryStore.clear();
         console.clear();
         printWelcome(
           config.provider,
@@ -1629,7 +1720,7 @@ export async function startRepl(
               `Compacted: ~${formatTokenCount(result.tokensBefore)} → ~${formatTokenCount(result.tokensAfter)} tokens (${pct}% reduction)`,
             );
           }
-          historyStore.save(agent.getHistory());
+          persistAgentState();
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           printError(`Compaction failed: ${message}`);
@@ -2999,7 +3090,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
         try {
           initSpinner();
           await agent.processInput(userText, [attachment]);
-          historyStore.save(agent.getHistory());
+          persistAgentState();
         } catch (err: unknown) {
           if (!interrupted) {
             printError(err instanceof Error ? err.message : String(err));
@@ -3048,7 +3139,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           try {
             initSpinner();
             await agent.processInput(message);
-            historyStore.save(agent.getHistory());
+            persistAgentState();
           } catch (err: unknown) {
             if (!interrupted) {
               const message = err instanceof Error ? err.message : String(err);
@@ -3112,7 +3203,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
     try {
       initSpinner();
       await agent.processInput(agentInput, inlineImages, resolvedEntries);
-      historyStore.save(agent.getHistory());
+      persistAgentState();
       // Per-turn rubric footer (#145). One muted line showing the composed
       // verdict + check counts. Suppressed when there is nothing to attest
       // (no checks of any kind contributed this turn — e.g. a pure-question

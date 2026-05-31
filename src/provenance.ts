@@ -31,6 +31,23 @@ export interface SourceItem {
 
 export type SourceItemInput = Omit<SourceItem, 'id' | 'timestamp'>;
 
+/**
+ * Snapshot of one completed turn's provenance, for the Shift+Tab citation
+ * history view. Persisted alongside conversation history. Issue #211.
+ */
+export interface TurnProvenance {
+  /** Monotonic index within the conversation (0-based). */
+  turnIndex: number;
+  /** Raw user input that started this turn. Trimmed for display. */
+  userInput: string;
+  /** Every source registered during the turn. */
+  sources: SourceItem[];
+  /** Subset of `sources[].id` that the model actually cited with `[^Sn]`. */
+  citedIds: string[];
+  /** Wall-clock epoch ms at end of turn. */
+  timestamp: number;
+}
+
 const MAX_PREVIEW = 200;
 
 function truncatePreview(s: string): string {
