@@ -10,6 +10,8 @@ import type { PolicyDecision } from '../policy/types.js';
 import type { ToolOptions } from '../tools/types.js';
 import { ProvenanceStore } from '../provenance.js';
 import { VerificationStore } from '../agent-status.js';
+import { VerificationTracker } from '../verification-tracker.js';
+import type { Check } from '../rubric.js';
 
 export interface AgentContextStores {
   memory: MemoryStore;
@@ -54,6 +56,20 @@ export interface AgentContext {
    * updates the parent's snapshot.
    */
   verification: VerificationStore;
+  /**
+   * Per-turn tracker that records every tool call (name, args, result preview)
+   * and answers `did the agent actually run a verification matching this step's
+   * `verification` text?` via token overlap. Cleared at the top of every
+   * `Agent.processInput`. Issue #145 check 1.
+   */
+  verificationTracker: VerificationTracker;
+  /**
+   * Per-turn sink for post-write schema/state checks produced by
+   * `ToolMeta.verifyOutput` hooks. Appended by `augmentTools`; consumed when
+   * composing the turn rubric. Cleared at the top of every
+   * `Agent.processInput`. Issue #145 check 3.
+   */
+  postWriteChecks: Check[];
 }
 
 export interface AssembleContextInput {
@@ -64,6 +80,8 @@ export interface AssembleContextInput {
   stores?: Partial<AgentContextStores>;
   provenance?: ProvenanceStore;
   verification?: VerificationStore;
+  verificationTracker?: VerificationTracker;
+  postWriteChecks?: Check[];
 }
 
 export function assembleContext(input: AssembleContextInput): AgentContext {
@@ -87,5 +105,7 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
     toolOptions: input.toolOptions,
     provenance: input.provenance ?? new ProvenanceStore(),
     verification: input.verification ?? new VerificationStore(),
+    verificationTracker: input.verificationTracker ?? new VerificationTracker(),
+    postWriteChecks: input.postWriteChecks ?? [],
   };
 }

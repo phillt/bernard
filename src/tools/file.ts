@@ -497,6 +497,32 @@ export function createFileTools(provenance?: ProvenanceStore) {
         deterministic: false,
         sideEffect: 'local',
         cacheable: false,
+        // Post-write check (issue #145): re-stat the file and confirm its
+        // hash matches the new_hash the tool just declared. Pass on match,
+        // warn on mismatch (someone else wrote it under us), fail if the
+        // file disappeared. Skips when the result shape isn't recognized.
+        verifyOutput: (_args, result) => {
+          if (!result || typeof result !== 'object') return null;
+          const r = result as Record<string, unknown>;
+          const p = typeof r.path === 'string' ? r.path : null;
+          const expected = typeof r.new_hash === 'string' ? r.new_hash : null;
+          if (!p || !expected) return null;
+          try {
+            const onDisk = fs.readFileSync(p, 'utf-8');
+            const actual = hashContent(onDisk);
+            if (actual === expected) {
+              return { status: 'pass', evidence: `hash matches (${actual.slice(0, 8)})` };
+            }
+            return {
+              status: 'warn',
+              evidence: `hash drift: declared ${expected.slice(0, 8)}, actual ${actual.slice(0, 8)}`,
+            };
+          } catch (err) {
+            const code = (err as NodeJS.ErrnoException)?.code;
+            if (code === 'ENOENT') return { status: 'fail', evidence: 'file missing post-write' };
+            return null;
+          }
+        },
       },
     ),
   };

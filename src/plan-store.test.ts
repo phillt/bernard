@@ -142,4 +142,68 @@ describe('PlanStore', () => {
     expect(rendered).toContain('2. [error] second');
     expect(rendered).toContain('note: file missing');
   });
+
+  describe('evaluateRubric', () => {
+    it('returns skip + skip + pass on empty plan (no signal either way)', () => {
+      const r = store.evaluateRubric();
+      expect(r.verdict).toBe('pass');
+      const byId = Object.fromEntries(r.checks.map((c) => [c.id, c]));
+      expect(byId.steps_terminal.status).toBe('skip');
+      expect(byId.signoffs_present.status).toBe('skip');
+      expect(byId.no_error_steps.status).toBe('pass');
+    });
+
+    it('FAIL when any step is still non-terminal', () => {
+      store.create([s('a'), s('b')]);
+      store.update(1, 'done', { signoff: 'verified output exists' });
+      // step 2 remains pending
+      const r = store.evaluateRubric();
+      expect(r.verdict).toBe('fail');
+      const terminal = r.checks.find((c) => c.id === 'steps_terminal');
+      expect(terminal?.status).toBe('fail');
+      expect(terminal?.evidence).toContain('1 unresolved');
+    });
+
+    it('PASS when all steps done with substantive signoffs', () => {
+      store.create([s('a'), s('b')]);
+      store.update(1, 'done', { signoff: 'tests pass locally' });
+      store.update(2, 'done', { signoff: 'file written and re-read' });
+      expect(store.evaluateRubric().verdict).toBe('pass');
+    });
+
+    it('WARN on weak signoff (under MIN_SIGNOFF_LEN)', () => {
+      store.create([s('a')]);
+      store.update(1, 'done', { signoff: 'ok' });
+      const r = store.evaluateRubric();
+      expect(r.verdict).toBe('warn');
+      expect(r.checks.find((c) => c.id === 'signoffs_present')?.status).toBe('warn');
+    });
+
+    it('WARN on exactly one error step', () => {
+      store.create([s('a'), s('b')]);
+      store.update(1, 'done', { signoff: 'fully verified output' });
+      store.update(2, 'error', { note: 'network failure' });
+      const r = store.evaluateRubric();
+      expect(r.verdict).toBe('warn');
+      expect(r.checks.find((c) => c.id === 'no_error_steps')?.status).toBe('warn');
+    });
+
+    it('FAIL on ≥2 error steps (worst-of beats warn-only signoff issue)', () => {
+      store.create([s('a'), s('b'), s('c')]);
+      store.update(1, 'done', { signoff: 'fully verified output' });
+      store.update(2, 'error', { note: 'net' });
+      store.update(3, 'error', { note: 'auth' });
+      const r = store.evaluateRubric();
+      expect(r.verdict).toBe('fail');
+      expect(r.checks.find((c) => c.id === 'no_error_steps')?.status).toBe('fail');
+    });
+
+    it('cancelled counts as terminal but not as error', () => {
+      store.create([s('a'), s('b')]);
+      store.update(1, 'done', { signoff: 'fully verified output' });
+      store.update(2, 'cancelled', { note: 'no longer needed' });
+      const r = store.evaluateRubric();
+      expect(r.verdict).toBe('pass');
+    });
+  });
 });

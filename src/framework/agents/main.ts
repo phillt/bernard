@@ -235,7 +235,7 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
                 reason: 'plan-replaced',
               });
             }),
-            evaluate: createEvaluateTool(),
+            evaluate: createEvaluateTool(ctx.verification),
           }
         : {}),
     };

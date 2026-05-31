@@ -164,6 +164,20 @@ export interface AugmentOptions {
    * `evidence` sub-policy for this turn).
    */
   evidenceEnabled?: boolean;
+  /**
+   * Per-turn sink for `ToolMeta.verifyOutput` results (issue #145). When
+   * provided, every tool call that defines `verifyOutput` and returns
+   * `status: 'ok'` contributes a structured `Check` to this array — which is
+   * later folded into the turn rubric by `Agent.processInput` (and the cron
+   * runner). Omitting the sink disables the hook (legacy / tests).
+   */
+  postWriteChecks?: import('../rubric.js').Check[];
+  /**
+   * Per-turn tracker for verification attestation (issue #145). When provided,
+   * every successful tool call is recorded so `attestAll(steps)` can later
+   * answer "was the stated verification actually exercised?"
+   */
+  verificationTracker?: import('../verification-tracker.js').VerificationTracker;
 }
 
 function isProfileStore(v: AugmentOptions | ToolProfileStore): v is ToolProfileStore {
@@ -276,6 +290,8 @@ export function augmentTools(
   // contexts that never consult the policy (cron, bare depsToCtx callers),
   // populating the shared store with entries the model was never told about.
   const evidenceEnabled = provenance ? opts.evidenceEnabled === true : false;
+  const postWriteChecks = opts.postWriteChecks;
+  const verificationTracker = opts.verificationTracker;
 
   /**
    * Stable 53-bit djb2 hash for an args string. Used to derive an evidence
@@ -514,6 +530,8 @@ export function augmentTools(
               const previewSrc =
                 typeof serialized === 'string' ? serialized : safeSerialize(serialized);
               registerEvidence(toolName, args, source.meta, previewSrc);
+              recordVerification(verificationTracker, toolName, args, envelope.result);
+              runVerifyOutput(postWriteChecks, source.meta, args, envelope.result);
             }
             return serialized;
           },
@@ -570,6 +588,8 @@ export function augmentTools(
             const previewSrc =
               typeof capturedResult === 'string' ? capturedResult : safeSerialize(capturedResult);
             registerEvidence(toolName, args, readToolMeta(toolDef), previewSrc);
+            recordVerification(verificationTracker, toolName, args, capturedResult);
+            runVerifyOutput(postWriteChecks, readToolMeta(toolDef), args, capturedResult);
           }
           setImmediate(() => {
             try {
@@ -589,4 +609,53 @@ export function augmentTools(
   }
 
   return augmented;
+}
+
+/**
+ * Push a `verifyOutput` outcome into the turn's `postWriteChecks` sink
+ * (issue #145). No-op when no sink is wired, when the tool has no meta, or
+ * when `verifyOutput` is undefined. Hook throws never propagate — a buggy
+ * verification check must not abort the real tool call.
+ */
+function runVerifyOutput(
+  sink: import('../rubric.js').Check[] | undefined,
+  meta: import('../framework/tools/types.js').ToolMeta | undefined,
+  args: unknown,
+  result: unknown,
+): void {
+  if (!sink || !meta?.verifyOutput) return;
+  try {
+    const outcome = meta.verifyOutput(args, result);
+    if (!outcome) return;
+    sink.push({
+      id: `post_write_${meta.name}`,
+      label: `${meta.name} post-write check`,
+      status: outcome.status,
+      evidence: outcome.evidence,
+    });
+  } catch (err) {
+    debugLog(
+      `augment:verifyOutput:${meta.name}:threw`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+/**
+ * Record a successful tool call into the turn's `VerificationTracker`
+ * (issue #145). No-op when no tracker is wired. Hook is best-effort —
+ * tracker errors never propagate.
+ */
+function recordVerification(
+  tracker: import('../verification-tracker.js').VerificationTracker | undefined,
+  toolName: string,
+  args: unknown,
+  result: unknown,
+): void {
+  if (!tracker) return;
+  try {
+    tracker.recordCall(toolName, args, result);
+  } catch (err) {
+    debugLog(`augment:verificationTracker:threw`, err instanceof Error ? err.message : String(err));
+  }
 }

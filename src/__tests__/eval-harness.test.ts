@@ -51,6 +51,9 @@ import { citationsFixture } from './fixtures/transcripts/citations.fixture.js';
 import { cachingFixture } from './fixtures/transcripts/caching.fixture.js';
 import { modelPolicyFixture } from './fixtures/transcripts/model-policy.fixture.js';
 import { scratchFixture } from './fixtures/transcripts/scratch.fixture.js';
+import { evaluationRubricFixture } from './fixtures/transcripts/evaluation-rubric.fixture.js';
+import { verdictOf } from '../rubric.js';
+import { PlanStore } from '../plan-store.js';
 
 const ALL_FIXTURES: Fixture[] = [
   promptBoundaryFixture,
@@ -60,6 +63,7 @@ const ALL_FIXTURES: Fixture[] = [
   cachingFixture,
   modelPolicyFixture,
   scratchFixture,
+  evaluationRubricFixture,
 ];
 
 const BASE_CONFIG: BernardConfig = makePolicyInput().config;
@@ -169,6 +173,45 @@ function runInvariant(fixtureName: string, inv: InvariantSpec, idx: number): voi
         }),
       );
       expect(decision.resetAll, t).toBe(inv.expectResetAll);
+      return;
+    }
+    case 'rubric_verdict_of': {
+      expect(verdictOf(inv.checks), t).toBe(inv.expected);
+      return;
+    }
+    case 'rubric_plan_evaluates_to': {
+      const store = new PlanStore();
+      // Seed via the public API: add() then update() into the target status so
+      // the store's invariants stay intact. Signoff/note are passed through.
+      for (const s of inv.steps) {
+        store.add({ description: s.description, verification: s.verification });
+      }
+      for (const s of inv.steps) {
+        if (s.status !== 'pending') {
+          store.update(s.id, s.status, { note: s.note, signoff: s.signoff });
+        }
+      }
+      const rubric = store.evaluateRubric();
+      expect(rubric.verdict, `${t} verdict`).toBe(inv.expectedVerdict);
+      if (inv.expectChecks) {
+        for (const want of inv.expectChecks) {
+          const actual = rubric.checks.find((c) => c.id === want.id);
+          expect(actual, `${t} missing check ${want.id}`).toBeDefined();
+          expect(actual!.status, `${t} check ${want.id} status`).toBe(want.status);
+        }
+      }
+      return;
+    }
+    case 'rubric_post_write_hook': {
+      const hook = inv.meta.verifyOutput;
+      expect(hook, `${t} fixture meta missing verifyOutput`).toBeDefined();
+      const outcome = hook!(inv.args, inv.result);
+      if (inv.expected === null) {
+        expect(outcome, `${t} expected null skip`).toBeNull();
+      } else {
+        expect(outcome, `${t} got null but expected outcome`).not.toBeNull();
+        expect(outcome!.status, `${t} outcome status`).toBe(inv.expected.status);
+      }
       return;
     }
     default:

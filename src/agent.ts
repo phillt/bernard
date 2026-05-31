@@ -49,6 +49,7 @@ import type { PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem } from './provenance.js';
 import type { Step } from './plan-store.js';
 import type { VerificationEntry } from './agent-status.js';
+import { verdictOf, renderRubricLine, type Check, type Rubric } from './rubric.js';
 
 // `buildSystemPrompt` lives in agent-prompt.ts (extracted to avoid a circular
 // import with framework/agents/main.ts). Re-exported here so existing imports
@@ -100,6 +101,8 @@ export class Agent {
   private lastRAGResults: RAGSearchResult[] = [];
   private lastSources: SourceItem[] = [];
   private lastCitedSources: SourceItem[] = [];
+  /** Most recent per-turn rubric (#145). Composed at end of `processInput`. */
+  private lastRubric: Rubric | null = null;
   private abortController: AbortController | null = null;
   private lastPromptTokens: number = 0;
   // Public so tokenStatsHook (an external module) can mutate these in place
@@ -171,6 +174,15 @@ export class Agent {
    */
   getLastCitedSources(): SourceItem[] {
     return this.lastCitedSources;
+  }
+
+  /**
+   * Most recent per-turn evaluation rubric — the composed pass/warn/fail
+   * verdict + the list of contributing checks. Null before the first turn or
+   * after `clearHistory`. Issue #145.
+   */
+  getLastRubric(): Rubric | null {
+    return this.lastRubric;
   }
 
   /** Cancels the in-flight LLM request, if any. Safe to call when no request is active. */
@@ -249,6 +261,15 @@ export class Agent {
     this.lastUserInput = userInput;
     this.lastResolvedReferences = resolvedReferences ?? [];
     this.ctx.verification.clear();
+    // Reset per-turn rubric inputs (#145): post-write hooks, tool-attestation
+    // tracker, and the cached snapshot. Both sinks are shared by reference
+    // into sub-agent / tool-wrapper contexts via `runDefinition`, so clearing
+    // here also clears for nested dispatches. `lastRubric` is reset here too
+    // — if the turn throws before composition, callers should see `null`
+    // rather than the previous turn's verdict.
+    this.ctx.postWriteChecks.length = 0;
+    this.ctx.verificationTracker.clear();
+    this.lastRubric = null;
 
     // Resolve every cross-cutting heuristic for this turn in one place.
     // Sub-systems read the decision off `this.ctx.policyDecision` (e.g.
@@ -588,6 +609,30 @@ export class Agent {
         coordinatorMode: this.config.coordinatorMode,
       });
 
+      // Compose per-turn rubric (#145). Combines:
+      //   - PlanStore.evaluateRubric (steps-terminal, signoffs, error-step count)
+      //   - Post-write hook results recorded by augmentTools
+      //   - Attestation: did the model run something matching each step's
+      //     declared `verification` text?
+      //   - The most recent `evaluate` tool's structured checks, if any
+      // Worst-of aggregation: any fail → fail, any warn → warn, else pass.
+      const planRubric = this.planStore.evaluateRubric();
+      const attestationChecks = this.ctx.verificationTracker.attestAll(this.planStore.view());
+      const evalChecks = this.ctx.verification.getLast()?.checks ?? [];
+      const allChecks: Check[] = [
+        ...planRubric.checks,
+        ...this.ctx.postWriteChecks,
+        ...attestationChecks,
+        ...evalChecks,
+      ];
+      const turnVerdict = verdictOf(allChecks);
+      this.lastRubric = { verdict: turnVerdict, checks: allChecks };
+      debugLog('rubric:turn', {
+        verdict: turnVerdict,
+        checks: allChecks.length,
+        summary: renderRubricLine(this.lastRubric),
+      });
+
       // Truncate large tool results before adding to history
       const truncatedMessages = truncateToolResults(result.response.messages as CoreMessage[]);
       this.history.push(...truncatedMessages);
@@ -635,6 +680,9 @@ export class Agent {
     this.lastCitedSources = [];
     this.ctx.verification.clear();
     this.ctx.provenance.clear();
+    this.ctx.postWriteChecks.length = 0;
+    this.ctx.verificationTracker.clear();
+    this.lastRubric = null;
     if (this.ctx.policyDecision) {
       this.ctx = { ...this.ctx, policyDecision: undefined };
     }
