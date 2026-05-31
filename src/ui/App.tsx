@@ -4,6 +4,10 @@ import type { Agent } from '../agent.js';
 import type { BernardConfig } from '../config.js';
 import type { HistoryStore } from '../history.js';
 import type { ProvenanceHistoryStore } from '../provenance-history.js';
+import type { MemoryStore } from '../memory.js';
+import type { RoutineStore } from '../routines.js';
+import type { SpecialistStore } from '../specialists.js';
+import type { CandidateStore } from '../specialist-candidates.js';
 import type {
   AskUserQuestion,
   AskUserBatchResult,
@@ -11,7 +15,13 @@ import type {
   BlockActionInput,
   BlockOutcome,
 } from '../tools/types.js';
-import type { MenuEntry, MenuItem, MenuOptions } from './menu-types.js';
+import type {
+  MenuEntry,
+  MenuItem,
+  MenuOptions,
+  ValuePromptOptions,
+  ValueResult,
+} from './menu-types.js';
 import { Thread } from './Thread.js';
 import { Prompt } from './Prompt.js';
 import { Spinner } from './Spinner.js';
@@ -20,23 +30,57 @@ import { MenuOverlay } from './overlays/MenuOverlay.js';
 import { ConfirmDialog } from './overlays/ConfirmDialog.js';
 import { StatusViewer } from './overlays/StatusViewer.js';
 import { SourcesViewer } from './overlays/SourcesViewer.js';
+import { HelpOverlay } from './overlays/HelpOverlay.js';
+import { TextInputOverlay } from './overlays/TextInputOverlay.js';
+import { Toast, type ToastVariant } from './Toast.js';
 import { persistAgentState } from './save.js';
 import { MessageStore } from './message-store.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { getThemeColors } from '../theme.js';
+
+/**
+ * Slash commands and overlays need direct access to the same stores the
+ * agent's tool layer already uses. Phase D bundles them into one prop so
+ * `<App>` doesn't grow a long parallel signature; `src/index.ts` constructs
+ * each store once and passes the same references into both `assembleContext`
+ * and `<App>`.
+ */
+export interface AppStores {
+  memory: MemoryStore;
+  routines: RoutineStore;
+  specialists: SpecialistStore;
+  candidates: CandidateStore;
+}
 
 interface AppProps {
   agent: Agent;
   config: BernardConfig;
   historyStore: HistoryStore;
   provenanceHistoryStore: ProvenanceHistoryStore;
+  stores: AppStores;
   /** Per-REPL-session allowlist (#179). Owned by the caller so it survives mount. */
   sessionToolAllowlist: Set<string>;
   /** Called when the user requests exit (Ctrl-C or `/exit`). */
   onExit: () => Promise<void> | void;
+  /**
+   * Optional alert banner string rendered above the thread until dismissed.
+   * Built in `src/index.ts` when `--alert` resumes a session in response to
+   * a cron alert.
+   */
+  alertBanner?: string;
 }
 
-type Overlay = 'status' | 'sources' | 'menu' | 'confirm';
+type Overlay = 'status' | 'sources' | 'menu' | 'confirm' | 'help' | 'text-input';
+
+interface PendingTextInput {
+  options: ValuePromptOptions;
+  resolve: (result: ValueResult) => void;
+}
+
+interface ToastState {
+  message: string;
+  variant: ToastVariant;
+}
 
 interface PendingMenu {
   entries: MenuEntry[];
@@ -79,8 +123,10 @@ export function App({
   config,
   historyStore,
   provenanceHistoryStore,
+  stores,
   sessionToolAllowlist: _sessionToolAllowlist,
   onExit,
+  alertBanner,
 }: AppProps) {
   const { exit } = useApp();
   const [activeOverlay, setActiveOverlay] = useState<Overlay | null>(null);
@@ -88,6 +134,9 @@ export function App({
   const [historyVersion, setHistoryVersion] = useState(0);
   const [pendingMenu, setPendingMenu] = useState<PendingMenu | null>(null);
   const [pendingDialog, setPendingDialog] = useState<PendingDialog | null>(null);
+  const [pendingTextInput, setPendingTextInput] = useState<PendingTextInput | null>(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const [bannerVisible, setBannerVisible] = useState<boolean>(!!alertBanner);
   const colors = getThemeColors();
 
   // Confirm-action session memo: `${toolName}:${stableHash(args)}` → true.
@@ -120,13 +169,17 @@ export function App({
       else pendingDialog.resolve('deny');
       setPendingDialog(null);
     }
+    if (pendingTextInput) {
+      pendingTextInput.resolve({ cancelled: true });
+      setPendingTextInput(null);
+    }
     setActiveOverlay(null);
   };
 
   // Gate the App-level useInput so it never fires concurrently with an
-  // overlay's own useInput. Modal overlays (menu, confirm) own the keystream;
-  // viewer overlays (status, sources) leave it to App so Esc can close them
-  // and Shift-Tab can keep cycling.
+  // overlay's own useInput. Modal overlays (menu, confirm, help, text-input)
+  // own the keystream; viewer overlays (status, sources) leave it to App so
+  // Esc can close them and Shift-Tab can keep cycling.
   const appInputActive =
     activeOverlay === null || activeOverlay === 'status' || activeOverlay === 'sources';
 
@@ -174,7 +227,17 @@ export function App({
     return () => setOutputSink(null);
   }, [messageStore]);
 
+  const flashToast = (message: string, variant: ToastVariant = 'info') => {
+    setToast({ message, variant });
+  };
+
   const handleSubmit = async (text: string) => {
+    // Clear any prior toast on the next submit so flashes don't accumulate.
+    if (toast) setToast(null);
+    // Dismiss the alert banner once the user starts interacting.
+    if (bannerVisible) setBannerVisible(false);
+
+    // ── Simple one-shot slash commands (no overlay, no agent turn) ──
     if (text === '/exit' || text === '/quit') {
       if (exitedRef.current) return;
       exitedRef.current = true;
@@ -187,8 +250,62 @@ export function App({
       provenanceHistoryStore.clear();
       agent.clearHistory();
       setHistoryVersion((v) => v + 1);
+      flashToast('Conversation history cleared.', 'success');
       return;
     }
+    if (text === '/help') {
+      setActiveOverlay('help');
+      return;
+    }
+    if (text === '/memory') {
+      const keys = stores.memory.listMemory();
+      flashToast(
+        keys.length === 0
+          ? 'No persistent memories stored.'
+          : `Persistent memories (${keys.length}): ${keys.join(', ')}`,
+      );
+      return;
+    }
+    if (text === '/scratch') {
+      const keys = stores.memory.listScratch();
+      flashToast(
+        keys.length === 0
+          ? 'No scratch notes in this session.'
+          : `Scratch notes (${keys.length}): ${keys.join(', ')}`,
+      );
+      return;
+    }
+    if (text === '/compact') {
+      const history = agent.getHistory();
+      if (history.length < 2) {
+        flashToast('Not enough conversation to compact.', 'warning');
+        return;
+      }
+      setBusy(true);
+      try {
+        const result = await agent.compactHistory();
+        if (!result.compacted) {
+          flashToast('Nothing to compact — conversation is already short enough.');
+        } else {
+          const pct = Math.round(
+            ((result.tokensBefore - result.tokensAfter) / result.tokensBefore) * 100,
+          );
+          flashToast(
+            `Compacted: ~${result.tokensBefore} → ~${result.tokensAfter} tokens (${pct}% reduction)`,
+            'success',
+          );
+        }
+        persistAgentState({ agent, historyStore, provenanceHistoryStore });
+        setHistoryVersion((v) => v + 1);
+      } catch (err) {
+        flashToast(`Compaction failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    // ── Agent turn ──
     // Drop a second Enter that arrives before the busy re-render has propagated
     // to <Prompt disabled={busy}>. Without this, two turns can run concurrently.
     if (submittingRef.current) return;
@@ -211,14 +328,14 @@ export function App({
 
   // Overlay-request helpers — exposed to the script that mounts <App> so it
   // can build the ToolOptions callbacks (confirmFn, confirmActionFn,
-  // blockActionFn, askUserFn). Phase D will move this wiring into the mount.
-  // For Phase B these are deliberately unused in <App> itself; the contracts
-  // they implement (matching src/tools/types.ts) are documented in the
-  // ConfirmDialog and MenuOverlay components.
+  // blockActionFn, askUserFn). The wiring lives in `src/index.ts` (Phase D
+  // mounts <App> directly); these are referenced here so React's
+  // closure captures them in the same render the props they consume change.
   void requestMenu;
   void requestConfirm;
   void requestBlock;
   void requestAskUser;
+  void requestTextInput;
 
   function requestMenu(
     entries: MenuEntry[],
@@ -250,6 +367,13 @@ export function App({
     return new Promise((resolve) => {
       setPendingDialog({ kind: 'block', input, resolve });
       setActiveOverlay('confirm');
+    });
+  }
+
+  function requestTextInput(options: ValuePromptOptions): Promise<ValueResult> {
+    return new Promise((resolve) => {
+      setPendingTextInput({ options, resolve });
+      setActiveOverlay('text-input');
     });
   }
 
@@ -287,6 +411,11 @@ export function App({
         </Text>
         <Text dimColor> {config.provider}/{config.model}</Text>
       </Box>
+      {bannerVisible && alertBanner && (
+        <Box marginTop={1} borderStyle="single" borderColor={colors.warning} paddingX={1}>
+          <Text color={colors.warning}>{alertBanner}</Text>
+        </Box>
+      )}
       <Thread
         key={historyVersion}
         history={agent.getHistory()}
@@ -299,6 +428,7 @@ export function App({
         </Box>
       )}
       <PlanStrip agent={agent} />
+      {toast && <Toast message={toast.message} variant={toast.variant} />}
       <Prompt disabled={busy || activeOverlay !== null} onSubmit={handleSubmit} />
       {activeOverlay === 'status' && (
         <StatusViewer agent={agent} config={config} sessionAllowedCount={_sessionToolAllowlist.size} />
@@ -334,6 +464,17 @@ export function App({
           onCancel={() => {
             pendingDialog.resolve(false, 'once');
             setPendingDialog(null);
+            setActiveOverlay(null);
+          }}
+        />
+      )}
+      {activeOverlay === 'help' && <HelpOverlay onClose={() => setActiveOverlay(null)} />}
+      {activeOverlay === 'text-input' && pendingTextInput && (
+        <TextInputOverlay
+          options={pendingTextInput.options}
+          onResolve={(result) => {
+            pendingTextInput.resolve(result);
+            setPendingTextInput(null);
             setActiveOverlay(null);
           }}
         />
