@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import type { MenuEntry, MenuItem, MenuOptions } from '../../menu.js';
@@ -8,6 +8,14 @@ interface MenuOverlayProps {
   options?: MenuOptions;
   onSelect: (index: number, item: MenuItem) => void;
   onCancel: () => void;
+  /**
+   * Optional external cancel signal. The legacy `selectFromMenu` accepts one
+   * via `MenuOptions.signal` so a parent (e.g. an aborted agent turn) can drop
+   * a stale menu without user interaction. Mirroring that here keeps the
+   * `askUser` and confirm-action paths unaffected when the user presses Esc
+   * mid-turn.
+   */
+  signal?: AbortSignal;
 }
 
 function isSection(entry: MenuEntry): entry is { type: 'section'; title: string } {
@@ -27,10 +35,27 @@ function isSection(entry: MenuEntry): entry is { type: 'section'; title: string 
  * items, never selectable. `options.headerLines` renders above the title so
  * the `ask_user` tab strip continues to work unchanged.
  */
-export function MenuOverlay({ entries, options, onSelect, onCancel }: MenuOverlayProps) {
+export function MenuOverlay({
+  entries,
+  options,
+  onSelect,
+  onCancel,
+  signal,
+}: MenuOverlayProps) {
   const colors = getThemeColors();
   const items = entries.filter((e): e is MenuItem => !isSection(e));
   const [highlight, setHighlight] = useState(0);
+
+  useEffect(() => {
+    if (!signal) return;
+    if (signal.aborted) {
+      onCancel();
+      return;
+    }
+    const onAbort = () => onCancel();
+    signal.addEventListener('abort', onAbort);
+    return () => signal.removeEventListener('abort', onAbort);
+  }, [signal, onCancel]);
 
   useInput((input, key) => {
     if (key.ctrl && input === 'c') {

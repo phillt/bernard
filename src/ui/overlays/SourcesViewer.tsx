@@ -68,15 +68,32 @@ function TurnBlock({ turn }: { turn: TurnProvenance }) {
 
 function SourceRow({ source, cited }: { source: SourceItem; cited: boolean }) {
   const colors = getThemeColors();
+  // Mirrors the legacy renderer at `src/repl.ts:874-885`: cited entries get
+  // the accent label + un-dimmed body; uncited entries use plain dimColor
+  // (no extra color override, which can over-darken on some themes).
+  const showRawRef = source.rawRef && source.rawRef !== source.label;
+  const showPreview = !!source.contentPreview;
   return (
-    <Box marginLeft={2}>
-      <Text color={cited ? colors.accent : undefined} dimColor={!cited} bold={cited}>
-        [{source.id}]
-      </Text>
-      <Text color={cited ? undefined : colors.muted} dimColor={!cited}>
-        {' '}
-        {source.kind} · {truncate(source.label, 80)}
-      </Text>
+    <Box flexDirection="column" marginLeft={2}>
+      <Box>
+        <Text color={cited ? colors.accent : undefined} dimColor={!cited} bold={cited}>
+          [^{source.id}]
+        </Text>
+        <Text dimColor> ({source.kind}) </Text>
+        <Text dimColor={!cited}>{truncate(source.label, 80)}</Text>
+      </Box>
+      {showRawRef && (
+        <Box marginLeft={4}>
+          <Text dimColor>{truncate(source.rawRef, 120)}</Text>
+        </Box>
+      )}
+      {showPreview && (
+        <Box marginLeft={4}>
+          <Text dimColor>
+            {truncate(source.contentPreview.replace(/\s+/g, ' '), 160)}
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }

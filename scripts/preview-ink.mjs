@@ -33,7 +33,7 @@ const { ProvenanceHistoryStore } = await import('../src/provenance-history.ts');
 const { MemoryStore } = await import('../src/memory.ts');
 const { RoutineStore } = await import('../src/routines.ts');
 const { SpecialistStore } = await import('../src/specialists.ts');
-const { CandidateStore } = await import('../src/correction-candidates.ts');
+const { CandidateStore } = await import('../src/specialist-candidates.ts');
 const { App } = await import('../src/ui/App.tsx');
 
 const config = loadConfig();

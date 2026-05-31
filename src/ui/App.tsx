@@ -88,9 +88,15 @@ export function App({
   const [pendingDialog, setPendingDialog] = useState<PendingDialog | null>(null);
   const colors = getThemeColors();
 
-  // Confirm-action session memo: `${toolName}:${stableJson(args)}` → true.
+  // Confirm-action session memo: `${toolName}:${stableHash(args)}` → true.
   // Mirrors the legacy REPL's confirm-allow-for-session map.
   const confirmAllowSession = useRef<Map<string, boolean>>(new Map());
+  // One-shot guard so onExit runs exactly once whether the user types
+  // `/exit` (handleSubmit) or the Ink tree unmounts (useEffect cleanup).
+  const exitedRef = useRef(false);
+  // Synchronous guard against double-Enter: setBusy schedules a re-render but
+  // a second submit can land before Prompt sees `disabled={busy}` flip.
+  const submittingRef = useRef(false);
 
   // Closes the active overlay and resolves any pending request as a cancel.
   const closeOverlay = () => {
@@ -106,38 +112,52 @@ export function App({
     setActiveOverlay(null);
   };
 
-  useInput((input, key) => {
-    // Shift-Tab cycles viewer tabs only while idle and no overlay-driven dialog is open.
-    if (key.shift && key.tab) {
-      if (busy) return;
-      if (activeOverlay === 'menu' || activeOverlay === 'confirm') return;
-      setActiveOverlay((curr) => {
-        if (curr === null) return 'status';
-        if (curr === 'status') return 'sources';
-        return null;
-      });
-      return;
-    }
-    if (key.escape) {
-      if (activeOverlay) {
-        closeOverlay();
+  // Gate the App-level useInput so it never fires concurrently with an
+  // overlay's own useInput. Modal overlays (menu, confirm) own the keystream;
+  // viewer overlays (status, sources) leave it to App so Esc can close them
+  // and Shift-Tab can keep cycling.
+  const appInputActive =
+    activeOverlay === null || activeOverlay === 'status' || activeOverlay === 'sources';
+
+  useInput(
+    (_input, key) => {
+      // Shift-Tab cycles viewer tabs only while idle.
+      if (key.shift && key.tab) {
+        if (busy) return;
+        setActiveOverlay((curr) => {
+          if (curr === null) return 'status';
+          if (curr === 'status') return 'sources';
+          return null;
+        });
         return;
       }
-      if (busy) {
-        agent.abort();
+      if (key.escape) {
+        if (activeOverlay) {
+          closeOverlay();
+          return;
+        }
+        if (busy) {
+          agent.abort();
+        }
       }
-    }
-  });
+    },
+    { isActive: appInputActive },
+  );
 
-  // Exit cleanup runs on Ink unmount.
+  // Exit cleanup runs on Ink unmount. The exitedRef guard means `/exit` (which
+  // already awaited onExit) doesn't trigger a second invocation.
   useEffect(() => {
     return () => {
+      if (exitedRef.current) return;
+      exitedRef.current = true;
       void onExit();
     };
   }, [onExit]);
 
   const handleSubmit = async (text: string) => {
     if (text === '/exit' || text === '/quit') {
+      if (exitedRef.current) return;
+      exitedRef.current = true;
       await onExit();
       exit();
       return;
@@ -149,6 +169,10 @@ export function App({
       setHistoryVersion((v) => v + 1);
       return;
     }
+    // Drop a second Enter that arrives before the busy re-render has propagated
+    // to <Prompt disabled={busy}>. Without this, two turns can run concurrently.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setBusy(true);
     try {
       await agent.processInput(text);
@@ -156,6 +180,7 @@ export function App({
       console.error('agent error:', err);
     } finally {
       persistAgentState({ agent, historyStore, provenanceHistoryStore });
+      submittingRef.current = false;
       setBusy(false);
       setHistoryVersion((v) => v + 1);
     }
@@ -183,7 +208,7 @@ export function App({
   }
 
   function requestConfirm(input: ConfirmActionInput): Promise<boolean> {
-    const key = `${input.toolName}:${stableJson(input.args)}`;
+    const key = `${input.toolName}:${stableHash(input.args)}`;
     if (confirmAllowSession.current.get(key)) return Promise.resolve(true);
     return new Promise<boolean>((resolve) => {
       setPendingDialog({
@@ -213,13 +238,17 @@ export function App({
     for (const q of questions) {
       if (signal?.aborted) return { cancelled: true, answered: answers };
       // Phase B: only choice questions are routed through the overlay.
-      // Free-text questions need a `<TextInputOverlay>` component, which
-      // lands in Phase D when the readline path is retired.
+      // Free-text and `allowOther` need a `<TextInputOverlay>` component
+      // which lands in Phase D when the readline path is retired. For now,
+      // bail with the partial answers already collected so the agent can see
+      // what the user did pick before the unsupported question.
       if (!q.choices || q.choices.length === 0) {
         return { cancelled: true, answered: answers };
       }
       const entries: MenuEntry[] = q.choices.map((c) => ({ label: c }));
-      if (q.allowOther) entries.push({ label: q.otherLabel ?? 'Other (free-form)' });
+      // Intentionally skip allowOther: choosing it would store the literal
+      // "Other (free-form)" label instead of the user's actual text. Better
+      // to surface only the canned choices until text input lands.
       const result = await requestMenu(entries, { title: q.question });
       if (result.cancelled) return { cancelled: true, answered: answers };
       answers.push(result.item.label);
@@ -302,10 +331,32 @@ export function App({
   );
 }
 
-function stableJson(value: unknown): string {
+/**
+ * Sort-keys-first JSON so `{a:1,b:2}` and `{b:2,a:1}` produce the same string.
+ * Mirrors `stableStringify` at `src/repl.ts:1122` — keeps the confirm-allow
+ * session memo stable across re-renders that reshuffle object key order.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys
+    .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
+    .join(',')}}`;
+}
+
+/** djb2 over the stable-JSON form. Matches `stableHash` at `src/repl.ts:1113`. */
+function stableHash(value: unknown): string {
+  let json: string;
   try {
-    return JSON.stringify(value);
+    json = stableStringify(value);
   } catch {
-    return String(value);
+    json = String(value);
   }
+  let h = 5381;
+  for (let i = 0; i < json.length; i++) {
+    h = ((h << 5) + h + json.charCodeAt(i)) >>> 0;
+  }
+  return h.toString(16);
 }
