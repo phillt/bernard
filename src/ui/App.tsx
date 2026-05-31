@@ -4,6 +4,7 @@ import type { Agent } from '../agent.js';
 import type { BernardConfig } from '../config.js';
 import {
   savePreferences,
+  loadPreferences,
   getDefaultModel,
   getAvailableProviders,
   PROVIDER_MODELS,
@@ -11,7 +12,11 @@ import {
   OPTIONS_REGISTRY,
   saveOption,
   getProviderKeyStatus,
+  normalizeMaxConcurrentAgents,
+  normalizeThreshold,
 } from '../config.js';
+import { MAX_CONCURRENT_AGENTS_LIMIT, setMaxConcurrentAgents } from '../tools/agent-pool.js';
+import { RESPONSE_STYLE_IDS, type ResponseStyle } from '../agent-prompt.js';
 import { getContextWindow } from '../context.js';
 import { getLocalVersion } from '../update.js';
 import { CONFIG_DIR, DATA_DIR, CACHE_DIR, STATE_DIR } from '../paths.js';
@@ -46,7 +51,10 @@ import { getDomain, getDomainIds } from '../domains.js';
 import { MCP_CONFIG_PATH } from '../paths.js';
 import { interactiveUpdate } from '../update.js';
 import { getBuiltinSpecialistIds } from '../specialists.js';
-import { buildCandidateContextBlock } from '../candidate-bootstrap.js';
+import {
+  buildCandidateContextBlock,
+  promotePendingCandidates,
+} from '../candidate-bootstrap.js';
 import {
   listProfiles,
   createProfile,
@@ -680,6 +688,11 @@ export function App({
       return;
     }
 
+    if (text === '/agent-options') {
+      await runAgentOptions();
+      return;
+    }
+
     if (text === '/profiles') {
       const profiles = listProfiles();
       const entries: MenuEntry[] = profiles.map((p) => ({
@@ -943,6 +956,389 @@ export function App({
 
     await runAgentTurn(text);
   };
+
+  type BooleanPrefKey =
+    | 'autoCreateSpecialists'
+    | 'promptRewriter'
+    | 'toolDetails'
+    | 'conciseMode';
+
+  async function toggleBooleanPref(
+    key: BooleanPrefKey,
+    label: string,
+    onMsg: string,
+    offMsg: string,
+    onToggle?: (value: boolean) => void,
+  ): Promise<void> {
+    const entries: MenuEntry[] = [
+      { label: 'On', active: config[key] === true, value: true },
+      { label: 'Off', active: config[key] === false, value: false },
+    ];
+    const result = await requestMenu(entries, {
+      title: `${label}: ${config[key] ? 'ON' : 'OFF'}`,
+    });
+    if (result.cancelled) return;
+    const newVal = result.item.value as boolean;
+    config[key] = newVal;
+    savePreferences({
+      ...loadPreferences(),
+      provider: config.provider,
+      model: config.model,
+      [key]: newVal,
+    });
+    onToggle?.(newVal);
+    flashToast(newVal ? onMsg : offMsg, 'success');
+  }
+
+  async function runCoordinatorModePrompt(): Promise<void> {
+    const modes: Array<{ value: 'on' | 'off' | 'auto'; label: string; desc: string }> = [
+      {
+        value: 'auto',
+        label: 'Auto (qualifier picks per turn)',
+        desc: 'Classifier inspects each ask and chooses Normal or ReAct.',
+      },
+      { value: 'on', label: 'On (always coordinator)', desc: 'Every turn runs ReAct.' },
+      { value: 'off', label: 'Off (always normal)', desc: 'Every turn runs single-shot Normal.' },
+    ];
+    const entries: MenuEntry[] = modes.map((m) => ({
+      label: m.label,
+      description: m.desc,
+      active: config.coordinatorMode === m.value,
+      value: m.value,
+    }));
+    const result = await requestMenu(entries, {
+      title: `Coordinator mode: ${config.coordinatorMode.toUpperCase()}`,
+    });
+    if (result.cancelled) return;
+    const chosen = result.item.value as 'on' | 'off' | 'auto';
+    config.coordinatorMode = chosen;
+    savePreferences({
+      ...loadPreferences(),
+      provider: config.provider,
+      model: config.model,
+      coordinatorMode: chosen,
+    });
+    flashToast(`Coordinator mode → ${chosen}`, 'success');
+  }
+
+  async function runModelModePrompt(): Promise<void> {
+    const modes: Array<{
+      value: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance';
+      label: string;
+      desc: string;
+    }> = [
+      { value: 'off', label: 'Off (single model)', desc: 'Every site uses active provider/model.' },
+      { value: 'balanced', label: 'Balanced', desc: 'Premium main; mid sub-agents; cheap routing.' },
+      {
+        value: 'optimize-tokens',
+        label: 'Optimize for token usage',
+        desc: 'Aggressive cost-saving.',
+      },
+      {
+        value: 'optimize-performance',
+        label: 'Optimize for performance',
+        desc: 'Strongest model everywhere.',
+      },
+    ];
+    const entries: MenuEntry[] = modes.map((m) => ({
+      label: m.label,
+      description: m.desc,
+      active: config.modelMode === m.value,
+      value: m.value,
+    }));
+    const result = await requestMenu(entries, { title: `Model mode: ${config.modelMode}` });
+    if (result.cancelled) return;
+    const chosen = result.item.value as typeof modes[number]['value'];
+    config.modelMode = chosen;
+    savePreferences({
+      ...loadPreferences(),
+      provider: config.provider,
+      model: config.model,
+      modelMode: chosen,
+    });
+    flashToast(`Model mode → ${chosen}`, 'success');
+  }
+
+  async function runToolModePrompt(): Promise<void> {
+    const modes: Array<{ value: 'read-only' | 'write'; label: string; desc: string }> = [
+      {
+        value: 'read-only',
+        label: 'Read-only (least privilege)',
+        desc: 'Write tools blocked until explicitly enabled.',
+      },
+      {
+        value: 'write',
+        label: 'Write',
+        desc: 'Every tool may run; confirm gate still prompts on risk.',
+      },
+    ];
+    const entries: MenuEntry[] = modes.map((m) => ({
+      label: m.label,
+      description: m.desc,
+      active: config.toolMode === m.value,
+      value: m.value,
+    }));
+    const result = await requestMenu(entries, { title: `Tool mode: ${config.toolMode}` });
+    if (result.cancelled) return;
+    const chosen = result.item.value as 'read-only' | 'write';
+    config.toolMode = chosen;
+    savePreferences({
+      ...loadPreferences(),
+      provider: config.provider,
+      model: config.model,
+      toolMode: chosen,
+    });
+    flashToast(`Tool mode → ${chosen}`, 'success');
+  }
+
+  async function runScratchThresholdPrompt(): Promise<void> {
+    const val = await requestTextInput({
+      label: 'New subject-change threshold (0-1, e.g. 0.15)',
+    });
+    if (val.cancelled) return;
+    const parsed = parseFloat(val.raw);
+    if (Number.isNaN(parsed) || parsed < 0 || parsed > 1) {
+      flashToast('Threshold must be a number between 0 and 1 (e.g. 0.15)', 'error');
+      return;
+    }
+    config.scratchSubjectThreshold = parsed;
+    savePreferences({
+      ...loadPreferences(),
+      scratchSubjectThreshold: parsed,
+      provider: config.provider,
+      model: config.model,
+    });
+    flashToast(`Scratch subject-change threshold: ${parsed}`, 'success');
+  }
+
+  async function runMaxConcurrentPrompt(): Promise<void> {
+    const val = await requestTextInput({
+      label: `Max concurrent sub-agents (1-${MAX_CONCURRENT_AGENTS_LIMIT}, default 4)`,
+    });
+    if (val.cancelled) return;
+    const raw = val.raw.trim();
+    const parsed = Number.parseInt(raw, 10);
+    if (
+      !Number.isFinite(parsed) ||
+      String(parsed) !== raw ||
+      parsed < 1 ||
+      parsed > MAX_CONCURRENT_AGENTS_LIMIT
+    ) {
+      flashToast(`Value must be an integer between 1 and ${MAX_CONCURRENT_AGENTS_LIMIT}.`, 'error');
+      return;
+    }
+    const normalized = normalizeMaxConcurrentAgents(parsed);
+    config.maxConcurrentAgents = normalized;
+    setMaxConcurrentAgents(normalized);
+    savePreferences({
+      ...loadPreferences(),
+      maxConcurrentAgents: normalized,
+      provider: config.provider,
+      model: config.model,
+    });
+    flashToast(`Max concurrent sub-agents: ${normalized}`, 'success');
+  }
+
+  async function runResponseStylePrompt(): Promise<void> {
+    const entries: MenuEntry[] = RESPONSE_STYLE_IDS.map((id: ResponseStyle) => ({
+      label: id,
+      active: config.responseStyle === id,
+      value: id,
+    }));
+    const result = await requestMenu(entries, {
+      title: `Response style: ${config.responseStyle}`,
+    });
+    if (result.cancelled) return;
+    const chosen = result.item.value as ResponseStyle;
+    config.responseStyle = chosen;
+    savePreferences({
+      ...loadPreferences(),
+      provider: config.provider,
+      model: config.model,
+      responseStyle: chosen,
+    });
+    flashToast(`Response style → ${chosen}`, 'success');
+  }
+
+  async function runThresholdPrompt(): Promise<void> {
+    const val = await requestTextInput({ label: 'New threshold (0-100)' });
+    if (val.cancelled) return;
+    const parsed = parseFloat(val.raw);
+    if (Number.isNaN(parsed) || parsed < 0 || parsed > 100) {
+      flashToast('Threshold must be a number between 0 and 100 (e.g. 0.8 or 80)', 'error');
+      return;
+    }
+    const normalized = normalizeThreshold(parsed);
+    config.autoCreateThreshold = normalized;
+    savePreferences({
+      ...loadPreferences(),
+      autoCreateThreshold: normalized,
+      provider: config.provider,
+      model: config.model,
+    });
+    flashToast(
+      `Auto-create threshold: ${normalized} (${Math.round(normalized * 100)}%)`,
+      'success',
+    );
+    if (config.autoCreateSpecialists) {
+      promotePendingCandidates(
+        stores.candidates,
+        stores.specialists,
+        config.autoCreateThreshold,
+        config,
+      );
+    }
+  }
+
+  async function runAgentOptions(): Promise<void> {
+    type MenuRow =
+      | { kind: 'section'; title: string }
+      | { kind: 'item'; item: MenuItem; action: () => void | Promise<void> };
+
+    const toggleRow = (
+      key: BooleanPrefKey,
+      label: string,
+      desc: string,
+      onMsg: string,
+      offMsg: string,
+      onToggle?: (value: boolean) => void,
+    ): MenuRow => ({
+      kind: 'item',
+      item: { label, annotation: `= ${config[key] ? 'on' : 'off'}`, description: desc },
+      action: () => toggleBooleanPref(key, label, onMsg, offMsg, onToggle),
+    });
+
+    const rows: MenuRow[] = [
+      { kind: 'section', title: 'System' },
+      toggleRow(
+        'autoCreateSpecialists',
+        'Auto-create specialists',
+        'Auto-promote pending candidates above the threshold.',
+        'Auto-create specialists: on',
+        'Auto-create specialists: off',
+        (value) => {
+          if (value) {
+            promotePendingCandidates(
+              stores.candidates,
+              stores.specialists,
+              config.autoCreateThreshold,
+              config,
+            );
+          }
+        },
+      ),
+      {
+        kind: 'item',
+        item: {
+          label: 'Auto-create threshold',
+          annotation: `= ${config.autoCreateThreshold} (${Math.round(config.autoCreateThreshold * 100)}%)`,
+          description: 'Minimum score (0-1) a pending specialist needs before auto-promotion.',
+        },
+        action: runThresholdPrompt,
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Coordinator (ReAct) mode',
+          annotation: `= ${config.coordinatorMode}`,
+          description:
+            'On = always coordinator; Off = always normal; Auto = per-turn qualifier.',
+        },
+        action: runCoordinatorModePrompt,
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Model mode',
+          annotation: `= ${config.modelMode}`,
+          description:
+            'Off = single model. Balanced / Optimize-tokens / Optimize-performance pick a model per site.',
+        },
+        action: runModelModePrompt,
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Tool mode',
+          annotation: `= ${config.toolMode}`,
+          description:
+            'Read-only blocks write tools until enabled. Write lets every tool run subject to the confirm gate.',
+        },
+        action: runToolModePrompt,
+      },
+      toggleRow(
+        'promptRewriter',
+        'Prompt rewriter',
+        'Restructure your prompt for the active model family before each turn.',
+        'Prompt rewriter: on',
+        'Prompt rewriter: off',
+      ),
+      toggleRow(
+        'toolDetails',
+        'Tool details',
+        'Show full tool call args and results in the transcript.',
+        'Tool details: on',
+        'Tool details: off',
+        setToolDetailsVisible,
+      ),
+      toggleRow(
+        'conciseMode',
+        'Concise mode',
+        'Default responses to the smallest sufficient size.',
+        'Concise mode: on',
+        'Concise mode: off',
+      ),
+      {
+        kind: 'item',
+        item: {
+          label: 'Scratch subject-change threshold',
+          annotation: `= ${config.scratchSubjectThreshold}`,
+          description: 'Jaccard similarity (0-1) below which a new turn clears all scratch.',
+        },
+        action: runScratchThresholdPrompt,
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Response style',
+          annotation: `= ${config.responseStyle}`,
+          description:
+            'Shape the model response (Detailed, Short, Step-by-Step, Simple, High-Level, Critical, Creative).',
+        },
+        action: runResponseStylePrompt,
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Max concurrent sub-agents',
+          annotation: `= ${config.maxConcurrentAgents}`,
+          description: `Cap on parallel agent/task/specialist runs (1-${MAX_CONCURRENT_AGENTS_LIMIT}). Default 4.`,
+        },
+        action: runMaxConcurrentPrompt,
+      },
+      { kind: 'section', title: 'User-created' },
+      {
+        kind: 'item',
+        item: { label: 'Specialists', description: 'List bundled and user-created specialists.' },
+        action: () => handleSubmit('/specialists'),
+      },
+      {
+        kind: 'item',
+        item: { label: 'Tasks & routines', description: 'List saved tasks and routines.' },
+        action: () => handleSubmit('/routines'),
+      },
+    ];
+
+    const topEntries: MenuEntry[] = rows.map((r) =>
+      r.kind === 'section' ? { type: 'section', title: r.title } : r.item,
+    );
+    const itemActions = rows.flatMap((r) => (r.kind === 'item' ? [r.action] : []));
+
+    const topResult = await requestMenu(topEntries, { title: 'Agent Options' });
+    if (topResult.cancelled) return;
+    const action = itemActions[topResult.index];
+    if (action) await action();
+  }
 
   function reapplyRuntimeSettings(cfg: BernardConfig): void {
     try {
