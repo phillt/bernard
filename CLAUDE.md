@@ -37,6 +37,8 @@ bernard -p openai -m gpt-4o  # Use specific provider/model
 - **src/prompt-rewriter.ts** — Pre-turn LLM pass that rewrites the user's message for the active model family (see `ModelProfile.rewriterHint` in `src/providers/profiles.ts`). Runs after reference-resolution so resolved entities can be inlined. Temperature 0, fail-open to the original prompt, gated by `config.promptRewriter` (default on; toggle via `/agent-options` or `BERNARD_PROMPT_REWRITER=false`).
 - **src/providers/** — `getModel()` factory returning AI SDK `LanguageModel`. `getModelForConfig(config, provider, model)` wraps it to consult `config.customProviders` and route through `createOpenAI` / `createAnthropic` / `createXai` with `{ baseURL, apiKey }` when the active provider is user-defined.
 - **src/custom-providers.ts** — `CustomProviderStore`: single-file JSON store at `~/.config/bernard/custom-providers.json`. Each entry binds a user-chosen `name` to one of the three installed SDKs (`openai` / `anthropic` / `xai`), a `baseURL`, a `defaultModel`, and a remembered `models[]` list that grows as the user types new names in `/model`. Reserved names: `anthropic`, `openai`, `xai`.
+- **src/profiles.ts** — Settings-profile store (#207) at `~/.config/bernard/profiles.json`. CRUD + atomic writes + lazy migration from legacy `preferences.json`. `loadPreferences` / `savePreferences` in `src/config.ts` are now thin shims that read/write the active profile's `settings` blob, so every existing settings call site is automatically profile-scoped.
+- **src/profiles-wizard.ts** — `WIZARD_CATEGORIES` constant + `runProfileWizard()` orchestrator for `/profiles` (create new) and the fresh-install onboarding flow. Built on `selectFromMenu` / `promptValue`; never persists mid-flight (caller commits via `createProfile`).
 - **src/tool-call-repair.ts** — `makeRepairHook()`: one-shot `ToolCallRepairFunction` wired into every `generateText` site (main, specialist, subagent, tool-wrapper, cron). Re-prompts the model on `InvalidToolArgumentsError` / `NoSuchToolError`. Detects argument truncation (e.g. a 16 KB heredoc cut mid-string) and steers the retry toward `file_write` + `shell` instead of inlining payloads. Forwards the parent abort signal so user-cancel (Esc) also cancels the repair call.
 - **src/tools/wrap-with-specialist.ts** — Transparent shim that routes the main agent's direct `shell`, `web_read`, and `file_*_lines` calls through their wrapper specialists (same tool name/schema; only `execute` changes). On `status: 'ok'` returns the wrapper's `result` as-is; on `status: 'error'` maps to the _native_ tool's error shape so `detectToolError` and tool-profile learning still see the right format. Falls through to the raw tool when the specialist is missing or wrong kind. Only active on the main agent — sub-agents and wrappers themselves bypass it.
 - **src/tools/ask-user.ts** — `ask_user` tool: pauses the agent loop to ask the user one or more clarifying questions and waits for their answers. Accepts a `questions` array (1-10 entries), each with optional `choices` / `allow_other` / `other_label`. For batches of 2+ the REPL pins a tab strip above the menu. Returns `{answers: [...]}`, `{cancelled: true, answered: [...]}` on Esc, or `{unavailable: true}` when running headless. Exists so the agent stops writing clarifying questions as prose (which leaves the turn idle and, in coordinator mode, trips the plan-enforcement loop).
@@ -88,6 +90,20 @@ bernard set-model-mode balanced            # CLI
 
 The single source of truth is `resolveSiteModel(config, site, opts?)` in `src/model-policy.ts`. Every `generateText` call site routes through it. Set `BERNARD_DEBUG=1` to see `model-policy:resolve` log entries per site.
 
+## Settings Profiles
+
+User-tunable settings are organized into named **profiles** (#207). Bernard always has at least one (`default`); `activeProfileId` in `~/.config/bernard/profiles.json` nominates which one is live. Every `savePreferences` call writes to the active profile, so any settings change made via `/agent-options`, `/model`, `/provider`, `/theme`, `bernard set-model-mode`, etc. is automatically profile-scoped. API keys (`keys.json`) and custom providers (`custom-providers.json`) stay global.
+
+- `/profiles` — list profiles (active one marked), switch, or launch the wizard to create a new one.
+- `/manage-profiles` — rename or delete (guards against deleting the active or last-remaining profile).
+- `bernard profiles` — read-only listing from the CLI.
+
+`src/profiles.ts` is the disk-backed store (CRUD + atomic writes); `src/profiles-wizard.ts` defines `WIZARD_CATEGORIES` (Agent behavior / Tool safety / Output style / Limits / Advanced) and the `runProfileWizard()` orchestrator, both built on the existing `selectFromMenu` / `promptValue` primitives — no new UI components.
+
+Migration: the first read of `profiles.json` is lazy; if the file is absent but `~/.config/bernard/preferences.json` exists, its contents seed the `default` profile and a `.migrated-to-profiles` marker is dropped. The legacy `preferences.json` is left in place (no destructive delete) so users can roll back. Brand-new users (neither file present) get the wizard at REPL start to customize their `default` profile. Env vars retain their existing precedence over the active profile.
+
+Profile switching mid-session calls `applyProfileToConfig(config)` (`src/config.ts`) which re-runs `loadConfig()` and copies only the profile-scoped fields back onto the live `config` reference, so subsystems holding that reference (agent loop, tool augment layer) see the new values without reinitialization. `setMaxConcurrentAgents()` is re-fired inside `loadConfig()` so the shared agent pool reflects the new cap.
+
 ## Key Patterns
 
 - **Vercel AI SDK** (`ai` package) provides unified tool calling across Anthropic/OpenAI/xAI
@@ -117,7 +133,7 @@ Bernard follows the [XDG Base Directory Specification](https://specifications.fr
 
 | Category   | Default Location          | Contents                                                                                                                                                                      |
 | ---------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Config** | `~/.config/bernard/`      | `preferences.json`, `keys.json`, `custom-providers.json`, `.env`, `mcp.json`                                                                                                  |
+| **Config** | `~/.config/bernard/`      | `profiles.json`, `preferences.json` (legacy, see below), `keys.json`, `custom-providers.json`, `.env`, `mcp.json`                                                              |
 | **Data**   | `~/.local/share/bernard/` | `memory/*.md`, `rag/`, `routines/*.json`, `specialists/*.json`, `correction-candidates/*.json`, `tool-profiles/*.json`, `cron/jobs.json`, `cron/alerts/`, `cron/notes/*.json` |
 | **Cache**  | `~/.cache/bernard/`       | `models/` (embeddings), `update-check.json`                                                                                                                                   |
 | **State**  | `~/.local/state/bernard/` | `conversation-history.json`, `logs/*.jsonl`, `cron-daemon.pid`, `cron-daemon.log`                                                                                             |

@@ -1,8 +1,13 @@
 import * as dotenv from 'dotenv';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { PREFS_PATH, KEYS_PATH, ENV_PATH, LEGACY_DIR } from './paths.js';
+import { KEYS_PATH, ENV_PATH, LEGACY_DIR } from './paths.js';
 import { loadCustomProviders, validateBaseURL, type CustomProvider } from './custom-providers.js';
+import {
+  loadProfiles,
+  saveActiveSettings,
+  type ProfileSettings,
+} from './profiles.js';
 import {
   setMaxConcurrentAgents,
   DEFAULT_MAX_CONCURRENT_AGENTS as POOL_DEFAULT_MAX,
@@ -266,9 +271,17 @@ export const OPTIONS_REGISTRY: Record<
 };
 
 /**
- * Persists user preferences to the config directory.
+ * Persists user preferences to the **active profile** in `profiles.json` (#207).
  *
- * Preserves the existing `autoUpdate` and `coordinatorMode` flags when the caller omits them.
+ * Acts as a partial patch: any field present in `prefs` (including `undefined`
+ * to explicitly reset that field) is merged into the active profile's settings.
+ * Other fields are preserved as-is. The provider/model arguments stay required
+ * for backwards-compat with the pre-profiles signature but are themselves
+ * patched in just like any other field.
+ *
+ * Side-effect note: if `profiles.json` does not yet exist on disk, the first
+ * call here lazily creates it (migrating from a legacy `preferences.json` when
+ * present) before merging this patch on top.
  */
 export function savePreferences(prefs: {
   provider: string;
@@ -294,124 +307,14 @@ export function savePreferences(prefs: {
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;
 }): void {
-  const dir = path.dirname(PREFS_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  // Patch shape matches ProfileSettings exactly — keys present in `prefs`
+  // (including explicit `undefined`s from resetOption / resetAllOptions) are
+  // applied; missing keys are preserved by saveActiveSettings.
+  const patch: Record<string, unknown> = {};
+  for (const k of Object.keys(prefs)) {
+    patch[k] = (prefs as Record<string, unknown>)[k];
   }
-  const data: Record<string, unknown> = { provider: prefs.provider, model: prefs.model };
-  if (prefs.maxTokens !== undefined) data.maxTokens = prefs.maxTokens;
-  if (prefs.shellTimeout !== undefined) data.shellTimeout = prefs.shellTimeout;
-  if (prefs.tokenWindow !== undefined) data.tokenWindow = prefs.tokenWindow;
-  if (prefs.maxSteps !== undefined) data.maxSteps = prefs.maxSteps;
-  if (prefs.theme !== undefined) data.theme = prefs.theme;
-  if (prefs.autoUpdate !== undefined) data.autoUpdate = prefs.autoUpdate;
-  if (prefs.coordinatorMode !== undefined) data.coordinatorMode = prefs.coordinatorMode;
-  if (prefs.modelMode !== undefined) data.modelMode = prefs.modelMode;
-  if (prefs.subagentPac !== undefined) data.subagentPac = prefs.subagentPac;
-  if (prefs.toolDetails !== undefined) data.toolDetails = prefs.toolDetails;
-  if (prefs.autoCreateSpecialists !== undefined)
-    data.autoCreateSpecialists = prefs.autoCreateSpecialists;
-  if (prefs.autoCreateThreshold !== undefined) data.autoCreateThreshold = prefs.autoCreateThreshold;
-  if (prefs.promptRewriter !== undefined) data.promptRewriter = prefs.promptRewriter;
-  if (prefs.referenceLookup !== undefined) data.referenceLookup = prefs.referenceLookup;
-  if (prefs.scratchSubjectThreshold !== undefined)
-    data.scratchSubjectThreshold = prefs.scratchSubjectThreshold;
-  if (prefs.conciseMode !== undefined) data.conciseMode = prefs.conciseMode;
-  if (prefs.confirmMode !== undefined) data.confirmMode = prefs.confirmMode;
-  if (prefs.toolMode !== undefined) data.toolMode = prefs.toolMode;
-  if (prefs.maxConcurrentAgents !== undefined) data.maxConcurrentAgents = prefs.maxConcurrentAgents;
-  if (prefs.responseStyle !== undefined) data.responseStyle = prefs.responseStyle;
-
-  // Preserve autoUpdate, coordinatorMode, and auto-create settings from existing prefs when callers don't pass them
-  let existing: Record<string, unknown> | undefined;
-  try {
-    existing = JSON.parse(fs.readFileSync(PREFS_PATH, 'utf-8'));
-  } catch {
-    /* ignore */
-  }
-
-  const booleanKeys = [
-    'autoUpdate',
-    'subagentPac',
-    'toolDetails',
-    'promptRewriter',
-    'referenceLookup',
-    'conciseMode',
-  ] as const;
-  for (const k of booleanKeys) {
-    if (prefs[k] === undefined && existing && typeof existing[k] === 'boolean') {
-      data[k] = existing[k];
-    }
-  }
-  if (prefs.modelMode === undefined && existing && isModelMode(existing.modelMode)) {
-    data.modelMode = existing.modelMode;
-  }
-  if (prefs.confirmMode === undefined && existing && isConfirmMode(existing.confirmMode)) {
-    data.confirmMode = existing.confirmMode;
-  }
-  if (prefs.toolMode === undefined && existing && isToolMode(existing.toolMode)) {
-    data.toolMode = existing.toolMode;
-  }
-  if (
-    prefs.maxConcurrentAgents === undefined &&
-    existing &&
-    typeof existing.maxConcurrentAgents === 'number'
-  ) {
-    data.maxConcurrentAgents = existing.maxConcurrentAgents;
-  }
-  if (prefs.responseStyle === undefined && existing && isResponseStyle(existing.responseStyle)) {
-    data.responseStyle = existing.responseStyle;
-  }
-  if (prefs.coordinatorMode === undefined && existing) {
-    if (isCoordinatorMode(existing.coordinatorMode)) {
-      data.coordinatorMode = existing.coordinatorMode;
-    } else {
-      // Migrate legacy `reactMode` boolean. Only carries through when the old
-      // field actually existed — otherwise we leave coordinatorMode unset so
-      // loadConfig picks up the default.
-      const migrated = legacyReactModeToCoordinator(
-        typeof existing.reactMode === 'boolean' ? existing.reactMode : undefined,
-      );
-      if (migrated) data.coordinatorMode = migrated;
-    }
-  }
-
-  // Preserve numeric options from existing prefs when callers don't pass them.
-  // Use 'in' to distinguish "key absent" (preserve) from "key explicitly set to undefined" (reset).
-  if (!('maxSteps' in prefs) && existing && typeof existing.maxSteps === 'number') {
-    data.maxSteps = existing.maxSteps;
-  }
-  if (!('maxTokens' in prefs) && existing && typeof existing.maxTokens === 'number') {
-    data.maxTokens = existing.maxTokens;
-  }
-  if (!('shellTimeout' in prefs) && existing && typeof existing.shellTimeout === 'number') {
-    data.shellTimeout = existing.shellTimeout;
-  }
-  if (!('tokenWindow' in prefs) && existing && typeof existing.tokenWindow === 'number') {
-    data.tokenWindow = existing.tokenWindow;
-  }
-  if (
-    prefs.autoCreateSpecialists === undefined &&
-    existing &&
-    typeof existing.autoCreateSpecialists === 'boolean'
-  ) {
-    data.autoCreateSpecialists = existing.autoCreateSpecialists;
-  }
-  if (
-    prefs.autoCreateThreshold === undefined &&
-    existing &&
-    typeof existing.autoCreateThreshold === 'number'
-  ) {
-    data.autoCreateThreshold = existing.autoCreateThreshold;
-  }
-  if (
-    prefs.scratchSubjectThreshold === undefined &&
-    existing &&
-    typeof existing.scratchSubjectThreshold === 'number'
-  ) {
-    data.scratchSubjectThreshold = existing.scratchSubjectThreshold;
-  }
-  fs.writeFileSync(PREFS_PATH, JSON.stringify(data, null, 2) + '\n');
+  saveActiveSettings(patch as ProfileSettings);
 }
 
 /**
@@ -443,53 +346,49 @@ export function loadPreferences(): {
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;
 } {
-  try {
-    const data = fs.readFileSync(PREFS_PATH, 'utf-8');
-    const parsed = JSON.parse(data);
-    // Prefer the new field; fall back to the legacy `reactMode` boolean so
-    // existing installs migrate transparently on first load.
-    const coordinatorMode = isCoordinatorMode(parsed.coordinatorMode)
-      ? parsed.coordinatorMode
-      : legacyReactModeToCoordinator(
-          typeof parsed.reactMode === 'boolean' ? parsed.reactMode : undefined,
-        );
-    return {
-      provider: typeof parsed.provider === 'string' ? parsed.provider : undefined,
-      model: typeof parsed.model === 'string' ? parsed.model : undefined,
-      maxTokens: typeof parsed.maxTokens === 'number' ? parsed.maxTokens : undefined,
-      shellTimeout: typeof parsed.shellTimeout === 'number' ? parsed.shellTimeout : undefined,
-      tokenWindow: typeof parsed.tokenWindow === 'number' ? parsed.tokenWindow : undefined,
-      maxSteps: typeof parsed.maxSteps === 'number' ? parsed.maxSteps : undefined,
-      theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
-      autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
-      coordinatorMode,
-      modelMode: isModelMode(parsed.modelMode) ? parsed.modelMode : undefined,
-      subagentPac: typeof parsed.subagentPac === 'boolean' ? parsed.subagentPac : undefined,
-      toolDetails: typeof parsed.toolDetails === 'boolean' ? parsed.toolDetails : undefined,
-      autoCreateSpecialists:
-        typeof parsed.autoCreateSpecialists === 'boolean'
-          ? parsed.autoCreateSpecialists
+  // Routes through the active profile in profiles.json (#207). Each field is
+  // type-checked here so a malformed stored value falls through to undefined
+  // and `loadConfig` picks up the env/default value instead.
+  const { file } = loadProfiles();
+  const parsed = file.profiles[file.activeProfileId]?.settings ?? {};
+  const coordinatorMode = isCoordinatorMode(parsed.coordinatorMode)
+    ? parsed.coordinatorMode
+    : legacyReactModeToCoordinator(
+        typeof (parsed as { reactMode?: unknown }).reactMode === 'boolean'
+          ? ((parsed as { reactMode?: boolean }).reactMode as boolean)
           : undefined,
-      autoCreateThreshold:
-        typeof parsed.autoCreateThreshold === 'number' ? parsed.autoCreateThreshold : undefined,
-      promptRewriter:
-        typeof parsed.promptRewriter === 'boolean' ? parsed.promptRewriter : undefined,
-      referenceLookup:
-        typeof parsed.referenceLookup === 'boolean' ? parsed.referenceLookup : undefined,
-      scratchSubjectThreshold:
-        typeof parsed.scratchSubjectThreshold === 'number'
-          ? parsed.scratchSubjectThreshold
-          : undefined,
-      conciseMode: typeof parsed.conciseMode === 'boolean' ? parsed.conciseMode : undefined,
-      confirmMode: isConfirmMode(parsed.confirmMode) ? parsed.confirmMode : undefined,
-      toolMode: isToolMode(parsed.toolMode) ? parsed.toolMode : undefined,
-      maxConcurrentAgents:
-        typeof parsed.maxConcurrentAgents === 'number' ? parsed.maxConcurrentAgents : undefined,
-      responseStyle: isResponseStyle(parsed.responseStyle) ? parsed.responseStyle : undefined,
-    };
-  } catch {
-    return {};
-  }
+      );
+  return {
+    provider: typeof parsed.provider === 'string' ? parsed.provider : undefined,
+    model: typeof parsed.model === 'string' ? parsed.model : undefined,
+    maxTokens: typeof parsed.maxTokens === 'number' ? parsed.maxTokens : undefined,
+    shellTimeout: typeof parsed.shellTimeout === 'number' ? parsed.shellTimeout : undefined,
+    tokenWindow: typeof parsed.tokenWindow === 'number' ? parsed.tokenWindow : undefined,
+    maxSteps: typeof parsed.maxSteps === 'number' ? parsed.maxSteps : undefined,
+    theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
+    autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
+    coordinatorMode,
+    modelMode: isModelMode(parsed.modelMode) ? parsed.modelMode : undefined,
+    subagentPac: typeof parsed.subagentPac === 'boolean' ? parsed.subagentPac : undefined,
+    toolDetails: typeof parsed.toolDetails === 'boolean' ? parsed.toolDetails : undefined,
+    autoCreateSpecialists:
+      typeof parsed.autoCreateSpecialists === 'boolean' ? parsed.autoCreateSpecialists : undefined,
+    autoCreateThreshold:
+      typeof parsed.autoCreateThreshold === 'number' ? parsed.autoCreateThreshold : undefined,
+    promptRewriter: typeof parsed.promptRewriter === 'boolean' ? parsed.promptRewriter : undefined,
+    referenceLookup:
+      typeof parsed.referenceLookup === 'boolean' ? parsed.referenceLookup : undefined,
+    scratchSubjectThreshold:
+      typeof parsed.scratchSubjectThreshold === 'number'
+        ? parsed.scratchSubjectThreshold
+        : undefined,
+    conciseMode: typeof parsed.conciseMode === 'boolean' ? parsed.conciseMode : undefined,
+    confirmMode: isConfirmMode(parsed.confirmMode) ? parsed.confirmMode : undefined,
+    toolMode: isToolMode(parsed.toolMode) ? parsed.toolMode : undefined,
+    maxConcurrentAgents:
+      typeof parsed.maxConcurrentAgents === 'number' ? parsed.maxConcurrentAgents : undefined,
+    responseStyle: isResponseStyle(parsed.responseStyle) ? parsed.responseStyle : undefined,
+  };
 }
 
 function loadStoredKeys(): Record<string, string> {
@@ -1157,6 +1056,59 @@ function resolveProviderBaseUrl(
     );
   }
   return trimmed;
+}
+
+/**
+ * Settings fields that profile-switching is allowed to overwrite on the live
+ * `BernardConfig`. Anything outside this list (API keys, custom providers,
+ * env-only toggles, CLI-scoped fields) is preserved across a switch.
+ */
+const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
+  'provider',
+  'model',
+  'maxTokens',
+  'shellTimeout',
+  'tokenWindow',
+  'maxSteps',
+  'theme',
+  'coordinatorMode',
+  'modelMode',
+  'subagentPac',
+  'toolDetails',
+  'autoCreateSpecialists',
+  'autoCreateThreshold',
+  'promptRewriter',
+  'confirmMode',
+  'toolMode',
+  'maxConcurrentAgents',
+  'responseStyle',
+  'referenceLookup',
+  'scratchSubjectThreshold',
+  'conciseMode',
+];
+
+/**
+ * Overlays the active profile's settings onto an existing live `BernardConfig`
+ * by re-running `loadConfig()` (which now reads the active profile) and
+ * copying only the profile-scoped fields back into `config`. Mutates in place
+ * so downstream subsystems holding a reference to `config` see the new values.
+ *
+ * Does not touch API keys, custom providers, the cached `providerBaseUrl`, or
+ * env-only flags (`ragEnabled`, `cacheEnabled`, `correctionEnabled`,
+ * `referenceLookupTools`) — those are not profile-scoped.
+ *
+ * @throws if the new profile selects a provider with no configured API key.
+ */
+export function applyProfileToConfig(config: BernardConfig): BernardConfig {
+  const refreshed = loadConfig();
+  const target = config as unknown as Record<string, unknown>;
+  const source = refreshed as unknown as Record<string, unknown>;
+  for (const key of PROFILE_SCOPED_KEYS) {
+    target[key as string] = source[key as string];
+  }
+  // setMaxConcurrentAgents is already called inside loadConfig() above, so the
+  // shared agent pool reflects the new profile's limit immediately.
+  return config;
 }
 
 function validateConfig(config: BernardConfig): void {

@@ -41,7 +41,9 @@ import { runFirstTimeSetup } from './setup.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
 import { migrateFromLegacy } from './migrate.js';
-import { MCP_CONFIG_PATH } from './paths.js';
+import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH } from './paths.js';
+import * as fs from 'node:fs';
+import { listProfiles } from './profiles.js';
 
 const program = new Command();
 
@@ -64,6 +66,12 @@ program
   )
   .action(async (opts) => {
     try {
+      // Detect a fresh install BEFORE any module touches preferences/profiles
+      // so we can decide whether to offer the onboarding wizard later. Both
+      // `profiles.json` and the legacy `preferences.json` must be absent to
+      // qualify — an existing prefs file means we're migrating, not onboarding.
+      const isFreshInstall = !fs.existsSync(PROFILES_PATH) && !fs.existsSync(PREFS_PATH);
+
       await runFirstTimeSetup();
 
       const config = loadConfig({
@@ -115,7 +123,7 @@ The user has been notified and this session is open for them to review and act o
       );
       const prefs = loadPreferences();
       startupUpdateCheck(!!prefs.autoUpdate);
-      await startRepl(config, alertContext, !!opts.resume);
+      await startRepl(config, alertContext, !!opts.resume, { isFreshInstall });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);
@@ -184,6 +192,24 @@ program
         'To add a custom provider: bernard add-provider <name> --sdk <openai|anthropic|xai> --base-url <url> --model <model>',
       );
     }
+  });
+
+program
+  .command('profiles')
+  .description('List saved settings profiles (active marked with *)')
+  .action(() => {
+    const profiles = listProfiles();
+    if (profiles.length === 0) {
+      printInfo('No profiles configured.');
+      return;
+    }
+    printInfo('Profiles:');
+    for (const p of profiles) {
+      const mark = p.active ? '*' : ' ';
+      const idSuffix = p.id !== p.name ? ` (${p.id})` : '';
+      printInfo(`  ${mark} ${p.name}${idSuffix}`);
+    }
+    printInfo('\nManage profiles from the REPL: /profiles, /manage-profiles');
   });
 
 program
