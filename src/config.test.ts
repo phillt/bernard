@@ -34,6 +34,8 @@ vi.mock('node:fs', () => ({
   writeFileSync: vi.fn(),
   chmodSync: vi.fn(),
   mkdirSync: vi.fn(),
+  renameSync: vi.fn(),
+  unlinkSync: vi.fn(),
 }));
 
 const fsMock = (await import('node:fs')) as unknown as {
@@ -42,7 +44,29 @@ const fsMock = (await import('node:fs')) as unknown as {
   writeFileSync: ReturnType<typeof vi.fn>;
   chmodSync: ReturnType<typeof vi.fn>;
   mkdirSync: ReturnType<typeof vi.fn>;
+  renameSync: ReturnType<typeof vi.fn>;
+  unlinkSync: ReturnType<typeof vi.fn>;
 };
+
+/**
+ * Builds the on-disk profiles.json shape used by the new profile-backed
+ * preferences store (#207). Tests that exercise "stored prefs win" precedence
+ * mock readFileSync to return this so loadProfiles() takes the happy path.
+ */
+function profilesFile(settings: Record<string, unknown>): string {
+  return JSON.stringify({
+    activeProfileId: 'default',
+    profiles: {
+      default: {
+        id: 'default',
+        name: 'default',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        settings,
+      },
+    },
+  });
+}
 
 describe('getDefaultModel', () => {
   it('returns the first model for anthropic', () => {
@@ -333,13 +357,13 @@ describe('loadConfig', () => {
 
   it('stored prefs.maxTokens overrides env var', () => {
     vi.stubEnv('BERNARD_MAX_TOKENS', '2048');
-    // readFileSync is called twice: once for keys.json (throws), once for preferences.json
+    // readFileSync is called twice: once for keys.json (throws), once for profiles.json
     let callCount = 0;
     fsMock.readFileSync.mockImplementation(() => {
       callCount++;
-      // keys.json reads throw, preferences.json returns our data
+      // keys.json reads throw, profiles.json returns our data
       if (callCount <= 1) throw new Error('ENOENT');
-      return JSON.stringify({ provider: 'anthropic', model: 'test', maxTokens: 8192 });
+      return profilesFile({ provider: 'anthropic', model: 'test', maxTokens: 8192 });
     });
     const config = loadConfig();
     expect(config.maxTokens).toBe(8192);
@@ -351,7 +375,7 @@ describe('loadConfig', () => {
     fsMock.readFileSync.mockImplementation(() => {
       callCount++;
       if (callCount <= 1) throw new Error('ENOENT');
-      return JSON.stringify({ provider: 'anthropic', model: 'test', shellTimeout: 60000 });
+      return profilesFile({ provider: 'anthropic', model: 'test', shellTimeout: 60000 });
     });
     const config = loadConfig();
     expect(config.shellTimeout).toBe(60000);
@@ -444,7 +468,7 @@ describe('loadConfig', () => {
     it('does not auto-detect when provider is set via stored preferences', () => {
       vi.stubEnv('ANTHROPIC_API_KEY', '');
       vi.stubEnv('XAI_API_KEY', 'xai-test-key');
-      fsMock.readFileSync.mockReturnValue(JSON.stringify({ provider: 'anthropic' }));
+      fsMock.readFileSync.mockReturnValue(profilesFile({ provider: 'anthropic' }));
       fsMock.existsSync.mockReturnValue(true);
       expect(() => loadConfig()).toThrow(/No API key found/);
     });
@@ -572,14 +596,27 @@ describe('loadConfig providerBaseUrl override', () => {
   });
 });
 
+/**
+ * Pulls the active profile's settings out of a written profiles.json string —
+ * the on-disk shape that saveActiveSettings (#207) emits.
+ */
+function settingsFromWrite(json: string): Record<string, unknown> {
+  const parsed = JSON.parse(json) as {
+    activeProfileId: string;
+    profiles: Record<string, { settings: Record<string, unknown> }>;
+  };
+  return parsed.profiles[parsed.activeProfileId].settings;
+}
+
 describe('saveOption', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(true);
     fsMock.readFileSync.mockReturnValue(
-      JSON.stringify({ provider: 'anthropic', model: 'test-model' }),
+      profilesFile({ provider: 'anthropic', model: 'test-model' }),
     );
     fsMock.writeFileSync.mockReturnValue(undefined);
     fsMock.mkdirSync.mockReturnValue(undefined);
+    fsMock.renameSync.mockReturnValue(undefined);
   });
 
   afterEach(() => {
@@ -590,24 +627,24 @@ describe('saveOption', () => {
     expect(() => saveOption('unknown', 100)).toThrow(/Unknown option "unknown"/);
   });
 
-  it('writes correct value to preferences.json', () => {
+  it('writes correct value to profiles.json', () => {
     saveOption('max-tokens', 8192);
-    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
-    expect(writtenData.maxTokens).toBe(8192);
+    const settings = settingsFromWrite(fsMock.writeFileSync.mock.calls[0][1] as string);
+    expect(settings.maxTokens).toBe(8192);
   });
 
-  it('writes max-steps to preferences.json', () => {
+  it('writes max-steps to profiles.json', () => {
     saveOption('max-steps', 50);
-    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
-    expect(writtenData.maxSteps).toBe(50);
+    const settings = settingsFromWrite(fsMock.writeFileSync.mock.calls[0][1] as string);
+    expect(settings.maxSteps).toBe(50);
   });
 
   it('preserves existing provider/model when saving', () => {
     saveOption('shell-timeout', 60000);
-    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
-    expect(writtenData.provider).toBe('anthropic');
-    expect(writtenData.model).toBe('test-model');
-    expect(writtenData.shellTimeout).toBe(60000);
+    const settings = settingsFromWrite(fsMock.writeFileSync.mock.calls[0][1] as string);
+    expect(settings.provider).toBe('anthropic');
+    expect(settings.model).toBe('test-model');
+    expect(settings.shellTimeout).toBe(60000);
   });
 });
 
@@ -615,7 +652,7 @@ describe('resetOption', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(true);
     fsMock.readFileSync.mockReturnValue(
-      JSON.stringify({
+      profilesFile({
         provider: 'anthropic',
         model: 'test-model',
         maxTokens: 8192,
@@ -624,6 +661,7 @@ describe('resetOption', () => {
     );
     fsMock.writeFileSync.mockReturnValue(undefined);
     fsMock.mkdirSync.mockReturnValue(undefined);
+    fsMock.renameSync.mockReturnValue(undefined);
   });
 
   afterEach(() => {
@@ -634,18 +672,18 @@ describe('resetOption', () => {
     expect(() => resetOption('unknown')).toThrow(/Unknown option "unknown"/);
   });
 
-  it('removes the option from preferences.json', () => {
+  it('removes the option from profiles.json', () => {
     resetOption('max-tokens');
-    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
-    expect(writtenData.maxTokens).toBeUndefined();
+    const settings = settingsFromWrite(fsMock.writeFileSync.mock.calls[0][1] as string);
+    expect(settings.maxTokens).toBeUndefined();
   });
 
   it('preserves other options and provider/model', () => {
     resetOption('max-tokens');
-    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
-    expect(writtenData.provider).toBe('anthropic');
-    expect(writtenData.model).toBe('test-model');
-    expect(writtenData.shellTimeout).toBe(60000);
+    const settings = settingsFromWrite(fsMock.writeFileSync.mock.calls[0][1] as string);
+    expect(settings.provider).toBe('anthropic');
+    expect(settings.model).toBe('test-model');
+    expect(settings.shellTimeout).toBe(60000);
   });
 });
 
@@ -653,7 +691,7 @@ describe('resetAllOptions', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(true);
     fsMock.readFileSync.mockReturnValue(
-      JSON.stringify({
+      profilesFile({
         provider: 'openai',
         model: 'gpt-4o-mini',
         maxTokens: 8192,
@@ -662,26 +700,27 @@ describe('resetAllOptions', () => {
     );
     fsMock.writeFileSync.mockReturnValue(undefined);
     fsMock.mkdirSync.mockReturnValue(undefined);
+    fsMock.renameSync.mockReturnValue(undefined);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('removes all option keys from preferences.json', () => {
+  it('removes all option keys from profiles.json', () => {
     resetAllOptions();
-    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
-    expect(writtenData.maxTokens).toBeUndefined();
-    expect(writtenData.shellTimeout).toBeUndefined();
-    expect(writtenData.tokenWindow).toBeUndefined();
-    expect(writtenData.maxSteps).toBeUndefined();
+    const settings = settingsFromWrite(fsMock.writeFileSync.mock.calls[0][1] as string);
+    expect(settings.maxTokens).toBeUndefined();
+    expect(settings.shellTimeout).toBeUndefined();
+    expect(settings.tokenWindow).toBeUndefined();
+    expect(settings.maxSteps).toBeUndefined();
   });
 
   it('preserves provider/model', () => {
     resetAllOptions();
-    const writtenData = JSON.parse(fsMock.writeFileSync.mock.calls[0][1] as string);
-    expect(writtenData.provider).toBe('openai');
-    expect(writtenData.model).toBe('gpt-4o-mini');
+    const settings = settingsFromWrite(fsMock.writeFileSync.mock.calls[0][1] as string);
+    expect(settings.provider).toBe('openai');
+    expect(settings.model).toBe('gpt-4o-mini');
   });
 });
 
@@ -726,7 +765,7 @@ describe('loadConfig promptRewriter', () => {
     fsMock.readFileSync.mockImplementation(() => {
       callCount++;
       if (callCount <= 1) throw new Error('ENOENT');
-      return JSON.stringify({ provider: 'anthropic', model: 'test', promptRewriter: true });
+      return profilesFile({ provider: 'anthropic', model: 'test', promptRewriter: true });
     });
     expect(loadConfig().promptRewriter).toBe(true);
   });
@@ -776,7 +815,7 @@ describe('loadConfig confirmMode (#144)', () => {
     fsMock.readFileSync.mockImplementation(() => {
       callCount++;
       if (callCount <= 1) throw new Error('ENOENT');
-      return JSON.stringify({ provider: 'anthropic', model: 'test', confirmMode: 'strict' });
+      return profilesFile({ provider: 'anthropic', model: 'test', confirmMode: 'strict' });
     });
     expect(loadConfig().confirmMode).toBe('strict');
   });
@@ -841,7 +880,7 @@ describe('loadConfig maxConcurrentAgents (#133)', () => {
     fsMock.readFileSync.mockImplementation(() => {
       callCount++;
       if (callCount <= 1) throw new Error('ENOENT');
-      return JSON.stringify({
+      return profilesFile({
         provider: 'anthropic',
         model: 'test',
         maxConcurrentAgents: 10,
@@ -890,7 +929,7 @@ describe('loadConfig responseStyle (#133)', () => {
     fsMock.readFileSync.mockImplementation(() => {
       callCount++;
       if (callCount <= 1) throw new Error('ENOENT');
-      return JSON.stringify({
+      return profilesFile({
         provider: 'anthropic',
         model: 'test',
         responseStyle: 'critical',

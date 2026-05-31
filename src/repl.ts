@@ -164,6 +164,23 @@ export async function startRepl(
   onboarding?: { isFreshInstall: boolean },
 ): Promise<void> {
   setToolDetailsVisible(config.toolDetails);
+
+  /**
+   * Re-fires the runtime side effects of `loadConfig` that live outside the
+   * `BernardConfig` object — the agent pool size is reseated inside
+   * `loadConfig`, but theme and tool-details visibility are owned by separate
+   * module-level singletons that only get pushed when `setTheme` /
+   * `setToolDetailsVisible` are called explicitly. Call this after every
+   * profile switch so the live REPL reflects the new profile's choices.
+   */
+  function reapplyRuntimeSettings(cfg: BernardConfig): void {
+    try {
+      setTheme(cfg.theme);
+    } catch {
+      /* unknown theme — keep current */
+    }
+    setToolDetailsVisible(cfg.toolDetails);
+  }
   const SLASH_COMMANDS = [
     { command: '/help', description: 'Show this help' },
     { command: '/clear', description: 'Clear conversation (--save/-s to summarize first)' },
@@ -2755,12 +2772,29 @@ Remember: the systemPrompt should read like a persona definition — who this sp
             void prompt();
             return;
           }
+          // Transactional create+switch: if applyProfileToConfig throws (e.g. the
+          // wizard picked a provider without a configured key) we roll the on-disk
+          // activeProfileId back so a failed switch can't leave the user stuck on
+          // an unusable profile at next startup.
+          const priorActive = listProfiles().find((p) => p.active)?.id;
+          let createdId: string | undefined;
           try {
             const profile = createProfile(wiz.name, wiz.settings);
+            createdId = profile.id;
             switchActiveProfile(profile.id);
             applyProfileToConfig(config);
+            reapplyRuntimeSettings(config);
             printInfo(`  Created profile "${profile.name}" and switched to it.`);
           } catch (err) {
+            if (createdId && priorActive) {
+              try {
+                switchActiveProfile(priorActive);
+                applyProfileToConfig(config);
+                reapplyRuntimeSettings(config);
+              } catch {
+                /* best-effort rollback */
+              }
+            }
             printError(`Failed to create profile: ${(err as Error).message}`);
           }
           console.log();
@@ -2775,11 +2809,24 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           void prompt();
           return;
         }
+        // Transactional switch: roll the on-disk activeProfileId back if
+        // applyProfileToConfig throws after the file write succeeded.
+        const priorActive = profiles.find((p) => p.active)?.id;
         try {
           switchActiveProfile(target.id);
           applyProfileToConfig(config);
+          reapplyRuntimeSettings(config);
           printInfo(`  Switched to profile "${target.name}".`);
         } catch (err) {
+          if (priorActive) {
+            try {
+              switchActiveProfile(priorActive);
+              applyProfileToConfig(config);
+              reapplyRuntimeSettings(config);
+            } catch {
+              /* best-effort rollback */
+            }
+          }
           printError(`Failed to switch profile: ${(err as Error).message}`);
         }
         console.log();
@@ -2840,11 +2887,7 @@ Remember: the systemPrompt should read like a persona definition — who this sp
           const renameSignal = createMenuSignal();
           let val;
           try {
-            val = await promptValue(
-              rl,
-              { label: `New name for "${target.name}"` },
-              renameSignal,
-            );
+            val = await promptValue(rl, { label: `New name for "${target.name}"` }, renameSignal);
           } finally {
             clearMenuSignal();
           }

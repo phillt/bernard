@@ -15,22 +15,10 @@
  */
 
 import * as readline from 'node:readline';
-import {
-  selectFromMenu,
-  promptValue,
-  type MenuEntry,
-} from './menu.js';
-import {
-  validateProfileName,
-  type ProfileSettings,
-} from './profiles.js';
-import {
-  MAX_CONCURRENT_AGENTS_LIMIT,
-} from './tools/agent-pool.js';
-import {
-  RESPONSE_STYLE_IDS,
-  type ResponseStyle,
-} from './agent-prompt.js';
+import { selectFromMenu, promptValue, type MenuEntry } from './menu.js';
+import { validateProfileName, type ProfileSettings } from './profiles.js';
+import { MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
+import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
 import { THEMES } from './theme.js';
 
 type ConfigureChoice = 'configure' | 'use-defaults' | 'skip';
@@ -41,7 +29,11 @@ export interface WizardField<T = unknown> {
   label: string;
   description: string;
   /** Render the picker for this field. Resolves to the chosen value, or `undefined` if the user cancelled. */
-  prompt: (rl: readline.Interface, current: T | undefined, signal: AbortSignal) => Promise<T | undefined>;
+  prompt: (
+    rl: readline.Interface,
+    current: T | undefined,
+    signal: AbortSignal,
+  ) => Promise<T | undefined>;
 }
 
 /** A category groups related fields so the user can configure or skip them as a unit. */
@@ -156,11 +148,17 @@ export const WIZARD_CATEGORIES: WizardCategory[] = [
         label: 'Coordinator mode',
         description: 'auto = qualifier picks; on = always ReAct; off = always Normal.',
         prompt: (rl, current, signal) =>
-          pickFromList<'on' | 'off' | 'auto'>(rl, 'Coordinator mode', current, [
-            { value: 'auto', label: 'Auto (qualifier picks per turn)' },
-            { value: 'on', label: 'On (always coordinator)' },
-            { value: 'off', label: 'Off (always normal)' },
-          ], signal),
+          pickFromList<'on' | 'off' | 'auto'>(
+            rl,
+            'Coordinator mode',
+            current,
+            [
+              { value: 'auto', label: 'Auto (qualifier picks per turn)' },
+              { value: 'on', label: 'On (always coordinator)' },
+              { value: 'off', label: 'Off (always normal)' },
+            ],
+            signal,
+          ),
       },
       {
         key: 'modelMode',
@@ -204,21 +202,33 @@ export const WIZARD_CATEGORIES: WizardCategory[] = [
         label: 'Tool mode',
         description: 'Whether write tools are blocked behind an enable prompt.',
         prompt: (rl, current, signal) =>
-          pickFromList<'read-only' | 'write'>(rl, 'Tool mode', current, [
-            { value: 'read-only', label: 'Read-only (least privilege)' },
-            { value: 'write', label: 'Write (allow all tools)' },
-          ], signal),
+          pickFromList<'read-only' | 'write'>(
+            rl,
+            'Tool mode',
+            current,
+            [
+              { value: 'read-only', label: 'Read-only (least privilege)' },
+              { value: 'write', label: 'Write (allow all tools)' },
+            ],
+            signal,
+          ),
       },
       {
         key: 'confirmMode',
         label: 'Confirm mode',
         description: 'How aggressively to prompt before running risky tools.',
         prompt: (rl, current, signal) =>
-          pickFromList<'off' | 'auto' | 'strict'>(rl, 'Confirm mode', current, [
-            { value: 'auto', label: 'Auto (high-risk only)' },
-            { value: 'strict', label: 'Strict (also medium-risk)' },
-            { value: 'off', label: 'Off (never prompt)' },
-          ], signal),
+          pickFromList<'off' | 'auto' | 'strict'>(
+            rl,
+            'Confirm mode',
+            current,
+            [
+              { value: 'auto', label: 'Auto (high-risk only)' },
+              { value: 'strict', label: 'Strict (also medium-risk)' },
+              { value: 'off', label: 'Off (never prompt)' },
+            ],
+            signal,
+          ),
       },
     ],
   },
@@ -236,7 +246,8 @@ export const WIZARD_CATEGORIES: WizardCategory[] = [
       {
         key: 'responseStyle',
         label: 'Response style',
-        description: 'Default, detailed, short, step-by-step, simple, high-level, critical, or creative.',
+        description:
+          'Default, detailed, short, step-by-step, simple, high-level, critical, or creative.',
         prompt: (rl, current, signal) =>
           pickFromList<ResponseStyle>(
             rl,
@@ -277,7 +288,14 @@ export const WIZARD_CATEGORIES: WizardCategory[] = [
         label: 'Max concurrent sub-agents',
         description: `Integer 1-${MAX_CONCURRENT_AGENTS_LIMIT}.`,
         prompt: (rl, current, signal) =>
-          pickInt(rl, 'Max concurrent sub-agents', current as number | undefined, 1, MAX_CONCURRENT_AGENTS_LIMIT, signal),
+          pickInt(
+            rl,
+            'Max concurrent sub-agents',
+            current as number | undefined,
+            1,
+            MAX_CONCURRENT_AGENTS_LIMIT,
+            signal,
+          ),
       },
       {
         key: 'maxSteps',
@@ -305,7 +323,14 @@ export const WIZARD_CATEGORIES: WizardCategory[] = [
         label: 'Context window override',
         description: '0 = auto-detect from model.',
         prompt: (rl, current, signal) =>
-          pickInt(rl, 'Token window (0 = auto)', current as number | undefined, 0, 2_000_000, signal),
+          pickInt(
+            rl,
+            'Token window (0 = auto)',
+            current as number | undefined,
+            0,
+            2_000_000,
+            signal,
+          ),
       },
     ],
   },
@@ -339,7 +364,12 @@ export const WIZARD_CATEGORIES: WizardCategory[] = [
         label: 'Scratch subject-change threshold',
         description: 'Jaccard threshold 0-1 below which scratch is cleared on subject change.',
         prompt: (rl, current, signal) =>
-          pickFloat01(rl, 'Scratch subject-change threshold', current as number | undefined, signal),
+          pickFloat01(
+            rl,
+            'Scratch subject-change threshold',
+            current as number | undefined,
+            signal,
+          ),
       },
     ],
   },
@@ -384,23 +414,39 @@ export async function runProfileWizard(
     namePromptLabel?: string;
   } = {},
 ): Promise<WizardResult> {
-  // 1) Name
+  // 1) Name — re-prompt on validation failure so an empty/too-long input
+  // surfaces a real error instead of silently aborting the wizard.
   let name = options.initialName?.trim() ?? '';
   if (!name) {
-    const signal = deps.createSignal();
-    try {
-      const val = await promptValue(
-        deps.rl,
-        { label: options.namePromptLabel ?? 'Profile name' },
-        signal,
-      );
-      if (val.cancelled) return { cancelled: true };
-      name = val.raw.trim();
-    } finally {
-      deps.clearSignal();
+    const maxAttempts = 3;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const signal = deps.createSignal();
+      let raw = '';
+      let cancelled = false;
+      try {
+        const val = await promptValue(
+          deps.rl,
+          { label: options.namePromptLabel ?? 'Profile name' },
+          signal,
+        );
+        if (val.cancelled) {
+          cancelled = true;
+        } else {
+          raw = val.raw.trim();
+        }
+      } finally {
+        deps.clearSignal();
+      }
+      if (cancelled) return { cancelled: true };
+      const err = validateProfileName(raw);
+      if (!err) {
+        name = raw;
+        break;
+      }
+      // eslint-disable-next-line no-console
+      console.error(`  ${err} Try again.`);
     }
-    const err = validateProfileName(name);
-    if (err) return { cancelled: true };
+    if (!name) return { cancelled: true };
   }
 
   const draft: ProfileSettings = { ...(options.initialSettings ?? {}) };
@@ -447,10 +493,7 @@ export async function runProfileWizard(
   try {
     const res = await selectFromMenu(
       deps.rl,
-      [
-        { label: `Save profile "${name}"` },
-        { label: 'Cancel without saving' },
-      ],
+      [{ label: `Save profile "${name}"` }, { label: 'Cancel without saving' }],
       { title: 'Ready to save?' },
       signal,
     );

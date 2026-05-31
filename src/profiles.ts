@@ -22,11 +22,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import {
-  PREFS_PATH,
-  PROFILES_PATH,
-  PROFILES_MIGRATED_MARKER,
-} from './paths.js';
+import { PREFS_PATH, PROFILES_PATH, PROFILES_MIGRATED_MARKER } from './paths.js';
 import { atomicWriteFileSync } from './fs-utils.js';
 import type { ResponseStyle } from './agent-prompt.js';
 
@@ -139,11 +135,19 @@ export function uniqueProfileId(name: string, existing: Record<string, Profile>)
     return `profile-${i}`;
   }
   if (!existing[base]) return base;
+  // Trim the base so `${base}-${i}` always fits within ID_MAX_LENGTH —
+  // otherwise a max-length collision could produce an id that violates
+  // `validateProfileId` (caught by `phillt/bernard#210` review).
   let i = 2;
-  let candidate = `${base}-${i}`;
+  const buildCandidate = (n: number): string => {
+    const suffix = `-${n}`;
+    const trimmed = base.slice(0, ID_MAX_LENGTH - suffix.length);
+    return `${trimmed}${suffix}`;
+  };
+  let candidate = buildCandidate(i);
   while (existing[candidate]) {
     i += 1;
-    candidate = `${base}-${i}`;
+    candidate = buildCandidate(i);
   }
   return candidate;
 }
@@ -153,13 +157,79 @@ function writeFile(file: ProfilesFile): void {
   atomicWriteFileSync(PROFILES_PATH, JSON.stringify(file, null, 2) + '\n');
 }
 
+/**
+ * Subset of legacy `preferences.json` keys we accept as profile settings.
+ * Anything outside this list (or anything whose type does not match) is
+ * dropped so a hand-edited or malformed legacy file cannot smuggle garbage
+ * into the new profile store.
+ */
+const LEGACY_STRING_KEYS = ['provider', 'model', 'theme'] as const;
+const LEGACY_NUMBER_KEYS = [
+  'maxTokens',
+  'shellTimeout',
+  'tokenWindow',
+  'maxSteps',
+  'autoCreateThreshold',
+  'scratchSubjectThreshold',
+  'maxConcurrentAgents',
+] as const;
+const LEGACY_BOOLEAN_KEYS = [
+  'autoUpdate',
+  'subagentPac',
+  'toolDetails',
+  'autoCreateSpecialists',
+  'promptRewriter',
+  'referenceLookup',
+  'conciseMode',
+] as const;
+
 function readLegacyPreferences(): ProfileSettings | null {
   try {
     if (!fs.existsSync(PREFS_PATH)) return null;
     const raw = fs.readFileSync(PREFS_PATH, 'utf-8');
-    const parsed = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
-    return parsed as ProfileSettings;
+    const src = parsed as Record<string, unknown>;
+    const out: ProfileSettings = {};
+    for (const k of LEGACY_STRING_KEYS) {
+      const v = src[k];
+      if (typeof v === 'string') (out as Record<string, unknown>)[k] = v;
+    }
+    for (const k of LEGACY_NUMBER_KEYS) {
+      const v = src[k];
+      if (typeof v === 'number' && Number.isFinite(v)) (out as Record<string, unknown>)[k] = v;
+    }
+    for (const k of LEGACY_BOOLEAN_KEYS) {
+      const v = src[k];
+      if (typeof v === 'boolean') (out as Record<string, unknown>)[k] = v;
+    }
+    if (
+      src.coordinatorMode === 'on' ||
+      src.coordinatorMode === 'off' ||
+      src.coordinatorMode === 'auto'
+    ) {
+      out.coordinatorMode = src.coordinatorMode;
+    } else if (typeof src.reactMode === 'boolean') {
+      out.coordinatorMode = src.reactMode ? 'on' : 'off';
+    }
+    if (
+      src.modelMode === 'off' ||
+      src.modelMode === 'optimize-tokens' ||
+      src.modelMode === 'balanced' ||
+      src.modelMode === 'optimize-performance'
+    ) {
+      out.modelMode = src.modelMode;
+    }
+    if (src.confirmMode === 'off' || src.confirmMode === 'auto' || src.confirmMode === 'strict') {
+      out.confirmMode = src.confirmMode;
+    }
+    if (src.toolMode === 'read-only' || src.toolMode === 'write') {
+      out.toolMode = src.toolMode;
+    }
+    if (typeof src.responseStyle === 'string') {
+      out.responseStyle = src.responseStyle as ResponseStyle;
+    }
+    return out;
   } catch {
     return null;
   }
@@ -215,9 +285,14 @@ export function loadProfiles(): LoadResult {
       if (Object.keys(profiles).length === 0) {
         profiles[DEFAULT_PROFILE_ID] = emptyDefaultProfile();
       }
+      // Prefer the stored activeProfileId; if it's stale, fall back to
+      // `default` when present, otherwise the alphabetically-first id (so
+      // ordering is deterministic across reloads).
       const activeProfileId = profiles[parsed.activeProfileId]
         ? parsed.activeProfileId
-        : Object.keys(profiles)[0];
+        : profiles[DEFAULT_PROFILE_ID]
+          ? DEFAULT_PROFILE_ID
+          : Object.keys(profiles).sort()[0];
       return {
         file: { activeProfileId, profiles },
         wasFreshlyCreated: false,
@@ -229,7 +304,17 @@ export function loadProfiles(): LoadResult {
   }
 
   // File missing or unparseable — create it (optionally migrating).
-  const legacy = readLegacyPreferences();
+  // If the migration marker exists from a prior run, skip the legacy ingest:
+  // the user (or a sync conflict) has since deleted profiles.json, and we
+  // don't want to silently resurrect months-old preferences. Fresh start.
+  const alreadyMigrated = (() => {
+    try {
+      return fs.existsSync(PROFILES_MIGRATED_MARKER);
+    } catch {
+      return false;
+    }
+  })();
+  const legacy = alreadyMigrated ? null : readLegacyPreferences();
   const migrated = legacy !== null;
   const file: ProfilesFile = {
     activeProfileId: DEFAULT_PROFILE_ID,
@@ -270,8 +355,17 @@ export function getActiveSettings(file: ProfilesFile): ProfileSettings {
  */
 export function saveActiveSettings(patch: ProfileSettings): ProfilesFile {
   const { file } = loadProfiles();
-  const active = file.profiles[file.activeProfileId];
-  if (!active) return file;
+  let active = file.profiles[file.activeProfileId];
+  if (!active) {
+    // Self-heal: activeProfileId points at a deleted/missing entry. Reseat it
+    // onto the default profile (creating one if necessary) so a manual edit
+    // to profiles.json doesn't silently swallow every subsequent save.
+    if (!file.profiles[DEFAULT_PROFILE_ID]) {
+      file.profiles[DEFAULT_PROFILE_ID] = emptyDefaultProfile();
+    }
+    file.activeProfileId = DEFAULT_PROFILE_ID;
+    active = file.profiles[DEFAULT_PROFILE_ID];
+  }
   const next: ProfileSettings = { ...active.settings };
   for (const [k, v] of Object.entries(patch)) {
     if (v === undefined) {
@@ -347,6 +441,10 @@ export function deleteProfile(id: string): void {
     throw new Error('Cannot delete the last remaining profile.');
   if (file.activeProfileId === id)
     throw new Error('Cannot delete the active profile. Switch to another profile first.');
+  // The default profile is part of Bernard's startup contract — never let it
+  // be removed (callers can rename its display label but not erase the id).
+  if (id === DEFAULT_PROFILE_ID)
+    throw new Error('Cannot delete the default profile. Rename it instead.');
   delete file.profiles[id];
   writeFile(file);
 }

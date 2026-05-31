@@ -100,7 +100,9 @@ User-tunable settings are organized into named **profiles** (#207). Bernard alwa
 
 `src/profiles.ts` is the disk-backed store (CRUD + atomic writes); `src/profiles-wizard.ts` defines `WIZARD_CATEGORIES` (Agent behavior / Tool safety / Output style / Limits / Advanced) and the `runProfileWizard()` orchestrator, both built on the existing `selectFromMenu` / `promptValue` primitives — no new UI components.
 
-Migration: the first read of `profiles.json` is lazy; if the file is absent but `~/.config/bernard/preferences.json` exists, its contents seed the `default` profile and a `.migrated-to-profiles` marker is dropped. The legacy `preferences.json` is left in place (no destructive delete) so users can roll back. Brand-new users (neither file present) get the wizard at REPL start to customize their `default` profile. Env vars retain their existing precedence over the active profile.
+Migration: the first read of `profiles.json` is lazy; if the file is absent but `~/.config/bernard/preferences.json` exists, its contents seed the `default` profile and a `.migrated-to-profiles` marker is dropped (subsequent loads consult the marker to avoid re-ingesting stale legacy settings if `profiles.json` is later removed). The legacy `preferences.json` is left in place (no destructive delete) so users can roll back. Brand-new users (neither file present) get the wizard at REPL start to customize their `default` profile.
+
+Resolution precedence in `loadConfig` matches the pre-profiles behavior: **CLI overrides > active profile (stored prefs) > environment variables > built-in defaults**. The profile is the preferences layer — storing a value in the active profile shadows the matching env var (e.g. `BERNARD_MODEL`, `BERNARD_MODEL_MODE`). To let an env var take effect again, reset the field from `/agent-options` or use a fresh profile that omits it.
 
 Profile switching mid-session calls `applyProfileToConfig(config)` (`src/config.ts`) which re-runs `loadConfig()` and copies only the profile-scoped fields back onto the live `config` reference, so subsystems holding that reference (agent loop, tool augment layer) see the new values without reinitialization. `setMaxConcurrentAgents()` is re-fired inside `loadConfig()` so the shared agent pool reflects the new cap.
 
@@ -133,7 +135,7 @@ Bernard follows the [XDG Base Directory Specification](https://specifications.fr
 
 | Category   | Default Location          | Contents                                                                                                                                                                      |
 | ---------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Config** | `~/.config/bernard/`      | `profiles.json`, `preferences.json` (legacy, see below), `keys.json`, `custom-providers.json`, `.env`, `mcp.json`                                                              |
+| **Config** | `~/.config/bernard/`      | `profiles.json`, `preferences.json` (legacy, see below), `keys.json`, `custom-providers.json`, `.env`, `mcp.json`                                                             |
 | **Data**   | `~/.local/share/bernard/` | `memory/*.md`, `rag/`, `routines/*.json`, `specialists/*.json`, `correction-candidates/*.json`, `tool-profiles/*.json`, `cron/jobs.json`, `cron/alerts/`, `cron/notes/*.json` |
 | **Cache**  | `~/.cache/bernard/`       | `models/` (embeddings), `update-check.json`                                                                                                                                   |
 | **State**  | `~/.local/state/bernard/` | `conversation-history.json`, `logs/*.jsonl`, `cron-daemon.pid`, `cron-daemon.log`                                                                                             |

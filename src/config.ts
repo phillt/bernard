@@ -3,11 +3,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { KEYS_PATH, ENV_PATH, LEGACY_DIR } from './paths.js';
 import { loadCustomProviders, validateBaseURL, type CustomProvider } from './custom-providers.js';
-import {
-  loadProfiles,
-  saveActiveSettings,
-  type ProfileSettings,
-} from './profiles.js';
+import { loadProfiles, saveActiveSettings, type ProfileSettings } from './profiles.js';
 import {
   setMaxConcurrentAgents,
   DEFAULT_MAX_CONCURRENT_AGENTS as POOL_DEFAULT_MAX,
