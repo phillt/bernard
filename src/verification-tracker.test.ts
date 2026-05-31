@@ -87,6 +87,37 @@ describe('VerificationTracker.attest', () => {
   });
 });
 
+describe('VerificationTracker attestation gating', () => {
+  it('skips non-done steps (cancelled / errored / pending / in_progress)', () => {
+    const t = new VerificationTracker();
+    // Even with rich tool calls that would otherwise pass, a non-done step
+    // has nothing to attest — its plan-state classification owns it.
+    t.recordCall('file_read_lines', { path: 'src/foo.ts' }, 'foo bar baz');
+    t.recordCall('shell', { command: 'grep readme README.md' }, '');
+    for (const status of ['pending', 'in_progress', 'cancelled', 'error'] as const) {
+      const s: Step = {
+        id: 1,
+        description: 'd',
+        verification: 'Read README.md and confirm foo export',
+        status,
+      };
+      const check = t.attest(s);
+      expect(check.status, `status=${status}`).toBe('skip');
+      expect(check.evidence, `status=${status}`).toContain(status);
+    }
+  });
+
+  it('rejects false-positive substring matches (cat ≠ certificate)', () => {
+    const t = new VerificationTracker();
+    // Verification token `cat` would have matched the substring `certificate`
+    // under the old `corpus.includes(t)` rule. With token-set membership it
+    // must not — and `confirm` doesn't appear at all.
+    t.recordCall('shell', { command: 'openssl x509 -in cert.pem' }, 'certificate valid');
+    const check = t.attest(step(99, 'cat the file and confirm output'));
+    expect(check.status).not.toBe('pass');
+  });
+});
+
 describe('VerificationTracker bookkeeping', () => {
   it('callCount reflects record + clear', () => {
     const t = new VerificationTracker();

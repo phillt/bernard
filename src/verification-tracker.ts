@@ -97,23 +97,38 @@ export class VerificationTracker {
    * Attest one plan step's `verification` string against the recorded calls.
    * Returns a Check with `pass`/`warn`/`fail` based on how many distinct
    * verification-tokens were observed across the tool-call corpus.
+   *
+   * Only `done` steps are attested: `verification` describes the proof of
+   * successful completion, so cancelled / errored / pending steps have no
+   * verification to exercise. Plan-state checks (`steps_terminal`,
+   * `no_error_steps`, `signoffs_present`) cover those cases independently.
+   *
+   * Matching uses tokenized set-membership on both the verification text and
+   * the recorded tool-call corpus — substring matching would otherwise let
+   * `cat` satisfy `certificate`, `file` satisfy `profile`, etc.
    */
   attest(step: Step): Check {
-    const tokens = tokenize(step.verification);
     const id = `attest_step_${step.id}`;
     const label = `step ${step.id} verification exercised`;
+    if (step.status !== 'done') {
+      return { id, label, status: 'skip', evidence: `step is ${step.status}, not done` };
+    }
+    const tokens = tokenize(step.verification);
     if (tokens.size === 0) {
       return { id, label, status: 'skip', evidence: 'no informative tokens' };
     }
-    const corpus = this.calls
-      .map((c) => `${c.toolName} ${c.argsText} ${c.resultText}`.toLowerCase())
-      .join(' ');
-    if (corpus.length === 0) {
+    if (this.calls.length === 0) {
       return { id, label, status: 'fail', evidence: 'no tool calls this turn' };
+    }
+    const corpusTokens = new Set<string>();
+    for (const c of this.calls) {
+      for (const tok of tokenize(`${c.toolName} ${c.argsText} ${c.resultText}`)) {
+        corpusTokens.add(tok);
+      }
     }
     const matched = new Set<string>();
     for (const t of tokens) {
-      if (corpus.includes(t)) matched.add(t);
+      if (corpusTokens.has(t)) matched.add(t);
     }
     if (matched.size >= MIN_MATCHES_FOR_PASS) {
       return {
@@ -129,7 +144,12 @@ export class VerificationTracker {
     return { id, label, status: 'fail', evidence: `0/${tokens.size} tokens matched` };
   }
 
-  /** Attest every non-skipped step on a plan. Returns one Check per step. */
+  /**
+   * Attest every step on a plan. Returns one Check per step. Non-`done` steps
+   * yield a `skip` Check via {@link attest} so the consumer always gets a
+   * 1:1 mapping but worst-of aggregation isn't dragged down by steps the
+   * plan-state checks already classify.
+   */
   attestAll(steps: readonly Step[]): Check[] {
     return steps.map((s) => this.attest(s));
   }
@@ -149,7 +169,12 @@ export function tokenize(text: string): Set<string> {
   const out = new Set<string>();
   if (!text) return out;
   const lowered = text.toLowerCase();
-  for (const raw of lowered.split(/[^a-z0-9_]+/)) {
+  // Split on every non-alphanumeric character, INCLUDING underscore. Tool
+  // names like `memory_write` / `file_read_lines` carry their semantics in the
+  // sub-tokens, and the verification text rarely contains underscores — so
+  // splitting on `_` lets corpus tokens align with plain-English verification
+  // tokens (`memory`, `read`, `file`) without needing substring fallback.
+  for (const raw of lowered.split(/[^a-z0-9]+/)) {
     if (raw.length < MIN_TOKEN_LEN) continue;
     if (STOPWORDS.has(raw)) continue;
     out.add(raw);

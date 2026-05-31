@@ -67,9 +67,9 @@ export interface ToolMeta {
    * Optional post-write schema/state check (issue #145). Runs after the tool
    * returns `status: 'ok'` and contributes a structured `Check` to the turn's
    * rubric. Used for "did we mutate external state, and did we confirm it
-   * post-write?" — e.g. `file_edit_lines` re-stats the path, `mcp_config`
-   * re-reads the config file. Return `null` to skip (not applicable for this
-   * call). Synchronous; should be fast and side-effect-free.
+   * post-write?" — e.g. `file_edit_lines` re-stats the path and compares its
+   * hash to the declared `new_hash`. Return `null` to skip (not applicable
+   * for this call). Synchronous; should be fast and side-effect-free.
    */
   verifyOutput?: (args: unknown, result: unknown) => VerifyOutcome | null;
 }

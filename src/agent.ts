@@ -261,12 +261,15 @@ export class Agent {
     this.lastUserInput = userInput;
     this.lastResolvedReferences = resolvedReferences ?? [];
     this.ctx.verification.clear();
-    // Reset per-turn rubric inputs (#145): post-write hooks and tool-attestation
-    // tracker. Both are shared by reference into sub-agent / tool-wrapper
-    // contexts via `runDefinition`, so clearing here also clears for nested
-    // dispatches at the start of the turn.
+    // Reset per-turn rubric inputs (#145): post-write hooks, tool-attestation
+    // tracker, and the cached snapshot. Both sinks are shared by reference
+    // into sub-agent / tool-wrapper contexts via `runDefinition`, so clearing
+    // here also clears for nested dispatches. `lastRubric` is reset here too
+    // — if the turn throws before composition, callers should see `null`
+    // rather than the previous turn's verdict.
     this.ctx.postWriteChecks.length = 0;
     this.ctx.verificationTracker.clear();
+    this.lastRubric = null;
 
     // Resolve every cross-cutting heuristic for this turn in one place.
     // Sub-systems read the decision off `this.ctx.policyDecision` (e.g.
