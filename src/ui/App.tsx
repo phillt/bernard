@@ -2,6 +2,29 @@ import { useEffect, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import type { Agent } from '../agent.js';
 import type { BernardConfig } from '../config.js';
+import {
+  savePreferences,
+  getDefaultModel,
+  getAvailableProviders,
+  PROVIDER_MODELS,
+  saveProviderKey,
+} from '../config.js';
+import {
+  loadCustomProviders,
+  saveCustomProvider,
+  rememberCustomModel,
+  validateProviderName,
+  validateBaseURL,
+  SUPPORTED_SDKS,
+} from '../custom-providers.js';
+import type { SupportedSdk } from '../providers/types.js';
+import {
+  THEMES,
+  getThemeKeys,
+  getActiveThemeKey,
+  setTheme,
+  getThemeColors,
+} from '../theme.js';
 import type { HistoryStore } from '../history.js';
 import type { ProvenanceHistoryStore } from '../provenance-history.js';
 import type { MemoryStore } from '../memory.js';
@@ -36,7 +59,6 @@ import { Toast, type ToastVariant } from './Toast.js';
 import { persistAgentState } from './save.js';
 import { MessageStore } from './message-store.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
-import { getThemeColors } from '../theme.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -305,6 +327,151 @@ export function App({
       return;
     }
 
+    if (text === '/theme') {
+      const allKeys = getThemeKeys();
+      const currentKey = getActiveThemeKey();
+      const regularKeys = allKeys.filter((k) => k !== 'high-contrast' && k !== 'colorblind');
+      const a11yKeys = allKeys.filter((k) => k === 'high-contrast' || k === 'colorblind');
+      const entries: MenuEntry[] = [
+        ...regularKeys.map((k) => ({
+          label: THEMES[k].name,
+          active: k === currentKey,
+          value: k,
+        })),
+        { type: 'section' as const, title: 'Accessibility:' },
+        ...a11yKeys.map((k) => ({
+          label: THEMES[k].name,
+          active: k === currentKey,
+          value: k,
+        })),
+      ];
+      const result = await requestMenu(entries, {
+        title: `Themes — current: ${THEMES[currentKey].name}`,
+      });
+      if (!result.cancelled) {
+        const chosen = result.item.value as string;
+        setTheme(chosen);
+        config.theme = chosen;
+        savePreferences({
+          provider: config.provider,
+          model: config.model,
+          maxTokens: config.maxTokens,
+          shellTimeout: config.shellTimeout,
+          tokenWindow: config.tokenWindow,
+          theme: chosen,
+        });
+        flashToast(`Switched to ${THEMES[chosen].name} theme.`, 'success');
+      }
+      return;
+    }
+
+    if (text === '/provider') {
+      const available = getAvailableProviders(config);
+      const customProviders = config.customProviders ?? {};
+      const builtinAvailable = available.filter((p) => !customProviders[p]);
+      const customAvailable = available.filter((p) => customProviders[p]);
+      const entries: MenuEntry[] = [];
+      for (const p of builtinAvailable) entries.push({ label: p, value: p });
+      if (customAvailable.length > 0) {
+        entries.push({ type: 'section', title: 'Custom:' });
+        for (const p of customAvailable) {
+          const entry = customProviders[p];
+          entries.push({
+            label: p,
+            annotation: `(${entry.sdk} → ${entry.baseURL})`,
+            value: p,
+          });
+        }
+      }
+      entries.push({ type: 'section', title: '' });
+      entries.push({ label: '+ Add custom provider…', value: '__add__' });
+      const result = await requestMenu(entries, {
+        title: `Providers — current: ${config.provider} (${config.model})`,
+      });
+      if (result.cancelled) return;
+      const value = result.item.value as string;
+      if (value === '__add__') {
+        const added = await runAddProviderInk(requestMenu, requestTextInput, flashToast);
+        if (added) {
+          config.customProviders = { ...customProviders, [added.entry.name]: added.entry };
+          config.apiKeys = { ...(config.apiKeys ?? {}), [added.entry.name]: added.apiKey };
+          config.provider = added.entry.name;
+          config.model = added.entry.defaultModel;
+          config.providerBaseUrl = undefined;
+          savePreferences({
+            provider: config.provider,
+            model: config.model,
+            maxTokens: config.maxTokens,
+            shellTimeout: config.shellTimeout,
+            tokenWindow: config.tokenWindow,
+            theme: config.theme,
+          });
+          flashToast(
+            `Added and switched to ${added.entry.name} (${added.entry.defaultModel})`,
+            'success',
+          );
+        }
+      } else {
+        config.provider = value;
+        config.model = getDefaultModel(config.provider, customProviders);
+        config.providerBaseUrl = undefined;
+        savePreferences({
+          provider: config.provider,
+          model: config.model,
+          maxTokens: config.maxTokens,
+          shellTimeout: config.shellTimeout,
+          tokenWindow: config.tokenWindow,
+          theme: config.theme,
+        });
+        flashToast(`Switched to ${config.provider} (${config.model})`, 'success');
+      }
+      return;
+    }
+
+    if (text === '/model') {
+      const customProviders = config.customProviders ?? {};
+      const customEntry = customProviders[config.provider];
+      const models = customEntry ? customEntry.models : PROVIDER_MODELS[config.provider];
+      if (!models || models.length === 0) {
+        flashToast(`No models listed for provider "${config.provider}".`, 'error');
+        return;
+      }
+      const entries: MenuEntry[] = models.map((m) => ({ label: m, value: m }));
+      if (customEntry) {
+        entries.push({ type: 'section', title: '' });
+        entries.push({ label: '+ Type a new model name…', value: '__free__' });
+      }
+      const result = await requestMenu(entries, {
+        title: `Models — current: ${config.provider} / ${config.model}`,
+      });
+      if (result.cancelled) return;
+      const value = result.item.value as string;
+      let chosenModel: string | null = null;
+      if (value === '__free__' && customEntry) {
+        const valueResult = await requestTextInput({ label: 'Model name' });
+        if (!valueResult.cancelled && valueResult.raw) {
+          rememberCustomModel(config.provider, valueResult.raw);
+          config.customProviders = loadCustomProviders();
+          chosenModel = valueResult.raw;
+        }
+      } else {
+        chosenModel = value;
+      }
+      if (chosenModel) {
+        config.model = chosenModel;
+        savePreferences({
+          provider: config.provider,
+          model: config.model,
+          maxTokens: config.maxTokens,
+          shellTimeout: config.shellTimeout,
+          tokenWindow: config.tokenWindow,
+          theme: config.theme,
+        });
+        flashToast(`Switched to ${config.model}`, 'success');
+      }
+      return;
+    }
+
     // ── Agent turn ──
     // Drop a second Enter that arrives before the busy re-render has propagated
     // to <Prompt disabled={busy}>. Without this, two turns can run concurrently.
@@ -498,6 +665,76 @@ export function App({
       )}
     </Box>
   );
+}
+
+/**
+ * 5-step add-custom-provider sequence: pick SDK → name → URL → model → key,
+ * then `saveCustomProvider` + `saveProviderKey`. Cancellation at any step
+ * (Esc) returns null without persisting.
+ *
+ * Phase D replacement for `runAddProviderWizard` in the deleted readline
+ * REPL. Same validation rules (`validateProviderName`, `validateBaseURL`,
+ * non-empty model and key) so the on-disk shape is identical.
+ */
+async function runAddProviderInk(
+  requestMenu: (entries: MenuEntry[], options?: MenuOptions) =>
+    Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }>,
+  requestTextInput: (options: ValuePromptOptions) => Promise<ValueResult>,
+  flashToast: (message: string, variant?: ToastVariant) => void,
+): Promise<{ entry: ReturnType<typeof saveCustomProvider>; apiKey: string } | null> {
+  const sdkEntries: MenuEntry[] = SUPPORTED_SDKS.map((s) => ({ label: s, value: s }));
+  const sdkResult = await requestMenu(sdkEntries, { title: 'Which SDK to use?' });
+  if (sdkResult.cancelled) return null;
+  const sdk = sdkResult.item.value as SupportedSdk;
+
+  const nameResult = await requestTextInput({
+    label: 'Provider name (lowercase, e.g. "ollama")',
+  });
+  if (nameResult.cancelled) return null;
+  const name = nameResult.raw;
+  const nameErr = validateProviderName(name);
+  if (nameErr) {
+    flashToast(nameErr, 'error');
+    return null;
+  }
+
+  const urlResult = await requestTextInput({
+    label: 'Base URL (e.g. http://localhost:11434/v1)',
+  });
+  if (urlResult.cancelled) return null;
+  const baseURL = urlResult.raw;
+  const urlErr = validateBaseURL(baseURL);
+  if (urlErr) {
+    flashToast(urlErr, 'error');
+    return null;
+  }
+
+  const modelResult = await requestTextInput({ label: 'Default model name' });
+  if (modelResult.cancelled) return null;
+  const defaultModel = modelResult.raw;
+  if (!defaultModel) {
+    flashToast('Default model cannot be empty.', 'error');
+    return null;
+  }
+
+  const keyResult = await requestTextInput({
+    label: 'API key (any non-empty token; some local servers ignore the value)',
+  });
+  if (keyResult.cancelled) return null;
+  const apiKey = keyResult.raw;
+  if (!apiKey) {
+    flashToast('API key cannot be empty.', 'error');
+    return null;
+  }
+
+  try {
+    const entry = saveCustomProvider({ name, sdk, baseURL, defaultModel });
+    saveProviderKey(name, apiKey);
+    return { entry, apiKey };
+  } catch (err: unknown) {
+    flashToast(err instanceof Error ? err.message : String(err), 'error');
+    return null;
+  }
 }
 
 /**
