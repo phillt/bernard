@@ -73,6 +73,24 @@ describe('ProvenanceHistoryStore', () => {
       expect(result[1].turnIndex).toBe(1);
     });
 
+    it('filters entries missing userInput or timestamp', () => {
+      // The full-screen viewer dereferences `userInput.replace(...)` and
+      // `formatRelativeTime(timestamp)` unconditionally. A persisted record
+      // missing either field would crash the REPL on Shift+Tab.
+      const records = [
+        makeRecord(0),
+        { turnIndex: 1, sources: [], citedIds: [], timestamp: 0 }, // no userInput
+        { turnIndex: 2, sources: [], citedIds: [], userInput: 'q' }, // no timestamp
+        { turnIndex: 3, sources: [], citedIds: [], userInput: 0, timestamp: 0 }, // wrong type
+        makeRecord(4),
+      ];
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(records));
+      const result = store.load();
+      expect(result).toHaveLength(2);
+      expect(result[0].turnIndex).toBe(0);
+      expect(result[1].turnIndex).toBe(4);
+    });
+
     it('round-trips well-formed records', () => {
       const records = [makeRecord(0), makeRecord(1)];
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(records));

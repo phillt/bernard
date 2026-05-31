@@ -14,14 +14,17 @@ export class ProvenanceHistoryStore {
       const data = fs.readFileSync(PROVENANCE_HISTORY_FILE, 'utf-8');
       const parsed = JSON.parse(data);
       if (!Array.isArray(parsed)) return [];
-      return parsed.filter(
-        (entry: unknown): entry is TurnProvenance =>
-          typeof entry === 'object' &&
-          entry !== null &&
-          typeof (entry as TurnProvenance).turnIndex === 'number' &&
-          Array.isArray((entry as TurnProvenance).sources) &&
-          Array.isArray((entry as TurnProvenance).citedIds),
-      );
+      return parsed.filter((entry: unknown): entry is TurnProvenance => {
+        if (typeof entry !== 'object' || entry === null) return false;
+        const e = entry as Partial<TurnProvenance>;
+        return (
+          typeof e.turnIndex === 'number' &&
+          typeof e.userInput === 'string' &&
+          typeof e.timestamp === 'number' &&
+          Array.isArray(e.sources) &&
+          Array.isArray(e.citedIds)
+        );
+      });
     } catch {
       return [];
     }

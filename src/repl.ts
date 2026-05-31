@@ -5,8 +5,6 @@ import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import {
   RAG_DIR,
   MCP_CONFIG_PATH,
@@ -148,11 +146,14 @@ import {
 import {
   selectFromMenu,
   promptValue,
+  MENU_REGION_ID,
   type MenuEntry,
   type MenuItem,
   type SelectResult,
   type ValueResult,
 } from './menu.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Launch the interactive REPL, wiring up readline, MCP servers, memory stores, and the agent loop.
@@ -834,10 +835,13 @@ export async function startRepl(
    * thread until Esc is pressed. Issue #211.
    */
   function enterFullScreenSources(): void {
-    // Drop any pinned regions (status overlay, plan strip) so they don't
-    // bleed into the full-screen paint.
+    // Drop any pinned regions (status overlay, plan strip, any menu /
+    // prompt-header left by an aborted selectFromMenu) so they don't
+    // bleed back in when the next paint re-renders pinned regions.
     clearPinnedRegion('viewer');
     clearPinnedRegion('plan');
+    clearPinnedRegion(MENU_REGION_ID);
+    clearPinnedRegion('prompt-header');
 
     const t = getTheme();
     const turns = agent.getTurnProvenance();
@@ -3087,6 +3091,9 @@ Remember: the systemPrompt should read like a persona definition — who this sp
 
         processing = true;
         interrupted = false;
+        // A new turn invalidates any pinned/full-screen viewer from the
+        // previous one. Same as the main text-input path below.
+        closeViewer();
         try {
           initSpinner();
           await agent.processInput(userText, [attachment]);
@@ -3136,6 +3143,9 @@ Remember: the systemPrompt should read like a persona definition — who this sp
 
           processing = true;
           interrupted = false;
+          // A new turn invalidates any pinned/full-screen viewer from the
+          // previous one. Same as the main text-input path below.
+          closeViewer();
           try {
             initSpinner();
             await agent.processInput(message);
