@@ -67,6 +67,20 @@ import {
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible } from '../output.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
+import {
+  loadImage,
+  tryLoadImage,
+  extractImagePaths,
+  isVisionCapableModel,
+  type ImageAttachment,
+} from '../image.js';
+import { runDefinition } from '../framework/agents/run.js';
+import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
+import {
+  acquireSlot,
+  releaseSlot,
+  getMaxConcurrentAgents,
+} from '../tools/agent-pool.js';
 import type {
   AskUserQuestion,
   AskUserBatchResult,
@@ -954,7 +968,103 @@ export function App({
       return;
     }
 
-    await runAgentTurn(text);
+    if (text === '/task' || text.startsWith('/task ')) {
+      const description = text.slice('/task'.length).trim();
+      if (!description) {
+        flashToast('Usage: /task <description>', 'error');
+        return;
+      }
+      await runTaskInk(description);
+      return;
+    }
+
+    if (text === '/image' || text.startsWith('/image ')) {
+      const argsText = text.slice('/image'.length).trim();
+      if (!argsText) {
+        flashToast('Usage: /image <path> [prompt]', 'error');
+        return;
+      }
+      let imagePath: string;
+      let userText: string;
+      const quoteMatch = argsText.match(/^(["'])(.+?)\1(?:\s+(.*))?$/);
+      if (quoteMatch) {
+        imagePath = quoteMatch[2];
+        userText = quoteMatch[3]?.trim() || 'Describe this image.';
+      } else {
+        const spaceIdx = argsText.indexOf(' ');
+        imagePath = spaceIdx === -1 ? argsText : argsText.slice(0, spaceIdx);
+        userText =
+          spaceIdx === -1
+            ? 'Describe this image.'
+            : argsText.slice(spaceIdx + 1).trim() || 'Describe this image.';
+      }
+      if (!isVisionCapableModel(config.provider, config.model)) {
+        flashToast(
+          `Model "${config.model}" does not support image input. Switch with /model.`,
+          'error',
+        );
+        return;
+      }
+      let attachment: ImageAttachment;
+      try {
+        attachment = loadImage(imagePath);
+      } catch (err) {
+        flashToast(err instanceof Error ? err.message : String(err), 'error');
+        return;
+      }
+      flashToast(`Attaching ${attachment.path} → ${config.provider}/${config.model}`);
+      await runAgentTurn(userText, [attachment]);
+      return;
+    }
+
+    // Dynamic routine invocation: /{routine-id} [args...]
+    if (text.startsWith('/')) {
+      const parts = text.slice(1).split(/\s+/);
+      const routineId = parts[0];
+      const routine = stores.routines.get(routineId);
+      if (routine) {
+        const args = parts.slice(1).join(' ');
+        if (routineId.startsWith('task-')) {
+          await runTaskInk(routine.content, args || undefined);
+          return;
+        }
+        let message = `Execute routine "${routine.name}" (/${routine.id}):\n${routine.description}\n\n## Routine Steps\n${routine.content}`;
+        if (args) {
+          message += `\n\n## Additional Context\n${args}`;
+        }
+        message +=
+          "\n\nFollow this routine intelligently — adapt to the current situation, skip steps that don't apply, and explain any deviations.";
+        await runAgentTurn(message);
+        return;
+      }
+      // Unknown slash command — fall through to agent turn (legacy behavior).
+    }
+
+    // Inline-image detection on plain text turns.
+    let inlineImages: ImageAttachment[] | undefined;
+    const candidatePaths = extractImagePaths(text);
+    if (candidatePaths.length > 0) {
+      if (isVisionCapableModel(config.provider, config.model)) {
+        const loaded: ImageAttachment[] = [];
+        for (const p of candidatePaths) {
+          const img = tryLoadImage(p);
+          if (img) loaded.push(img);
+        }
+        if (loaded.length > 0) {
+          for (const img of loaded) {
+            flashToast(`Attaching ${img.path}`);
+          }
+          inlineImages = loaded;
+        }
+      } else {
+        flashToast(
+          `Image(s) detected but model "${config.model}" does not support vision.`,
+          'warning',
+        );
+      }
+    }
+
+    await runAgentTurn(text, inlineImages);
   };
 
   type BooleanPrefKey =
@@ -1349,7 +1459,7 @@ export function App({
     setToolDetailsVisible(cfg.toolDetails);
   }
 
-  async function runAgentTurn(input: string): Promise<void> {
+  async function runAgentTurn(input: string, images?: ImageAttachment[]): Promise<void> {
     // Drop a second Enter that arrives before the busy re-render has propagated
     // to <Prompt disabled={busy}>. Without this, two turns can run concurrently.
     if (submittingRef.current) return;
@@ -1359,7 +1469,7 @@ export function App({
     messageStore.reset();
     setBusy(true);
     try {
-      await agent.processInput(input);
+      await agent.processInput(input, images);
     } catch (err) {
       console.error('agent error:', err);
     } finally {
@@ -1367,6 +1477,47 @@ export function App({
       submittingRef.current = false;
       setBusy(false);
       setHistoryVersion((v) => v + 1);
+    }
+  }
+
+  async function runTaskInk(description: string, context?: string): Promise<void> {
+    const slot = acquireSlot();
+    if (!slot) {
+      flashToast(`Maximum concurrent agents (${getMaxConcurrentAgents()}) reached.`, 'error');
+      return;
+    }
+    setBusy(true);
+    const ctx = agent.getContext();
+    ctx.provenance.clear();
+    try {
+      const input: TaskInput = context
+        ? { task: description, context, slotId: slot.id }
+        : { task: description, slotId: slot.id };
+      const { result, formatted } = await runDefinition(ctx, taskDefinition, input);
+      if (result.finishReason === 'length') {
+        const recommended = Math.ceil((config.maxTokens * 2) / 1024) * 1024;
+        flashToast(
+          `Task response truncated (hit ${config.maxTokens} tokens). Consider /options max-tokens ${recommended}`,
+          'warning',
+        );
+      }
+      const outputStr =
+        typeof formatted.output === 'string'
+          ? formatted.output
+          : JSON.stringify(formatted.output, null, 2);
+      const lines: PendingInfo['lines'] = outputStr.split('\n').map((l) => ({ text: l }));
+      if (formatted.details) {
+        lines.push({ text: '' });
+        for (const l of String(formatted.details).split('\n')) {
+          lines.push({ text: l, dim: true });
+        }
+      }
+      showInfo(`Task: ${description.slice(0, 60)}${description.length > 60 ? '…' : ''}`, lines);
+    } catch (err) {
+      flashToast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      releaseSlot();
+      setBusy(false);
     }
   }
 
