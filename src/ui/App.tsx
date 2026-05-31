@@ -47,6 +47,18 @@ import { MCP_CONFIG_PATH } from '../paths.js';
 import { interactiveUpdate } from '../update.js';
 import { getBuiltinSpecialistIds } from '../specialists.js';
 import { buildCandidateContextBlock } from '../candidate-bootstrap.js';
+import {
+  listProfiles,
+  createProfile,
+  switchActiveProfile,
+  renameProfile,
+  deleteProfile,
+  validateProfileName,
+  type ProfileSettings,
+} from '../profiles.js';
+import { applyProfileToConfig } from '../config.js';
+import { setToolDetailsVisible } from '../output.js';
+import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
 import type {
   AskUserQuestion,
   AskUserBatchResult,
@@ -668,6 +680,120 @@ export function App({
       return;
     }
 
+    if (text === '/profiles') {
+      const profiles = listProfiles();
+      const entries: MenuEntry[] = profiles.map((p) => ({
+        label: p.name,
+        annotation: p.id !== p.name ? `(${p.id})` : undefined,
+        active: p.active,
+      }));
+      entries.push({ label: '+ Create new profile…', value: '__new__' });
+      const result = await requestMenu(entries, {
+        title: 'Profiles — select one to switch, or create a new one',
+      });
+      if (result.cancelled) return;
+      if (result.index === profiles.length) {
+        const wiz = await runProfileWizardInk(requestMenu, requestTextInput, flashToast);
+        if (wiz.cancelled) {
+          flashToast('Profile creation cancelled.');
+          return;
+        }
+        const priorActive = listProfiles().find((p) => p.active)?.id;
+        let createdId: string | undefined;
+        try {
+          const profile = createProfile(wiz.name, wiz.settings);
+          createdId = profile.id;
+          switchActiveProfile(profile.id);
+          applyProfileToConfig(config);
+          reapplyRuntimeSettings(config);
+          flashToast(`Created profile "${profile.name}" and switched to it.`, 'success');
+        } catch (err) {
+          if (createdId && priorActive) {
+            try {
+              switchActiveProfile(priorActive);
+              applyProfileToConfig(config);
+              reapplyRuntimeSettings(config);
+            } catch {
+              /* best-effort rollback */
+            }
+          }
+          flashToast(`Failed to create profile: ${(err as Error).message}`, 'error');
+        }
+        return;
+      }
+      const target = profiles[result.index];
+      if (target.active) {
+        flashToast(`Already on profile "${target.name}".`);
+        return;
+      }
+      const priorActive = profiles.find((p) => p.active)?.id;
+      try {
+        switchActiveProfile(target.id);
+        applyProfileToConfig(config);
+        reapplyRuntimeSettings(config);
+        flashToast(`Switched to profile "${target.name}".`, 'success');
+      } catch (err) {
+        if (priorActive) {
+          try {
+            switchActiveProfile(priorActive);
+            applyProfileToConfig(config);
+            reapplyRuntimeSettings(config);
+          } catch {
+            /* best-effort rollback */
+          }
+        }
+        flashToast(`Failed to switch profile: ${(err as Error).message}`, 'error');
+      }
+      return;
+    }
+
+    if (text === '/manage-profiles') {
+      const profiles = listProfiles();
+      if (profiles.length === 0) {
+        flashToast('No profiles configured.');
+        return;
+      }
+      const entries: MenuEntry[] = profiles.map((p) => ({
+        label: p.name,
+        annotation: p.active ? '(active)' : undefined,
+      }));
+      const pick = await requestMenu(entries, { title: 'Manage profiles — select one' });
+      if (pick.cancelled) return;
+      const target = profiles[pick.index];
+      const action = await requestMenu(
+        [{ label: 'Rename' }, { label: 'Delete' }, { label: 'Back' }],
+        { title: `Profile "${target.name}" (${target.id})` },
+      );
+      if (action.cancelled || action.index === 2) return;
+      if (action.index === 0) {
+        const val = await requestTextInput({ label: `New name for "${target.name}"` });
+        if (val.cancelled || !val.raw.trim()) return;
+        try {
+          const updated = renameProfile(target.id, val.raw.trim());
+          flashToast(`Renamed to "${updated.name}".`, 'success');
+        } catch (err) {
+          flashToast(`Failed to rename: ${(err as Error).message}`, 'error');
+        }
+        return;
+      }
+      // Delete path.
+      const confirm = await requestMenu(
+        [
+          { label: `Delete "${target.name}"`, description: 'This cannot be undone.' },
+          { label: 'Cancel' },
+        ],
+        { title: 'Confirm deletion' },
+      );
+      if (confirm.cancelled || confirm.index === 1) return;
+      try {
+        deleteProfile(target.id);
+        flashToast(`Deleted profile "${target.name}".`, 'success');
+      } catch (err) {
+        flashToast(`Cannot delete: ${(err as Error).message}`, 'error');
+      }
+      return;
+    }
+
     if (text === '/options') {
       const optEntries = Object.entries(OPTIONS_REGISTRY);
       const menuEntries: MenuEntry[] = [
@@ -817,6 +943,15 @@ export function App({
 
     await runAgentTurn(text);
   };
+
+  function reapplyRuntimeSettings(cfg: BernardConfig): void {
+    try {
+      setTheme(cfg.theme);
+    } catch {
+      /* unknown theme — keep current */
+    }
+    setToolDetailsVisible(cfg.toolDetails);
+  }
 
   async function runAgentTurn(input: string): Promise<void> {
     // Drop a second Enter that arrives before the busy re-render has propagated
@@ -1021,6 +1156,126 @@ export function App({
       )}
     </Box>
   );
+}
+
+type RequestMenuFn = (
+  entries: MenuEntry[],
+  options?: MenuOptions,
+) => Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }>;
+type RequestTextInputFn = (options: ValuePromptOptions) => Promise<ValueResult>;
+type FlashToastFn = (message: string, variant?: ToastVariant) => void;
+
+async function pickWizardField(
+  field: WizardFieldData,
+  current: unknown,
+  requestMenu: RequestMenuFn,
+  requestTextInput: RequestTextInputFn,
+): Promise<unknown> {
+  const kind = field.field;
+  if (kind.kind === 'list') {
+    const entries: MenuEntry[] = kind.options.map((o) => ({
+      label: o.label,
+      description: o.description,
+      active: current === o.value,
+      value: o.value,
+    }));
+    const res = await requestMenu(entries, { title: field.label });
+    if (res.cancelled) return undefined;
+    return res.item.value;
+  }
+  if (kind.kind === 'boolean') {
+    const entries: MenuEntry[] = [
+      { label: 'On', active: current === true, value: true },
+      { label: 'Off', active: current === false, value: false },
+    ];
+    const res = await requestMenu(entries, { title: field.label });
+    if (res.cancelled) return undefined;
+    return res.item.value;
+  }
+  const label =
+    current !== undefined && current !== null
+      ? `${field.label} [current: ${String(current)}]`
+      : field.label;
+  const val = await requestTextInput({ label });
+  if (val.cancelled) return undefined;
+  const trimmed = val.raw.trim();
+  if (!trimmed) return undefined;
+  if (kind.kind === 'int') {
+    const parsed = Number.parseInt(trimmed, 10);
+    if (!Number.isFinite(parsed) || String(parsed) !== trimmed) return undefined;
+    if (parsed < kind.min || parsed > kind.max) return undefined;
+    return parsed;
+  }
+  // float01
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) return undefined;
+  return parsed;
+}
+
+/**
+ * Ink-native re-implementation of `runProfileWizard` from the deleted
+ * `src/profiles-wizard.ts`. Same three-phase flow: name → per-category
+ * Configure/Use-defaults/Skip → final save confirm. Returns
+ * `{cancelled:true}` if the user aborts the name prompt or save confirm.
+ */
+async function runProfileWizardInk(
+  requestMenu: RequestMenuFn,
+  requestTextInput: RequestTextInputFn,
+  _flashToast: FlashToastFn,
+): Promise<{ cancelled: true } | { cancelled: false; name: string; settings: ProfileSettings }> {
+  let name = '';
+  for (let attempt = 0; attempt < 3 && !name; attempt += 1) {
+    const val = await requestTextInput({ label: 'Profile name' });
+    if (val.cancelled) return { cancelled: true };
+    const raw = val.raw.trim();
+    const err = validateProfileName(raw);
+    if (!err) {
+      name = raw;
+      break;
+    }
+    _flashToast(err, 'error');
+  }
+  if (!name) return { cancelled: true };
+
+  const draft: ProfileSettings = {};
+
+  for (const category of WIZARD_CATEGORIES_DATA) {
+    const res = await requestMenu(
+      [
+        { label: 'Configure', description: 'Step through each setting in this category.' },
+        { label: 'Use defaults', description: 'Clear any draft values so Bernard defaults win.' },
+        { label: 'Skip', description: 'Leave whatever is already in the draft (or unset).' },
+      ],
+      { title: `${category.title} — ${category.description}` },
+    );
+    const choice = res.cancelled
+      ? 'skip'
+      : (['configure', 'use-defaults', 'skip'] as const)[res.index];
+    if (choice === 'configure') {
+      for (const field of category.fields) {
+        const chosen = await pickWizardField(
+          field,
+          draft[field.key],
+          requestMenu,
+          requestTextInput,
+        );
+        if (chosen !== undefined) {
+          (draft as Record<string, unknown>)[field.key as string] = chosen;
+        }
+      }
+    } else if (choice === 'use-defaults') {
+      for (const field of category.fields) {
+        delete (draft as Record<string, unknown>)[field.key as string];
+      }
+    }
+  }
+
+  const save = await requestMenu(
+    [{ label: `Save profile "${name}"` }, { label: 'Cancel without saving' }],
+    { title: 'Ready to save?' },
+  );
+  if (save.cancelled || save.index === 1) return { cancelled: true };
+  return { cancelled: false, name, settings: draft };
 }
 
 function buildDebugReportLines(
