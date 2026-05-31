@@ -38,6 +38,8 @@ import { isDaemonRunning } from '../cron/client.js';
 import { getDomain, getDomainIds } from '../domains.js';
 import { MCP_CONFIG_PATH } from '../paths.js';
 import { interactiveUpdate } from '../update.js';
+import { getBuiltinSpecialistIds } from '../specialists.js';
+import { buildCandidateContextBlock } from '../candidate-bootstrap.js';
 import type {
   AskUserQuestion,
   AskUserBatchResult,
@@ -659,7 +661,105 @@ export function App({
       return;
     }
 
-    // ── Agent turn ──
+    if (text === '/routines') {
+      const all = stores.routines.list();
+      if (all.length === 0) {
+        flashToast(
+          'No routines saved. Teach me a workflow and I can save it as a routine.',
+        );
+        return;
+      }
+      const tasks = all.filter((r) => r.id.startsWith('task-'));
+      const routines = all.filter((r) => !r.id.startsWith('task-'));
+      const lines: PendingInfo['lines'] = [];
+      if (tasks.length > 0) {
+        lines.push({
+          text: `Tasks (${tasks.length}) — single-step, structured output:`,
+          bold: true,
+        });
+        for (const r of tasks) {
+          lines.push({ text: `  /${r.id} — ${r.name}: ${r.description}` });
+        }
+      }
+      if (routines.length > 0) {
+        if (tasks.length > 0) lines.push({ text: '' });
+        lines.push({
+          text: `Routines (${routines.length}) — multi-step workflows:`,
+          bold: true,
+        });
+        for (const r of routines) {
+          lines.push({ text: `  /${r.id} — ${r.name}: ${r.description}` });
+        }
+      }
+      showInfo('Routines', lines);
+      return;
+    }
+
+    if (text === '/specialists') {
+      const all = stores.specialists.list();
+      if (all.length === 0) {
+        flashToast(
+          'No specialist agents defined yet. Ask me to create one or use /create-specialist.',
+        );
+        return;
+      }
+      const builtinIds = getBuiltinSpecialistIds();
+      const bundled = all.filter((s) => builtinIds.has(s.id));
+      const user = all.filter((s) => !builtinIds.has(s.id));
+      const lines: PendingInfo['lines'] = [];
+      if (bundled.length > 0) {
+        lines.push({ text: 'Bundled:', bold: true });
+        for (const s of bundled) {
+          lines.push({ text: `  ${s.id} — ${s.name}: ${s.description}` });
+        }
+      }
+      if (user.length > 0) {
+        if (bundled.length > 0) lines.push({ text: '' });
+        lines.push({ text: 'Yours:', bold: true });
+        for (const s of user) {
+          lines.push({ text: `  ${s.id} — ${s.name}: ${s.description}` });
+        }
+      }
+      showInfo(`Specialists (${all.length})`, lines);
+      return;
+    }
+
+    if (text === '/candidates') {
+      const pending = stores.candidates.listPending();
+      if (pending.length === 0) {
+        flashToast('No pending specialist suggestions.');
+        return;
+      }
+      const lines: PendingInfo['lines'] = [];
+      for (const c of pending) {
+        const pct = Math.round(c.confidence * 100);
+        const date = new Date(c.detectedAt).toLocaleDateString();
+        lines.push({ text: `${c.name} (${c.draftId})`, bold: true });
+        lines.push({ text: `  ${c.description}`, dim: true });
+        lines.push({ text: `  Confidence: ${pct}% | Detected: ${date}`, dim: true });
+        lines.push({ text: `  Reasoning: ${c.reasoning}`, dim: true });
+        lines.push({ text: '' });
+        stores.candidates.acknowledge(c.id);
+      }
+      lines.push({
+        text: 'To accept or reject, tell Bernard conversationally (e.g., "accept the code-review candidate").',
+        dim: true,
+      });
+      agent.setAlertContext(buildCandidateContextBlock(pending));
+      showInfo(`Specialist Suggestions (${pending.length})`, lines);
+      return;
+    }
+
+    if (text === '/create-routine' || text === '/create-task' || text === '/create-specialist') {
+      const seed = CREATE_SEED_PROMPTS[text];
+      await runAgentTurn(seed);
+      return;
+    }
+
+    await runAgentTurn(text);
+  };
+
+  async function runAgentTurn(input: string): Promise<void> {
     // Drop a second Enter that arrives before the busy re-render has propagated
     // to <Prompt disabled={busy}>. Without this, two turns can run concurrently.
     if (submittingRef.current) return;
@@ -669,7 +769,7 @@ export function App({
     messageStore.reset();
     setBusy(true);
     try {
-      await agent.processInput(text);
+      await agent.processInput(input);
     } catch (err) {
       console.error('agent error:', err);
     } finally {
@@ -678,7 +778,7 @@ export function App({
       setBusy(false);
       setHistoryVersion((v) => v + 1);
     }
-  };
+  }
 
   // Overlay-request helpers — exposed to the script that mounts <App> so it
   // can build the ToolOptions callbacks (confirmFn, confirmActionFn,
@@ -863,6 +963,58 @@ export function App({
     </Box>
   );
 }
+
+const CREATE_SEED_PROMPTS: Record<string, string> = {
+  '/create-routine': `The user wants to create a new routine interactively. Guide them through the process:
+
+1. Ask what workflow they want to save (what task, what steps, what's the goal)
+2. Ask clarifying questions if the instructions are vague or incomplete — e.g., what should happen on errors, are there optional steps, what tools/commands are involved
+3. Once you have enough information, draft the routine by optimizing their raw instructions into a well-structured routine using these prompting best practices:
+   - **Clarity**: use simple, literal language; define terms; state fallback behavior
+   - **Specificity**: specify exact commands, file paths, expected outputs, and decision rules
+   - **Structure**: organize steps logically with clear numbering and section headers
+   - **Constraints**: encode "never do X" + "do Y instead" at boundaries; keep constraints minimal but explicit
+   - **Robustness**: include error handling guidance, edge cases, and "if X then Y" decision points
+   - **Conciseness**: be token-efficient — no filler, no redundant instructions
+4. Present the draft routine (id, name, description, content) to the user for review
+5. Make any requested changes
+6. Use the routine tool to save it once the user approves
+
+Remember: routine content should be written as clear instructions that Bernard can follow. Think of it like writing a mini system prompt — specific, structured, and actionable.`,
+  '/create-task': `The user wants to create a new saved task interactively. Saved tasks are routines whose ID is prefixed with "task-", but they execute differently from routines: tasks run in a single-step execution model (1 LLM call + tool use → structured JSON output). Guide them through the process:
+
+1. Ask what task they want to save (what's the goal, what output is expected)
+2. Ask clarifying questions if needed — e.g., what should happen on errors, what tools/commands are involved, what the expected output format is
+3. Once you have enough information, draft the task using these guidelines:
+   - **Single-step**: task content must be achievable in a single LLM call with tool use. If the task needs multiple sequential steps, it should be a routine that chains tasks instead.
+   - **Explicit commands**: specify exact commands, file paths, and expected output format
+   - **Success/error criteria**: define what constitutes success and how errors should be reported
+   - **Output format**: specify what the structured JSON output should contain
+   - **Conciseness**: be token-efficient — no filler, no redundant instructions
+4. Present the draft task (id, name, description, content) to the user for review
+5. Make any requested changes
+6. Use the routine tool to save it once the user approves
+
+IMPORTANT: The routine ID MUST start with "task-". When drafting, generate an ID like "task-deploy-staging" or "task-run-tests". If the user suggests an ID without the prefix, prepend "task-" automatically. The user will invoke this task with /task-{name} in the REPL.
+
+Remember: task content should describe a single atomic operation with clear success criteria. Unlike routines (multi-step workflows), tasks must complete in one step.`,
+  '/create-specialist': `The user wants to create a new specialist agent interactively. Guide them through the process:
+
+1. Ask what domain or recurring task pattern the specialist covers (e.g., email triage, code review, data analysis)
+2. Ask about behavioral preferences — how should the specialist approach work? What tone, priorities, output formats, or decision rules should it follow?
+3. Ask about specific guidelines — are there things it should always or never do?
+4. Once you have enough information, draft the specialist by creating:
+   - **id**: kebab-case slug (e.g., "email-triage")
+   - **name**: display name (e.g., "Email Triage Specialist")
+   - **description**: one-line summary
+   - **systemPrompt**: the specialist's persona and behavioral instructions (this is the core — write it like a focused system prompt)
+   - **guidelines**: short behavioral rules as a list of strings
+5. Present the draft to the user for review
+6. Make any requested changes
+7. Use the specialist tool to save it once the user approves
+
+Remember: the systemPrompt should read like a persona definition — who this specialist is, what they care about, how they work. Guidelines are individual rules that can be added/removed independently.`,
+};
 
 /**
  * 5-step add-custom-provider sequence: pick SDK → name → URL → model → key,
