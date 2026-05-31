@@ -160,4 +160,15 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
 
   /** Optional prefix for log lines emitted from strategies (e.g. `[sub:42]`). */
   prefix?(input: TInput): string | undefined;
+
+  /**
+   * Phase C (#214): when `true` AND an output sink is registered via
+   * `setOutputSink`, the runner uses `streamText` instead of `generateText`
+   * and pushes per-token deltas into the sink for this definition's runs.
+   * When false / omitted, the run stays on `generateText` regardless of
+   * whether a sink is active. Only the main-agent definition sets this so
+   * sub-agent / specialist / tool-wrapper dispatches don't interleave
+   * concurrent token streams in the terminal.
+   */
+  streaming?: boolean;
 }

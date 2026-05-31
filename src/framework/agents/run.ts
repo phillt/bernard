@@ -4,6 +4,7 @@ import { resolveSiteModel } from '../../model-policy.js';
 import { makeRepairHook } from '../../tool-call-repair.js';
 import { augmentTools } from '../../tools/augment.js';
 import type { AgentContext } from '../context.js';
+import { getOutputSink } from '../hooks/output-sink.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import type { AgentDefinition, HistoryMode, ModelOverrides, ResolvedModel } from './types.js';
@@ -148,6 +149,16 @@ export async function runDefinition<TInput, TFormatted>(
     return msg ? [msg] : [];
   };
 
+  // Phase C (#214) streaming gate. Both conditions must hold: the definition
+  // opts in (`main` only today), AND a sink is currently registered (the Ink
+  // `<App>` is mounted). The legacy readline REPL never registers a sink, so
+  // it always falls through to `generateText` — identical behavior to today.
+  const sink = def.streaming ? getOutputSink() : null;
+  const useStreaming = sink !== null;
+  const onTextDelta = useStreaming
+    ? (delta: string) => sink.append({ kind: 'text-delta', text: delta })
+    : undefined;
+
   // `messages` here is a placeholder — `innerIterate` rebuilds the messages
   // array on every call, so the seed alone is sufficient for the baseSpec.
   const baseSpec: AgentSpec = {
@@ -162,6 +173,8 @@ export async function runDefinition<TInput, TFormatted>(
     prepareStep,
     repair,
     hooks,
+    useStreaming,
+    onTextDelta,
   };
 
   let stepLimitHit = false;

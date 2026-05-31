@@ -21,6 +21,8 @@ import { ConfirmDialog } from './overlays/ConfirmDialog.js';
 import { StatusViewer } from './overlays/StatusViewer.js';
 import { SourcesViewer } from './overlays/SourcesViewer.js';
 import { persistAgentState } from './save.js';
+import { MessageStore } from './message-store.js';
+import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { getThemeColors } from '../theme.js';
 
 interface AppProps {
@@ -97,6 +99,15 @@ export function App({
   // Synchronous guard against double-Enter: setBusy schedules a re-render but
   // a second submit can land before Prompt sees `disabled={busy}` flip.
   const submittingRef = useRef(false);
+  // Phase C (#214): one MessageStore per <App> lifecycle. Held in a ref so
+  // re-renders don't reinstantiate it (which would unsubscribe consumers and
+  // drop in-flight events). Registered with the framework's output-sink seam
+  // in a mount-time effect; cleared on unmount.
+  const messageStoreRef = useRef<MessageStore | null>(null);
+  if (messageStoreRef.current === null) {
+    messageStoreRef.current = new MessageStore();
+  }
+  const messageStore = messageStoreRef.current;
 
   // Closes the active overlay and resolves any pending request as a cancel.
   const closeOverlay = () => {
@@ -154,6 +165,15 @@ export function App({
     };
   }, [onExit]);
 
+  // Phase C (#214) sink registration. The framework's `getOutputSink()` reads
+  // this slot on every step; the legacy readline REPL leaves it null. Cleared
+  // on unmount so a test or preview that re-mounts <App> doesn't leak the
+  // previous store into the new run.
+  useEffect(() => {
+    setOutputSink(messageStore);
+    return () => setOutputSink(null);
+  }, [messageStore]);
+
   const handleSubmit = async (text: string) => {
     if (text === '/exit' || text === '/quit') {
       if (exitedRef.current) return;
@@ -173,6 +193,9 @@ export function App({
     // to <Prompt disabled={busy}>. Without this, two turns can run concurrently.
     if (submittingRef.current) return;
     submittingRef.current = true;
+    // Clear the previous turn's stream events so the in-flight
+    // <StreamingAssistantMessage> renders only this turn's deltas.
+    messageStore.reset();
     setBusy(true);
     try {
       await agent.processInput(text);
@@ -264,7 +287,12 @@ export function App({
         </Text>
         <Text dimColor> {config.provider}/{config.model}</Text>
       </Box>
-      <Thread key={historyVersion} history={agent.getHistory()} />
+      <Thread
+        key={historyVersion}
+        history={agent.getHistory()}
+        messageStore={messageStore}
+        busy={busy}
+      />
       {busy && (
         <Box marginTop={1}>
           <Spinner label="thinking…" />

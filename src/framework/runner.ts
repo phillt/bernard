@@ -1,5 +1,6 @@
 import {
   generateText,
+  streamText,
   type CoreMessage,
   type GenerateTextResult,
   type LanguageModel,
@@ -29,6 +30,21 @@ export interface AgentSpec {
   repair?: ToolCallRepairFunction<any>;
   /** Observer hooks composed in-order on `onStepFinish`. */
   hooks?: AgentHook[];
+  /**
+   * Phase C (#214): opt-in switch from `generateText` to `streamText` for
+   * this run. Only the main-agent dispatch sets this — and only when an
+   * output sink is registered, so the deltas have a consumer. Leaving it
+   * `false`/undefined keeps every other call site (sub-agents, wrappers,
+   * pre-turn LLM passes, context summarization) on the unchanged
+   * `generateText` path.
+   */
+  useStreaming?: boolean;
+  /**
+   * Called once per text-delta chunk when `useStreaming` is true. The runner
+   * still resolves the final {@link AgentResult} after the stream drains, so
+   * callers downstream of `runAgent` see the same shape they always did.
+   */
+  onTextDelta?: (delta: string) => void;
 }
 
 /** Result type re-exported so callers needn't depend on `ai` directly. */
@@ -71,6 +87,9 @@ function composeOnStepFinish(
  */
 export async function runAgent(spec: AgentSpec): Promise<AgentResult> {
   const onStepFinish = composeOnStepFinish(spec.hooks);
+  if (spec.useStreaming) {
+    return runStreaming(spec, onStepFinish);
+  }
   return generateText({
     model: spec.model,
     providerOptions: spec.providerOptions,
@@ -84,4 +103,93 @@ export async function runAgent(spec: AgentSpec): Promise<AgentResult> {
     experimental_repairToolCall: spec.repair,
     onStepFinish,
   });
+}
+
+/**
+ * `streamText` branch (Phase C, #214). Pushes deltas to `spec.onTextDelta` as
+ * they arrive, then assembles a `GenerateTextResult`-shaped object from the
+ * `StreamTextResult` promises so callers downstream — strategies, plan
+ * enforcement, provenance, format hooks — see no shape difference. The
+ * `onStepFinish` hook still fires per step exactly as in the non-streaming
+ * path, so tool-call / tool-result events route through `outputHook` to the
+ * sink alongside the per-token deltas.
+ */
+async function runStreaming(
+  spec: AgentSpec,
+  onStepFinish: ((payload: StepFinishPayload) => Promise<void>) | undefined,
+): Promise<AgentResult> {
+  // `streamText` accepts a subset of `generateText` settings — no
+  // `experimental_prepareStep`. The main agent (the only `streaming: true`
+  // definition) doesn't use prepareStep, so this is sound. If a future
+  // streaming-capable definition needs prepareStep, the AI SDK has
+  // `experimental_continueSteps` for the equivalent steering on this path.
+  const stream = streamText({
+    model: spec.model,
+    providerOptions: spec.providerOptions,
+    tools: spec.tools,
+    maxSteps: spec.maxSteps,
+    maxTokens: spec.maxTokens,
+    system: spec.system,
+    messages: spec.messages,
+    abortSignal: spec.abortSignal,
+    experimental_repairToolCall: spec.repair,
+    onStepFinish,
+  });
+  // Drain the text stream so promises resolve. `onTextDelta` lets the caller
+  // forward each chunk to the message store; `streamText` continues running
+  // even if the consumer is slow because the chunks land on internal queues.
+  for await (const delta of stream.textStream) {
+    spec.onTextDelta?.(delta);
+  }
+  // The other promises (toolCalls, toolResults, steps, etc.) are already
+  // resolved once textStream completes — awaiting them is cheap.
+  const [
+    text,
+    steps,
+    finishReason,
+    usage,
+    warnings,
+    toolCalls,
+    toolResults,
+    reasoning,
+    reasoningDetails,
+    providerMetadata,
+    request,
+    response,
+    files,
+    sources,
+  ] = await Promise.all([
+    stream.text,
+    stream.steps,
+    stream.finishReason,
+    stream.usage,
+    stream.warnings,
+    stream.toolCalls,
+    stream.toolResults,
+    stream.reasoning,
+    stream.reasoningDetails,
+    stream.providerMetadata,
+    stream.request,
+    stream.response,
+    stream.files,
+    stream.sources,
+  ]);
+  return {
+    text,
+    steps,
+    finishReason,
+    usage,
+    warnings,
+    toolCalls,
+    toolResults,
+    reasoning,
+    reasoningDetails,
+    providerMetadata,
+    experimental_providerMetadata: providerMetadata,
+    request,
+    response,
+    files,
+    sources,
+    experimental_output: undefined as never,
+  } as unknown as AgentResult;
 }

@@ -186,6 +186,11 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
   site: 'main',
   historyMode: 'persistent',
   repairLabel: 'main',
+  // Phase C (#214): main-only token streaming. Sub-agents / specialists /
+  // tool-wrappers stay on `generateText` so concurrent dispatches don't
+  // interleave token streams in the terminal. The streaming branch only
+  // activates when `setOutputSink` has registered a consumer.
+  streaming: true,
 
   systemPrompt(_ctx, input) {
     // The Agent class pre-renders the prompt via `buildMainSystemPrompt` and
