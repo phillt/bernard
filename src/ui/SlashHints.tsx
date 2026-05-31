@@ -7,18 +7,18 @@ export interface SlashCommand {
 }
 
 /**
- * The static set of slash commands the Ink shell will ship at cutover.
+ * The static set of slash commands the Ink shell wires through in Phase B.
  *
- * Phase B intentionally lists only the commands `<App>` wires through in this
- * milestone (`/exit`, `/clear`, `/profiles`). Phase D ports the remaining
- * commands from `src/repl.ts` (`/agent-options`, `/manage-profiles`, `/cron`,
- * `/image`, `/run-routine`, etc.) when the bespoke layer is deleted and adds
- * their entries here.
+ * Only commands `<App>.handleSubmit` actually handles are listed here so a
+ * suggestion can't fall through to `agent.processInput` and get sent to the
+ * model as prose. Phase D ports the remaining commands from `src/repl.ts`
+ * (`/profiles`, `/agent-options`, `/manage-profiles`, `/cron`, `/image`,
+ * `/run-routine`, etc.) when the bespoke layer is deleted and adds their
+ * entries here.
  */
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/exit', description: 'Exit Bernard' },
   { name: '/clear', description: 'Clear conversation history' },
-  { name: '/profiles', description: 'Switch settings profile' },
 ];
 
 interface SlashHintsProps {
