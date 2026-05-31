@@ -31,6 +31,13 @@ import type { MemoryStore } from '../memory.js';
 import type { RoutineStore } from '../routines.js';
 import type { SpecialistStore } from '../specialists.js';
 import type { CandidateStore } from '../specialist-candidates.js';
+import type { RAGStore, RAGSearchResult } from '../rag.js';
+import type { MCPManager } from '../mcp.js';
+import { CronStore } from '../cron/store.js';
+import { isDaemonRunning } from '../cron/client.js';
+import { getDomain, getDomainIds } from '../domains.js';
+import { MCP_CONFIG_PATH } from '../paths.js';
+import { interactiveUpdate } from '../update.js';
 import type {
   AskUserQuestion,
   AskUserBatchResult,
@@ -55,6 +62,7 @@ import { StatusViewer } from './overlays/StatusViewer.js';
 import { SourcesViewer } from './overlays/SourcesViewer.js';
 import { HelpOverlay } from './overlays/HelpOverlay.js';
 import { TextInputOverlay } from './overlays/TextInputOverlay.js';
+import { InfoOverlay } from './overlays/InfoOverlay.js';
 import { Toast, type ToastVariant } from './Toast.js';
 import { persistAgentState } from './save.js';
 import { MessageStore } from './message-store.js';
@@ -72,6 +80,10 @@ export interface AppStores {
   routines: RoutineStore;
   specialists: SpecialistStore;
   candidates: CandidateStore;
+  /** Optional — only present when `config.ragEnabled === true`. */
+  rag?: RAGStore;
+  /** Optional — only present when MCP servers are configured. */
+  mcp?: MCPManager;
 }
 
 interface AppProps {
@@ -92,11 +104,23 @@ interface AppProps {
   alertBanner?: string;
 }
 
-type Overlay = 'status' | 'sources' | 'menu' | 'confirm' | 'help' | 'text-input';
+type Overlay =
+  | 'status'
+  | 'sources'
+  | 'menu'
+  | 'confirm'
+  | 'help'
+  | 'text-input'
+  | 'info';
 
 interface PendingTextInput {
   options: ValuePromptOptions;
   resolve: (result: ValueResult) => void;
+}
+
+interface PendingInfo {
+  title: string;
+  lines: { text: string; dim?: boolean; bold?: boolean }[];
 }
 
 interface ToastState {
@@ -157,6 +181,7 @@ export function App({
   const [pendingMenu, setPendingMenu] = useState<PendingMenu | null>(null);
   const [pendingDialog, setPendingDialog] = useState<PendingDialog | null>(null);
   const [pendingTextInput, setPendingTextInput] = useState<PendingTextInput | null>(null);
+  const [pendingInfo, setPendingInfo] = useState<PendingInfo | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [bannerVisible, setBannerVisible] = useState<boolean>(!!alertBanner);
   const colors = getThemeColors();
@@ -195,6 +220,7 @@ export function App({
       pendingTextInput.resolve({ cancelled: true });
       setPendingTextInput(null);
     }
+    if (pendingInfo) setPendingInfo(null);
     setActiveOverlay(null);
   };
 
@@ -251,6 +277,11 @@ export function App({
 
   const flashToast = (message: string, variant: ToastVariant = 'info') => {
     setToast({ message, variant });
+  };
+
+  const showInfo = (title: string, lines: PendingInfo['lines']) => {
+    setPendingInfo({ title, lines });
+    setActiveOverlay('info');
   };
 
   const handleSubmit = async (text: string) => {
@@ -323,6 +354,162 @@ export function App({
         flashToast(`Compaction failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
       } finally {
         setBusy(false);
+      }
+      return;
+    }
+
+    if (text === '/policy') {
+      const last = agent.getLastPolicyDecision();
+      if (!last) {
+        flashToast('No policy decision yet — send a message first.');
+        return;
+      }
+      const lines: PendingInfo['lines'] = [
+        { text: 'Decision:', bold: true },
+        ...JSON.stringify(last.decision, null, 2)
+          .split('\n')
+          .map((l) => ({ text: l })),
+        { text: '' },
+        { text: 'Reason codes:', bold: true },
+        ...Object.entries(last.reasons).map(([k, r]) => ({ text: `  ${k}: ${r}` })),
+      ];
+      showInfo('Last policy decision', lines);
+      return;
+    }
+
+    if (text === '/mcp') {
+      if (!stores.mcp) {
+        flashToast(`No MCP servers configured. Add servers to ${MCP_CONFIG_PATH}`);
+        return;
+      }
+      const statuses = stores.mcp.getServerStatuses();
+      if (statuses.length === 0) {
+        flashToast(`No MCP servers configured. Add servers to ${MCP_CONFIG_PATH}`);
+        return;
+      }
+      const lines: PendingInfo['lines'] = statuses.map((s) =>
+        s.connected
+          ? { text: `  ✓ ${s.name} (${s.toolCount} tools)` }
+          : { text: `  ✗ ${s.name} — ${s.error}` },
+      );
+      const toolNames = Object.keys(stores.mcp.getTools());
+      if (toolNames.length > 0) {
+        lines.push({ text: '' });
+        lines.push({ text: `MCP tools: ${toolNames.join(', ')}`, dim: true });
+      }
+      showInfo('MCP servers', lines);
+      return;
+    }
+
+    if (text === '/cron') {
+      const store = new CronStore();
+      const jobs = store.loadJobs();
+      const running = isDaemonRunning();
+      const lines: PendingInfo['lines'] = [
+        { text: `Daemon: ${running ? 'running' : 'stopped'}`, bold: true },
+      ];
+      if (jobs.length === 0) {
+        lines.push({ text: 'No cron jobs configured.', dim: true });
+      } else {
+        lines.push({ text: '' });
+        lines.push({ text: `Jobs (${jobs.length}):`, bold: true });
+        for (const job of jobs) {
+          const status = job.enabled ? 'enabled' : 'disabled';
+          const lastRun = job.lastRun
+            ? `last: ${new Date(job.lastRun).toLocaleString()} (${job.lastRunStatus || 'unknown'})`
+            : 'never run';
+          lines.push({ text: `  ${job.name} [${status}] — ${job.schedule} — ${lastRun}` });
+          lines.push({ text: `    ID: ${job.id}`, dim: true });
+        }
+        const alerts = store.listAlerts().filter((a) => !a.acknowledged);
+        if (alerts.length > 0) {
+          lines.push({ text: '' });
+          lines.push({ text: `Unacknowledged alerts (${alerts.length}):`, bold: true });
+          for (const alert of alerts.slice(0, 5)) {
+            lines.push({
+              text: `  [${new Date(alert.timestamp).toLocaleString()}] ${alert.jobName}: ${alert.message}`,
+            });
+          }
+        }
+      }
+      showInfo('Cron', lines);
+      return;
+    }
+
+    if (text === '/rag') {
+      if (!stores.rag) {
+        flashToast('RAG is disabled. Set BERNARD_RAG_ENABLED=true (default) to enable.');
+        return;
+      }
+      const count = stores.rag.count();
+      const lines: PendingInfo['lines'] = [{ text: `Total memories: ${count}`, bold: true }];
+      if (count === 0) {
+        lines.push({
+          text: 'No RAG memories yet. Memories are extracted automatically during context compression.',
+          dim: true,
+        });
+      } else {
+        const counts = stores.rag.countByDomain();
+        const knownDomains = new Set(getDomainIds());
+        lines.push({ text: '' });
+        lines.push({ text: 'By domain:', bold: true });
+        for (const domainId of knownDomains) {
+          const domainCount = counts[domainId] ?? 0;
+          if (domainCount > 0) {
+            const domain = getDomain(domainId);
+            lines.push({ text: `  ${domain.name}: ${domainCount}` });
+          }
+        }
+        for (const [domainId, domainCount] of Object.entries(counts)) {
+          if (!knownDomains.has(domainId)) {
+            lines.push({ text: `  ${domainId}: ${domainCount}` });
+          }
+        }
+        const facts = stores.rag.listFacts();
+        const recent = facts.slice(-10);
+        lines.push({ text: '' });
+        lines.push({ text: 'Most recent (up to 10):', bold: true });
+        for (const f of recent) lines.push({ text: `  ${f}`, dim: true });
+      }
+      showInfo('RAG memories', lines);
+      return;
+    }
+
+    if (text === '/facts') {
+      const results = agent.getLastRAGResults();
+      if (results.length === 0) {
+        flashToast('No RAG facts in current context window.');
+        return;
+      }
+      const lines: PendingInfo['lines'] = [];
+      const byDomain = new Map<string, RAGSearchResult[]>();
+      for (const r of results) {
+        if (!byDomain.has(r.domain)) byDomain.set(r.domain, []);
+        byDomain.get(r.domain)!.push(r);
+      }
+      for (const [domainId, items] of byDomain) {
+        const domain = getDomain(domainId);
+        lines.push({ text: `### ${domain.name}`, bold: true });
+        for (const item of items) {
+          const pct = Math.round(item.similarity * 100);
+          lines.push({ text: `  - (${pct}%) ${item.fact}` });
+        }
+        lines.push({ text: '' });
+      }
+      showInfo(`Recalled Context (${results.length} facts)`, lines);
+      return;
+    }
+
+    if (text === '/update') {
+      flashToast('Checking for updates…');
+      try {
+        await interactiveUpdate();
+        flashToast('Update check complete.', 'success');
+      } catch (err) {
+        flashToast(
+          `Update check failed: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        );
       }
       return;
     }
@@ -636,6 +823,16 @@ export function App({
         />
       )}
       {activeOverlay === 'help' && <HelpOverlay onClose={() => setActiveOverlay(null)} />}
+      {activeOverlay === 'info' && pendingInfo && (
+        <InfoOverlay
+          title={pendingInfo.title}
+          lines={pendingInfo.lines}
+          onClose={() => {
+            setPendingInfo(null);
+            setActiveOverlay(null);
+          }}
+        />
+      )}
       {activeOverlay === 'text-input' && pendingTextInput && (
         <TextInputOverlay
           options={pendingTextInput.options}
