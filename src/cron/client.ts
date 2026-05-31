@@ -1,7 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { fork } from 'node:child_process';
 import { CronStore } from './store.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Checks whether the daemon process is alive by sending signal 0 to the recorded PID. Cleans up stale PID files. */
 export function isDaemonRunning(): boolean {

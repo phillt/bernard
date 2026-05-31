@@ -46,7 +46,7 @@ import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyEngine, PolicyResult } from './policy/index.js';
-import { extractCitationMarkers, type SourceItem } from './provenance.js';
+import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
 import type { Step } from './plan-store.js';
 import type { VerificationEntry } from './agent-status.js';
 import { verdictOf, renderRubricLine, type Check, type Rubric } from './rubric.js';
@@ -101,6 +101,12 @@ export class Agent {
   private lastRAGResults: RAGSearchResult[] = [];
   private lastSources: SourceItem[] = [];
   private lastCitedSources: SourceItem[] = [];
+  /**
+   * Per-turn citation snapshots for the whole current conversation —
+   * powers the Shift+Tab full-screen citation viewer. Issue #211. Cleared
+   * by {@link clearHistory}; loaded on resume via {@link setTurnProvenance}.
+   */
+  private turnProvenance: TurnProvenance[] = [];
   /** Most recent per-turn rubric (#145). Composed at end of `processInput`. */
   private lastRubric: Rubric | null = null;
   private abortController: AbortController | null = null;
@@ -174,6 +180,23 @@ export class Agent {
    */
   getLastCitedSources(): SourceItem[] {
     return this.lastCitedSources;
+  }
+
+  /**
+   * Returns a snapshot of every completed turn's provenance for this
+   * conversation. Powers the Shift+Tab full-screen citation viewer.
+   * Issue #211.
+   */
+  getTurnProvenance(): TurnProvenance[] {
+    return [...this.turnProvenance];
+  }
+
+  /**
+   * Restores per-turn citation snapshots when a session is resumed. Replaces
+   * any in-memory records. Issue #211.
+   */
+  setTurnProvenance(records: TurnProvenance[]): void {
+    this.turnProvenance = [...records];
   }
 
   /**
@@ -583,10 +606,16 @@ export class Agent {
 
       // Snapshot provenance for the REPL viewer. `lastSources` is everything
       // registered this turn; `lastCitedSources` is the subset whose ids
-      // appeared as `[^Sn]` markers in the final text. Invalid markers are
-      // silently dropped by `extractCitationMarkers`. Issue #173.
+      // appeared as `[^Sn]` markers anywhere in the turn's emitted text.
+      // `result.text` is only the *final* step's prose; if the model emits
+      // markers in an earlier step and ends with a tool call, they would be
+      // missed. Scan every step plus the final text. Issues #173, #211.
       this.lastSources = this.ctx.provenance.list();
-      const citedIds = extractCitationMarkers(result.text ?? '', this.ctx.provenance);
+      const stepTexts = (result.steps ?? [])
+        .map((s) => (typeof s.text === 'string' ? s.text : ''))
+        .join('\n');
+      const citedScanText = stepTexts + '\n' + (result.text ?? '');
+      const citedIds = extractCitationMarkers(citedScanText, this.ctx.provenance);
       this.lastCitedSources = citedIds
         .map((id) => this.ctx.provenance.get(id))
         .filter((s): s is SourceItem => s !== undefined);
@@ -594,6 +623,25 @@ export class Agent {
         debugLog('agent:citations', {
           available: this.lastSources.length,
           cited: 0,
+        });
+      }
+
+      // Append a per-turn snapshot for the Shift+Tab full-screen viewer
+      // (#211). Only record turns that actually had something to cite —
+      // empty turns would clutter the history view. `turnIndex` is the
+      // *conversation* turn position (0-based count of user messages in
+      // history), not the index within `turnProvenance` — otherwise turns
+      // that registered no sources would compress the indices and the
+      // viewer would show "Turn 2" for what the user typed as their 5th
+      // message. Derived from history so it's also correct on resume.
+      if (this.lastSources.length > 0) {
+        const userTurnCount = this.history.filter((m) => m.role === 'user').length;
+        this.turnProvenance.push({
+          turnIndex: Math.max(0, userTurnCount - 1),
+          userInput: userInput,
+          sources: this.lastSources.map((s) => ({ ...s })),
+          citedIds: [...citedIds],
+          timestamp: Date.now(),
         });
       }
 
@@ -678,6 +726,7 @@ export class Agent {
     this.lastResolvedReferences = [];
     this.lastSources = [];
     this.lastCitedSources = [];
+    this.turnProvenance = [];
     this.ctx.verification.clear();
     this.ctx.provenance.clear();
     this.ctx.postWriteChecks.length = 0;

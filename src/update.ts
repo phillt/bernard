@@ -1,9 +1,12 @@
 import * as https from 'node:https';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { printInfo, printError } from './output.js';
 import { UPDATE_CACHE_PATH as CACHE_PATH } from './paths.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours

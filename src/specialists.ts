@@ -1,8 +1,11 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { SPECIALISTS_DIR } from './paths.js';
 import { RESERVED_NAMES } from './reserved-names.js';
 import { atomicWriteFileSync, seedOnce } from './fs-utils.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Specialist category. `persona` is the historical default; `tool-wrapper` specialists front a concrete tool or CLI; `meta` specialists operate on other specialists (e.g. specialist-creator, correction-agent). */
 export type SpecialistKind = 'persona' | 'tool-wrapper' | 'meta';
