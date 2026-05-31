@@ -40,6 +40,24 @@ export class MessageStore implements OutputSink {
   readonly getSnapshot = (): readonly StreamEvent[] => this.events;
 
   append(event: StreamEvent): void {
+    // Coalesce consecutive text-delta events for the same agentLabel into a
+    // single entry. Without this the main agent's streamText loop appends one
+    // event per token — a 4 000-token response would build a 4 000-element
+    // array via O(n) spread per token (O(n²) total) and force the renderer to
+    // walk the full list on every snapshot. Coalescing keeps the event count
+    // bounded by the number of tool boundaries instead of token count.
+    if (event.kind === 'text-delta' && this.events.length > 0) {
+      const tail = this.events[this.events.length - 1];
+      if (tail.kind === 'text-delta' && tail.agentLabel === event.agentLabel) {
+        const merged: StreamEvent = {
+          ...tail,
+          text: tail.text + event.text,
+        };
+        this.events = [...this.events.slice(0, -1), merged];
+        for (const listener of this.listeners) listener();
+        return;
+      }
+    }
     this.events = [...this.events, event];
     for (const listener of this.listeners) listener();
   }

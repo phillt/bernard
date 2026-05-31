@@ -10,16 +10,57 @@ describe('MessageStore', () => {
   it('appends events and flips snapshot identity per append', () => {
     const store = new MessageStore();
     const a = store.getSnapshot();
-    store.append({ kind: 'text-delta', text: 'hi' });
+    store.append({ kind: 'tool-call', callId: 'c1', toolName: 'shell', args: {} });
     const b = store.getSnapshot();
-    store.append({ kind: 'text-delta', text: ' there' });
+    store.append({ kind: 'tool-result', callId: 'c1', result: 'ok', isError: false });
     const c = store.getSnapshot();
     // useSyncExternalStore relies on reference inequality to detect changes.
     expect(a).not.toBe(b);
     expect(b).not.toBe(c);
     expect(c).toEqual([
-      { kind: 'text-delta', text: 'hi' },
-      { kind: 'text-delta', text: ' there' },
+      { kind: 'tool-call', callId: 'c1', toolName: 'shell', args: {} },
+      { kind: 'tool-result', callId: 'c1', result: 'ok', isError: false },
+    ]);
+  });
+
+  it('coalesces consecutive text-deltas for the same agentLabel', () => {
+    const store = new MessageStore();
+    store.append({ kind: 'text-delta', text: 'hi' });
+    store.append({ kind: 'text-delta', text: ' there' });
+    store.append({ kind: 'text-delta', text: '!' });
+    expect(store.getSnapshot()).toEqual([{ kind: 'text-delta', text: 'hi there!' }]);
+  });
+
+  it('still flips snapshot identity on every coalesced text-delta', () => {
+    const store = new MessageStore();
+    store.append({ kind: 'text-delta', text: 'hi' });
+    const a = store.getSnapshot();
+    store.append({ kind: 'text-delta', text: ' there' });
+    const b = store.getSnapshot();
+    expect(a).not.toBe(b);
+  });
+
+  it('does not coalesce across different agentLabels', () => {
+    const store = new MessageStore();
+    store.append({ kind: 'text-delta', text: 'main' });
+    store.append({ kind: 'text-delta', text: 'sub', agentLabel: 'sub:2' });
+    store.append({ kind: 'text-delta', text: 'main2' });
+    expect(store.getSnapshot()).toEqual([
+      { kind: 'text-delta', text: 'main' },
+      { kind: 'text-delta', text: 'sub', agentLabel: 'sub:2' },
+      { kind: 'text-delta', text: 'main2' },
+    ]);
+  });
+
+  it('does not coalesce across a tool-call boundary', () => {
+    const store = new MessageStore();
+    store.append({ kind: 'text-delta', text: 'before ' });
+    store.append({ kind: 'tool-call', callId: 'c1', toolName: 'shell', args: {} });
+    store.append({ kind: 'text-delta', text: 'after' });
+    expect(store.getSnapshot()).toEqual([
+      { kind: 'text-delta', text: 'before ' },
+      { kind: 'tool-call', callId: 'c1', toolName: 'shell', args: {} },
+      { kind: 'text-delta', text: 'after' },
     ]);
   });
 

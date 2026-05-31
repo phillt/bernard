@@ -1,4 +1,5 @@
 import { printToolCall, printToolResult, printAssistantText } from '../../output.js';
+import { detectToolError } from '../../tool-profiles.js';
 import { getOutputSink } from './output-sink.js';
 import type { AgentHook } from './types.js';
 
@@ -42,11 +43,16 @@ export function outputHook(prefix?: string): AgentHook {
           });
         }
         for (const tr of toolResults ?? []) {
+          // Per-tool shapes vary (`shell` uses `is_error`, `web_read` returns
+          // an "Error:" string, MCP tools surface text content, …) — defer to
+          // the same classifier the stdout printer uses so the Ink thread
+          // colors failed calls red consistently with the legacy path.
+          const errInfo = detectToolError(tr.toolName, tr.result);
           sink.append({
             kind: 'tool-result',
             callId: tr.toolCallId,
             result: tr.result,
-            isError: false,
+            isError: errInfo.isError,
             agentLabel: prefix,
           });
         }

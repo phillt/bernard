@@ -114,10 +114,15 @@ function StreamGroupBody({ events }: { events: StreamEvent[] }) {
     textBuffer = '';
   };
   // Pair tool-calls with their results by callId so the result renders
-  // directly under its call instead of as a separate orphan block.
+  // directly under its call instead of as a separate orphan block. The
+  // callsById set lets the orphan check below run in O(1) rather than
+  // re-scanning the event list per result — important once the list grows
+  // (tool-heavy turns can produce dozens of call/result pairs).
   const resultsByCall = new Map<string, Extract<StreamEvent, { kind: 'tool-result' }>>();
+  const callsById = new Set<string>();
   for (const ev of events) {
     if (ev.kind === 'tool-result') resultsByCall.set(ev.callId, ev);
+    else if (ev.kind === 'tool-call') callsById.add(ev.callId);
   }
   for (const ev of events) {
     if (ev.kind === 'text-delta') {
@@ -143,7 +148,7 @@ function StreamGroupBody({ events }: { events: StreamEvent[] }) {
     // tool-result handled inline above; skip if it has a matching call.
     // If a result arrived without its call (shouldn't happen, but defensive),
     // render it as a standalone row so the user still sees it.
-    if (!events.some((e) => e.kind === 'tool-call' && e.callId === ev.callId)) {
+    if (!callsById.has(ev.callId)) {
       flushText();
       elements.push(
         <Box key={`r-${ev.callId}`} marginLeft={2}>
