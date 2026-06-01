@@ -1,17 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-vi.mock('../../../output.js', () => ({
-  startSpinner: vi.fn(),
-  buildSpinnerMessage: vi.fn(() => 'msg'),
-}));
+import { describe, it, expect, beforeEach } from 'vitest';
 
 import { tokenStatsHook, type TokenStatsTarget } from '../token-stats.js';
-import { startSpinner } from '../../../output.js';
 import type { SpinnerStats } from '../../../output.js';
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+beforeEach(() => {});
 
 function makeStats(over: Partial<SpinnerStats> = {}): SpinnerStats {
   return {
@@ -64,38 +56,12 @@ describe('tokenStatsHook', () => {
       usage: { promptTokens: 9, completionTokens: 1 },
     });
     expect(target.lastStepPromptTokens).toBe(9);
-    // No spinner restart either
-    expect(startSpinner).not.toHaveBeenCalled();
-  });
-
-  it('restarts spinner when step had tool calls AND spinnerStats present', async () => {
-    const target: TokenStatsTarget = { lastStepPromptTokens: 0, spinnerStats: makeStats() };
-    const hook = tokenStatsHook(target);
-    await hook.onStepFinish!({
-      text: '',
-      toolCalls: [{ toolName: 'shell', toolCallId: 't', args: {} }],
-      toolResults: [],
-      usage: { promptTokens: 1, completionTokens: 1 },
-    });
-    expect(startSpinner).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not restart spinner when no tool calls', async () => {
-    const target: TokenStatsTarget = { lastStepPromptTokens: 0, spinnerStats: makeStats() };
-    const hook = tokenStatsHook(target);
-    await hook.onStepFinish!({
-      text: 'final',
-      toolCalls: [],
-      toolResults: [],
-      usage: { promptTokens: 1, completionTokens: 1 },
-    });
-    expect(startSpinner).not.toHaveBeenCalled();
   });
 
   it('handles missing usage gracefully', async () => {
     const target: TokenStatsTarget = { lastStepPromptTokens: 42, spinnerStats: makeStats() };
     const hook = tokenStatsHook(target);
     await hook.onStepFinish!({ text: '', toolCalls: [], toolResults: [] });
-    expect(target.lastStepPromptTokens).toBe(42); // unchanged
+    expect(target.lastStepPromptTokens).toBe(42);
   });
 });

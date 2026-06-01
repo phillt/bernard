@@ -1,4 +1,4 @@
-import { startSpinner, buildSpinnerMessage, type SpinnerStats } from '../../output.js';
+import type { SpinnerStats } from '../../output.js';
 import type { AgentHook } from './types.js';
 
 /**
@@ -24,7 +24,7 @@ export interface TokenStatsTarget {
  */
 export function tokenStatsHook(target: TokenStatsTarget): AgentHook {
   return {
-    onStepFinish: ({ toolCalls, usage }) => {
+    onStepFinish: ({ usage }) => {
       if (usage) {
         target.lastStepPromptTokens = usage.promptTokens;
         if (target.spinnerStats) {
@@ -32,9 +32,6 @@ export function tokenStatsHook(target: TokenStatsTarget): AgentHook {
           target.spinnerStats.totalCompletionTokens += usage.completionTokens;
           target.spinnerStats.latestPromptTokens = usage.promptTokens;
         }
-      }
-      if ((toolCalls?.length ?? 0) > 0 && target.spinnerStats) {
-        startSpinner(() => buildSpinnerMessage(target.spinnerStats!));
       }
     },
   };

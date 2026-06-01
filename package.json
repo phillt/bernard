@@ -58,7 +58,6 @@
     "@ai-sdk/xai": "^1.1.0",
     "@xenova/transformers": "^2.17.0",
     "ai": "^4.1.0",
-    "chalk": "^4.1.2",
     "commander": "^12.1.0",
     "dotenv": "^16.4.0",
     "ink": "^5.0.1",

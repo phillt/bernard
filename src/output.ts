@@ -1,6 +1,5 @@
 import type { CoreMessage } from 'ai';
 import { getContextWindow, COMPRESSION_THRESHOLD } from './context.js';
-import { getTheme } from './theme.js';
 import type { Step, StepStatus } from './plan-store.js';
 import { debugLog } from './logger.js';
 
@@ -17,144 +16,24 @@ export function setToolDetailsVisible(enabled: boolean): void {
   toolDetailsVisible = enabled;
 }
 
-// Tools rendered through dedicated channels (printPlan, printThought,
-// printEvaluation) — their generic call/result lines would be duplicate noise.
 const silentTools = new Set<string>(['plan', 'think', 'evaluate']);
-
-// Pinned regions: a generic persistent-footer mechanism. Each region is a
-// block of lines keyed by id that stays anchored just above the prompt.
-// Only active when stdout is a TTY; in pipe/test mode the regions are stored
-// but never rendered, so chat output stays clean.
-
-const pinnedRegions = new Map<string, string[]>();
-let pinnedVisualRowCount = 0;
-
-function pinSupported(): boolean {
-  return !!process.stdout.isTTY;
-}
-
-// CSI escapes contribute to `.length` but occupy zero cells on screen, so
-// they must be removed before computing how many visual rows a line wraps to.
-const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
-
-function stripAnsi(s: string): string {
-  return s.replace(ANSI_RE, '');
-}
-
-function currentColumns(): number {
-  return process.stdout.columns || 80;
-}
-
-/**
- * Number of visual terminal rows a single logical line will occupy, given
- * the current column width. Strips ANSI CSI escapes so zero-width control
- * codes don't inflate the count. Exported for direct testing.
- */
-export function visualRowCount(line: string, columns: number): number {
-  const width = stripAnsi(line).length;
-  if (width === 0) return 1;
-  return Math.ceil(width / columns);
-}
-
-function erasePinnedRegions(): void {
-  if (!pinSupported() || pinnedVisualRowCount === 0) return;
-  process.stdout.write(`\x1b[${pinnedVisualRowCount}A`);
-  process.stdout.write(`\r\x1b[J`);
-  pinnedVisualRowCount = 0;
-}
-
-function renderPinnedRegions(): void {
-  if (!pinSupported() || pinnedRegions.size === 0) return;
-  const columns = currentColumns();
-  let rows = 0;
-  for (const lines of pinnedRegions.values()) {
-    for (const line of lines) {
-      process.stdout.write(line + '\n');
-      rows += visualRowCount(line, columns);
-    }
-  }
-  pinnedVisualRowCount = rows;
-}
-
-if (process.stdout.isTTY) {
-  process.stdout.on('resize', () => {
-    // On resize the row math for the currently-rendered pinned content is
-    // based on the old column count. Redraw from scratch using the new width.
-    if (pinnedRegions.size === 0) return;
-    // Can't reliably erase since cursor position relative to the wrapped
-    // lines is now ambiguous. Just reset the counter and re-render below the
-    // current cursor; scrollback picks up the old copy but the live region
-    // stays correct going forward.
-    pinnedVisualRowCount = 0;
-    renderPinnedRegions();
-  });
-}
-
-function sameLines(a: string[] | undefined, b: string[]): boolean {
-  if (!a || a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
-
-/**
- * Pins or updates a named region of lines above the prompt.
- * Passing an empty array removes the region. No-op when the new content
- * matches what is already pinned under that id.
- */
-export function setPinnedRegion(id: string, lines: string[]): void {
-  if (lines.length === 0) {
-    if (!pinnedRegions.has(id)) return;
-    erasePinnedRegions();
-    pinnedRegions.delete(id);
-    renderPinnedRegions();
-    return;
-  }
-  if (sameLines(pinnedRegions.get(id), lines)) return;
-  erasePinnedRegions();
-  pinnedRegions.set(id, lines);
-  renderPinnedRegions();
-}
-
-/** Removes a named pinned region. */
-export function clearPinnedRegion(id: string): void {
-  setPinnedRegion(id, []);
-}
-
-function emit(message: string): void {
-  erasePinnedRegions();
-  console.log(message);
-  renderPinnedRegions();
-}
 
 /** Cumulative token-usage statistics displayed alongside the thinking spinner. */
 export interface SpinnerStats {
-  /** Epoch timestamp (ms) when the current agent step began. */
   startTime: number;
-  /** Running total of prompt tokens consumed across all steps. */
   totalPromptTokens: number;
-  /** Running total of completion tokens generated across all steps. */
   totalCompletionTokens: number;
-  /** Prompt tokens for the most recent LLM call (used for compression headroom). */
   latestPromptTokens: number;
-  /** Model identifier, used to look up the context-window size. */
   model: string;
-  /** Optional context window override (0 or undefined = auto-detect). */
   contextWindowOverride?: number;
 }
 
-/**
- * Formats a token count into a compact human-readable string (e.g. `"3.2k"`).
- */
 export function formatTokenCount(n: number): string {
   if (n < 1000) return String(n);
   const k = n / 1000;
   return k >= 10 ? `${Math.round(k)}k` : `${k.toFixed(1)}k`;
 }
 
-/**
- * Formats a millisecond duration as `"Xs"` or `"XmYs"`.
- * @internal
- */
 function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   if (totalSeconds < 60) return `${totalSeconds}s`;
@@ -163,12 +42,6 @@ function formatElapsed(ms: number): string {
   return `${minutes}m${seconds}s`;
 }
 
-/**
- * Builds the dynamic status text shown next to the spinner animation.
- *
- * Displays elapsed time, cumulative token counts (up/down arrows),
- * and percentage of context window remaining before compression triggers.
- */
 export function buildSpinnerMessage(stats: SpinnerStats): string {
   const elapsed = formatElapsed(Date.now() - stats.startTime);
 
@@ -185,117 +58,59 @@ export function buildSpinnerMessage(stats: SpinnerStats): string {
     Math.round(((thresholdTokens - stats.latestPromptTokens) / thresholdTokens) * 100),
   );
 
-  return `Thinking (${elapsed} | ${up}\u2191 ${down}\u2193 | ${remainingPct}% until compression)`;
+  return `Thinking (${elapsed} | ${up}↑ ${down}↓ | ${remainingPct}% until compression)`;
 }
 
-/**
- * Wraps an optional sub-agent prefix (e.g. `"sub:2"`) in a colored bracket label.
- * Returns an empty string when no prefix is provided.
- * @internal
- */
 function formatPrefix(prefix?: string): string {
   if (!prefix) return '';
-  const prefixColors = getTheme().prefixColors;
-  const match = prefix.match(/^(?:sub|task|spec):(\d+)$/);
-  const colorIndex = match ? (parseInt(match[1], 10) - 1) % prefixColors.length : 0;
-  const colorFn = prefixColors[colorIndex];
-  return colorFn(`[${prefix}] `);
+  return `[${prefix}] `;
 }
 
-// Spinner state
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-let spinnerTimer: ReturnType<typeof setInterval> | null = null;
-let spinnerFrameIndex = 0;
+// Spinner is a no-op in Phase D — Ink renders its own animated status line.
+export function startSpinner(_message?: string | (() => string)): void {}
+export function stopSpinner(): void {}
 
-/**
- * Starts a braille-dot spinner animation on stdout.
- *
- * Hides the cursor and redraws at 80 ms intervals. If a spinner is already
- * running the call is a no-op. Call {@link stopSpinner} to clear it.
- *
- * @param message - Static string or callback returning a dynamic status line.
- */
-export function startSpinner(message: string | (() => string) = 'Thinking'): void {
-  if (spinnerTimer) return; // already running
-  spinnerFrameIndex = 0;
-  const getMessage = typeof message === 'function' ? message : () => message;
-  process.stdout.write('\x1B[?25l'); // hide cursor
-  spinnerTimer = setInterval(() => {
-    const frame = SPINNER_FRAMES[spinnerFrameIndex % SPINNER_FRAMES.length];
-    process.stdout.write(`\r\x1B[2K${getTheme().accent(frame)} ${getTheme().muted(getMessage())}`);
-    spinnerFrameIndex++;
-  }, 80);
-}
-
-/** Stops the spinner, clears its line, and restores the cursor. */
-export function stopSpinner(): void {
-  if (!spinnerTimer) return;
-  clearInterval(spinnerTimer);
-  spinnerTimer = null;
-  process.stdout.write('\r\x1B[2K'); // clear line
-  process.stdout.write('\x1B[?25h'); // show cursor
-}
-
-/** Prints the branded welcome banner with provider, model, and optional version info. */
 export function printWelcome(
   provider: string,
   model: string,
   version?: string,
   baseURL?: string,
 ): void {
-  const ver = version ? getTheme().muted(` v${version}`) : '';
-  console.log(getTheme().accentBold('\n  Bernard') + ver + getTheme().muted(' — AI CLI Assistant'));
-  console.log(getTheme().muted(`  Provider: ${provider} | Model: ${model}`));
+  const ver = version ? ` v${version}` : '';
+  console.log(`\n  Bernard${ver} — AI CLI Assistant`);
+  console.log(`  Provider: ${provider} | Model: ${model}`);
   if (baseURL) {
-    console.log(getTheme().muted(`  Endpoint: ${baseURL}`));
+    console.log(`  Endpoint: ${baseURL}`);
   }
   if (process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1') {
-    console.log(getTheme().warning('  DEBUG mode enabled — logging to .logs/'));
+    console.log('  DEBUG mode enabled — logging to .logs/');
   }
-  console.log(getTheme().muted('  Type /help for commands, exit to quit\n'));
+  console.log('  Type /help for commands, exit to quit\n');
 }
 
-/** Prints an assistant response, stopping any active spinner first. */
 export function printAssistantText(text: string, prefix?: string): void {
-  stopSpinner();
   if (text.trim()) {
-    const label = formatPrefix(prefix);
-    emit(label + getTheme().text(text));
+    console.log(formatPrefix(prefix) + text);
   }
 }
 
-/**
- * Prints a one-line summary of a tool invocation.
- *
- * For the `shell` tool the raw command string is shown; for all others
- * the args object is JSON-serialized.
- */
 export function printToolCall(
   toolName: string,
   args: Record<string, unknown>,
   prefix?: string,
 ): void {
-  stopSpinner();
-  // Debug log fires regardless of visibility so `.logs/<date>.log` keeps
-  // full tool args even when tool-details are hidden (see issue #116).
   debugLog(`onStepFinish:toolCall:${toolName}`, args);
   if (silentTools.has(toolName)) return;
   const label = formatPrefix(prefix);
   if (!toolDetailsVisible) {
-    emit(label + getTheme().toolCall(`  ▶ ${toolName}`));
+    console.log(`${label}  ▶ ${toolName}`);
     return;
   }
   const argsStr = toolName === 'shell' ? String(args.command || '') : JSON.stringify(args);
-  emit(label + getTheme().toolCall(`  ▶ ${toolName}`) + getTheme().muted(`: ${argsStr}`));
+  console.log(`${label}  ▶ ${toolName}: ${argsStr}`);
 }
 
-/**
- * Prints a tool's return value, truncated to {@link MAX_TOOL_OUTPUT_LENGTH} characters.
- *
- * Handles string results, `{ output: string }` shapes, and arbitrary objects.
- */
 export function printToolResult(toolName: string, result: unknown, prefix?: string): void {
-  stopSpinner();
   debugLog(`onStepFinish:toolResult:${toolName}`, result);
   if (silentTools.has(toolName)) return;
   if (!toolDetailsVisible) return;
@@ -310,68 +125,45 @@ export function printToolResult(toolName: string, result: unknown, prefix?: stri
   }
 
   if (output.length > MAX_TOOL_OUTPUT_LENGTH) {
-    output = output.slice(0, MAX_TOOL_OUTPUT_LENGTH) + getTheme().muted('\n  ... (truncated)');
+    output = output.slice(0, MAX_TOOL_OUTPUT_LENGTH) + '\n  ... (truncated)';
   }
 
   const lines = output
     .split('\n')
-    .map((line) => label + getTheme().muted(`  ${line}`))
+    .map((line) => `${label}  ${line}`)
     .join('\n');
-  emit(lines);
+  console.log(lines);
 }
 
-/** Prints an error message to stderr in the theme's error color. */
 export function printError(message: string): void {
-  stopSpinner();
-  console.error(getTheme().error(`Error: ${message}`));
+  console.error(`Error: ${message}`);
 }
 
-/** Prints an informational message in the theme's muted color. */
 export function printInfo(message: string): void {
-  emit(getTheme().muted(message));
+  console.log(message);
 }
 
-/** Prints a dimmed, de-emphasized line — used for secondary text like menu descriptions. */
 export function printDim(message: string): void {
-  emit(getTheme().dim(message));
+  console.log(message);
 }
 
-/** Prints a warning message in the theme's warning color. */
 export function printWarning(message: string): void {
-  stopSpinner();
-  emit(getTheme().warning(message));
+  console.log(message);
 }
 
-/**
- * Two-line tool-failure render with category label, one-line error snippet,
- * and a recovery hint from the failure-taxonomy playbook. Severity controls
- * color: `critical` and `normal` use `error`; `low` uses `warning`.
- *
- * Sits at the boundary where the user actually sees a failed tool call —
- * the wrapper shim (and, eventually, bare-tool error paths in the agent loop).
- */
 export function printToolFailure(
   category: string,
   snippet: string,
   hint: string,
-  severity: 'low' | 'normal' | 'critical' = 'normal',
+  _severity: 'low' | 'normal' | 'critical' = 'normal',
 ): void {
-  stopSpinner();
   const firstLine = snippet.split('\n')[0]?.slice(0, 200) ?? '';
-  const theme = getTheme();
-  const colorFn = severity === 'low' ? theme.warning : theme.error;
-  emit(colorFn(`  ${category}: ${firstLine}`));
-  emit(theme.muted(`  → ${hint}`));
+  console.log(`  ${category}: ${firstLine}`);
+  console.log(`  → ${hint}`);
 }
 
-/**
- * Prints a dimmed summary of a prior conversation for session-resume context.
- *
- * Each message is truncated to {@link MAX_REPLAY_LENGTH} characters.
- * Tool-role messages are skipped.
- */
 export function printConversationReplay(messages: CoreMessage[]): void {
-  console.log(getTheme().dim('  Previous conversation:'));
+  console.log('  Previous conversation:');
 
   for (const msg of messages) {
     if (msg.role === 'tool') continue;
@@ -383,22 +175,13 @@ export function printConversationReplay(messages: CoreMessage[]): void {
       text.length > MAX_REPLAY_LENGTH ? text.slice(0, MAX_REPLAY_LENGTH) + '…' : text;
 
     const prefix = msg.role === 'user' ? '  you> ' : '  assistant> ';
-    console.log(getTheme().dim(prefix + truncated));
+    console.log(prefix + truncated);
   }
 
-  console.log(getTheme().dim('  ———'));
+  console.log('  ———');
   console.log();
 }
 
-/**
- * Extracts the plain-text content from a {@link CoreMessage} for display formatting.
- *
- * Unlike {@link extractText} in `context.ts` (which is used for serialization and compression),
- * this variant is scoped to output rendering only.
- *
- * @returns The joined text content, or `null` if the message has no text parts.
- * @internal
- */
 function extractText(msg: CoreMessage): string | null {
   if (typeof msg.content === 'string') return msg.content;
   if (!Array.isArray(msg.content)) return null;
@@ -416,160 +199,110 @@ function extractText(msg: CoreMessage): string | null {
 function iconForStatus(status: StepStatus): string {
   switch (status) {
     case 'done':
-      return '\u2713';
+      return '✓';
     case 'in_progress':
-      return '\u25D0';
+      return '◐';
     case 'cancelled':
-      return '\u2298';
+      return '⊘';
     case 'error':
-      return '\u2717';
+      return '✗';
     case 'pending':
-      return '\u25CB';
+      return '○';
   }
 }
 
-/**
- * Pins the current plan as a bulleted, status-decorated list above the prompt.
- *
- * Uses the generic pinned-region mechanism keyed by `'plan'`, so the block
- * stays anchored while other chat-flow output scrolls above it.
- * Passing no steps removes the pinned plan.
- */
 export function printPlan(steps: Step[], prefix?: string): void {
-  stopSpinner();
-  if (steps.length === 0) {
-    clearPinnedRegion('plan');
-    return;
-  }
-  const t = getTheme();
+  if (steps.length === 0) return;
   const label = formatPrefix(prefix);
-  const lines: string[] = [label + t.accent('  \u25C6 Plan:')];
+  console.log(`${label}  ◆ Plan:`);
   for (const s of steps) {
     const icon = iconForStatus(s.status);
-    const note = s.note ? t.muted(` \u2014 ${s.note}`) : '';
-    lines.push(label + t.muted(`    ${icon} ${s.id}. ${s.description}`) + note);
+    const note = s.note ? ` — ${s.note}` : '';
+    console.log(`${label}    ${icon} ${s.id}. ${s.description}${note}`);
   }
-  setPinnedRegion('plan', lines);
 }
 
-/** Prints a visible thought block, styled as secondary (dim italic) so it reads below the main response. */
 export function printThought(thought: string, prefix?: string): void {
-  stopSpinner();
-  const t = getTheme();
   const label = formatPrefix(prefix);
-  emit(label + t.dim('◉ thinking'));
+  console.log(`${label}◉ thinking`);
   for (const line of thought.split('\n')) {
-    emit(label + t.dimItalic(line));
+    console.log(label + line);
   }
-  emit(label + '');
+  console.log(label);
 }
 
-/** Prints a visible post-action self-evaluation, styled to mirror printThought. */
 export function printEvaluation(evaluation: string, prefix?: string): void {
-  stopSpinner();
-  const t = getTheme();
   const label = formatPrefix(prefix);
-  emit(label + t.dim('\u2316 evaluating'));
+  console.log(`${label}⌖ evaluating`);
   for (const line of evaluation.split('\n')) {
-    emit(label + t.dimItalic(line));
+    console.log(label + line);
   }
-  emit(label + '');
+  console.log(label);
 }
 
-/** Prints a colored top-border line when a sub-agent begins executing a task. */
 export function printSubAgentStart(id: number, task: string): void {
-  const prefixColors = getTheme().prefixColors;
-  const colorFn = prefixColors[(id - 1) % prefixColors.length];
   const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
-  emit(colorFn(`┌─ sub:${id} — ${displayTask}`));
+  console.log(`┌─ sub:${id} — ${displayTask}`);
 }
 
-/** Prints a colored bottom-border line when a sub-agent finishes. */
 export function printSubAgentEnd(id: number): void {
-  const prefixColors = getTheme().prefixColors;
-  const colorFn = prefixColors[(id - 1) % prefixColors.length];
-  emit(colorFn(`└─ sub:${id} done`));
+  console.log(`└─ sub:${id} done`);
 }
 
-/** Prints a colored top-border line when a specialist begins executing a task. */
 export function printSpecialistStart(id: number, specialistName: string, task: string): void {
-  const prefixColors = getTheme().prefixColors;
-  const colorFn = prefixColors[(id - 1) % prefixColors.length];
   const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
-  emit(colorFn(`┌─ spec:${id} [${specialistName}] — ${displayTask}`));
+  console.log(`┌─ spec:${id} [${specialistName}] — ${displayTask}`);
 }
 
-/** Prints a colored bottom-border line when a specialist finishes. */
 export function printSpecialistEnd(id: number): void {
-  const prefixColors = getTheme().prefixColors;
-  const colorFn = prefixColors[(id - 1) % prefixColors.length];
-  emit(colorFn(`└─ spec:${id} done`));
+  console.log(`└─ spec:${id} done`);
 }
 
-/** Prints a colored top-border line when a task begins executing. */
 export function printTaskStart(task: string): void {
-  const t = getTheme();
   const displayTask = task.length > 80 ? task.slice(0, 80) + '…' : task;
-  emit(t.accent(`┌─ task — ${displayTask}`));
+  console.log(`┌─ task — ${displayTask}`);
 }
 
-/** Prints a colored bottom-border line when a task finishes, showing structured result. */
 export function printTaskEnd(result: string): void {
-  const t = getTheme();
   try {
     const parsed = JSON.parse(result);
-    const statusColor = parsed.status === 'success' ? t.accent : t.error;
     const MAX_TASK_OUTPUT_LENGTH = 80;
     const output = parsed.output
       ? `: ${parsed.output.length > MAX_TASK_OUTPUT_LENGTH ? parsed.output.slice(0, MAX_TASK_OUTPUT_LENGTH) + '…' : parsed.output}`
       : '';
-    emit(statusColor(`└─ task ${parsed.status}${output}`));
+    console.log(`└─ task ${parsed.status}${output}`);
   } catch {
-    emit(t.accent(`└─ task done`));
+    console.log('└─ task done');
   }
 }
 
-/** Prints the REPL help menu listing all available slash commands. */
 export function printHelp(): void {
-  const t = getTheme();
   const lines = [
-    t.accent('\nCommands:'),
-    '  ' + t.accent('/help') + t.muted('    — Show this help'),
-    '  ' + t.accent('/clear') + t.muted('   — Clear conversation (--save/-s to summarize first)'),
-    '  ' + t.accent('/compact') + t.muted(' — Compress conversation history in-place'),
-    '  ' +
-      t.accent('/task') +
-      t.muted('    — Run an isolated task (no history, structured output)'),
-    '  ' + t.accent('/image') + t.muted('   — Attach an image: /image <path> [prompt]'),
-    '  ' + t.accent('/memory') + t.muted('  — List persistent memories'),
-    '  ' + t.accent('/scratch') + t.muted(' — List session scratch notes'),
-    '  ' + t.accent('/mcp') + t.muted('      — List MCP servers and tools'),
-    '  ' + t.accent('/cron') + t.muted('     — Show cron jobs and daemon status'),
-    '  ' + t.accent('/facts') + t.muted('    — Show RAG facts in current context window'),
-    '  ' + t.accent('/provider') + t.muted(' — Switch LLM provider'),
-    '  ' + t.accent('/model') + t.muted('    — Switch model for current provider'),
-    '  ' + t.accent('/theme') + t.muted('    — Switch color theme'),
-    '  ' + t.accent('/routines') + t.muted(' — List saved routines'),
-    '  ' + t.accent('/create-routine') + t.muted(' — Create a routine with guided AI assistance'),
-    '  ' + t.accent('/create-task') + t.muted(' — Create a task routine with guided AI assistance'),
-    '  ' + t.accent('/specialists') + t.muted(' — List specialist agents'),
-    '  ' +
-      t.accent('/create-specialist') +
-      t.muted(' — Create a specialist with guided AI assistance'),
-    '  ' + t.accent('/candidates') + t.muted(' — Review specialist suggestions'),
-    '  ' +
-      t.accent('/options') +
-      t.muted('  — View and set options (max-tokens, max-steps, shell-timeout, token-window)'),
-    '  ' +
-      t.accent('/agent-options') +
-      t.muted(' — Configure agent behavior (toggles, thresholds, saved assets)'),
-    '  ' + t.accent('/update') + t.muted('   — Check for and install updates'),
-    '  ' + t.accent('exit') + t.muted('      — Quit Bernard'),
-    '',
-    t.muted(
-      '  Tip: set BERNARD_PLAIN_MENU=1 for a static numbered-list menu (better for screen readers).',
-    ),
+    '\nCommands:',
+    '  /help    — Show this help',
+    '  /clear   — Clear conversation (--save/-s to summarize first)',
+    '  /compact — Compress conversation history in-place',
+    '  /task    — Run an isolated task (no history, structured output)',
+    '  /image   — Attach an image: /image <path> [prompt]',
+    '  /memory  — List persistent memories',
+    '  /scratch — List session scratch notes',
+    '  /mcp     — List MCP servers and tools',
+    '  /cron    — Show cron jobs and daemon status',
+    '  /facts   — Show RAG facts in current context window',
+    '  /provider — Switch LLM provider',
+    '  /model   — Switch model for current provider',
+    '  /theme   — Switch color theme',
+    '  /routines — List saved routines',
+    '  /create-routine — Create a routine with guided AI assistance',
+    '  /create-task — Create a task routine with guided AI assistance',
+    '  /specialists — List specialist agents',
+    '  /create-specialist — Create a specialist with guided AI assistance',
+    '  /candidates — Review specialist suggestions',
+    '  /options — View and set options',
+    '  /agent-options — Configure agent behavior',
+    '  /update  — Check for and install updates',
+    '  exit     — Quit Bernard',
     '',
   ];
-  emit(lines.join('\n'));
+  console.log(lines.join('\n'));
 }
