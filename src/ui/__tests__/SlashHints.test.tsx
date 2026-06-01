@@ -28,17 +28,13 @@ describe('matchSlashCommands', () => {
 
 describe('<SlashHints>', () => {
   it('renders nothing when matches is empty', () => {
-    const { lastFrame } = render(
-      createElement(SlashHints, { matches: [], selectedIndex: 0 }),
-    );
+    const { lastFrame } = render(createElement(SlashHints, { matches: [], selectedIndex: 0 }));
     expect(lastFrame()).toBe('');
   });
 
   it('renders the supplied matches with the selected row highlighted', () => {
     const matches = matchSlashCommands('/c');
-    const { lastFrame } = render(
-      createElement(SlashHints, { matches, selectedIndex: 0 }),
-    );
+    const { lastFrame } = render(createElement(SlashHints, { matches, selectedIndex: 0 }));
     const frame = lastFrame() ?? '';
     for (const cmd of matches) expect(frame).toContain(cmd.name);
     // The selection marker prefixes only the highlighted row.

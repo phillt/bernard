@@ -26,9 +26,7 @@ export function HintBar({ busy, overlayActive, slashActive }: HintBarProps) {
       {hints.map((hint, idx) => (
         <Text key={hint.key} color={colors.muted}>
           {idx > 0 ? '  ·  ' : ''}
-          <Text color={colors.accent}>{hint.key}</Text>
-          {' '}
-          {hint.label}
+          <Text color={colors.accent}>{hint.key}</Text> {hint.label}
         </Text>
       ))}
     </Box>

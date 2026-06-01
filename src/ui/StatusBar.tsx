@@ -44,8 +44,7 @@ export function StatusBar({ agent }: StatusBarProps) {
   // dots get progressively louder as the model's input window approaches the
   // compression cliff; the empty trailing dots stay muted so the active
   // portion pops.
-  const fillColor =
-    freePct > 25 ? colors.muted : freePct > 5 ? colors.warning : colors.accent;
+  const fillColor = freePct > 25 ? colors.muted : freePct > 5 ? colors.warning : colors.accent;
 
   return (
     <Box justifyContent="flex-end">
@@ -53,7 +52,11 @@ export function StatusBar({ agent }: StatusBarProps) {
         {up}↑ {down}↓{'   '}
       </Text>
       {filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
-      {emptyCount > 0 && <Text color={colors.muted} dimColor>{'○'.repeat(emptyCount)}</Text>}
+      {emptyCount > 0 && (
+        <Text color={colors.muted} dimColor>
+          {'○'.repeat(emptyCount)}
+        </Text>
+      )}
     </Box>
   );
 }

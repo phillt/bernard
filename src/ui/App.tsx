@@ -241,9 +241,7 @@ export function App({
   // duration footer under every assistant message in <Thread>. Stored as a
   // ref because re-renders are already triggered by historyVersion bumps; the
   // map is append-only across the session and cleared by /clear.
-  const turnTimingsRef = useRef<Map<number, { endedAt: number; durationMs: number }>>(
-    new Map(),
-  );
+  const turnTimingsRef = useRef<Map<number, { endedAt: number; durationMs: number }>>(new Map());
   // history-index → user's original text when the rewriter substituted it.
   // Lives outside React state because it's append-only and not React-reactive
   // (history re-renders are driven by historyVersion bumps already).
@@ -349,19 +347,21 @@ export function App({
   // Attach a persistent SpinnerStats object so the framework's token-stats
   // hook accumulates usage across turns. <StatusBar> polls this for the
   // pinned bottom-right readout. We never null it out — totals carry across
-  // the whole session and only reset on REPL restart. Seeded synchronously
-  // during the first render so the status line is visible from the first
-  // paint instead of after the next interval tick.
-  if (!agent.spinnerStats) {
-    agent.setSpinnerStats({
-      startTime: Date.now(),
-      totalPromptTokens: 0,
-      totalCompletionTokens: 0,
-      latestPromptTokens: 0,
-      model: config.model,
-      contextWindowOverride: config.tokenWindow || undefined,
-    });
-  }
+  // the whole session and only reset on REPL restart. Seeded in a mount-time
+  // effect (StrictMode-safe; render-body side effects double-fire and would
+  // re-overwrite the object on every re-render including the StatusBar tick).
+  useEffect(() => {
+    if (!agent.spinnerStats) {
+      agent.setSpinnerStats({
+        startTime: Date.now(),
+        totalPromptTokens: 0,
+        totalCompletionTokens: 0,
+        latestPromptTokens: 0,
+        model: config.model,
+        contextWindowOverride: config.tokenWindow || undefined,
+      });
+    }
+  }, [agent, config.model, config.tokenWindow]);
 
   // Phase D (#215) ink-handlers bridge. The toolOptions callbacks built in
   // `src/index.ts` read from `getInkHandlers()` at call time, so this effect
@@ -532,6 +532,8 @@ export function App({
       provenanceHistoryStore.clear();
       agent.clearHistory();
       turnTimingsRef.current.clear();
+      rewriteOriginalsRef.current.clear();
+      setInterrupted(false);
       // Wipe scrollback + visible region so the old transcript doesn't linger
       // above the cleared <Thread>. `\x1b[3J` clears scrollback, `\x1b[2J`
       // the visible region, `\x1b[H` homes the cursor. Ink repaints on the
@@ -575,6 +577,10 @@ export function App({
         if (!result.compacted) {
           flashToast('Nothing to compact — conversation is already short enough.');
         } else {
+          // History indices shift after compaction; per-index maps would now
+          // attach to the wrong messages.
+          turnTimingsRef.current.clear();
+          rewriteOriginalsRef.current.clear();
           const pct = Math.round(
             ((result.tokensBefore - result.tokensAfter) / result.tokensBefore) * 100,
           );
@@ -823,6 +829,7 @@ export function App({
           config.provider = added.entry.name;
           config.model = added.entry.defaultModel;
           config.providerBaseUrl = undefined;
+          if (agent.spinnerStats) agent.spinnerStats.model = added.entry.defaultModel;
           savePreferences({
             provider: config.provider,
             model: config.model,
@@ -840,6 +847,7 @@ export function App({
         config.provider = value;
         config.model = getDefaultModel(config.provider, customProviders);
         config.providerBaseUrl = undefined;
+        if (agent.spinnerStats) agent.spinnerStats.model = config.model;
         savePreferences({
           provider: config.provider,
           model: config.model,
@@ -884,6 +892,10 @@ export function App({
       }
       if (chosenModel) {
         config.model = chosenModel;
+        // <StatusBar> computes the compression-headroom bar against this model
+        // via getContextWindow(stats.model). Without this refresh it would
+        // keep using the previous model's window after a /model switch.
+        if (agent.spinnerStats) agent.spinnerStats.model = chosenModel;
         savePreferences({
           provider: config.provider,
           model: config.model,
@@ -1801,6 +1813,7 @@ export function App({
       flashToast(`Maximum concurrent agents (${getMaxConcurrentAgents()}) reached.`, 'error');
       return;
     }
+    setInterrupted(false);
     setBusy(true);
     const ctx = agent.getContext();
     ctx.provenance.clear();
@@ -1988,11 +2001,7 @@ export function App({
         onSlashActiveChange={setSlashActive}
       />
       <Box justifyContent="space-between">
-        <HintBar
-          busy={busy}
-          overlayActive={activeOverlay !== null}
-          slashActive={slashActive}
-        />
+        <HintBar busy={busy} overlayActive={activeOverlay !== null} slashActive={slashActive} />
         <StatusBar agent={agent} />
       </Box>
       {activeOverlay === 'status' && (

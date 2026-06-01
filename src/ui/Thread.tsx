@@ -315,9 +315,7 @@ function MessageBlock({
   toolDetails: boolean;
 }) {
   if (message.role === 'user')
-    return (
-      <UserMessage message={message as CoreUserMessage} rewriteOriginal={rewriteOriginal} />
-    );
+    return <UserMessage message={message as CoreUserMessage} rewriteOriginal={rewriteOriginal} />;
   if (message.role === 'assistant')
     return (
       <AssistantMessage
@@ -356,9 +354,7 @@ function UserMessage({
         </Text>
       </Box>
       <Box>
-        {rewriteOriginal !== undefined && (
-          <Text dimColor>{REWRITE_ICON} </Text>
-        )}
+        {rewriteOriginal !== undefined && <Text dimColor>{REWRITE_ICON} </Text>}
         {timestamp && <Text dimColor>{formatFriendlyTimestamp(timestamp)}</Text>}
       </Box>
     </Box>
@@ -542,9 +538,12 @@ function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   const seconds = ms / 1000;
   if (seconds < 10) return `${seconds.toFixed(1)}s`;
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const m = Math.floor(seconds / 60);
-  const s = Math.round(seconds - m * 60);
+  // Round once, then carry over to minutes so we can't emit "60s" or
+  // "1m 60s" when the float happens to round up at the boundary.
+  const wholeSeconds = Math.round(seconds);
+  if (wholeSeconds < 60) return `${wholeSeconds}s`;
+  const m = Math.floor(wholeSeconds / 60);
+  const s = wholeSeconds - m * 60;
   return `${m}m ${s}s`;
 }
 

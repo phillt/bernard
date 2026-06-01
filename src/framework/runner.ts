@@ -199,27 +199,44 @@ async function runStreaming(
       if (part.type === 'text-delta') {
         if (part.textDelta) spec.onTextDelta?.(part.textDelta);
       } else if (part.type === 'tool-call') {
-        spec.onToolCallStart?.({
-          callId: part.toolCallId ?? '',
-          toolName: part.toolName ?? '',
-          args: part.args,
-        });
+        // Skip malformed events: an empty callId would collide across tool
+        // pairings in the sink, and an empty name renders as a blank `⚙ `.
+        if (part.toolCallId && part.toolName) {
+          spec.onToolCallStart?.({
+            callId: part.toolCallId,
+            toolName: part.toolName,
+            args: part.args,
+          });
+        }
       } else if (part.type === 'tool-result') {
-        spec.onToolResult?.({
-          callId: part.toolCallId ?? '',
-          toolName: part.toolName ?? '',
-          result: part.result,
-        });
+        if (part.toolCallId && part.toolName) {
+          spec.onToolResult?.({
+            callId: part.toolCallId,
+            toolName: part.toolName,
+            result: part.result,
+          });
+        }
       } else if (part.type === 'error') {
         // Surface stream errors immediately rather than waiting for the
         // settled promises below to re-throw — keeps the original stack.
-        throw part.error;
+        // Providers occasionally emit a non-Error value (string, plain
+        // object); wrap so downstream `err.message` / `err.name` checks work.
+        if (part.error instanceof Error) throw part.error;
+        const wrapped = new Error(
+          typeof part.error === 'string' ? part.error : JSON.stringify(part.error),
+        );
+        throw wrapped;
       }
     }
   } catch (err) {
     // Swallow the abort here so the result-promise awaits below can throw the
     // canonical AbortError from the race, keeping the error shape consistent.
-    if (!(err instanceof Error && err.name === 'AbortError')) throw err;
+    // Gate on `signal.aborted` so a provider-side AbortError (server timeout,
+    // internal cancellation) still propagates — otherwise the turn ends with
+    // no text and no diagnostic.
+    const isUserAbort =
+      err instanceof Error && err.name === 'AbortError' && abortSignal?.aborted === true;
+    if (!isUserAbort) throw err;
   }
   // Suppress unhandled-rejection noise for the abortPromise once the run is
   // unwinding — every downstream `raceAbort` will surface it as the thrown

@@ -38,6 +38,13 @@ export function Prompt({ disabled = false, onSubmit, onSlashActiveChange }: Prom
   // character and fewer commands match). Avoids dangling out-of-range cursor.
   const clampedIndex = matches.length === 0 ? 0 : Math.min(selectedIndex, matches.length - 1);
 
+  // Keep the underlying state in sync with the clamped value so arrow-key
+  // handlers don't decrement from a stale high index (e.g. 19 → 18 → 17 …)
+  // when the list shrinks from 20 to 3.
+  useEffect(() => {
+    if (selectedIndex !== clampedIndex) setSelectedIndex(clampedIndex);
+  }, [selectedIndex, clampedIndex]);
+
   const slashActive = matches.length > 0;
   useEffect(() => {
     onSlashActiveChange?.(slashActive);
@@ -93,12 +100,14 @@ export function Prompt({ disabled = false, onSubmit, onSlashActiveChange }: Prom
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Box
-        borderStyle="round"
-        borderColor={disabled ? colors.muted : colors.accent}
-        paddingX={1}
-      >
-        <Text><Text color={colors.accent} bold>{'› '}</Text><Text>{buffer}</Text>{!disabled ? <Text color={colors.accent}>{'▌'}</Text> : null}</Text>
+      <Box borderStyle="round" borderColor={disabled ? colors.muted : colors.accent} paddingX={1}>
+        <Text>
+          <Text color={colors.accent} bold>
+            {'› '}
+          </Text>
+          <Text>{buffer}</Text>
+          {!disabled ? <Text color={colors.accent}>{'▌'}</Text> : null}
+        </Text>
       </Box>
       <SlashHints matches={matches} selectedIndex={clampedIndex} />
     </Box>
