@@ -5,7 +5,6 @@ import {
   printWarning,
   startSpinner,
   buildSpinnerMessage,
-  clearPinnedRegion,
   type SpinnerStats,
 } from './output.js';
 import { runDefinition, registerBuiltinDefinitions } from './framework/agents/index.js';
@@ -318,7 +317,6 @@ export class Agent {
     if (policyResult.decision.scratch?.resetAll) {
       this.memoryStore.clearScratch();
     }
-    clearPinnedRegion('plan');
 
     const profile = getModelProfile(
       this.config.provider,
@@ -693,7 +691,6 @@ export class Agent {
     } finally {
       this.abortController = null;
       this.spinnerStats = null;
-      clearPinnedRegion('plan');
     }
   }
 

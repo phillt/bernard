@@ -8,6 +8,11 @@
 
 import { Command } from 'commander';
 import * as readline from 'node:readline';
+import * as path from 'node:path';
+import * as crypto from 'node:crypto';
+import * as childProcess from 'node:child_process';
+import { createElement } from 'react';
+import { render } from 'ink';
 import {
   loadConfig,
   loadPreferences,
@@ -31,19 +36,43 @@ import {
   removeCustomProvider,
 } from './custom-providers.js';
 import type { SupportedSdk } from './providers/types.js';
-import { startRepl } from './repl.js';
 import { printWelcome, printError, printInfo } from './output.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
-import { listMCPServers, removeMCPServer } from './mcp.js';
+import { listMCPServers, removeMCPServer, MCPManager } from './mcp.js';
 import { runFirstTimeSetup } from './setup.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
 import { migrateFromLegacy } from './migrate.js';
-import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH } from './paths.js';
+import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH, RAG_DIR } from './paths.js';
 import * as fs from 'node:fs';
 import { listProfiles } from './profiles.js';
+import { MemoryStore } from './memory.js';
+import { serializeMessages } from './context.js';
+import { RAGStore } from './rag.js';
+import { RoutineStore } from './routines.js';
+import { SpecialistStore } from './specialists.js';
+import { CandidateStore } from './specialist-candidates.js';
+import { HistoryStore } from './history.js';
+import { ProvenanceHistoryStore } from './provenance-history.js';
+import { assembleContext } from './framework/context.js';
+import { Agent } from './agent.js';
+import { bootstrapPendingCandidates } from './candidate-bootstrap.js';
+import { runCorrectionAgent } from './correction.js';
+import { debugLog } from './logger.js';
+import { App } from './ui/App.js';
+import { getInkHandlers } from './ui/ink-handlers.js';
+import type {
+  ToolOptions,
+  ConfirmActionInput,
+  BlockActionInput,
+  BlockOutcome,
+  AskUserQuestion,
+  AskUserBatchResult,
+} from './tools/types.js';
+import type { CoreMessage } from 'ai';
+import { fileURLToPath } from 'node:url';
 
 const program = new Command();
 
@@ -89,6 +118,7 @@ program
       }
 
       let alertContext: string | undefined;
+      let alertBanner: string | undefined;
 
       if (opts.alert) {
         const store = new CronStore();
@@ -110,9 +140,7 @@ This session was opened in response to a cron job alert.
 
 The user has been notified and this session is open for them to review and act on this alert. Help the user understand and address the issue described above.`;
 
-        printInfo(`\n  Alert from cron job: ${alert.jobName}`);
-        printInfo(`  Message: ${alert.message}`);
-        printInfo(`  Time: ${alert.timestamp}\n`);
+        alertBanner = `Cron alert: ${alert.jobName} — ${alert.message} (${alert.timestamp})`;
       }
 
       printWelcome(
@@ -123,13 +151,267 @@ The user has been notified and this session is open for them to review and act o
       );
       const prefs = loadPreferences();
       startupUpdateCheck(!!prefs.autoUpdate);
-      await startRepl(config, alertContext, !!opts.resume, { isFreshInstall });
+
+      await runInkRepl({
+        config,
+        alertContext,
+        alertBanner,
+        resume: !!opts.resume,
+        isFreshInstall: isFreshInstall && !opts.alert && !opts.resume,
+      });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);
       process.exit(1);
     }
   });
+
+/**
+ * Mount the Ink REPL. Replaces the legacy `startRepl()` from `src/repl.ts`.
+ *
+ * Bootstraps every store the agent and overlays share, builds the
+ * `ToolOptions` callbacks as thin shims that forward to the App's
+ * overlay-request closures (via `getInkHandlers()`), then renders `<App>`
+ * and awaits unmount. The cleanup chain (RAG worker spawn, correction
+ * agent, MCP close) runs from `onExit` — invoked by either `/exit` or
+ * Ink unmount.
+ */
+async function runInkRepl(args: {
+  config: ReturnType<typeof loadConfig>;
+  alertContext?: string;
+  alertBanner?: string;
+  resume: boolean;
+  isFreshInstall: boolean;
+}): Promise<void> {
+  const { config, resume, isFreshInstall, alertBanner } = args;
+  let { alertContext } = args;
+
+  const memoryStore = new MemoryStore();
+  const routineStore = new RoutineStore();
+  const specialistStore = new SpecialistStore();
+  const candidateStore = new CandidateStore();
+  const historyStore = new HistoryStore();
+  const provenanceHistoryStore = new ProvenanceHistoryStore();
+  const ragStore = config.ragEnabled ? new RAGStore() : undefined;
+  const mcpManager = new MCPManager();
+
+  try {
+    await mcpManager.connect();
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    printError(`MCP initialization failed: ${message}`);
+  }
+
+  const statuses = mcpManager.getServerStatuses();
+  if (statuses.length > 0) {
+    printInfo('  MCP servers:');
+    for (const s of statuses) {
+      if (s.connected) {
+        printInfo(`    ✓ ${s.name} (${s.toolCount} tools)`);
+      } else {
+        printError(`    ✗ ${s.name}: ${s.error}`);
+      }
+    }
+  }
+
+  const mcpTools = mcpManager.getTools();
+  const mcpServerNames = mcpManager.getConnectedServerNames();
+
+  const sessionToolAllowlist = new Set<string>();
+
+  const confirmDangerous = async (command: string, signal?: AbortSignal): Promise<boolean> => {
+    const h = getInkHandlers();
+    if (!h) return false;
+    return h.requestConfirmDangerous(command, signal);
+  };
+  const confirmAction = async (
+    input: ConfirmActionInput,
+    signal?: AbortSignal,
+  ): Promise<boolean> => {
+    const h = getInkHandlers();
+    if (!h) return false;
+    return h.requestConfirm(input, signal);
+  };
+  const blockAction = async (
+    input: BlockActionInput,
+    signal?: AbortSignal,
+  ): Promise<BlockOutcome> => {
+    const h = getInkHandlers();
+    if (!h) return 'deny';
+    return h.requestBlock(input, signal);
+  };
+  const askUser = async (
+    questions: AskUserQuestion[],
+    signal?: AbortSignal,
+  ): Promise<AskUserBatchResult> => {
+    const h = getInkHandlers();
+    if (!h) return { cancelled: true, answered: [] };
+    return h.requestAskUser(questions, signal);
+  };
+
+  const toolOptions: ToolOptions = {
+    shellTimeout: config.shellTimeout,
+    confirmDangerous,
+    confirmAction,
+    blockAction,
+    sessionToolAllowlist,
+    askUser,
+  };
+
+  let initialHistory: CoreMessage[] | undefined;
+  if (resume) {
+    const loaded = historyStore.load();
+    if (loaded.length > 0) {
+      const filtered = loaded.filter(
+        (msg) =>
+          !(
+            typeof msg.content === 'string' &&
+            (msg.content.startsWith('[Previous session ended') ||
+              msg.content ===
+                "Understood. Starting a new session. I'll only reference prior context if relevant to your current request.")
+          ),
+      );
+      const boundary: CoreMessage = {
+        role: 'user',
+        content:
+          '[Previous session ended. New session starting. Treat tasks from prior session as completed unless the user explicitly continues them.]',
+      };
+      const boundaryAck: CoreMessage = {
+        role: 'assistant',
+        content:
+          "Understood. Starting a new session. I'll only reference prior context if relevant to your current request.",
+      };
+      initialHistory = [...filtered, boundary, boundaryAck];
+    }
+  }
+
+  const { pending: pendingCandidates, contextBlock } = bootstrapPendingCandidates(
+    candidateStore,
+    specialistStore,
+    config,
+    config,
+  );
+  if (contextBlock) {
+    printInfo(
+      `  ${pendingCandidates.length} specialist suggestion(s) pending. Use /candidates to review.`,
+    );
+    alertContext = alertContext ? alertContext + '\n\n' + contextBlock : contextBlock;
+  }
+
+  const agentCtx = assembleContext({
+    config,
+    toolOptions,
+    mcp: { tools: mcpTools, serverNames: mcpServerNames },
+    rag: ragStore,
+    stores: {
+      memory: memoryStore,
+      routines: routineStore,
+      specialists: specialistStore,
+      candidates: candidateStore,
+    },
+  });
+  const agent = new Agent(agentCtx, { alertContext, initialHistory });
+
+  if (resume) {
+    agent.setTurnProvenance(provenanceHistoryStore.load());
+  }
+
+  let cleanedUp = false;
+  const cleanup = async (): Promise<void> => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+
+    try {
+      const history = agent.getHistory();
+      if (ragStore && history.length >= 4) {
+        const serialized = serializeMessages(history);
+        if (serialized.trim()) {
+          fs.mkdirSync(RAG_DIR, { recursive: true });
+          const tempFile = path.join(
+            RAG_DIR,
+            `.pending-${crypto.randomBytes(8).toString('hex')}.json`,
+          );
+          fs.writeFileSync(
+            tempFile,
+            JSON.stringify({
+              serialized,
+              provider: config.provider,
+              model: config.model,
+            }),
+          );
+          const __dirname = path.dirname(fileURLToPath(import.meta.url));
+          const workerPath = path.join(__dirname, 'rag-worker.js');
+          const child = childProcess.spawn(process.execPath, [workerPath, tempFile], {
+            detached: true,
+            stdio: 'ignore',
+            env: process.env,
+          });
+          child.unref();
+        }
+      }
+    } catch {
+      // Silent failure — don't block exit.
+    }
+
+    if (config.correctionEnabled) {
+      try {
+        const correctionStore = agent.getCorrectionStore();
+        const pending = correctionStore.listPending();
+        if (pending.length > 0) {
+          printInfo(`Reviewing ${pending.length} tool-wrapper failure(s) for learning...`);
+          const result = await runCorrectionAgent({ ctx: agent.getContext() }, pending);
+          if (result.applied > 0) {
+            printInfo(
+              `  Learned from ${result.applied}/${result.processed} failure(s); examples updated.`,
+            );
+          }
+        }
+      } catch (err) {
+        debugLog('correction:error', err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    try {
+      historyStore.save(agent.getHistory());
+      provenanceHistoryStore.save(agent.getTurnProvenance());
+    } catch (err) {
+      debugLog('persist:error', err instanceof Error ? err.message : String(err));
+    }
+
+    try {
+      await mcpManager.close();
+    } catch (err) {
+      debugLog('mcp:close-error', err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const { waitUntilExit } = render(
+    createElement(App, {
+      agent,
+      config,
+      historyStore,
+      provenanceHistoryStore,
+      stores: {
+        memory: memoryStore,
+        routines: routineStore,
+        specialists: specialistStore,
+        candidates: candidateStore,
+        rag: ragStore,
+        mcp: mcpManager,
+      },
+      sessionToolAllowlist,
+      // Real cleanup runs AFTER waitUntilExit so its printInfo / printError
+      // calls don't write through stdout while the Ink renderer is still
+      // mounted (which would corrupt the live UI).
+      onExit: async () => {},
+      alertBanner,
+      isFreshInstall,
+    }),
+  );
+
+  await waitUntilExit();
+  await cleanup();
+}
 
 program
   .command('add-key <provider> <key>')

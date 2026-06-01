@@ -86,6 +86,12 @@ const { waitUntilExit } = render(
     config,
     historyStore,
     provenanceHistoryStore,
+    stores: {
+      memory: memoryStore,
+      routines: routineStore,
+      specialists: specialistStore,
+      candidates: candidateStore,
+    },
     sessionToolAllowlist,
     onExit,
   }),

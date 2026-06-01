@@ -1,4 +1,3 @@
-import type { Theme } from './theme.js';
 import type { PolicyDecision } from './policy/types.js';
 import type { ResolvedEntry } from './reference-resolver.js';
 import type { Step } from './plan-store.js';
@@ -98,9 +97,9 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 1).trimEnd() + '…';
 }
 
-function row(label: string, value: string, t: Theme): string {
+function row(label: string, value: string): string {
   const padded = label.padEnd(LABEL_WIDTH);
-  return `${t.dim(padded)}${value}`;
+  return `${padded}${value}`;
 }
 
 function continuation(value: string): string {
@@ -130,30 +129,27 @@ function permissionsValue(p: AgentStatusInputs['permissions']): string {
 }
 
 /**
- * Renders the Agent Status panel as themed ANSI lines suitable for
- * {@link setPinnedRegion}.
+ * Renders the Agent Status panel as plain-text lines. Callers that want
+ * color (the Ink {@link import('./ui/overlays/StatusViewer.js').StatusViewer})
+ * own their own coloring; this builder produces the textual content.
  *
  * Empty sections render as `(none)` rather than hiding — predictability
- * over compactness for an inspection tool. Callers are responsible for
- * adding a tab strip header above this output (the REPL does this so the
- * same builder can drive cron logs).
+ * over compactness for an inspection tool.
  */
-export function buildAgentStatusPanel(inputs: AgentStatusInputs, t: Theme): string[] {
+export function buildAgentStatusPanel(inputs: AgentStatusInputs): string[] {
   const lines: string[] = [];
 
-  lines.push(row('Goal', inputs.goal ? truncate(inputs.goal, MAX_VALUE_CHARS) : '(none)', t));
-
-  lines.push(row('Permissions', permissionsValue(inputs.permissions), t));
-
-  lines.push(row('Strategy', strategyValue(inputs.constraints), t));
-  lines.push(row('Response shape', responseShapeValue(inputs.constraints), t));
+  lines.push(row('Goal', inputs.goal ? truncate(inputs.goal, MAX_VALUE_CHARS) : '(none)'));
+  lines.push(row('Permissions', permissionsValue(inputs.permissions)));
+  lines.push(row('Strategy', strategyValue(inputs.constraints)));
+  lines.push(row('Response shape', responseShapeValue(inputs.constraints)));
 
   if (inputs.assumptions.length === 0) {
-    lines.push(row('Assumptions', '(none)', t));
+    lines.push(row('Assumptions', '(none)'));
   } else {
     inputs.assumptions.forEach((a, i) => {
       const text = `"${a.phrase}" → ${truncate(a.resolvedTo, 80)} (${a.sourceKey})`;
-      lines.push(i === 0 ? row('Assumptions', text, t) : continuation(text));
+      lines.push(i === 0 ? row('Assumptions', text) : continuation(text));
     });
   }
 
@@ -161,61 +157,33 @@ export function buildAgentStatusPanel(inputs: AgentStatusInputs, t: Theme): stri
     const { id, status, description, verification } = inputs.planStep;
     const { done, total } = inputs.planSummary;
     const header = `[${status}] ${id} of ${total} — ${truncate(description, 120)}`;
-    lines.push(row('Plan step', header, t));
+    lines.push(row('Plan step', header));
     if (verification) {
-      lines.push(continuation(t.dim(`verify: ${truncate(verification, 120)}`)));
+      lines.push(continuation(`verify: ${truncate(verification, 120)}`));
     }
     if (done > 0 && done < total) {
-      lines.push(continuation(t.dim(`(${done}/${total} done)`)));
+      lines.push(continuation(`(${done}/${total} done)`));
     }
   } else {
-    lines.push(row('Plan step', '(none)', t));
+    lines.push(row('Plan step', '(none)'));
   }
 
   if (inputs.lastVerification) {
     const v = inputs.lastVerification;
-    const tag =
-      v.verdict === 'pass'
-        ? t.success('PASS')
-        : v.verdict === 'warn'
-          ? t.warning('WARN')
-          : t.error('FAIL');
+    const tag = v.verdict === 'pass' ? 'PASS' : v.verdict === 'warn' ? 'WARN' : 'FAIL';
     const body = ` — ${truncate(v.reason, 120)}`;
-    const tail = v.source ? t.dim(`  (${truncate(v.source, 60)})`) : '';
-    lines.push(row('Last verify', `${tag}${body}${tail}`, t));
+    const tail = v.source ? `  (${truncate(v.source, 60)})` : '';
+    lines.push(row('Last verify', `${tag}${body}${tail}`));
   } else {
-    lines.push(row('Last verify', '(none)', t));
+    lines.push(row('Last verify', '(none)'));
   }
 
   return lines;
 }
 
 /**
- * Plain-text variant of {@link buildAgentStatusPanel} for log files, cron
- * runs, and non-TTY contexts. Identical layout but without ANSI escapes.
- *
- * Implemented as a fully-typed Theme with identity style functions so that
- * any future renderer call to a color helper (e.g. `accent`, `muted`)
- * compiles and degrades to plain text instead of throwing.
+ * Plain-text variant used by cron logs and non-TTY contexts.
  */
 export function renderAgentStatusPlain(inputs: AgentStatusInputs): string {
-  return buildAgentStatusPanel(inputs, IDENTITY_THEME).join('\n');
+  return buildAgentStatusPanel(inputs).join('\n');
 }
-
-const identity = (s: string) => s;
-
-const IDENTITY_THEME: Theme = {
-  name: 'plain',
-  accent: identity,
-  accentBold: identity,
-  muted: identity,
-  text: identity,
-  toolCall: identity,
-  error: identity,
-  success: identity,
-  dim: identity,
-  dimItalic: identity,
-  warning: identity,
-  prefixColors: [identity, identity, identity, identity],
-  ansi: { prompt: '', hintCmd: '', hintDesc: '', warning: '', reset: '' },
-};

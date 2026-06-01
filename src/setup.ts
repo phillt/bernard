@@ -7,7 +7,6 @@ import {
   PROVIDER_ENV_VARS,
   getDefaultModel,
 } from './config.js';
-import { getTheme } from './theme.js';
 import { KEYS_PATH } from './paths.js';
 
 const PROVIDERS = Object.keys(PROVIDER_ENV_VARS);
@@ -35,15 +34,14 @@ export async function runFirstTimeSetup(): Promise<boolean> {
   });
 
   try {
-    const t = getTheme();
-    console.log(t.accentBold('\n  Welcome to Bernard'));
-    console.log(t.muted('  Local CLI AI Agent with multi-provider support\n'));
-    console.log(t.text('  It looks like this is your first time running Bernard.'));
-    console.log(t.text("  Let's get you set up with an AI provider.\n"));
+    console.log('\n  Welcome to Bernard');
+    console.log('  Local CLI AI Agent with multi-provider support\n');
+    console.log('  It looks like this is your first time running Bernard.');
+    console.log("  Let's get you set up with an AI provider.\n");
 
-    console.log(t.text('  Available providers:'));
+    console.log('  Available providers:');
     for (let i = 0; i < PROVIDERS.length; i++) {
-      console.log(t.text(`    ${i + 1}. ${PROVIDERS[i]}`));
+      console.log(`    ${i + 1}. ${PROVIDERS[i]}`);
     }
     console.log();
 
@@ -54,13 +52,13 @@ export async function runFirstTimeSetup(): Promise<boolean> {
       if (num >= 1 && num <= PROVIDERS.length) {
         provider = PROVIDERS[num - 1];
       } else {
-        console.log(t.error(`  Please enter a number between 1 and ${PROVIDERS.length}.`));
+        console.log(`  Please enter a number between 1 and ${PROVIDERS.length}.`);
       }
     }
 
     const envVar = PROVIDER_ENV_VARS[provider];
-    console.log(t.muted(`\n  You'll need an API key for ${provider}.`));
-    console.log(t.muted(`  (This will be saved securely to ${KEYS_PATH})\n`));
+    console.log(`\n  You'll need an API key for ${provider}.`);
+    console.log(`  (This will be saved securely to ${KEYS_PATH})\n`);
 
     let key: string | undefined;
     while (!key) {
@@ -68,7 +66,7 @@ export async function runFirstTimeSetup(): Promise<boolean> {
       if (answer.length > 0) {
         key = answer;
       } else {
-        console.log(t.error('  API key cannot be empty.'));
+        console.log('  API key cannot be empty.');
       }
     }
 
@@ -77,13 +75,11 @@ export async function runFirstTimeSetup(): Promise<boolean> {
     const existingPrefs = loadPreferences();
     savePreferences({ provider, model, theme: existingPrefs.theme });
 
-    console.log(t.success('\n  Setup complete!'));
-    console.log(t.muted(`  Provider: ${provider} | Model: ${model}`));
-    console.log(t.muted('  You can change these later with /provider and /model'));
+    console.log('\n  Setup complete!');
+    console.log(`  Provider: ${provider} | Model: ${model}`);
+    console.log('  You can change these later with /provider and /model');
     console.log(
-      t.muted(
-        '  Tip: running a local LLM? Use `bernard add-provider` to point at it (Ollama, LM Studio, OpenRouter, etc.)\n',
-      ),
+      '  Tip: running a local LLM? Use `bernard add-provider` to point at it (Ollama, LM Studio, OpenRouter, etc.)\n',
     );
 
     return true;
