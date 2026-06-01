@@ -89,9 +89,7 @@ function SourceRow({ source, cited }: { source: SourceItem; cited: boolean }) {
       )}
       {showPreview && (
         <Box marginLeft={4}>
-          <Text dimColor>
-            {truncate(source.contentPreview.replace(/\s+/g, ' '), 160)}
-          </Text>
+          <Text dimColor>{truncate(source.contentPreview.replace(/\s+/g, ' '), 160)}</Text>
         </Box>
       )}
     </Box>

@@ -1,11 +1,7 @@
 import { Box, Text } from 'ink';
 import type { Agent } from '../../agent.js';
 import type { BernardConfig } from '../../config.js';
-import {
-  pickActiveStep,
-  summarizePlan,
-  type AgentStatusInputs,
-} from '../../agent-status.js';
+import { pickActiveStep, summarizePlan, type AgentStatusInputs } from '../../agent-status.js';
 import { getThemeColors } from '../../theme.js';
 
 interface StatusViewerProps {
@@ -65,11 +61,7 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function AssumptionsRows({
-  assumptions,
-}: {
-  assumptions: AgentStatusInputs['assumptions'];
-}) {
+function AssumptionsRows({ assumptions }: { assumptions: AgentStatusInputs['assumptions'] }) {
   if (assumptions.length === 0) return <Row label="Assumptions" value="(none)" />;
   return (
     <Box flexDirection="column">
@@ -133,7 +125,7 @@ function VerificationRow({ entry }: { entry: AgentStatusInputs['lastVerification
         {entry.verdict.toUpperCase()}
       </Text>
       <Text> — {truncate(entry.reason, 120)}</Text>
-      {entry.source && <Text dimColor>  ({truncate(entry.source, 60)})</Text>}
+      {entry.source && <Text dimColor> ({truncate(entry.source, 60)})</Text>}
     </Box>
   );
 }

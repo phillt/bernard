@@ -15,8 +15,8 @@
     "test:watch": "vitest",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "format": "prettier --write \"src/**/*.{ts,md}\" \"docs/**/*.{html,css,md}\" \"*.md\"",
-    "format:check": "prettier --check \"src/**/*.{ts,md}\" \"docs/**/*.{html,css,md}\" \"*.md\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx,md}\" \"docs/**/*.{html,css,md}\" \"*.md\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,md}\" \"docs/**/*.{html,css,md}\" \"*.md\"",
     "prepublishOnly": "npm run build"
   },
   "repository": {
@@ -76,6 +76,7 @@
     "@types/turndown": "^5.0.6",
     "eslint": "^9.39.2",
     "eslint-config-prettier": "^10.1.8",
+    "ink-testing-library": "^4.0.0",
     "prettier": "^3.8.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

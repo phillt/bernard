@@ -35,13 +35,7 @@ function isSection(entry: MenuEntry): entry is { type: 'section'; title: string 
  * items, never selectable. `options.headerLines` renders above the title so
  * the `ask_user` tab strip continues to work unchanged.
  */
-export function MenuOverlay({
-  entries,
-  options,
-  onSelect,
-  onCancel,
-  signal,
-}: MenuOverlayProps) {
+export function MenuOverlay({ entries, options, onSelect, onCancel, signal }: MenuOverlayProps) {
   const colors = getThemeColors();
   const items = entries.filter((e): e is MenuItem => !isSection(e));
   const [highlight, setHighlight] = useState(0);
