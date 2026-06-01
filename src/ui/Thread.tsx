@@ -131,6 +131,17 @@ function StreamGroupBody({ events }: { events: StreamEvent[] }) {
     }
     if (ev.kind === 'tool-call') {
       flushText();
+      if (ev.toolName === 'think') {
+        const thought = extractThought(ev.args);
+        if (thought) {
+          elements.push(
+            <Text key={`c-${ev.callId}`} dimColor italic>
+              💭 {thought}
+            </Text>,
+          );
+        }
+        continue;
+      }
       const argsSummary = summariseArgs(ev.args);
       elements.push(
         <Box key={`c-${ev.callId}`} flexDirection="column">
@@ -189,13 +200,15 @@ function MessageBlock({ message }: { message: CoreMessage }) {
 
 function UserMessage({ message }: { message: CoreUserMessage }) {
   const colors = getThemeColors();
-  const text = extractUserText(message);
+  const raw = extractUserText(message);
+  const { body, timestamp } = parseUserMessage(raw);
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column" marginTop={1} alignItems="flex-end">
       <Text color={colors.accent} bold>
         you
       </Text>
-      <Text>{text}</Text>
+      <Text>{body}</Text>
+      {timestamp && <Text dimColor>{formatFriendlyTimestamp(timestamp)}</Text>}
     </Box>
   );
 }
@@ -226,6 +239,15 @@ function AssistantMessage({ message }: { message: CoreAssistantMessage }) {
 
 function ToolCallBlock({ part }: { part: ToolCallPart }) {
   const colors = getThemeColors();
+  if (part.toolName === 'think') {
+    const thought = extractThought(part.args);
+    if (!thought) return null;
+    return (
+      <Text dimColor italic>
+        💭 {thought}
+      </Text>
+    );
+  }
   const argSummary = summariseArgs(part.args);
   return (
     <Box>
@@ -238,9 +260,11 @@ function ToolCallBlock({ part }: { part: ToolCallPart }) {
 function ToolResultMessage({ message }: { message: CoreToolMessage }) {
   const colors = getThemeColors();
   const parts = Array.isArray(message.content) ? message.content : [];
+  const visible = parts.filter((p: ToolResultPart) => p.toolName !== 'think');
+  if (visible.length === 0) return null;
   return (
     <Box flexDirection="column" marginLeft={2}>
-      {parts.map((part: ToolResultPart, idx) => {
+      {visible.map((part: ToolResultPart, idx) => {
         const snippet = renderResultSnippet(part.result);
         const isError = part.isError === true;
         return (
@@ -253,6 +277,49 @@ function ToolResultMessage({ message }: { message: CoreToolMessage }) {
       })}
     </Box>
   );
+}
+
+/**
+ * Strips the model-facing wrapper (`# Request` heading or `<user_request>`
+ * tags) and the leading `[ISO-timestamp]` injected by `timestampUserMessage`,
+ * returning the human-readable body plus the timestamp (if present) for
+ * separate rendering.
+ */
+function parseUserMessage(raw: string): { body: string; timestamp: Date | null } {
+  let text = raw;
+  if (text.startsWith('# Request\n')) {
+    text = text.slice('# Request\n'.length);
+  } else if (text.startsWith('<user_request>\n')) {
+    text = text.slice('<user_request>\n'.length);
+    if (text.endsWith('\n</user_request>')) text = text.slice(0, -'\n</user_request>'.length);
+  }
+  const m = text.match(/^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2})\] /);
+  if (m) {
+    const parsed = new Date(m[1]);
+    return {
+      body: text.slice(m[0].length),
+      timestamp: isNaN(parsed.getTime()) ? null : parsed,
+    };
+  }
+  return { body: text, timestamp: null };
+}
+
+function formatFriendlyTimestamp(date: Date): string {
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  const time = date.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  if (sameDay) return time;
+  const day = date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+  return `${day} · ${time}`;
 }
 
 function extractUserText(message: CoreUserMessage): string {
@@ -270,6 +337,14 @@ type AssistantPart = TextPart | ToolCallPart | ReasoningPart | RedactedReasoning
 function normalizeAssistantContent(content: CoreAssistantMessage['content']): AssistantPart[] {
   if (typeof content === 'string') return [{ type: 'text', text: content }];
   return content as AssistantPart[];
+}
+
+function extractThought(args: unknown): string {
+  if (args && typeof args === 'object' && 'thought' in args) {
+    const t = (args as { thought: unknown }).thought;
+    if (typeof t === 'string') return t;
+  }
+  return '';
 }
 
 function summariseArgs(args: unknown): string {

@@ -135,6 +135,8 @@ function makeAgent(spy: Partial<AgentSpy> = {}): Agent {
     getLastVerification: () => null,
     abort: () => {},
     setAlertContext: () => {},
+    setSpinnerStats: () => {},
+    spinnerStats: null,
   } as unknown as Agent;
 }
 

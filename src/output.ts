@@ -62,6 +62,23 @@ export function buildSpinnerMessage(stats: SpinnerStats): string {
   return `Thinking (${elapsed} | ${up}↑ ${down}↓ | ${remainingPct}% until compression)`;
 }
 
+/**
+ * Compact status string for the always-on bottom-right status bar.
+ * Omits elapsed time (only meaningful per-turn) and formats counts/headroom
+ * the same way as `buildSpinnerMessage`.
+ */
+export function buildStatusLine(stats: SpinnerStats): string {
+  const up = formatTokenCount(stats.totalPromptTokens);
+  const down = formatTokenCount(stats.totalCompletionTokens);
+  const contextWindow = getContextWindow(stats.model, stats.contextWindowOverride);
+  const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;
+  const remainingPct = Math.max(
+    0,
+    Math.round(((thresholdTokens - stats.latestPromptTokens) / thresholdTokens) * 100),
+  );
+  return `${up}↑ ${down}↓ • ${remainingPct}% free`;
+}
+
 // Spinner is a no-op in Phase D — Ink renders its own animated status line.
 export function startSpinner(_message?: string | (() => string)): void {}
 export function stopSpinner(): void {}

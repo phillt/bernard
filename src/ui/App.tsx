@@ -101,6 +101,7 @@ import type {
 import { Thread } from './Thread.js';
 import { Prompt } from './Prompt.js';
 import { Spinner } from './Spinner.js';
+import { StatusBar } from './StatusBar.js';
 import { PlanStrip } from './PlanStrip.js';
 import { MenuOverlay } from './overlays/MenuOverlay.js';
 import { ConfirmDialog } from './overlays/ConfirmDialog.js';
@@ -323,6 +324,21 @@ export function App({
     setOutputSink(messageStore);
     return () => setOutputSink(null);
   }, [messageStore]);
+
+  // Attach a persistent SpinnerStats object so the framework's token-stats
+  // hook accumulates usage across turns. <StatusBar> polls this for the
+  // pinned bottom-right readout. We never null it out — totals carry across
+  // the whole session and only reset on REPL restart.
+  useEffect(() => {
+    agent.setSpinnerStats({
+      startTime: Date.now(),
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      latestPromptTokens: 0,
+      model: config.model,
+      contextWindowOverride: config.tokenWindow || undefined,
+    });
+  }, [agent, config.model, config.tokenWindow]);
 
   // Phase D (#215) ink-handlers bridge. The toolOptions callbacks built in
   // `src/index.ts` read from `getInkHandlers()` at call time, so this effect
@@ -1871,7 +1887,7 @@ export function App({
   }
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" paddingX={2}>
       <Box>
         <Text color={colors.accent} bold>
           bernard
@@ -1900,6 +1916,7 @@ export function App({
       <PlanStrip agent={agent} />
       {toast && <Toast message={toast.message} variant={toast.variant} />}
       <Prompt disabled={busy || activeOverlay !== null} onSubmit={handleSubmit} />
+      <StatusBar agent={agent} />
       {activeOverlay === 'status' && (
         <StatusViewer
           agent={agent}
