@@ -1,6 +1,7 @@
 import type { CoreMessage } from 'ai';
 import { buildContextMessage, type ContextMessageInputs } from '../../context-message.js';
 import { resolveSiteModel } from '../../model-policy.js';
+import { detectToolError } from '../../tool-profiles.js';
 import { makeRepairHook } from '../../tool-call-repair.js';
 import { augmentTools } from '../../tools/augment.js';
 import type { AgentContext } from '../context.js';
@@ -158,6 +159,26 @@ export async function runDefinition<TInput, TFormatted>(
   const onTextDelta = useStreaming
     ? (delta: string) => sink.append({ kind: 'text-delta', text: delta })
     : undefined;
+  const onToolCallStart = useStreaming
+    ? (ev: { callId: string; toolName: string; args: unknown }) =>
+        sink.append({
+          kind: 'tool-call',
+          callId: ev.callId,
+          toolName: ev.toolName,
+          args: ev.args,
+        })
+    : undefined;
+  const onToolResult = useStreaming
+    ? (ev: { callId: string; toolName: string; result: unknown }) => {
+        const errInfo = detectToolError(ev.toolName, ev.result);
+        sink.append({
+          kind: 'tool-result',
+          callId: ev.callId,
+          result: ev.result,
+          isError: errInfo.isError,
+        });
+      }
+    : undefined;
 
   // `messages` here is a placeholder — `innerIterate` rebuilds the messages
   // array on every call, so the seed alone is sufficient for the baseSpec.
@@ -175,6 +196,8 @@ export async function runDefinition<TInput, TFormatted>(
     hooks,
     useStreaming,
     onTextDelta,
+    onToolCallStart,
+    onToolResult,
   };
 
   let stepLimitHit = false;

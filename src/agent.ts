@@ -690,7 +690,6 @@ export class Agent {
       throw new Error(`Agent error: ${message}`);
     } finally {
       this.abortController = null;
-      this.spinnerStats = null;
     }
   }
 

@@ -143,12 +143,6 @@ The user has been notified and this session is open for them to review and act o
         alertBanner = `Cron alert: ${alert.jobName} — ${alert.message} (${alert.timestamp})`;
       }
 
-      printWelcome(
-        config.provider,
-        config.model,
-        getLocalVersion(),
-        config.providerBaseUrl ?? config.customProviders?.[config.provider]?.baseURL,
-      );
       const prefs = loadPreferences();
       startupUpdateCheck(!!prefs.autoUpdate);
 
@@ -203,15 +197,23 @@ async function runInkRepl(args: {
   }
 
   const statuses = mcpManager.getServerStatuses();
-  if (statuses.length > 0) {
-    printInfo('  MCP servers:');
-    for (const s of statuses) {
-      if (s.connected) {
-        printInfo(`    ✓ ${s.name} (${s.toolCount} tools)`);
-      } else {
-        printError(`    ✗ ${s.name}: ${s.error}`);
-      }
-    }
+  const connected = statuses.filter((s) => s.connected);
+  const failed = statuses.filter((s) => !s.connected);
+  const totalTools = connected.reduce((acc, s) => acc + s.toolCount, 0);
+
+  printWelcome(
+    config.provider,
+    config.model,
+    getLocalVersion(),
+    config.providerBaseUrl ?? config.customProviders?.[config.provider]?.baseURL,
+    statuses.length > 0
+      ? { connected: connected.length, failed: failed.length, tools: totalTools }
+      : undefined,
+  );
+  // Surface any failed MCP servers explicitly below the splash so users can
+  // see *which* one is broken — the splash itself just reports the count.
+  for (const s of failed) {
+    printError(`  ✗ mcp ${s.name}: ${s.error}`);
   }
 
   const mcpTools = mcpManager.getTools();

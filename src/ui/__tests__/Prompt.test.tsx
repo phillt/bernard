@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { Prompt } from '../Prompt.js';
-import { ENTER, BACKSPACE, tick } from './_keys.js';
+import { ENTER, BACKSPACE, ARROW_DOWN, tick } from './_keys.js';
+
+const TAB = '\t';
 
 describe('<Prompt>', () => {
   it('echoes typed characters into the buffer', async () => {
@@ -64,5 +66,42 @@ describe('<Prompt>', () => {
     stdin.write('/ex');
     await tick();
     expect(lastFrame()).toContain('/exit');
+  });
+
+  it('Enter picks the highlighted slash command instead of the literal buffer', async () => {
+    const onSubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    stdin.write('/ex');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('/exit');
+  });
+
+  it('Down arrow moves the slash-command selection', async () => {
+    const onSubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    stdin.write('/');
+    await tick();
+    stdin.write(ARROW_DOWN);
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    // First match is /help; one ArrowDown lands on /clear.
+    expect(onSubmit).toHaveBeenCalledWith('/clear');
+  });
+
+  it('Tab autocompletes the highlighted command into the buffer', async () => {
+    const onSubmit = vi.fn();
+    const { stdin, lastFrame } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    stdin.write('/ta');
+    await tick();
+    stdin.write(TAB);
+    await tick();
+    expect(lastFrame()).toContain('/task ');
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

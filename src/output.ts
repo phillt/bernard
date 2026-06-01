@@ -2,6 +2,7 @@ import type { CoreMessage } from 'ai';
 import { getContextWindow, COMPRESSION_THRESHOLD } from './context.js';
 import type { Step } from './plan-store.js';
 import { debugLog } from './logger.js';
+import { getThemeColors } from './theme.js';
 
 let toolDetailsVisible = false;
 
@@ -66,22 +67,98 @@ export function buildSpinnerMessage(stats: SpinnerStats): string {
 export function startSpinner(_message?: string | (() => string)): void {}
 export function stopSpinner(): void {}
 
+const BERNARD_BANNER = [
+  '██████╗ ███████╗██████╗ ███╗   ██╗ █████╗ ██████╗ ██████╗ ',
+  '██╔══██╗██╔════╝██╔══██╗████╗  ██║██╔══██╗██╔══██╗██╔══██╗',
+  '██████╔╝█████╗  ██████╔╝██╔██╗ ██║███████║██████╔╝██║  ██║',
+  '██╔══██╗██╔══╝  ██╔══██╗██║╚██╗██║██╔══██║██╔══██╗██║  ██║',
+  '██████╔╝███████╗██║  ██║██║ ╚████║██║  ██║██║  ██║██████╔╝',
+  '╚═════╝ ╚══════╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝ ',
+];
+
+const RESET = '\x1b[0m';
+const DIM = '\x1b[2m';
+
+/**
+ * Wraps `text` in an ANSI color escape. Accepts a `#rrggbb` hex string
+ * (rendered as a truecolor 24-bit escape, supported by every modern terminal)
+ * or a named ANSI color from the small allowlist below. Unknown values fall
+ * through uncolored so the splash still renders on terminals without color.
+ */
+function colorize(text: string, color: string): string {
+  const hex = color.match(/^#([0-9a-f]{6})$/i);
+  if (hex) {
+    const n = parseInt(hex[1], 16);
+    const r = (n >> 16) & 0xff;
+    const g = (n >> 8) & 0xff;
+    const b = n & 0xff;
+    return `\x1b[38;2;${r};${g};${b}m${text}${RESET}`;
+  }
+  const named: Record<string, string> = {
+    black: '30',
+    red: '31',
+    green: '32',
+    yellow: '33',
+    blue: '34',
+    magenta: '35',
+    cyan: '36',
+    white: '37',
+    gray: '90',
+    whiteBright: '97',
+    redBright: '91',
+    greenBright: '92',
+    yellowBright: '93',
+    blueBright: '94',
+    magentaBright: '95',
+    cyanBright: '96',
+  };
+  const code = named[color];
+  return code ? `\x1b[${code}m${text}${RESET}` : text;
+}
+
+export interface WelcomeMcpSummary {
+  /** Total connected MCP servers. */
+  connected: number;
+  /** Number of failed-to-connect servers (rendered as a warning when > 0). */
+  failed: number;
+  /** Total tools surfaced across all connected servers. */
+  tools: number;
+}
+
 export function printWelcome(
   provider: string,
   model: string,
   version?: string,
   baseURL?: string,
+  mcp?: WelcomeMcpSummary,
 ): void {
-  const ver = version ? ` v${version}` : '';
-  console.log(`\n  Bernard${ver} — AI CLI Assistant`);
-  console.log(`  Provider: ${provider} | Model: ${model}`);
-  if (baseURL) {
-    console.log(`  Endpoint: ${baseURL}`);
+  const accent = getThemeColors().accent;
+
+  console.log();
+  for (const line of BERNARD_BANNER) {
+    console.log('  ' + colorize(line, accent));
+  }
+  console.log();
+  const ver = version ? `v${version}` : '';
+  const line1 = [ver, 'local AI CLI agent'].filter(Boolean).join('  ·  ');
+  const line2 = `${provider}  /  ${model}`;
+  const line3 = '/help for commands  ·  exit to quit';
+  console.log('  ' + colorize(line1, accent));
+  console.log('  ' + DIM + line2 + RESET);
+  if (baseURL) console.log('  ' + DIM + `endpoint  ${baseURL}` + RESET);
+  if (mcp && (mcp.connected > 0 || mcp.failed > 0)) {
+    const parts: string[] = [];
+    if (mcp.connected > 0) {
+      parts.push(`${mcp.connected} server${mcp.connected === 1 ? '' : 's'} · ${mcp.tools} tools`);
+    }
+    if (mcp.failed > 0) parts.push(`${mcp.failed} failed`);
+    console.log('  ' + DIM + `mcp       ${parts.join('  ·  ')}` + RESET);
   }
   if (process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1') {
-    console.log('  DEBUG mode enabled — logging to .logs/');
+    console.log('  ' + DIM + 'debug logging enabled' + RESET);
   }
-  console.log('  Type /help for commands, exit to quit\n');
+  console.log('  ' + DIM + line3 + RESET);
+  console.log();
 }
 
 // Render path is now Ink (StreamingAssistantMessage + ToolCallEvent components

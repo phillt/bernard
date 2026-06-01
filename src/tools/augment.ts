@@ -492,8 +492,12 @@ export function augmentTools(
               debugLog(`cache:tool:miss`, { tool: toolName });
             }
             let envelope: ToolResult<unknown>;
+            debugLog(`augment:${toolName}:start`, undefined);
             try {
               envelope = await source.execute(args, execOptions as never);
+              debugLog(`augment:${toolName}:done`, {
+                ok: envelope.status === 'ok',
+              });
             } catch (thrown: unknown) {
               // Infrastructure-level throws (reconnect, network, etc.) are not
               // usage errors — don't record them as bad examples.
