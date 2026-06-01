@@ -98,10 +98,11 @@ import type {
   ValuePromptOptions,
   ValueResult,
 } from './menu-types.js';
-import { Thread } from './Thread.js';
+import { Thread, REWRITE_ICON } from './Thread.js';
 import { Prompt } from './Prompt.js';
 import { Spinner } from './Spinner.js';
 import { StatusBar } from './StatusBar.js';
+import { HintBar } from './HintBar.js';
 import { PlanStrip } from './PlanStrip.js';
 import { MenuOverlay } from './overlays/MenuOverlay.js';
 import { ConfirmDialog } from './overlays/ConfirmDialog.js';
@@ -234,6 +235,19 @@ export function App({
   const [pendingInfo, setPendingInfo] = useState<PendingInfo | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [bannerVisible, setBannerVisible] = useState<boolean>(!!alertBanner);
+  const [interrupted, setInterrupted] = useState(false);
+  const [slashActive, setSlashActive] = useState(false);
+  // Per-history-index timing for completed turns: drives the timestamp +
+  // duration footer under every assistant message in <Thread>. Stored as a
+  // ref because re-renders are already triggered by historyVersion bumps; the
+  // map is append-only across the session and cleared by /clear.
+  const turnTimingsRef = useRef<Map<number, { endedAt: number; durationMs: number }>>(
+    new Map(),
+  );
+  // history-index → user's original text when the rewriter substituted it.
+  // Lives outside React state because it's append-only and not React-reactive
+  // (history re-renders are driven by historyVersion bumps already).
+  const rewriteOriginalsRef = useRef<Map<number, string>>(new Map());
   const colors = getThemeColors();
 
   // Confirm-action session memo: `${toolName}:${stableHash(args)}` → true.
@@ -245,6 +259,10 @@ export function App({
   // Synchronous guard against double-Enter: setBusy schedules a re-render but
   // a second submit can land before Prompt sees `disabled={busy}` flip.
   const submittingRef = useRef(false);
+  // Turn-level abort controller. Esc aborts this controller (cancels the
+  // pre-turn pipeline) AND calls agent.abort() (cancels the agent loop once
+  // it's started). Reset to null in runAgentTurn's finally block.
+  const turnAbortRef = useRef<AbortController | null>(null);
   // Phase C (#214): one MessageStore per <App> lifecycle. Held in a ref so
   // re-renders don't reinstantiate it (which would unsubscribe consumers and
   // drop in-flight events). Registered with the framework's output-sink seam
@@ -294,11 +312,14 @@ export function App({
         return;
       }
       if (key.escape) {
+        debugLog('app:esc', { busy, activeOverlay, hasTurnAbort: !!turnAbortRef.current });
         if (activeOverlay) {
           closeOverlay();
           return;
         }
         if (busy) {
+          setInterrupted(true);
+          turnAbortRef.current?.abort();
           agent.abort();
         }
       }
@@ -328,8 +349,10 @@ export function App({
   // Attach a persistent SpinnerStats object so the framework's token-stats
   // hook accumulates usage across turns. <StatusBar> polls this for the
   // pinned bottom-right readout. We never null it out — totals carry across
-  // the whole session and only reset on REPL restart.
-  useEffect(() => {
+  // the whole session and only reset on REPL restart. Seeded synchronously
+  // during the first render so the status line is visible from the first
+  // paint instead of after the next interval tick.
+  if (!agent.spinnerStats) {
     agent.setSpinnerStats({
       startTime: Date.now(),
       totalPromptTokens: 0,
@@ -338,7 +361,7 @@ export function App({
       model: config.model,
       contextWindowOverride: config.tokenWindow || undefined,
     });
-  }, [agent, config.model, config.tokenWindow]);
+  }
 
   // Phase D (#215) ink-handlers bridge. The toolOptions callbacks built in
   // `src/index.ts` read from `getInkHandlers()` at call time, so this effect
@@ -508,6 +531,7 @@ export function App({
       historyStore.clear();
       provenanceHistoryStore.clear();
       agent.clearHistory();
+      turnTimingsRef.current.clear();
       // Wipe scrollback + visible region so the old transcript doesn't linger
       // above the cleared <Thread>. `\x1b[3J` clears scrollback, `\x1b[2J`
       // the visible region, `\x1b[H` homes the cursor. Ink repaints on the
@@ -1560,8 +1584,8 @@ export function App({
       },
       toggleRow(
         'promptRewriter',
-        'Prompt rewriter',
-        'Restructure your prompt for the active model family before each turn.',
+        `Prompt rewriter ${REWRITE_ICON}`,
+        `Restructure your prompt for the active model family before each turn. Rewritten messages are tagged with ${REWRITE_ICON} next to the timestamp in the transcript.`,
         'Prompt rewriter: on',
         'Prompt rewriter: off',
       ),
@@ -1571,7 +1595,13 @@ export function App({
         'Show full tool call args and results in the transcript.',
         'Tool details: on',
         'Tool details: off',
-        setToolDetailsVisible,
+        (value) => {
+          setToolDetailsVisible(value);
+          // <Thread> re-keys on historyVersion, so bumping it here forces a
+          // remount that picks up the new toolDetails flag on the visible
+          // transcript (not just future turns).
+          setHistoryVersion((v) => v + 1);
+        },
       ),
       toggleRow(
         'conciseMode',
@@ -1643,6 +1673,7 @@ export function App({
 
   async function runPreTurnPipeline(
     input: string,
+    signal: AbortSignal,
   ): Promise<{ agentInput: string; resolvedEntries: ResolvedEntry[] }> {
     // Per-turn RAG cache invalidation (#171). Must run before any resolver /
     // rewriter LLM call so they see only this turn's facts.
@@ -1659,7 +1690,7 @@ export function App({
             stores.memory,
             config,
             hints,
-            undefined,
+            signal,
             stores.rag,
             agent.getHistory(),
           );
@@ -1675,6 +1706,7 @@ export function App({
         }
       }
     }
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
     let agentInput = input;
     if (config.promptRewriter) {
@@ -1684,7 +1716,7 @@ export function App({
           config.model,
           config.customProviders?.[config.provider]?.sdk,
         );
-        const result = await rewritePrompt(input, profile, resolvedEntries, config);
+        const result = await rewritePrompt(input, profile, resolvedEntries, config, signal);
         if (result.status === 'rewritten') {
           agentInput = result.text;
           debugLog('app:prompt-rewritten', {
@@ -1697,6 +1729,7 @@ export function App({
         debugLog('app:prompt-rewriter', err instanceof Error ? err.message : String(err));
       }
     }
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
     return { agentInput, resolvedEntries };
   }
@@ -1709,16 +1742,55 @@ export function App({
     // Clear the previous turn's stream events so the in-flight
     // <StreamingAssistantMessage> renders only this turn's deltas.
     messageStore.reset();
+    setInterrupted(false);
     setBusy(true);
+    const turnStartedAt = Date.now();
+    let turnCompleted = false;
+    const controller = new AbortController();
+    turnAbortRef.current = controller;
     try {
-      const { agentInput, resolvedEntries } = await runPreTurnPipeline(input);
-      await agent.processInput(agentInput, images, resolvedEntries);
+      const { agentInput, resolvedEntries } = await runPreTurnPipeline(input, controller.signal);
+      if (controller.signal.aborted) return;
+      // `processInput` pushes the user message to `agent.history` synchronously
+      // (before its first internal await), so by the time the returned promise
+      // hits this microtask boundary the history already contains the new
+      // entry. Bumping `historyVersion` here makes the static <Thread> re-read
+      // and show the user message above the streaming assistant block instead
+      // of after the turn finishes.
+      const inflight = agent.processInput(agentInput, images, resolvedEntries);
+      // Capture the original text (pre-rewrite) so <UserMessage> can display
+      // it instead of the rewritten version that was dispatched to the model.
+      // The push has already happened — record at the resulting last index.
+      if (input !== agentInput) {
+        const idx = agent.getHistory().length - 1;
+        rewriteOriginalsRef.current.set(idx, input);
+      }
+      setHistoryVersion((v) => v + 1);
+      await inflight;
+      turnCompleted = !controller.signal.aborted;
     } catch (err) {
-      console.error('agent error:', err);
+      // AbortError on user-cancel is expected; don't dump it to the console.
+      const isAbort =
+        err instanceof Error && (err.name === 'AbortError' || controller.signal.aborted);
+      if (!isAbort) console.error('agent error:', err);
     } finally {
       persistAgentState({ agent, historyStore, provenanceHistoryStore });
       submittingRef.current = false;
+      turnAbortRef.current = null;
       setBusy(false);
+      if (turnCompleted) {
+        const endedAt = Date.now();
+        const history = agent.getHistory();
+        for (let i = history.length - 1; i >= 0; i--) {
+          if (history[i].role === 'assistant') {
+            turnTimingsRef.current.set(i, {
+              endedAt,
+              durationMs: endedAt - turnStartedAt,
+            });
+            break;
+          }
+        }
+      }
       setHistoryVersion((v) => v + 1);
     }
   }
@@ -1888,15 +1960,6 @@ export function App({
 
   return (
     <Box flexDirection="column" paddingX={2}>
-      <Box>
-        <Text color={colors.accent} bold>
-          bernard
-        </Text>
-        <Text dimColor>
-          {' '}
-          {config.provider}/{config.model}
-        </Text>
-      </Box>
       {bannerVisible && alertBanner && (
         <Box marginTop={1} borderStyle="single" borderColor={colors.warning} paddingX={1}>
           <Text color={colors.warning}>{alertBanner}</Text>
@@ -1907,6 +1970,10 @@ export function App({
         history={agent.getHistory()}
         messageStore={messageStore}
         busy={busy}
+        interrupted={interrupted}
+        rewriteOriginals={rewriteOriginalsRef.current}
+        turnTimings={turnTimingsRef.current}
+        toolDetails={config.toolDetails}
       />
       {busy && (
         <Box marginTop={1}>
@@ -1915,8 +1982,19 @@ export function App({
       )}
       <PlanStrip agent={agent} />
       {toast && <Toast message={toast.message} variant={toast.variant} />}
-      <Prompt disabled={busy || activeOverlay !== null} onSubmit={handleSubmit} />
-      <StatusBar agent={agent} />
+      <Prompt
+        disabled={busy || activeOverlay !== null}
+        onSubmit={handleSubmit}
+        onSlashActiveChange={setSlashActive}
+      />
+      <Box justifyContent="space-between">
+        <HintBar
+          busy={busy}
+          overlayActive={activeOverlay !== null}
+          slashActive={slashActive}
+        />
+        <StatusBar agent={agent} />
+      </Box>
       {activeOverlay === 'status' && (
         <StatusViewer
           agent={agent}

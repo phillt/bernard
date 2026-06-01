@@ -32,32 +32,38 @@ export function outputHook(prefix?: string): AgentHook {
     onStepFinish: ({ text, toolCalls, toolResults }) => {
       const sink = getOutputSink();
       if (!sink) return;
-      for (const tc of toolCalls ?? []) {
-        sink.append({
-          kind: 'tool-call',
-          callId: tc.toolCallId,
-          toolName: tc.toolName,
-          args: tc.args,
-          agentLabel: prefix,
-        });
-      }
-      for (const tr of toolResults ?? []) {
-        // Per-tool shapes vary (`shell` uses `is_error`, `web_read` returns
-        // an "Error:" string, MCP tools surface text content, …) — defer to
-        // the same classifier so the Ink thread colors failed calls red.
-        const errInfo = detectToolError(tr.toolName, tr.result);
-        sink.append({
-          kind: 'tool-result',
-          callId: tr.toolCallId,
-          result: tr.result,
-          isError: errInfo.isError,
-          agentLabel: prefix,
-        });
-      }
-      if (text && prefix !== undefined) {
-        // Sub-agent / wrapper bulk-render. Main agent (prefix === undefined)
-        // is handled by the runner's streamText loop pushing per-token deltas.
-        sink.append({ kind: 'text-delta', text, agentLabel: prefix });
+      // Main agent (`prefix === undefined`) streams via `runStreaming`, which
+      // already pushes `tool-call` / `tool-result` to the sink the moment the
+      // model finishes the call and the SDK returns the execute result. Emit
+      // them here again and the Ink thread would render each tool twice.
+      // Sub-agents / wrappers don't stream, so they still need this path.
+      if (prefix !== undefined) {
+        for (const tc of toolCalls ?? []) {
+          sink.append({
+            kind: 'tool-call',
+            callId: tc.toolCallId,
+            toolName: tc.toolName,
+            args: tc.args,
+            agentLabel: prefix,
+          });
+        }
+        for (const tr of toolResults ?? []) {
+          // Per-tool shapes vary (`shell` uses `is_error`, `web_read` returns
+          // an "Error:" string, MCP tools surface text content, …) — defer to
+          // the same classifier so the Ink thread colors failed calls red.
+          const errInfo = detectToolError(tr.toolName, tr.result);
+          sink.append({
+            kind: 'tool-result',
+            callId: tr.toolCallId,
+            result: tr.result,
+            isError: errInfo.isError,
+            agentLabel: prefix,
+          });
+        }
+        if (text) {
+          // Sub-agent / wrapper bulk-render.
+          sink.append({ kind: 'text-delta', text, agentLabel: prefix });
+        }
       }
     },
   };

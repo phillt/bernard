@@ -61,7 +61,7 @@ describe('outputHook', () => {
     ]);
   });
 
-  it('omits the bulk text-delta for the main agent (prefix === undefined)', async () => {
+  it('omits all events for the main agent (prefix === undefined)', async () => {
     const hook = outputHook();
     await hook.onStepFinish!(
       payload({
@@ -70,9 +70,10 @@ describe('outputHook', () => {
         toolResults: [{ toolName: 'memory', toolCallId: 'm1', result: 'ok' }],
       }),
     );
-    // Tool events flow; text is suppressed here because the runner's
-    // streamText loop is already pushing per-token deltas for the main agent.
-    expect(recorder.events.map((e) => e.kind)).toEqual(['tool-call', 'tool-result']);
+    // The runner's fullStream loop pushes text-delta + tool-call + tool-result
+    // to the sink directly for the main agent, so this hook no-ops to avoid
+    // double-rendering. Sub-agents / wrappers still use the bulk path above.
+    expect(recorder.events).toEqual([]);
   });
 
   it('no-ops on empty step', async () => {

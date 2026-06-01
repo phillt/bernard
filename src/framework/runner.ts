@@ -45,6 +45,18 @@ export interface AgentSpec {
    * callers downstream of `runAgent` see the same shape they always did.
    */
   onTextDelta?: (delta: string) => void;
+  /**
+   * Fired the moment the model finishes emitting a complete tool call (i.e.
+   * the AI SDK's `tool-call` event in `fullStream`). Lets the caller surface
+   * a `⚙ toolName` row in the UI while the tool's `execute` is still running,
+   * which would otherwise stay invisible until the entire step finished.
+   */
+  onToolCallStart?: (event: { callId: string; toolName: string; args: unknown }) => void;
+  /**
+   * Fired when a tool's `execute` returns. Pairs with `onToolCallStart` by
+   * `callId`. Useful for live-updating the result block under the call row.
+   */
+  onToolResult?: (event: { callId: string; toolName: string; result: unknown }) => void;
 }
 
 /** Result type re-exported so callers needn't depend on `ai` directly. */
@@ -135,12 +147,84 @@ async function runStreaming(
     experimental_repairToolCall: spec.repair,
     onStepFinish,
   });
-  // Drain the text stream so promises resolve. `onTextDelta` lets the caller
-  // forward each chunk to the message store; `streamText` continues running
-  // even if the consumer is slow because the chunks land on internal queues.
-  for await (const delta of stream.textStream) {
-    spec.onTextDelta?.(delta);
+  // Defensive: race every await against the parent abort signal. The AI SDK
+  // is supposed to settle `textStream` and the result promises when its own
+  // `abortSignal` fires, but in practice some providers leave the stream
+  // pending after the underlying fetch is cancelled (observed on the OpenAI
+  // path mid-reasoning). Without this race the REPL hangs on Esc because the
+  // for-await never throws. We pin a single rejecting promise to the signal
+  // and race it against each await so an abort always unwinds the runner.
+  const abortSignal = spec.abortSignal;
+  const abortPromise = abortSignal
+    ? new Promise<never>((_, reject) => {
+        if (abortSignal.aborted) {
+          reject(new DOMException('Aborted', 'AbortError'));
+          return;
+        }
+        abortSignal.addEventListener(
+          'abort',
+          () => reject(new DOMException('Aborted', 'AbortError')),
+          { once: true },
+        );
+      })
+    : null;
+  const raceAbort = async <T>(p: Promise<T>): Promise<T> =>
+    abortPromise ? (Promise.race([p, abortPromise]) as Promise<T>) : p;
+
+  // Drain the full stream. `fullStream` (vs `textStream`) emits tool-call /
+  // tool-result events as they arrive, so the renderer can show `⚙ toolName`
+  // the moment the model finishes the call — without that, MCP tools that
+  // sit in `execute` for several seconds look indistinguishable from the
+  // model still reasoning. Text deltas remain forwarded via `onTextDelta` so
+  // existing callers see no behavior change.
+  try {
+    const iter = stream.fullStream[Symbol.asyncIterator]();
+    while (true) {
+      const next = await raceAbort(iter.next());
+      if (next.done) break;
+      // The AI SDK narrows `tool-call` / `tool-result` parts on the `TOOLS`
+      // generic; since we type-erase tools to `Record<string, Tool>` for the
+      // shared runner, those branches collapse to `never`. Cast through
+      // `unknown` so we can pattern-match on `type` without coupling the
+      // runner to a specific tool set.
+      const part = next.value as {
+        type: string;
+        textDelta?: string;
+        toolCallId?: string;
+        toolName?: string;
+        args?: unknown;
+        result?: unknown;
+        error?: unknown;
+      };
+      if (part.type === 'text-delta') {
+        if (part.textDelta) spec.onTextDelta?.(part.textDelta);
+      } else if (part.type === 'tool-call') {
+        spec.onToolCallStart?.({
+          callId: part.toolCallId ?? '',
+          toolName: part.toolName ?? '',
+          args: part.args,
+        });
+      } else if (part.type === 'tool-result') {
+        spec.onToolResult?.({
+          callId: part.toolCallId ?? '',
+          toolName: part.toolName ?? '',
+          result: part.result,
+        });
+      } else if (part.type === 'error') {
+        // Surface stream errors immediately rather than waiting for the
+        // settled promises below to re-throw — keeps the original stack.
+        throw part.error;
+      }
+    }
+  } catch (err) {
+    // Swallow the abort here so the result-promise awaits below can throw the
+    // canonical AbortError from the race, keeping the error shape consistent.
+    if (!(err instanceof Error && err.name === 'AbortError')) throw err;
   }
+  // Suppress unhandled-rejection noise for the abortPromise once the run is
+  // unwinding — every downstream `raceAbort` will surface it as the thrown
+  // error from `Promise.all`.
+  abortPromise?.catch(() => {});
   // The other promises (toolCalls, toolResults, steps, etc.) are already
   // resolved once textStream completes — awaiting them is cheap.
   const [
@@ -158,22 +242,24 @@ async function runStreaming(
     response,
     files,
     sources,
-  ] = await Promise.all([
-    stream.text,
-    stream.steps,
-    stream.finishReason,
-    stream.usage,
-    stream.warnings,
-    stream.toolCalls,
-    stream.toolResults,
-    stream.reasoning,
-    stream.reasoningDetails,
-    stream.providerMetadata,
-    stream.request,
-    stream.response,
-    stream.files,
-    stream.sources,
-  ]);
+  ] = await raceAbort(
+    Promise.all([
+      stream.text,
+      stream.steps,
+      stream.finishReason,
+      stream.usage,
+      stream.warnings,
+      stream.toolCalls,
+      stream.toolResults,
+      stream.reasoning,
+      stream.reasoningDetails,
+      stream.providerMetadata,
+      stream.request,
+      stream.response,
+      stream.files,
+      stream.sources,
+    ]),
+  );
   return {
     text,
     steps,

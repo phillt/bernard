@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { SlashHints, matchSlashCommands } from './SlashHints.js';
@@ -8,6 +8,11 @@ interface PromptProps {
   disabled?: boolean;
   /** Called on Enter with the current buffer (trimmed of trailing newline). */
   onSubmit: (text: string) => void;
+  /**
+   * Fired whenever the slash-hint strip toggles. Lets the parent show the
+   * contextual hint bar without lifting the whole input buffer out of Prompt.
+   */
+  onSlashActiveChange?: (active: boolean) => void;
 }
 
 /**
@@ -23,7 +28,7 @@ interface PromptProps {
  * highlighted command. Once the user types a space, hints clear and Enter
  * submits the literal buffer.
  */
-export function Prompt({ disabled = false, onSubmit }: PromptProps) {
+export function Prompt({ disabled = false, onSubmit, onSlashActiveChange }: PromptProps) {
   const [buffer, setBuffer] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const colors = getThemeColors();
@@ -32,6 +37,11 @@ export function Prompt({ disabled = false, onSubmit }: PromptProps) {
   // Clamp selection whenever the match list shrinks (e.g. user typed another
   // character and fewer commands match). Avoids dangling out-of-range cursor.
   const clampedIndex = matches.length === 0 ? 0 : Math.min(selectedIndex, matches.length - 1);
+
+  const slashActive = matches.length > 0;
+  useEffect(() => {
+    onSlashActiveChange?.(slashActive);
+  }, [slashActive, onSlashActiveChange]);
 
   useInput(
     (input, key) => {
@@ -88,11 +98,7 @@ export function Prompt({ disabled = false, onSubmit }: PromptProps) {
         borderColor={disabled ? colors.muted : colors.accent}
         paddingX={1}
       >
-        <Text color={colors.accent} bold>
-          ›{' '}
-        </Text>
-        <Text>{buffer}</Text>
-        {!disabled && <Text color={colors.accent}>▌</Text>}
+        <Text><Text color={colors.accent} bold>{'› '}</Text><Text>{buffer}</Text>{!disabled ? <Text color={colors.accent}>{'▌'}</Text> : null}</Text>
       </Box>
       <SlashHints matches={matches} selectedIndex={clampedIndex} />
     </Box>

@@ -27,7 +27,33 @@ interface ThreadProps {
    */
   messageStore?: MessageStore;
   busy?: boolean;
+  /** Rendered as a dim notice below the transcript when the last turn was Esc-cancelled. */
+  interrupted?: boolean;
+  /**
+   * Per-history-index map of the user's original text when the rewriter
+   * replaced it before dispatch. `UserMessage` reads this to show the original
+   * (not the rewritten) text and tag it with the rewrite icon next to the
+   * timestamp. Same icon is used in `/agent-options` so the meaning is shared.
+   */
+  rewriteOriginals?: ReadonlyMap<number, string>;
+  /**
+   * Per-history-index timestamp + duration of completed turns. Rendered as a
+   * dim footer (`hh:mm · 1.2s`) under every assistant message that has an
+   * entry — mirrors the timestamp `<UserMessage>` shows under the outbound
+   * message. Owned by `<App>` so the footer persists across follow-up turns.
+   */
+  turnTimings?: ReadonlyMap<number, { endedAt: number; durationMs: number }>;
+  /**
+   * Whether to show full tool-call arguments and result bodies in the
+   * transcript. Tool names are always shown; only the args summary next to
+   * the name and the `↳ …` result row are suppressed when this is false.
+   * Mirrors the `Tool details` setting in `/agent-options`.
+   */
+  toolDetails?: boolean;
 }
+
+/** Icon used wherever the prompt-rewriter feature surfaces in the UI. */
+export const REWRITE_ICON = '✎';
 
 /**
  * Renders the conversation as a flowing list of message blocks. Reads the
@@ -38,13 +64,37 @@ interface ThreadProps {
  * from an in-memory message store so the in-flight assistant message updates
  * token-by-token. Phase B renders the message in bulk at turn end.
  */
-export function Thread({ history, messageStore, busy }: ThreadProps) {
+export function Thread({
+  history,
+  messageStore,
+  busy,
+  interrupted,
+  rewriteOriginals,
+  turnTimings,
+  toolDetails = false,
+}: ThreadProps) {
+  const colors = getThemeColors();
   return (
     <Box flexDirection="column">
       {history.map((msg, idx) => (
-        <MessageBlock key={idx} message={msg} />
+        <MessageBlock
+          key={idx}
+          message={msg}
+          rewriteOriginal={rewriteOriginals?.get(idx)}
+          timing={turnTimings?.get(idx)}
+          toolDetails={toolDetails}
+        />
       ))}
-      {busy && messageStore && <StreamingAssistantMessage store={messageStore} />}
+      {busy && messageStore && (
+        <StreamingAssistantMessage store={messageStore} toolDetails={toolDetails} />
+      )}
+      {!busy && interrupted && (
+        <Box marginTop={1}>
+          <Text color={colors.muted} italic>
+            ⏹ you interrupted
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }
@@ -56,21 +106,47 @@ export function Thread({ history, messageStore, busy }: ThreadProps) {
  * by then the AI SDK history has the finished message and the static
  * `<AssistantMessage>` takes over rendering it.
  */
-export function StreamingAssistantMessage({ store }: { store: MessageStore }) {
+export function StreamingAssistantMessage({
+  store,
+  toolDetails = false,
+}: {
+  store: MessageStore;
+  toolDetails?: boolean;
+}) {
   const colors = getThemeColors();
   const events = useSyncExternalStore(store.subscribe, store.getSnapshot);
   if (events.length === 0) return null;
   const groups = groupByLabel(events);
   return (
     <Box flexDirection="column" marginTop={1}>
-      {groups.map((group, idx) => (
-        <Box key={idx} flexDirection="column">
-          <Text color={colors.accent} bold>
-            {group.label ?? 'bernard'}
-          </Text>
-          <StreamGroupBody events={group.events} />
-        </Box>
-      ))}
+      {groups.map((group, idx) => {
+        // Sub-agent groups (label set) keep the labeled header above the
+        // body. Main-agent groups (no label) inline the chevron with the
+        // first line of body content, mirroring the static AssistantMessage.
+        if (group.label !== undefined) {
+          // Sub-agent / wrapper output never appears in the static post-turn
+          // <Thread> (only main-agent assistant messages do). Mirror that
+          // when tool details are off so streaming doesn't briefly leak
+          // wrapper JSON / sub-agent text that vanishes once the turn ends.
+          if (!toolDetails) return null;
+          return (
+            <Box key={idx} flexDirection="column">
+              <Text color={colors.accent} bold>
+                {group.label}
+              </Text>
+              <StreamGroupBody events={group.events} toolDetails={toolDetails} />
+            </Box>
+          );
+        }
+        return (
+          <StreamGroupBody
+            key={idx}
+            events={group.events}
+            toolDetails={toolDetails}
+            inlineChevron
+          />
+        );
+      })}
     </Box>
   );
 }
@@ -101,8 +177,23 @@ function groupByLabel(events: readonly StreamEvent[]): EventGroup[] {
   return out;
 }
 
-function StreamGroupBody({ events }: { events: StreamEvent[] }) {
+function StreamGroupBody({
+  events,
+  toolDetails,
+  inlineChevron = false,
+}: {
+  events: StreamEvent[];
+  toolDetails: boolean;
+  /** When true, prepend `<❮ >` inline with the first emitted element. */
+  inlineChevron?: boolean;
+}) {
   const colors = getThemeColors();
+  const chevron = (
+    <Text color={colors.accent} bold>
+      {'❮  '}
+    </Text>
+  );
+  let chevronPending = inlineChevron;
   // Concatenate text-deltas into a single rolling string so we don't render
   // one <Text> per token (which Ink would lay out as separate lines).
   const elements: ReactNode[] = [];
@@ -110,7 +201,17 @@ function StreamGroupBody({ events }: { events: StreamEvent[] }) {
   let textKey = 0;
   const flushText = () => {
     if (textBuffer.length === 0) return;
-    elements.push(<Text key={`t-${textKey++}`}>{textBuffer}</Text>);
+    if (chevronPending) {
+      elements.push(
+        <Box key={`t-${textKey++}`}>
+          {chevron}
+          <Text>{textBuffer}</Text>
+        </Box>,
+      );
+      chevronPending = false;
+    } else {
+      elements.push(<Text key={`t-${textKey++}`}>{textBuffer}</Text>);
+    }
     textBuffer = '';
   };
   // Pair tool-calls with their results by callId so the result renders
@@ -135,31 +236,38 @@ function StreamGroupBody({ events }: { events: StreamEvent[] }) {
         const thought = extractThought(ev.args);
         if (thought) {
           elements.push(
-            <Text key={`c-${ev.callId}`} dimColor italic>
-              💭 {thought}
-            </Text>,
+            <Box key={`c-${ev.callId}`}>
+              {chevronPending && chevron}
+              <Text dimColor italic>
+                💭 {thought}
+              </Text>
+            </Box>,
           );
+          chevronPending = false;
         }
         continue;
       }
-      const argsSummary = summariseArgs(ev.args);
+      const argsSummary = toolDetails ? summariseArgs(ev.args) : '';
+      const headPrefix = chevronPending ? chevron : null;
       elements.push(
         <Box key={`c-${ev.callId}`} flexDirection="column">
           <Box>
+            {headPrefix}
             <Text color={colors.toolCall}>⚙ {ev.toolName}</Text>
             {argsSummary && <Text dimColor> {argsSummary}</Text>}
           </Box>
-          {resultsByCall.has(ev.callId) && (
+          {toolDetails && resultsByCall.has(ev.callId) && (
             <StreamingToolResult result={resultsByCall.get(ev.callId)!} />
           )}
         </Box>,
       );
+      chevronPending = false;
       continue;
     }
     // tool-result handled inline above; skip if it has a matching call.
     // If a result arrived without its call (shouldn't happen, but defensive),
     // render it as a standalone row so the user still sees it.
-    if (!callsById.has(ev.callId)) {
+    if (toolDetails && !callsById.has(ev.callId)) {
       flushText();
       elements.push(
         <Box key={`r-${ev.callId}`} marginLeft={2}>
@@ -171,6 +279,12 @@ function StreamGroupBody({ events }: { events: StreamEvent[] }) {
     }
   }
   flushText();
+  // Group produced no renderable content (e.g. only suppressed think events)
+  // but a chevron was promised — emit it on its own line so the assistant
+  // turn still shows up.
+  if (chevronPending) {
+    elements.push(<Box key="chev-only">{chevron}</Box>);
+  }
   return <>{elements}</>;
 }
 
@@ -189,68 +303,183 @@ function StreamingToolResult({
   );
 }
 
-function MessageBlock({ message }: { message: CoreMessage }) {
-  if (message.role === 'user') return <UserMessage message={message as CoreUserMessage} />;
+function MessageBlock({
+  message,
+  rewriteOriginal,
+  timing,
+  toolDetails,
+}: {
+  message: CoreMessage;
+  rewriteOriginal?: string;
+  timing?: { endedAt: number; durationMs: number };
+  toolDetails: boolean;
+}) {
+  if (message.role === 'user')
+    return (
+      <UserMessage message={message as CoreUserMessage} rewriteOriginal={rewriteOriginal} />
+    );
   if (message.role === 'assistant')
-    return <AssistantMessage message={message as CoreAssistantMessage} />;
-  if (message.role === 'tool') return <ToolResultMessage message={message as CoreToolMessage} />;
+    return (
+      <AssistantMessage
+        message={message as CoreAssistantMessage}
+        timing={timing}
+        toolDetails={toolDetails}
+      />
+    );
+  if (message.role === 'tool')
+    return toolDetails ? <ToolResultMessage message={message as CoreToolMessage} /> : null;
   // System messages are agent-internal; don't render in the thread.
   return null;
 }
 
-function UserMessage({ message }: { message: CoreUserMessage }) {
+function UserMessage({
+  message,
+  rewriteOriginal,
+}: {
+  message: CoreUserMessage;
+  rewriteOriginal?: string;
+}) {
   const colors = getThemeColors();
   const raw = extractUserText(message);
   const { body, timestamp } = parseUserMessage(raw);
+  // When the prompt-rewriter replaced the user's text before dispatch we want
+  // to surface the original to the user (the rewrite is an LLM-only detail).
+  // `rewriteOriginal` is plain text — strip the timestamp wrapper from `body`
+  // by replacing the body, leaving the parsed timestamp untouched.
+  const display = rewriteOriginal ?? body;
   return (
     <Box flexDirection="column" marginTop={1} alignItems="flex-end">
-      <Text color={colors.accent} bold>
-        you
-      </Text>
-      <Text>{body}</Text>
-      {timestamp && <Text dimColor>{formatFriendlyTimestamp(timestamp)}</Text>}
+      <Box>
+        <Text>{display}</Text>
+        <Text color={colors.accent} bold>
+          {' ❯'}
+        </Text>
+      </Box>
+      <Box>
+        {rewriteOriginal !== undefined && (
+          <Text dimColor>{REWRITE_ICON} </Text>
+        )}
+        {timestamp && <Text dimColor>{formatFriendlyTimestamp(timestamp)}</Text>}
+      </Box>
     </Box>
   );
 }
 
-function AssistantMessage({ message }: { message: CoreAssistantMessage }) {
+function AssistantMessage({
+  message,
+  timing,
+  toolDetails,
+}: {
+  message: CoreAssistantMessage;
+  timing?: { endedAt: number; durationMs: number };
+  toolDetails: boolean;
+}) {
   const colors = getThemeColors();
   const parts = normalizeAssistantContent(message.content);
-  return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text color={colors.accent} bold>
-        bernard
-      </Text>
-      {parts.map((part, idx) => {
-        if (part.type === 'text') return <Text key={idx}>{part.text}</Text>;
-        if (part.type === 'reasoning')
-          return (
-            <Text key={idx} dimColor italic>
+  const chevron = (
+    <Text color={colors.accent} bold>
+      {'❮  '}
+    </Text>
+  );
+  // The chevron mirrors the user's right-aligned `❯` and rides the first
+  // line of content. Walk parts in order and prepend it to the first
+  // renderable part; remaining parts render unchanged.
+  let chevronUsed = false;
+  const rendered: ReactNode[] = [];
+  for (let idx = 0; idx < parts.length; idx++) {
+    const part = parts[idx];
+    if (part.type === 'text') {
+      rendered.push(
+        chevronUsed ? (
+          <Text key={idx}>{part.text}</Text>
+        ) : (
+          <Box key={idx}>
+            {chevron}
+            <Text>{part.text}</Text>
+          </Box>
+        ),
+      );
+      chevronUsed = true;
+      continue;
+    }
+    if (part.type === 'reasoning') {
+      rendered.push(
+        chevronUsed ? (
+          <Text key={idx} dimColor italic>
+            {part.text}
+          </Text>
+        ) : (
+          <Box key={idx}>
+            {chevron}
+            <Text dimColor italic>
               {part.text}
             </Text>
-          );
-        if (part.type === 'tool-call') return <ToolCallBlock key={idx} part={part} />;
-        // 'redacted-reasoning' / unknown parts: skip silently.
-        return null;
-      })}
+          </Box>
+        ),
+      );
+      chevronUsed = true;
+      continue;
+    }
+    if (part.type === 'tool-call') {
+      // `think` with empty thought renders nothing — don't consume the
+      // chevron slot in that case.
+      if (part.toolName === 'think' && !extractThought(part.args)) continue;
+      rendered.push(
+        <ToolCallBlock
+          key={idx}
+          part={part}
+          toolDetails={toolDetails}
+          prefix={chevronUsed ? undefined : chevron}
+        />,
+      );
+      chevronUsed = true;
+      continue;
+    }
+    // 'redacted-reasoning' / unknown parts: skip silently.
+  }
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {!chevronUsed && chevron}
+      {rendered}
+      {timing && (
+        <Box justifyContent="flex-end">
+          <Text dimColor>
+            {formatDuration(timing.durationMs)} ·{' '}
+            {formatFriendlyTimestamp(new Date(timing.endedAt))}
+          </Text>
+        </Box>
+      )}
     </Box>
   );
 }
 
-function ToolCallBlock({ part }: { part: ToolCallPart }) {
+function ToolCallBlock({
+  part,
+  toolDetails,
+  prefix,
+}: {
+  part: ToolCallPart;
+  toolDetails: boolean;
+  /** Optional inline node rendered before the `⚙ name` text (the chevron). */
+  prefix?: ReactNode;
+}) {
   const colors = getThemeColors();
   if (part.toolName === 'think') {
     const thought = extractThought(part.args);
     if (!thought) return null;
     return (
-      <Text dimColor italic>
-        💭 {thought}
-      </Text>
+      <Box>
+        {prefix}
+        <Text dimColor italic>
+          💭 {thought}
+        </Text>
+      </Box>
     );
   }
-  const argSummary = summariseArgs(part.args);
+  const argSummary = toolDetails ? summariseArgs(part.args) : '';
   return (
     <Box>
+      {prefix}
       <Text color={colors.toolCall}>⚙ {part.toolName}</Text>
       {argSummary && <Text dimColor> {argSummary}</Text>}
     </Box>
@@ -302,6 +531,21 @@ function parseUserMessage(raw: string): { body: string; timestamp: Date | null }
     };
   }
   return { body: text, timestamp: null };
+}
+
+/**
+ * Human-friendly elapsed time: `420ms`, `1.2s`, `47s`, `2m 3s`. Mirrors what
+ * a developer would scan for in the corner of a chat client — exact under a
+ * second, one decimal under ten, whole seconds up to a minute, then `m s`.
+ */
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds - m * 60);
+  return `${m}m ${s}s`;
 }
 
 function formatFriendlyTimestamp(date: Date): string {
