@@ -76,6 +76,26 @@ import {
 } from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
+import { generateText } from 'ai';
+import { resolveSiteModel } from '../model-policy.js';
+import {
+  serializeMessages,
+  extractDomainFacts,
+  SUMMARIZATION_PROMPT,
+} from '../context.js';
+import { detectSpecialistCandidate } from '../specialist-detector.js';
+import { promoteCandidate } from '../candidate-bootstrap.js';
+import {
+  resolveReferences,
+  stripToolResolvableTokens,
+  shouldSkipResolver,
+  type ResolvedEntry,
+} from '../reference-resolver.js';
+import { rewritePrompt } from '../prompt-rewriter.js';
+import { loadRewriterHints } from '../memory.js';
+import { stripImagePaths } from '../image.js';
+import { getModelProfile } from '../providers/index.js';
+import { debugLog } from '../logger.js';
 import {
   acquireSlot,
   releaseSlot,
@@ -343,16 +363,20 @@ export function App({
     setInkHandlers({
       requestMenu: (entries, options) =>
         handlersRef.current!.requestMenu(entries, options),
-      requestConfirm: (input) => handlersRef.current!.requestConfirm(input),
-      requestBlock: (input) => handlersRef.current!.requestBlock(input),
+      requestConfirm: (input, signal) =>
+        handlersRef.current!.requestConfirm(input, signal),
+      requestBlock: (input, signal) =>
+        handlersRef.current!.requestBlock(input, signal),
       requestTextInput: (options) => handlersRef.current!.requestTextInput(options),
       requestAskUser: (questions, signal) =>
         handlersRef.current!.requestAskUser(questions, signal),
-      requestConfirmDangerous: async (command) => {
+      requestConfirmDangerous: async (command, signal) => {
+        if (signal?.aborted) return false;
         const result = await handlersRef.current!.requestMenu(
           [{ label: 'Allow once' }, { label: 'Cancel' }],
           { title: `⚠ Dangerous command: ${command}` },
         );
+        if (signal?.aborted) return false;
         return !result.cancelled && result.index === 0;
       },
     });
@@ -411,7 +435,92 @@ export function App({
       exit();
       return;
     }
-    if (text === '/clear') {
+    if (text === '/clear' || text.startsWith('/clear ')) {
+      const clearArgs = text.slice('/clear'.length).trim();
+      const shouldSave = clearArgs === '--save' || clearArgs === '-s';
+      if (clearArgs && !shouldSave) {
+        flashToast('Usage: /clear [--save|-s]', 'error');
+        return;
+      }
+      if (shouldSave) {
+        const history = agent.getHistory();
+        if (history.length < 2) {
+          flashToast('Not enough conversation to summarize.', 'warning');
+        } else {
+          setBusy(true);
+          try {
+            const serialized = serializeMessages(history);
+            const summarySite = resolveSiteModel(config, 'compressor');
+            const [summaryResult, domainFacts, candidateResult] = await Promise.all([
+              generateText({
+                model: summarySite.model,
+                providerOptions: summarySite.providerOptions,
+                maxTokens: 2048,
+                system: SUMMARIZATION_PROMPT,
+                messages: [
+                  { role: 'user', content: `Summarize this conversation:\n\n${serialized}` },
+                ],
+              }),
+              extractDomainFacts(serialized, config),
+              detectSpecialistCandidate(
+                serialized,
+                config,
+                stores.specialists.list(),
+                stores.candidates.listPending(),
+              ).catch(() => null),
+            ]);
+            const summary = summaryResult.text?.trim();
+            if (summary) {
+              const key = `session-summary-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+              stores.memory.writeMemory(key, summary);
+              flashToast(`Summary saved to memory: ${key}`, 'success');
+            }
+            if (stores.rag && domainFacts.length > 0) {
+              const results = await Promise.allSettled(
+                domainFacts.map((df) =>
+                  stores.rag!.addFacts(df.facts, 'clear-save', df.domain),
+                ),
+              );
+              let storedFacts = 0;
+              results.forEach((r, i) => {
+                if (r.status === 'fulfilled') storedFacts += domainFacts[i].facts.length;
+              });
+              if (storedFacts > 0) {
+                debugLog('app:clear-save:rag', { storedFacts });
+              }
+            }
+            if (candidateResult) {
+              try {
+                if (candidateResult.type === 'new-candidate') {
+                  const created = stores.candidates.create(
+                    candidateResult.candidate,
+                    'clear-save',
+                  );
+                  if (
+                    config.autoCreateSpecialists &&
+                    candidateResult.candidate.confidence >= config.autoCreateThreshold
+                  ) {
+                    promoteCandidate(
+                      { ...candidateResult.candidate, id: created.id },
+                      stores.specialists,
+                      stores.candidates,
+                      config.autoCreateThreshold,
+                      config,
+                    );
+                  }
+                }
+              } catch {
+                // Silent — candidate storage failure is non-critical
+              }
+            }
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            flashToast(`Failed to summarize: ${message}. Clearing anyway.`, 'error');
+          } finally {
+            setBusy(false);
+          }
+        }
+      }
       historyStore.clear();
       provenanceHistoryStore.clear();
       agent.clearHistory();
@@ -1529,6 +1638,72 @@ export function App({
     setToolDetailsVisible(cfg.toolDetails);
   }
 
+  async function runPreTurnPipeline(
+    input: string,
+  ): Promise<{ agentInput: string; resolvedEntries: ResolvedEntry[] }> {
+    // Per-turn RAG cache invalidation (#171). Must run before any resolver /
+    // rewriter LLM call so they see only this turn's facts.
+    stores.rag?.clearTurnCache();
+
+    let resolvedEntries: ResolvedEntry[] = [];
+    if (!shouldSkipResolver(input)) {
+      const resolverInput = stripToolResolvableTokens(stripImagePaths(input));
+      if (resolverInput.length > 0) {
+        try {
+          const hints = loadRewriterHints(stores.memory);
+          const result = await resolveReferences(
+            resolverInput,
+            stores.memory,
+            config,
+            hints,
+            undefined,
+            stores.rag,
+            agent.getHistory(),
+          );
+          if (result.status === 'resolved') {
+            resolvedEntries = result.entries;
+            debugLog('app:resolved-references', { entries: resolvedEntries });
+          }
+          // ambiguous/unknown: degraded — the legacy disambiguation / save
+          // menus haven't been ported to Ink yet (Phase E). Fall open so the
+          // turn proceeds with the original prompt rather than blocking.
+        } catch (err: unknown) {
+          debugLog(
+            'app:resolve-references',
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
+    }
+
+    let agentInput = input;
+    if (config.promptRewriter) {
+      try {
+        const profile = getModelProfile(
+          config.provider,
+          config.model,
+          config.customProviders?.[config.provider]?.sdk,
+        );
+        const result = await rewritePrompt(input, profile, resolvedEntries, config);
+        if (result.status === 'rewritten') {
+          agentInput = result.text;
+          debugLog('app:prompt-rewritten', {
+            family: profile.family,
+            original: input,
+            rewritten: result.text,
+          });
+        }
+      } catch (err: unknown) {
+        debugLog(
+          'app:prompt-rewriter',
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
+    return { agentInput, resolvedEntries };
+  }
+
   async function runAgentTurn(input: string, images?: ImageAttachment[]): Promise<void> {
     // Drop a second Enter that arrives before the busy re-render has propagated
     // to <Prompt disabled={busy}>. Without this, two turns can run concurrently.
@@ -1539,7 +1714,8 @@ export function App({
     messageStore.reset();
     setBusy(true);
     try {
-      await agent.processInput(input, images);
+      const { agentInput, resolvedEntries } = await runPreTurnPipeline(input);
+      await agent.processInput(agentInput, images, resolvedEntries);
     } catch (err) {
       console.error('agent error:', err);
     } finally {
@@ -1614,25 +1790,59 @@ export function App({
     });
   }
 
-  function requestConfirm(input: ConfirmActionInput): Promise<boolean> {
+  function requestConfirm(input: ConfirmActionInput, signal?: AbortSignal): Promise<boolean> {
     const key = `${input.toolName}:${stableHash(input.args)}`;
     if (confirmAllowSession.current.get(key)) return Promise.resolve(true);
+    if (signal?.aborted) return Promise.resolve(false);
     return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (value: boolean): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const onAbort = () => {
+        setPendingDialog(null);
+        setActiveOverlay(null);
+        finish(false);
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
       setPendingDialog({
         kind: 'confirm',
         input,
         resolve: (allowed, scope) => {
+          signal?.removeEventListener('abort', onAbort);
           if (allowed && scope === 'session') confirmAllowSession.current.set(key, true);
-          resolve(allowed);
+          finish(allowed);
         },
       });
       setActiveOverlay('confirm');
     });
   }
 
-  function requestBlock(input: BlockActionInput): Promise<BlockOutcome> {
+  function requestBlock(input: BlockActionInput, signal?: AbortSignal): Promise<BlockOutcome> {
+    if (signal?.aborted) return Promise.resolve('deny' as BlockOutcome);
     return new Promise((resolve) => {
-      setPendingDialog({ kind: 'block', input, resolve });
+      let settled = false;
+      const finish = (value: BlockOutcome): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const onAbort = () => {
+        setPendingDialog(null);
+        setActiveOverlay(null);
+        finish('deny');
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      setPendingDialog({
+        kind: 'block',
+        input,
+        resolve: (outcome) => {
+          signal?.removeEventListener('abort', onAbort);
+          finish(outcome);
+        },
+      });
       setActiveOverlay('confirm');
     });
   }
@@ -1651,21 +1861,30 @@ export function App({
     const answers: string[] = [];
     for (const q of questions) {
       if (signal?.aborted) return { cancelled: true, answered: answers };
-      // Phase B: only choice questions are routed through the overlay.
-      // Free-text and `allowOther` need a `<TextInputOverlay>` component
-      // which lands in Phase D when the readline path is retired. For now,
-      // bail with the partial answers already collected so the agent can see
-      // what the user did pick before the unsupported question.
+
+      // Free-text question (no choices) — prompt with TextInputOverlay.
       if (!q.choices || q.choices.length === 0) {
-        return { cancelled: true, answered: answers };
+        const result = await requestTextInput({ label: q.question });
+        if (result.cancelled) return { cancelled: true, answered: answers };
+        answers.push(result.raw.trim());
+        continue;
       }
+
+      // Choice question; append an "Other" escape hatch if requested.
+      const otherLabel = q.otherLabel?.trim() || 'Other (type your own)';
       const entries: MenuEntry[] = q.choices.map((c) => ({ label: c }));
-      // Intentionally skip allowOther: choosing it would store the literal
-      // "Other (free-form)" label instead of the user's actual text. Better
-      // to surface only the canned choices until text input lands.
+      if (q.allowOther) entries.push({ label: otherLabel });
       const result = await requestMenu(entries, { title: q.question });
       if (result.cancelled) return { cancelled: true, answered: answers };
-      answers.push(result.item.label);
+
+      if (q.allowOther && result.index === entries.length - 1) {
+        // User picked "Other" — gather free-form text.
+        const free = await requestTextInput({ label: q.question });
+        if (free.cancelled) return { cancelled: true, answered: answers };
+        answers.push(free.raw.trim());
+      } else {
+        answers.push(result.item.label);
+      }
     }
     return { answers };
   }

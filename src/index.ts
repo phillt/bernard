@@ -219,20 +219,29 @@ async function runInkRepl(args: {
 
   const sessionToolAllowlist = new Set<string>();
 
-  const confirmDangerous = async (command: string): Promise<boolean> => {
+  const confirmDangerous = async (
+    command: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> => {
     const h = getInkHandlers();
     if (!h) return false;
-    return h.requestConfirmDangerous(command);
+    return h.requestConfirmDangerous(command, signal);
   };
-  const confirmAction = async (input: ConfirmActionInput): Promise<boolean> => {
+  const confirmAction = async (
+    input: ConfirmActionInput,
+    signal?: AbortSignal,
+  ): Promise<boolean> => {
     const h = getInkHandlers();
     if (!h) return false;
-    return h.requestConfirm(input);
+    return h.requestConfirm(input, signal);
   };
-  const blockAction = async (input: BlockActionInput): Promise<BlockOutcome> => {
+  const blockAction = async (
+    input: BlockActionInput,
+    signal?: AbortSignal,
+  ): Promise<BlockOutcome> => {
     const h = getInkHandlers();
     if (!h) return 'deny';
-    return h.requestBlock(input);
+    return h.requestBlock(input, signal);
   };
   const askUser = async (
     questions: AskUserQuestion[],
@@ -394,13 +403,17 @@ async function runInkRepl(args: {
         mcp: mcpManager,
       },
       sessionToolAllowlist,
-      onExit: cleanup,
+      // Real cleanup runs AFTER waitUntilExit so its printInfo / printError
+      // calls don't write through stdout while the Ink renderer is still
+      // mounted (which would corrupt the live UI).
+      onExit: async () => {},
       alertBanner,
       isFreshInstall,
     }),
   );
 
   await waitUntilExit();
+  await cleanup();
 }
 
 program

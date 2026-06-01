@@ -36,14 +36,14 @@ export type MenuResult = { cancelled: true } | { cancelled: false; index: number
 
 export interface InkHandlers {
   requestMenu: (entries: MenuEntry[], options?: MenuOptions) => Promise<MenuResult>;
-  requestConfirm: (input: ConfirmActionInput) => Promise<boolean>;
-  requestBlock: (input: BlockActionInput) => Promise<BlockOutcome>;
+  requestConfirm: (input: ConfirmActionInput, signal?: AbortSignal) => Promise<boolean>;
+  requestBlock: (input: BlockActionInput, signal?: AbortSignal) => Promise<BlockOutcome>;
   requestTextInput: (options: ValuePromptOptions) => Promise<ValueResult>;
   requestAskUser: (
     questions: AskUserQuestion[],
     signal?: AbortSignal,
   ) => Promise<AskUserBatchResult>;
-  requestConfirmDangerous: (command: string) => Promise<boolean>;
+  requestConfirmDangerous: (command: string, signal?: AbortSignal) => Promise<boolean>;
 }
 
 let registered: InkHandlers | null = null;
