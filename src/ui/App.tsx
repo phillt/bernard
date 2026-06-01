@@ -110,6 +110,7 @@ import { Toast, type ToastVariant } from './Toast.js';
 import { persistAgentState } from './save.js';
 import { MessageStore } from './message-store.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
+import { setInkHandlers } from './ink-handlers.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -145,6 +146,12 @@ interface AppProps {
    * a cron alert.
    */
   alertBanner?: string;
+  /**
+   * When true, run the fresh-install profile wizard once on mount before
+   * accepting input. The default profile is already on disk; the wizard
+   * overlays the user's choices on top of it.
+   */
+  isFreshInstall?: boolean;
 }
 
 type Overlay =
@@ -216,6 +223,7 @@ export function App({
   sessionToolAllowlist: _sessionToolAllowlist,
   onExit,
   alertBanner,
+  isFreshInstall,
 }: AppProps) {
   const { exit } = useApp();
   const [activeOverlay, setActiveOverlay] = useState<Overlay | null>(null);
@@ -317,6 +325,68 @@ export function App({
     setOutputSink(messageStore);
     return () => setOutputSink(null);
   }, [messageStore]);
+
+  // Phase D (#215) ink-handlers bridge. The toolOptions callbacks built in
+  // `src/index.ts` read from `getInkHandlers()` at call time, so this effect
+  // hands them the live overlay-request closures. The methods on the
+  // registered object close over `handlersRef.current`, which is rewritten on
+  // every render so the toolOptions see the latest closures without
+  // re-registering. Cleared on unmount so post-exit calls fail closed.
+  const handlersRef = useRef<{
+    requestMenu: typeof requestMenu;
+    requestConfirm: typeof requestConfirm;
+    requestBlock: typeof requestBlock;
+    requestTextInput: typeof requestTextInput;
+    requestAskUser: typeof requestAskUser;
+  } | null>(null);
+  useEffect(() => {
+    setInkHandlers({
+      requestMenu: (entries, options) =>
+        handlersRef.current!.requestMenu(entries, options),
+      requestConfirm: (input) => handlersRef.current!.requestConfirm(input),
+      requestBlock: (input) => handlersRef.current!.requestBlock(input),
+      requestTextInput: (options) => handlersRef.current!.requestTextInput(options),
+      requestAskUser: (questions, signal) =>
+        handlersRef.current!.requestAskUser(questions, signal),
+      requestConfirmDangerous: async (command) => {
+        const result = await handlersRef.current!.requestMenu(
+          [{ label: 'Allow once' }, { label: 'Cancel' }],
+          { title: `⚠ Dangerous command: ${command}` },
+        );
+        return !result.cancelled && result.index === 0;
+      },
+    });
+    return () => setInkHandlers(null);
+  }, []);
+
+  // Fresh-install profile wizard (#207). Runs once on mount, after handlers
+  // are registered, before the user starts typing. Failures are swallowed so
+  // a wizard glitch never blocks the REPL from coming up.
+  const onboardingRanRef = useRef(false);
+  useEffect(() => {
+    if (!isFreshInstall || onboardingRanRef.current) return;
+    onboardingRanRef.current = true;
+    void (async () => {
+      try {
+        const wiz = await runProfileWizardInk(requestMenu, requestTextInput, flashToast);
+        if (!wiz.cancelled) {
+          const { savePreferences: save } = await import('../config.js');
+          save({ provider: config.provider, model: config.model, ...wiz.settings });
+          const { applyProfileToConfig: apply } = await import('../config.js');
+          apply(config);
+          flashToast('Default profile updated.', 'success');
+        } else {
+          flashToast('Setup skipped — running with built-in defaults.', 'info');
+        }
+      } catch (err) {
+        flashToast(
+          `Onboarding wizard error: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        );
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFreshInstall]);
 
   const flashToast = (message: string, variant: ToastVariant = 'info') => {
     setToast({ message, variant });
@@ -1521,16 +1591,18 @@ export function App({
     }
   }
 
-  // Overlay-request helpers — exposed to the script that mounts <App> so it
-  // can build the ToolOptions callbacks (confirmFn, confirmActionFn,
-  // blockActionFn, askUserFn). The wiring lives in `src/index.ts` (Phase D
-  // mounts <App> directly); these are referenced here so React's
-  // closure captures them in the same render the props they consume change.
-  void requestMenu;
-  void requestConfirm;
-  void requestBlock;
-  void requestAskUser;
-  void requestTextInput;
+  // Overlay-request helpers — built locally and bridged to the pre-mount
+  // `ToolOptions` callbacks in `src/index.ts` via `setInkHandlers`. The
+  // `handlersRef.current` assignment below rewrites the slot every render so
+  // the registered (stable) shim object always forwards to the latest
+  // closures.
+  handlersRef.current = {
+    requestMenu,
+    requestConfirm,
+    requestBlock,
+    requestTextInput,
+    requestAskUser,
+  };
 
   function requestMenu(
     entries: MenuEntry[],
