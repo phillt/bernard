@@ -170,8 +170,7 @@ export function buildAgentStatusPanel(inputs: AgentStatusInputs): string[] {
 
   if (inputs.lastVerification) {
     const v = inputs.lastVerification;
-    const tag =
-      v.verdict === 'pass' ? 'PASS' : v.verdict === 'warn' ? 'WARN' : 'FAIL';
+    const tag = v.verdict === 'pass' ? 'PASS' : v.verdict === 'warn' ? 'WARN' : 'FAIL';
     const body = ` — ${truncate(v.reason, 120)}`;
     const tail = v.source ? `  (${truncate(v.source, 60)})` : '';
     lines.push(row('Last verify', `${tag}${body}${tail}`));

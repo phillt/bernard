@@ -183,8 +183,8 @@ async function runInkRepl(args: {
   resume: boolean;
   isFreshInstall: boolean;
 }): Promise<void> {
-  const { config, resume, isFreshInstall } = args;
-  let { alertContext, alertBanner } = args;
+  const { config, resume, isFreshInstall, alertBanner } = args;
+  let { alertContext } = args;
 
   const memoryStore = new MemoryStore();
   const routineStore = new RoutineStore();
@@ -219,10 +219,7 @@ async function runInkRepl(args: {
 
   const sessionToolAllowlist = new Set<string>();
 
-  const confirmDangerous = async (
-    command: string,
-    signal?: AbortSignal,
-  ): Promise<boolean> => {
+  const confirmDangerous = async (command: string, signal?: AbortSignal): Promise<boolean> => {
     const h = getInkHandlers();
     if (!h) return false;
     return h.requestConfirmDangerous(command, signal);

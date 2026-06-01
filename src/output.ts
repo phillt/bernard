@@ -6,11 +6,17 @@ import { debugLog } from './logger.js';
 let toolDetailsVisible = false;
 
 /**
- * Enables or disables printing of tool-call arguments and tool result bodies.
- * Tool names and call lines (▶ toolName) are always shown regardless.
+ * Enables or disables full display of tool-call arguments and result bodies.
+ * Tool names and call lines are always shown regardless. Consumed by the Ink
+ * tool-call renderers via {@link isToolDetailsVisible}; non-Ink callers can
+ * still call this setter to persist the preference for the current session.
  */
 export function setToolDetailsVisible(enabled: boolean): void {
   toolDetailsVisible = enabled;
+}
+
+export function isToolDetailsVisible(): boolean {
+  return toolDetailsVisible;
 }
 
 /** Cumulative token-usage statistics displayed alongside the thinking spinner. */

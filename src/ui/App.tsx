@@ -409,7 +409,6 @@ export function App({
         );
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isFreshInstall]);
 
   const flashToast = (message: string, variant: ToastVariant = 'info') => {
@@ -524,6 +523,11 @@ export function App({
       historyStore.clear();
       provenanceHistoryStore.clear();
       agent.clearHistory();
+      // Wipe scrollback + visible region so the old transcript doesn't linger
+      // above the cleared <Thread>. `\x1b[3J` clears scrollback, `\x1b[2J`
+      // the visible region, `\x1b[H` homes the cursor. Ink repaints on the
+      // next setHistoryVersion bump below.
+      process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
       setHistoryVersion((v) => v + 1);
       flashToast('Conversation history cleared.', 'success');
       return;
@@ -1193,6 +1197,20 @@ export function App({
       }
       flashToast(`Attaching ${attachment.path} → ${config.provider}/${config.model}`);
       await runAgentTurn(userText, [attachment]);
+      return;
+    }
+
+    // Backwards-compat shims: standalone toggles that were consolidated into
+    // /agent-options or /options in pre-Phase-D releases. Print a short
+    // pointer so users typing the old name aren't silently dropped into the
+    // agent turn.
+    const legacyToggle: Record<string, string> = {
+      '/react': 'Coordinator (ReAct) mode → /agent-options',
+      '/tool-details': 'Tool-call details → /agent-options',
+      '/debug': 'Debug logging → /options',
+    };
+    if (legacyToggle[text]) {
+      flashToast(`This command moved. ${legacyToggle[text]}`, 'warning');
       return;
     }
 
