@@ -1,738 +1,108 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { CoreMessage } from 'ai';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  printAssistantText,
-  printToolCall,
-  printToolResult,
-  printError,
-  printInfo,
-  printWelcome,
-  printHelp,
-  printConversationReplay,
-  printSubAgentStart,
-  printSubAgentEnd,
-  printPlan,
-  printThought,
-  printEvaluation,
-  startSpinner,
-  stopSpinner,
+  formatTokenCount,
   buildSpinnerMessage,
   setToolDetailsVisible,
-  setPinnedRegion,
-  clearPinnedRegion,
-  visualRowCount,
+  isToolDetailsVisible,
   type SpinnerStats,
 } from './output.js';
-import type { Step } from './plan-store.js';
 
-describe.skip('output (Phase D: legacy stdout printers slated for deletion; Phase E rewrites with ink-testing-library)', () => {
-  let logSpy: ReturnType<typeof vi.spyOn>;
-  let errorSpy: ReturnType<typeof vi.spyOn>;
-  let stdoutWriteSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    stdoutWriteSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    stopSpinner(); // ensure clean state
-    stdoutWriteSpy.mockClear();
-    setToolDetailsVisible(true);
+describe('formatTokenCount', () => {
+  it('renders raw integers under 1000', () => {
+    expect(formatTokenCount(0)).toBe('0');
+    expect(formatTokenCount(1)).toBe('1');
+    expect(formatTokenCount(999)).toBe('999');
   });
 
-  afterEach(() => {
+  it('formats 1k–9.9k with one decimal', () => {
+    expect(formatTokenCount(1000)).toBe('1.0k');
+    expect(formatTokenCount(1500)).toBe('1.5k');
+    expect(formatTokenCount(9949)).toBe('9.9k');
+  });
+
+  it('rounds to whole k at 10k and above', () => {
+    expect(formatTokenCount(10000)).toBe('10k');
+    expect(formatTokenCount(12345)).toBe('12k');
+    expect(formatTokenCount(99999)).toBe('100k');
+  });
+});
+
+describe('buildSpinnerMessage', () => {
+  function makeStats(overrides: Partial<SpinnerStats> = {}): SpinnerStats {
+    return {
+      startTime: Date.now(),
+      totalPromptTokens: 0,
+      totalCompletionTokens: 0,
+      latestPromptTokens: 0,
+      model: 'claude-sonnet-4-5-20250929',
+      ...overrides,
+    };
+  }
+
+  it('returns "Thinking (Xs)" when no tokens have flowed yet', () => {
+    const msg = buildSpinnerMessage(makeStats({ startTime: Date.now() - 5000 }));
+    expect(msg).toMatch(/^Thinking \(\d+s\)$/);
+  });
+
+  it('includes up / down counts and a remaining-percentage tail when populated', () => {
+    const msg = buildSpinnerMessage(
+      makeStats({
+        startTime: Date.now() - 1000,
+        totalPromptTokens: 1234,
+        totalCompletionTokens: 56,
+        latestPromptTokens: 1234,
+      }),
+    );
+    expect(msg).toContain('↑');
+    expect(msg).toContain('↓');
+    expect(msg).toContain('% until compression');
+  });
+
+  it('honors contextWindowOverride', () => {
+    const small = buildSpinnerMessage(
+      makeStats({
+        totalPromptTokens: 5000,
+        totalCompletionTokens: 100,
+        latestPromptTokens: 5000,
+        contextWindowOverride: 10_000,
+      }),
+    );
+    const large = buildSpinnerMessage(
+      makeStats({
+        totalPromptTokens: 5000,
+        totalCompletionTokens: 100,
+        latestPromptTokens: 5000,
+        contextWindowOverride: 1_000_000,
+      }),
+    );
+    const smallPct = Number(small.match(/(\d+)% until compression/)?.[1] ?? '-1');
+    const largePct = Number(large.match(/(\d+)% until compression/)?.[1] ?? '-1');
+    expect(smallPct).toBeLessThan(largePct);
+  });
+
+  it('clamps remainingPct to 0 when the latest prompt exceeds the threshold', () => {
+    const msg = buildSpinnerMessage(
+      makeStats({
+        totalPromptTokens: 999_999,
+        totalCompletionTokens: 1,
+        latestPromptTokens: 999_999,
+        contextWindowOverride: 10_000,
+      }),
+    );
+    expect(msg).toContain('0% until compression');
+  });
+});
+
+describe('tool-details visibility', () => {
+  beforeEach(() => {
     setToolDetailsVisible(false);
   });
 
-  describe('printAssistantText', () => {
-    it('prints non-empty text', () => {
-      printAssistantText('Hello there');
-      expect(logSpy).toHaveBeenCalled();
-      expect(logSpy.mock.calls[0][0]).toContain('Hello there');
-    });
-
-    it('skips whitespace-only text', () => {
-      printAssistantText('   \n  ');
-      expect(logSpy).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('printToolCall', () => {
-    it('shows command string for shell tool', () => {
-      printToolCall('shell', { command: 'ls -la' });
-      expect(logSpy).toHaveBeenCalled();
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('shell');
-      expect(output).toContain('ls -la');
-    });
-
-    it('shows JSON args for other tools', () => {
-      printToolCall('memory', { action: 'list' });
-      expect(logSpy).toHaveBeenCalled();
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('memory');
-      expect(output).toContain('"action"');
-    });
-
-    it('omits args when tool details are hidden', () => {
-      setToolDetailsVisible(false);
-      printToolCall('shell', { command: 'ls -la' });
-      expect(logSpy).toHaveBeenCalled();
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('shell');
-      expect(output).not.toContain('ls -la');
-    });
-
-    it('prints nothing for silent tools (plan, think, evaluate)', () => {
-      printToolCall('plan', { action: 'view' });
-      printToolCall('think', { thought: 'x' });
-      printToolCall('evaluate', { evaluation: 'y' });
-      expect(logSpy).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('printToolResult', () => {
-    it('handles string result', () => {
-      printToolResult('shell', 'file contents here');
-      expect(logSpy).toHaveBeenCalled();
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('file contents here');
-    });
-
-    it('handles object with .output property', () => {
-      printToolResult('shell', { output: 'command output' });
-      expect(logSpy).toHaveBeenCalled();
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('command output');
-    });
-
-    it('JSON-stringifies other objects', () => {
-      printToolResult('memory', { action: 'list', keys: ['a', 'b'] });
-      expect(logSpy).toHaveBeenCalled();
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('"action"');
-    });
-
-    it('truncates output longer than 2000 chars', () => {
-      const longString = 'x'.repeat(3000);
-      printToolResult('shell', longString);
-      expect(logSpy).toHaveBeenCalled();
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('truncated');
-    });
-
-    it('prints nothing when tool details are hidden', () => {
-      setToolDetailsVisible(false);
-      printToolResult('shell', 'file contents here');
-      expect(logSpy).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('printError', () => {
-    it('writes to console.error', () => {
-      printError('something broke');
-      expect(errorSpy).toHaveBeenCalled();
-      expect(errorSpy.mock.calls[0][0]).toContain('something broke');
-    });
-  });
-
-  describe('printInfo', () => {
-    it('writes to console.log', () => {
-      printInfo('info message');
-      expect(logSpy).toHaveBeenCalled();
-      expect(logSpy.mock.calls[0][0]).toContain('info message');
-    });
-  });
-
-  describe('printWelcome', () => {
-    it('writes to console.log', () => {
-      printWelcome('anthropic', 'claude-sonnet');
-      expect(logSpy).toHaveBeenCalled();
-    });
-
-    it('includes version when provided', () => {
-      printWelcome('anthropic', 'claude-sonnet', '1.2.3');
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('v1.2.3');
-    });
-
-    it('omits version when not provided', () => {
-      printWelcome('anthropic', 'claude-sonnet');
-      const output = logSpy.mock.calls[0][0];
-      expect(output).not.toMatch(/v\d+\.\d+/);
-    });
-  });
-
-  describe('printHelp', () => {
-    it('writes to console.log', () => {
-      printHelp();
-      expect(logSpy).toHaveBeenCalled();
-    });
-  });
-
-  describe('startSpinner', () => {
-    beforeEach(() => {
-      vi.useFakeTimers();
-    });
-
-    afterEach(() => {
-      stopSpinner();
-      vi.useRealTimers();
-    });
-
-    it('writes spinner frames after interval', () => {
-      startSpinner();
-      vi.advanceTimersByTime(80);
-      expect(stdoutWriteSpy).toHaveBeenCalled();
-      const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
-      const hasFrame = writes.some((w) => w.includes('⠋') || w.includes('⠙'));
-      expect(hasFrame).toBe(true);
-    });
-
-    it('is idempotent (double start is a no-op)', () => {
-      startSpinner();
-      startSpinner();
-      vi.advanceTimersByTime(160);
-      stopSpinner();
-      // Should not throw and should clean up fine
-    });
-  });
-
-  describe('stopSpinner', () => {
-    beforeEach(() => {
-      vi.useFakeTimers();
-    });
-
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it('clears line and shows cursor', () => {
-      startSpinner();
-      vi.advanceTimersByTime(80);
-      stdoutWriteSpy.mockClear();
-      stopSpinner();
-      const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
-      expect(writes.some((w) => w.includes('\x1B[2K'))).toBe(true); // clear line
-      expect(writes.some((w) => w.includes('\x1B[?25h'))).toBe(true); // show cursor
-    });
-
-    it('is idempotent (double stop is a no-op)', () => {
-      stopSpinner();
-      stopSpinner();
-      // Should not throw
-    });
-  });
-
-  describe('printConversationReplay', () => {
-    it('prints user and assistant string messages', () => {
-      const messages: CoreMessage[] = [
-        { role: 'user', content: 'Hello' },
-        { role: 'assistant', content: 'Hi there' },
-      ];
-      printConversationReplay(messages);
-      const output = logSpy.mock.calls.map((c) => String(c[0]));
-      expect(output.some((l) => l.includes('you>') && l.includes('Hello'))).toBe(true);
-      expect(output.some((l) => l.includes('assistant>') && l.includes('Hi there'))).toBe(true);
-    });
-
-    it('skips tool messages', () => {
-      const messages: CoreMessage[] = [
-        { role: 'user', content: 'run ls' },
-        {
-          role: 'assistant',
-          content: [
-            { type: 'tool-call', toolCallId: '1', toolName: 'shell', args: { command: 'ls' } },
-          ],
-        },
-        { role: 'tool', content: [{ type: 'tool-result', toolCallId: '1', result: 'file.txt' }] },
-        { role: 'assistant', content: 'Done' },
-      ];
-      printConversationReplay(messages);
-      const output = logSpy.mock.calls.map((c) => String(c[0]));
-      expect(output.some((l) => l.includes('tool-result'))).toBe(false);
-      expect(output.some((l) => l.includes('file.txt'))).toBe(false);
-    });
-
-    it('skips assistant messages with only tool-call parts', () => {
-      const messages: CoreMessage[] = [
-        {
-          role: 'assistant',
-          content: [{ type: 'tool-call', toolCallId: '1', toolName: 'shell', args: {} }],
-        },
-      ];
-      printConversationReplay(messages);
-      // header + separator + blank line = 3 calls, no message lines
-      const output = logSpy.mock.calls.map((c) => String(c[0]));
-      expect(output.some((l) => l.includes('assistant>'))).toBe(false);
-    });
-
-    it('extracts text parts from array content', () => {
-      const messages: CoreMessage[] = [
-        {
-          role: 'assistant',
-          content: [
-            { type: 'text', text: 'Here is the result' },
-            { type: 'tool-call', toolCallId: '1', toolName: 'shell', args: {} },
-          ],
-        },
-      ];
-      printConversationReplay(messages);
-      const output = logSpy.mock.calls.map((c) => String(c[0]));
-      expect(output.some((l) => l.includes('Here is the result'))).toBe(true);
-    });
-
-    it('truncates long messages', () => {
-      const longText = 'a'.repeat(300);
-      const messages: CoreMessage[] = [{ role: 'user', content: longText }];
-      printConversationReplay(messages);
-      const output = logSpy.mock.calls.map((c) => String(c[0]));
-      const userLine = output.find((l) => l.includes('you>'));
-      expect(userLine).toBeDefined();
-      expect(userLine!.includes('…')).toBe(true);
-      // Should not contain the full 300-char string
-      expect(userLine!.includes(longText)).toBe(false);
-    });
-
-    it('prints header and separator', () => {
-      printConversationReplay([{ role: 'user', content: 'hi' }]);
-      const output = logSpy.mock.calls.map((c) => String(c[0]));
-      expect(output[0]).toContain('Previous conversation');
-      expect(output.some((l) => l.includes('———'))).toBe(true);
-    });
-
-    it('handles empty messages array', () => {
-      printConversationReplay([]);
-      const output = logSpy.mock.calls.map((c) => String(c[0]));
-      expect(output[0]).toContain('Previous conversation');
-      expect(output.some((l) => l.includes('———'))).toBe(true);
-    });
-  });
-
-  describe('prefix support', () => {
-    it('printToolCall with prefix includes [sub:N] label', () => {
-      printToolCall('shell', { command: 'ls' }, 'sub:1');
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('[sub:1]');
-      expect(output).toContain('shell');
-    });
-
-    it('printToolCall without prefix works unchanged', () => {
-      printToolCall('shell', { command: 'ls' });
-      const output = logSpy.mock.calls[0][0];
-      expect(output).not.toContain('[sub:');
-      expect(output).toContain('shell');
-    });
-
-    it('printAssistantText with prefix includes label', () => {
-      printAssistantText('Hello', 'sub:2');
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('[sub:2]');
-      expect(output).toContain('Hello');
-    });
-
-    it('printToolResult with prefix includes label on each line', () => {
-      printToolResult('shell', 'line1\nline2', 'sub:1');
-      const output = logSpy.mock.calls[0][0];
-      // Both lines should have the prefix
-      const lines = output.split('\n');
-      expect(lines[0]).toContain('[sub:1]');
-      expect(lines[1]).toContain('[sub:1]');
-    });
-  });
-
-  describe('printSubAgentStart', () => {
-    it('prints id and task', () => {
-      printSubAgentStart(1, 'List all files');
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('sub:1');
-      expect(output).toContain('List all files');
-      expect(output).toContain('┌─');
-    });
-
-    it('truncates long tasks at 80 chars', () => {
-      const longTask = 'a'.repeat(100);
-      printSubAgentStart(1, longTask);
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('…');
-      expect(output).not.toContain(longTask);
-    });
-  });
-
-  describe('printSubAgentEnd', () => {
-    it('prints id with done', () => {
-      printSubAgentEnd(1);
-      const output = logSpy.mock.calls[0][0];
-      expect(output).toContain('sub:1');
-      expect(output).toContain('done');
-      expect(output).toContain('└─');
-    });
-  });
-
-  describe('buildSpinnerMessage', () => {
-    it('shows only elapsed time when no tokens yet', () => {
-      const stats: SpinnerStats = {
-        startTime: Date.now() - 5000,
-        totalPromptTokens: 0,
-        totalCompletionTokens: 0,
-        latestPromptTokens: 0,
-        model: 'gpt-4o-mini',
-      };
-      const msg = buildSpinnerMessage(stats);
-      expect(msg).toBe('Thinking (5s)');
-    });
-
-    it('shows token counts with arrows when data available', () => {
-      const stats: SpinnerStats = {
-        startTime: Date.now() - 12000,
-        totalPromptTokens: 1500,
-        totalCompletionTokens: 200,
-        latestPromptTokens: 1500,
-        model: 'gpt-4o-mini', // 128k context
-      };
-      const msg = buildSpinnerMessage(stats);
-      expect(msg).toContain('12s');
-      expect(msg).toContain('1.5k\u2191');
-      expect(msg).toContain('200\u2193');
-      expect(msg).toContain('% until compression');
-    });
-
-    it('formats large token counts with k suffix', () => {
-      const stats: SpinnerStats = {
-        startTime: Date.now() - 1000,
-        totalPromptTokens: 20000,
-        totalCompletionTokens: 15000,
-        latestPromptTokens: 20000,
-        model: 'gpt-4o-mini',
-      };
-      const msg = buildSpinnerMessage(stats);
-      expect(msg).toContain('20k\u2191');
-      expect(msg).toContain('15k\u2193');
-    });
-
-    it('shows 0% when at or beyond compression threshold', () => {
-      // gpt-4o-mini = 128k, threshold = 75% = 96k
-      const stats: SpinnerStats = {
-        startTime: Date.now() - 1000,
-        totalPromptTokens: 100000,
-        totalCompletionTokens: 5000,
-        latestPromptTokens: 100000,
-        model: 'gpt-4o-mini',
-      };
-      const msg = buildSpinnerMessage(stats);
-      expect(msg).toContain('0% until compression');
-    });
-
-    it('formats minutes for long durations', () => {
-      const stats: SpinnerStats = {
-        startTime: Date.now() - 125000, // 2m5s
-        totalPromptTokens: 0,
-        totalCompletionTokens: 0,
-        latestPromptTokens: 0,
-        model: 'gpt-4o-mini',
-      };
-      const msg = buildSpinnerMessage(stats);
-      expect(msg).toBe('Thinking (2m5s)');
-    });
-
-    it('shows small token counts without k suffix', () => {
-      const stats: SpinnerStats = {
-        startTime: Date.now() - 3000,
-        totalPromptTokens: 850,
-        totalCompletionTokens: 42,
-        latestPromptTokens: 850,
-        model: 'gpt-4o-mini',
-      };
-      const msg = buildSpinnerMessage(stats);
-      expect(msg).toContain('850\u2191');
-      expect(msg).toContain('42\u2193');
-    });
-  });
-
-  describe('dynamic spinner message', () => {
-    beforeEach(() => {
-      vi.useFakeTimers();
-    });
-
-    afterEach(() => {
-      stopSpinner();
-      vi.useRealTimers();
-    });
-
-    it('calls message function each frame', () => {
-      let callCount = 0;
-      const getter = () => {
-        callCount++;
-        return `msg ${callCount}`;
-      };
-      startSpinner(getter);
-      vi.advanceTimersByTime(80 * 3);
-      stopSpinner();
-      expect(callCount).toBeGreaterThanOrEqual(3);
-    });
-
-    it('renders updated message text', () => {
-      let counter = 0;
-      startSpinner(() => `Step ${++counter}`);
-      vi.advanceTimersByTime(80);
-      const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
-      expect(writes.some((w) => w.includes('Step 1'))).toBe(true);
-      vi.advanceTimersByTime(80);
-      const writes2 = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
-      expect(writes2.some((w) => w.includes('Step 2'))).toBe(true);
-    });
-  });
-
-  describe('spinner auto-stop', () => {
-    beforeEach(() => {
-      vi.useFakeTimers();
-    });
-
-    afterEach(() => {
-      stopSpinner();
-      vi.useRealTimers();
-    });
-
-    it('printAssistantText stops the spinner', () => {
-      startSpinner();
-      vi.advanceTimersByTime(80);
-      printAssistantText('Hello');
-      // Spinner should be stopped — further advances should not write more frames
-      stdoutWriteSpy.mockClear();
-      vi.advanceTimersByTime(160);
-      const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
-      const hasFrame = writes.some((w) => w.includes('⠋') || w.includes('⠙'));
-      expect(hasFrame).toBe(false);
-    });
-
-    it('printToolCall stops the spinner', () => {
-      startSpinner();
-      vi.advanceTimersByTime(80);
-      printToolCall('shell', { command: 'ls' });
-      stdoutWriteSpy.mockClear();
-      vi.advanceTimersByTime(160);
-      const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
-      const hasFrame = writes.some((w) => w.includes('⠋') || w.includes('⠙'));
-      expect(hasFrame).toBe(false);
-    });
-
-    it('printError stops the spinner', () => {
-      startSpinner();
-      vi.advanceTimersByTime(80);
-      printError('something broke');
-      stdoutWriteSpy.mockClear();
-      vi.advanceTimersByTime(160);
-      const writes = stdoutWriteSpy.mock.calls.map((c) => String(c[0]));
-      const hasFrame = writes.some((w) => w.includes('⠋') || w.includes('⠙'));
-      expect(hasFrame).toBe(false);
-    });
-  });
-
-  describe('printPlan', () => {
-    // printPlan renders through the pinned-region system, which writes to
-    // process.stdout.write in TTY mode and no-ops otherwise. Force TTY so the
-    // writes are observable via stdoutWriteSpy.
-    let originalIsTTY: boolean | undefined;
-    beforeEach(() => {
-      originalIsTTY = process.stdout.isTTY;
-      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-      stdoutWriteSpy.mockClear();
-    });
-    afterEach(() => {
-      Object.defineProperty(process.stdout, 'isTTY', {
-        value: originalIsTTY,
-        configurable: true,
-      });
-    });
-
-    function renderedLines(): string[] {
-      // Pinned-region cursor control: CSI ? A (move-up-N) and `\r\x1b[J` (erase-to-end).
-      const pinnedControl = /^(?:\x1b\[\d*A|\r\x1b\[J)+$/;
-      const ansiColor = /\x1b\[[0-9;]*m/g;
-      return stdoutWriteSpy.mock.calls
-        .map((c) => String(c[0]))
-        .filter((s) => !pinnedControl.test(s))
-        .flatMap((s) => s.split('\n'))
-        .map((s) => s.replace(ansiColor, ''))
-        .filter((s) => s.length > 0);
-    }
-
-    it('prints a header line and one line per step with the right icons and notes', () => {
-      const steps: Step[] = [
-        { id: 1, description: 'gather data', status: 'done', note: 'got it' },
-        { id: 2, description: 'summarize', status: 'in_progress' },
-        { id: 3, description: 'report', status: 'pending' },
-      ];
-      printPlan(steps);
-      const lines = renderedLines();
-      expect(lines[0]).toContain('Plan:');
-      expect(lines[1]).toContain('\u2713');
-      expect(lines[1]).toContain('1. gather data');
-      expect(lines[1]).toContain('got it');
-      expect(lines[2]).toContain('\u25D0');
-      expect(lines[2]).toContain('2. summarize');
-      expect(lines[3]).toContain('\u25CB');
-      expect(lines[3]).toContain('3. report');
-      expect(lines[3]).not.toContain('\u2014');
-    });
-
-    it('shows cancelled and error icons for terminal statuses', () => {
-      const steps: Step[] = [
-        { id: 1, description: 'abandoned', status: 'cancelled', note: 'user pivoted' },
-        { id: 2, description: 'unachievable', status: 'error', note: 'no permission' },
-      ];
-      printPlan(steps);
-      const lines = renderedLines();
-      expect(lines[1]).toContain('\u2298');
-      expect(lines[1]).toContain('user pivoted');
-      expect(lines[2]).toContain('\u2717');
-      expect(lines[2]).toContain('no permission');
-    });
-  });
-
-  describe('visualRowCount', () => {
-    it('counts a short line as one row', () => {
-      expect(visualRowCount('abc', 80)).toBe(1);
-    });
-
-    it('counts an empty string as one row', () => {
-      expect(visualRowCount('', 40)).toBe(1);
-    });
-
-    it('counts a line exactly equal to columns as one row', () => {
-      expect(visualRowCount('x'.repeat(40), 40)).toBe(1);
-    });
-
-    it('wraps a long line across multiple rows', () => {
-      expect(visualRowCount('a'.repeat(95), 40)).toBe(3);
-    });
-
-    it('excludes ANSI escape codes from width calculation', () => {
-      const colored = `\x1b[31m${'x'.repeat(35)}\x1b[0m`;
-      expect(visualRowCount(colored, 40)).toBe(1);
-    });
-
-    it('handles multiple ANSI sequences per line', () => {
-      const line = `\x1b[1m\x1b[31mhello\x1b[0m world \x1b[32mthere\x1b[0m`;
-      // Visible: "hello world there" = 17 chars, fits in 40 cols.
-      expect(visualRowCount(line, 40)).toBe(1);
-    });
-  });
-
-  describe('pinned region integration', () => {
-    let originalIsTTY: boolean | undefined;
-    let originalColumns: number | undefined;
-
-    beforeEach(() => {
-      originalIsTTY = process.stdout.isTTY;
-      originalColumns = process.stdout.columns;
-      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-      Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
-      clearPinnedRegion('plan');
-      clearPinnedRegion('test');
-      stdoutWriteSpy.mockClear();
-    });
-
-    afterEach(() => {
-      clearPinnedRegion('plan');
-      clearPinnedRegion('test');
-      Object.defineProperty(process.stdout, 'isTTY', {
-        value: originalIsTTY,
-        configurable: true,
-      });
-      Object.defineProperty(process.stdout, 'columns', {
-        value: originalColumns,
-        configurable: true,
-      });
-    });
-
-    it('emits an erase sequence summing visual rows across mixed lines', () => {
-      // columns=40: short(1) + 80-char wrap(2) + short(1) = 4 visual rows.
-      setPinnedRegion('test', ['short', 'b'.repeat(80), 'tail']);
-      stdoutWriteSpy.mockClear();
-      setPinnedRegion('test', []); // triggers erase
-      const moveUp = stdoutWriteSpy.mock.calls
-        .map((c) => String(c[0]))
-        .find((s) => /^\x1b\[\d+A$/.test(s));
-      expect(moveUp).toBe('\x1b[4A');
-    });
-  });
-
-  describe('resize handler', () => {
-    it('re-renders pinned content without emitting an erase sequence', async () => {
-      const originalIsTTY = process.stdout.isTTY;
-      const originalColumns = process.stdout.columns;
-      Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true });
-      Object.defineProperty(process.stdout, 'columns', { value: 80, configurable: true });
-
-      // Snapshot resize listeners so we can strip any added by the re-imported module.
-      const preListeners = process.stdout.listeners('resize');
-      vi.resetModules();
-      const mod = await import('./output.js');
-
-      const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-      try {
-        mod.setPinnedRegion('test', ['hello world']);
-        writeSpy.mockClear();
-
-        Object.defineProperty(process.stdout, 'columns', { value: 40, configurable: true });
-        process.stdout.emit('resize');
-
-        const writes = writeSpy.mock.calls.map((c) => String(c[0]));
-        expect(writes.some((s) => /^\x1b\[\d+A$/.test(s))).toBe(false);
-        expect(writes.join('')).toContain('hello world');
-
-        mod.clearPinnedRegion('test');
-      } finally {
-        writeSpy.mockRestore();
-        for (const l of process.stdout.listeners('resize')) {
-          if (!preListeners.includes(l)) {
-            process.stdout.removeListener('resize', l as (...args: unknown[]) => void);
-          }
-        }
-        Object.defineProperty(process.stdout, 'isTTY', {
-          value: originalIsTTY,
-          configurable: true,
-        });
-        Object.defineProperty(process.stdout, 'columns', {
-          value: originalColumns,
-          configurable: true,
-        });
-        vi.resetModules();
-      }
-    });
-  });
-
-  describe('printThought', () => {
-    it('renders a thinking header followed by the body', () => {
-      printThought('Next I will check deps.');
-      const calls = logSpy.mock.calls.map((c) => String(c[0]));
-      expect(calls.some((line) => line.includes('\u25C9 thinking'))).toBe(true);
-      expect(calls.some((line) => line.includes('Next I will check deps.'))).toBe(true);
-      expect(calls.join('\n')).not.toContain('\uD83D\uDCAD');
-    });
-
-    it('preserves multi-line thoughts as separate lines', () => {
-      printThought('First sentence.\nSecond sentence.');
-      const calls = logSpy.mock.calls.map((c) => String(c[0]));
-      expect(calls.some((line) => line.includes('First sentence.'))).toBe(true);
-      expect(calls.some((line) => line.includes('Second sentence.'))).toBe(true);
-    });
-  });
-
-  describe('printEvaluation', () => {
-    it('renders an evaluating header followed by the body', () => {
-      printEvaluation('That result was empty; retrying with a wider glob.');
-      const calls = logSpy.mock.calls.map((c) => String(c[0]));
-      expect(calls.some((line) => line.includes('\u2316 evaluating'))).toBe(true);
-      expect(calls.some((line) => line.includes('That result was empty'))).toBe(true);
-      expect(calls.join('\n')).not.toContain('\uD83D\uDD0D');
-    });
-
-    it('preserves multi-line evaluations as separate lines', () => {
-      printEvaluation('First observation.\nSecond observation.');
-      const calls = logSpy.mock.calls.map((c) => String(c[0]));
-      expect(calls.some((line) => line.includes('First observation.'))).toBe(true);
-      expect(calls.some((line) => line.includes('Second observation.'))).toBe(true);
-    });
+  it('round-trips through the setter/getter', () => {
+    expect(isToolDetailsVisible()).toBe(false);
+    setToolDetailsVisible(true);
+    expect(isToolDetailsVisible()).toBe(true);
+    setToolDetailsVisible(false);
+    expect(isToolDetailsVisible()).toBe(false);
   });
 });

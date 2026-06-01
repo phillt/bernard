@@ -30,13 +30,7 @@ import {
   SUPPORTED_SDKS,
 } from '../custom-providers.js';
 import type { SupportedSdk } from '../providers/types.js';
-import {
-  THEMES,
-  getThemeKeys,
-  getActiveThemeKey,
-  setTheme,
-  getThemeColors,
-} from '../theme.js';
+import { THEMES, getThemeKeys, getActiveThemeKey, setTheme, getThemeColors } from '../theme.js';
 import type { HistoryStore } from '../history.js';
 import type { ProvenanceHistoryStore } from '../provenance-history.js';
 import type { MemoryStore } from '../memory.js';
@@ -51,10 +45,7 @@ import { getDomain, getDomainIds } from '../domains.js';
 import { MCP_CONFIG_PATH } from '../paths.js';
 import { interactiveUpdate } from '../update.js';
 import { getBuiltinSpecialistIds } from '../specialists.js';
-import {
-  buildCandidateContextBlock,
-  promotePendingCandidates,
-} from '../candidate-bootstrap.js';
+import { buildCandidateContextBlock, promotePendingCandidates } from '../candidate-bootstrap.js';
 import {
   listProfiles,
   createProfile,
@@ -78,11 +69,7 @@ import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
 import { generateText } from 'ai';
 import { resolveSiteModel } from '../model-policy.js';
-import {
-  serializeMessages,
-  extractDomainFacts,
-  SUMMARIZATION_PROMPT,
-} from '../context.js';
+import { serializeMessages, extractDomainFacts, SUMMARIZATION_PROMPT } from '../context.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
 import { promoteCandidate } from '../candidate-bootstrap.js';
 import {
@@ -96,11 +83,7 @@ import { loadRewriterHints } from '../memory.js';
 import { stripImagePaths } from '../image.js';
 import { getModelProfile } from '../providers/index.js';
 import { debugLog } from '../logger.js';
-import {
-  acquireSlot,
-  releaseSlot,
-  getMaxConcurrentAgents,
-} from '../tools/agent-pool.js';
+import { acquireSlot, releaseSlot, getMaxConcurrentAgents } from '../tools/agent-pool.js';
 import type {
   AskUserQuestion,
   AskUserBatchResult,
@@ -174,14 +157,7 @@ interface AppProps {
   isFreshInstall?: boolean;
 }
 
-type Overlay =
-  | 'status'
-  | 'sources'
-  | 'menu'
-  | 'confirm'
-  | 'help'
-  | 'text-input'
-  | 'info';
+type Overlay = 'status' | 'sources' | 'menu' | 'confirm' | 'help' | 'text-input' | 'info';
 
 interface PendingTextInput {
   options: ValuePromptOptions;
@@ -201,7 +177,9 @@ interface ToastState {
 interface PendingMenu {
   entries: MenuEntry[];
   options?: MenuOptions;
-  resolve: (result: { cancelled: true } | { cancelled: false; index: number; item: MenuItem }) => void;
+  resolve: (
+    result: { cancelled: true } | { cancelled: false; index: number; item: MenuItem },
+  ) => void;
 }
 
 interface PendingConfirm {
@@ -361,15 +339,11 @@ export function App({
   } | null>(null);
   useEffect(() => {
     setInkHandlers({
-      requestMenu: (entries, options) =>
-        handlersRef.current!.requestMenu(entries, options),
-      requestConfirm: (input, signal) =>
-        handlersRef.current!.requestConfirm(input, signal),
-      requestBlock: (input, signal) =>
-        handlersRef.current!.requestBlock(input, signal),
+      requestMenu: (entries, options) => handlersRef.current!.requestMenu(entries, options),
+      requestConfirm: (input, signal) => handlersRef.current!.requestConfirm(input, signal),
+      requestBlock: (input, signal) => handlersRef.current!.requestBlock(input, signal),
       requestTextInput: (options) => handlersRef.current!.requestTextInput(options),
-      requestAskUser: (questions, signal) =>
-        handlersRef.current!.requestAskUser(questions, signal),
+      requestAskUser: (questions, signal) => handlersRef.current!.requestAskUser(questions, signal),
       requestConfirmDangerous: async (command, signal) => {
         if (signal?.aborted) return false;
         const result = await handlersRef.current!.requestMenu(
@@ -476,9 +450,7 @@ export function App({
             }
             if (stores.rag && domainFacts.length > 0) {
               const results = await Promise.allSettled(
-                domainFacts.map((df) =>
-                  stores.rag!.addFacts(df.facts, 'clear-save', df.domain),
-                ),
+                domainFacts.map((df) => stores.rag!.addFacts(df.facts, 'clear-save', df.domain)),
               );
               let storedFacts = 0;
               results.forEach((r, i) => {
@@ -491,10 +463,7 @@ export function App({
             if (candidateResult) {
               try {
                 if (candidateResult.type === 'new-candidate') {
-                  const created = stores.candidates.create(
-                    candidateResult.candidate,
-                    'clear-save',
-                  );
+                  const created = stores.candidates.create(candidateResult.candidate, 'clear-save');
                   if (
                     config.autoCreateSpecialists &&
                     candidateResult.candidate.confidence >= config.autoCreateThreshold
@@ -577,7 +546,10 @@ export function App({
         persistAgentState({ agent, historyStore, provenanceHistoryStore });
         setHistoryVersion((v) => v + 1);
       } catch (err) {
-        flashToast(`Compaction failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
+        flashToast(
+          `Compaction failed: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        );
       } finally {
         setBusy(false);
       }
@@ -1059,9 +1031,7 @@ export function App({
     if (text === '/routines') {
       const all = stores.routines.list();
       if (all.length === 0) {
-        flashToast(
-          'No routines saved. Teach me a workflow and I can save it as a routine.',
-        );
+        flashToast('No routines saved. Teach me a workflow and I can save it as a routine.');
         return;
       }
       const tasks = all.filter((r) => r.id.startsWith('task-'));
@@ -1264,11 +1234,7 @@ export function App({
     await runAgentTurn(text, inlineImages);
   };
 
-  type BooleanPrefKey =
-    | 'autoCreateSpecialists'
-    | 'promptRewriter'
-    | 'toolDetails'
-    | 'conciseMode';
+  type BooleanPrefKey = 'autoCreateSpecialists' | 'promptRewriter' | 'toolDetails' | 'conciseMode';
 
   async function toggleBooleanPref(
     key: BooleanPrefKey,
@@ -1335,7 +1301,11 @@ export function App({
       desc: string;
     }> = [
       { value: 'off', label: 'Off (single model)', desc: 'Every site uses active provider/model.' },
-      { value: 'balanced', label: 'Balanced', desc: 'Premium main; mid sub-agents; cheap routing.' },
+      {
+        value: 'balanced',
+        label: 'Balanced',
+        desc: 'Premium main; mid sub-agents; cheap routing.',
+      },
       {
         value: 'optimize-tokens',
         label: 'Optimize for token usage',
@@ -1355,7 +1325,7 @@ export function App({
     }));
     const result = await requestMenu(entries, { title: `Model mode: ${config.modelMode}` });
     if (result.cancelled) return;
-    const chosen = result.item.value as typeof modes[number]['value'];
+    const chosen = result.item.value as (typeof modes)[number]['value'];
     config.modelMode = chosen;
     savePreferences({
       ...loadPreferences(),
@@ -1548,8 +1518,7 @@ export function App({
         item: {
           label: 'Coordinator (ReAct) mode',
           annotation: `= ${config.coordinatorMode}`,
-          description:
-            'On = always coordinator; Off = always normal; Auto = per-turn qualifier.',
+          description: 'On = always coordinator; Off = always normal; Auto = per-turn qualifier.',
         },
         action: runCoordinatorModePrompt,
       },
@@ -1686,10 +1655,7 @@ export function App({
           // menus haven't been ported to Ink yet (Phase E). Fall open so the
           // turn proceeds with the original prompt rather than blocking.
         } catch (err: unknown) {
-          debugLog(
-            'app:resolve-references',
-            err instanceof Error ? err.message : String(err),
-          );
+          debugLog('app:resolve-references', err instanceof Error ? err.message : String(err));
         }
       }
     }
@@ -1712,10 +1678,7 @@ export function App({
           });
         }
       } catch (err: unknown) {
-        debugLog(
-          'app:prompt-rewriter',
-          err instanceof Error ? err.message : String(err),
-        );
+        debugLog('app:prompt-rewriter', err instanceof Error ? err.message : String(err));
       }
     }
 
@@ -1913,7 +1876,10 @@ export function App({
         <Text color={colors.accent} bold>
           bernard
         </Text>
-        <Text dimColor> {config.provider}/{config.model}</Text>
+        <Text dimColor>
+          {' '}
+          {config.provider}/{config.model}
+        </Text>
       </Box>
       {bannerVisible && alertBanner && (
         <Box marginTop={1} borderStyle="single" borderColor={colors.warning} paddingX={1}>
@@ -1935,7 +1901,11 @@ export function App({
       {toast && <Toast message={toast.message} variant={toast.variant} />}
       <Prompt disabled={busy || activeOverlay !== null} onSubmit={handleSubmit} />
       {activeOverlay === 'status' && (
-        <StatusViewer agent={agent} config={config} sessionAllowedCount={_sessionToolAllowlist.size} />
+        <StatusViewer
+          agent={agent}
+          config={config}
+          sessionAllowedCount={_sessionToolAllowlist.size}
+        />
       )}
       {activeOverlay === 'sources' && <SourcesViewer agent={agent} />}
       {activeOverlay === 'menu' && pendingMenu && (
@@ -2213,8 +2183,7 @@ function buildDebugReportLines(
   lines.push({ text: `  Coordinator mode: ${config.coordinatorMode}`, dim: true });
   lines.push({ text: `  Tool details: ${config.toolDetails ? 'on' : 'off'}`, dim: true });
   lines.push({ text: `  Prompt rewriter: ${config.promptRewriter ? 'on' : 'off'}`, dim: true });
-  const debugEnabled =
-    process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
+  const debugEnabled = process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
   lines.push({ text: `  Debug mode: ${debugEnabled ? 'on' : 'off'}`, dim: true });
 
   lines.push({ text: '' });
@@ -2292,8 +2261,10 @@ Remember: the systemPrompt should read like a persona definition — who this sp
  * non-empty model and key) so the on-disk shape is identical.
  */
 async function runAddProviderInk(
-  requestMenu: (entries: MenuEntry[], options?: MenuOptions) =>
-    Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }>,
+  requestMenu: (
+    entries: MenuEntry[],
+    options?: MenuOptions,
+  ) => Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }>,
   requestTextInput: (options: ValuePromptOptions) => Promise<ValueResult>,
   flashToast: (message: string, variant?: ToastVariant) => void,
 ): Promise<{ entry: ReturnType<typeof saveCustomProvider>; apiKey: string } | null> {
@@ -2362,9 +2333,7 @@ function stableStringify(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
   const obj = value as Record<string, unknown>;
   const keys = Object.keys(obj).sort();
-  return `{${keys
-    .map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`)
-    .join(',')}}`;
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
 }
 
 /** djb2 over the stable-JSON form. Matches `stableHash` at `src/repl.ts:1113`. */

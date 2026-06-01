@@ -63,11 +63,7 @@ export function TextInputOverlay({ options, onResolve }: TextInputOverlayProps) 
       {options.headerLines && options.headerLines.length > 0 && <Text> </Text>}
       <Box>
         <Text color={colors.accent}>{options.label}: </Text>
-        {showPlaceholder ? (
-          <Text dimColor>{options.placeholder}</Text>
-        ) : (
-          <Text>{buffer}</Text>
-        )}
+        {showPlaceholder ? <Text dimColor>{options.placeholder}</Text> : <Text>{buffer}</Text>}
         <Text color={colors.accent}>▎</Text>
       </Box>
       <Text> </Text>

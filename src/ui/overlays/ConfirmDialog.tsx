@@ -40,12 +40,14 @@ export type ConfirmDialogProps = ConfirmKindProps | BlockKindProps;
  */
 export function ConfirmDialog(props: ConfirmDialogProps) {
   const colors = getThemeColors();
-  const choices = props.kind === 'confirm'
-    ? (['allow-once', 'allow-session', 'cancel'] as ConfirmChoice[])
-    : (['allow-once', 'allow-tool-for-session', 'deny'] as BlockChoice[]);
-  const labels = props.kind === 'confirm'
-    ? ['Allow once', 'Allow for session', 'Cancel']
-    : ['Allow once', 'Enable for this tool, this session', 'Deny'];
+  const choices =
+    props.kind === 'confirm'
+      ? (['allow-once', 'allow-session', 'cancel'] as ConfirmChoice[])
+      : (['allow-once', 'allow-tool-for-session', 'deny'] as BlockChoice[]);
+  const labels =
+    props.kind === 'confirm'
+      ? ['Allow once', 'Allow for session', 'Cancel']
+      : ['Allow once', 'Enable for this tool, this session', 'Deny'];
   const [highlight, setHighlight] = useState(0);
 
   const commit = (idx: number) => {

@@ -136,7 +136,7 @@ function StreamGroupBody({ events }: { events: StreamEvent[] }) {
         <Box key={`c-${ev.callId}`} flexDirection="column">
           <Box>
             <Text color={colors.toolCall}>⚙ {ev.toolName}</Text>
-            {argsSummary && <Text dimColor>  {argsSummary}</Text>}
+            {argsSummary && <Text dimColor> {argsSummary}</Text>}
           </Box>
           {resultsByCall.has(ev.callId) && (
             <StreamingToolResult result={resultsByCall.get(ev.callId)!} />
@@ -230,7 +230,7 @@ function ToolCallBlock({ part }: { part: ToolCallPart }) {
   return (
     <Box>
       <Text color={colors.toolCall}>⚙ {part.toolName}</Text>
-      {argSummary && <Text dimColor>  {argSummary}</Text>}
+      {argSummary && <Text dimColor> {argSummary}</Text>}
     </Box>
   );
 }
@@ -267,9 +267,7 @@ function extractUserText(message: CoreUserMessage): string {
 
 type AssistantPart = TextPart | ToolCallPart | ReasoningPart | RedactedReasoningPart;
 
-function normalizeAssistantContent(
-  content: CoreAssistantMessage['content'],
-): AssistantPart[] {
+function normalizeAssistantContent(content: CoreAssistantMessage['content']): AssistantPart[] {
   if (typeof content === 'string') return [{ type: 'text', text: content }];
   return content as AssistantPart[];
 }
