@@ -1,5 +1,6 @@
 import type { BernardConfig } from './config.js';
 import { formatCurrentDateTime } from './tools/datetime.js';
+import { loadLineups, resolveActiveLineup } from './lineups.js';
 
 /**
  * Directs the model to publish brief reasoning via the `think` tool so the
@@ -263,6 +264,22 @@ Do NOT use sub-agents for tasks that are sequential or depend on each other's re
 
 **agent vs. task** — Use \`agent\` for open-ended work where you need a narrative report. Use \`task\` when you need a discrete, machine-readable JSON result — tasks are truly single-step/atomic (1 LLM call + tools), return Zod-validated structured JSON, and are ideal for routine chaining where you need to branch on success/error. Tasks are the preferred delegation mechanism when you need a discrete, verifiable result. Both share the same concurrency pool.`;
 
+function formatLineupPromptLine(config: BernardConfig): string {
+  try {
+    const lineups = loadLineups();
+    const lineup = resolveActiveLineup(lineups, config.activeLineupId, config.provider);
+    return (
+      `\nActive lineup: ${lineup.name} — ` +
+      `premium ${lineup.premium.provider}/${lineup.premium.model}, ` +
+      `mid ${lineup.mid.provider}/${lineup.mid.model}, ` +
+      `cheap ${lineup.cheap.provider}/${lineup.cheap.model}. ` +
+      `The user can edit it with /lineup or switch lineups with /lineups.`
+    );
+  } catch {
+    return `\nYou are running as provider: ${config.provider}, model: ${config.model}.`;
+  }
+}
+
 /**
  * Assembles the static SYSTEM prompt: base instructions, date/time, provider/model.
  *
@@ -276,7 +293,7 @@ Do NOT use sub-agents for tasks that are sequential or depend on each other's re
  */
 export function buildSystemPrompt(config: BernardConfig): string {
   let prompt = BASE_SYSTEM_PROMPT + `\n\nCurrent date and time: ${formatCurrentDateTime()}.`;
-  prompt += `\nYou are running as provider: ${config.provider}, model: ${config.model}. The user can switch with /provider and /model.`;
+  prompt += formatLineupPromptLine(config);
 
   prompt += `\n\n## MCP Servers
 

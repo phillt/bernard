@@ -77,7 +77,7 @@ export async function runFirstTimeSetup(): Promise<boolean> {
 
     console.log('\n  Setup complete!');
     console.log(`  Provider: ${provider} | Model: ${model}`);
-    console.log('  You can change these later with /provider and /model');
+    console.log('  Edit tier→model bindings with /lineup, switch lineups with /lineups.');
     console.log(
       '  Tip: running a local LLM? Use `bernard add-provider` to point at it (Ollama, LM Studio, OpenRouter, etc.)\n',
     );

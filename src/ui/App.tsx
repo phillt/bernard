@@ -5,8 +5,6 @@ import type { BernardConfig } from '../config.js';
 import {
   savePreferences,
   loadPreferences,
-  getDefaultModel,
-  getAvailableProviders,
   PROVIDER_MODELS,
   saveProviderKey,
   OPTIONS_REGISTRY,
@@ -29,6 +27,18 @@ import {
   validateBaseURL,
   SUPPORTED_SDKS,
 } from '../custom-providers.js';
+import {
+  LINEUP_TIERS,
+  type Lineup,
+  type LineupSlot,
+  type LineupTier,
+  loadLineups,
+  resolveActiveLineup,
+  saveLineup,
+  deleteLineup,
+  listLineups,
+  validateLineupName,
+} from '../lineups.js';
 import type { SupportedSdk } from '../providers/types.js';
 import { THEMES, getThemeKeys, getActiveThemeKey, setTheme, getThemeColors } from '../theme.js';
 import type { HistoryStore } from '../history.js';
@@ -796,116 +806,127 @@ export function App({
       return;
     }
 
-    if (text === '/provider') {
-      const available = getAvailableProviders(config);
-      const customProviders = config.customProviders ?? {};
-      const builtinAvailable = available.filter((p) => !customProviders[p]);
-      const customAvailable = available.filter((p) => customProviders[p]);
-      const entries: MenuEntry[] = [];
-      for (const p of builtinAvailable) entries.push({ label: p, value: p });
-      if (customAvailable.length > 0) {
-        entries.push({ type: 'section', title: 'Custom:' });
-        for (const p of customAvailable) {
-          const entry = customProviders[p];
-          entries.push({
-            label: p,
-            annotation: `(${entry.sdk} → ${entry.baseURL})`,
-            value: p,
-          });
-        }
-      }
-      entries.push({ type: 'section', title: '' });
-      entries.push({ label: '+ Add custom provider…', value: '__add__' });
-      const result = await requestMenu(entries, {
-        title: `Providers — current: ${config.provider} (${config.model})`,
-      });
-      if (result.cancelled) return;
-      const value = result.item.value as string;
-      if (value === '__add__') {
-        const added = await runAddProviderInk(requestMenu, requestTextInput, flashToast);
-        if (added) {
-          config.customProviders = { ...customProviders, [added.entry.name]: added.entry };
-          config.apiKeys = { ...(config.apiKeys ?? {}), [added.entry.name]: added.apiKey };
-          config.provider = added.entry.name;
-          config.model = added.entry.defaultModel;
-          config.providerBaseUrl = undefined;
-          if (agent.spinnerStats) agent.spinnerStats.model = added.entry.defaultModel;
-          savePreferences({
-            provider: config.provider,
-            model: config.model,
-            maxTokens: config.maxTokens,
-            shellTimeout: config.shellTimeout,
-            tokenWindow: config.tokenWindow,
-            theme: config.theme,
-          });
-          flashToast(
-            `Added and switched to ${added.entry.name} (${added.entry.defaultModel})`,
-            'success',
-          );
-        }
-      } else {
-        config.provider = value;
-        config.model = getDefaultModel(config.provider, customProviders);
-        config.providerBaseUrl = undefined;
-        if (agent.spinnerStats) agent.spinnerStats.model = config.model;
-        savePreferences({
-          provider: config.provider,
-          model: config.model,
-          maxTokens: config.maxTokens,
-          shellTimeout: config.shellTimeout,
-          tokenWindow: config.tokenWindow,
-          theme: config.theme,
-        });
-        flashToast(`Switched to ${config.provider} (${config.model})`, 'success');
-      }
+    if (text === '/provider' || text === '/models') {
+      await runModelsCatalogInk(config, requestMenu, requestTextInput, flashToast);
       return;
     }
 
     if (text === '/model') {
-      const customProviders = config.customProviders ?? {};
-      const customEntry = customProviders[config.provider];
-      const models = customEntry ? customEntry.models : PROVIDER_MODELS[config.provider];
-      if (!models || models.length === 0) {
-        flashToast(`No models listed for provider "${config.provider}".`, 'error');
-        return;
-      }
-      const entries: MenuEntry[] = models.map((m) => ({ label: m, value: m }));
-      if (customEntry) {
-        entries.push({ type: 'section', title: '' });
-        entries.push({ label: '+ Type a new model name…', value: '__free__' });
-      }
-      const result = await requestMenu(entries, {
-        title: `Models — current: ${config.provider} / ${config.model}`,
-      });
-      if (result.cancelled) return;
-      const value = result.item.value as string;
-      let chosenModel: string | null = null;
-      if (value === '__free__' && customEntry) {
-        const valueResult = await requestTextInput({ label: 'Model name' });
-        if (!valueResult.cancelled && valueResult.raw) {
-          rememberCustomModel(config.provider, valueResult.raw);
-          config.customProviders = loadCustomProviders();
-          chosenModel = valueResult.raw;
-        }
-      } else {
-        chosenModel = value;
-      }
-      if (chosenModel) {
-        config.model = chosenModel;
-        // <StatusBar> computes the compression-headroom bar against this model
-        // via getContextWindow(stats.model). Without this refresh it would
-        // keep using the previous model's window after a /model switch.
-        if (agent.spinnerStats) agent.spinnerStats.model = chosenModel;
+      flashToast(
+        'Model selection is now per-tier. Use /lineup to edit the active lineup, or /lineups to switch.',
+        'info',
+      );
+      return;
+    }
+
+    if (text === '/lineup') {
+      const lineups = loadLineups();
+      const active = resolveActiveLineup(lineups, config.activeLineupId, config.provider);
+      const edited = await runLineupEditorInk(
+        active,
+        config,
+        requestMenu,
+        requestTextInput,
+        flashToast,
+      );
+      if (edited) {
+        config.activeLineupId = edited.id;
         savePreferences({
           provider: config.provider,
           model: config.model,
-          maxTokens: config.maxTokens,
-          shellTimeout: config.shellTimeout,
-          tokenWindow: config.tokenWindow,
-          theme: config.theme,
+          activeLineupId: edited.id,
         });
-        flashToast(`Switched to ${config.model}`, 'success');
+        flashToast(`Lineup "${edited.name}" saved.`, 'success');
       }
+      return;
+    }
+
+    if (text === '/lineups') {
+      const all = listLineups();
+      // Resolve once so a stale `config.activeLineupId` (e.g. pointing at a
+      // lineup the user deleted) falls through to whatever resolveActiveLineup
+      // picks instead of leaving every row marked as not-active.
+      const activeId = resolveActiveLineup(
+        loadLineups(),
+        config.activeLineupId,
+        config.provider,
+      ).id;
+      const entries: MenuEntry[] = all.map((l) => ({
+        label: l.name,
+        annotation: `(${l.id})`,
+        active: l.id === activeId,
+        description: `premium ${l.premium.provider}/${l.premium.model} · mid ${l.mid.provider}/${l.mid.model} · cheap ${l.cheap.provider}/${l.cheap.model}`,
+        value: l.id,
+      }));
+      entries.push({ type: 'section', title: '' });
+      entries.push({ label: '+ Create new lineup…', value: '__new__' });
+      const pick = await requestMenu(entries, {
+        title: 'Lineups — select to switch (active is opened for edit)',
+      });
+      if (pick.cancelled) return;
+      const value = pick.item.value as string;
+      if (value === '__new__') {
+        const nameRes = await requestTextInput({ label: 'New lineup name' });
+        if (nameRes.cancelled || !nameRes.raw.trim()) return;
+        const nameErr = validateLineupName(nameRes.raw);
+        if (nameErr) {
+          flashToast(nameErr, 'error');
+          return;
+        }
+        const seed = resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider);
+        const draft: Lineup = {
+          ...seed,
+          id: '',
+          name: nameRes.raw.trim(),
+        };
+        const created = await runLineupEditorInk(
+          draft,
+          config,
+          requestMenu,
+          requestTextInput,
+          flashToast,
+          { isNew: true },
+        );
+        if (created) {
+          config.activeLineupId = created.id;
+          savePreferences({
+            provider: config.provider,
+            model: config.model,
+            activeLineupId: created.id,
+          });
+          flashToast(`Created and switched to "${created.name}".`, 'success');
+        }
+        return;
+      }
+      const target = all.find((l) => l.id === value);
+      if (!target) return;
+      const isActive = target.id === activeId;
+      if (isActive) {
+        const edited = await runLineupEditorInk(
+          target,
+          config,
+          requestMenu,
+          requestTextInput,
+          flashToast,
+        );
+        if (edited) {
+          config.activeLineupId = edited.id;
+          savePreferences({
+            provider: config.provider,
+            model: config.model,
+            activeLineupId: edited.id,
+          });
+          flashToast(`Lineup "${edited.name}" saved.`, 'success');
+        }
+        return;
+      }
+      config.activeLineupId = target.id;
+      savePreferences({
+        provider: config.provider,
+        model: config.model,
+        activeLineupId: target.id,
+      });
+      flashToast(`Switched to lineup "${target.name}".`, 'success');
       return;
     }
 
@@ -1348,11 +1369,10 @@ export function App({
 
   async function runModelModePrompt(): Promise<void> {
     const modes: Array<{
-      value: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance';
+      value: 'optimize-tokens' | 'balanced' | 'optimize-performance';
       label: string;
       desc: string;
     }> = [
-      { value: 'off', label: 'Off (single model)', desc: 'Every site uses active provider/model.' },
       {
         value: 'balanced',
         label: 'Balanced',
@@ -1583,6 +1603,16 @@ export function App({
             'Off = single model. Balanced / Optimize-tokens / Optimize-performance pick a model per site.',
         },
         action: runModelModePrompt,
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Tier lineup',
+          annotation: `= ${resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider).name}`,
+          description:
+            'Switch, edit, or create lineups that bind premium/mid/cheap tiers to specific (provider, model) pairs.',
+        },
+        action: () => handleSubmit('/lineups'),
       },
       {
         kind: 'item',
@@ -2424,6 +2454,267 @@ async function runAddProviderInk(
   } catch (err: unknown) {
     flashToast(err instanceof Error ? err.message : String(err), 'error');
     return null;
+  }
+}
+
+type RequestMenu = (
+  entries: MenuEntry[],
+  options?: MenuOptions,
+) => Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }>;
+type RequestTextInput = (options: ValuePromptOptions) => Promise<ValueResult>;
+type FlashToast = (message: string, variant?: ToastVariant) => void;
+
+/**
+ * Cross-provider model picker used by the lineup editor. Lists every
+ * (provider, model) pair Bernard knows: built-ins from `PROVIDER_MODELS`,
+ * custom providers from `config.customProviders`, grouped under section
+ * headers. Last item is "+ Add custom provider…" which round-trips through
+ * `runAddProviderInk` and re-opens the picker with the new entries appended.
+ *
+ * Returns `null` on cancel.
+ */
+async function pickLineupSlotInk(
+  config: BernardConfig,
+  tier: LineupTier,
+  current: LineupSlot,
+  requestMenu: RequestMenu,
+  requestTextInput: RequestTextInput,
+  flashToast: FlashToast,
+): Promise<LineupSlot | null> {
+  while (true) {
+    const customProviders = config.customProviders ?? {};
+    const entries: MenuEntry[] = [];
+    const builtinProviders = Object.keys(PROVIDER_MODELS);
+    for (const provider of builtinProviders) {
+      entries.push({ type: 'section', title: provider });
+      for (const model of PROVIDER_MODELS[provider]) {
+        entries.push({
+          label: model,
+          annotation:
+            provider === current.provider && model === current.model ? '(current)' : undefined,
+          value: { provider, model },
+        });
+      }
+    }
+    const customNames = Object.keys(customProviders);
+    if (customNames.length > 0) {
+      for (const name of customNames) {
+        const entry = customProviders[name];
+        entries.push({
+          type: 'section',
+          title: `${name} — custom (${entry.sdk} → ${entry.baseURL})`,
+        });
+        const models = entry.models.length > 0 ? entry.models : [entry.defaultModel];
+        for (const model of models) {
+          entries.push({
+            label: model,
+            annotation:
+              name === current.provider && model === current.model ? '(current)' : undefined,
+            value: { provider: name, model },
+          });
+        }
+        entries.push({ label: '+ Type a new model name…', value: { __free__: name } });
+      }
+    }
+    entries.push({ type: 'section', title: '' });
+    entries.push({ label: '+ Add custom provider…', value: '__add__' });
+
+    const pick = await requestMenu(entries, {
+      title: `${tier.toUpperCase()} slot — current: ${current.provider} / ${current.model}`,
+    });
+    if (pick.cancelled) return null;
+    const value = pick.item.value;
+    if (value === '__add__') {
+      const added = await runAddProviderInk(requestMenu, requestTextInput, flashToast);
+      if (added) {
+        config.customProviders = {
+          ...(config.customProviders ?? {}),
+          [added.entry.name]: added.entry,
+        };
+        config.apiKeys = { ...(config.apiKeys ?? {}), [added.entry.name]: added.apiKey };
+      }
+      continue;
+    }
+    if (value && typeof value === 'object' && '__free__' in value) {
+      const provider = (value as { __free__: string }).__free__;
+      const modelRes = await requestTextInput({ label: `New model name for ${provider}` });
+      if (modelRes.cancelled || !modelRes.raw.trim()) continue;
+      const model = modelRes.raw.trim();
+      rememberCustomModel(provider, model);
+      config.customProviders = loadCustomProviders();
+      return { provider, model };
+    }
+    if (value && typeof value === 'object' && 'provider' in value && 'model' in value) {
+      return value as LineupSlot;
+    }
+  }
+}
+
+/**
+ * Read-only catalog of every (provider, model) Bernard knows. Used by
+ * `/provider` and `/models` — these are now management surfaces only;
+ * tier→model selection lives in `/lineup`. Last entry runs the add-custom-
+ * provider wizard.
+ */
+async function runModelsCatalogInk(
+  config: BernardConfig,
+  requestMenu: RequestMenu,
+  requestTextInput: RequestTextInput,
+  flashToast: FlashToast,
+): Promise<void> {
+  const customProviders = config.customProviders ?? {};
+  const customNames = Object.keys(customProviders);
+
+  const entries: MenuEntry[] = [
+    { label: 'View catalog', description: 'Show all known (provider, model) pairs' },
+    { label: '+ Add custom provider…' },
+    { label: 'Done' },
+  ];
+  const pick = await requestMenu(entries, { title: 'Model catalog' });
+  if (pick.cancelled || pick.index === 2) return;
+  if (pick.index === 0) {
+    // Showing the info overlay requires access to setPendingInfo via the
+    // App scope; surface as a toast list instead. Each line emitted as a
+    // single toast would spam — collapse to one summary toast with counts.
+    const builtinCount = Object.values(PROVIDER_MODELS).reduce((a, b) => a + b.length, 0);
+    const customCount = Object.values(customProviders).reduce(
+      (a, b) => a + (b.models.length > 0 ? b.models.length : 1),
+      0,
+    );
+    flashToast(
+      `Catalog: ${builtinCount} built-in models across ${Object.keys(PROVIDER_MODELS).length} providers · ${customCount} custom models across ${customNames.length} providers. Open /lineup to bind them.`,
+      'info',
+    );
+    return;
+  }
+  if (pick.index === 1) {
+    const added = await runAddProviderInk(requestMenu, requestTextInput, flashToast);
+    if (added) {
+      config.customProviders = {
+        ...(config.customProviders ?? {}),
+        [added.entry.name]: added.entry,
+      };
+      config.apiKeys = { ...(config.apiKeys ?? {}), [added.entry.name]: added.apiKey };
+      flashToast(`Added "${added.entry.name}". Bind it via /lineup.`, 'success');
+    }
+  }
+}
+
+/**
+ * Editor for one lineup. Shows three rows (premium / mid / cheap) plus
+ * rename and either "Save" (existing) or "Save as new" (draft). Returns
+ * the persisted lineup on save, or `null` on cancel.
+ */
+async function runLineupEditorInk(
+  initial: Lineup,
+  config: BernardConfig,
+  requestMenu: RequestMenu,
+  requestTextInput: RequestTextInput,
+  flashToast: FlashToast,
+  opts: { isNew?: boolean } = {},
+): Promise<Lineup | null> {
+  let draft: Lineup = { ...initial };
+  while (true) {
+    const tierRows: MenuEntry[] = LINEUP_TIERS.map((tier) => ({
+      label: `${tier.toUpperCase()}`,
+      annotation: `→ ${draft[tier].provider} / ${draft[tier].model}`,
+      value: { kind: 'tier', tier },
+    }));
+    const entries: MenuEntry[] = [
+      ...tierRows,
+      { type: 'section', title: '' },
+      { label: 'Rename lineup', value: { kind: 'rename' } },
+      ...(opts.isNew
+        ? [{ label: 'Save as new lineup', value: { kind: 'save-new' } } as MenuEntry]
+        : [
+            { label: 'Save changes', value: { kind: 'save' } } as MenuEntry,
+            { label: 'Save as new lineup', value: { kind: 'save-new' } } as MenuEntry,
+            { label: 'Delete lineup', value: { kind: 'delete' } } as MenuEntry,
+          ]),
+      { label: 'Cancel', value: { kind: 'cancel' } },
+    ];
+    const pick = await requestMenu(entries, {
+      title: `Lineup: ${draft.name}${opts.isNew ? ' (draft)' : ''}`,
+    });
+    if (pick.cancelled) return null;
+    const value = pick.item.value as
+      | { kind: 'tier'; tier: LineupTier }
+      | { kind: 'rename' | 'save' | 'save-new' | 'delete' | 'cancel' };
+    if (value.kind === 'cancel') return null;
+    if (value.kind === 'tier') {
+      const next = await pickLineupSlotInk(
+        config,
+        value.tier,
+        draft[value.tier],
+        requestMenu,
+        requestTextInput,
+        flashToast,
+      );
+      if (next) draft = { ...draft, [value.tier]: next };
+      continue;
+    }
+    if (value.kind === 'rename') {
+      const res = await requestTextInput({
+        label: 'New name',
+        initialValue: draft.name,
+      });
+      if (res.cancelled || !res.raw.trim()) continue;
+      const err = validateLineupName(res.raw);
+      if (err) {
+        flashToast(err, 'error');
+        continue;
+      }
+      draft = { ...draft, name: res.raw.trim() };
+      continue;
+    }
+    if (value.kind === 'save') {
+      try {
+        const saved = saveLineup({
+          id: draft.id,
+          name: draft.name,
+          premium: draft.premium,
+          mid: draft.mid,
+          cheap: draft.cheap,
+        });
+        return saved;
+      } catch (err) {
+        flashToast(`Failed to save: ${(err as Error).message}`, 'error');
+        continue;
+      }
+    }
+    if (value.kind === 'save-new') {
+      try {
+        const saved = saveLineup({
+          // omit id so saveLineup slugs from name
+          name: draft.name,
+          premium: draft.premium,
+          mid: draft.mid,
+          cheap: draft.cheap,
+        });
+        return saved;
+      } catch (err) {
+        flashToast(`Failed to save: ${(err as Error).message}`, 'error');
+        continue;
+      }
+    }
+    if (value.kind === 'delete') {
+      const confirm = await requestMenu(
+        [
+          { label: `Delete "${draft.name}"`, description: 'This cannot be undone.' },
+          { label: 'Cancel' },
+        ],
+        { title: 'Confirm deletion' },
+      );
+      if (confirm.cancelled || confirm.index === 1) continue;
+      try {
+        deleteLineup(draft.id);
+        flashToast(`Deleted lineup "${draft.name}".`, 'success');
+        return null;
+      } catch (err) {
+        flashToast(`Cannot delete: ${(err as Error).message}`, 'error');
+        continue;
+      }
+    }
   }
 }
 

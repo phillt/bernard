@@ -26,9 +26,10 @@ import {
   resetAllOptions,
   getDefaultModel,
   providerEnvVar,
-  isModelMode,
   normalizeMaxConcurrentAgents,
+  getAvailableProviders,
 } from './config.js';
+import { normalizeStoredModelMode } from './model-policy.js';
 import { setMaxConcurrentAgents, MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
 import {
   loadCustomProviders,
@@ -202,10 +203,8 @@ async function runInkRepl(args: {
   const totalTools = connected.reduce((acc, s) => acc + s.toolCount, 0);
 
   printWelcome(
-    config.provider,
-    config.model,
+    getAvailableProviders(config),
     getLocalVersion(),
-    config.providerBaseUrl ?? config.customProviders?.[config.provider]?.baseURL,
     statuses.length > 0
       ? { connected: connected.length, failed: failed.length, tools: totalTools }
       : undefined,
@@ -613,12 +612,15 @@ program
 program
   .command('set-model-mode <mode>')
   .description(
-    'Set multi-model assignment policy: off | optimize-tokens | balanced | optimize-performance',
+    'Set multi-model assignment policy: optimize-tokens | balanced | optimize-performance ' +
+      '(legacy "off" is accepted and migrated to optimize-performance)',
   )
   .action((mode: string) => {
-    if (!isModelMode(mode)) {
+    const normalized = normalizeStoredModelMode(mode);
+    if (!normalized) {
       printError(
-        `Unknown model mode "${mode}". Valid values: off, optimize-tokens, balanced, optimize-performance.`,
+        `Unknown model mode "${mode}". Valid values: optimize-tokens, balanced, optimize-performance ` +
+          `(legacy "off" is accepted and migrates to optimize-performance).`,
       );
       process.exit(1);
     }
@@ -634,9 +636,13 @@ program
         ...prefs,
         provider,
         model,
-        modelMode: mode,
+        modelMode: normalized,
       });
-      printInfo(`Model mode set to "${mode}".`);
+      if (normalized !== mode) {
+        printInfo(`Model mode "${mode}" migrated to "${normalized}".`);
+      } else {
+        printInfo(`Model mode set to "${normalized}".`);
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);

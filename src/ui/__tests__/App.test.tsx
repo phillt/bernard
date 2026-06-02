@@ -86,7 +86,7 @@ function makeConfig(overrides: Partial<BernardConfig> = {}): BernardConfig {
     tokenWindow: 0,
     maxSteps: 25,
     coordinatorMode: 'off',
-    modelMode: 'off',
+    modelMode: 'balanced',
     subagentResultMaxChars: 4000,
     autoCreateSpecialists: false,
     autoCreateThreshold: 0.8,

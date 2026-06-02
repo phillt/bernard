@@ -88,16 +88,20 @@ vi.mock('../providers/index.js', () => ({
   getProviderOptionsForConfig: vi.fn(() => undefined),
 }));
 
-vi.mock('../config.js', () => ({
-  loadConfig: vi.fn().mockReturnValue({
-    provider: 'anthropic',
-    model: 'test',
-    maxTokens: 1024,
-    shellTimeout: 5000,
-    tokenWindow: 0,
-    ragEnabled: true,
-  }),
-}));
+vi.mock('../config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config.js')>();
+  return {
+    ...actual,
+    loadConfig: vi.fn().mockReturnValue({
+      provider: 'anthropic',
+      model: 'test',
+      maxTokens: 1024,
+      shellTimeout: 5000,
+      tokenWindow: 0,
+      ragEnabled: true,
+    }),
+  };
+});
 
 vi.mock('../tools/shell.js', () => ({
   createShellTool: vi.fn().mockReturnValue({ type: 'mock-shell' }),

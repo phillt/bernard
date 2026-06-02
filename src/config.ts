@@ -10,6 +10,7 @@ import {
   MAX_CONCURRENT_AGENTS_LIMIT,
 } from './tools/agent-pool.js';
 import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
+import { normalizeStoredModelMode, type ModelMode } from './model-policy.js';
 
 /** Resolved runtime configuration for a Bernard session. */
 export interface BernardConfig {
@@ -37,13 +38,20 @@ export interface BernardConfig {
    */
   coordinatorMode: 'on' | 'off' | 'auto';
   /**
-   * Multi-model assignment policy (#170). `'off'` keeps every LLM call site
-   * pinned to `provider`/`model` (legacy behavior). `'optimize-tokens'`,
-   * `'balanced'`, and `'optimize-performance'` route each site through
-   * `resolveSiteModel` in `src/model-policy.ts` to pick a cheap / mid / premium
-   * tier of the active provider's model lineup.
+   * Multi-model assignment policy (#170). One of `'optimize-tokens'`,
+   * `'balanced'`, or `'optimize-performance'` — `resolveSiteModel` in
+   * `src/model-policy.ts` maps each call site to a `(provider, model)` slot
+   * via the active lineup (`src/lineups.ts`). The legacy `'off'` value is
+   * migrated to `'optimize-performance'` on read.
    */
-  modelMode: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance';
+  modelMode: ModelMode;
+  /**
+   * Id of the active tier lineup (`src/lineups.ts`). When unset, the resolver
+   * falls back to the lineup whose id matches `provider` (the seeded
+   * Anthropic/OpenAI/xAI lineups share their provider id), then to the first
+   * lineup in the store.
+   */
+  activeLineupId?: string;
   /** Whether sub-agent delegations run through the PAC (Planner → Actor → Critic) pipeline. */
   subagentPac: boolean;
   /** Whether tool-call arguments and full tool result output are shown in the terminal. Tool names and call lines are always shown. */
@@ -149,7 +157,7 @@ const DEFAULT_AUTO_CREATE_THRESHOLD = 0.8;
 const DEFAULT_COORDINATOR_MODE: 'on' | 'off' | 'auto' = 'auto';
 const DEFAULT_CONFIRM_MODE: 'off' | 'auto' | 'strict' = 'auto';
 const DEFAULT_TOOL_MODE: 'read-only' | 'write' = 'read-only';
-const DEFAULT_MODEL_MODE: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance' = 'off';
+const DEFAULT_MODEL_MODE: ModelMode = 'balanced';
 const DEFAULT_SCRATCH_SUBJECT_THRESHOLD = 0.15;
 const DEFAULT_CONCISE_MODE = true;
 const DEFAULT_MAX_CONCURRENT_AGENTS = POOL_DEFAULT_MAX;
@@ -170,11 +178,13 @@ export function isToolMode(v: unknown): v is 'read-only' | 'write' {
   return v === 'read-only' || v === 'write';
 }
 
-/** Type guard for `modelMode` string values (#170). */
-export function isModelMode(
-  v: unknown,
-): v is 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance' {
-  return v === 'off' || v === 'optimize-tokens' || v === 'balanced' || v === 'optimize-performance';
+/**
+ * Type guard for runtime `modelMode` string values. Accepts only the three
+ * post-#170-redesign values; legacy `'off'` is migrated via
+ * {@link normalizeStoredModelMode} at the read boundary, not here.
+ */
+export function isModelMode(v: unknown): v is ModelMode {
+  return v === 'optimize-tokens' || v === 'balanced' || v === 'optimize-performance';
 }
 
 /** Type guard for `responseStyle` string values (#133). */
@@ -289,7 +299,7 @@ export function savePreferences(prefs: {
   theme?: string;
   autoUpdate?: boolean;
   coordinatorMode?: 'on' | 'off' | 'auto';
-  modelMode?: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance';
+  modelMode?: ModelMode;
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
@@ -302,6 +312,7 @@ export function savePreferences(prefs: {
   toolMode?: 'read-only' | 'write';
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;
+  activeLineupId?: string;
 }): void {
   // Patch shape matches ProfileSettings exactly — keys present in `prefs`
   // (including explicit `undefined`s from resetOption / resetAllOptions) are
@@ -328,7 +339,7 @@ export function loadPreferences(): {
   theme?: string;
   autoUpdate?: boolean;
   coordinatorMode?: 'on' | 'off' | 'auto';
-  modelMode?: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance';
+  modelMode?: ModelMode;
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
@@ -341,6 +352,7 @@ export function loadPreferences(): {
   toolMode?: 'read-only' | 'write';
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;
+  activeLineupId?: string;
 } {
   // Routes through the active profile in profiles.json (#207). Each field is
   // type-checked here so a malformed stored value falls through to undefined
@@ -364,7 +376,7 @@ export function loadPreferences(): {
     theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
     autoUpdate: typeof parsed.autoUpdate === 'boolean' ? parsed.autoUpdate : undefined,
     coordinatorMode,
-    modelMode: isModelMode(parsed.modelMode) ? parsed.modelMode : undefined,
+    modelMode: normalizeStoredModelMode(parsed.modelMode),
     subagentPac: typeof parsed.subagentPac === 'boolean' ? parsed.subagentPac : undefined,
     toolDetails: typeof parsed.toolDetails === 'boolean' ? parsed.toolDetails : undefined,
     autoCreateSpecialists:
@@ -384,6 +396,10 @@ export function loadPreferences(): {
     maxConcurrentAgents:
       typeof parsed.maxConcurrentAgents === 'number' ? parsed.maxConcurrentAgents : undefined,
     responseStyle: isResponseStyle(parsed.responseStyle) ? parsed.responseStyle : undefined,
+    activeLineupId:
+      typeof parsed.activeLineupId === 'string' && parsed.activeLineupId.length > 0
+        ? parsed.activeLineupId
+        : undefined,
   };
 }
 
@@ -853,14 +869,11 @@ export function loadConfig(overrides?: {
     DEFAULT_COORDINATOR_MODE;
 
   // Multi-model assignment mode (#170). Precedence: pref > env > default.
-  const envModelMode = isModelMode(process.env.BERNARD_MODEL_MODE)
-    ? (process.env.BERNARD_MODEL_MODE as
-        | 'off'
-        | 'optimize-tokens'
-        | 'balanced'
-        | 'optimize-performance')
-    : undefined;
-  const modelMode = prefs.modelMode ?? envModelMode ?? DEFAULT_MODEL_MODE;
+  // `normalizeStoredModelMode` migrates legacy `'off'` → `'optimize-performance'`
+  // for both stored prefs and env values, so we never see the legacy value
+  // downstream.
+  const envModelMode = normalizeStoredModelMode(process.env.BERNARD_MODEL_MODE);
+  const modelMode: ModelMode = prefs.modelMode ?? envModelMode ?? DEFAULT_MODEL_MODE;
 
   // Sub-agent PAC pipeline runs by default; users can opt out with BERNARD_SUBAGENT_PAC=false.
   const rawSubagentPac = process.env.BERNARD_SUBAGENT_PAC;
@@ -1010,6 +1023,7 @@ export function loadConfig(overrides?: {
     apiKeys: { ...storedKeys },
     customProviders,
     providerBaseUrl,
+    activeLineupId: prefs.activeLineupId,
   };
 
   validateConfig(config);
@@ -1081,6 +1095,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'referenceLookup',
   'scratchSubjectThreshold',
   'conciseMode',
+  'activeLineupId',
 ];
 
 /**
