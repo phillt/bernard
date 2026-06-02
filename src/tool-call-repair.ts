@@ -8,7 +8,7 @@ import {
 } from 'ai';
 import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import type { BernardConfig } from './config.js';
-import { debugLog } from './logger.js';
+import { debugLog, traceLlm } from './logger.js';
 
 /** Identifies which generateText site produced the failed tool call. */
 export type RepairLabel = 'main' | 'specialist' | 'subagent' | 'tool-wrapper' | 'cron';
@@ -92,17 +92,20 @@ export function makeRepairHook<TOOLS extends ToolSet>(
 
       const repairMessages: CoreMessage[] = [...messages, recoveryMessage];
 
-      const result = await generateText({
-        model: getModelForConfig(config, resolvedProvider, resolvedModel),
-        providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
-        tools,
-        toolChoice: isNoSuchTool ? 'auto' : { type: 'tool', toolName: toolCall.toolName },
-        maxSteps: 1,
-        maxTokens: config.maxTokens,
-        system,
-        messages: repairMessages,
-        abortSignal,
-      });
+      const repairModel = getModelForConfig(config, resolvedProvider, resolvedModel);
+      const result = await traceLlm(`tool-call-repair:${label}`, repairModel.modelId, () =>
+        generateText({
+          model: repairModel,
+          providerOptions: getProviderOptionsForConfig(config, resolvedProvider),
+          tools,
+          toolChoice: isNoSuchTool ? 'auto' : { type: 'tool', toolName: toolCall.toolName },
+          maxSteps: 1,
+          maxTokens: config.maxTokens,
+          system,
+          messages: repairMessages,
+          abortSignal,
+        }),
+      );
 
       const repaired = result.toolCalls?.[0];
       if (!repaired) {

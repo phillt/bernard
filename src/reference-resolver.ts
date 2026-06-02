@@ -1,5 +1,5 @@
 import { generateText, type CoreMessage } from 'ai';
-import { debugLog } from './logger.js';
+import { debugLog, traceLlm } from './logger.js';
 import { sanitizeKey, REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import type { BernardConfig } from './config.js';
@@ -304,15 +304,17 @@ export async function resolveReferences(
 
   try {
     const site = resolveSiteModel(config, 'reference-resolver');
-    const result = await generateText({
-      model: site.model,
-      providerOptions: site.providerOptions,
-      system: RESOLVER_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMessage }],
-      maxSteps: 1,
-      maxTokens: RESOLVER_MAX_TOKENS,
-      abortSignal,
-    });
+    const result = await traceLlm('reference-resolver', site.model.modelId, () =>
+      generateText({
+        model: site.model,
+        providerOptions: site.providerOptions,
+        system: RESOLVER_SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: userMessage }],
+        maxSteps: 1,
+        maxTokens: RESOLVER_MAX_TOKENS,
+        abortSignal,
+      }),
+    );
 
     if (!result.text) {
       debugLog('reference-resolver:empty-response', null);
