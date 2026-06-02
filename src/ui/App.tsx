@@ -92,7 +92,7 @@ import { rewritePrompt } from '../prompt-rewriter.js';
 import { loadRewriterHints } from '../memory.js';
 import { stripImagePaths } from '../image.js';
 import { getModelProfile } from '../providers/index.js';
-import { debugLog } from '../logger.js';
+import { debugLog, getSessionId, getSessionLogPath, isDebugEnabled } from '../logger.js';
 import { acquireSlot, releaseSlot, getMaxConcurrentAgents } from '../tools/agent-pool.js';
 import type {
   AskUserQuestion,
@@ -354,6 +354,29 @@ export function App({
     return () => setOutputSink(null);
   }, [messageStore]);
 
+  // Per-session debug log boundaries. `session:start` captures the runtime
+  // shape so a future tail-read can correlate behavior with the active
+  // provider / model / lineup; `session:end` lets us see how long the REPL
+  // ran and roughly how many turns happened.
+  useEffect(() => {
+    const startedAt = Date.now();
+    debugLog('session:start', {
+      sessionId: getSessionId(),
+      logPath: getSessionLogPath(),
+      cwd: process.cwd(),
+      provider: config.provider,
+      model: config.model,
+      modelMode: config.modelMode,
+      coordinatorMode: config.coordinatorMode,
+    });
+    return () => {
+      debugLog('session:end', {
+        durationMs: Date.now() - startedAt,
+        turns: agent.getHistory().filter((m) => m.role === 'user').length,
+      });
+    };
+  }, [agent, config.provider, config.model, config.modelMode, config.coordinatorMode]);
+
   // Attach a persistent SpinnerStats object so the framework's token-stats
   // hook accumulates usage across turns. <StatusBar> polls this for the
   // pinned bottom-right readout. We never null it out — totals carry across
@@ -555,6 +578,14 @@ export function App({
     }
     if (text === '/help') {
       setActiveOverlay('help');
+      return;
+    }
+    if (text === '/session-log') {
+      flashToast(
+        isDebugEnabled()
+          ? `Session log: ${getSessionLogPath()}`
+          : 'Session log is disabled. Start Bernard with BERNARD_DEBUG=1 to record one.',
+      );
       return;
     }
     if (text === '/memory') {
@@ -1717,6 +1748,8 @@ export function App({
     input: string,
     signal: AbortSignal,
   ): Promise<{ agentInput: string; resolvedEntries: ResolvedEntry[] }> {
+    const pipelineStartedAt = Date.now();
+    debugLog('pre-turn:start', { inputLen: input.length });
     // Per-turn RAG cache invalidation (#171). Must run before any resolver /
     // rewriter LLM call so they see only this turn's facts.
     stores.rag?.clearTurnCache();
@@ -1773,6 +1806,11 @@ export function App({
     }
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
+    debugLog('pre-turn:end', {
+      durationMs: Date.now() - pipelineStartedAt,
+      rewritten: agentInput !== input,
+      refCount: resolvedEntries.length,
+    });
     return { agentInput, resolvedEntries };
   }
 
@@ -1814,7 +1852,23 @@ export function App({
       // AbortError on user-cancel is expected; don't dump it to the console.
       const isAbort =
         err instanceof Error && (err.name === 'AbortError' || controller.signal.aborted);
-      if (!isAbort) console.error('agent error:', err);
+      if (!isAbort) {
+        console.error('agent error:', err);
+        // When debug is on, also surface the error in the chat transcript so
+        // hangs / silent failures are visible without having to grep logs.
+        if (isDebugEnabled()) {
+          const message = err instanceof Error ? err.message : String(err);
+          const stack = err instanceof Error && err.stack ? err.stack : undefined;
+          const cause =
+            err instanceof Error && err.cause instanceof Error ? err.cause.stack : undefined;
+          debugLog('error:turn', { message, stack, cause });
+          const body = [`⚠ Agent error: ${message}`, stack, cause && `Caused by:\n${cause}`]
+            .filter(Boolean)
+            .join('\n\n');
+          agent.getHistory().push({ role: 'assistant', content: body });
+          setHistoryVersion((v) => v + 1);
+        }
+      }
     } finally {
       persistAgentState({ agent, historyStore, provenanceHistoryStore });
       submittingRef.current = false;

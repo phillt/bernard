@@ -7,6 +7,7 @@ import {
   type Tool,
   type ToolCallRepairFunction,
 } from 'ai';
+import { debugLog } from '../logger.js';
 import type { AgentHook, StepFinishPayload } from './hooks/types.js';
 
 /**
@@ -99,22 +100,50 @@ function composeOnStepFinish(
  */
 export async function runAgent(spec: AgentSpec): Promise<AgentResult> {
   const onStepFinish = composeOnStepFinish(spec.hooks);
-  if (spec.useStreaming) {
-    return runStreaming(spec, onStepFinish);
-  }
-  return generateText({
-    model: spec.model,
-    providerOptions: spec.providerOptions,
-    tools: spec.tools,
+  const dispatchStartedAt = Date.now();
+  const modelId =
+    (spec.model as unknown as { modelId?: string }).modelId ?? String(spec.model);
+  debugLog('agent:dispatch:start', {
+    model: modelId,
+    streaming: spec.useStreaming === true,
+    systemLen: spec.system?.length ?? 0,
+    messagesLen: spec.messages.length,
+    toolCount: spec.tools ? Object.keys(spec.tools).length : 0,
     maxSteps: spec.maxSteps,
-    maxTokens: spec.maxTokens,
-    system: spec.system,
-    messages: spec.messages,
-    abortSignal: spec.abortSignal,
-    experimental_prepareStep: spec.prepareStep,
-    experimental_repairToolCall: spec.repair,
-    onStepFinish,
   });
+  try {
+    const result = spec.useStreaming
+      ? await runStreaming(spec, onStepFinish)
+      : await generateText({
+          model: spec.model,
+          providerOptions: spec.providerOptions,
+          tools: spec.tools,
+          maxSteps: spec.maxSteps,
+          maxTokens: spec.maxTokens,
+          system: spec.system,
+          messages: spec.messages,
+          abortSignal: spec.abortSignal,
+          experimental_prepareStep: spec.prepareStep,
+          experimental_repairToolCall: spec.repair,
+          onStepFinish,
+        });
+    debugLog('agent:dispatch:end', {
+      model: modelId,
+      durationMs: Date.now() - dispatchStartedAt,
+      steps: result.steps?.length ?? 0,
+      finishReason: result.finishReason,
+      promptTokens: result.usage?.promptTokens,
+      completionTokens: result.usage?.completionTokens,
+    });
+    return result;
+  } catch (err) {
+    debugLog('agent:dispatch:error', {
+      model: modelId,
+      durationMs: Date.now() - dispatchStartedAt,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
 }
 
 /**

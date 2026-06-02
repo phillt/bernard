@@ -284,6 +284,14 @@ export class Agent {
     images?: ImageAttachment[],
     resolvedReferences?: ResolvedEntry[],
   ): Promise<void> {
+    const turnStartedAt = Date.now();
+    let turnAborted = false;
+    debugLog('turn:start', {
+      inputLen: userInput.length,
+      hasImages: !!(images && images.length > 0),
+      refCount: resolvedReferences?.length ?? 0,
+      historyLen: this.history.length,
+    });
     this.lastStepLimitHit = false;
     // Cache per-turn snapshot inputs for the Agent Status overlay (#140).
     // Last-write-wins — the overlay is a snapshot, not a log.
@@ -694,12 +702,24 @@ export class Agent {
       this.history.push(...truncatedMessages);
     } catch (err: unknown) {
       // If aborted by user, return silently — user message stays in history
-      if (this.abortController?.signal.aborted) return;
+      if (this.abortController?.signal.aborted) {
+        turnAborted = true;
+        return;
+      }
 
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`Agent error: ${message}`);
+      debugLog('error:turn', {
+        message,
+        stack: err instanceof Error ? err.stack : undefined,
+        durationMs: Date.now() - turnStartedAt,
+      });
+      throw new Error(`Agent error: ${message}`, { cause: err });
     } finally {
       this.abortController = null;
+      debugLog('turn:end', {
+        durationMs: Date.now() - turnStartedAt,
+        aborted: turnAborted,
+      });
     }
   }
 
