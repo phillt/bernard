@@ -114,6 +114,13 @@ export class Agent {
   // after each agent step. See src/framework/hooks/token-stats.ts.
   lastStepPromptTokens: number = 0;
   spinnerStats: SpinnerStats | null = null;
+  /**
+   * The execution strategy chosen for the current (or most recent) turn,
+   * resolved by the Policy Engine + Qualifier. `null` between turns. Read by
+   * the StatusBar to render the coordinator/normal indicator. Mutated on
+   * `processInput` start and cleared in its `finally`.
+   */
+  currentStrategy: 'react' | 'normal' | null = null;
   private routineStore: RoutineStore;
   private specialistStore: SpecialistStore;
   private correctionStore: CorrectionCandidateStore;
@@ -307,6 +314,9 @@ export class Agent {
     });
     this.lastPolicyResult = policyResult;
     this.ctx = { ...this.ctx, policyDecision: policyResult.decision };
+    this.currentStrategy = isReactEffective(this.config, policyResult.decision)
+      ? 'react'
+      : 'normal';
 
     if (policyResult.decision.scratch?.resetPlanOnly) {
       this.planStore.clear();

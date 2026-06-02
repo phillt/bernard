@@ -28,13 +28,14 @@ export function StatusBar({ agent }: StatusBarProps) {
   }, []);
 
   const stats: SpinnerStats | null = agent.spinnerStats;
-  if (!stats) return null;
+  const strategy = agent.currentStrategy;
+  if (!stats && !strategy) return null;
 
-  const up = formatTokenCount(stats.totalPromptTokens);
-  const down = formatTokenCount(stats.totalCompletionTokens);
-  const contextWindow = getContextWindow(stats.model, stats.contextWindowOverride);
+  const up = stats ? formatTokenCount(stats.totalPromptTokens) : '0';
+  const down = stats ? formatTokenCount(stats.totalCompletionTokens) : '0';
+  const contextWindow = stats ? getContextWindow(stats.model, stats.contextWindowOverride) : 1;
   const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;
-  const usedFrac = Math.min(1, Math.max(0, stats.latestPromptTokens / thresholdTokens));
+  const usedFrac = stats ? Math.min(1, Math.max(0, stats.latestPromptTokens / thresholdTokens)) : 0;
   const freePct = (1 - usedFrac) * 100;
 
   const filledCount = Math.round(usedFrac * BAR_WIDTH);
@@ -48,9 +49,17 @@ export function StatusBar({ agent }: StatusBarProps) {
 
   return (
     <Box justifyContent="flex-end">
-      <Text color={colors.muted}>
-        {up}↑ {down}↓{'   '}
-      </Text>
+      {strategy && (
+        <Text color={strategy === 'react' ? colors.accent : colors.muted}>
+          {strategy === 'react' ? '◆ coordinator' : '◇ normal'}
+          {'   '}
+        </Text>
+      )}
+      {stats && (
+        <Text color={colors.muted}>
+          {up}↑ {down}↓{'   '}
+        </Text>
+      )}
       {filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
       {emptyCount > 0 && (
         <Text color={colors.muted} dimColor>
