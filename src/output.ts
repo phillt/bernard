@@ -166,9 +166,14 @@ export function printWelcome(providers: string[], version?: string, mcp?: Welcom
 
   const dataRow = (label: string, value: string): string => {
     const content = inner - 2 * pad;
-    const dotCount = Math.max(3, content - label.length - value.length);
+    // Reserve room for at least 3 dots between the label and the value so a
+    // long Providers / MCP string can't push past the right border.
+    const maxValueLen = Math.max(1, content - label.length - 3);
+    const trimmed =
+      value.length > maxValueLen ? value.slice(0, Math.max(1, maxValueLen - 1)) + '…' : value;
+    const dotCount = content - label.length - trimmed.length;
     const dots = subtle('.'.repeat(dotCount));
-    return wall + ' '.repeat(pad) + label + dots + value + ' '.repeat(pad) + wall;
+    return wall + ' '.repeat(pad) + label + dots + trimmed + ' '.repeat(pad) + wall;
   };
 
   const rows: string[] = [];

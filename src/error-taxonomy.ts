@@ -47,7 +47,8 @@ const PLAYBOOKS: Record<ToolErrorType, { user: string; model: string }> = {
   },
   rate_limit: {
     user: 'Rate-limited — wait or switch lineup with /lineups.',
-    model: 'You are rate-limited. Do not retry immediately. Suggest waiting or switching provider.',
+    model:
+      'You are rate-limited. Do not retry immediately. Suggest waiting or switching to a different tier lineup via /lineups.',
   },
   permission: {
     user: 'Permission denied — check filesystem or service ACLs.',

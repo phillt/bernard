@@ -843,13 +843,18 @@ export function App({
 
     if (text === '/lineups') {
       const all = listLineups();
+      // Resolve once so a stale `config.activeLineupId` (e.g. pointing at a
+      // lineup the user deleted) falls through to whatever resolveActiveLineup
+      // picks instead of leaving every row marked as not-active.
+      const activeId = resolveActiveLineup(
+        loadLineups(),
+        config.activeLineupId,
+        config.provider,
+      ).id;
       const entries: MenuEntry[] = all.map((l) => ({
         label: l.name,
         annotation: `(${l.id})`,
-        active:
-          l.id ===
-          (config.activeLineupId ??
-            resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider).id),
+        active: l.id === activeId,
         description: `premium ${l.premium.provider}/${l.premium.model} · mid ${l.mid.provider}/${l.mid.model} · cheap ${l.cheap.provider}/${l.cheap.model}`,
         value: l.id,
       }));
@@ -895,10 +900,7 @@ export function App({
       }
       const target = all.find((l) => l.id === value);
       if (!target) return;
-      const isActive =
-        target.id ===
-        (config.activeLineupId ??
-          resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider).id);
+      const isActive = target.id === activeId;
       if (isActive) {
         const edited = await runLineupEditorInk(
           target,
@@ -2561,29 +2563,7 @@ async function runModelsCatalogInk(
   flashToast: FlashToast,
 ): Promise<void> {
   const customProviders = config.customProviders ?? {};
-  const lines: PendingInfo['lines'] = [];
-  lines.push({ text: 'Built-in providers:', bold: true });
-  for (const provider of Object.keys(PROVIDER_MODELS)) {
-    lines.push({ text: `  ${provider}` });
-    for (const model of PROVIDER_MODELS[provider]) {
-      lines.push({ text: `    • ${model}`, dim: true });
-    }
-  }
   const customNames = Object.keys(customProviders);
-  if (customNames.length > 0) {
-    lines.push({ text: '' });
-    lines.push({ text: 'Custom providers:', bold: true });
-    for (const name of customNames) {
-      const entry = customProviders[name];
-      lines.push({ text: `  ${name} (${entry.sdk} → ${entry.baseURL})` });
-      const models = entry.models.length > 0 ? entry.models : [entry.defaultModel];
-      for (const model of models) {
-        lines.push({ text: `    • ${model}`, dim: true });
-      }
-    }
-  }
-  lines.push({ text: '' });
-  lines.push({ text: 'Tip: use /lineup to bind models to tier slots.', dim: true });
 
   const entries: MenuEntry[] = [
     { label: 'View catalog', description: 'Show all known (provider, model) pairs' },
