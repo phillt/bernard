@@ -125,39 +125,86 @@ export interface WelcomeMcpSummary {
   tools: number;
 }
 
+const TAGLINE = 'Valet to your digital world.';
+const BORDER_COLOR = '#555555';
+const MIN_BOX_WIDTH = 64;
+// Must match the `paddingX` on the root <Box> in src/ui/App.tsx so the
+// splash printed pre-Ink lines up with the prompt / hint bar / status bar
+// rendered inside the Ink tree.
+const APP_PADDING_X = 2;
+
 export function printWelcome(
-  provider: string,
-  model: string,
+  providers: string[],
   version?: string,
-  baseURL?: string,
   mcp?: WelcomeMcpSummary,
 ): void {
   const accent = getThemeColors().accent;
+  const bannerWidth = Math.max(...BERNARD_BANNER.map((l) => l.length));
+  const termCols = process.stdout.columns ?? 80;
+  const margin = ' '.repeat(APP_PADDING_X);
+  const totalWidth = Math.max(MIN_BOX_WIDTH, termCols - 2 * APP_PADDING_X);
+  const inner = totalWidth - 2;
+  const pad = 2;
 
-  console.log();
-  for (const line of BERNARD_BANNER) {
-    console.log('  ' + colorize(line, accent));
-  }
-  console.log();
-  const ver = version ? `v${version}` : '';
-  const line1 = [ver, 'local AI CLI agent'].filter(Boolean).join('  ·  ');
-  const line2 = `${provider}  /  ${model}`;
-  const line3 = '/help for commands  ·  exit to quit';
-  console.log('  ' + colorize(line1, accent));
-  console.log('  ' + DIM + line2 + RESET);
-  if (baseURL) console.log('  ' + DIM + `endpoint  ${baseURL}` + RESET);
+  const subtle = (s: string) => colorize(s, BORDER_COLOR);
+  const dimText = (s: string) => DIM + s + RESET;
+  const wall = subtle('│');
+  const horizontal = subtle('─'.repeat(inner));
+  const topBorder = subtle('╭') + horizontal + subtle('╮');
+  const midBorder = subtle('├') + horizontal + subtle('┤');
+  const bottomBorder = subtle('╰') + horizontal + subtle('╯');
+  const emptyRow = wall + ' '.repeat(inner) + wall;
+
+  const bannerRow = (line: string): string => {
+    const padded = line.padEnd(bannerWidth, ' ');
+    const left = Math.floor((inner - bannerWidth) / 2);
+    const right = inner - bannerWidth - left;
+    return wall + ' '.repeat(left) + colorize(padded, accent) + ' '.repeat(right) + wall;
+  };
+
+  const taglineRow = (): string => {
+    const left = Math.floor((inner - TAGLINE.length) / 2);
+    const right = inner - TAGLINE.length - left;
+    return wall + ' '.repeat(left) + dimText(TAGLINE) + ' '.repeat(right) + wall;
+  };
+
+  const dataRow = (label: string, value: string): string => {
+    const content = inner - 2 * pad;
+    const dotCount = Math.max(3, content - label.length - value.length);
+    const dots = subtle('.'.repeat(dotCount));
+    return wall + ' '.repeat(pad) + label + dots + value + ' '.repeat(pad) + wall;
+  };
+
+  const rows: string[] = [];
+  rows.push(topBorder);
+  rows.push(emptyRow);
+  for (const line of BERNARD_BANNER) rows.push(bannerRow(line));
+  rows.push(emptyRow);
+  rows.push(taglineRow());
+  rows.push(emptyRow);
+  rows.push(midBorder);
+  rows.push(emptyRow);
+  if (version) rows.push(dataRow('Version', `v${version}`));
+  const providerLabel = providers.length > 0 ? providers.join(', ') : '(none configured)';
+  rows.push(dataRow('Providers', providerLabel));
   if (mcp && (mcp.connected > 0 || mcp.failed > 0)) {
     const parts: string[] = [];
     if (mcp.connected > 0) {
-      parts.push(`${mcp.connected} server${mcp.connected === 1 ? '' : 's'} · ${mcp.tools} tools`);
+      const srv = `${mcp.connected} server${mcp.connected === 1 ? '' : 's'}`;
+      const tls = `${mcp.tools} tool${mcp.tools === 1 ? '' : 's'}`;
+      parts.push(`${srv} · ${tls}`);
     }
     if (mcp.failed > 0) parts.push(`${mcp.failed} failed`);
-    console.log('  ' + DIM + `mcp       ${parts.join('  ·  ')}` + RESET);
+    rows.push(dataRow('MCP', parts.join(' · ')));
   }
   if (process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1') {
-    console.log('  ' + DIM + 'debug logging enabled' + RESET);
+    rows.push(dataRow('Debug', 'enabled'));
   }
-  console.log('  ' + DIM + line3 + RESET);
+  rows.push(emptyRow);
+  rows.push(bottomBorder);
+
+  console.log();
+  for (const row of rows) console.log(margin + row);
   console.log();
 }
 
@@ -238,8 +285,10 @@ export function printHelp(): void {
     '  /mcp     — List MCP servers and tools',
     '  /cron    — Show cron jobs and daemon status',
     '  /facts   — Show RAG facts in current context window',
-    '  /provider — Switch LLM provider',
-    '  /model   — Switch model for current provider',
+    '  /lineup  — Edit the active tier lineup (premium/mid/cheap)',
+    '  /lineups — List, switch, or create tier lineups',
+    '  /models  — Browse the model catalog and add custom providers',
+    '  /provider — Manage providers (alias of /models)',
     '  /theme   — Switch color theme',
     '  /routines — List saved routines',
     '  /create-routine — Create a routine with guided AI assistance',

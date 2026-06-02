@@ -28,6 +28,7 @@ import {
   providerEnvVar,
   isModelMode,
   normalizeMaxConcurrentAgents,
+  getAvailableProviders,
 } from './config.js';
 import { setMaxConcurrentAgents, MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
 import {
@@ -202,10 +203,8 @@ async function runInkRepl(args: {
   const totalTools = connected.reduce((acc, s) => acc + s.toolCount, 0);
 
   printWelcome(
-    config.provider,
-    config.model,
+    getAvailableProviders(config),
     getLocalVersion(),
-    config.providerBaseUrl ?? config.customProviders?.[config.provider]?.baseURL,
     statuses.length > 0
       ? { connected: connected.length, failed: failed.length, tools: totalTools }
       : undefined,
