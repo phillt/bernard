@@ -14,7 +14,7 @@ import { createScopedCronNotesTools } from '../../cron/scoped-notes-tools.js';
 import { sendNotification } from '../../cron/notify.js';
 import type { CronJob } from '../../cron/types.js';
 import type { RAGSearchResult } from '../../rag.js';
-import { getModelForConfig, getProviderOptionsForConfig } from '../../providers/index.js';
+import { resolveSiteModel } from '../../model-policy.js';
 import { cronStepRecorderHook } from '../hooks/cron-step-recorder.js';
 import { NormalStrategy } from '../strategies/normal.js';
 import type { AgentDefinition, ResolvedModel } from './types.js';
@@ -224,16 +224,17 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
   },
 
   resolveModel(ctx): ResolvedModel {
-    // Cron always uses the global config provider/model — no per-call
-    // overrides, no specialist record. Bypassing the generic
-    // `resolveProviderAndModel` path keeps parity with the previous inline
-    // runner (`getModelForConfig(config, config.provider, config.model)`).
-    const { config } = ctx;
+    // Cron runs at the `main` site — pick the premium-tier slot of the
+    // active lineup via `resolveSiteModel` so a custom-provider cron job
+    // routes the same way an interactive turn would. (The old direct
+    // `config.provider/config.model` path silently degraded on custom
+    // providers because they had no `PROVIDER_TIERS` entry.)
+    const site = resolveSiteModel(ctx.config, 'main');
     return {
-      model: getModelForConfig(config, config.provider, config.model),
-      providerOptions: getProviderOptionsForConfig(config, config.provider),
-      provider: config.provider,
-      modelName: config.model,
+      model: site.model,
+      providerOptions: site.providerOptions,
+      provider: site.provider,
+      modelName: site.modelName,
     };
   },
 

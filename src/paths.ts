@@ -30,6 +30,7 @@ export const KEYS_PATH = path.join(CONFIG_DIR, 'keys.json');
 export const ENV_PATH = path.join(CONFIG_DIR, '.env');
 export const MCP_CONFIG_PATH = path.join(CONFIG_DIR, 'mcp.json');
 export const CUSTOM_PROVIDERS_PATH = path.join(CONFIG_DIR, 'custom-providers.json');
+export const LINEUPS_PATH = path.join(CONFIG_DIR, 'lineups.json');
 export const PROFILES_PATH = path.join(CONFIG_DIR, 'profiles.json');
 export const PROFILES_MIGRATED_MARKER = path.join(CONFIG_DIR, '.migrated-to-profiles');
 

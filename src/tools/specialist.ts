@@ -202,12 +202,7 @@ export function createSpecialistTool(
             // mode is active and the user didn't specify either (#170).
             let resolvedProvider = normProvider;
             let resolvedModel = normModel;
-            if (
-              normProvider === undefined &&
-              normModel === undefined &&
-              config &&
-              config.modelMode !== 'off'
-            ) {
+            if (normProvider === undefined && normModel === undefined && config) {
               try {
                 const site = resolveSiteModel(config, 'specialist');
                 if (site.source === 'policy') {

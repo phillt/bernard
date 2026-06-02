@@ -43,10 +43,10 @@ const PLAYBOOKS: Record<ToolErrorType, { user: string; model: string }> = {
   auth: {
     user: 'Authentication failed — re-authenticate or check your API key.',
     model:
-      'Authentication failed. Do not retry. Ask the user to re-authenticate (e.g. /provider for API keys) or surface the issue.',
+      'Authentication failed. Do not retry. Ask the user to re-authenticate (e.g. /models for API keys) or surface the issue.',
   },
   rate_limit: {
-    user: 'Rate-limited — wait or switch provider with /provider.',
+    user: 'Rate-limited — wait or switch lineup with /lineups.',
     model: 'You are rate-limited. Do not retry immediately. Suggest waiting or switching provider.',
   },
   permission: {

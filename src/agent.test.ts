@@ -155,10 +155,10 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toMatch(/\d{1,2}:\d{2}/);
   });
 
-  it('includes provider and model', () => {
+  it('includes the active lineup summary', () => {
     const prompt = buildSystemPrompt(makeConfig({ provider: 'openai', model: 'gpt-4o-mini' }));
+    expect(prompt).toContain('Active lineup');
     expect(prompt).toContain('openai');
-    expect(prompt).toContain('gpt-4o-mini');
   });
 
   it('includes execution model constraints', () => {

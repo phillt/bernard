@@ -51,7 +51,7 @@ export interface ProfileSettings {
   theme?: string;
   autoUpdate?: boolean;
   coordinatorMode?: 'on' | 'off' | 'auto';
-  modelMode?: 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance';
+  modelMode?: 'optimize-tokens' | 'balanced' | 'optimize-performance';
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
@@ -64,6 +64,13 @@ export interface ProfileSettings {
   toolMode?: 'read-only' | 'write';
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;
+  /**
+   * Id of the active tier lineup (`src/lineups.ts`). `resolveSiteModel`
+   * consults the named lineup's `{premium, mid, cheap}` slots. When unset,
+   * the resolver falls back to the lineup whose id matches the active
+   * provider, then to the first lineup in the store.
+   */
+  activeLineupId?: string;
 }
 
 /** A single named profile entry. */
@@ -213,12 +220,13 @@ function readLegacyPreferences(): ProfileSettings | null {
       out.coordinatorMode = src.reactMode ? 'on' : 'off';
     }
     if (
-      src.modelMode === 'off' ||
       src.modelMode === 'optimize-tokens' ||
       src.modelMode === 'balanced' ||
       src.modelMode === 'optimize-performance'
     ) {
       out.modelMode = src.modelMode;
+    } else if (src.modelMode === 'off') {
+      out.modelMode = 'optimize-performance';
     }
     if (src.confirmMode === 'off' || src.confirmMode === 'auto' || src.confirmMode === 'strict') {
       out.confirmMode = src.confirmMode;

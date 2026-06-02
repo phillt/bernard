@@ -23,7 +23,7 @@ function makeCtx(style: ResponseStyle): AgentContext {
     cacheEnabled: true,
     theme: 'bernard',
     coordinatorMode: 'off',
-    modelMode: 'off',
+    modelMode: 'balanced',
     subagentPac: false,
     toolDetails: false,
     autoCreateSpecialists: false,

@@ -8,12 +8,13 @@ import {
   blankToUndefined,
 } from './config.js';
 import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
+import { loadLineups, resolveActiveLineup, type Lineup } from './lineups.js';
 import { debugLog } from './logger.js';
 
 /**
  * Logical LLM call sites whose model can be tiered independently when
- * `config.modelMode !== 'off'`. Every `generateText` call in Bernard maps to
- * exactly one site.
+ * the active `config.modelMode`. Every `generateText` call in Bernard maps
+ * to exactly one site.
  */
 export type ModelSite =
   | 'main'
@@ -25,18 +26,21 @@ export type ModelSite =
   | 'compressor'
   | 'specialist-detector';
 
-export type ModelMode = 'off' | 'optimize-tokens' | 'balanced' | 'optimize-performance';
+/**
+ * Three-value runtime mode (#170, redesigned). The legacy `'off'` value is
+ * gone — every active call site now flows through the active lineup. Stored
+ * `'off'` is migrated to `'optimize-performance'` on first load (see
+ * {@link normalizeStoredModelMode}).
+ */
+export type ModelMode = 'optimize-tokens' | 'balanced' | 'optimize-performance';
 
 export type ModelTier = 'cheap' | 'mid' | 'premium';
 
 /**
- * Per-site tier assignment for each `ModelMode`. The tier is mapped to a
- * concrete model via `PROVIDER_TIERS` keyed by the active `config.provider`.
- *
- * `'off'` is intentionally absent here — when the mode is off we short-circuit
- * to `config.provider/config.model` without consulting the tier table.
+ * Per-site tier assignment for each `ModelMode`. The tier maps to a concrete
+ * `(provider, model)` via the user's active lineup (`src/lineups.ts`).
  */
-const TIER_TABLE: Record<Exclude<ModelMode, 'off'>, Record<ModelSite, ModelTier>> = {
+const TIER_TABLE: Record<ModelMode, Record<ModelSite, ModelTier>> = {
   'optimize-tokens': {
     main: 'mid',
     specialist: 'cheap',
@@ -70,28 +74,16 @@ const TIER_TABLE: Record<Exclude<ModelMode, 'off'>, Record<ModelSite, ModelTier>
 };
 
 /**
- * Per-provider concrete model for each tier. Model names match entries in
- * `PROVIDER_MODELS` so the chosen value is always one the SDK knows.
- *
- * Custom providers don't appear here — they fall through to `config.model`.
+ * Normalizes any modelMode-shaped value read from disk or env. Returns the
+ * canonical runtime mode, or `undefined` for inputs that don't match. Migrates
+ * legacy `'off'` → `'optimize-performance'` so existing users keep their
+ * previously chosen model in the premium tier of the seeded lineup.
  */
-const PROVIDER_TIERS: Record<string, Record<ModelTier, string>> = {
-  anthropic: {
-    premium: 'claude-opus-4-6',
-    mid: 'claude-sonnet-4-5-20250929',
-    cheap: 'claude-haiku-4-5-20251001',
-  },
-  openai: {
-    premium: 'gpt-5.2',
-    mid: 'gpt-4.1',
-    cheap: 'gpt-4.1-mini',
-  },
-  xai: {
-    premium: 'grok-4-1-fast-reasoning',
-    mid: 'grok-4-fast-non-reasoning',
-    cheap: 'grok-3-mini',
-  },
-};
+export function normalizeStoredModelMode(v: unknown): ModelMode | undefined {
+  if (v === 'optimize-tokens' || v === 'balanced' || v === 'optimize-performance') return v;
+  if (v === 'off') return 'optimize-performance';
+  return undefined;
+}
 
 /**
  * Result of {@link resolveSiteModel}. `model`/`providerOptions` are ready to
@@ -116,20 +108,21 @@ export interface SiteModel {
 const RESOLVE_LOG_SEEN = new Set<string>();
 
 /**
- * Resolves the effective (provider, model) for a given LLM call site (#170).
+ * Resolves the effective (provider, model) for a given LLM call site.
  *
  * Precedence (highest to lowest):
  *  1. `opts.overrides.{provider,model}` — invocation-level args (parity with
  *     {@link resolveProviderAndModel}).
  *  2. `opts.specialist.{provider,model}` — persisted specialist record.
- *  3. When `config.modelMode !== 'off'`, the tier table entry for
- *     `(modelMode, site)` mapped through `PROVIDER_TIERS[config.provider]`.
- *  4. `config.provider`/`config.model` — session global.
+ *  3. The tier-table entry for `(modelMode, site)` mapped through the
+ *     **active lineup** (`src/lineups.ts`). When the lineup slot's provider
+ *     has no key, we fall through.
+ *  4. `config.provider`/`config.model` — last-resort fallback (used when the
+ *     lineup file is missing/corrupt, or the resolved slot lacks a key).
  *
- * Provider is never crossed automatically — the tier table only selects a
- * model name within the user's active provider. Unknown providers and any
- * other tier-lookup miss safely fall through to step 4 with
- * `source: 'fallback'`.
+ * Lineups are user-defined and may freely mix providers across tiers, so
+ * "active provider" is no longer a concept here — each tier slot carries its
+ * own provider.
  */
 export function resolveSiteModel(
   config: BernardConfig,
@@ -149,10 +142,10 @@ export function resolveSiteModel(
   };
 
   // Steps 1 & 2 — let the existing 3-tier resolver handle override + specialist.
-  // If either fired, return that; the policy never overrides an explicit
-  // user-supplied or specialist-supplied (provider, model). When the explicit
-  // choice points at a provider with no key, throw — matches pre-#170 behavior
-  // (specialist.ts / tool-wrapper.ts both relied on this).
+  // The policy never overrides an explicit user-supplied or specialist-supplied
+  // (provider, model). When the explicit choice points at a provider with no
+  // key, throw — matches pre-#170 behavior (specialist.ts / tool-wrapper.ts
+  // both relied on this).
   if (override.provider || override.model || specialist.provider || specialist.model) {
     const resolution = resolveProviderAndModel({
       provider: override.provider,
@@ -171,26 +164,39 @@ export function resolveSiteModel(
     return buildSiteModel(config, resolution.provider, resolution.model, source);
   }
 
-  // Step 3 — tier-table lookup when the policy is active.
-  if (config.modelMode && config.modelMode !== 'off') {
-    const tier = TIER_TABLE[config.modelMode][site];
-    const tierModel = PROVIDER_TIERS[config.provider]?.[tier];
-    if (tierModel && hasProviderKey(config, config.provider)) {
-      return buildSiteModel(config, config.provider, tierModel, 'policy', site, tier);
-    }
-    // Custom provider, unknown built-in, or missing key — fall through.
-    debugLog('model-policy:fallback', {
-      site,
-      mode: config.modelMode,
-      tier,
-      provider: config.provider,
-      reason: tierModel ? 'missing-key' : 'no-tier-mapping',
-    });
-    return buildSiteModel(config, config.provider, config.model, 'fallback', site, tier);
+  // Step 3 — tier-table lookup against the active lineup. Defensively
+  // normalize an unknown/undefined `modelMode` (legacy `'off'`, missing key in
+  // test fixtures) to `'balanced'` so resolution never crashes.
+  const mode: ModelMode = TIER_TABLE[config.modelMode] ? config.modelMode : 'balanced';
+  const tier = TIER_TABLE[mode][site];
+  const lineup = loadActiveLineup(config);
+  const slot = lineup[tier];
+  if (hasProviderKey(config, slot.provider)) {
+    return buildSiteModel(config, slot.provider, slot.model, 'policy', site, tier, lineup);
   }
+  // Lineup slot points at a provider with no key — fall through to the
+  // session-global so the turn doesn't crash. This is the only "silent
+  // degradation" path left, and it's loud in the debug log.
+  debugLog('model-policy:fallback', {
+    site,
+    mode,
+    tier,
+    lineupId: lineup.id,
+    slotProvider: slot.provider,
+    slotModel: slot.model,
+    reason: 'missing-key',
+  });
+  return buildSiteModel(config, config.provider, config.model, 'fallback', site, tier, lineup);
+}
 
-  // Step 4 — passthrough.
-  return buildSiteModel(config, config.provider, config.model, 'config');
+/**
+ * Loads the active lineup once per call. Cheap — `loadLineups()` is a
+ * single small JSON read; we don't memoize so a `/lineup` edit takes effect
+ * on the next turn without process restart.
+ */
+function loadActiveLineup(config: BernardConfig): Lineup {
+  const lineups = loadLineups();
+  return resolveActiveLineup(lineups, config.activeLineupId, config.provider);
 }
 
 function buildSiteModel(
@@ -200,6 +206,7 @@ function buildSiteModel(
   source: SiteModel['source'],
   site?: ModelSite,
   tier?: ModelTier,
+  lineup?: Lineup,
 ): SiteModel {
   const out: SiteModel = {
     model: getModelForConfig(config, provider, modelName),
@@ -210,7 +217,7 @@ function buildSiteModel(
     tier,
   };
   if (site) {
-    const key = `${site}:${provider}:${modelName}:${source}`;
+    const key = `${site}:${provider}:${modelName}:${source}:${lineup?.id ?? '-'}`;
     if (!RESOLVE_LOG_SEEN.has(key)) {
       RESOLVE_LOG_SEEN.add(key);
       debugLog('model-policy:resolve', {
@@ -220,6 +227,8 @@ function buildSiteModel(
         provider,
         model: modelName,
         source,
+        lineupId: lineup?.id,
+        lineupName: lineup?.name,
       });
     }
   }

@@ -3,13 +3,12 @@ import { MODEL_COMPONENTS, modelPolicy } from './model.js';
 import { makePolicyInput } from './test-helpers.js';
 
 describe('modelPolicy', () => {
-  it('mirrors config.provider and config.model for every known component', () => {
-    const result = modelPolicy(
-      makePolicyInput({ config: { provider: 'openai', model: 'gpt-4o' } }),
-    );
-    expect(result.reason).toBe('config-default');
+  it('resolves each component via the active lineup', () => {
+    const result = modelPolicy(makePolicyInput({ config: { provider: 'openai' } }));
+    expect(result.reason).toBe('lineup-resolved');
     for (const key of MODEL_COMPONENTS) {
-      expect(result.models[key]).toEqual({ provider: 'openai', model: 'gpt-4o' });
+      expect(result.models[key].provider).toBeTruthy();
+      expect(result.models[key].model).toBeTruthy();
     }
   });
 
