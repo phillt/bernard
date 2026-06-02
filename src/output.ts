@@ -133,11 +133,7 @@ const MIN_BOX_WIDTH = 64;
 // rendered inside the Ink tree.
 const APP_PADDING_X = 2;
 
-export function printWelcome(
-  providers: string[],
-  version?: string,
-  mcp?: WelcomeMcpSummary,
-): void {
+export function printWelcome(providers: string[], version?: string, mcp?: WelcomeMcpSummary): void {
   const accent = getThemeColors().accent;
   const bannerWidth = Math.max(...BERNARD_BANNER.map((l) => l.length));
   const termCols = process.stdout.columns ?? 80;

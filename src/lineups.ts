@@ -231,10 +231,10 @@ export function resolveActiveLineup(
   fallbackProviderName: string | undefined,
 ): Lineup {
   if (activeLineupId && lineups[activeLineupId]) return lineups[activeLineupId];
-  if (fallbackProviderName && lineups[fallbackProviderName])
-    return lineups[fallbackProviderName];
+  if (fallbackProviderName && lineups[fallbackProviderName]) return lineups[fallbackProviderName];
   const first = Object.values(lineups)[0];
-  if (!first) throw new Error('No lineups available. This is a bug — loadLineups should always seed.');
+  if (!first)
+    throw new Error('No lineups available. This is a bug — loadLineups should always seed.');
   return first;
 }
 

@@ -5,8 +5,6 @@ import type { BernardConfig } from '../config.js';
 import {
   savePreferences,
   loadPreferences,
-  getDefaultModel,
-  getAvailableProviders,
   PROVIDER_MODELS,
   saveProviderKey,
   OPTIONS_REGISTRY,
@@ -848,7 +846,10 @@ export function App({
       const entries: MenuEntry[] = all.map((l) => ({
         label: l.name,
         annotation: `(${l.id})`,
-        active: l.id === (config.activeLineupId ?? resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider).id),
+        active:
+          l.id ===
+          (config.activeLineupId ??
+            resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider).id),
         description: `premium ${l.premium.provider}/${l.premium.model} · mid ${l.mid.provider}/${l.mid.model} · cheap ${l.cheap.provider}/${l.cheap.model}`,
         value: l.id,
       }));
@@ -2487,7 +2488,8 @@ async function pickLineupSlotInk(
       for (const model of PROVIDER_MODELS[provider]) {
         entries.push({
           label: model,
-          annotation: provider === current.provider && model === current.model ? '(current)' : undefined,
+          annotation:
+            provider === current.provider && model === current.model ? '(current)' : undefined,
           value: { provider, model },
         });
       }
@@ -2496,12 +2498,16 @@ async function pickLineupSlotInk(
     if (customNames.length > 0) {
       for (const name of customNames) {
         const entry = customProviders[name];
-        entries.push({ type: 'section', title: `${name} — custom (${entry.sdk} → ${entry.baseURL})` });
+        entries.push({
+          type: 'section',
+          title: `${name} — custom (${entry.sdk} → ${entry.baseURL})`,
+        });
         const models = entry.models.length > 0 ? entry.models : [entry.defaultModel];
         for (const model of models) {
           entries.push({
             label: model,
-            annotation: name === current.provider && model === current.model ? '(current)' : undefined,
+            annotation:
+              name === current.provider && model === current.model ? '(current)' : undefined,
             value: { provider: name, model },
           });
         }
@@ -2713,7 +2719,10 @@ async function runLineupEditorInk(
     }
     if (value.kind === 'delete') {
       const confirm = await requestMenu(
-        [{ label: `Delete "${draft.name}"`, description: 'This cannot be undone.' }, { label: 'Cancel' }],
+        [
+          { label: `Delete "${draft.name}"`, description: 'This cannot be undone.' },
+          { label: 'Cancel' },
+        ],
         { title: 'Confirm deletion' },
       );
       if (confirm.cancelled || confirm.index === 1) continue;
