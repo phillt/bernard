@@ -66,10 +66,42 @@ describe('ReActStrategy', () => {
     expect(ctx.iterate).toHaveBeenCalledTimes(1);
   });
 
-  it('skips enforcement when plan is empty (no steps)', async () => {
-    const ctx = makeCtx({ planStore: new PlanStore() });
+  it('re-prompts to create a plan when the model finished without calling `plan`', async () => {
+    const planStore = new PlanStore();
+    const ctx = makeCtx({ planStore });
+    let call = 0;
+    ctx.iterate.mockImplementation(async () => {
+      call++;
+      // Initial call: model produces no plan. Enforcement retry: model
+      // finally calls `plan.create` and resolves the step.
+      if (call === 2) {
+        planStore.create([{ description: 'a', verification: 'b' }]);
+        planStore.update(1, 'done', { signoff: 'ok' });
+      }
+      return baseResult;
+    });
     await new ReActStrategy(new NormalStrategy()).run(ctx);
-    expect(ctx.iterate).toHaveBeenCalledTimes(1);
+    expect(ctx.iterate).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(printWarning)).toHaveBeenCalledWith(
+      expect.stringContaining('ended without a plan'),
+    );
+    const enforcementOpts = ctx.iterate.mock.calls[1][0] as IterateOpts;
+    const lastMsg = enforcementOpts.extra?.[enforcementOpts.extra.length - 1];
+    expect(typeof lastMsg?.content === 'string' ? lastMsg.content : '').toContain(
+      'did not call the `plan` tool',
+    );
+  });
+
+  it('exhausts retries when model never creates a plan and logs the give-up', async () => {
+    const planStore = new PlanStore();
+    const ctx = makeCtx({ planStore });
+    // iterate always returns without creating a plan.
+    await new ReActStrategy(new NormalStrategy()).run(ctx);
+    expect(ctx.iterate).toHaveBeenCalledTimes(1 + REACT_ENFORCEMENT_MAX_RETRIES);
+    expect(vi.mocked(printInfo)).toHaveBeenCalledWith(
+      expect.stringContaining('without a plan after'),
+    );
+    expect(planStore.view().length).toBe(0);
   });
 
   it('re-prompts when plan has unresolved steps, exits when resolved', async () => {

@@ -76,14 +76,20 @@ When all plan steps are in terminal states and you are ready to respond to the u
 /**
  * Pure predicate: should the ReAct plan-enforcement loop run after the main
  * generateText call?
+ *
+ * `needsEnforcement` is true when the plan store is not in a fully resolved
+ * state — either no plan was ever created (model skipped the `plan` tool
+ * entirely), or one was created but still has unresolved steps. In
+ * coordinator mode we re-prompt on both, since the coordinator prompt
+ * mandates planning for any non-trivial task.
  */
 export function shouldEnforcePlan(args: {
   reactMode: boolean;
   aborted: boolean;
   stepLimitHit: boolean;
-  hasSteps: boolean;
+  needsEnforcement: boolean;
 }): boolean {
-  return args.reactMode && !args.aborted && !args.stepLimitHit && args.hasSteps;
+  return args.reactMode && !args.aborted && !args.stepLimitHit && args.needsEnforcement;
 }
 
 /**
@@ -118,5 +124,20 @@ export function buildEnforcementFeedback(planRender: string): string {
   return (
     `Your plan still has unresolved steps:\n\n${planRender}\n\n` +
     `Resolve each remaining step: complete it (plan update -> done), mark it cancelled with a note if the user's intent changed or the step is no longer needed, or mark it error with a note if it is genuinely unachievable. Do not leave steps pending or in_progress.`
+  );
+}
+
+/**
+ * Builds the re-prompt used when the model finished a coordinator turn without
+ * ever calling the `plan` tool. Distinct from {@link buildEnforcementFeedback}
+ * because the model needs a different next action — create the plan from
+ * scratch, not finish an existing one.
+ */
+export function buildMissingPlanFeedback(): string {
+  return (
+    `You are operating in coordinator mode but did not call the \`plan\` tool. ` +
+    `Before composing your final response, call \`plan\` with action \`create\` and an ordered list of step objects ({description, verification}) covering the work this turn requires. ` +
+    `Then walk each step through the in_progress → done/cancelled/error lifecycle as described in the coordinator prompt. ` +
+    `Do not skip planning — every coordinator turn needs a plan.`
   );
 }

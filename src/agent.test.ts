@@ -570,7 +570,7 @@ describe('prompt-injection regression (issue #172)', () => {
 });
 
 describe('shouldEnforcePlan', () => {
-  const base = { reactMode: true, aborted: false, stepLimitHit: false, hasSteps: true };
+  const base = { reactMode: true, aborted: false, stepLimitHit: false, needsEnforcement: true };
 
   it('returns true when all gates pass', () => {
     expect(shouldEnforcePlan(base)).toBe(true);
@@ -588,8 +588,8 @@ describe('shouldEnforcePlan', () => {
     expect(shouldEnforcePlan({ ...base, stepLimitHit: true })).toBe(false);
   });
 
-  it('returns false when the plan has no steps', () => {
-    expect(shouldEnforcePlan({ ...base, hasSteps: false })).toBe(false);
+  it('returns false when the plan is already in a resolved state', () => {
+    expect(shouldEnforcePlan({ ...base, needsEnforcement: false })).toBe(false);
   });
 });
 
@@ -1447,11 +1447,12 @@ describe('Agent', () => {
         expect(mockGenerateText).toHaveBeenCalledTimes(1);
       });
 
-      it('does not re-prompt when no plan was created', async () => {
+      it('re-prompts up to the retry limit when no plan was created', async () => {
         const agent = makeAgent(makeConfig({ coordinatorMode: 'on' }), toolOptions, store);
         mockGenerateText.mockResolvedValue(baseResult);
         await agent.processInput('trivial');
-        expect(mockGenerateText).toHaveBeenCalledTimes(1);
+        // 1 initial call + REACT_ENFORCEMENT_MAX_RETRIES (= 2) re-prompts.
+        expect(mockGenerateText).toHaveBeenCalledTimes(3);
       });
 
       it('stops re-prompting when abort fires mid-loop', async () => {

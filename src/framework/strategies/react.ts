@@ -4,6 +4,7 @@ import {
   REACT_COORDINATOR_PROMPT,
   REACT_ENFORCEMENT_MAX_RETRIES,
   buildEnforcementFeedback,
+  buildMissingPlanFeedback,
   computeEffectiveMaxSteps,
   shouldEnforcePlan,
 } from '../../react.js';
@@ -68,13 +69,16 @@ export class ReActStrategy implements ExecutionStrategy {
     let result = await this.inner.run(wrappedCtx);
 
     const planStore = ctx.planStore;
+    const needsEnforcement = planStore
+      ? planStore.view().length === 0 || planStore.unresolvedCount() > 0
+      : false;
     if (
       !planStore ||
       !shouldEnforcePlan({
         reactMode: reactActive,
         aborted: ctx.abortSignal?.aborted === true,
         stepLimitHit: ctx.getStepLimitHit?.() === true,
-        hasSteps: planStore.unresolvedCount() > 0,
+        needsEnforcement,
       })
     ) {
       return result;
@@ -92,17 +96,25 @@ export class ReActStrategy implements ExecutionStrategy {
     );
     const prefixTag = ctx.prefix ? `[${ctx.prefix}] ` : '';
 
+    const isUnfinished = () => planStore.view().length === 0 || planStore.unresolvedCount() > 0;
+
     let attempts = 0;
-    while (!planStore.isComplete() && attempts < REACT_ENFORCEMENT_MAX_RETRIES) {
+    while (isUnfinished() && attempts < REACT_ENFORCEMENT_MAX_RETRIES) {
       if (ctx.abortSignal?.aborted) break;
       attempts++;
+      const planMissing = planStore.view().length === 0;
       printWarning(
-        `${prefixTag}Plan has ${planStore.unresolvedCount()} unresolved step(s). Prompting to resolve... (${attempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`,
+        planMissing
+          ? `${prefixTag}Coordinator turn ended without a plan. Prompting to create one... (${attempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`
+          : `${prefixTag}Plan has ${planStore.unresolvedCount()} unresolved step(s). Prompting to resolve... (${attempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`,
       );
 
+      const feedback = planMissing
+        ? buildMissingPlanFeedback()
+        : buildEnforcementFeedback(planStore.render());
       const enforcementExtra: CoreMessage[] = [
         ...truncateToolResults(result.response.messages as CoreMessage[]),
-        { role: 'user', content: buildEnforcementFeedback(planStore.render()) },
+        { role: 'user', content: feedback },
       ];
 
       try {
@@ -124,6 +136,10 @@ export class ReActStrategy implements ExecutionStrategy {
           `${prefixTag}Auto-cancelled ${cancelled} unresolved plan step(s) after enforcement retries.`,
         );
       }
+    } else if (planStore.view().length === 0 && attempts >= REACT_ENFORCEMENT_MAX_RETRIES) {
+      printInfo(
+        `${prefixTag}Coordinator turn finished without a plan after ${REACT_ENFORCEMENT_MAX_RETRIES} re-prompt(s).`,
+      );
     }
 
     return result;
