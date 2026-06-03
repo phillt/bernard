@@ -41,6 +41,7 @@ vi.mock('../output.js', () => ({
 
 vi.mock('../logger.js', () => ({
   debugLog: vi.fn(),
+  isDebugEnabled: () => false,
 }));
 
 vi.mock('./agent-pool.js', async (importOriginal) => {

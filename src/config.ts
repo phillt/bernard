@@ -11,6 +11,8 @@ import {
 } from './tools/agent-pool.js';
 import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
 import { normalizeStoredModelMode, type ModelMode } from './model-policy.js';
+import { getCatalogForProvider } from './providers/catalog.js';
+import { BUILTIN_PROVIDERS, type BuiltinProvider } from './providers/types.js';
 
 /** Resolved runtime configuration for a Bernard session. */
 export interface BernardConfig {
@@ -571,36 +573,63 @@ export function getProviderKeyStatus(): Array<{
   return [...builtin, ...custom];
 }
 
-/** Known model identifiers for each provider, ordered by preference (first = default). */
-export const PROVIDER_MODELS: Record<string, string[]> = {
+/**
+ * Last-resort fallback model lists used only when the model catalog is empty
+ * for a built-in provider (e.g. first run on an offline machine with a corrupt
+ * vendored snapshot). The dynamic `PROVIDER_MODELS` proxy below consults the
+ * catalog first and falls back to these.
+ */
+const FALLBACK_PROVIDER_MODELS: Record<BuiltinProvider, string[]> = {
   anthropic: [
     'claude-sonnet-4-5-20250929',
     'claude-opus-4-6',
     'claude-haiku-4-5-20251001',
-    'claude-opus-4-20250514',
-    'claude-sonnet-4-20250514',
   ],
-  openai: [
-    'gpt-5.2',
-    'gpt-5.2-chat-latest',
-    'o3',
-    'o3-mini',
-    'gpt-4o-mini',
-    'gpt-4.1',
-    'gpt-4.1-mini',
-    'gpt-4.1-nano',
-  ],
-  xai: [
-    'grok-4-fast-non-reasoning',
-    'grok-4-fast-reasoning',
-    'grok-4-1-fast-non-reasoning',
-    'grok-4-1-fast-reasoning',
-    'grok-4-0709',
-    'grok-code-fast-1',
-    'grok-3',
-    'grok-3-mini',
-  ],
+  openai: ['gpt-5.2', 'gpt-4.1', 'gpt-4.1-mini'],
+  xai: ['grok-4-1-fast-reasoning', 'grok-4-fast-non-reasoning', 'grok-3-mini'],
 };
+
+function modelsForBuiltin(provider: BuiltinProvider): string[] {
+  const entries = getCatalogForProvider(provider);
+  if (entries.length === 0) return FALLBACK_PROVIDER_MODELS[provider];
+  // Sort by release date desc so the newest model is the suggested default.
+  const sorted = [...entries].sort((a, b) => b.released - a.released);
+  return sorted.map((e) => e.model);
+}
+
+/**
+ * Known model identifiers for each built-in provider. Sourced dynamically from
+ * the model catalog (Vercel AI Gateway → disk cache → vendored fallback) so
+ * adding a new model on the gateway doesn't require a code change. The first
+ * entry is the default for `getDefaultModel`. Custom providers are not
+ * represented here — consult `config.customProviders` for those.
+ */
+export const PROVIDER_MODELS: Record<string, string[]> = new Proxy(
+  {} as Record<string, string[]>,
+  {
+    get(_target, prop) {
+      if (typeof prop !== 'string') return undefined;
+      if (!BUILTIN_PROVIDERS.includes(prop as BuiltinProvider)) return undefined;
+      return modelsForBuiltin(prop as BuiltinProvider);
+    },
+    has(_target, prop) {
+      return typeof prop === 'string' && BUILTIN_PROVIDERS.includes(prop as BuiltinProvider);
+    },
+    ownKeys() {
+      return [...BUILTIN_PROVIDERS];
+    },
+    getOwnPropertyDescriptor(_target, prop) {
+      if (typeof prop !== 'string') return undefined;
+      if (!BUILTIN_PROVIDERS.includes(prop as BuiltinProvider)) return undefined;
+      return {
+        value: modelsForBuiltin(prop as BuiltinProvider),
+        writable: false,
+        enumerable: true,
+        configurable: true,
+      };
+    },
+  },
+);
 
 /**
  * Returns the first (preferred) model for a provider.

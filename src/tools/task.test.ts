@@ -23,6 +23,7 @@ vi.mock('../providers/index.js', () => ({
 
 vi.mock('../logger.js', () => ({
   debugLog: vi.fn(),
+  isDebugEnabled: () => false,
 }));
 
 const mockPrintTaskStart = vi.fn();

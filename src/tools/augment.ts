@@ -582,11 +582,6 @@ export function augmentTools(
           });
           try {
             result = await originalExecute(args, execOptions);
-            debugLog('tool:execute:end', {
-              tool: toolName,
-              durationMs: Date.now() - execStartedAt,
-              status: 'ok',
-            });
           } catch (thrown: unknown) {
             debugLog(
               `augment:${toolName}:threw`,
@@ -616,6 +611,17 @@ export function augmentTools(
             typeof capturedResult === 'object' &&
             ((capturedResult as Record<string, unknown>).is_error === true ||
               'error' in (capturedResult as Record<string, unknown>));
+          // Log a non-throwing failure as `status: 'error'` so the JSONL
+          // reflects what the model actually received. The legacy path used
+          // to always log `'ok'` whenever execute didn't throw, which made
+          // wrapper sub-dispatch errors (which surface as `{is_error: true}`
+          // or `{error: '...'}` envelopes — see `wrap-with-specialist.ts`)
+          // invisible at the augment-log layer.
+          debugLog('tool:execute:end', {
+            tool: toolName,
+            durationMs: Date.now() - execStartedAt,
+            status: looksLikeError ? 'error' : 'ok',
+          });
           if (!looksLikeError) {
             const previewSrc =
               typeof capturedResult === 'string' ? capturedResult : safeSerialize(capturedResult);

@@ -5,6 +5,13 @@ import * as path from 'node:path';
 import type { BernardConfig } from './config.js';
 import type { Specialist } from './specialists.js';
 
+vi.mock('./logger.js', () => ({
+  debugLog: vi.fn(),
+  isDebugEnabled: vi.fn(() => false),
+  getSessionId: vi.fn(() => 'test'),
+  getSessionLogPath: vi.fn(() => '/tmp/test.jsonl'),
+}));
+
 vi.mock('@ai-sdk/anthropic', () => ({
   anthropic: vi.fn((m: string) => ({ modelId: `anthropic:${m}` })),
   createAnthropic: vi.fn(() => (m: string) => ({ modelId: `anthropic:${m}` })),
@@ -57,10 +64,60 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
 let tmpDir: string;
 let origHome: string | undefined;
 
+/**
+ * Pins the built-in provider lineups so these tests stay deterministic. The
+ * resolver normally seeds from the dynamic model catalog (Vercel AI Gateway),
+ * which would re-tier whenever the gateway updates prices.
+ */
+function seedTestLineups(dir: string): void {
+  const cfgDir = path.join(dir, 'bernard');
+  fs.mkdirSync(cfgDir, { recursive: true });
+  const now = new Date().toISOString();
+  fs.writeFileSync(
+    path.join(cfgDir, 'lineups.json'),
+    JSON.stringify(
+      {
+        lineups: {
+          anthropic: {
+            id: 'anthropic',
+            name: 'Anthropic-only',
+            premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
+            mid: { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
+            cheap: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+            createdAt: now,
+            updatedAt: now,
+          },
+          openai: {
+            id: 'openai',
+            name: 'OpenAI-only',
+            premium: { provider: 'openai', model: 'gpt-5.2' },
+            mid: { provider: 'openai', model: 'gpt-4.1' },
+            cheap: { provider: 'openai', model: 'gpt-4.1-mini' },
+            createdAt: now,
+            updatedAt: now,
+          },
+          xai: {
+            id: 'xai',
+            name: 'xAI-only',
+            premium: { provider: 'xai', model: 'grok-4-1-fast-reasoning' },
+            mid: { provider: 'xai', model: 'grok-4-fast-non-reasoning' },
+            cheap: { provider: 'xai', model: 'grok-3-mini' },
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+      },
+      null,
+      2,
+    ),
+  );
+}
+
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-model-policy-'));
   origHome = process.env.BERNARD_HOME;
   process.env.BERNARD_HOME = tmpDir;
+  seedTestLineups(tmpDir);
 });
 
 afterEach(() => {
@@ -227,6 +284,76 @@ describe('resolveSiteModel — fallbacks', () => {
   });
 });
 
+describe('resolveSiteModel — off-lineup specialist pin guard', () => {
+  it('drops a specialist pin whose provider is not in the active lineup', async () => {
+    const m = await loadModule();
+    const logger = await import('./logger.js');
+    const spy = logger.debugLog as unknown as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+    m._resetModelPolicyLogCacheForTests();
+
+    // xAI-only lineup, but a stale specialist pin from when the user was on OpenAI.
+    const config = makeConfig({
+      provider: 'xai',
+      model: 'grok-4-fast-non-reasoning',
+      modelMode: 'balanced',
+      activeLineupId: 'xai',
+    });
+    const specialist = { provider: 'openai', model: 'gpt-5.2' } as Specialist;
+    const r = m.resolveSiteModel(config, 'tool-wrapper', { specialist });
+
+    expect(r.provider).toBe('xai');
+    expect(r.source).toBe('policy');
+    expect(r.modelName).toBe('grok-4-fast-non-reasoning');
+
+    const offLineupCalls = spy.mock.calls.filter(
+      (c) => c[0] === 'model-policy:specialist-off-lineup',
+    );
+    expect(offLineupCalls).toHaveLength(1);
+    expect(offLineupCalls[0][1]).toMatchObject({
+      site: 'tool-wrapper',
+      specialistProvider: 'openai',
+      lineupId: 'xai',
+    });
+  });
+
+  it('keeps a specialist pin whose provider is in the active lineup', async () => {
+    const m = await loadModule();
+    const config = makeConfig({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5-20250929',
+      modelMode: 'balanced',
+      activeLineupId: 'anthropic',
+    });
+    const specialist = {
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5-20251001',
+    } as Specialist;
+    const r = m.resolveSiteModel(config, 'specialist', { specialist });
+    expect(r.source).toBe('specialist');
+    expect(r.modelName).toBe('claude-haiku-4-5-20251001');
+  });
+
+  it('invocation override bypasses the off-lineup guard', async () => {
+    const m = await loadModule();
+    const config = makeConfig({
+      provider: 'xai',
+      model: 'grok-4-fast-non-reasoning',
+      modelMode: 'balanced',
+      activeLineupId: 'xai',
+    });
+    // Specialist pin would be dropped, but explicit override wins.
+    const specialist = { provider: 'openai', model: 'gpt-5.2' } as Specialist;
+    const r = m.resolveSiteModel(config, 'tool-wrapper', {
+      specialist,
+      overrides: { provider: 'openai', model: 'gpt-4.1' },
+    });
+    expect(r.source).toBe('override');
+    expect(r.provider).toBe('openai');
+    expect(r.modelName).toBe('gpt-4.1');
+  });
+});
+
 describe('resolveSiteModel — every mode is total', () => {
   const sites = [
     'main',
@@ -249,6 +376,128 @@ describe('resolveSiteModel — every mode is total', () => {
       });
     }
   }
+});
+
+describe('snapshotSiteModels', () => {
+  const sites = [
+    'main',
+    'specialist',
+    'tool-wrapper',
+    'rewriter',
+    'reference-resolver',
+    'reference-lookup',
+    'compressor',
+    'specialist-detector',
+  ] as const;
+
+  it('returns one entry per ModelSite with a provider/model populated', async () => {
+    const { snapshotSiteModels } = await loadModule();
+    const snap = snapshotSiteModels(
+      makeConfig({ modelMode: 'balanced', activeLineupId: 'anthropic' }),
+    );
+    expect(snap.modelMode).toBe('balanced');
+    expect(snap.lineup.id).toBe('anthropic');
+    for (const s of sites) {
+      expect(snap.sites[s]).toBeDefined();
+      expect(snap.sites[s].provider).toBeTruthy();
+      expect(snap.sites[s].model).toBeTruthy();
+      expect(['cheap', 'mid', 'premium']).toContain(snap.sites[s].tier);
+      expect(snap.sites[s].source).toBe('policy');
+    }
+  });
+
+  it('reflects mode shifts (balanced → optimize-tokens moves main from premium to mid)', async () => {
+    const { snapshotSiteModels } = await loadModule();
+    const bal = snapshotSiteModels(makeConfig({ modelMode: 'balanced' }));
+    const opt = snapshotSiteModels(makeConfig({ modelMode: 'optimize-tokens' }));
+    expect(bal.sites.main.tier).toBe('premium');
+    expect(opt.sites.main.tier).toBe('mid');
+  });
+
+  it('marks source="fallback" when the lineup slot points at a provider with no key', async () => {
+    const { snapshotSiteModels } = await loadModule();
+    const snap = snapshotSiteModels(
+      makeConfig({
+        modelMode: 'balanced',
+        anthropicApiKey: undefined,
+        apiKeys: {},
+      }),
+    );
+    expect(snap.sites.main.source).toBe('fallback');
+  });
+});
+
+describe('logSiteModelSnapshot', () => {
+  it('emits the full snapshot on session-start, then diffs on follow-ups', async () => {
+    const m = await loadModule();
+    const logger = await import('./logger.js');
+    const spy = logger.debugLog as unknown as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+    m._resetSnapshotCacheForTests();
+
+    const config = makeConfig({ modelMode: 'balanced', activeLineupId: 'anthropic' });
+    m.logSiteModelSnapshot(config, 'session-start');
+    const startCalls = spy.mock.calls.filter((c) => c[0] === 'model-policy:snapshot');
+    expect(startCalls).toHaveLength(1);
+    expect(startCalls[0][1]).toMatchObject({ reason: 'session-start' });
+    expect((startCalls[0][1] as { snapshot?: unknown }).snapshot).toBeDefined();
+
+    spy.mockClear();
+    config.modelMode = 'optimize-tokens';
+    m.logSiteModelSnapshot(config, 'model-mode-change');
+    const followCalls = spy.mock.calls.filter((c) => c[0] === 'model-policy:snapshot');
+    expect(followCalls).toHaveLength(1);
+    const payload = followCalls[0][1] as { reason: string; changed: unknown[] };
+    expect(payload.reason).toBe('model-mode-change');
+    expect(Array.isArray(payload.changed)).toBe(true);
+    expect(payload.changed.length).toBeGreaterThan(0);
+  });
+
+  it('emits an empty changed array when nothing actually shifts', async () => {
+    const m = await loadModule();
+    const logger = await import('./logger.js');
+    const spy = logger.debugLog as unknown as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+    m._resetSnapshotCacheForTests();
+
+    const config = makeConfig({ modelMode: 'balanced', activeLineupId: 'anthropic' });
+    m.logSiteModelSnapshot(config, 'session-start');
+    spy.mockClear();
+    m.logSiteModelSnapshot(config, 'lineup-change');
+    const calls = spy.mock.calls.filter((c) => c[0] === 'model-policy:snapshot');
+    expect(calls).toHaveLength(1);
+    expect((calls[0][1] as { changed: unknown[] }).changed).toEqual([]);
+  });
+});
+
+describe('resolveSiteModel — override-path logging (regression)', () => {
+  it('emits model-policy:resolve with source="specialist" when a specialist override wins', async () => {
+    const m = await loadModule();
+    const logger = await import('./logger.js');
+    const spy = logger.debugLog as unknown as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+    m._resetModelPolicyLogCacheForTests();
+
+    // Pin the specialist to a provider that IS in the active lineup — the
+    // off-lineup guard would otherwise (correctly) drop the pin.
+    const config = makeConfig({ modelMode: 'balanced', activeLineupId: 'anthropic' });
+    const specialist = {
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5-20251001',
+    } as Specialist;
+    m.resolveSiteModel(config, 'tool-wrapper', { specialist });
+
+    const resolveCalls = spy.mock.calls.filter((c) => c[0] === 'model-policy:resolve');
+    expect(resolveCalls.length).toBeGreaterThan(0);
+    const last = resolveCalls[resolveCalls.length - 1][1] as {
+      site: string;
+      source: string;
+      provider: string;
+    };
+    expect(last.site).toBe('tool-wrapper');
+    expect(last.source).toBe('specialist');
+    expect(last.provider).toBe('anthropic');
+  });
 });
 
 describe('normalizeStoredModelMode', () => {

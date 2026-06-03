@@ -91,6 +91,28 @@ bernard set-model-mode balanced            # CLI
 
 The single source of truth is `resolveSiteModel(config, site, opts?)` in `src/model-policy.ts`. Every `generateText` call site routes through it. Set `BERNARD_DEBUG=1` to see `model-policy:resolve` log entries per site.
 
+Every `BERNARD_DEBUG=1` session log starts with a `model-policy:snapshot` event capturing the full `{site → {tier, provider, model, source}}` baseline for the active lineup (emitted by `logSiteModelSnapshot(config, 'session-start')` in `src/ui/App.tsx`). Mid-session mutations — `/lineup` save, `/lineups` create/edit/switch, `/agent-options` model-mode change, `/profiles` switch — each emit a follow-up `model-policy:snapshot` with a per-site diff (or `changed: []` when nothing moved). `model-policy:resolve` lines also now fire when a specialist's persisted `provider`/`model` overrides the lineup, so off-lineup calls (e.g. an OpenAI 429 surfacing on an xAI-only lineup because a specialist hardcoded `provider: 'openai'`) are visible in the log without code reading.
+
+**Off-lineup specialist pin guard**: when `config.activeLineupId` is set and a specialist's persisted `provider` isn't bound to any tier of that lineup, `resolveSiteModel` drops the pin (provider + model together) and falls through to the policy tier instead. This catches stale pins from specialists created under a different lineup or provider — e.g. a tool-wrapper specialist baked at `provider:'openai', model:'gpt-5.5'` during an OpenAI session, surfacing as 429s on an xAI-only lineup because the OpenAI quota is exhausted. Invocation-level overrides bypass the guard (those are explicit and trump persisted intent), and the guard never fires when no `activeLineupId` is set (no explicit lineup → the pin is the strongest signal). Emits `model-policy:specialist-off-lineup {site, specialistProvider, specialistModel, lineupId, lineupProviders, reason}` to the debug log on each drop.
+
+## Dispatch Observability
+
+When triaging a hang from the session JSONL alone, start from the event shape — every `runAgent` invocation emits a correlated chain under a 4-byte hex `dispatchId`:
+
+- `agent:dispatch:start {dispatchId, model, streaming, maxSteps, …}` — entry.
+- `step:start {dispatchId, n}` / `step:end {dispatchId, n, finishReason, toolCalls, textChars, promptTokens, completionTokens, ttlms}` — per-step boundaries on the non-streaming branch (the streaming branch already emits per-token / per-tool-call events through the sink, so step boundaries there would be redundant).
+- `agent:dispatch:stuck {dispatchId, model, ms, sinceLastStepMs, stepsCompleted}` — fires every 30 s from a debug-only watchdog while a dispatch is still alive. Recurring `stuck` lines with monotonically growing `ms` are the hang signature.
+- `agent:dispatch:timeout {dispatchId, model, ms}` — fires when `BERNARD_DISPATCH_TIMEOUT_MS` is set and elapses.
+- `agent:dispatch:end {dispatchId, durationMs, steps, finishReason, …}` or `agent:dispatch:error {dispatchId, durationMs, message}` — exit.
+
+HTTP-level events (debug-only, install via `installInstrumentedFetchIfDebug()` in `src/index.ts`) tag the same `dispatchId` through `AsyncLocalStorage` (`src/framework/dispatch-context.ts`): `http:request:start {reqId, dispatchId?, host, path, method}`, `http:response:headers {reqId, status, ttlms}`, `http:response:end {reqId, bytes, ttlmsTotal}`, `http:request:error {reqId, ms, message}`. **Privacy contract**: we log only host, path, method, status, byte counts, and timings — never query strings, headers, or bodies (API keys / prompts / user content live there).
+
+The triad `step:end {n:1, finishReason:'tool-calls'}` → `step:start {n:2}` → `agent:dispatch:stuck {ms:30_000}` localizes the bug: step 2 never made its HTTP call. Add a missing `http:request:start` → it's a network hang. Add `http:request:headers` without `http:response:end` → it's a stream that never closed.
+
+`process:dump` events come from `SIGUSR2` (debug-only handler). `kill -USR2 <pid>` writes `{activeHandles, activeRequests, resources}` to both the session log and stderr — useful when a dispatch is stuck and you want to know what the event loop is holding.
+
+The non-streaming branch (`runNonStreaming` in `src/framework/runner.ts`) races `generateText` against the abort signal — always on, not debug-gated — so an Esc unwinds the runner even when the AI SDK provider leaves an internal await pending after the underlying fetch is cancelled. The streaming branch has carried the same defensive race since its inception.
+
 ## Settings Profiles
 
 User-tunable settings are organized into named **profiles** (#207). Bernard always has at least one (`default`); `activeProfileId` in `~/.config/bernard/profiles.json` nominates which one is live. Every `savePreferences` call writes to the active profile, so any settings change made via `/agent-options`, `/model`, `/provider`, `/theme`, `bernard set-model-mode`, etc. is automatically profile-scoped. API keys (`keys.json`) and custom providers (`custom-providers.json`) stay global.
@@ -156,6 +178,7 @@ On first run, files are auto-migrated from `~/.bernard/` to XDG locations. A `~/
 - `BERNARD_TOKEN_WINDOW` — Context window size for compression, 0 = auto-detect (default: 0)
 - `BERNARD_MAX_STEPS` — Max agent loop iterations per request (default: 25)
 - `BERNARD_HOME` — Override all XDG directories with a single flat path
+- `BERNARD_DISPATCH_TIMEOUT_MS` — Opt-in per-`runAgent` wall-clock cap (default: unset). When set to a positive integer the runner chains a fresh `AbortController` off `spec.abortSignal`, fires `agent:dispatch:timeout {dispatchId, model, ms}` to the debug log, and aborts the dispatch. Useful when triaging hangs — turns a 5-minute Esc-wait into a clean automatic abort. Leave unset in normal operation: reasoning models can legitimately sit on a single step for 60–90 s. Sub-dispatches inherit independent timers (one per `runAgent` invocation).
 - `BERNARD_COORDINATOR_MODE` — Tri-state execution-strategy selector: `on | off | auto` (default: `auto`). `on` runs ReAct every turn (think → act → evaluate → decide loop with plan tool + enforcement, per-turn step budget `min(BERNARD_MAX_STEPS * 3, 150)`, up to 2 extra re-prompts if the plan still has unresolved steps — worst-case step count `effectiveMaxSteps * 3`, subagent budgets unaffected). `off` runs single-shot Normal every turn. `auto` runs the per-turn Qualifier (`src/qualifier/`) which classifies the user message via rule-based features grounded in LLM-routing research (RouteLLM, FrugalGPT, Topaz, MoMA, RouterArena) and emits `strategyId: 'normal' | 'react'` plus a kebab-case reason that flows through `policy:decide` + `qualifier:outcome` debug logs.
 - `BERNARD_REACT_MODE` — Deprecated alias for `BERNARD_COORDINATOR_MODE`: `true` → `on`, `false` → `off`. Use `BERNARD_COORDINATOR_MODE` directly.
 - `BERNARD_MODEL_MODE` — Multi-model assignment policy (#170): `off | optimize-tokens | balanced | optimize-performance` (default: `off`). See the "Model Mode" section above.

@@ -347,7 +347,7 @@ function UserMessage({
   const display = rewriteOriginal ?? body;
   return (
     <Box flexDirection="column" marginTop={1} alignItems="flex-end">
-      <Box>
+      <Box width="85%" justifyContent="flex-end">
         <Text>{display}</Text>
         <Text color={colors.accent} bold>
           {' ❯'}

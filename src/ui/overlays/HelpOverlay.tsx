@@ -24,6 +24,7 @@ const HELP_ROWS: HelpRow[] = [
   { command: '/lineup', description: 'Edit the active tier lineup (premium/mid/cheap)' },
   { command: '/lineups', description: 'List, switch, or create tier lineups' },
   { command: '/models', description: 'Browse the model catalog and add custom providers' },
+  { command: '/refresh-models', description: 'Force-refresh the model catalog from the gateway' },
   { command: '/provider', description: 'Manage providers (alias of /models)' },
   { command: '/theme', description: 'Switch color theme' },
   { command: '/routines', description: 'List saved routines' },

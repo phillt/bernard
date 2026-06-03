@@ -52,6 +52,7 @@ export const TOOL_PROFILES_DIR = path.join(DATA_DIR, 'tool-profiles');
 // Cache
 export const MODELS_DIR = path.join(CACHE_DIR, 'models');
 export const UPDATE_CACHE_PATH = path.join(CACHE_DIR, 'update-check.json');
+export const MODEL_CATALOG_CACHE = path.join(CACHE_DIR, 'model-catalog.json');
 
 // State
 export const HISTORY_FILE = path.join(STATE_DIR, 'conversation-history.json');

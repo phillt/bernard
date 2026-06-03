@@ -5,6 +5,7 @@ import { resolveSiteModel } from './model-policy.js';
 import type { RAGStore } from './rag.js';
 import { DOMAIN_REGISTRY, getDomainIds } from './domains.js';
 import { estimateContentPartTokens } from './image.js';
+import { findModelMetaByName } from './providers/catalog.js';
 
 /** Model name → context window size in tokens */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
@@ -44,6 +45,8 @@ export const RECENT_TURNS_TO_KEEP = 4;
 /** Look up context window for a model, falling back to 128k for unknown models. */
 export function getContextWindow(model: string, override?: number): number {
   if (override && override > 0) return override;
+  const meta = findModelMetaByName(model);
+  if (meta && meta.contextWindow > 0) return meta.contextWindow;
   return MODEL_CONTEXT_WINDOWS[model] ?? DEFAULT_CONTEXT_WINDOW;
 }
 

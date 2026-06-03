@@ -9,6 +9,8 @@
  * across a session with a fixed model.
  */
 
+import { findModelMetaByName } from './catalog.js';
+
 /** Static per-model settings applied at the agent-loop boundary. */
 export interface ModelProfile {
   /** Stable identifier — useful in logs and tests. */
@@ -120,17 +122,29 @@ export function getModelProfile(
   const m = model.toLowerCase();
   const family = sdk ?? provider;
 
+  // Catalog-first reasoning detection: when the gateway tags a model as
+  // `reasoning` it overrides the family heuristics below. The catalog lookup
+  // is name-only (no provider) because custom providers may have a name
+  // mismatch but still wrap an SDK whose underlying model id is in the
+  // catalog (e.g. an OpenRouter proxy of `gpt-5.2`).
+  const meta = findModelMetaByName(model);
+  const catalogReasoning = meta?.tags.includes('reasoning') ?? null;
+
   if (family === 'anthropic') {
     return ANTHROPIC_PROFILE;
   }
 
   if (family === 'openai') {
+    if (catalogReasoning === true) return OPENAI_REASONING_PROFILE;
+    if (catalogReasoning === false) return OPENAI_STANDARD_PROFILE;
     // o-series reasoning models: o1, o3, o3-mini, o4-mini, …
     if (/^o\d/.test(m)) return OPENAI_REASONING_PROFILE;
     return OPENAI_STANDARD_PROFILE;
   }
 
   if (family === 'xai') {
+    if (catalogReasoning === true) return XAI_REASONING_PROFILE;
+    if (catalogReasoning === false) return XAI_STANDARD_PROFILE;
     // Explicit non-reasoning variants take precedence over the generic grok-4 rule.
     if (m.includes('non-reasoning')) return XAI_STANDARD_PROFILE;
     if (m.includes('reasoning')) return XAI_REASONING_PROFILE;

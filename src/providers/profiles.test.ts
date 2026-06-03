@@ -25,8 +25,15 @@ describe('getModelProfile — resolution', () => {
     expect(getModelProfile('openai', 'gpt-4o-mini').family).toBe('openai-standard');
     expect(getModelProfile('openai', 'gpt-4.1').family).toBe('openai-standard');
     expect(getModelProfile('openai', 'gpt-4.1-nano').family).toBe('openai-standard');
-    expect(getModelProfile('openai', 'gpt-5.2').family).toBe('openai-standard');
+    // gpt-5.2-chat-latest isn't in the catalog → pattern fallback → standard.
     expect(getModelProfile('openai', 'gpt-5.2-chat-latest').family).toBe('openai-standard');
+  });
+
+  it('catalog-tagged reasoning models override the pattern matcher', () => {
+    // gpt-5.2 carries a `reasoning` tag in the vendored catalog snapshot, so
+    // the catalog-first lookup routes it to openai-reasoning even though the
+    // pattern matcher alone would say standard.
+    expect(getModelProfile('openai', 'gpt-5.2').family).toBe('openai-reasoning');
   });
 
   it('routes xai grok-4 reasoning variants to xai-grok-reasoning', () => {
