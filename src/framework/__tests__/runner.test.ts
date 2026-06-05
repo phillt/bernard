@@ -4,12 +4,28 @@ vi.mock('ai', () => ({
   generateText: vi.fn(),
 }));
 
+const logCalls: { label: string; data: any }[] = [];
+vi.mock('../../logger.js', async () => {
+  const actual =
+    await vi.importActual<typeof import('../../logger.js')>('../../logger.js');
+  return {
+    ...actual,
+    isDebugEnabled: () => !!(globalThis as { __debugForRunnerTest?: boolean })
+      .__debugForRunnerTest,
+    debugLog: (label: string, data: unknown) => {
+      logCalls.push({ label, data });
+    },
+  };
+});
+
 import { runAgent, type AgentSpec } from '../runner.js';
 import type { AgentHook } from '../hooks/types.js';
 import { generateText } from 'ai';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  logCalls.length = 0;
+  (globalThis as { __debugForRunnerTest?: boolean }).__debugForRunnerTest = false;
   (generateText as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
     text: 'final',
     steps: [],
@@ -97,5 +113,114 @@ describe('runAgent', () => {
   it('returns the generateText result directly', async () => {
     const result = await runAgent(makeSpec());
     expect(result.text).toBe('final');
+  });
+
+  it('races the non-streaming await against the abort signal', async () => {
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise(() => {}),
+    );
+    const ac = new AbortController();
+    const p = runAgent(makeSpec({ abortSignal: ac.signal }));
+    ac.abort();
+    await expect(p).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('rejects synchronously when the abort signal is already aborted', async () => {
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise(() => {}),
+    );
+    const ac = new AbortController();
+    ac.abort();
+    await expect(runAgent(makeSpec({ abortSignal: ac.signal }))).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+  });
+
+  it('does not emit step:start / step:end / stuck when debug is off', async () => {
+    await runAgent(makeSpec());
+    const args = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    await args.onStepFinish?.({ text: 'hi', toolCalls: [], toolResults: [] });
+    const labels = logCalls.map((c) => c.label);
+    expect(labels).not.toContain('step:start');
+    expect(labels).not.toContain('step:end');
+    expect(labels).not.toContain('agent:dispatch:stuck');
+  });
+
+  it('emits step:start (via prepareStep) and step:end with dispatchId when debug is on', async () => {
+    (globalThis as { __debugForRunnerTest?: boolean }).__debugForRunnerTest = true;
+    await runAgent(makeSpec());
+    const args = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    await args.experimental_prepareStep?.({ stepNumber: 0 });
+    await args.onStepFinish?.({
+      text: 'hi',
+      toolCalls: [{ toolName: 'shell', toolCallId: 'c1', args: {} }],
+      toolResults: [],
+      usage: { promptTokens: 5, completionTokens: 3 },
+      finishReason: 'tool-calls',
+    });
+    const start = logCalls.find((c) => c.label === 'step:start');
+    const end = logCalls.find((c) => c.label === 'step:end');
+    expect(start).toBeDefined();
+    expect(end).toBeDefined();
+    expect(start!.data.dispatchId).toMatch(/^[0-9a-f]{8}$/);
+    expect(end!.data.dispatchId).toBe(start!.data.dispatchId);
+    expect(end!.data.toolCalls).toEqual(['shell']);
+    expect(end!.data.promptTokens).toBe(5);
+  });
+
+  it('tags agent:dispatch:start/end with dispatchId when debug is on', async () => {
+    (globalThis as { __debugForRunnerTest?: boolean }).__debugForRunnerTest = true;
+    await runAgent(makeSpec());
+    const start = logCalls.find((c) => c.label === 'agent:dispatch:start');
+    const end = logCalls.find((c) => c.label === 'agent:dispatch:end');
+    expect(start?.data.dispatchId).toBeDefined();
+    expect(end?.data.dispatchId).toBe(start?.data.dispatchId);
+  });
+
+  it('honors BERNARD_DISPATCH_TIMEOUT_MS by aborting with a self-describing error', async () => {
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (opts: { abortSignal?: AbortSignal }) =>
+        new Promise((_, reject) => {
+          opts.abortSignal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError')),
+          );
+        }),
+    );
+    const prev = process.env.BERNARD_DISPATCH_TIMEOUT_MS;
+    process.env.BERNARD_DISPATCH_TIMEOUT_MS = '20';
+    try {
+      // The bare AbortError is re-shaped so the agent's catch — which only
+      // recognizes aborts on its own controller — renders the timeout
+      // context instead of a generic "Agent error: Aborted".
+      await expect(runAgent(makeSpec())).rejects.toThrow(
+        /Dispatch timed out after 20 ms \(BERNARD_DISPATCH_TIMEOUT_MS\)/,
+      );
+    } finally {
+      if (prev === undefined) delete process.env.BERNARD_DISPATCH_TIMEOUT_MS;
+      else process.env.BERNARD_DISPATCH_TIMEOUT_MS = prev;
+    }
+  });
+
+  it('does not re-shape a user abort as a dispatch timeout', async () => {
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (opts: { abortSignal?: AbortSignal }) =>
+        new Promise((_, reject) => {
+          opts.abortSignal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError')),
+          );
+        }),
+    );
+    const prev = process.env.BERNARD_DISPATCH_TIMEOUT_MS;
+    process.env.BERNARD_DISPATCH_TIMEOUT_MS = '5000';
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 5);
+    try {
+      await expect(runAgent({ ...makeSpec(), abortSignal: ac.signal })).rejects.toMatchObject({
+        name: 'AbortError',
+      });
+    } finally {
+      if (prev === undefined) delete process.env.BERNARD_DISPATCH_TIMEOUT_MS;
+      else process.env.BERNARD_DISPATCH_TIMEOUT_MS = prev;
+    }
   });
 });

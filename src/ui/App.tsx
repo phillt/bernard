@@ -12,10 +12,12 @@ import {
   getProviderKeyStatus,
   normalizeMaxConcurrentAgents,
   normalizeThreshold,
+  getAvailableProviders,
 } from '../config.js';
 import { MAX_CONCURRENT_AGENTS_LIMIT, setMaxConcurrentAgents } from '../tools/agent-pool.js';
 import { RESPONSE_STYLE_IDS, type ResponseStyle } from '../agent-prompt.js';
 import { getContextWindow } from '../context.js';
+import { loadCatalog, getCatalogAgeMs, getCatalogSource } from '../providers/catalog.js';
 import { getLocalVersion } from '../update.js';
 import { CONFIG_DIR, DATA_DIR, CACHE_DIR, STATE_DIR } from '../paths.js';
 import * as os from 'node:os';
@@ -38,6 +40,7 @@ import {
   deleteLineup,
   listLineups,
   validateLineupName,
+  PROVIDER_DISPLAY_NAMES,
 } from '../lineups.js';
 import type { SupportedSdk } from '../providers/types.js';
 import { THEMES, getThemeKeys, getActiveThemeKey, setTheme, getThemeColors } from '../theme.js';
@@ -78,7 +81,7 @@ import {
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
 import { generateText } from 'ai';
-import { resolveSiteModel } from '../model-policy.js';
+import { resolveSiteModel, logSiteModelSnapshot } from '../model-policy.js';
 import { serializeMessages, extractDomainFacts, SUMMARIZATION_PROMPT } from '../context.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
 import { promoteCandidate } from '../candidate-bootstrap.js';
@@ -92,7 +95,7 @@ import { rewritePrompt } from '../prompt-rewriter.js';
 import { loadRewriterHints } from '../memory.js';
 import { stripImagePaths } from '../image.js';
 import { getModelProfile } from '../providers/index.js';
-import { debugLog } from '../logger.js';
+import { debugLog, getSessionId, getSessionLogPath, isDebugEnabled } from '../logger.js';
 import { acquireSlot, releaseSlot, getMaxConcurrentAgents } from '../tools/agent-pool.js';
 import type {
   AskUserQuestion,
@@ -113,8 +116,9 @@ import { Prompt } from './Prompt.js';
 import { Spinner } from './Spinner.js';
 import { StatusBar } from './StatusBar.js';
 import { HintBar } from './HintBar.js';
-import { PlanStrip } from './PlanStrip.js';
+import { PlanPanel } from './PlanPanel.js';
 import { MenuOverlay } from './overlays/MenuOverlay.js';
+import { ModelGridOverlay } from './overlays/ModelGridOverlay.js';
 import { ConfirmDialog } from './overlays/ConfirmDialog.js';
 import { StatusViewer } from './overlays/StatusViewer.js';
 import { SourcesViewer } from './overlays/SourcesViewer.js';
@@ -169,7 +173,15 @@ interface AppProps {
   isFreshInstall?: boolean;
 }
 
-type Overlay = 'status' | 'sources' | 'menu' | 'confirm' | 'help' | 'text-input' | 'info';
+type Overlay =
+  | 'status'
+  | 'sources'
+  | 'menu'
+  | 'grid'
+  | 'confirm'
+  | 'help'
+  | 'text-input'
+  | 'info';
 
 interface PendingTextInput {
   options: ValuePromptOptions;
@@ -192,6 +204,12 @@ interface PendingMenu {
   resolve: (
     result: { cancelled: true } | { cancelled: false; index: number; item: MenuItem },
   ) => void;
+}
+
+interface PendingGrid {
+  items: string[];
+  options?: { title?: string; footer?: string; initialIndex?: number; currentItem?: string };
+  resolve: (result: { cancelled: true } | { cancelled: false; index: number }) => void;
 }
 
 interface PendingConfirm {
@@ -240,6 +258,7 @@ export function App({
   const [busy, setBusy] = useState(false);
   const [historyVersion, setHistoryVersion] = useState(0);
   const [pendingMenu, setPendingMenu] = useState<PendingMenu | null>(null);
+  const [pendingGrid, setPendingGrid] = useState<PendingGrid | null>(null);
   const [pendingDialog, setPendingDialog] = useState<PendingDialog | null>(null);
   const [pendingTextInput, setPendingTextInput] = useState<PendingTextInput | null>(null);
   const [pendingInfo, setPendingInfo] = useState<PendingInfo | null>(null);
@@ -286,6 +305,10 @@ export function App({
     if (pendingMenu) {
       pendingMenu.resolve({ cancelled: true });
       setPendingMenu(null);
+    }
+    if (pendingGrid) {
+      pendingGrid.resolve({ cancelled: true });
+      setPendingGrid(null);
     }
     if (pendingDialog) {
       if (pendingDialog.kind === 'confirm') pendingDialog.resolve(false, 'once');
@@ -353,6 +376,36 @@ export function App({
     setOutputSink(messageStore);
     return () => setOutputSink(null);
   }, [messageStore]);
+
+  // Per-session debug log boundaries. `session:start` captures the runtime
+  // shape so a future tail-read can correlate behavior with the active
+  // provider / model / lineup; `session:end` lets us see how long the REPL
+  // ran and roughly how many turns happened. Mount-once on purpose: the
+  // boundaries delimit the REPL *process* lifetime, so mid-session
+  // provider/model/mode changes must not emit a spurious end/start pair
+  // (those mutations already log their own `model-policy:snapshot` diffs).
+  // `agent` and `config` are stable references for the App lifetime; the
+  // fields read here are deliberately the mount-time values.
+  useEffect(() => {
+    const startedAt = Date.now();
+    debugLog('session:start', {
+      sessionId: getSessionId(),
+      logPath: getSessionLogPath(),
+      cwd: process.cwd(),
+      provider: config.provider,
+      model: config.model,
+      modelMode: config.modelMode,
+      coordinatorMode: config.coordinatorMode,
+    });
+    logSiteModelSnapshot(config, 'session-start');
+    return () => {
+      debugLog('session:end', {
+        durationMs: Date.now() - startedAt,
+        turns: agent.getHistory().filter((m) => m.role === 'user').length,
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- session boundaries are per-mount, not per-config-change
+  }, [agent]);
 
   // Attach a persistent SpinnerStats object so the framework's token-stats
   // hook accumulates usage across turns. <StatusBar> polls this for the
@@ -555,6 +608,31 @@ export function App({
     }
     if (text === '/help') {
       setActiveOverlay('help');
+      return;
+    }
+    if (text === '/session-log') {
+      flashToast(
+        isDebugEnabled()
+          ? `Session log: ${getSessionLogPath()}`
+          : 'Session log is disabled. Start Bernard with BERNARD_DEBUG=1 to record one.',
+      );
+      return;
+    }
+    if (text === '/refresh-models') {
+      flashToast('Refreshing model catalog…');
+      try {
+        const refreshed = await loadCatalog({ force: true });
+        const source = getCatalogSource();
+        flashToast(
+          `Catalog refreshed: ${refreshed.entries.length} models (source: ${source}).`,
+          'success',
+        );
+      } catch (err) {
+        flashToast(
+          `Catalog refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+          'error',
+        );
+      }
       return;
     }
     if (text === '/memory') {
@@ -826,6 +904,7 @@ export function App({
         active,
         config,
         requestMenu,
+        requestGridMenu,
         requestTextInput,
         flashToast,
       );
@@ -836,6 +915,7 @@ export function App({
           model: config.model,
           activeLineupId: edited.id,
         });
+        logSiteModelSnapshot(config, 'lineup-change');
         flashToast(`Lineup "${edited.name}" saved.`, 'success');
       }
       return;
@@ -883,6 +963,7 @@ export function App({
           draft,
           config,
           requestMenu,
+          requestGridMenu,
           requestTextInput,
           flashToast,
           { isNew: true },
@@ -894,6 +975,7 @@ export function App({
             model: config.model,
             activeLineupId: created.id,
           });
+          logSiteModelSnapshot(config, 'lineup-change');
           flashToast(`Created and switched to "${created.name}".`, 'success');
         }
         return;
@@ -906,6 +988,7 @@ export function App({
           target,
           config,
           requestMenu,
+          requestGridMenu,
           requestTextInput,
           flashToast,
         );
@@ -916,6 +999,7 @@ export function App({
             model: config.model,
             activeLineupId: edited.id,
           });
+          logSiteModelSnapshot(config, 'lineup-change');
           flashToast(`Lineup "${edited.name}" saved.`, 'success');
         }
         return;
@@ -926,6 +1010,7 @@ export function App({
         model: config.model,
         activeLineupId: target.id,
       });
+      logSiteModelSnapshot(config, 'lineup-change');
       flashToast(`Switched to lineup "${target.name}".`, 'success');
       return;
     }
@@ -961,6 +1046,7 @@ export function App({
           switchActiveProfile(profile.id);
           applyProfileToConfig(config);
           reapplyRuntimeSettings(config);
+          logSiteModelSnapshot(config, 'profile-switch');
           flashToast(`Created profile "${profile.name}" and switched to it.`, 'success');
         } catch (err) {
           if (createdId && priorActive) {
@@ -986,6 +1072,7 @@ export function App({
         switchActiveProfile(target.id);
         applyProfileToConfig(config);
         reapplyRuntimeSettings(config);
+        logSiteModelSnapshot(config, 'profile-switch');
         flashToast(`Switched to profile "${target.name}".`, 'success');
       } catch (err) {
         if (priorActive) {
@@ -1405,6 +1492,7 @@ export function App({
       model: config.model,
       modelMode: chosen,
     });
+    logSiteModelSnapshot(config, 'model-mode-change');
     flashToast(`Model mode → ${chosen}`, 'success');
   }
 
@@ -1717,6 +1805,8 @@ export function App({
     input: string,
     signal: AbortSignal,
   ): Promise<{ agentInput: string; resolvedEntries: ResolvedEntry[] }> {
+    const pipelineStartedAt = Date.now();
+    debugLog('pre-turn:start', { inputLen: input.length });
     // Per-turn RAG cache invalidation (#171). Must run before any resolver /
     // rewriter LLM call so they see only this turn's facts.
     stores.rag?.clearTurnCache();
@@ -1773,6 +1863,11 @@ export function App({
     }
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
+    debugLog('pre-turn:end', {
+      durationMs: Date.now() - pipelineStartedAt,
+      rewritten: agentInput !== input,
+      refCount: resolvedEntries.length,
+    });
     return { agentInput, resolvedEntries };
   }
 
@@ -1814,7 +1909,23 @@ export function App({
       // AbortError on user-cancel is expected; don't dump it to the console.
       const isAbort =
         err instanceof Error && (err.name === 'AbortError' || controller.signal.aborted);
-      if (!isAbort) console.error('agent error:', err);
+      if (!isAbort) {
+        console.error('agent error:', err);
+        // When debug is on, also surface the error in the chat transcript so
+        // hangs / silent failures are visible without having to grep logs.
+        if (isDebugEnabled()) {
+          const message = err instanceof Error ? err.message : String(err);
+          const stack = err instanceof Error && err.stack ? err.stack : undefined;
+          const cause =
+            err instanceof Error && err.cause instanceof Error ? err.cause.stack : undefined;
+          debugLog('error:turn', { message, stack, cause });
+          const body = [`⚠ Agent error: ${message}`, stack, cause && `Caused by:\n${cause}`]
+            .filter(Boolean)
+            .join('\n\n');
+          agent.getHistory().push({ role: 'assistant', content: body });
+          setHistoryVersion((v) => v + 1);
+        }
+      }
     } finally {
       persistAgentState({ agent, historyStore, provenanceHistoryStore });
       submittingRef.current = false;
@@ -1899,6 +2010,16 @@ export function App({
     return new Promise((resolve) => {
       setPendingMenu({ entries, options, resolve });
       setActiveOverlay('menu');
+    });
+  }
+
+  function requestGridMenu(
+    items: string[],
+    options?: { title?: string; footer?: string; initialIndex?: number; currentItem?: string },
+  ): Promise<{ cancelled: true } | { cancelled: false; index: number }> {
+    return new Promise((resolve) => {
+      setPendingGrid({ items, options, resolve });
+      setActiveOverlay('grid');
     });
   }
 
@@ -2023,7 +2144,7 @@ export function App({
           <Spinner label="thinking…" />
         </Box>
       )}
-      <PlanStrip agent={agent} />
+      <PlanPanel agent={agent} />
       {toast && <Toast message={toast.message} variant={toast.variant} />}
       <Prompt
         disabled={busy || activeOverlay !== null}
@@ -2054,6 +2175,25 @@ export function App({
           onCancel={() => {
             pendingMenu.resolve({ cancelled: true });
             setPendingMenu(null);
+            setActiveOverlay(null);
+          }}
+        />
+      )}
+      {activeOverlay === 'grid' && pendingGrid && (
+        <ModelGridOverlay
+          items={pendingGrid.items}
+          title={pendingGrid.options?.title}
+          footer={pendingGrid.options?.footer}
+          initialIndex={pendingGrid.options?.initialIndex}
+          currentItem={pendingGrid.options?.currentItem}
+          onSelect={(index) => {
+            pendingGrid.resolve({ cancelled: false, index });
+            setPendingGrid(null);
+            setActiveOverlay(null);
+          }}
+          onCancel={() => {
+            pendingGrid.resolve({ cancelled: true });
+            setPendingGrid(null);
             setActiveOverlay(null);
           }}
         />
@@ -2457,74 +2597,124 @@ async function runAddProviderInk(
   }
 }
 
+function formatCatalogFooter(): string {
+  const source = getCatalogSource();
+  const ageMs = getCatalogAgeMs();
+  if (source === 'vendored' || ageMs == null) {
+    return 'Model catalog: vendored fallback — /refresh-models to fetch live.';
+  }
+  const mins = Math.floor(ageMs / 60_000);
+  const ageLabel =
+    mins < 1
+      ? 'just now'
+      : mins < 60
+        ? `${mins}m ago`
+        : `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
+  return `Model catalog: ${source}, refreshed ${ageLabel} — /refresh-models to fetch.`;
+}
+
 type RequestMenu = (
   entries: MenuEntry[],
   options?: MenuOptions,
 ) => Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }>;
+type RequestGridMenu = (
+  items: string[],
+  options?: { title?: string; footer?: string; initialIndex?: number; currentItem?: string },
+) => Promise<{ cancelled: true } | { cancelled: false; index: number }>;
 type RequestTextInput = (options: ValuePromptOptions) => Promise<ValueResult>;
 type FlashToast = (message: string, variant?: ToastVariant) => void;
 
 /**
- * Cross-provider model picker used by the lineup editor. Lists every
- * (provider, model) pair Bernard knows: built-ins from `PROVIDER_MODELS`,
- * custom providers from `config.customProviders`, grouped under section
- * headers. Last item is "+ Add custom provider…" which round-trips through
- * `runAddProviderInk` and re-opens the picker with the new entries appended.
+ * Two-step picker for a lineup slot: provider first (filtered to those with
+ * keys), then model (rendered in a multi-column grid). Esc from the model
+ * step returns to the provider step; Esc from the provider step returns
+ * `null` to the editor.
  *
- * Returns `null` on cancel.
+ * Custom providers expose a final "+ Type a new model name…" cell so the
+ * user can extend the remembered model list inline. The provider step ends
+ * with "+ Add custom provider…" which round-trips through `runAddProviderInk`
+ * and re-renders the step with the new provider appended.
  */
 async function pickLineupSlotInk(
   config: BernardConfig,
   tier: LineupTier,
   current: LineupSlot,
   requestMenu: RequestMenu,
+  requestGridMenu: RequestGridMenu,
   requestTextInput: RequestTextInput,
   flashToast: FlashToast,
 ): Promise<LineupSlot | null> {
+  const providerDisplayName = (name: string): string => {
+    if (Object.hasOwn(PROVIDER_DISPLAY_NAMES, name)) {
+      return PROVIDER_DISPLAY_NAMES[name as keyof typeof PROVIDER_DISPLAY_NAMES];
+    }
+    return name;
+  };
+
+  const modelsForProvider = (name: string): string[] => {
+    if (Object.hasOwn(PROVIDER_MODELS, name)) return PROVIDER_MODELS[name];
+    const custom = (config.customProviders ?? {})[name];
+    if (!custom) return [];
+    const models = [...custom.models];
+    if (custom.defaultModel && !models.includes(custom.defaultModel)) {
+      models.unshift(custom.defaultModel);
+    }
+    return models;
+  };
+
   while (true) {
     const customProviders = config.customProviders ?? {};
-    const entries: MenuEntry[] = [];
-    const builtinProviders = Object.keys(PROVIDER_MODELS);
-    for (const provider of builtinProviders) {
-      entries.push({ type: 'section', title: provider });
-      for (const model of PROVIDER_MODELS[provider]) {
-        entries.push({
-          label: model,
-          annotation:
-            provider === current.provider && model === current.model ? '(current)' : undefined,
-          value: { provider, model },
-        });
-      }
+    const available = getAvailableProviders(config);
+
+    if (available.length === 0) {
+      flashToast('No providers with API keys configured. Add one via /provider first.', 'error');
+      return null;
     }
-    const customNames = Object.keys(customProviders);
-    if (customNames.length > 0) {
-      for (const name of customNames) {
-        const entry = customProviders[name];
+
+    const builtin = available.filter((p) => Object.hasOwn(PROVIDER_MODELS, p));
+    const custom = available.filter((p) => Object.hasOwn(customProviders, p));
+
+    const entries: MenuEntry[] = [];
+    for (const provider of builtin) {
+      const count = PROVIDER_MODELS[provider].length;
+      entries.push({
+        label: providerDisplayName(provider),
+        annotation: `(${count} model${count === 1 ? '' : 's'})${
+          provider === current.provider ? ' · current' : ''
+        }`,
+        active: provider === current.provider,
+        value: { kind: 'provider', provider } as const,
+      });
+    }
+    if (custom.length > 0) {
+      entries.push({ type: 'section', title: 'Custom' });
+      for (const provider of custom) {
+        const entry = customProviders[provider];
+        const count = entry.models.length > 0 ? entry.models.length : 1;
         entries.push({
-          type: 'section',
-          title: `${name} — custom (${entry.sdk} → ${entry.baseURL})`,
+          label: provider,
+          annotation: `(${entry.sdk} → ${entry.baseURL})${
+            provider === current.provider ? ' · current' : ''
+          }`,
+          active: provider === current.provider,
+          description: `${count} model${count === 1 ? '' : 's'} remembered`,
+          value: { kind: 'provider', provider } as const,
         });
-        const models = entry.models.length > 0 ? entry.models : [entry.defaultModel];
-        for (const model of models) {
-          entries.push({
-            label: model,
-            annotation:
-              name === current.provider && model === current.model ? '(current)' : undefined,
-            value: { provider: name, model },
-          });
-        }
-        entries.push({ label: '+ Type a new model name…', value: { __free__: name } });
       }
     }
     entries.push({ type: 'section', title: '' });
-    entries.push({ label: '+ Add custom provider…', value: '__add__' });
+    entries.push({ label: '+ Add custom provider…', value: { kind: 'add-custom' } as const });
 
     const pick = await requestMenu(entries, {
-      title: `${tier.toUpperCase()} slot — current: ${current.provider} / ${current.model}`,
+      title: `Pick provider for ${tier.toUpperCase()} slot`,
+      headerLines: [formatCatalogFooter()],
     });
     if (pick.cancelled) return null;
-    const value = pick.item.value;
-    if (value === '__add__') {
+    const choice = pick.item.value as
+      | { kind: 'provider'; provider: string }
+      | { kind: 'add-custom' };
+
+    if (choice.kind === 'add-custom') {
       const added = await runAddProviderInk(requestMenu, requestTextInput, flashToast);
       if (added) {
         config.customProviders = {
@@ -2535,8 +2725,36 @@ async function pickLineupSlotInk(
       }
       continue;
     }
-    if (value && typeof value === 'object' && '__free__' in value) {
-      const provider = (value as { __free__: string }).__free__;
+
+    const provider = choice.provider;
+    const isCustom = Object.hasOwn(customProviders, provider);
+    const models = modelsForProvider(provider);
+    const FREE_TYPE = '+ Type a new model name…';
+    const items: string[] = [...models];
+    if (isCustom) items.push(FREE_TYPE);
+
+    if (items.length === 0) {
+      flashToast(`No models known for provider "${provider}".`, 'error');
+      continue;
+    }
+
+    const currentModelForProvider =
+      provider === current.provider ? current.model : undefined;
+    const initialIndex =
+      currentModelForProvider && models.includes(currentModelForProvider)
+        ? models.indexOf(currentModelForProvider)
+        : 0;
+
+    const result = await requestGridMenu(items, {
+      title: `Pick ${providerDisplayName(provider)} model for ${tier.toUpperCase()} slot`,
+      footer: formatCatalogFooter(),
+      initialIndex,
+      currentItem: currentModelForProvider,
+    });
+    if (result.cancelled) continue; // back to provider step
+
+    const picked = items[result.index];
+    if (picked === FREE_TYPE) {
       const modelRes = await requestTextInput({ label: `New model name for ${provider}` });
       if (modelRes.cancelled || !modelRes.raw.trim()) continue;
       const model = modelRes.raw.trim();
@@ -2544,9 +2762,7 @@ async function pickLineupSlotInk(
       config.customProviders = loadCustomProviders();
       return { provider, model };
     }
-    if (value && typeof value === 'object' && 'provider' in value && 'model' in value) {
-      return value as LineupSlot;
-    }
+    return { provider, model: picked };
   }
 }
 
@@ -2609,6 +2825,7 @@ async function runLineupEditorInk(
   initial: Lineup,
   config: BernardConfig,
   requestMenu: RequestMenu,
+  requestGridMenu: RequestGridMenu,
   requestTextInput: RequestTextInput,
   flashToast: FlashToast,
   opts: { isNew?: boolean } = {},
@@ -2647,6 +2864,7 @@ async function runLineupEditorInk(
         value.tier,
         draft[value.tier],
         requestMenu,
+        requestGridMenu,
         requestTextInput,
         flashToast,
       );

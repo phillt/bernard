@@ -134,6 +134,7 @@ vi.mock('../tools/time.js', () => ({
 
 vi.mock('../logger.js', () => ({
   debugLog: vi.fn(),
+  isDebugEnabled: () => false,
 }));
 
 // Mock MemoryStore with functional getAllMemoryContents/getAllScratchContents

@@ -191,12 +191,9 @@ export function createSpecialistTool(
             if (normProvider !== undefined) {
               if (!isValidProvider(normProvider))
                 return `Error: Unknown provider "${normProvider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
-              if (normModel !== undefined && !PROVIDER_MODELS[normProvider]?.includes(normModel))
-                return `Error: Unknown model "${normModel}" for provider "${normProvider}". Valid models: ${PROVIDER_MODELS[normProvider].join(', ')}`;
-            } else if (normModel !== undefined && config) {
-              // Validate model against the global config's provider when no explicit provider given
-              if (!PROVIDER_MODELS[config.provider]?.includes(normModel))
-                return `Error: Unknown model "${normModel}" for provider "${config.provider}". Valid models: ${PROVIDER_MODELS[config.provider].join(', ')}`;
+              // Model is not validated against PROVIDER_MODELS: the catalog can
+              // lag day-0 model releases, and the underlying SDK already
+              // rejects unknown ids. Trust the caller and pass through.
             }
             // Auto-assign policy-resolved provider/model when multi-model
             // mode is active and the user didn't specify either (#170).
@@ -251,19 +248,10 @@ export function createSpecialistTool(
             if (provider !== undefined && provider !== '') {
               if (!isValidProvider(provider))
                 return `Error: Unknown provider "${provider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
-              if (
-                model !== undefined &&
-                model !== '' &&
-                !PROVIDER_MODELS[provider]?.includes(model)
-              )
-                return `Error: Unknown model "${model}" for provider "${provider}". Valid models: ${PROVIDER_MODELS[provider].join(', ')}`;
-            } else if (model !== undefined && model !== '' && provider === undefined) {
-              // Model-only update: validate against existing specialist's provider or global config
-              const existing = store.get(id);
-              const effectiveProvider = existing?.provider || config?.provider;
-              if (effectiveProvider && !PROVIDER_MODELS[effectiveProvider]?.includes(model))
-                return `Error: Unknown model "${model}" for provider "${effectiveProvider}". Valid models: ${PROVIDER_MODELS[effectiveProvider]?.join(', ') ?? 'none'}`;
             }
+            // Model is not validated against PROVIDER_MODELS: the catalog can
+            // lag day-0 model releases, and the underlying SDK already
+            // rejects unknown ids.
             const updates: SpecialistUpdates = {};
             if (name !== undefined) updates.name = name;
             if (description !== undefined) updates.description = description;

@@ -319,4 +319,94 @@ describe('<Thread>', () => {
     const frame = lastFrame() ?? '';
     expect(frame).not.toContain('should not render');
   });
+
+  it('echoes the plan step list for a static plan create call when toolDetails is on', () => {
+    const history: CoreMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'p1',
+            toolName: 'plan',
+            args: {
+              action: 'create',
+              steps: [
+                { description: 'Run the tests', verification: 'tests pass' },
+                { description: 'Deploy the service', verification: 'service up' },
+              ],
+            },
+          },
+        ] as unknown as CoreMessage['content'],
+      },
+    ];
+    const { lastFrame } = render(createElement(Thread, { history, toolDetails: true }));
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('⚙ plan');
+    expect(frame).toContain('1. Run the tests');
+    expect(frame).toContain('2. Deploy the service');
+  });
+
+  it('echoes a plan update transition when toolDetails is on', () => {
+    const history: CoreMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'p2',
+            toolName: 'plan',
+            args: { action: 'update', id: 1, status: 'done', signoff: 'verified by run' },
+          },
+        ] as unknown as CoreMessage['content'],
+      },
+    ];
+    const { lastFrame } = render(createElement(Thread, { history, toolDetails: true }));
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('step 1 → done · verified by run');
+  });
+
+  it('renders only the plan tool name when toolDetails is off', () => {
+    const history: CoreMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 'p3',
+            toolName: 'plan',
+            args: {
+              action: 'create',
+              steps: [{ description: 'hidden step', verification: 'v' }],
+            },
+          },
+        ] as unknown as CoreMessage['content'],
+      },
+    ];
+    const { lastFrame } = render(createElement(Thread, { history }));
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('⚙ plan');
+    expect(frame).not.toContain('hidden step');
+  });
+
+  it('echoes the plan step list on a streaming plan create when toolDetails is on', () => {
+    const store = new MessageStore();
+    store.append({
+      kind: 'tool-call',
+      callId: 'p4',
+      toolName: 'plan',
+      args: {
+        action: 'create',
+        steps: [{ description: 'streamed step', verification: 'v' }],
+      },
+    });
+    store.append({ kind: 'tool-result', callId: 'p4', result: 'Plan created with 1 steps.', isError: false });
+    const { lastFrame } = render(
+      createElement(Thread, { history: [], messageStore: store, busy: true, toolDetails: true }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('⚙ plan');
+    expect(frame).toContain('1. streamed step');
+    expect(frame).toContain('↳ Plan created with 1 steps.');
+  });
 });

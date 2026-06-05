@@ -1,5 +1,6 @@
 import type { Check, Rubric } from './rubric.js';
 import { verdictOf } from './rubric.js';
+import { debugLog } from './logger.js';
 
 /**
  * Status lifecycle for a plan step.
@@ -46,6 +47,32 @@ const TERMINAL_STATUSES: ReadonlySet<StepStatus> = new Set<StepStatus>([
  */
 export class PlanStore {
   private steps: Step[] = [];
+  private subscribers: Set<() => void> = new Set();
+
+  /**
+   * Registers a callback fired after every mutation (create/add/update/clear/
+   * cancelAllUnresolved). Returns an unsubscribe function. Used by the REPL's
+   * `<PlanPanel>` so the pinned plan list re-renders the moment the model
+   * transitions a step, even mid-turn.
+   */
+  subscribe(cb: () => void): () => void {
+    this.subscribers.add(cb);
+    return () => this.subscribers.delete(cb);
+  }
+
+  private notify(): void {
+    for (const cb of this.subscribers) {
+      try {
+        cb();
+      } catch (err) {
+        // A throwing subscriber (e.g. a UI render error) must not break the
+        // plan mutation that triggered it, nor starve the other subscribers.
+        debugLog('plan-store:subscriber-error', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
 
   /**
    * Replaces all steps. When called with a non-empty existing plan (the model
@@ -66,6 +93,7 @@ export class PlanStore {
         status: 'pending',
       });
     }
+    this.notify();
     return this.view();
   }
 
@@ -77,6 +105,7 @@ export class PlanStore {
       status: 'pending',
     };
     this.steps.push(step);
+    this.notify();
     return { ...step };
   }
 
@@ -87,6 +116,7 @@ export class PlanStore {
     step.status = status;
     if (opts?.note !== undefined) step.note = opts.note;
     if (opts?.signoff !== undefined) step.signoff = opts.signoff;
+    this.notify();
     return { ...step };
   }
 
@@ -96,6 +126,7 @@ export class PlanStore {
 
   clear(): void {
     this.steps = [];
+    this.notify();
   }
 
   /** True when every step is in a terminal state (done, cancelled, error). */
@@ -117,6 +148,7 @@ export class PlanStore {
         count++;
       }
     }
+    if (count > 0) this.notify();
     return count;
   }
 

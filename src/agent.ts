@@ -114,6 +114,13 @@ export class Agent {
   // after each agent step. See src/framework/hooks/token-stats.ts.
   lastStepPromptTokens: number = 0;
   spinnerStats: SpinnerStats | null = null;
+  /**
+   * The execution strategy chosen for the current (or most recent) turn,
+   * resolved by the Policy Engine + Qualifier. `null` between turns. Read by
+   * the StatusBar to render the coordinator/normal indicator. Mutated on
+   * `processInput` start and cleared in its `finally`.
+   */
+  currentStrategy: 'react' | 'normal' | null = null;
   private routineStore: RoutineStore;
   private specialistStore: SpecialistStore;
   private correctionStore: CorrectionCandidateStore;
@@ -238,6 +245,14 @@ export class Agent {
   }
 
   /**
+   * Subscribes to plan mutations (create/add/update/clear/cancel). Returns an
+   * unsubscribe function. Used by `<PlanPanel>` for live mid-turn updates.
+   */
+  subscribeToPlanStore(cb: () => void): () => void {
+    return this.planStore.subscribe(cb);
+  }
+
+  /**
    * Returns the live `AgentContext` (with the most recent `policyDecision`
    * threaded in by `processInput`). The Agent class re-points `this.ctx`
    * on every turn, so callers that need to invoke a definition outside the
@@ -277,6 +292,14 @@ export class Agent {
     images?: ImageAttachment[],
     resolvedReferences?: ResolvedEntry[],
   ): Promise<void> {
+    const turnStartedAt = Date.now();
+    let turnAborted = false;
+    debugLog('turn:start', {
+      inputLen: userInput.length,
+      hasImages: !!(images && images.length > 0),
+      refCount: resolvedReferences?.length ?? 0,
+      historyLen: this.history.length,
+    });
     this.lastStepLimitHit = false;
     // Cache per-turn snapshot inputs for the Agent Status overlay (#140).
     // Last-write-wins — the overlay is a snapshot, not a log.
@@ -307,6 +330,9 @@ export class Agent {
     });
     this.lastPolicyResult = policyResult;
     this.ctx = { ...this.ctx, policyDecision: policyResult.decision };
+    this.currentStrategy = isReactEffective(this.config, policyResult.decision)
+      ? 'react'
+      : 'normal';
 
     if (policyResult.decision.scratch?.resetPlanOnly) {
       this.planStore.clear();
@@ -684,12 +710,25 @@ export class Agent {
       this.history.push(...truncatedMessages);
     } catch (err: unknown) {
       // If aborted by user, return silently — user message stays in history
-      if (this.abortController?.signal.aborted) return;
+      if (this.abortController?.signal.aborted) {
+        turnAborted = true;
+        return;
+      }
 
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`Agent error: ${message}`);
+      debugLog('error:turn', {
+        message,
+        stack: err instanceof Error ? err.stack : undefined,
+        durationMs: Date.now() - turnStartedAt,
+      });
+      throw new Error(`Agent error: ${message}`, { cause: err });
     } finally {
       this.abortController = null;
+      this.currentStrategy = null;
+      debugLog('turn:end', {
+        durationMs: Date.now() - turnStartedAt,
+        aborted: turnAborted,
+      });
     }
   }
 

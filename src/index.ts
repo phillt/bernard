@@ -61,7 +61,8 @@ import { assembleContext } from './framework/context.js';
 import { Agent } from './agent.js';
 import { bootstrapPendingCandidates } from './candidate-bootstrap.js';
 import { runCorrectionAgent } from './correction.js';
-import { debugLog } from './logger.js';
+import { debugLog, isDebugEnabled } from './logger.js';
+import { installInstrumentedFetchIfDebug } from './framework/instrumented-fetch.js';
 import { App } from './ui/App.js';
 import { getInkHandlers } from './ui/ink-handlers.js';
 import type {
@@ -74,6 +75,41 @@ import type {
 } from './tools/types.js';
 import type { CoreMessage } from 'ai';
 import { fileURLToPath } from 'node:url';
+
+let signalHandlersInstalled = false;
+
+/**
+ * Registers a SIGUSR2 handler that dumps a snapshot of active event-loop
+ * resources to the debug log and stderr. Gated on `BERNARD_DEBUG` so prod
+ * never carries the listener. Idempotent.
+ *
+ * Use `kill -USR2 <pid>` to inspect a stuck process: the JSONL line lands
+ * in the session log, and the stderr line lands in whatever terminal
+ * Bernard is running in.
+ */
+function installDebugSignalHandlers(): void {
+  if (signalHandlersInstalled) return;
+  if (!isDebugEnabled()) return;
+  process.on('SIGUSR2', () => {
+    type ProcessWithInternals = {
+      _getActiveHandles?: () => unknown[];
+      _getActiveRequests?: () => unknown[];
+    };
+    const p = process as unknown as ProcessWithInternals;
+    const payload = {
+      activeHandles: p._getActiveHandles?.().length ?? -1,
+      activeRequests: p._getActiveRequests?.().length ?? -1,
+      resources: process.getActiveResourcesInfo?.() ?? [],
+    };
+    debugLog('process:dump', payload);
+    try {
+      process.stderr.write(`[bernard process:dump] ${JSON.stringify(payload)}\n`);
+    } catch {
+      // best-effort; the JSONL line is the durable record
+    }
+  });
+  signalHandlersInstalled = true;
+}
 
 const program = new Command();
 
@@ -110,6 +146,12 @@ program
         providerBaseUrl: opts.providerBaseUrl,
         allowProviderBaseUrl: opts.allowProviderBaseUrl,
       });
+
+      // `loadConfig` runs dotenv, so BERNARD_DEBUG from `.env` is in scope by
+      // here. Both helpers are no-ops when debug is off — safe to call
+      // unconditionally.
+      installInstrumentedFetchIfDebug();
+      installDebugSignalHandlers();
 
       if (opts.toolDetails) config.toolDetails = true;
 

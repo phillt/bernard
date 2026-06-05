@@ -23,6 +23,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { LINEUPS_PATH } from './paths.js';
 import { atomicWriteFileSync } from './fs-utils.js';
+import { getCatalogForProvider } from './providers/catalog.js';
+import { deriveTiers } from './providers/tiers.js';
+import { BUILTIN_PROVIDERS, type BuiltinProvider } from './providers/types.js';
 
 /** The three tier slots every lineup must define. */
 export const LINEUP_TIERS = ['premium', 'mid', 'cheap'] as const;
@@ -55,34 +58,42 @@ const ID_PATTERN = /^[a-z][a-z0-9_-]*$/;
 const ID_MAX_LENGTH = 32;
 const NAME_MAX_LENGTH = 64;
 
+export const PROVIDER_DISPLAY_NAMES: Record<BuiltinProvider, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  xai: 'xAI',
+};
+
 /**
- * Seeds shipped with Bernard so a fresh install has working lineups for each
- * built-in provider on day one. Mirrors the legacy `PROVIDER_TIERS` table; the
- * data lives here now because it's user-editable.
+ * Last-resort fallback used only when the model catalog has zero entries for a
+ * built-in provider (e.g. first run on an offline machine with a broken
+ * vendored fallback). Models here mirror the legacy hardcoded `PROVIDER_TIERS`
+ * table.
+ *
+ * Single source of truth for offline-fallback model names — `config.ts`
+ * derives its `FALLBACK_PROVIDER_MODELS` lists from this table, so a new
+ * model name only ever needs to land here.
  */
-const SEED_LINEUPS: ReadonlyArray<Omit<Lineup, 'createdAt' | 'updatedAt'>> = [
-  {
-    id: 'anthropic',
-    name: 'Anthropic-only',
-    premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
-    mid: { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
-    cheap: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+export const FALLBACK_TIERS: Record<
+  BuiltinProvider,
+  { premium: string; mid: string; cheap: string }
+> = {
+  anthropic: {
+    premium: 'claude-opus-4-6',
+    mid: 'claude-sonnet-4-5-20250929',
+    cheap: 'claude-haiku-4-5-20251001',
   },
-  {
-    id: 'openai',
-    name: 'OpenAI-only',
-    premium: { provider: 'openai', model: 'gpt-5.2' },
-    mid: { provider: 'openai', model: 'gpt-4.1' },
-    cheap: { provider: 'openai', model: 'gpt-4.1-mini' },
+  openai: {
+    premium: 'gpt-5.2',
+    mid: 'gpt-4.1',
+    cheap: 'gpt-4.1-mini',
   },
-  {
-    id: 'xai',
-    name: 'xAI-only',
-    premium: { provider: 'xai', model: 'grok-4-1-fast-reasoning' },
-    mid: { provider: 'xai', model: 'grok-4-fast-non-reasoning' },
-    cheap: { provider: 'xai', model: 'grok-3-mini' },
+  xai: {
+    premium: 'grok-4-1-fast-reasoning',
+    mid: 'grok-4-fast-non-reasoning',
+    cheap: 'grok-3-mini',
   },
-];
+};
 
 export function validateLineupId(id: string): string | null {
   if (!id) return 'Lineup id cannot be empty.';
@@ -153,11 +164,54 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function seedForProvider(provider: BuiltinProvider, now: string): Lineup {
+  const entries = getCatalogForProvider(provider);
+  let tiers: { premium: string; mid: string; cheap: string };
+  if (entries.length > 0) {
+    tiers = deriveTiers(entries);
+  } else {
+    tiers = FALLBACK_TIERS[provider];
+  }
+  return {
+    id: provider,
+    name: `${PROVIDER_DISPLAY_NAMES[provider]}-only`,
+    premium: { provider, model: tiers.premium },
+    mid: { provider, model: tiers.mid },
+    cheap: { provider, model: tiers.cheap },
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 function buildSeedLineups(): Record<string, Lineup> {
   const now = nowIso();
   const out: Record<string, Lineup> = {};
-  for (const seed of SEED_LINEUPS) {
-    out[seed.id] = { ...seed, createdAt: now, updatedAt: now };
+  for (const provider of BUILTIN_PROVIDERS) {
+    out[provider] = seedForProvider(provider, now);
+  }
+  return out;
+}
+
+/**
+ * Adds default lineups for any built-in provider not yet present on disk.
+ * Existing lineups (including user-edited slot picks) are left untouched.
+ * Returns the merged map and only writes when something actually changed.
+ */
+export function seedDefaultLineups(existing: Record<string, Lineup>): Record<string, Lineup> {
+  const now = nowIso();
+  let mutated = false;
+  const out: Record<string, Lineup> = { ...existing };
+  for (const provider of BUILTIN_PROVIDERS) {
+    if (out[provider]) continue;
+    out[provider] = seedForProvider(provider, now);
+    mutated = true;
+  }
+  if (mutated) {
+    try {
+      writeFile(out);
+    } catch {
+      // best-effort; return the merged map regardless
+    }
   }
   return out;
 }

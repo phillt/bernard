@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import type { CoreMessage } from 'ai';
+import { findModelMetaByName } from './providers/catalog.js';
 
 /** Describes a loaded image ready to be attached to a user message. */
 export interface ImageAttachment {
@@ -135,12 +136,20 @@ export function stripImagePaths(text: string): string {
 /**
  * Heuristic check for whether the given provider/model combination supports image input.
  *
+ * Consults the model catalog first (`tags` includes `vision` or `file-input`).
+ * Falls back to name-based pattern matching when the model isn't in the
+ * catalog (custom providers, brand-new releases the catalog hasn't refreshed).
+ *
  * - Anthropic: all models are treated as vision-capable (all current models are Claude 3+).
  * - OpenAI: gpt-4o, gpt-4.1, gpt-4-turbo, gpt-5, o3, and o4 families are treated as vision-capable.
  * - xAI: models containing `vision` in the name, plus grok-4 family, are treated as vision-capable.
  * - Unknown providers: optimistically allowed (the API will reject if unsupported).
  */
 export function isVisionCapableModel(provider: string, model: string): boolean {
+  const meta = findModelMetaByName(model);
+  if (meta) {
+    return meta.tags.includes('vision') || meta.tags.includes('file-input');
+  }
   switch (provider) {
     case 'anthropic':
       return true;

@@ -1,6 +1,6 @@
 import { generateText } from 'ai';
 import { readToolMeta } from './framework/tools/adapter.js';
-import { debugLog } from './logger.js';
+import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
@@ -179,16 +179,18 @@ export async function selectLookupTool(
       rawText = cached;
     } else {
       if (cacheKey) debugLog('cache:llm:miss', { site: 'reference-lookup:select' });
-      const result = await generateText({
-        model: site.model,
-        providerOptions: site.providerOptions,
-        system: SELECT_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: userContent }],
-        maxSteps: 1,
-        maxTokens: SELECT_MAX_TOKENS,
-        temperature: 0,
-        abortSignal,
-      });
+      const result = await traceLlm('reference-lookup:select', site.model.modelId, () =>
+        generateText({
+          model: site.model,
+          providerOptions: site.providerOptions,
+          system: SELECT_SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userContent }],
+          maxSteps: 1,
+          maxTokens: SELECT_MAX_TOKENS,
+          temperature: 0,
+          abortSignal,
+        }),
+      );
       if (!result.text) return null;
       rawText = result.text;
       if (cacheKey) setCachedLLM(cacheKey, rawText);
@@ -325,16 +327,18 @@ export async function interpretLookupResult(
       rawText = cached;
     } else {
       if (cacheKey) debugLog('cache:llm:miss', { site: 'reference-lookup:interpret' });
-      const result = await generateText({
-        model: site.model,
-        providerOptions: site.providerOptions,
-        system: INTERPRET_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: userContent }],
-        maxSteps: 1,
-        maxTokens: INTERPRET_MAX_TOKENS,
-        temperature: 0,
-        abortSignal,
-      });
+      const result = await traceLlm('reference-lookup:interpret', site.model.modelId, () =>
+        generateText({
+          model: site.model,
+          providerOptions: site.providerOptions,
+          system: INTERPRET_SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userContent }],
+          maxSteps: 1,
+          maxTokens: INTERPRET_MAX_TOKENS,
+          temperature: 0,
+          abortSignal,
+        }),
+      );
       if (!result.text) return { status: 'none' };
       rawText = result.text;
       if (cacheKey) setCachedLLM(cacheKey, rawText);

@@ -1,11 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { createPlanTool } from './plan.js';
 import { PlanStore } from '../plan-store.js';
-import { printPlan } from '../output.js';
-
-vi.mock('../output.js', () => ({
-  printPlan: vi.fn(),
-}));
 
 const s = (description: string, verification = `verify: ${description}`) => ({
   description,
@@ -17,7 +12,6 @@ describe('plan tool', () => {
   let tool: ReturnType<typeof createPlanTool>;
 
   beforeEach(() => {
-    vi.mocked(printPlan).mockClear();
     store = new PlanStore();
     tool = createPlanTool(store);
   });
@@ -189,20 +183,4 @@ describe('plan tool', () => {
     expect(parsed.success).toBe(true);
   });
 
-  it('skips re-printing when repeated view actions yield identical render', async () => {
-    await run({ action: 'create', steps: [s('a'), s('b')] });
-    expect(printPlan).toHaveBeenCalledTimes(1);
-    await run({ action: 'view' });
-    await run({ action: 'view' });
-    await run({ action: 'view' });
-    expect(printPlan).toHaveBeenCalledTimes(1);
-  });
-
-  it('re-prints once state changes after suppressed views', async () => {
-    await run({ action: 'create', steps: [s('a')] });
-    await run({ action: 'view' });
-    expect(printPlan).toHaveBeenCalledTimes(1);
-    await run({ action: 'update', id: 1, status: 'in_progress' });
-    expect(printPlan).toHaveBeenCalledTimes(2);
-  });
 });

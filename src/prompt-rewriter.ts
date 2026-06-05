@@ -3,7 +3,7 @@ import type { ModelProfile } from './providers/profiles.js';
 import type { ResolvedEntry } from './reference-resolver.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
-import { debugLog } from './logger.js';
+import { debugLog, traceLlm } from './logger.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 
 /**
@@ -173,16 +173,18 @@ export async function rewritePrompt(
       rawText = cached;
     } else {
       if (cacheKey) debugLog('cache:llm:miss', { site: 'rewriter' });
-      const result = await generateText({
-        model: site.model,
-        providerOptions: site.providerOptions,
-        system,
-        messages: [{ role: 'user', content: userContent }],
-        maxSteps: 1,
-        maxTokens: REWRITER_MAX_TOKENS,
-        temperature: 0,
-        abortSignal,
-      });
+      const result = await traceLlm('rewriter', site.model.modelId, () =>
+        generateText({
+          model: site.model,
+          providerOptions: site.providerOptions,
+          system,
+          messages: [{ role: 'user', content: userContent }],
+          maxSteps: 1,
+          maxTokens: REWRITER_MAX_TOKENS,
+          temperature: 0,
+          abortSignal,
+        }),
+      );
       if (!result.text) {
         debugLog('prompt-rewriter:empty-response', null);
         return { status: 'noop' };

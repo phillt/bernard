@@ -409,7 +409,7 @@ describe('createSpecialistTool', () => {
       expect(result).toContain('Unknown provider');
     });
 
-    it('returns error for invalid model on create', async () => {
+    it('accepts unknown model names on create (catalog may lag day-0 releases)', async () => {
       const result = await tool.execute(
         {
           action: 'create',
@@ -422,11 +422,11 @@ describe('createSpecialistTool', () => {
         },
         {} as any,
       );
-      expect(result).toContain('Error');
-      expect(result).toContain('Unknown model');
+      expect(result).not.toContain('Error');
+      expect(result).toContain('created');
     });
 
-    it('validates model against global config provider when only model is specified on create', async () => {
+    it('accepts unknown model on create when only model is specified (no hard reject)', async () => {
       const config: BernardConfig = {
         provider: 'anthropic',
         model: 'claude-sonnet-4-5-20250929',
@@ -455,9 +455,8 @@ describe('createSpecialistTool', () => {
         },
         {} as any,
       );
-      expect(result).toContain('Error');
-      expect(result).toContain('Unknown model');
-      expect(result).toContain('anthropic');
+      expect(result).not.toContain('Error');
+      expect(result).toContain('created');
     });
 
     it('allows valid model without provider on create when config is provided', async () => {
@@ -634,7 +633,7 @@ describe('createSpecialistTool', () => {
       expect(written.model).toBeUndefined();
     });
 
-    it('validates model-only update against specialist existing provider', async () => {
+    it('accepts unknown model on model-only update (no hard reject)', async () => {
       const config: BernardConfig = {
         provider: 'anthropic',
         model: 'claude-sonnet-4-5-20250929',
@@ -669,9 +668,8 @@ describe('createSpecialistTool', () => {
         { action: 'update', id: 'code-review', model: 'nonexistent-model' },
         {} as any,
       );
-      expect(result).toContain('Error');
-      expect(result).toContain('Unknown model');
-      expect(result).toContain('xai');
+      expect(result).not.toContain('Error');
+      expect(result).toContain('updated');
     });
 
     it('does not show model override section when no override set', async () => {

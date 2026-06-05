@@ -29,6 +29,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/lineup', description: 'Edit the active tier lineup (premium/mid/cheap)' },
   { name: '/lineups', description: 'List, switch, or create tier lineups' },
   { name: '/models', description: 'Browse the model catalog and add custom providers' },
+  { name: '/refresh-models', description: 'Force-refresh the model catalog from the gateway' },
   { name: '/provider', description: 'Manage providers (alias of /models)' },
   { name: '/theme', description: 'Switch color theme' },
   { name: '/routines', description: 'List saved routines' },

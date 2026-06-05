@@ -34,6 +34,7 @@ vi.mock('ai', async (importOriginal) => {
 
 vi.mock('./logger.js', () => ({
   debugLog: vi.fn(),
+  traceLlm: <T,>(_site: string, _model: string, fn: () => Promise<T>) => fn(),
 }));
 
 function makeConfig() {

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import {
   generateText,
   streamText,
@@ -7,7 +8,43 @@ import {
   type Tool,
   type ToolCallRepairFunction,
 } from 'ai';
+import { debugLog, isDebugEnabled } from '../logger.js';
 import type { AgentHook, StepFinishPayload } from './hooks/types.js';
+import { runWithDispatchId } from './dispatch-context.js';
+
+const WATCHDOG_INTERVAL_MS = 30_000;
+
+/**
+ * Builds a promise that rejects with the canonical AbortError when the signal
+ * fires (immediately if it already has). A no-op rejection handler is attached
+ * at construction so the promise can never surface as an unhandled rejection —
+ * e.g. when the run unwinds via a provider-side error before any race observes
+ * it, and the user only presses Esc afterwards. Each `Promise.race` attaches
+ * its own handlers, so the races still see the rejection normally.
+ */
+function makeAbortPromise(abortSignal: AbortSignal): Promise<never> {
+  const p = new Promise<never>((_, reject) => {
+    if (abortSignal.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    abortSignal.addEventListener(
+      'abort',
+      () => reject(new DOMException('Aborted', 'AbortError')),
+      { once: true },
+    );
+  });
+  p.catch(() => {});
+  return p;
+}
+
+function parseDispatchTimeoutMs(): number | null {
+  const raw = process.env.BERNARD_DISPATCH_TIMEOUT_MS;
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
+}
 
 /**
  * Declarative spec for one `generateText` invocation. Callers pre-resolve the
@@ -98,11 +135,172 @@ function composeOnStepFinish(
  * hooks/factories.
  */
 export async function runAgent(spec: AgentSpec): Promise<AgentResult> {
-  const onStepFinish = composeOnStepFinish(spec.hooks);
-  if (spec.useStreaming) {
-    return runStreaming(spec, onStepFinish);
+  const dispatchId = crypto.randomBytes(4).toString('hex');
+  const debug = isDebugEnabled();
+  const body = () => runAgentInner(spec, dispatchId);
+  return debug ? runWithDispatchId(dispatchId, body) : body();
+}
+
+async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<AgentResult> {
+  const dispatchStartedAt = Date.now();
+  const modelId =
+    (spec.model as unknown as { modelId?: string }).modelId ?? String(spec.model);
+  const debug = isDebugEnabled();
+
+  // Per-step boundary instrumentation. We track stepN locally so step:start
+  // (fired from a wrapped `prepareStep`) and step:end (fired from a prepended
+  // `onStepFinish` observer) share the same counter, and so the watchdog can
+  // read `lastStepEndAt` / `stepsCompleted` without coupling to the AI SDK
+  // step accounting.
+  let stepN = 0;
+  let lastStepEndAt = dispatchStartedAt;
+  let stepsCompleted = 0;
+  let lastStepStartAt = dispatchStartedAt;
+
+  const wrappedPrepareStep: AgentSpec['prepareStep'] = debug
+    ? async (opts) => {
+        stepN += 1;
+        lastStepStartAt = Date.now();
+        debugLog('step:start', { dispatchId, n: stepN });
+        return spec.prepareStep ? await spec.prepareStep(opts) : undefined;
+      }
+    : spec.prepareStep;
+
+  const stepObserver: AgentHook = {
+    onStepFinish: (payload) => {
+      lastStepEndAt = Date.now();
+      stepsCompleted += 1;
+      if (debug) {
+        debugLog('step:end', {
+          dispatchId,
+          n: stepsCompleted,
+          finishReason: payload.finishReason,
+          toolCalls: payload.toolCalls.map((c) => c.toolName),
+          textChars: payload.text?.length ?? 0,
+          promptTokens: payload.usage?.promptTokens,
+          completionTokens: payload.usage?.completionTokens,
+          ttlms: Date.now() - lastStepStartAt,
+        });
+      }
+    },
+  };
+  // Streaming branch already emits per-token / per-tool-call events through
+  // the sink; the per-step boundary event there would be redundant noise.
+  // Only prepend stepObserver when debug is on — otherwise it'd force
+  // `onStepFinish` to be defined on every dispatch even when the caller
+  // passed no hooks, breaking the param-parity contract.
+  const composedHooks: AgentHook[] =
+    debug && !spec.useStreaming
+      ? [stepObserver, ...(spec.hooks ?? [])]
+      : (spec.hooks ?? []);
+  const onStepFinish = composeOnStepFinish(composedHooks);
+
+  debugLog('agent:dispatch:start', {
+    dispatchId,
+    model: modelId,
+    streaming: spec.useStreaming === true,
+    systemLen: spec.system?.length ?? 0,
+    messagesLen: spec.messages.length,
+    toolCount: spec.tools ? Object.keys(spec.tools).length : 0,
+    maxSteps: spec.maxSteps,
+  });
+
+  // Watchdog — debug-only so prod never registers the interval. Cleared in
+  // the finally block whether the dispatch ends, errors, or aborts.
+  const watchdog = debug
+    ? setInterval(() => {
+        debugLog('agent:dispatch:stuck', {
+          dispatchId,
+          model: modelId,
+          ms: Date.now() - dispatchStartedAt,
+          sinceLastStepMs: Date.now() - lastStepEndAt,
+          stepsCompleted,
+        });
+      }, WATCHDOG_INTERVAL_MS)
+    : null;
+  watchdog?.unref?.();
+
+  // Optional per-dispatch timeout. Chains a fresh AbortController off the
+  // caller's signal so we don't leak a timer past dispatch completion.
+  const timeoutMs = parseDispatchTimeoutMs();
+  let timeoutHandle: NodeJS.Timeout | null = null;
+  let timedOut = false;
+  let effectiveSignal = spec.abortSignal;
+  if (timeoutMs !== null) {
+    const ac = new AbortController();
+    if (spec.abortSignal) {
+      if (spec.abortSignal.aborted) ac.abort();
+      else spec.abortSignal.addEventListener('abort', () => ac.abort(), { once: true });
+    }
+    timeoutHandle = setTimeout(() => {
+      debugLog('agent:dispatch:timeout', {
+        dispatchId,
+        model: modelId,
+        ms: timeoutMs,
+      });
+      timedOut = true;
+      ac.abort();
+    }, timeoutMs);
+    timeoutHandle.unref?.();
+    effectiveSignal = ac.signal;
   }
-  return generateText({
+
+  try {
+    const result = spec.useStreaming
+      ? await runStreaming({ ...spec, abortSignal: effectiveSignal }, onStepFinish)
+      : await runNonStreaming(
+          { ...spec, abortSignal: effectiveSignal, prepareStep: wrappedPrepareStep },
+          onStepFinish,
+        );
+    debugLog('agent:dispatch:end', {
+      dispatchId,
+      model: modelId,
+      durationMs: Date.now() - dispatchStartedAt,
+      steps: result.steps?.length ?? 0,
+      finishReason: result.finishReason,
+      promptTokens: result.usage?.promptTokens,
+      completionTokens: result.usage?.completionTokens,
+    });
+    return result;
+  } catch (err) {
+    // A timeout abort fires the *chained* controller, not the caller's
+    // signal, so the agent's catch can't tell it apart from a generic abort
+    // (`this.abortController.signal.aborted` stays false) and would render a
+    // bare "Agent error: Aborted". Re-shape it into a self-describing error
+    // here, where the timeout context still exists.
+    const wrapped =
+      timedOut && err instanceof Error && err.name === 'AbortError' && !spec.abortSignal?.aborted
+        ? new Error(
+            `Dispatch timed out after ${timeoutMs} ms (BERNARD_DISPATCH_TIMEOUT_MS)`,
+            { cause: err },
+          )
+        : err;
+    debugLog('agent:dispatch:error', {
+      dispatchId,
+      model: modelId,
+      durationMs: Date.now() - dispatchStartedAt,
+      message: wrapped instanceof Error ? wrapped.message : String(wrapped),
+    });
+    throw wrapped;
+  } finally {
+    if (watchdog) clearInterval(watchdog);
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
+
+/**
+ * Non-streaming branch with a defensive abort race. The streaming branch has
+ * carried this pattern for a while (see the comment on `raceAbort` below);
+ * we mirror it here because the same provider-side hang ("internal await
+ * deadlocked, but the fetch was cancelled") can land on `generateText`. The
+ * race adds no work on the happy path — it just means a fired abort signal
+ * unwinds the await immediately instead of waiting for the SDK to settle.
+ */
+async function runNonStreaming(
+  spec: AgentSpec,
+  onStepFinish: ((payload: StepFinishPayload) => Promise<void>) | undefined,
+): Promise<AgentResult> {
+  const gen = generateText({
     model: spec.model,
     providerOptions: spec.providerOptions,
     tools: spec.tools,
@@ -115,6 +313,9 @@ export async function runAgent(spec: AgentSpec): Promise<AgentResult> {
     experimental_repairToolCall: spec.repair,
     onStepFinish,
   });
+  const abortSignal = spec.abortSignal;
+  if (!abortSignal) return gen;
+  return Promise.race([gen, makeAbortPromise(abortSignal)]);
 }
 
 /**
@@ -155,19 +356,7 @@ async function runStreaming(
   // for-await never throws. We pin a single rejecting promise to the signal
   // and race it against each await so an abort always unwinds the runner.
   const abortSignal = spec.abortSignal;
-  const abortPromise = abortSignal
-    ? new Promise<never>((_, reject) => {
-        if (abortSignal.aborted) {
-          reject(new DOMException('Aborted', 'AbortError'));
-          return;
-        }
-        abortSignal.addEventListener(
-          'abort',
-          () => reject(new DOMException('Aborted', 'AbortError')),
-          { once: true },
-        );
-      })
-    : null;
+  const abortPromise = abortSignal ? makeAbortPromise(abortSignal) : null;
   const raceAbort = async <T>(p: Promise<T>): Promise<T> =>
     abortPromise ? (Promise.race([p, abortPromise]) as Promise<T>) : p;
 
@@ -238,10 +427,6 @@ async function runStreaming(
       err instanceof Error && err.name === 'AbortError' && abortSignal?.aborted === true;
     if (!isUserAbort) throw err;
   }
-  // Suppress unhandled-rejection noise for the abortPromise once the run is
-  // unwinding — every downstream `raceAbort` will surface it as the thrown
-  // error from `Promise.all`.
-  abortPromise?.catch(() => {});
   // The other promises (toolCalls, toolResults, steps, etc.) are already
   // resolved once textStream completes — awaiting them is cheap.
   const [

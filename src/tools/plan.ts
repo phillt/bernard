@@ -1,7 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import type { PlanStore } from '../plan-store.js';
-import { printPlan } from '../output.js';
 
 const STEP_FIELD_MAX = 400;
 
@@ -36,17 +35,8 @@ const stepInputSchema = z.object({
  * one.
  */
 export function createPlanTool(planStore: PlanStore, onPlanReplaced?: () => void) {
-  // Suppress redundant re-renders: the model often calls `view` repeatedly
-  // (and may also re-issue an `update` that produces no visible change).
-  // Compare against the last rendered string and skip printing when identical.
-  let lastRendered: string | null = null;
-  const printIfChanged = () => {
-    const rendered = planStore.render();
-    if (rendered === lastRendered) return;
-    lastRendered = rendered;
-    printPlan(planStore.view());
-  };
-
+  // No terminal rendering here: the Ink `PlanPanel` subscribes to the
+  // PlanStore directly, and the transcript echo lives in `src/ui/Thread.tsx`.
   return tool({
     description: `Track and manage a structured plan for the current turn. Required in coordinator mode. Each step has a \`verification\` criterion (set at creation) describing how you'll prove it succeeded. Actions: 'create' seeds a plan with step objects {description, verification}; 'add' appends one such step; 'update' transitions a step's status; 'view' shows the plan. Marking 'done' requires \`signoff\` (attesting verification was performed). Marking 'cancelled' or 'error' requires \`note\` (the reason). The plan is visible to the user. Each \`description\` and \`verification\` must be a single line of plain text — no newlines (neither literal nor escaped as \\n), no code blocks, no multi-paragraph prose. Keep each entry under ${STEP_FIELD_MAX} characters; if a step needs more context, split it into multiple smaller steps.`,
     parameters: z.object({
@@ -83,13 +73,11 @@ export function createPlanTool(planStore: PlanStore, onPlanReplaced?: () => void
             return 'Error: steps is required for create action and must be non-empty.';
           }
           const created = planStore.create(steps, onPlanReplaced);
-          printIfChanged();
           return `Plan created with ${created.length} step${created.length === 1 ? '' : 's'}.`;
         }
         case 'add': {
           if (!step) return 'Error: step is required for add action ({description, verification}).';
           const added = planStore.add(step);
-          printIfChanged();
           return `Step ${added.id} added.`;
         }
         case 'update': {
@@ -104,13 +92,11 @@ export function createPlanTool(planStore: PlanStore, onPlanReplaced?: () => void
           }
           const updated = planStore.update(id, status, { note, signoff });
           if (!updated) return `Error: no step found with id ${id}.`;
-          printIfChanged();
           return `Step ${id} -> ${status}.`;
         }
         case 'view': {
           const current = planStore.view();
           if (current.length === 0) return 'No plan in progress. Use create to start one.';
-          printIfChanged();
           return `Plan: ${current.length} step${current.length === 1 ? '' : 's'}, ${planStore.unresolvedCount()} unresolved.`;
         }
         default:

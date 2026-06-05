@@ -130,6 +130,7 @@ function makeAgent(spy: Partial<AgentSpy> = {}): Agent {
     getContext: () => ({ provenance: { clear: () => {}, list: () => [] } }),
     getCorrectionStore: () => ({ listPending: () => [] }),
     getPlanSnapshot: () => [],
+    subscribeToPlanStore: () => () => {},
     getLastUserInput: () => null,
     getLastResolvedReferences: () => [],
     getLastVerification: () => null,

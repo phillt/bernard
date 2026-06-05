@@ -1,7 +1,6 @@
 import type { CoreMessage } from 'ai';
 import { getContextWindow, COMPRESSION_THRESHOLD } from './context.js';
-import type { Step } from './plan-store.js';
-import { debugLog } from './logger.js';
+import { debugLog, isDebugEnabled, getSessionLogPath } from './logger.js';
 import { getThemeColors } from './theme.js';
 
 let toolDetailsVisible = false;
@@ -198,8 +197,9 @@ export function printWelcome(providers: string[], version?: string, mcp?: Welcom
     if (mcp.failed > 0) parts.push(`${mcp.failed} failed`);
     rows.push(dataRow('MCP', parts.join(' · ')));
   }
-  if (process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1') {
+  if (isDebugEnabled()) {
     rows.push(dataRow('Debug', 'enabled'));
+    rows.push(dataRow('Session log', getSessionLogPath()));
   }
   rows.push(emptyRow);
   rows.push(bottomBorder);
@@ -254,8 +254,6 @@ export function printToolFailure(
 ): void {}
 
 export function printConversationReplay(_messages: CoreMessage[]): void {}
-
-export function printPlan(_steps: Step[], _prefix?: string): void {}
 
 export function printThought(_thought: string, _prefix?: string): void {}
 

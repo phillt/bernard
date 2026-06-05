@@ -2,14 +2,10 @@ import { Box, Text } from 'ink';
 import type { Agent } from '../../agent.js';
 import type { TurnProvenance, SourceItem } from '../../provenance.js';
 import { getThemeColors } from '../../theme.js';
+import { truncate } from '../../text.js';
 
 interface SourcesViewerProps {
   agent: Agent;
-}
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1).trimEnd() + '…';
 }
 
 /**

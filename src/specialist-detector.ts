@@ -1,5 +1,5 @@
 import { generateText } from 'ai';
-import { debugLog } from './logger.js';
+import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import type { Specialist, SpecialistSummary } from './specialists.js';
@@ -126,18 +126,20 @@ export async function detectSpecialistCandidate(
 
   try {
     const site = resolveSiteModel(config, 'specialist-detector');
-    const result = await generateText({
-      model: site.model,
-      providerOptions: site.providerOptions,
-      maxTokens: 2048,
-      system: DETECTION_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content: `Analyze this conversation for recurring specialist patterns:${existingList}${pendingList}\n\n---\n\n${serializedText}`,
-        },
-      ],
-    });
+    const result = await traceLlm('specialist-detector', site.model.modelId, () =>
+      generateText({
+        model: site.model,
+        providerOptions: site.providerOptions,
+        maxTokens: 2048,
+        system: DETECTION_SYSTEM_PROMPT,
+        messages: [
+          {
+            role: 'user',
+            content: `Analyze this conversation for recurring specialist patterns:${existingList}${pendingList}\n\n---\n\n${serializedText}`,
+          },
+        ],
+      }),
+    );
 
     const text = result.text?.trim();
     if (!text) return null;

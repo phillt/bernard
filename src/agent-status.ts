@@ -2,6 +2,7 @@ import type { PolicyDecision } from './policy/types.js';
 import type { ResolvedEntry } from './reference-resolver.js';
 import type { Step } from './plan-store.js';
 import type { Check, Verdict } from './rubric.js';
+import { truncate } from './text.js';
 
 /**
  * Snapshot of "what Bernard believes its operating state is" for one turn.
@@ -91,11 +92,6 @@ export function summarizePlan(steps: Step[]): { done: number; total: number } {
 
 const LABEL_WIDTH = 15;
 const MAX_VALUE_CHARS = 200;
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1).trimEnd() + '…';
-}
 
 function row(label: string, value: string): string {
   const padded = label.padEnd(LABEL_WIDTH);

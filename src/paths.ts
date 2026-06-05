@@ -52,11 +52,13 @@ export const TOOL_PROFILES_DIR = path.join(DATA_DIR, 'tool-profiles');
 // Cache
 export const MODELS_DIR = path.join(CACHE_DIR, 'models');
 export const UPDATE_CACHE_PATH = path.join(CACHE_DIR, 'update-check.json');
+export const MODEL_CATALOG_CACHE = path.join(CACHE_DIR, 'model-catalog.json');
 
 // State
 export const HISTORY_FILE = path.join(STATE_DIR, 'conversation-history.json');
 export const PROVENANCE_HISTORY_FILE = path.join(STATE_DIR, 'provenance-history.json');
 export const LOGS_DIR = path.join(STATE_DIR, 'logs');
+export const SESSION_LOGS_DIR = path.join(LOGS_DIR, 'sessions');
 export const TOOL_WRAPPER_LOG = path.join(LOGS_DIR, 'tool-wrappers.jsonl');
 export const CRON_PID_FILE = path.join(STATE_DIR, 'cron-daemon.pid');
 export const CRON_LOG_FILE = path.join(STATE_DIR, 'cron-daemon.log');

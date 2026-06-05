@@ -71,9 +71,16 @@ describe('lineups store', () => {
       const m = await loadModule();
       const lineups = m.loadLineups();
       expect(Object.keys(lineups).sort()).toEqual(['anthropic', 'openai', 'xai']);
-      expect(lineups.anthropic.premium.model).toBe('claude-opus-4-6');
-      expect(lineups.openai.mid.model).toBe('gpt-4.1');
-      expect(lineups.xai.cheap.model).toBe('grok-3-mini');
+      // Models are derived dynamically from the catalog; assert structural
+      // shape rather than exact names so a catalog refresh doesn't break this.
+      for (const provider of ['anthropic', 'openai', 'xai'] as const) {
+        expect(lineups[provider].premium.provider).toBe(provider);
+        expect(lineups[provider].mid.provider).toBe(provider);
+        expect(lineups[provider].cheap.provider).toBe(provider);
+        expect(lineups[provider].premium.model.length).toBeGreaterThan(0);
+        expect(lineups[provider].mid.model.length).toBeGreaterThan(0);
+        expect(lineups[provider].cheap.model.length).toBeGreaterThan(0);
+      }
     });
 
     it('persists the seed to disk', async () => {

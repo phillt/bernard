@@ -492,11 +492,19 @@ export function augmentTools(
               debugLog(`cache:tool:miss`, { tool: toolName });
             }
             let envelope: ToolResult<unknown>;
+            const execStartedAt = Date.now();
+            const argsPreview = safeSerialize(redactArgs(args, source.meta?.sensitiveArgs));
             debugLog(`augment:${toolName}:start`, undefined);
+            debugLog('tool:execute:start', { tool: toolName, args: argsPreview });
             try {
               envelope = await source.execute(args, execOptions as never);
               debugLog(`augment:${toolName}:done`, {
                 ok: envelope.status === 'ok',
+              });
+              debugLog('tool:execute:end', {
+                tool: toolName,
+                durationMs: Date.now() - execStartedAt,
+                status: envelope.status,
               });
             } catch (thrown: unknown) {
               // Infrastructure-level throws (reconnect, network, etc.) are not
@@ -505,6 +513,11 @@ export function augmentTools(
                 `augment:${toolName}:threw`,
                 thrown instanceof Error ? thrown.message : String(thrown),
               );
+              debugLog('tool:execute:error', {
+                tool: toolName,
+                durationMs: Date.now() - execStartedAt,
+                message: thrown instanceof Error ? thrown.message : String(thrown),
+              });
               throw thrown;
             }
 
@@ -562,6 +575,11 @@ export function augmentTools(
             return CANCELLED_LEGACY_RESULT;
           }
           let result: unknown;
+          const execStartedAt = Date.now();
+          debugLog('tool:execute:start', {
+            tool: toolName,
+            args: safeSerialize(redactArgs(args, readToolMeta(toolDef)?.sensitiveArgs)),
+          });
           try {
             result = await originalExecute(args, execOptions);
           } catch (thrown: unknown) {
@@ -569,6 +587,11 @@ export function augmentTools(
               `augment:${toolName}:threw`,
               thrown instanceof Error ? thrown.message : String(thrown),
             );
+            debugLog('tool:execute:error', {
+              tool: toolName,
+              durationMs: Date.now() - execStartedAt,
+              message: thrown instanceof Error ? thrown.message : String(thrown),
+            });
             throw thrown;
           }
 
@@ -588,6 +611,17 @@ export function augmentTools(
             typeof capturedResult === 'object' &&
             ((capturedResult as Record<string, unknown>).is_error === true ||
               'error' in (capturedResult as Record<string, unknown>));
+          // Log a non-throwing failure as `status: 'error'` so the JSONL
+          // reflects what the model actually received. The legacy path used
+          // to always log `'ok'` whenever execute didn't throw, which made
+          // wrapper sub-dispatch errors (which surface as `{is_error: true}`
+          // or `{error: '...'}` envelopes — see `wrap-with-specialist.ts`)
+          // invisible at the augment-log layer.
+          debugLog('tool:execute:end', {
+            tool: toolName,
+            durationMs: Date.now() - execStartedAt,
+            status: looksLikeError ? 'error' : 'ok',
+          });
           if (!looksLikeError) {
             const previewSrc =
               typeof capturedResult === 'string' ? capturedResult : safeSerialize(capturedResult);
