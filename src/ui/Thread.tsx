@@ -247,6 +247,25 @@ function StreamGroupBody({
         }
         continue;
       }
+      if (ev.toolName === 'plan' && toolDetails) {
+        const planLines = formatPlanLines(ev.args);
+        if (planLines.length > 0) {
+          elements.push(
+            <Box key={`c-${ev.callId}`} flexDirection="column">
+              <Box>
+                {chevronPending && chevron}
+                <Text color={colors.toolCall}>⚙ plan</Text>
+              </Box>
+              <PlanEchoLines lines={planLines} />
+              {resultsByCall.has(ev.callId) && (
+                <StreamingToolResult result={resultsByCall.get(ev.callId)!} />
+              )}
+            </Box>,
+          );
+          chevronPending = false;
+          continue;
+        }
+      }
       const argsSummary = toolDetails ? summariseArgs(ev.args) : '';
       const headPrefix = chevronPending ? chevron : null;
       elements.push(
@@ -472,12 +491,39 @@ function ToolCallBlock({
       </Box>
     );
   }
+  if (part.toolName === 'plan' && toolDetails) {
+    const planLines = formatPlanLines(part.args);
+    if (planLines.length > 0) {
+      return (
+        <Box flexDirection="column">
+          <Box>
+            {prefix}
+            <Text color={colors.toolCall}>⚙ plan</Text>
+          </Box>
+          <PlanEchoLines lines={planLines} />
+        </Box>
+      );
+    }
+  }
   const argSummary = toolDetails ? summariseArgs(part.args) : '';
   return (
     <Box>
       {prefix}
       <Text color={colors.toolCall}>⚙ {part.toolName}</Text>
       {argSummary && <Text dimColor> {argSummary}</Text>}
+    </Box>
+  );
+}
+
+/** Indented dim lines under a `⚙ plan` row — the tool-details plan echo. */
+function PlanEchoLines({ lines }: { lines: string[] }) {
+  return (
+    <Box flexDirection="column" marginLeft={2}>
+      {lines.map((line, i) => (
+        <Text key={i} dimColor>
+          {line}
+        </Text>
+      ))}
     </Box>
   );
 }
@@ -588,6 +634,36 @@ function extractThought(args: unknown): string {
     if (typeof t === 'string') return t;
   }
   return '';
+}
+
+/**
+ * Decodes a `plan` tool call's args into human-readable lines for the
+ * transcript echo (shown only when tool details are on). Reads purely from
+ * the recorded args — never from the live PlanStore, which would be stale or
+ * wrong for older turns in the history.
+ */
+function formatPlanLines(args: unknown): string[] {
+  if (args == null || typeof args !== 'object') return [];
+  const a = args as Record<string, unknown>;
+  const action = a['action'];
+  if (action === 'create' && Array.isArray(a['steps'])) {
+    const steps = a['steps'] as { description?: unknown }[];
+    return [
+      'create:',
+      ...steps.map((s, i) => `${i + 1}. ${typeof s?.description === 'string' ? s.description : '?'}`),
+    ];
+  }
+  if (action === 'add' && a['step'] != null && typeof a['step'] === 'object') {
+    const s = a['step'] as { description?: unknown };
+    return [`+ step: ${typeof s.description === 'string' ? s.description : '?'}`];
+  }
+  if (action === 'update') {
+    const base = `step ${a['id']} → ${a['status']}`;
+    const note = a['note'] ?? a['signoff'];
+    return [typeof note === 'string' && note ? `${base} · ${truncate(note, 80)}` : base];
+  }
+  if (action === 'view') return ['(view)'];
+  return [];
 }
 
 function summariseArgs(args: unknown): string {
