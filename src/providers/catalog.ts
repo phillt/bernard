@@ -50,7 +50,13 @@ interface RawGatewayModel {
 }
 
 let memoryCache: CachedCatalog | null = null;
-let inflight: Promise<CachedCatalog> | null = null;
+/**
+ * Shared refresh promise. Always *resolves* (never rejects) so the
+ * stale-while-revalidate path — which fires it without awaiting — can never
+ * produce an unhandled rejection. The fetch error travels in the envelope
+ * instead; forced callers unwrap it and re-throw (see {@link loadCatalog}).
+ */
+let inflight: Promise<{ catalog: CachedCatalog; error: Error | null }> | null = null;
 
 /**
  * Anthropic gateway ids use dots (`claude-opus-4.6`) but the @ai-sdk/anthropic
@@ -207,22 +213,36 @@ export async function loadCatalog(opts: { force?: boolean } = {}): Promise<Cache
   const current = loadCatalogSync();
   const stale = Date.now() - current.fetchedAt > ttlMs();
   if (!opts.force && !stale) return current;
-  if (inflight) return inflight;
-  inflight = (async () => {
-    try {
-      const entries = await fetchFromGateway();
-      const fetchedAt = Date.now();
-      saveDiskCache(entries, fetchedAt);
-      memoryCache = { fetchedAt, source: 'network', entries };
-      debugLog('catalog:source', { source: 'network', entries: entries.length });
-      return memoryCache;
-    } catch {
-      return current;
-    } finally {
-      inflight = null;
-    }
-  })();
-  if (opts.force) return inflight;
+  if (!inflight) {
+    inflight = (async () => {
+      try {
+        const entries = await fetchFromGateway();
+        const fetchedAt = Date.now();
+        saveDiskCache(entries, fetchedAt);
+        memoryCache = { fetchedAt, source: 'network', entries };
+        debugLog('catalog:source', { source: 'network', entries: entries.length });
+        return { catalog: memoryCache, error: null };
+      } catch (err) {
+        debugLog('catalog:refresh-error', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+        return {
+          catalog: current,
+          error: err instanceof Error ? err : new Error(String(err)),
+        };
+      } finally {
+        inflight = null;
+      }
+    })();
+  }
+  if (opts.force) {
+    // A forced refresh is user-initiated (`/refresh-models`) — surface the
+    // fetch failure so the caller's error path is reachable instead of
+    // silently reporting the stale catalog as "refreshed".
+    const { catalog, error } = await inflight;
+    if (error) throw error;
+    return catalog;
+  }
   // Stale-while-revalidate: don't await the refresh, return what we have.
   return current;
 }

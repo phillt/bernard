@@ -254,5 +254,21 @@ describe('PlanStore', () => {
       store.add(s('b'));
       expect(calls).toBe(1);
     });
+
+    it('a throwing subscriber does not break mutations or starve other subscribers', () => {
+      let calls = 0;
+      store.subscribe(() => {
+        throw new Error('render exploded');
+      });
+      store.subscribe(() => calls++);
+
+      // The mutation itself must succeed and the second subscriber still fire.
+      expect(() => store.create([s('a')])).not.toThrow();
+      expect(store.view().length).toBe(1);
+      expect(calls).toBe(1);
+
+      expect(() => store.update(1, 'done', { signoff: 'fully verified output' })).not.toThrow();
+      expect(calls).toBe(2);
+    });
   });
 });

@@ -380,7 +380,12 @@ export function App({
   // Per-session debug log boundaries. `session:start` captures the runtime
   // shape so a future tail-read can correlate behavior with the active
   // provider / model / lineup; `session:end` lets us see how long the REPL
-  // ran and roughly how many turns happened.
+  // ran and roughly how many turns happened. Mount-once on purpose: the
+  // boundaries delimit the REPL *process* lifetime, so mid-session
+  // provider/model/mode changes must not emit a spurious end/start pair
+  // (those mutations already log their own `model-policy:snapshot` diffs).
+  // `agent` and `config` are stable references for the App lifetime; the
+  // fields read here are deliberately the mount-time values.
   useEffect(() => {
     const startedAt = Date.now();
     debugLog('session:start', {
@@ -399,7 +404,8 @@ export function App({
         turns: agent.getHistory().filter((m) => m.role === 'user').length,
       });
     };
-  }, [agent, config.provider, config.model, config.modelMode, config.coordinatorMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- session boundaries are per-mount, not per-config-change
+  }, [agent]);
 
   // Attach a persistent SpinnerStats object so the framework's token-stats
   // hook accumulates usage across turns. <StatusBar> polls this for the

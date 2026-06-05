@@ -1,5 +1,6 @@
 import type { Check, Rubric } from './rubric.js';
 import { verdictOf } from './rubric.js';
+import { debugLog } from './logger.js';
 
 /**
  * Status lifecycle for a plan step.
@@ -60,7 +61,17 @@ export class PlanStore {
   }
 
   private notify(): void {
-    for (const cb of this.subscribers) cb();
+    for (const cb of this.subscribers) {
+      try {
+        cb();
+      } catch (err) {
+        // A throwing subscriber (e.g. a UI render error) must not break the
+        // plan mutation that triggered it, nor starve the other subscribers.
+        debugLog('plan-store:subscriber-error', {
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   /**
