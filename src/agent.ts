@@ -245,6 +245,14 @@ export class Agent {
   }
 
   /**
+   * Subscribes to plan mutations (create/add/update/clear/cancel). Returns an
+   * unsubscribe function. Used by `<PlanPanel>` for live mid-turn updates.
+   */
+  subscribeToPlanStore(cb: () => void): () => void {
+    return this.planStore.subscribe(cb);
+  }
+
+  /**
    * Returns the live `AgentContext` (with the most recent `policyDecision`
    * threaded in by `processInput`). The Agent class re-points `this.ctx`
    * on every turn, so callers that need to invoke a definition outside the

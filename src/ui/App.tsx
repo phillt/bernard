@@ -116,7 +116,7 @@ import { Prompt } from './Prompt.js';
 import { Spinner } from './Spinner.js';
 import { StatusBar } from './StatusBar.js';
 import { HintBar } from './HintBar.js';
-import { PlanStrip } from './PlanStrip.js';
+import { PlanPanel } from './PlanPanel.js';
 import { MenuOverlay } from './overlays/MenuOverlay.js';
 import { ModelGridOverlay } from './overlays/ModelGridOverlay.js';
 import { ConfirmDialog } from './overlays/ConfirmDialog.js';
@@ -2138,7 +2138,7 @@ export function App({
           <Spinner label="thinking…" />
         </Box>
       )}
-      <PlanStrip agent={agent} />
+      <PlanPanel agent={agent} />
       {toast && <Toast message={toast.message} variant={toast.variant} />}
       <Prompt
         disabled={busy || activeOverlay !== null}

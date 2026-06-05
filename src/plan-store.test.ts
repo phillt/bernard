@@ -206,4 +206,53 @@ describe('PlanStore', () => {
       expect(r.verdict).toBe('pass');
     });
   });
+
+  describe('subscribe', () => {
+    it('notifies on create, add, update, clear, and cancelAllUnresolved', () => {
+      let calls = 0;
+      store.subscribe(() => calls++);
+
+      store.create([s('a')]);
+      expect(calls).toBe(1);
+
+      store.add(s('b'));
+      expect(calls).toBe(2);
+
+      store.update(1, 'in_progress');
+      expect(calls).toBe(3);
+
+      store.cancelAllUnresolved('aborting');
+      expect(calls).toBe(4);
+
+      store.clear();
+      expect(calls).toBe(5);
+    });
+
+    it('does not notify on cancelAllUnresolved when nothing is unresolved', () => {
+      store.create([s('a')]);
+      store.update(1, 'done', { signoff: 'fully verified output' });
+      let calls = 0;
+      store.subscribe(() => calls++);
+      store.cancelAllUnresolved('noop');
+      expect(calls).toBe(0);
+    });
+
+    it('does not notify a failed update (unknown id)', () => {
+      store.create([s('a')]);
+      let calls = 0;
+      store.subscribe(() => calls++);
+      expect(store.update(99, 'done')).toBeNull();
+      expect(calls).toBe(0);
+    });
+
+    it('stops notifying after unsubscribe', () => {
+      let calls = 0;
+      const unsub = store.subscribe(() => calls++);
+      store.create([s('a')]);
+      expect(calls).toBe(1);
+      unsub();
+      store.add(s('b'));
+      expect(calls).toBe(1);
+    });
+  });
 });
