@@ -10,6 +10,9 @@ import {
   ARROW_RIGHT,
   CTRL_A,
   CTRL_E,
+  CTRL_J,
+  SHIFT_ENTER_CSIU,
+  META_ENTER,
   tick,
 } from './_keys.js';
 
@@ -189,6 +192,88 @@ describe('<Prompt>', () => {
     stdin.write(ENTER);
     await tick();
     expect(onSubmit).toHaveBeenCalledWith('hi world!');
+  });
+
+  it('Ctrl+J inserts a newline; Enter submits the multi-line message', async () => {
+    const onSubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    stdin.write('line1');
+    await tick();
+    stdin.write(CTRL_J);
+    await tick();
+    stdin.write('line2');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('line1\nline2');
+  });
+
+  it('CSI-u Shift+Enter (kitty) inserts a newline instead of submitting', async () => {
+    const onSubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    stdin.write('a');
+    await tick();
+    stdin.write(SHIFT_ENTER_CSIU);
+    await tick();
+    expect(onSubmit).not.toHaveBeenCalled();
+    stdin.write('b');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('a\nb');
+  });
+
+  it('ESC+CR (iTerm2/VS Code Shift+Enter) inserts a newline instead of submitting', async () => {
+    const onSubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    stdin.write('a');
+    await tick();
+    stdin.write(META_ENTER);
+    await tick();
+    expect(onSubmit).not.toHaveBeenCalled();
+    stdin.write('b');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('a\nb');
+  });
+
+  it('trailing backslash + Enter continues the line instead of submitting', async () => {
+    const onSubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    stdin.write('first\\');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).not.toHaveBeenCalled();
+    stdin.write('second');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('first\nsecond');
+  });
+
+  it('renders a multi-line buffer across lines', async () => {
+    const { stdin, lastFrame } = render(createElement(Prompt, { onSubmit: () => {} }));
+    await tick();
+    stdin.write('alpha');
+    await tick();
+    stdin.write(CTRL_J);
+    await tick();
+    stdin.write('omega');
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('alpha');
+    expect(frame).toContain('omega');
+    // The two halves are on different rows.
+    const alphaLine = frame.split('\n').findIndex((l) => l.includes('alpha'));
+    const omegaLine = frame.split('\n').findIndex((l) => l.includes('omega'));
+    expect(alphaLine).toBeGreaterThanOrEqual(0);
+    expect(omegaLine).toBeGreaterThan(alphaLine);
   });
 
   it('renders the buffer split around a mid-string cursor', async () => {

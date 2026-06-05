@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { TextInputOverlay } from '../overlays/TextInputOverlay.js';
-import { ESC, ENTER, BACKSPACE, CTRL_C, ARROW_LEFT, tick } from './_keys.js';
+import { ESC, ENTER, BACKSPACE, CTRL_C, CTRL_J, META_ENTER, ARROW_LEFT, tick } from './_keys.js';
 
 describe('<TextInputOverlay>', () => {
   it('renders label, initial value, and the commit hint', () => {
@@ -140,6 +140,24 @@ describe('<TextInputOverlay>', () => {
     stdin.write(ENTER);
     await tick();
     expect(onResolve).toHaveBeenCalledWith({ cancelled: false, raw: 'ac' });
+  });
+
+  it('newline-ish keys are stripped — overlay inputs stay single-line', async () => {
+    const onResolve = vi.fn();
+    const { stdin } = render(
+      createElement(TextInputOverlay, {
+        options: { label: 'L', initialValue: 'ab' },
+        onResolve,
+      }),
+    );
+    await tick();
+    stdin.write(CTRL_J);
+    await tick();
+    stdin.write(META_ENTER);
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onResolve).toHaveBeenCalledWith({ cancelled: false, raw: 'ab' });
   });
 
   it('headerLines render above the label', () => {

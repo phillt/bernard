@@ -18,6 +18,8 @@ export interface LineEditor {
   setBuffer: (text: string) => void;
   /** Empties the buffer and resets the cursor (post-submit). */
   clear: () => void;
+  /** Inserts text at the cursor (e.g. an explicit newline from Shift+Enter). */
+  insert: (text: string) => void;
   /**
    * Handles editing keys (arrows, Ctrl-A/E, backspace, printable input).
    * Returns true when consumed — the caller should stop processing. Keys with
@@ -26,7 +28,18 @@ export interface LineEditor {
   handleKey: (input: string, key: Key) => boolean;
 }
 
-export function useLineEditor(initial = ''): LineEditor {
+export interface LineEditorOptions {
+  /**
+   * When true, newlines in inserted text are kept (normalized to '\n').
+   * When false (default), they are stripped — single-line inputs like the
+   * overlay text fields must never accumulate newline characters from
+   * pastes or half-parsed escape sequences (e.g. ESC+CR arrives as '\r').
+   */
+  multiline?: boolean;
+}
+
+export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineEditor {
+  const { multiline = false } = opts;
   // Single state object so buffer/cursor updates are atomic.
   const [state, setState] = useState({ buffer: initial, cursor: initial.length });
 
@@ -38,50 +51,65 @@ export function useLineEditor(initial = ''): LineEditor {
     setState({ buffer: '', cursor: 0 });
   }, []);
 
-  const handleKey = useCallback((input: string, key: Key): boolean => {
-    if (key.leftArrow) {
-      setState((s) => ({ ...s, cursor: Math.max(0, s.cursor - 1) }));
-      return true;
-    }
-    if (key.rightArrow) {
-      setState((s) => ({ ...s, cursor: Math.min(s.buffer.length, s.cursor + 1) }));
-      return true;
-    }
-    // Emacs-style Home/End — Ink's Key has no home/end flags.
-    if (key.ctrl && input === 'a') {
-      setState((s) => ({ ...s, cursor: 0 }));
-      return true;
-    }
-    if (key.ctrl && input === 'e') {
-      setState((s) => ({ ...s, cursor: s.buffer.length }));
-      return true;
-    }
-    if (key.backspace || key.delete) {
-      // Both treated as backspace (delete before cursor) — terminals conflate
-      // the two in Ink, matching ink-text-input's convention.
-      setState((s) => {
-        if (s.cursor === 0) return s;
-        return {
-          buffer: s.buffer.slice(0, s.cursor - 1) + s.buffer.slice(s.cursor),
-          cursor: s.cursor - 1,
-        };
-      });
-      return true;
-    }
-    if (key.ctrl || key.meta) return false;
-    // Printable input (including multi-char paste): insert at the cursor.
-    // `input` is empty for arrow/function keys, so those fall through.
-    if (input && !key.escape && !key.tab && !key.return) {
+  const insert = useCallback(
+    (text: string) => {
+      // Normalize CRLF / bare CR (paste, ESC+CR remnants) to '\n', then strip
+      // newlines entirely for single-line editors.
+      let cleaned = text.replace(/\r\n?/g, '\n');
+      if (!multiline) cleaned = cleaned.replace(/\n/g, '');
+      if (!cleaned) return;
       setState((s) => ({
-        buffer: s.buffer.slice(0, s.cursor) + input + s.buffer.slice(s.cursor),
-        cursor: s.cursor + input.length,
+        buffer: s.buffer.slice(0, s.cursor) + cleaned + s.buffer.slice(s.cursor),
+        cursor: s.cursor + cleaned.length,
       }));
-      return true;
-    }
-    return false;
-  }, []);
+    },
+    [multiline],
+  );
 
-  return { buffer: state.buffer, cursor: state.cursor, setBuffer, clear, handleKey };
+  const handleKey = useCallback(
+    (input: string, key: Key): boolean => {
+      if (key.leftArrow) {
+        setState((s) => ({ ...s, cursor: Math.max(0, s.cursor - 1) }));
+        return true;
+      }
+      if (key.rightArrow) {
+        setState((s) => ({ ...s, cursor: Math.min(s.buffer.length, s.cursor + 1) }));
+        return true;
+      }
+      // Emacs-style Home/End — Ink's Key has no home/end flags.
+      if (key.ctrl && input === 'a') {
+        setState((s) => ({ ...s, cursor: 0 }));
+        return true;
+      }
+      if (key.ctrl && input === 'e') {
+        setState((s) => ({ ...s, cursor: s.buffer.length }));
+        return true;
+      }
+      if (key.backspace || key.delete) {
+        // Both treated as backspace (delete before cursor) — terminals conflate
+        // the two in Ink, matching ink-text-input's convention.
+        setState((s) => {
+          if (s.cursor === 0) return s;
+          return {
+            buffer: s.buffer.slice(0, s.cursor - 1) + s.buffer.slice(s.cursor),
+            cursor: s.cursor - 1,
+          };
+        });
+        return true;
+      }
+      if (key.ctrl || key.meta) return false;
+      // Printable input (including multi-char paste): insert at the cursor.
+      // `input` is empty for arrow/function keys, so those fall through.
+      if (input && !key.escape && !key.tab && !key.return) {
+        insert(input);
+        return true;
+      }
+      return false;
+    },
+    [insert],
+  );
+
+  return { buffer: state.buffer, cursor: state.cursor, setBuffer, clear, insert, handleKey };
 }
 
 interface LineWithCursorProps {
@@ -118,11 +146,14 @@ export function LineWithCursor({
       </Text>
     );
   }
+  // Inverse-video on a bare '\n' is invisible — render an inverse space at
+  // the end of the line, then the newline itself.
+  const onNewline = buffer[cursor] === '\n';
   return (
     <Text>
       <Text>{buffer.slice(0, cursor)}</Text>
-      <Text inverse>{buffer[cursor]}</Text>
-      <Text>{buffer.slice(cursor + 1)}</Text>
+      <Text inverse>{onNewline ? ' ' : buffer[cursor]}</Text>
+      <Text>{buffer.slice(onNewline ? cursor : cursor + 1)}</Text>
     </Text>
   );
 }
