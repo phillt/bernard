@@ -1,7 +1,7 @@
-import { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import type { ValuePromptOptions, ValueResult } from '../menu-types.js';
+import { useLineEditor, LineWithCursor } from '../use-line-editor.js';
 
 interface TextInputOverlayProps {
   options: ValuePromptOptions;
@@ -23,10 +23,13 @@ interface TextInputOverlayProps {
  */
 export function TextInputOverlay({ options, onResolve }: TextInputOverlayProps) {
   const colors = getThemeColors();
-  const [buffer, setBuffer] = useState(options.initialValue ?? '');
+  const editor = useLineEditor(options.initialValue ?? '');
+  const { buffer } = editor;
   const cancelOnEmpty = options.cancelOnEmpty !== false;
 
   useInput((input, key) => {
+    // Ctrl-C must run before the editor, which consumes other Ctrl combos
+    // (Ctrl-A / Ctrl-E move the cursor to start / end).
     if (key.ctrl && input === 'c') {
       onResolve({ cancelled: true });
       return;
@@ -44,14 +47,9 @@ export function TextInputOverlay({ options, onResolve }: TextInputOverlayProps) 
       onResolve({ cancelled: false, raw: trimmed });
       return;
     }
-    if (key.backspace || key.delete) {
-      setBuffer((b) => b.slice(0, -1));
-      return;
-    }
-    // Filter non-printable control keys; allow regular characters and space.
-    if (input && !key.ctrl && !key.meta) {
-      setBuffer((b) => b + input);
-    }
+    // Cursor movement, backspace-at-cursor, and printable insertion all live
+    // in the shared line editor (see use-line-editor.tsx).
+    editor.handleKey(input, key);
   });
 
   const showPlaceholder = buffer.length === 0 && options.placeholder;
@@ -63,8 +61,20 @@ export function TextInputOverlay({ options, onResolve }: TextInputOverlayProps) 
       {options.headerLines && options.headerLines.length > 0 && <Text> </Text>}
       <Box>
         <Text color={colors.accent}>{options.label}: </Text>
-        {showPlaceholder ? <Text dimColor>{options.placeholder}</Text> : <Text>{buffer}</Text>}
-        <Text color={colors.accent}>▎</Text>
+        {showPlaceholder ? (
+          <Text>
+            <Text dimColor>{options.placeholder}</Text>
+            <Text color={colors.accent}>▎</Text>
+          </Text>
+        ) : (
+          <LineWithCursor
+            buffer={buffer}
+            cursor={editor.cursor}
+            showCursor
+            cursorColor={colors.accent}
+            cursorGlyph="▎"
+          />
+        )}
       </Box>
       <Text> </Text>
       <Text dimColor>Enter commit · Esc cancel</Text>

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { TextInputOverlay } from '../overlays/TextInputOverlay.js';
-import { ESC, ENTER, BACKSPACE, CTRL_C, tick } from './_keys.js';
+import { ESC, ENTER, BACKSPACE, CTRL_C, ARROW_LEFT, tick } from './_keys.js';
 
 describe('<TextInputOverlay>', () => {
   it('renders label, initial value, and the commit hint', () => {
@@ -104,6 +104,42 @@ describe('<TextInputOverlay>', () => {
     stdin.write(ENTER);
     await tick();
     expect(onResolve).toHaveBeenCalledWith({ cancelled: false, raw: '' });
+  });
+
+  it('left arrow moves the cursor so typing inserts mid-string', async () => {
+    const onResolve = vi.fn();
+    const { stdin } = render(
+      createElement(TextInputOverlay, {
+        options: { label: 'L', initialValue: 'abc' },
+        onResolve,
+      }),
+    );
+    await tick();
+    stdin.write(ARROW_LEFT);
+    await tick();
+    stdin.write('X');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onResolve).toHaveBeenCalledWith({ cancelled: false, raw: 'abXc' });
+  });
+
+  it('backspace deletes the character before the cursor', async () => {
+    const onResolve = vi.fn();
+    const { stdin } = render(
+      createElement(TextInputOverlay, {
+        options: { label: 'L', initialValue: 'abc' },
+        onResolve,
+      }),
+    );
+    await tick();
+    stdin.write(ARROW_LEFT);
+    await tick();
+    stdin.write(BACKSPACE);
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onResolve).toHaveBeenCalledWith({ cancelled: false, raw: 'ac' });
   });
 
   it('headerLines render above the label', () => {

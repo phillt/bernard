@@ -2,7 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { Prompt } from '../Prompt.js';
-import { ENTER, BACKSPACE, ARROW_DOWN, tick } from './_keys.js';
+import {
+  ENTER,
+  BACKSPACE,
+  ARROW_DOWN,
+  ARROW_LEFT,
+  ARROW_RIGHT,
+  CTRL_A,
+  CTRL_E,
+  tick,
+} from './_keys.js';
 
 const TAB = '\t';
 
@@ -103,5 +112,97 @@ describe('<Prompt>', () => {
     await tick();
     expect(lastFrame()).toContain('/task ');
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it('left arrow moves the cursor so typing inserts mid-string', async () => {
+    const onSubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    stdin.write('abc');
+    await tick();
+    stdin.write(ARROW_LEFT);
+    await tick();
+    stdin.write('X');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('abXc');
+  });
+
+  it('backspace deletes the character before the cursor', async () => {
+    const onSubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    stdin.write('abc');
+    await tick();
+    stdin.write(ARROW_LEFT);
+    await tick();
+    stdin.write(ARROW_LEFT);
+    await tick();
+    stdin.write(BACKSPACE);
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('bc');
+  });
+
+  it('left at position 0 and right at the end are no-ops', async () => {
+    const onSubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    stdin.write('ab');
+    await tick();
+    // Walk well past both boundaries.
+    stdin.write(ARROW_LEFT);
+    await tick();
+    stdin.write(ARROW_LEFT);
+    await tick();
+    stdin.write(ARROW_LEFT);
+    await tick();
+    stdin.write(ARROW_RIGHT);
+    await tick();
+    stdin.write(ARROW_RIGHT);
+    await tick();
+    stdin.write(ARROW_RIGHT);
+    await tick();
+    stdin.write('!');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('ab!');
+  });
+
+  it('Ctrl-A jumps to start, Ctrl-E back to end', async () => {
+    const onSubmit = vi.fn();
+    const { stdin } = render(createElement(Prompt, { onSubmit }));
+    await tick();
+    stdin.write('world');
+    await tick();
+    stdin.write(CTRL_A);
+    await tick();
+    stdin.write('hi ');
+    await tick();
+    stdin.write(CTRL_E);
+    await tick();
+    stdin.write('!');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('hi world!');
+  });
+
+  it('renders the buffer split around a mid-string cursor', async () => {
+    const { stdin, lastFrame } = render(createElement(Prompt, { onSubmit: () => {} }));
+    await tick();
+    stdin.write('abc');
+    await tick();
+    stdin.write(ARROW_LEFT);
+    await tick();
+    // The full text is still present; the end-of-line block glyph is not,
+    // because the cursor now sits on 'c' (rendered inverse).
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('ab');
+    expect(frame).toContain('c');
+    expect(frame).not.toContain('▌');
   });
 });
