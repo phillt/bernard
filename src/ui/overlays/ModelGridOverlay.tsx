@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import { getThemeColors } from '../../theme.js';
+import { truncate } from '../../text.js';
 
 export interface ModelGridOverlayProps {
   title?: string;
@@ -16,19 +17,12 @@ export interface ModelGridOverlayProps {
 const MIN_TERM_WIDTH = 50;
 const CELL_GUTTER = 4;
 const MAX_COLUMNS = 4;
-const ELLIPSIS = '…';
 
 function computeColumns(termWidth: number, longestItemLen: number): number {
   if (termWidth < MIN_TERM_WIDTH) return 1;
   const usable = Math.max(1, termWidth - 4);
   const cellWidth = longestItemLen + CELL_GUTTER;
   return Math.max(1, Math.min(MAX_COLUMNS, Math.floor(usable / cellWidth)));
-}
-
-function truncate(value: string, width: number): string {
-  if (value.length <= width) return value;
-  if (width <= 1) return value.slice(0, width);
-  return value.slice(0, width - 1) + ELLIPSIS;
 }
 
 /**

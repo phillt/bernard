@@ -14,6 +14,30 @@ import { runWithDispatchId } from './dispatch-context.js';
 
 const WATCHDOG_INTERVAL_MS = 30_000;
 
+/**
+ * Builds a promise that rejects with the canonical AbortError when the signal
+ * fires (immediately if it already has). A no-op rejection handler is attached
+ * at construction so the promise can never surface as an unhandled rejection —
+ * e.g. when the run unwinds via a provider-side error before any race observes
+ * it, and the user only presses Esc afterwards. Each `Promise.race` attaches
+ * its own handlers, so the races still see the rejection normally.
+ */
+function makeAbortPromise(abortSignal: AbortSignal): Promise<never> {
+  const p = new Promise<never>((_, reject) => {
+    if (abortSignal.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'));
+      return;
+    }
+    abortSignal.addEventListener(
+      'abort',
+      () => reject(new DOMException('Aborted', 'AbortError')),
+      { once: true },
+    );
+  });
+  p.catch(() => {});
+  return p;
+}
+
 function parseDispatchTimeoutMs(): number | null {
   const raw = process.env.BERNARD_DISPATCH_TIMEOUT_MS;
   if (!raw) return null;
@@ -200,6 +224,7 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   // caller's signal so we don't leak a timer past dispatch completion.
   const timeoutMs = parseDispatchTimeoutMs();
   let timeoutHandle: NodeJS.Timeout | null = null;
+  let timedOut = false;
   let effectiveSignal = spec.abortSignal;
   if (timeoutMs !== null) {
     const ac = new AbortController();
@@ -213,6 +238,7 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
         model: modelId,
         ms: timeoutMs,
       });
+      timedOut = true;
       ac.abort();
     }, timeoutMs);
     timeoutHandle.unref?.();
@@ -237,13 +263,25 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
     });
     return result;
   } catch (err) {
+    // A timeout abort fires the *chained* controller, not the caller's
+    // signal, so the agent's catch can't tell it apart from a generic abort
+    // (`this.abortController.signal.aborted` stays false) and would render a
+    // bare "Agent error: Aborted". Re-shape it into a self-describing error
+    // here, where the timeout context still exists.
+    const wrapped =
+      timedOut && err instanceof Error && err.name === 'AbortError' && !spec.abortSignal?.aborted
+        ? new Error(
+            `Dispatch timed out after ${timeoutMs} ms (BERNARD_DISPATCH_TIMEOUT_MS)`,
+            { cause: err },
+          )
+        : err;
     debugLog('agent:dispatch:error', {
       dispatchId,
       model: modelId,
       durationMs: Date.now() - dispatchStartedAt,
-      message: err instanceof Error ? err.message : String(err),
+      message: wrapped instanceof Error ? wrapped.message : String(wrapped),
     });
-    throw err;
+    throw wrapped;
   } finally {
     if (watchdog) clearInterval(watchdog);
     if (timeoutHandle) clearTimeout(timeoutHandle);
@@ -277,19 +315,7 @@ async function runNonStreaming(
   });
   const abortSignal = spec.abortSignal;
   if (!abortSignal) return gen;
-  const abortPromise = new Promise<never>((_, reject) => {
-    if (abortSignal.aborted) {
-      reject(new DOMException('Aborted', 'AbortError'));
-      return;
-    }
-    abortSignal.addEventListener(
-      'abort',
-      () => reject(new DOMException('Aborted', 'AbortError')),
-      { once: true },
-    );
-  });
-  abortPromise.catch(() => {});
-  return Promise.race([gen, abortPromise]);
+  return Promise.race([gen, makeAbortPromise(abortSignal)]);
 }
 
 /**
@@ -330,19 +356,7 @@ async function runStreaming(
   // for-await never throws. We pin a single rejecting promise to the signal
   // and race it against each await so an abort always unwinds the runner.
   const abortSignal = spec.abortSignal;
-  const abortPromise = abortSignal
-    ? new Promise<never>((_, reject) => {
-        if (abortSignal.aborted) {
-          reject(new DOMException('Aborted', 'AbortError'));
-          return;
-        }
-        abortSignal.addEventListener(
-          'abort',
-          () => reject(new DOMException('Aborted', 'AbortError')),
-          { once: true },
-        );
-      })
-    : null;
+  const abortPromise = abortSignal ? makeAbortPromise(abortSignal) : null;
   const raceAbort = async <T>(p: Promise<T>): Promise<T> =>
     abortPromise ? (Promise.race([p, abortPromise]) as Promise<T>) : p;
 
@@ -413,10 +427,6 @@ async function runStreaming(
       err instanceof Error && err.name === 'AbortError' && abortSignal?.aborted === true;
     if (!isUserAbort) throw err;
   }
-  // Suppress unhandled-rejection noise for the abortPromise once the run is
-  // unwinding — every downstream `raceAbort` will surface it as the thrown
-  // error from `Promise.all`.
-  abortPromise?.catch(() => {});
   // The other promises (toolCalls, toolResults, steps, etc.) are already
   // resolved once textStream completes — awaiting them is cheap.
   const [

@@ -1447,12 +1447,26 @@ describe('Agent', () => {
         expect(mockGenerateText).toHaveBeenCalledTimes(1);
       });
 
-      it('re-prompts up to the retry limit when no plan was created', async () => {
+      it('re-prompts up to the retry limit when tools ran but no plan was created', async () => {
         const agent = makeAgent(makeConfig({ coordinatorMode: 'on' }), toolOptions, store);
-        mockGenerateText.mockResolvedValue(baseResult);
-        await agent.processInput('trivial');
+        // The turn used tools, so the missing plan is a real coordination
+        // failure (not the trivial-turn escape hatch below).
+        mockGenerateText.mockResolvedValue({
+          ...baseResult,
+          steps: [{ toolCalls: [{ toolName: 'shell' }] }],
+        });
+        await agent.processInput('do the thing');
         // 1 initial call + REACT_ENFORCEMENT_MAX_RETRIES (= 2) re-prompts.
         expect(mockGenerateText).toHaveBeenCalledTimes(3);
+      });
+
+      it('skips missing-plan enforcement on trivial turns that used no tools', async () => {
+        const agent = makeAgent(makeConfig({ coordinatorMode: 'on' }), toolOptions, store);
+        // No plan AND no tool calls — the model just answered. Re-prompting
+        // "create a plan" would burn 2 extra LLM calls for nothing.
+        mockGenerateText.mockResolvedValue(baseResult);
+        await agent.processInput('trivial');
+        expect(mockGenerateText).toHaveBeenCalledTimes(1);
       });
 
       it('stops re-prompting when abort fires mid-loop', async () => {

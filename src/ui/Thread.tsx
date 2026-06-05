@@ -14,6 +14,7 @@ import type {
 type ReasoningPart = { type: 'reasoning'; text: string };
 type RedactedReasoningPart = { type: 'redacted-reasoning'; data: string };
 import { getThemeColors } from '../theme.js';
+import { truncate } from '../text.js';
 import type { MessageStore, StreamEvent } from './message-store.js';
 
 interface ThreadProps {
@@ -687,7 +688,3 @@ function renderResultSnippet(result: unknown): string {
   }
 }
 
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1).trimEnd() + '…';
-}

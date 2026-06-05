@@ -13,6 +13,7 @@ import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
 import { normalizeStoredModelMode, type ModelMode } from './model-policy.js';
 import { getCatalogForProvider } from './providers/catalog.js';
 import { BUILTIN_PROVIDERS, type BuiltinProvider } from './providers/types.js';
+import { FALLBACK_TIERS } from './lineups.js';
 
 /** Resolved runtime configuration for a Bernard session. */
 export interface BernardConfig {
@@ -578,15 +579,21 @@ export function getProviderKeyStatus(): Array<{
  * for a built-in provider (e.g. first run on an offline machine with a corrupt
  * vendored snapshot). The dynamic `PROVIDER_MODELS` proxy below consults the
  * catalog first and falls back to these.
+ *
+ * Derived from `FALLBACK_TIERS` (src/lineups.ts) — the single source of truth
+ * for offline-fallback model names — so the two tables can't drift. Only the
+ * *ordering* is owned here: the first entry is the `getDefaultModel` fallback,
+ * and anthropic deliberately leads with the mid tier (sonnet) rather than
+ * premium so the offline default stays the cheaper everyday model.
  */
 const FALLBACK_PROVIDER_MODELS: Record<BuiltinProvider, string[]> = {
   anthropic: [
-    'claude-sonnet-4-5-20250929',
-    'claude-opus-4-6',
-    'claude-haiku-4-5-20251001',
+    FALLBACK_TIERS.anthropic.mid,
+    FALLBACK_TIERS.anthropic.premium,
+    FALLBACK_TIERS.anthropic.cheap,
   ],
-  openai: ['gpt-5.2', 'gpt-4.1', 'gpt-4.1-mini'],
-  xai: ['grok-4-1-fast-reasoning', 'grok-4-fast-non-reasoning', 'grok-3-mini'],
+  openai: [FALLBACK_TIERS.openai.premium, FALLBACK_TIERS.openai.mid, FALLBACK_TIERS.openai.cheap],
+  xai: [FALLBACK_TIERS.xai.premium, FALLBACK_TIERS.xai.mid, FALLBACK_TIERS.xai.cheap],
 };
 
 function modelsForBuiltin(provider: BuiltinProvider): string[] {

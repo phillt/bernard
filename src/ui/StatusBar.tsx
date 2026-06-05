@@ -60,8 +60,11 @@ export function StatusBar({ agent }: StatusBarProps) {
           {up}↑ {down}↓{'   '}
         </Text>
       )}
-      {filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
-      {emptyCount > 0 && (
+      {/* Context gauge only renders once real token stats exist — before the
+          first stats flush (strategy set, stats still null) an all-empty bar
+          would be visual noise. */}
+      {stats && filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
+      {stats && emptyCount > 0 && (
         <Text color={colors.muted} dimColor>
           {'○'.repeat(emptyCount)}
         </Text>

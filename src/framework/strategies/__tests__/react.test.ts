@@ -20,6 +20,13 @@ const baseResult = {
   usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
 } as any;
 
+// A turn that invoked at least one tool — missing-plan enforcement only
+// fires for these (the trivial-turn escape hatch skips tool-free turns).
+const toolUseResult = {
+  ...baseResult,
+  steps: [{ toolCalls: [{ toolName: 'shell' }] }],
+} as any;
+
 function makeCtx(
   overrides: Partial<StrategyContext> & { config?: Partial<BernardConfig> } = {},
 ): StrategyContext & { iterate: ReturnType<typeof vi.fn> } {
@@ -72,13 +79,13 @@ describe('ReActStrategy', () => {
     let call = 0;
     ctx.iterate.mockImplementation(async () => {
       call++;
-      // Initial call: model produces no plan. Enforcement retry: model
-      // finally calls `plan.create` and resolves the step.
+      // Initial call: model runs tools but produces no plan. Enforcement
+      // retry: model finally calls `plan.create` and resolves the step.
       if (call === 2) {
         planStore.create([{ description: 'a', verification: 'b' }]);
         planStore.update(1, 'done', { signoff: 'ok' });
       }
-      return baseResult;
+      return toolUseResult;
     });
     await new ReActStrategy(new NormalStrategy()).run(ctx);
     expect(ctx.iterate).toHaveBeenCalledTimes(2);
@@ -95,13 +102,24 @@ describe('ReActStrategy', () => {
   it('exhausts retries when model never creates a plan and logs the give-up', async () => {
     const planStore = new PlanStore();
     const ctx = makeCtx({ planStore });
-    // iterate always returns without creating a plan.
+    // iterate always runs tools but returns without creating a plan.
+    ctx.iterate.mockImplementation(async () => toolUseResult);
     await new ReActStrategy(new NormalStrategy()).run(ctx);
     expect(ctx.iterate).toHaveBeenCalledTimes(1 + REACT_ENFORCEMENT_MAX_RETRIES);
     expect(vi.mocked(printInfo)).toHaveBeenCalledWith(
       expect.stringContaining('without a plan after'),
     );
     expect(planStore.view().length).toBe(0);
+  });
+
+  it('skips missing-plan enforcement when the turn used no tools (trivial-turn escape hatch)', async () => {
+    const planStore = new PlanStore();
+    const ctx = makeCtx({ planStore });
+    // No plan AND no tool calls — the model just answered prose. There was
+    // nothing to coordinate, so enforcement would only burn LLM calls.
+    await new ReActStrategy(new NormalStrategy()).run(ctx);
+    expect(ctx.iterate).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(printWarning)).not.toHaveBeenCalled();
   });
 
   it('re-prompts when plan has unresolved steps, exits when resolved', async () => {

@@ -153,6 +153,13 @@ export function resolveSiteModel(
     model: blankToUndefined(opts?.specialist?.model),
   };
 
+  // Loaded at most once per resolve — both the pin guard and the tier lookup
+  // need it, and `loadLineups()` is an uncached readFileSync + JSON.parse.
+  // Function-scoped (not module-memoized) so a `/lineup` edit still takes
+  // effect on the next resolve without a process restart.
+  let activeLineupCache: Lineup | null = null;
+  const getActiveLineup = (): Lineup => (activeLineupCache ??= loadActiveLineup(config));
+
   // Off-lineup specialist pin guard. A persisted specialist may carry a
   // `provider`/`model` baked in from when it was created — e.g. an
   // `optimize-performance` session against OpenAI. When the user has
@@ -165,14 +172,18 @@ export function resolveSiteModel(
   // overrides bypass the guard — those are explicit and trump persisted
   // intent. When no `activeLineupId` is set the user hasn't expressed a
   // lineup-level preference, so the pin is the strongest signal and we
-  // leave it alone.
+  // leave it alone. Custom-provider pins (Ollama, LM Studio, internal
+  // proxies) are also exempt: those are deliberate, often privacy- or
+  // cost-motivated bindings, and silently rerouting them to a lineup tier
+  // would ship a local-model workload to a remote API.
   if (
     config.activeLineupId &&
     !override.provider &&
     !override.model &&
-    specialist.provider
+    specialist.provider &&
+    !Object.hasOwn(config.customProviders ?? {}, specialist.provider)
   ) {
-    const activeLineup = loadActiveLineup(config);
+    const activeLineup = getActiveLineup();
     if (!isProviderInLineup(specialist.provider, activeLineup)) {
       debugLog('model-policy:specialist-off-lineup', {
         site,
@@ -222,7 +233,7 @@ export function resolveSiteModel(
   // test fixtures) to `'balanced'` so resolution never crashes.
   const mode: ModelMode = TIER_TABLE[config.modelMode] ? config.modelMode : 'balanced';
   const tier = TIER_TABLE[mode][site];
-  const lineup = loadActiveLineup(config);
+  const lineup = getActiveLineup();
   const slot = lineup[tier];
   if (hasProviderKey(config, slot.provider)) {
     return buildSiteModel(config, slot.provider, slot.model, 'policy', site, tier, lineup);

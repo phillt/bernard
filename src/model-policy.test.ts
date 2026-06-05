@@ -334,6 +334,43 @@ describe('resolveSiteModel — off-lineup specialist pin guard', () => {
     expect(r.modelName).toBe('claude-haiku-4-5-20251001');
   });
 
+  it('keeps a custom-provider pin even when off-lineup (deliberate local binding)', async () => {
+    const m = await loadModule();
+    const logger = await import('./logger.js');
+    const spy = logger.debugLog as unknown as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+
+    // xAI-only lineup, but the specialist is deliberately pinned to a custom
+    // Ollama endpoint — privacy/cost intent the guard must never reroute to
+    // a remote API.
+    const config = makeConfig({
+      provider: 'xai',
+      model: 'grok-4-fast-non-reasoning',
+      modelMode: 'balanced',
+      activeLineupId: 'xai',
+      customProviders: {
+        ollama: {
+          name: 'ollama',
+          sdk: 'openai',
+          baseURL: 'http://localhost:11434/v1',
+          defaultModel: 'llama3.2',
+          models: ['llama3.2'],
+        },
+      },
+      apiKeys: { anthropic: 'sk-ant', openai: 'sk-openai', xai: 'xai-key', ollama: 'local' },
+    });
+    const specialist = { provider: 'ollama', model: 'llama3.2' } as Specialist;
+    const r = m.resolveSiteModel(config, 'tool-wrapper', { specialist });
+
+    expect(r.source).toBe('specialist');
+    expect(r.provider).toBe('ollama');
+    expect(r.modelName).toBe('llama3.2');
+    const offLineupCalls = spy.mock.calls.filter(
+      (c) => c[0] === 'model-policy:specialist-off-lineup',
+    );
+    expect(offLineupCalls).toHaveLength(0);
+  });
+
   it('invocation override bypasses the off-lineup guard', async () => {
     const m = await loadModule();
     const config = makeConfig({

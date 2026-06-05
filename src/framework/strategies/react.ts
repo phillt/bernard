@@ -69,8 +69,18 @@ export class ReActStrategy implements ExecutionStrategy {
     let result = await this.inner.run(wrappedCtx);
 
     const planStore = ctx.planStore;
+    // Trivial-turn escape hatch: when the model answered without touching a
+    // single tool AND never created a plan, there was nothing to coordinate —
+    // re-prompting "create a plan" would burn up to
+    // REACT_ENFORCEMENT_MAX_RETRIES extra LLM calls on greetings and one-line
+    // answers. Only bites with coordinatorMode=on; `auto` is already shielded
+    // because the qualifier routes trivial turns to Normal.
+    const usedTools = (result.steps ?? []).some((s) => (s.toolCalls?.length ?? 0) > 0);
+    const planMissing = planStore ? planStore.view().length === 0 : false;
     const needsEnforcement = planStore
-      ? planStore.view().length === 0 || planStore.unresolvedCount() > 0
+      ? planMissing
+        ? usedTools
+        : planStore.unresolvedCount() > 0
       : false;
     if (
       !planStore ||

@@ -177,7 +177,7 @@ describe('runAgent', () => {
     expect(end?.data.dispatchId).toBe(start?.data.dispatchId);
   });
 
-  it('honors BERNARD_DISPATCH_TIMEOUT_MS by aborting the dispatch', async () => {
+  it('honors BERNARD_DISPATCH_TIMEOUT_MS by aborting with a self-describing error', async () => {
     (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       (opts: { abortSignal?: AbortSignal }) =>
         new Promise((_, reject) => {
@@ -189,7 +189,35 @@ describe('runAgent', () => {
     const prev = process.env.BERNARD_DISPATCH_TIMEOUT_MS;
     process.env.BERNARD_DISPATCH_TIMEOUT_MS = '20';
     try {
-      await expect(runAgent(makeSpec())).rejects.toMatchObject({ name: 'AbortError' });
+      // The bare AbortError is re-shaped so the agent's catch — which only
+      // recognizes aborts on its own controller — renders the timeout
+      // context instead of a generic "Agent error: Aborted".
+      await expect(runAgent(makeSpec())).rejects.toThrow(
+        /Dispatch timed out after 20 ms \(BERNARD_DISPATCH_TIMEOUT_MS\)/,
+      );
+    } finally {
+      if (prev === undefined) delete process.env.BERNARD_DISPATCH_TIMEOUT_MS;
+      else process.env.BERNARD_DISPATCH_TIMEOUT_MS = prev;
+    }
+  });
+
+  it('does not re-shape a user abort as a dispatch timeout', async () => {
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (opts: { abortSignal?: AbortSignal }) =>
+        new Promise((_, reject) => {
+          opts.abortSignal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError')),
+          );
+        }),
+    );
+    const prev = process.env.BERNARD_DISPATCH_TIMEOUT_MS;
+    process.env.BERNARD_DISPATCH_TIMEOUT_MS = '5000';
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 5);
+    try {
+      await expect(runAgent({ ...makeSpec(), abortSignal: ac.signal })).rejects.toMatchObject({
+        name: 'AbortError',
+      });
     } finally {
       if (prev === undefined) delete process.env.BERNARD_DISPATCH_TIMEOUT_MS;
       else process.env.BERNARD_DISPATCH_TIMEOUT_MS = prev;

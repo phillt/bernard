@@ -69,8 +69,15 @@ export const PROVIDER_DISPLAY_NAMES: Record<BuiltinProvider, string> = {
  * built-in provider (e.g. first run on an offline machine with a broken
  * vendored fallback). Models here mirror the legacy hardcoded `PROVIDER_TIERS`
  * table.
+ *
+ * Single source of truth for offline-fallback model names — `config.ts`
+ * derives its `FALLBACK_PROVIDER_MODELS` lists from this table, so a new
+ * model name only ever needs to land here.
  */
-const FALLBACK_TIERS: Record<BuiltinProvider, { premium: string; mid: string; cheap: string }> = {
+export const FALLBACK_TIERS: Record<
+  BuiltinProvider,
+  { premium: string; mid: string; cheap: string }
+> = {
   anthropic: {
     premium: 'claude-opus-4-6',
     mid: 'claude-sonnet-4-5-20250929',

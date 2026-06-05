@@ -724,6 +724,7 @@ export class Agent {
       throw new Error(`Agent error: ${message}`, { cause: err });
     } finally {
       this.abortController = null;
+      this.currentStrategy = null;
       debugLog('turn:end', {
         durationMs: Date.now() - turnStartedAt,
         aborted: turnAborted,

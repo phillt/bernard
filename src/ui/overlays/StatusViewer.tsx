@@ -3,6 +3,7 @@ import type { Agent } from '../../agent.js';
 import type { BernardConfig } from '../../config.js';
 import { pickActiveStep, summarizePlan, type AgentStatusInputs } from '../../agent-status.js';
 import { getThemeColors } from '../../theme.js';
+import { truncate } from '../../text.js';
 
 interface StatusViewerProps {
   agent: Agent;
@@ -12,11 +13,6 @@ interface StatusViewerProps {
 
 const LABEL_WIDTH = 15;
 const MAX_VALUE_CHARS = 200;
-
-function truncate(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1).trimEnd() + '…';
-}
 
 /**
  * Full-screen Agent Status panel. Replaces the legacy `buildAgentStatusPanel`
