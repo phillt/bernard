@@ -42,7 +42,10 @@ const NAMED_COLORS: Record<string, ChalkInstance> = {
   whiteBright: chalk.whiteBright,
 };
 
-const HEX_RE = /^#[0-9a-fA-F]{3,8}$/;
+// Only the lengths chalk.hex() accepts (#rgb / #rrggbb) — a malformed theme
+// value falls through to the named-color map / white fallback instead of
+// reaching chalk with an invalid string.
+const HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
 
 /**
  * Map a `ThemeColors` value (hex string or named Ink color) to a chalk

@@ -73,6 +73,40 @@ describe('profiles store', () => {
     expect(prefs.toolPermissions).toEqual({ 'shell:ls': 'allow' });
   });
 
+  it('loadPreferences drops prototype-pollution keys from toolPermissions (#212)', async () => {
+    const configDir = path.join(tmpDir, 'bernard');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'profiles.json'),
+      JSON.stringify({
+        activeProfileId: 'default',
+        profiles: {
+          default: {
+            id: 'default',
+            name: 'Default',
+            settings: {
+              // JSON.parse produces these as own properties; assigning them
+              // onto a plain object would rewire its prototype.
+              toolPermissions: {
+                'shell:ls': 'allow',
+                __proto__: 'allow',
+                constructor: 'deny',
+                prototype: 'allow',
+              },
+            },
+            createdAt: 'x',
+            updatedAt: 'x',
+          },
+        },
+      }),
+    );
+    vi.resetModules();
+    const config = await import('./config.js');
+    const prefs = config.loadPreferences();
+    expect(prefs.toolPermissions).toEqual({ 'shell:ls': 'allow' });
+    expect(Object.getPrototypeOf(prefs.toolPermissions)).toBe(Object.prototype);
+  });
+
   it('loadPreferences normalizes a legacy modelMode="off" on disk to "optimize-performance"', async () => {
     const configDir = path.join(tmpDir, 'bernard');
     fs.mkdirSync(configDir, { recursive: true });

@@ -30,17 +30,21 @@ export type ToolPermissions = Record<string, ToolPermissionValue>;
 
 /**
  * Characters that make a command line "complex": pipes, separators,
- * redirects (both directions), backticks, subshells, and newlines. Mirrors
- * shell.ts `META_RE` and deliberately adds `<` and `\r\n` — a multi-line
- * payload like `ls\nrm -rf /` must never classify as read-only `ls` or earn
- * an `ls`-keyed grant.
+ * redirects (both directions), backticks, `$` (subshells AND variable
+ * expansion — `echo $TOKEN` must not classify as read-only or earn a
+ * stable grant, since expansion can exfiltrate env secrets), and newlines.
+ * Mirrors shell.ts `META_RE` and deliberately adds `<`, `$`, and `\r\n` —
+ * a multi-line payload like `ls\nrm -rf /` must never classify as
+ * read-only `ls` or earn an `ls`-keyed grant.
  */
-const COMPLEX_RE = /[;&|`><\r\n]|\$\(/;
+const COMPLEX_RE = /[;&|`><$\r\n]/;
 
 /**
  * Commands whose simple invocations only read. Deliberately conservative:
  * - no `find`/`sed`/`awk`/`xargs`/`sort` (write-capable via flags/exec)
  * - no `env`/`printenv` (dump secrets into model context)
+ * - no `echo`/`printf` (expansion printers — `echo $TOKEN` is env
+ *   exfiltration, not filesystem inspection)
  * - no pagers (`less`, `more`) — they hang a non-interactive shell
  */
 const READONLY_COMMANDS = new Set([
@@ -73,8 +77,6 @@ const READONLY_COMMANDS = new Set([
   'diff',
   'cmp',
   'nl',
-  'echo',
-  'printf',
   'md5sum',
   'sha256sum',
 ]);

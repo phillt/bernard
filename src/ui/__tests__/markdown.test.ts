@@ -126,4 +126,11 @@ describe('normalizeColor', () => {
     expect(() => normalizeColor('not-a-color')('x')).not.toThrow();
     expect(stripAnsi(normalizeColor('not-a-color')('x'))).toBe('x');
   });
+
+  it('falls back without throwing on malformed hex lengths', () => {
+    for (const bad of ['#12345', '#1234567', '#12', '#12345678']) {
+      expect(() => normalizeColor(bad)('x')).not.toThrow();
+      expect(stripAnsi(normalizeColor(bad)('x'))).toBe('x');
+    }
+  });
 });

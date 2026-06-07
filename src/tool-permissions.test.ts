@@ -94,6 +94,17 @@ describe('isReadOnlyShellInvocation', () => {
     expect(isReadOnlyShellInvocation('cat `which sh`')).toBe(false);
     expect(isReadOnlyShellInvocation('echo $(rm -rf /)')).toBe(false);
   });
+
+  it('treats $ expansion as complex — env exfiltration is not read-only', () => {
+    expect(isReadOnlyShellInvocation('cat $SECRET_FILE')).toBe(false);
+    expect(isReadOnlyShellInvocation('ls $HOME')).toBe(false);
+    expect(permissionKeyFor('shell', { command: 'cat $SECRET_FILE' })).toBeNull();
+  });
+
+  it('excludes echo/printf from the read-only allowlist (expansion printers)', () => {
+    expect(isReadOnlyShellInvocation('echo hello')).toBe(false);
+    expect(isReadOnlyShellInvocation('printf hi')).toBe(false);
+  });
 });
 
 describe('permissionKeyLabel', () => {

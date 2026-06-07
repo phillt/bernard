@@ -430,11 +430,17 @@ export function loadPreferences(): {
  * Validates a stored `toolPermissions` blob (#212): must be a plain object;
  * entries whose value isn't exactly `'allow'` or `'deny'` are dropped so a
  * hand-edited profiles.json can't smuggle garbage into the permission gates.
+ * Prototype-pollution keys are skipped — no legitimate permission key is
+ * named `__proto__`/`constructor`/`prototype`, and assigning them onto a
+ * plain object can rewire its prototype.
  */
+const FORBIDDEN_PERMISSION_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function sanitizeToolPermissions(raw: unknown): ToolPermissions | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const out: ToolPermissions = {};
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (FORBIDDEN_PERMISSION_KEYS.has(k)) continue;
     if (v === 'allow' || v === 'deny') out[k] = v;
   }
   return out;
