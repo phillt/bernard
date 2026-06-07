@@ -130,25 +130,35 @@ function getParser(colors: ThemeColors, width: number): Marked {
 
 // One-slot render cache: streaming re-renders fire on every store event,
 // including tool-call/result events that leave the text unchanged — skip
-// the re-parse in that common case.
+// the re-parse (and the remend heal) in that common case.
 let lastInput = '';
 let lastWidth = 0;
 let lastColors: ThemeColors | null = null;
+let lastHeal = false;
 let lastOutput = '';
 
 /**
  * Render markdown to an ANSI-styled string themed from `colors`. Empty or
  * whitespace-only input passes through unchanged; trailing newlines that
- * marked-terminal appends per block are trimmed.
+ * marked-terminal appends per block are trimmed. `heal` runs the buffer
+ * through {@link healStreamMarkdown} first (streaming path) — it lives
+ * behind the cache check so a re-render with unchanged text skips both the
+ * remend pass and the re-parse.
  */
-export function renderMarkdown(text: string, width: number, colors: ThemeColors): string {
+export function renderMarkdown(
+  text: string,
+  width: number,
+  colors: ThemeColors,
+  heal = false,
+): string {
   if (!text || !text.trim()) return text;
-  if (text === lastInput && width === lastWidth && colors === lastColors) {
+  if (text === lastInput && width === lastWidth && colors === lastColors && heal === lastHeal) {
     return lastOutput;
   }
+  const source = heal ? healStreamMarkdown(text) : text;
   let output: string;
   try {
-    output = (getParser(colors, width).parse(text) as string).trimEnd();
+    output = (getParser(colors, width).parse(source) as string).trimEnd();
   } catch {
     // A parser failure should never take the transcript down — fall back
     // to the raw markdown text.
@@ -157,6 +167,7 @@ export function renderMarkdown(text: string, width: number, colors: ThemeColors)
   lastInput = text;
   lastWidth = width;
   lastColors = colors;
+  lastHeal = heal;
   lastOutput = output;
   return output;
 }

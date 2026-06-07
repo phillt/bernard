@@ -15,7 +15,7 @@ type ReasoningPart = { type: 'reasoning'; text: string };
 type RedactedReasoningPart = { type: 'redacted-reasoning'; data: string };
 import { getThemeColors } from '../theme.js';
 import { truncate } from '../text.js';
-import { renderMarkdown, healStreamMarkdown } from './markdown.js';
+import { renderMarkdown } from './markdown.js';
 import type { MessageStore, StreamEvent } from './message-store.js';
 
 interface ThreadProps {
@@ -191,8 +191,7 @@ function MarkdownLines({ text, streaming = false }: { text: string; streaming?: 
   const colors = getThemeColors();
   // App's outer <Box> has paddingX={2}; keep the table/rule width inside it.
   const width = Math.max(40, (stdout?.columns ?? 80) - 4);
-  const source = streaming ? healStreamMarkdown(text) : text;
-  const rendered = renderMarkdown(source, width, colors);
+  const rendered = renderMarkdown(text, width, colors, streaming);
   return (
     <Box flexDirection="column">
       {rendered.split('\n').map((line, i) => (

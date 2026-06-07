@@ -38,6 +38,9 @@ export interface LineEditorOptions {
   multiline?: boolean;
 }
 
+const CRLF_RE = /\r\n?/g;
+const NEWLINE_RE = /\n/g;
+
 export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineEditor {
   const { multiline = false } = opts;
   // Single state object so buffer/cursor updates are atomic.
@@ -55,8 +58,8 @@ export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineE
     (text: string) => {
       // Normalize CRLF / bare CR (paste, ESC+CR remnants) to '\n', then strip
       // newlines entirely for single-line editors.
-      let cleaned = text.replace(/\r\n?/g, '\n');
-      if (!multiline) cleaned = cleaned.replace(/\n/g, '');
+      let cleaned = text.replace(CRLF_RE, '\n');
+      if (!multiline) cleaned = cleaned.replace(NEWLINE_RE, '');
       if (!cleaned) return;
       setState((s) => ({
         buffer: s.buffer.slice(0, s.cursor) + cleaned + s.buffer.slice(s.cursor),

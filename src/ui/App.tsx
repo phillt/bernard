@@ -1503,6 +1503,18 @@ export function App({
     flashToast(`Model mode → ${chosen}`, 'success');
   }
 
+  /** Toggle the #212 escape hatch: mutate live config, persist, toast. */
+  function setSkipPermissions(enabled: boolean): void {
+    config.skipPermissions = enabled;
+    saveActiveSettings({ skipPermissions: enabled });
+    flashToast(
+      enabled
+        ? '⚠ Permission checks and safeguards DISABLED for this profile.'
+        : 'Permission checks re-enabled.',
+      enabled ? 'error' : 'success',
+    );
+  }
+
   async function runToolModePrompt(): Promise<void> {
     const modes: Array<{ value: 'read-only' | 'write' | 'skip'; label: string; desc: string }> = [
       {
@@ -1532,21 +1544,13 @@ export function App({
     if (result.cancelled) return;
     const chosen = result.item.value as 'read-only' | 'write' | 'skip';
     if (chosen === 'skip') {
-      config.skipPermissions = true;
-      saveActiveSettings({ skipPermissions: true });
-      flashToast('⚠ Permission checks and safeguards DISABLED for this profile.', 'error');
+      setSkipPermissions(true);
       return;
     }
     // Picking a guarded mode always re-arms the safeguards.
     config.toolMode = chosen;
     config.skipPermissions = false;
-    savePreferences({
-      ...loadPreferences(),
-      provider: config.provider,
-      model: config.model,
-      toolMode: chosen,
-      skipPermissions: false,
-    });
+    saveActiveSettings({ toolMode: chosen, skipPermissions: false });
     flashToast(`Tool mode → ${chosen}`, 'success');
   }
 
@@ -2092,14 +2096,7 @@ export function App({
     const value = result.item.value as string;
 
     if (value === '__skip__') {
-      config.skipPermissions = !skipOn;
-      saveActiveSettings({ skipPermissions: config.skipPermissions });
-      flashToast(
-        config.skipPermissions
-          ? '⚠ Permission checks and safeguards DISABLED for this profile.'
-          : 'Permission checks re-enabled.',
-        config.skipPermissions ? 'error' : 'success',
-      );
+      setSkipPermissions(!skipOn);
       return;
     }
 

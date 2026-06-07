@@ -359,6 +359,24 @@ export function augmentTools(
   const augmented: Record<string, any> = {};
 
   /**
+   * Profile-persisted grant lookup (#212), shared by both gates: `allow`
+   * skips the gate's prompt, `deny` refuses without prompting, `prompt`
+   * falls through to the gate's dialog. Checked after the session
+   * allowlist, before prompting.
+   */
+  const resolveProfileGrant = (
+    toolName: string,
+    permissionKey: string | null,
+    gate: 'block' | 'confirm',
+  ): 'allow' | 'deny' | 'prompt' => {
+    const grant = permissionKey ? opts.getToolPermissions?.()?.[permissionKey] : undefined;
+    if (grant === 'deny') {
+      debugLog(`augment:${toolName}:${gate}:profile-deny`, { permissionKey });
+    }
+    return grant ?? 'prompt';
+  };
+
+  /**
    * Block gate (#179). Returns `true` to fall through to {@link runGate},
    * `false` if the call was denied (caller returns a cancelled-shape result).
    *
@@ -377,15 +395,10 @@ export function augmentTools(
     const meta = readToolMeta(toolDef);
     if (!shouldBlockInReadOnly(meta, args)) return true;
     if (sessionToolAllowlist.has(toolName)) return true;
-    // Profile-persisted grant (#212) — checked after the session allowlist,
-    // before prompting. `deny` refuses without a prompt.
     const permissionKey = permissionKeyFor(toolName, args);
-    const grant = permissionKey ? opts.getToolPermissions?.()?.[permissionKey] : undefined;
+    const grant = resolveProfileGrant(toolName, permissionKey, 'block');
     if (grant === 'allow') return true;
-    if (grant === 'deny') {
-      debugLog(`augment:${toolName}:block:profile-deny`, { permissionKey });
-      return false;
-    }
+    if (grant === 'deny') return false;
     if (!blockAction) {
       debugLog(`augment:${toolName}:block:fail-closed`, { toolMode });
       return false;
@@ -430,15 +443,10 @@ export function augmentTools(
     const meta = readToolMeta(toolDef);
     const risk = riskFromMeta(meta, args);
     if (!shouldConfirm(risk, confirmThreshold)) return true;
-    // Profile-persisted grant (#212): `allow` skips the prompt entirely,
-    // `deny` cancels without prompting.
     const permissionKey = permissionKeyFor(toolName, args);
-    const grant = permissionKey ? opts.getToolPermissions?.()?.[permissionKey] : undefined;
+    const grant = resolveProfileGrant(toolName, permissionKey, 'confirm');
     if (grant === 'allow') return true;
-    if (grant === 'deny') {
-      debugLog(`augment:${toolName}:confirm:profile-deny`, { permissionKey });
-      return false;
-    }
+    if (grant === 'deny') return false;
     const input: ConfirmActionInput = {
       toolName,
       args,

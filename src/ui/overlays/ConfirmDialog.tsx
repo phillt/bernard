@@ -53,25 +53,27 @@ export type ConfirmDialogProps = ConfirmKindProps | BlockKindProps;
  */
 export function ConfirmDialog(props: ConfirmDialogProps) {
   const colors = getThemeColors();
-  const profileChoiceLabel = props.permissionKey
-    ? `Always allow \`${permissionKeyLabel(props.permissionKey)}\` for this profile`
-    : null;
-  const choices: Array<ConfirmChoice | BlockChoice> =
+  const keyLabel = props.permissionKey ? permissionKeyLabel(props.permissionKey) : null;
+  const profileLabel = keyLabel ? `Always allow \`${keyLabel}\` for this profile` : null;
+  // Choice/label pairs assembled together so the two can't drift.
+  const rows: Array<{ choice: ConfirmChoice | BlockChoice; label: string }> =
     props.kind === 'confirm'
-      ? profileChoiceLabel
-        ? ['allow-once', 'allow-session', 'allow-profile', 'cancel']
-        : ['allow-once', 'allow-session', 'cancel']
-      : profileChoiceLabel
-        ? ['allow-once', 'allow-tool-for-session', 'allow-tool-for-profile', 'deny']
-        : ['allow-once', 'allow-tool-for-session', 'deny'];
-  const labels =
-    props.kind === 'confirm'
-      ? profileChoiceLabel
-        ? ['Allow once', 'Allow for session', profileChoiceLabel, 'Cancel']
-        : ['Allow once', 'Allow for session', 'Cancel']
-      : profileChoiceLabel
-        ? ['Allow once', 'Enable for this tool, this session', profileChoiceLabel, 'Deny']
-        : ['Allow once', 'Enable for this tool, this session', 'Deny'];
+      ? [
+          { choice: 'allow-once', label: 'Allow once' },
+          { choice: 'allow-session', label: 'Allow for session' },
+          ...(profileLabel ? [{ choice: 'allow-profile' as const, label: profileLabel }] : []),
+          { choice: 'cancel', label: 'Cancel' },
+        ]
+      : [
+          { choice: 'allow-once', label: 'Allow once' },
+          { choice: 'allow-tool-for-session', label: 'Enable for this tool, this session' },
+          ...(profileLabel
+            ? [{ choice: 'allow-tool-for-profile' as const, label: profileLabel }]
+            : []),
+          { choice: 'deny', label: 'Deny' },
+        ];
+  const choices = rows.map((r) => r.choice);
+  const labels = rows.map((r) => r.label);
   const [highlight, setHighlight] = useState(0);
 
   const commit = (idx: number) => {
@@ -121,10 +123,11 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         : colors.accent;
 
   // Command-level header framing (#212): `shell (touch)` instead of bare
-  // `shell` when the permission key carries a primary command.
+  // `shell` when the permission key carries a primary command — the label
+  // differs from the raw key exactly when a `shell:` prefix was stripped.
   const toolLabel =
-    props.permissionKey && props.permissionKey.startsWith('shell:')
-      ? `${props.toolName} (${permissionKeyLabel(props.permissionKey)})`
+    keyLabel && keyLabel !== props.permissionKey
+      ? `${props.toolName} (${keyLabel})`
       : props.toolName;
 
   return (
