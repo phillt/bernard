@@ -3,6 +3,7 @@ import { execSync } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ToolOptions, ShellResult } from './types.js';
+import { isReadOnlyShellInvocation } from '../tool-permissions.js';
 import type { BernardTool } from '../framework/tools/types.js';
 import { ok, err } from '../framework/tools/types.js';
 
@@ -109,6 +110,15 @@ export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, Sh
       deterministic: false,
       sideEffect: 'local',
       cacheable: false,
+      // Per-call refinement (#212): simple invocations of known read-only
+      // commands (`ls`, `git status`, …) are read-shaped — they drop to low
+      // risk (no confirm prompt) and pass the read-only-mode block gate.
+      // Complex lines (pipes/redirects/subshells/newlines) and unknown
+      // commands stay write-shaped, keeping the historic dangerous/high path.
+      isWriteAction: (args: unknown) => {
+        const cmd = (args as Record<string, unknown> | undefined)?.command;
+        return typeof cmd === 'string' ? !isReadOnlyShellInvocation(cmd) : true;
+      },
     },
     description: SHELL_DESCRIPTION,
     parameters: SHELL_PARAMETERS,

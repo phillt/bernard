@@ -80,6 +80,19 @@ describe('riskFromMeta', () => {
     expect(riskFromMeta(m, { action: 'list' })).toBe('low');
     expect(riskFromMeta(m, { action: 'write' })).toBe('medium');
   });
+
+  it('isWriteAction downgrades read-shaped calls on dangerous-kind tools (#212)', () => {
+    const m = meta({
+      kind: 'dangerous',
+      sideEffect: 'local',
+      isWriteAction: (args) =>
+        (args as { command?: string } | undefined)?.command !== 'ls',
+    });
+    expect(riskFromMeta(m, { command: 'ls' })).toBe('low');
+    expect(riskFromMeta(m, { command: 'rm -rf /' })).toBe('high');
+    // Without args the predicate is skipped — static kind wins.
+    expect(riskFromMeta(m)).toBe('high');
+  });
 });
 
 describe('shouldConfirm', () => {

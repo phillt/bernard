@@ -62,6 +62,18 @@ function thresholdForMode(mode: 'off' | 'auto' | 'strict'): ConfirmThreshold {
  * `augmentTools` in `src/tools/augment.ts`.
  */
 export const toolModePolicy: SubPolicy<ToolMode> = (input) => {
+  // "Run Without Permission Checks or Safeguards" (#212): the user explicitly
+  // opted out of both gates for this profile. Checked before everything else
+  // — even pure-question shaping is moot when nothing can prompt or block.
+  if (input.config.skipPermissions) {
+    return {
+      mode: 'write',
+      requireConfirmForWrite: false,
+      confirmThreshold: 'never',
+      reason: 'skip-permissions',
+    };
+  }
+
   if (isPureQuestion(input.userInput)) {
     return {
       mode: 'read-only',

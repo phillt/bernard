@@ -66,8 +66,10 @@ import {
   renameProfile,
   deleteProfile,
   validateProfileName,
+  saveActiveSettings,
   type ProfileSettings,
 } from '../profiles.js';
+import { permissionKeyLabel, type ToolPermissionValue } from '../tool-permissions.js';
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible } from '../output.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
@@ -215,7 +217,7 @@ interface PendingGrid {
 interface PendingConfirm {
   kind: 'confirm';
   input: ConfirmActionInput;
-  resolve: (allowed: boolean, scope: 'once' | 'session') => void;
+  resolve: (allowed: boolean, scope: 'once' | 'session' | 'profile') => void;
 }
 
 interface PendingBlock {
@@ -884,6 +886,11 @@ export function App({
       return;
     }
 
+    if (text === '/tool-permissions') {
+      await runToolPermissionsMenu();
+      return;
+    }
+
     if (text === '/provider' || text === '/models') {
       await runModelsCatalogInk(config, requestMenu, requestTextInput, flashToast);
       return;
@@ -1497,7 +1504,7 @@ export function App({
   }
 
   async function runToolModePrompt(): Promise<void> {
-    const modes: Array<{ value: 'read-only' | 'write'; label: string; desc: string }> = [
+    const modes: Array<{ value: 'read-only' | 'write' | 'skip'; label: string; desc: string }> = [
       {
         value: 'read-only',
         label: 'Read-only (least privilege)',
@@ -1508,22 +1515,37 @@ export function App({
         label: 'Write',
         desc: 'Every tool may run; confirm gate still prompts on risk.',
       },
+      {
+        value: 'skip',
+        label: 'Run Without Permission Checks or Safeguards',
+        desc: '⚠ No blocking, no confirmation prompts — every tool call runs unattended.',
+      },
     ];
     const entries: MenuEntry[] = modes.map((m) => ({
       label: m.label,
       description: m.desc,
-      active: config.toolMode === m.value,
+      active: m.value === 'skip' ? config.skipPermissions : !config.skipPermissions && config.toolMode === m.value,
       value: m.value,
     }));
-    const result = await requestMenu(entries, { title: `Tool mode: ${config.toolMode}` });
+    const current = config.skipPermissions ? 'unrestricted' : config.toolMode;
+    const result = await requestMenu(entries, { title: `Tool mode: ${current}` });
     if (result.cancelled) return;
-    const chosen = result.item.value as 'read-only' | 'write';
+    const chosen = result.item.value as 'read-only' | 'write' | 'skip';
+    if (chosen === 'skip') {
+      config.skipPermissions = true;
+      saveActiveSettings({ skipPermissions: true });
+      flashToast('⚠ Permission checks and safeguards DISABLED for this profile.', 'error');
+      return;
+    }
+    // Picking a guarded mode always re-arms the safeguards.
     config.toolMode = chosen;
+    config.skipPermissions = false;
     savePreferences({
       ...loadPreferences(),
       provider: config.provider,
       model: config.model,
       toolMode: chosen,
+      skipPermissions: false,
     });
     flashToast(`Tool mode → ${chosen}`, 'success');
   }
@@ -1706,9 +1728,9 @@ export function App({
         kind: 'item',
         item: {
           label: 'Tool mode',
-          annotation: `= ${config.toolMode}`,
+          annotation: `= ${config.skipPermissions ? '⚠ unrestricted' : config.toolMode}`,
           description:
-            'Read-only blocks write tools until enabled. Write lets every tool run subject to the confirm gate.',
+            'Read-only blocks write tools until enabled. Write lets every tool run subject to the confirm gate. Unrestricted skips all permission checks.',
         },
         action: runToolModePrompt,
       },
@@ -2023,6 +2045,96 @@ export function App({
     });
   }
 
+  /**
+   * Persists an `allow`/`deny` grant under `key` in the active profile's
+   * `toolPermissions` (#212). Mutates the live `config` reference (the augment
+   * gates read it through `getToolPermissions` on every call) and writes the
+   * active profile so the grant survives REPL restarts.
+   */
+  function persistToolPermission(key: string, value: ToolPermissionValue): void {
+    config.toolPermissions = { ...config.toolPermissions, [key]: value };
+    saveActiveSettings({ toolPermissions: config.toolPermissions });
+  }
+
+  /**
+   * `/tool-permissions` (#212): inspect/remove the active profile's persisted
+   * grants and toggle the global "Run Without Permission Checks or
+   * Safeguards" escape hatch.
+   */
+  async function runToolPermissionsMenu(): Promise<void> {
+    const skipOn = config.skipPermissions;
+    const keys = Object.keys(config.toolPermissions).sort();
+    const entries: MenuEntry[] = [
+      {
+        label: 'Run Without Permission Checks or Safeguards',
+        annotation: skipOn ? 'ON' : 'off',
+        description: skipOn
+          ? 'Every tool call runs without prompts or read-only blocking. Select to turn back off.'
+          : 'Disable the block gate and every confirmation prompt for this profile.',
+        value: '__skip__',
+      },
+      ...(keys.length > 0
+        ? [
+            { type: 'section' as const, title: 'Profile grants:' },
+            ...keys.map((k) => ({
+              label: k,
+              annotation: config.toolPermissions[k],
+              value: k,
+            })),
+            { label: 'Reset all grants', value: '__reset__' },
+          ]
+        : [{ type: 'section' as const, title: 'No tool grants saved for this profile.' }]),
+    ];
+    const result = await requestMenu(entries, {
+      title: `Tool permissions — profile grants persist across sessions`,
+    });
+    if (result.cancelled) return;
+    const value = result.item.value as string;
+
+    if (value === '__skip__') {
+      config.skipPermissions = !skipOn;
+      saveActiveSettings({ skipPermissions: config.skipPermissions });
+      flashToast(
+        config.skipPermissions
+          ? '⚠ Permission checks and safeguards DISABLED for this profile.'
+          : 'Permission checks re-enabled.',
+        config.skipPermissions ? 'error' : 'success',
+      );
+      return;
+    }
+
+    if (value === '__reset__') {
+      config.toolPermissions = {};
+      saveActiveSettings({ toolPermissions: {} });
+      flashToast('All profile tool grants removed.', 'success');
+      return;
+    }
+
+    // Per-grant submenu.
+    const current = config.toolPermissions[value];
+    if (!current) return;
+    const flipped: ToolPermissionValue = current === 'allow' ? 'deny' : 'allow';
+    const sub = await requestMenu(
+      [
+        { label: 'Remove grant', value: 'remove' },
+        { label: `Switch to ${flipped}`, value: 'switch' },
+        { label: 'Cancel', value: 'cancel' },
+      ],
+      { title: `${value} — currently ${current}` },
+    );
+    if (sub.cancelled || sub.item.value === 'cancel') return;
+    if (sub.item.value === 'remove') {
+      const updated = { ...config.toolPermissions };
+      delete updated[value];
+      config.toolPermissions = updated;
+      saveActiveSettings({ toolPermissions: updated });
+      flashToast(`Removed grant for "${permissionKeyLabel(value)}".`, 'success');
+      return;
+    }
+    persistToolPermission(value, flipped);
+    flashToast(`"${permissionKeyLabel(value)}" switched to ${flipped}.`, 'success');
+  }
+
   function requestConfirm(input: ConfirmActionInput, signal?: AbortSignal): Promise<boolean> {
     const key = `${input.toolName}:${stableHash(input.args)}`;
     if (confirmAllowSession.current.get(key)) return Promise.resolve(true);
@@ -2046,6 +2158,9 @@ export function App({
         resolve: (allowed, scope) => {
           signal?.removeEventListener('abort', onAbort);
           if (allowed && scope === 'session') confirmAllowSession.current.set(key, true);
+          if (allowed && scope === 'profile' && input.permissionKey) {
+            persistToolPermission(input.permissionKey, 'allow');
+          }
           finish(allowed);
         },
       });
@@ -2073,6 +2188,9 @@ export function App({
         input,
         resolve: (outcome) => {
           signal?.removeEventListener('abort', onAbort);
+          if (outcome === 'allow-tool-for-profile' && input.permissionKey) {
+            persistToolPermission(input.permissionKey, 'allow');
+          }
           finish(outcome);
         },
       });
@@ -2204,6 +2322,7 @@ export function App({
           toolName={pendingDialog.input.toolName}
           reason={pendingDialog.input.reason}
           risk={pendingDialog.input.risk}
+          permissionKey={pendingDialog.input.permissionKey}
           onResolve={(allowed, scope) => {
             pendingDialog.resolve(allowed, scope);
             setPendingDialog(null);
@@ -2242,6 +2361,7 @@ export function App({
           kind="block"
           toolName={pendingDialog.input.toolName}
           reason={pendingDialog.input.reason}
+          permissionKey={pendingDialog.input.permissionKey}
           onResolve={(outcome) => {
             pendingDialog.resolve(outcome);
             setPendingDialog(null);

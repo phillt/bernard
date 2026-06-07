@@ -40,6 +40,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/candidates', description: 'Review specialist suggestions' },
   { name: '/options', description: 'View and set options (max-tokens, max-steps, …)' },
   { name: '/agent-options', description: 'Configure agent behavior (toggles, thresholds)' },
+  { name: '/tool-permissions', description: 'View/remove profile tool grants; skip-permissions toggle' },
   { name: '/profiles', description: 'Switch / create settings profiles' },
   { name: '/manage-profiles', description: 'Rename or delete saved profiles' },
   { name: '/update', description: 'Check for and install updates' },

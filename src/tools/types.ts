@@ -1,4 +1,5 @@
 import type { RiskLevel } from '../risk.js';
+import type { ToolPermissions } from '../tool-permissions.js';
 
 /**
  * Input passed to the unified pre-execution confirmation callback (issue #144).
@@ -17,6 +18,13 @@ export interface ConfirmActionInput {
   risk: RiskLevel;
   /** One-line human description rendered to the user; e.g. the shell command. */
   reason: string;
+  /**
+   * Profile-grant key for this call (#212): `shell:<primary>` for simple
+   * shell commands, the tool name otherwise, or `null` when no stable key
+   * exists (complex shell lines). `null` ⇒ the dialog hides the
+   * "Always allow for this profile" option.
+   */
+  permissionKey?: string | null;
 }
 
 /** A single question for the `askUser` callback. */
@@ -44,15 +52,22 @@ export interface BlockActionInput {
   args: unknown;
   /** One-line human description rendered to the user. */
   reason: string;
+  /** Profile-grant key for this call (#212) — see {@link ConfirmActionInput.permissionKey}. */
+  permissionKey?: string | null;
 }
 
 /**
  * User decision returned from the block callback:
  *  - `allow-once`              — let this single call through; future calls re-prompt.
  *  - `allow-tool-for-session`  — add this tool name to the session allowlist; same-tool calls bypass the block gate.
+ *  - `allow-tool-for-profile`  — persist an `allow` grant under the call's permission key in the active profile (#212). The UI layer owns the persistence; the gate just proceeds.
  *  - `deny`                    — cancel the call.
  */
-export type BlockOutcome = 'allow-once' | 'allow-tool-for-session' | 'deny';
+export type BlockOutcome =
+  | 'allow-once'
+  | 'allow-tool-for-session'
+  | 'allow-tool-for-profile'
+  | 'deny';
 
 /** Options shared by all tool implementations. */
 export interface ToolOptions {
@@ -105,6 +120,14 @@ export interface ToolOptions {
    * Omitted in non-interactive environments (cron daemon).
    */
   askUser?: (questions: AskUserQuestion[], signal?: AbortSignal) => Promise<AskUserBatchResult>;
+  /**
+   * Live reader for the active profile's persisted tool grants (#212).
+   * Consulted by both augment gates before prompting: `allow` proceeds,
+   * `deny` refuses, absent falls through to the prompt. A function (not a
+   * snapshot) so mid-session grants and profile switches take effect
+   * immediately. Omitted by cron — headless runs never honor profile grants.
+   */
+  getToolPermissions?: () => ToolPermissions | undefined;
 }
 
 /** Outcome of a shell tool invocation. */

@@ -205,4 +205,124 @@ describe('<ConfirmDialog>', () => {
       expect(onResolve).toHaveBeenCalledWith('deny');
     });
   });
+
+  describe('profile grants (#212, permissionKey set)', () => {
+    it('confirm kind renders the 4th choice with the command label and shell header tag', () => {
+      const { lastFrame } = render(
+        createElement(ConfirmDialog, {
+          kind: 'confirm',
+          toolName: 'shell',
+          reason: '$ touch x',
+          risk: 'high',
+          permissionKey: 'shell:touch',
+          onResolve: () => {},
+          onCancel: () => {},
+        }),
+      );
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('Confirm high: shell (touch)');
+      expect(frame).toContain('3. Always allow `touch` for this profile');
+      expect(frame).toContain('4. Cancel');
+    });
+
+    it('confirm kind: Down x2 + Enter resolves profile scope', async () => {
+      const onResolve = vi.fn();
+      const { stdin } = render(
+        createElement(ConfirmDialog, {
+          kind: 'confirm',
+          toolName: 'web_read',
+          reason: 'r',
+          permissionKey: 'web_read',
+          onResolve,
+          onCancel: () => {},
+        }),
+      );
+      await tick();
+      stdin.write(ARROW_DOWN);
+      stdin.write(ARROW_DOWN);
+      await tick();
+      stdin.write(ENTER);
+      await tick();
+      expect(onResolve).toHaveBeenCalledWith(true, 'profile');
+    });
+
+    it('confirm kind: Down x3 + Enter still reaches Cancel', async () => {
+      const onResolve = vi.fn();
+      const { stdin } = render(
+        createElement(ConfirmDialog, {
+          kind: 'confirm',
+          toolName: 'web_read',
+          reason: 'r',
+          permissionKey: 'web_read',
+          onResolve,
+          onCancel: () => {},
+        }),
+      );
+      await tick();
+      stdin.write(ARROW_DOWN);
+      stdin.write(ARROW_DOWN);
+      stdin.write(ARROW_DOWN);
+      await tick();
+      stdin.write(ENTER);
+      await tick();
+      expect(onResolve).toHaveBeenCalledWith(false, 'once');
+    });
+
+    it('confirm kind: digit 3 commits the profile choice', async () => {
+      const onResolve = vi.fn();
+      const { stdin } = render(
+        createElement(ConfirmDialog, {
+          kind: 'confirm',
+          toolName: 'web_read',
+          reason: 'r',
+          permissionKey: 'web_read',
+          onResolve,
+          onCancel: () => {},
+        }),
+      );
+      await tick();
+      stdin.write('3');
+      await tick();
+      expect(onResolve).toHaveBeenCalledWith(true, 'profile');
+    });
+
+    it('block kind: Down x2 + Enter commits allow-tool-for-profile; Deny moves to 4', async () => {
+      const onResolve = vi.fn();
+      const { stdin, lastFrame } = render(
+        createElement(ConfirmDialog, {
+          kind: 'block',
+          toolName: 'shell',
+          reason: '$ touch x',
+          permissionKey: 'shell:touch',
+          onResolve,
+          onCancel: () => {},
+        }),
+      );
+      expect(lastFrame()).toContain('4. Deny');
+      await tick();
+      stdin.write(ARROW_DOWN);
+      stdin.write(ARROW_DOWN);
+      await tick();
+      stdin.write(ENTER);
+      await tick();
+      expect(onResolve).toHaveBeenCalledWith('allow-tool-for-profile');
+    });
+
+    it('null permissionKey keeps the historic 3-choice list', () => {
+      const { lastFrame } = render(
+        createElement(ConfirmDialog, {
+          kind: 'confirm',
+          toolName: 'shell',
+          reason: '$ touch x; rm -rf /',
+          risk: 'high',
+          permissionKey: null,
+          onResolve: () => {},
+          onCancel: () => {},
+        }),
+      );
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('3. Cancel');
+      expect(frame).not.toContain('for this profile');
+    });
+  });
 });

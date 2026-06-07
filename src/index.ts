@@ -299,6 +299,10 @@ async function runInkRepl(args: {
     blockAction,
     sessionToolAllowlist,
     askUser,
+    // Profile-persisted grants (#212). Reads the live config reference so
+    // "always allow for this profile" decisions and profile switches
+    // (applyProfileToConfig mutates in place) take effect immediately.
+    getToolPermissions: () => config.toolPermissions,
   };
 
   let initialHistory: CoreMessage[] | undefined;
@@ -383,13 +387,27 @@ async function runInkRepl(args: {
             }),
           );
           const __dirname = path.dirname(fileURLToPath(import.meta.url));
-          const workerPath = path.join(__dirname, 'rag-worker.js');
-          const child = childProcess.spawn(process.execPath, [workerPath, tempFile], {
-            detached: true,
-            stdio: 'ignore',
-            env: process.env,
-          });
-          child.unref();
+          // Built install: this file lives in dist/ next to rag-worker.js.
+          // Dev (`npm run dev` via tsx): import.meta.url points at src/, where
+          // only rag-worker.ts exists — fall back to the built sibling in
+          // dist/ so exit-time extraction works in dev sessions too.
+          let workerPath = path.join(__dirname, 'rag-worker.js');
+          if (!fs.existsSync(workerPath)) {
+            workerPath = path.join(__dirname, '..', 'dist', 'rag-worker.js');
+          }
+          if (fs.existsSync(workerPath)) {
+            const child = childProcess.spawn(process.execPath, [workerPath, tempFile], {
+              detached: true,
+              stdio: 'ignore',
+              env: process.env,
+            });
+            child.unref();
+          } else {
+            // No built worker anywhere (fresh clone, never built). Drop the
+            // payload so it doesn't sit as an orphan until the 1h reaper.
+            fs.unlinkSync(tempFile);
+            debugLog('rag:exit-worker-missing', { workerPath });
+          }
         }
       }
     } catch {

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   buildSystemPrompt,
   Agent,
@@ -18,6 +18,7 @@ import { MemoryStore } from './memory.js';
 import { printWarning, printInfo } from './output.js';
 import { getModelProfile } from './providers/index.js';
 import { assembleContext } from './framework/context.js';
+import { setOutputSink } from './framework/hooks/output-sink.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
@@ -86,11 +87,13 @@ vi.mock('./tools/subagent.js', () => ({
 }));
 
 const mockGenerateText = vi.fn();
+const mockStreamText = vi.fn();
 vi.mock('ai', async (importOriginal) => {
   const actual = (await importOriginal()) as any;
   return {
     ...actual,
     generateText: (...args: any[]) => mockGenerateText(...args),
+    streamText: (...args: any[]) => mockStreamText(...args),
   };
 });
 
@@ -1597,5 +1600,151 @@ describe('Agent', () => {
       expect(userMsg.content[2].type).toBe('image');
       expect(userMsg.content[2].mimeType).toBe('image/jpeg');
     });
+  });
+});
+
+describe('partial history preserved on abort (Esc)', () => {
+  let store: MemoryStore;
+  const toolOptions = {
+    shellTimeout: 30000,
+    confirmDangerous: vi.fn(),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    store = new MemoryStore();
+    setOutputSink(null);
+  });
+
+  afterEach(() => {
+    setOutputSink(null);
+  });
+
+  /** Step payload shaped like the AI SDK's StepResult subset our hooks read. */
+  function stepPayload(messages: any[]): any {
+    return {
+      text: 'step text',
+      toolCalls: [],
+      toolResults: [],
+      finishReason: 'tool-calls',
+      usage: { promptTokens: 10, completionTokens: 5 },
+      response: { messages },
+    };
+  }
+
+  it('abort after a completed step preserves its messages plus an interrupted note', async () => {
+    const stepMessages = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'shell', args: { cmd: 'ls' } }],
+      },
+      {
+        role: 'tool',
+        content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'shell', result: 'ok' }],
+      },
+    ];
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    mockGenerateText.mockImplementation(async (opts: any) => {
+      // Step 1 completes (tools executed, cumulative snapshot delivered)...
+      await opts.onStepFinish?.(stepPayload(stepMessages));
+      // ...then the user hits Esc while step 2 is in flight.
+      agent.abort();
+      throw new DOMException('Aborted', 'AbortError');
+    });
+
+    await agent.processInput('list my files');
+
+    const history = agent.getHistory();
+    expect(history[0].role).toBe('user');
+    expect(history).toContainEqual(stepMessages[0]);
+    expect(history).toContainEqual(stepMessages[1]);
+    expect(history[history.length - 1]).toEqual({
+      role: 'assistant',
+      content: '[interrupted by user]',
+    });
+  });
+
+  it('abort mid-stream preserves the partial text with the note appended', async () => {
+    // Registering a sink flips the main definition onto the streamText branch,
+    // which is where per-token deltas (and thus partial text) exist.
+    setOutputSink({ append: vi.fn() });
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    mockStreamText.mockImplementation(() => {
+      async function* fullStream() {
+        yield { type: 'text-delta', textDelta: 'partial ' };
+        yield { type: 'text-delta', textDelta: 'answer' };
+        agent.abort();
+        // Hang: the runner's abort race unwinds the await.
+        await new Promise(() => {});
+      }
+      return { fullStream: fullStream() };
+    });
+
+    await agent.processInput('long question');
+
+    const history = agent.getHistory();
+    expect(history[0].role).toBe('user');
+    expect(history[1]).toEqual({
+      role: 'assistant',
+      content: 'partial answer\n\n[interrupted by user]',
+    });
+  });
+
+  it('does not flush or double-push on a successful turn', async () => {
+    const stepMessages = [{ role: 'assistant', content: 'done' }];
+    mockGenerateText.mockImplementation(async (opts: any) => {
+      await opts.onStepFinish?.(stepPayload(stepMessages));
+      return {
+        response: { messages: stepMessages },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      };
+    });
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+
+    const history = agent.getHistory();
+    const assistantMsgs = history.filter((m: any) => m.role === 'assistant');
+    expect(assistantMsgs).toEqual(stepMessages);
+    expect(JSON.stringify(history)).not.toContain('[interrupted by user]');
+  });
+
+  it('clears the recorder between turns so stale partials never resurface', async () => {
+    const turn1Messages = [{ role: 'assistant', content: 'turn one answer' }];
+    mockGenerateText.mockImplementation(async (opts: any) => {
+      await opts.onStepFinish?.(stepPayload(turn1Messages));
+      return {
+        response: { messages: turn1Messages },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      };
+    });
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    await agent.processInput('first');
+
+    // Second turn: abort before anything is generated.
+    mockGenerateText.mockImplementation(async () => {
+      agent.abort();
+      throw new DOMException('Aborted', 'AbortError');
+    });
+    const lenBefore = agent.getHistory().length;
+    await agent.processInput('second');
+
+    const history = agent.getHistory();
+    // Only the new user message was added — no stale turn-1 partials, no note.
+    expect(history.length).toBe(lenBefore + 1);
+    expect(history[history.length - 1].role).toBe('user');
+    expect(JSON.stringify(history.slice(lenBefore))).not.toContain('[interrupted by user]');
+  });
+
+  it('abort with nothing captured keeps current behavior (user message only)', async () => {
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    mockGenerateText.mockImplementation(async () => {
+      agent.abort();
+      throw new DOMException('Aborted', 'AbortError');
+    });
+    await agent.processInput('Hello');
+
+    const history = agent.getHistory();
+    expect(history).toHaveLength(1);
+    expect(history[0].role).toBe('user');
   });
 });

@@ -34,6 +34,45 @@ describe('profiles store', () => {
     expect(settings.modelMode).toBe('balanced');
   });
 
+  it('round-trips toolPermissions and skipPermissions through save and load (#212)', async () => {
+    const m = await loadModule();
+    m.saveActiveSettings({
+      toolPermissions: { 'shell:git': 'allow', web_read: 'deny' },
+      skipPermissions: true,
+    });
+    vi.resetModules();
+    const reloaded = await import('./profiles.js');
+    const settings = reloaded.getActiveSettings(reloaded.loadProfiles().file);
+    expect(settings.toolPermissions).toEqual({ 'shell:git': 'allow', web_read: 'deny' });
+    expect(settings.skipPermissions).toBe(true);
+  });
+
+  it('loadPreferences filters garbage toolPermissions values (#212)', async () => {
+    const configDir = path.join(tmpDir, 'bernard');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(configDir, 'profiles.json'),
+      JSON.stringify({
+        activeProfileId: 'default',
+        profiles: {
+          default: {
+            id: 'default',
+            name: 'Default',
+            settings: {
+              toolPermissions: { 'shell:ls': 'allow', bad: 'yolo', worse: 42 },
+            },
+            createdAt: 'x',
+            updatedAt: 'x',
+          },
+        },
+      }),
+    );
+    vi.resetModules();
+    const config = await import('./config.js');
+    const prefs = config.loadPreferences();
+    expect(prefs.toolPermissions).toEqual({ 'shell:ls': 'allow' });
+  });
+
   it('loadPreferences normalizes a legacy modelMode="off" on disk to "optimize-performance"', async () => {
     const configDir = path.join(tmpDir, 'bernard');
     fs.mkdirSync(configDir, { recursive: true });

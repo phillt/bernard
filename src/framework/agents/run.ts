@@ -6,6 +6,7 @@ import { makeRepairHook } from '../../tool-call-repair.js';
 import { augmentTools } from '../../tools/augment.js';
 import type { AgentContext } from '../context.js';
 import { getOutputSink } from '../hooks/output-sink.js';
+import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import type { AgentDefinition, HistoryMode, ModelOverrides, ResolvedModel } from './types.js';
@@ -36,6 +37,28 @@ export interface RunDefinitionOpts {
    * call it multiple times before returning a final {@link AgentResult}.
    */
   wrapIterate?: (inner: IterateFn) => IterateFn;
+  /**
+   * Observer for partial progress so persistent-history callers (the main
+   * agent) can preserve completed steps + streamed text when the user aborts
+   * mid-turn. Opt-in: cron / sub-agent / task dispatches don't pass it and
+   * see zero behavior change.
+   *
+   * `onIterateStart` fires at the top of every inner iterate call — the reset
+   * point. Every LLM re-invocation (wrapIterate overflow retry, auto-continue
+   * loop, ReAct enforcement) funnels through the inner iterate, and each of
+   * those paths pushes the PRIOR call's messages into persistent history
+   * itself, so after a reset the observer accumulates exactly "messages from
+   * the current in-flight call not yet in history".
+   *
+   * `onStepMessages` receives the AI SDK's cumulative `response.messages`
+   * snapshot after each completed step. `onTextDelta` receives streamed text
+   * of the in-flight step (streaming branch only).
+   */
+  partialObserver?: {
+    onIterateStart?(): void;
+    onStepMessages?(cumulativeMessages: CoreMessage[]): void;
+    onTextDelta?(delta: string): void;
+  };
 }
 
 export interface RunDefinitionResult<TFormatted> {
@@ -82,6 +105,9 @@ export async function runDefinition<TInput, TFormatted>(
     toolMode: ctx.policyDecision?.toolMode?.mode,
     blockAction: ctx.toolOptions.blockAction,
     sessionToolAllowlist: ctx.toolOptions.sessionToolAllowlist,
+    // Profile-persisted grants (#212). Live reader so mid-session grants and
+    // profile switches apply immediately. Cron's toolOptions omit it.
+    getToolPermissions: ctx.toolOptions.getToolPermissions,
     cacheEnabled: config.cacheEnabled,
     // Evidence-pointer registration (#141). Shared by reference into
     // sub-agent / tool-wrapper contexts so a `shell` call inside a wrapper
@@ -98,7 +124,19 @@ export async function runDefinition<TInput, TFormatted>(
     verificationTracker: ctx.verificationTracker,
     postWriteChecks: ctx.postWriteChecks,
   });
-  const hooks = def.hooks(ctx, input);
+  const partialObserver = opts.partialObserver;
+  const hooks = partialObserver?.onStepMessages
+    ? [
+        ...def.hooks(ctx, input),
+        {
+          onStepFinish: (payload: StepFinishPayload) => {
+            if (payload.response?.messages) {
+              partialObserver.onStepMessages!(payload.response.messages as CoreMessage[]);
+            }
+          },
+        },
+      ]
+    : def.hooks(ctx, input);
   const baseMaxSteps = def.stepBudget(config, input);
   const prepareStep = def.prepareStep?.(ctx, input, baseMaxSteps);
   const repair = def.repairLabel
@@ -157,7 +195,10 @@ export async function runDefinition<TInput, TFormatted>(
   const sink = def.streaming ? getOutputSink() : null;
   const useStreaming = sink !== null;
   const onTextDelta = useStreaming
-    ? (delta: string) => sink.append({ kind: 'text-delta', text: delta })
+    ? (delta: string) => {
+        sink.append({ kind: 'text-delta', text: delta });
+        partialObserver?.onTextDelta?.(delta);
+      }
     : undefined;
   const onToolCallStart = useStreaming
     ? (ev: { callId: string; toolName: string; args: unknown }) =>
@@ -202,6 +243,11 @@ export async function runDefinition<TInput, TFormatted>(
 
   let stepLimitHit = false;
   const innerIterate: IterateFn = async (iterOpts: IterateOpts) => {
+    // Reset the partial-progress recorder for this LLM call. Any prior call's
+    // messages have already been (or are about to be) pushed into persistent
+    // history by the caller's wrapIterate / strategy extras — see the
+    // `partialObserver` doc on RunDefinitionOpts.
+    partialObserver?.onIterateStart?.();
     const contextMsgs = await getContextMessages();
     const seedWithContext = insertContextBeforeLastUser(contextMsgs, getSeed());
     const messages = composeMessages(def.historyMode, seedWithContext, iterOpts.extra);
