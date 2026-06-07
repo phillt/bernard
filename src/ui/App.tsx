@@ -229,6 +229,14 @@ interface PendingBlock {
 type PendingDialog = PendingConfirm | PendingBlock;
 
 /**
+ * "Other"-shaped choice labels ("Other", "Other (I'll specify)", …).
+ * Models include these in `ask_user` choices despite the tool description
+ * saying not to (#230); `requestAskUser` dedupes against the auto-appended
+ * escape hatch and routes matching selections to the free-text input.
+ */
+const OTHER_RE = /^other\b/i;
+
+/**
  * Top-level Ink component. Owns the lifecycle of a Bernard REPL session:
  * turn submission, history versioning, overlay queueing, Shift-Tab cycling,
  * and Esc / Ctrl-C handling.
@@ -2219,13 +2227,21 @@ export function App({
       }
 
       // Choice question; append an "Other" escape hatch if requested.
+      // Models often include their own "Other" entry despite the tool
+      // description (#230) — when they do, skip the duplicate and treat
+      // the model's entry as the escape hatch instead.
       const otherLabel = q.otherLabel?.trim() || 'Other (type your own)';
       const entries: MenuEntry[] = q.choices.map((c) => ({ label: c }));
-      if (q.allowOther) entries.push({ label: otherLabel });
+      const hasModelOther = q.choices.some((c) => OTHER_RE.test(c.trim()));
+      const appendedHatch = q.allowOther && !hasModelOther;
+      if (appendedHatch) entries.push({ label: otherLabel });
       const result = await requestMenu(entries, { title: q.question });
       if (result.cancelled) return { cancelled: true, answered: answers };
 
-      if (q.allowOther && result.index === entries.length - 1) {
+      const pickedHatch =
+        (appendedHatch && result.index === entries.length - 1) ||
+        OTHER_RE.test(result.item.label.trim());
+      if (pickedHatch) {
         // User picked "Other" — gather free-form text.
         const free = await requestTextInput({ label: q.question });
         if (free.cancelled) return { cancelled: true, answered: answers };

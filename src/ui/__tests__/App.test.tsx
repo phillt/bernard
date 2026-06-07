@@ -66,6 +66,7 @@ process.env.BERNARD_HOME = TMP_HOME;
 
 // ── Imports under test (after mocks + env) ──────────────────────────────
 import { App, type AppStores } from '../App.js';
+import { getInkHandlers } from '../ink-handlers.js';
 import type { BernardConfig } from '../../config.js';
 import type { Agent } from '../../agent.js';
 import type { HistoryStore } from '../../history.js';
@@ -420,6 +421,91 @@ describe('<App> plain-text turn', () => {
     await submit(stdin, 'hi');
     await tick(40);
     expect(lastFrame()).not.toContain('CRON_ALERT — job foo');
+    unmount();
+  });
+});
+
+describe('<App> requestAskUser "Other" dedup (#230)', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does not append the escape hatch when the model already provided an "Other" choice', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    const pending = getInkHandlers()!.requestAskUser([
+      { question: 'How many kids?', choices: ['1 kid', '2 kids', 'Other'], allowOther: true },
+    ]);
+    await tick(40);
+    const frame = lastFrame()!;
+    expect(frame).toContain('How many kids?');
+    expect(frame).toContain('3. Other');
+    expect(frame).not.toContain('Other (type your own)');
+    expect(frame).not.toContain('4.');
+    // Selecting the model's "Other" routes to the free-text input.
+    stdin.write('3');
+    await tick(40);
+    expect(lastFrame()).not.toContain('1 kid'); // menu gone → text input
+    stdin.write('four kids');
+    await tick();
+    stdin.write(ENTER);
+    await tick(40);
+    await expect(pending).resolves.toEqual({ answers: ['four kids'] });
+    unmount();
+  });
+
+  it('routes a model-provided "Other (I\'ll specify)" variant to free text even with allowOther false', async () => {
+    const { stdin, unmount } = renderApp();
+    await tick();
+    const pending = getInkHandlers()!.requestAskUser([
+      {
+        question: 'Pick one',
+        choices: ['A', "Other (I'll specify)"],
+        allowOther: false,
+      },
+    ]);
+    await tick(40);
+    stdin.write('2');
+    await tick(40);
+    stdin.write('custom answer');
+    await tick();
+    stdin.write(ENTER);
+    await tick(40);
+    await expect(pending).resolves.toEqual({ answers: ['custom answer'] });
+    unmount();
+  });
+
+  it('still returns the label for a normal choice', async () => {
+    const { stdin, unmount } = renderApp();
+    await tick();
+    const pending = getInkHandlers()!.requestAskUser([
+      { question: 'Pick one', choices: ['A', 'B', 'Other'], allowOther: true },
+    ]);
+    await tick(40);
+    stdin.write('1');
+    await tick(40);
+    await expect(pending).resolves.toEqual({ answers: ['A'] });
+    unmount();
+  });
+
+  it('still appends the escape hatch when no "Other"-shaped choice exists', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    const pending = getInkHandlers()!.requestAskUser([
+      { question: 'Pick one', choices: ['A', 'B'], allowOther: true },
+    ]);
+    await tick(40);
+    expect(lastFrame()).toContain('Other (type your own)');
+    stdin.write('3');
+    await tick(40);
+    stdin.write('free text');
+    await tick();
+    stdin.write(ENTER);
+    await tick(40);
+    await expect(pending).resolves.toEqual({ answers: ['free text'] });
     unmount();
   });
 });
