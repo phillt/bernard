@@ -1,5 +1,5 @@
 import { useSyncExternalStore, type ReactNode } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, useStdout } from 'ink';
 import type {
   CoreMessage,
   CoreUserMessage,
@@ -15,6 +15,7 @@ type ReasoningPart = { type: 'reasoning'; text: string };
 type RedactedReasoningPart = { type: 'redacted-reasoning'; data: string };
 import { getThemeColors } from '../theme.js';
 import { truncate } from '../text.js';
+import { renderMarkdown, healStreamMarkdown } from './markdown.js';
 import type { MessageStore, StreamEvent } from './message-store.js';
 
 interface ThreadProps {
@@ -178,6 +179,30 @@ function groupByLabel(events: readonly StreamEvent[]): EventGroup[] {
   return out;
 }
 
+/**
+ * Assistant prose rendered as themed ANSI markdown. The rendered string is
+ * split on newlines into one `<Text>` per line — a single multi-line ANSI
+ * `<Text>` confuses Ink's width measurement (ink#907). `streaming` runs the
+ * buffer through `healStreamMarkdown` first so incomplete mid-stream syntax
+ * (`**partial`, open fences) doesn't flash raw delimiters.
+ */
+function MarkdownLines({ text, streaming = false }: { text: string; streaming?: boolean }) {
+  const { stdout } = useStdout();
+  const colors = getThemeColors();
+  // App's outer <Box> has paddingX={2}; keep the table/rule width inside it.
+  const width = Math.max(40, (stdout?.columns ?? 80) - 4);
+  const source = streaming ? healStreamMarkdown(text) : text;
+  const rendered = renderMarkdown(source, width, colors);
+  return (
+    <Box flexDirection="column">
+      {rendered.split('\n').map((line, i) => (
+        // Empty-string <Text> collapses to zero height; keep blank lines.
+        <Text key={i}>{line.length === 0 ? ' ' : line}</Text>
+      ))}
+    </Box>
+  );
+}
+
 function StreamGroupBody({
   events,
   toolDetails,
@@ -206,12 +231,12 @@ function StreamGroupBody({
       elements.push(
         <Box key={`t-${textKey++}`}>
           {chevron}
-          <Text>{textBuffer}</Text>
+          <MarkdownLines text={textBuffer} streaming />
         </Box>,
       );
       chevronPending = false;
     } else {
-      elements.push(<Text key={`t-${textKey++}`}>{textBuffer}</Text>);
+      elements.push(<MarkdownLines key={`t-${textKey++}`} text={textBuffer} streaming />);
     }
     textBuffer = '';
   };
@@ -407,11 +432,11 @@ function AssistantMessage({
     if (part.type === 'text') {
       rendered.push(
         chevronUsed ? (
-          <Text key={idx}>{part.text}</Text>
+          <MarkdownLines key={idx} text={part.text} />
         ) : (
           <Box key={idx}>
             {chevron}
-            <Text>{part.text}</Text>
+            <MarkdownLines text={part.text} />
           </Box>
         ),
       );

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
+import stripAnsi from 'strip-ansi';
 import type { CoreMessage } from 'ai';
 import { Thread } from '../Thread.js';
 import { MessageStore } from '../message-store.js';
@@ -387,6 +388,57 @@ describe('<Thread>', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('⚙ plan');
     expect(frame).not.toContain('hidden step');
+  });
+
+  it('renders assistant markdown formatted (no literal ** delimiters)', () => {
+    const history: CoreMessage[] = [
+      { role: 'assistant', content: 'some **bold text** here' },
+    ];
+    const { lastFrame } = render(createElement(Thread, { history }));
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('❮'); // chevron regression guard
+    expect(frame).toContain('bold text');
+    expect(frame).not.toContain('**');
+  });
+
+  it('renders assistant headings without the # prefix', () => {
+    const history: CoreMessage[] = [
+      { role: 'assistant', content: '# Big Title\n\nbody text' },
+    ];
+    const { lastFrame } = render(createElement(Thread, { history }));
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('Big Title');
+    expect(frame).not.toContain('# Big Title');
+    expect(frame).toContain('body text');
+  });
+
+  it('renders streaming markdown formatted with healed partial syntax', () => {
+    const store = new MessageStore();
+    store.append({ kind: 'text-delta', text: 'streamed **bo' });
+    store.append({ kind: 'text-delta', text: 'ld**' });
+    const { lastFrame } = render(
+      createElement(Thread, { history: [], messageStore: store, busy: true }),
+    );
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('❮');
+    expect(frame).toContain('streamed bold');
+    expect(frame).not.toContain('**');
+  });
+
+  it('leaves reasoning text raw (no markdown treatment)', () => {
+    const history: CoreMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: 'raw **scratchpad** text' },
+          { type: 'text', text: 'answer' },
+        ] as unknown as CoreMessage['content'],
+      },
+    ];
+    const { lastFrame } = render(createElement(Thread, { history }));
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('**scratchpad**');
+    expect(frame).toContain('answer');
   });
 
   it('echoes the plan step list on a streaming plan create when toolDetails is on', () => {
