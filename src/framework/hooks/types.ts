@@ -1,3 +1,5 @@
+import type { CoreMessage } from 'ai';
+
 /**
  * Payload passed to `onStepFinish` by the AI SDK after each generation step.
  *
@@ -10,6 +12,13 @@ export interface StepFinishPayload {
   toolResults: { toolName: string; toolCallId: string; result: unknown }[];
   usage?: { promptTokens: number; completionTokens: number };
   finishReason?: string;
+  /**
+   * The AI SDK's `StepResult.response` — `messages` is a CUMULATIVE snapshot
+   * of every response message generated so far in this call (verified for
+   * both `generateText` and `streamText` in ai@4.1). Optional because hooks
+   * are also exercised with hand-built payloads in tests.
+   */
+  response?: { messages?: CoreMessage[] };
 }
 
 /**

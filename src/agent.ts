@@ -109,6 +109,15 @@ export class Agent {
   /** Most recent per-turn rubric (#145). Composed at end of `processInput`. */
   private lastRubric: Rubric | null = null;
   private abortController: AbortController | null = null;
+  // Partial-progress recorder for the in-flight LLM call (issue: history lost
+  // on Esc). `partialStepMessages` holds the AI SDK's cumulative
+  // `response.messages` snapshot from the last completed step;
+  // `partialText` accumulates streamed deltas of the step still in flight.
+  // Both reset at the start of every inner iterate call (see the
+  // `partialObserver` passed to `runDefinition`) and flush into `history`
+  // only on user abort.
+  private partialStepMessages: CoreMessage[] = [];
+  private partialText: string = '';
   private lastPromptTokens: number = 0;
   // Public so tokenStatsHook (an external module) can mutate these in place
   // after each agent step. See src/framework/hooks/token-stats.ts.
@@ -610,18 +619,28 @@ export class Agent {
           return result;
         };
 
-      let runOut;
-      try {
-        runOut = await runDefinition(this.ctx, mainAgentDefinition, input, {
-          abortSignal: this.abortController!.signal,
-          seedMessages: () => this.history,
-          planStore: this.planStore,
-          wrapIterate,
-        });
-      } catch (apiErr: unknown) {
-        if (this.abortController?.signal.aborted) return;
-        throw apiErr;
-      }
+      const runOut = await runDefinition(this.ctx, mainAgentDefinition, input, {
+        abortSignal: this.abortController!.signal,
+        seedMessages: () => this.history,
+        planStore: this.planStore,
+        wrapIterate,
+        partialObserver: {
+          onIterateStart: () => {
+            this.partialStepMessages = [];
+            this.partialText = '';
+          },
+          onStepMessages: (msgs) => {
+            // Cumulative snapshot — replace, don't append. A finished step's
+            // text is already inside its messages, so deltas accumulated past
+            // this point belong to the NEXT in-flight step.
+            this.partialStepMessages = msgs;
+            this.partialText = '';
+          },
+          onTextDelta: (delta) => {
+            this.partialText += delta;
+          },
+        },
+      });
       const result = runOut.result;
 
       // Track token usage for compression decisions — use last step's prompt tokens
@@ -709,9 +728,23 @@ export class Agent {
       const truncatedMessages = truncateToolResults(result.response.messages as CoreMessage[]);
       this.history.push(...truncatedMessages);
     } catch (err: unknown) {
-      // If aborted by user, return silently — user message stays in history
+      // If aborted by user, preserve whatever the turn produced before the
+      // interrupt — completed steps (tool calls + results, already API-valid
+      // because a step only finishes after its tools execute) plus the
+      // streamed text of the step in flight — so "please continue" resumes
+      // from the interruption point instead of restarting the turn.
       if (this.abortController?.signal.aborted) {
         turnAborted = true;
+        const partial = truncateToolResults(this.partialStepMessages);
+        const text = this.partialText.trim();
+        if (text) {
+          partial.push({ role: 'assistant', content: `${text}\n\n[interrupted by user]` });
+        } else if (partial.length > 0) {
+          partial.push({ role: 'assistant', content: '[interrupted by user]' });
+        }
+        if (partial.length > 0) {
+          this.history.push(...partial);
+        }
         return;
       }
 
@@ -725,6 +758,10 @@ export class Agent {
     } finally {
       this.abortController = null;
       this.currentStrategy = null;
+      // Drop any unflushed partials so a stale snapshot can never leak into a
+      // later turn's abort flush.
+      this.partialStepMessages = [];
+      this.partialText = '';
       debugLog('turn:end', {
         durationMs: Date.now() - turnStartedAt,
         aborted: turnAborted,

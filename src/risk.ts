@@ -53,11 +53,14 @@ export function isReadOnlyMCPSuffix(name: string): boolean {
 export function riskFromMeta(meta: ToolMeta | undefined, args?: unknown): RiskLevel {
   if (!meta) return 'medium';
   if (meta.risk) return meta.risk;
+  // Per-call predicate FIRST (#212) — read-shaped invocations downgrade even
+  // on dangerous-kind tools (shell's `ls` / `git status`), not just on
+  // discriminator-style write tools (memory/scratch with action: 'read').
+  // Mirrors `shouldBlockInReadOnly`, where the predicate already overrides
+  // the static kind.
+  if (meta.isWriteAction && args !== undefined && !meta.isWriteAction(args)) return 'low';
   if (meta.kind === 'dangerous') return 'high';
   if (meta.kind === 'read' || meta.kind === 'inert') return 'low';
-  // kind === 'write' — let the per-call predicate downgrade reads on
-  // discriminator-style tools (memory/scratch with action: 'read').
-  if (meta.isWriteAction && args !== undefined && !meta.isWriteAction(args)) return 'low';
   if (meta.sideEffect === 'external-api') return 'high';
   return 'medium';
 }

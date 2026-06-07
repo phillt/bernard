@@ -51,6 +51,19 @@ describe('toolModePolicy', () => {
     expect(result.requireConfirmForWrite).toBe(false);
     expect(result.reason).toBe('pure-question');
   });
+
+  it('skipPermissions forces write + never regardless of every other setting (#212)', () => {
+    const result = toolModePolicy(
+      makePolicyInput({
+        userInput: 'delete everything in the temp folder',
+        config: { skipPermissions: true, confirmMode: 'strict', toolMode: 'read-only' },
+      }),
+    );
+    expect(result.mode).toBe('write');
+    expect(result.confirmThreshold).toBe('never');
+    expect(result.requireConfirmForWrite).toBe(false);
+    expect(result.reason).toBe('skip-permissions');
+  });
 });
 
 describe('isPureQuestion', () => {

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { SlashHints, matchSlashCommands } from './SlashHints.js';
+import { useLineEditor, LineWithCursor } from './use-line-editor.js';
 
 interface PromptProps {
   /** When true, suppress key handling — used while an overlay is open. */
@@ -29,7 +30,8 @@ interface PromptProps {
  * submits the literal buffer.
  */
 export function Prompt({ disabled = false, onSubmit, onSlashActiveChange }: PromptProps) {
-  const [buffer, setBuffer] = useState('');
+  const editor = useLineEditor('', { multiline: true });
+  const { buffer } = editor;
   const [selectedIndex, setSelectedIndex] = useState(0);
   const colors = getThemeColors();
 
@@ -52,18 +54,37 @@ export function Prompt({ disabled = false, onSubmit, onSlashActiveChange }: Prom
 
   useInput(
     (input, key) => {
+      // Newline intent — Shift+Enter where the terminal transmits it
+      // distinctly, plus the universal Ctrl+J fallback. Most terminals
+      // (e.g. VTE/GNOME Terminal) send plain \r for Shift+Enter, which is
+      // byte-identical to Enter; for those, Ctrl+J or trailing-\ work.
+      const newlineIntent =
+        input === '\n' || // Ctrl+J (LF) — works everywhere
+        (!key.return && input === '\r') || // ESC+CR (iTerm2 / VS Code Shift+Enter) — Ink strips the ESC
+        /^\[13;\d+u$/.test(input); // CSI-u modified Enter (kitty/foot/ghostty Shift+Enter = [13;2u)
+      if (newlineIntent) {
+        editor.insert('\n');
+        setSelectedIndex(0);
+        return;
+      }
       if (key.return) {
         // Highlighted slash command wins over the literal buffer.
         if (matches.length > 0) {
           const picked = matches[clampedIndex];
-          setBuffer('');
+          editor.clear();
           setSelectedIndex(0);
           onSubmit(picked.name);
           return;
         }
+        // Trailing-\ continuation (Claude Code convention): swap the
+        // backslash for a newline instead of submitting.
+        if (buffer.endsWith('\\')) {
+          editor.setBuffer(buffer.slice(0, -1) + '\n');
+          return;
+        }
         const text = buffer.trim();
         if (text.length === 0) return;
-        setBuffer('');
+        editor.clear();
         setSelectedIndex(0);
         onSubmit(text);
         return;
@@ -80,19 +101,15 @@ export function Prompt({ disabled = false, onSubmit, onSlashActiveChange }: Prom
         // Autocomplete: drop the highlighted command into the buffer and add a
         // trailing space so the user can type args without re-typing the name.
         const picked = matches[clampedIndex];
-        setBuffer(picked.name + ' ');
+        editor.setBuffer(picked.name + ' ');
         setSelectedIndex(0);
         return;
       }
-      if (key.backspace || key.delete) {
-        setBuffer((b) => b.slice(0, -1));
-        return;
-      }
-      if (key.ctrl || key.meta) return;
-      // Ignore arrow / function keys — `input` is empty for those.
-      if (input && !key.escape && !key.tab) {
-        setBuffer((b) => b + input);
+      // Cursor movement, backspace-at-cursor, and printable insertion all
+      // live in the shared line editor (see use-line-editor.tsx).
+      if (editor.handleKey(input, key)) {
         setSelectedIndex(0);
+        return;
       }
     },
     { isActive: !disabled },
@@ -105,8 +122,12 @@ export function Prompt({ disabled = false, onSubmit, onSlashActiveChange }: Prom
           <Text color={colors.accent} bold>
             {'› '}
           </Text>
-          <Text>{buffer}</Text>
-          {!disabled ? <Text color={colors.accent}>{'▌'}</Text> : null}
+          <LineWithCursor
+            buffer={buffer}
+            cursor={editor.cursor}
+            showCursor={!disabled}
+            cursorColor={colors.accent}
+          />
         </Text>
       </Box>
       <SlashHints matches={matches} selectedIndex={clampedIndex} />

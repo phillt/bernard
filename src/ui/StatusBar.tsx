@@ -15,9 +15,10 @@ const BAR_WIDTH = 10;
  * Pinned bottom-right token / context-window readout. Polls `agent.spinnerStats`
  * every 500 ms — cheap, and only mutated by the token-stats hook on step
  * boundaries, so a poll-based refresh is fine (no subscription seam needed).
- * The compression-headroom indicator is a `[████░░░░░░]` bar that gets louder
- * as it fills: muted while there's >25% headroom, warning between 5%–25%, and
- * the theme's accent color once <5% of the compression budget is left.
+ * The compression-headroom indicator is a `●●●◐○○○○○○` dot gauge (half-dot
+ * resolution) that gets louder as it fills: muted while there's >25% headroom,
+ * warning between 5%–25%, and the theme's accent color once <5% of the
+ * compression budget is left.
  */
 export function StatusBar({ agent }: StatusBarProps) {
   const colors = getThemeColors();
@@ -38,8 +39,16 @@ export function StatusBar({ agent }: StatusBarProps) {
   const usedFrac = stats ? Math.min(1, Math.max(0, stats.latestPromptTokens / thresholdTokens)) : 0;
   const freePct = (1 - usedFrac) * 100;
 
-  const filledCount = Math.round(usedFrac * BAR_WIDTH);
-  const emptyCount = BAR_WIDTH - filledCount;
+  // Quantize the fill to half-dot resolution: a dot whose fractional fill
+  // lands in [0.25, 0.75) renders as ◐ instead of rounding to fully on/off,
+  // doubling the gauge's granularity (BAR_WIDTH dots → 2×BAR_WIDTH states).
+  const exactFill = usedFrac * BAR_WIDTH;
+  let filledCount = Math.floor(exactFill);
+  const remainder = exactFill - filledCount;
+  let halfCount = 0;
+  if (remainder >= 0.75) filledCount += 1;
+  else if (remainder >= 0.25) halfCount = 1;
+  const emptyCount = BAR_WIDTH - filledCount - halfCount;
 
   // Three-stop color ramp keyed to remaining compression headroom. The filled
   // dots get progressively louder as the model's input window approaches the
@@ -64,6 +73,7 @@ export function StatusBar({ agent }: StatusBarProps) {
           first stats flush (strategy set, stats still null) an all-empty bar
           would be visual noise. */}
       {stats && filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
+      {stats && halfCount > 0 && <Text color={fillColor}>◐</Text>}
       {stats && emptyCount > 0 && (
         <Text color={colors.muted} dimColor>
           {'○'.repeat(emptyCount)}

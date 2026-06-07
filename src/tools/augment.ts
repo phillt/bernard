@@ -11,6 +11,8 @@ import { CACHE_MISS, getCachedResult, setCachedResult } from '../framework/tools
 import { redactArgs, REDACTED } from '../framework/tools/redact.js';
 import type { ProvenanceStore } from '../provenance.js';
 import type { ToolMeta } from '../framework/tools/types.js';
+import { isDangerous } from './shell.js';
+import { permissionKeyFor } from '../tool-permissions.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -141,6 +143,15 @@ export interface AugmentOptions {
    */
   sessionToolAllowlist?: Set<string>;
   /**
+   * Live reader for the active profile's persisted tool grants (#212).
+   * Consulted by both gates before prompting — `allow` proceeds, `deny`
+   * refuses, absent falls through to the prompt. Keys come from
+   * `permissionKeyFor` (`shell:<primary>` for simple shell commands, the
+   * tool name otherwise). Omitted by cron and tests → both gates behave
+   * exactly as before #212.
+   */
+  getToolPermissions?: ToolOptions['getToolPermissions'];
+  /**
    * Deterministic tool result cache toggle (#171). When omitted or `true`,
    * tools whose `ToolMeta` passes `isCacheable` (deterministic + no side
    * effects, or `cacheable: true`) hit the in-process TTL cache in
@@ -186,13 +197,16 @@ function isProfileStore(v: AugmentOptions | ToolProfileStore): v is ToolProfileS
 
 /**
  * One-line description for the confirmation prompt. Shell carries the command
- * verbatim (highest signal); everything else falls back to `toolName` with a
- * truncated JSON tail when args exist.
+ * verbatim (highest signal) — prefixed `Dangerous command:` only when it
+ * matches the dangerous patterns, plain `$ <cmd>` otherwise (#212); everything
+ * else falls back to `toolName` with a truncated JSON tail when args exist.
  */
 function buildConfirmReason(toolName: string, args: unknown): string {
   if (toolName === 'shell' && args && typeof args === 'object') {
     const cmd = (args as Record<string, unknown>).command;
-    if (typeof cmd === 'string') return `Dangerous command: ${cmd}`;
+    if (typeof cmd === 'string') {
+      return isDangerous(cmd) ? `Dangerous command: ${cmd}` : `$ ${cmd}`;
+    }
   }
   const snippet = args ? ` ${safeSerialize(args)}` : '';
   return `${toolName}${snippet}`;
@@ -345,6 +359,24 @@ export function augmentTools(
   const augmented: Record<string, any> = {};
 
   /**
+   * Profile-persisted grant lookup (#212), shared by both gates: `allow`
+   * skips the gate's prompt, `deny` refuses without prompting, `prompt`
+   * falls through to the gate's dialog. Checked after the session
+   * allowlist, before prompting.
+   */
+  const resolveProfileGrant = (
+    toolName: string,
+    permissionKey: string | null,
+    gate: 'block' | 'confirm',
+  ): 'allow' | 'deny' | 'prompt' => {
+    const grant = permissionKey ? opts.getToolPermissions?.()?.[permissionKey] : undefined;
+    if (grant === 'deny') {
+      debugLog(`augment:${toolName}:${gate}:profile-deny`, { permissionKey });
+    }
+    return grant ?? 'prompt';
+  };
+
+  /**
    * Block gate (#179). Returns `true` to fall through to {@link runGate},
    * `false` if the call was denied (caller returns a cancelled-shape result).
    *
@@ -363,6 +395,10 @@ export function augmentTools(
     const meta = readToolMeta(toolDef);
     if (!shouldBlockInReadOnly(meta, args)) return true;
     if (sessionToolAllowlist.has(toolName)) return true;
+    const permissionKey = permissionKeyFor(toolName, args);
+    const grant = resolveProfileGrant(toolName, permissionKey, 'block');
+    if (grant === 'allow') return true;
+    if (grant === 'deny') return false;
     if (!blockAction) {
       debugLog(`augment:${toolName}:block:fail-closed`, { toolMode });
       return false;
@@ -371,6 +407,7 @@ export function augmentTools(
       toolName,
       args,
       reason: buildConfirmReason(toolName, args),
+      permissionKey,
     };
     const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
     let outcome: BlockOutcome;
@@ -384,6 +421,11 @@ export function augmentTools(
     }
     if (outcome === 'deny') return false;
     if (outcome === 'allow-tool-for-session') sessionToolAllowlist.add(toolName);
+    // 'allow-tool-for-profile': the UI layer persisted the grant before
+    // resolving; the live getToolPermissions reader covers later calls.
+    // Deliberately NOT added to sessionToolAllowlist — that Set is keyed by
+    // tool name, so adding `shell` for a `shell:ls` grant would over-allow
+    // every shell command for the session.
     return true;
   };
 
@@ -401,11 +443,16 @@ export function augmentTools(
     const meta = readToolMeta(toolDef);
     const risk = riskFromMeta(meta, args);
     if (!shouldConfirm(risk, confirmThreshold)) return true;
+    const permissionKey = permissionKeyFor(toolName, args);
+    const grant = resolveProfileGrant(toolName, permissionKey, 'confirm');
+    if (grant === 'allow') return true;
+    if (grant === 'deny') return false;
     const input: ConfirmActionInput = {
       toolName,
       args,
       risk,
       reason: buildConfirmReason(toolName, args),
+      permissionKey,
     };
     const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
     try {

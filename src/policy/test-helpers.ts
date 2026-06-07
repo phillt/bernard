@@ -40,6 +40,8 @@ export function makePolicyInput(overrides?: {
     maxConcurrentAgents: 4,
     responseStyle: 'default',
     customProviders: {},
+    toolPermissions: {},
+    skipPermissions: false,
   };
   return {
     userInput: overrides?.userInput ?? 'hello',

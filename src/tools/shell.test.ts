@@ -115,6 +115,29 @@ describe('createShellTool', () => {
     confirmDangerous = vi.fn();
   });
 
+  describe('meta.isWriteAction (#212 read-only classification)', () => {
+    const isWriteAction = () =>
+      createShellTool({ shellTimeout: 30000, confirmDangerous }).meta.isWriteAction!;
+
+    it('classifies simple read-only commands as read-shaped', () => {
+      expect(isWriteAction()({ command: 'ls -la' })).toBe(false);
+      expect(isWriteAction()({ command: 'git status' })).toBe(false);
+      expect(isWriteAction()({ command: 'cat package.json' })).toBe(false);
+    });
+
+    it('classifies write-capable and complex commands as writes', () => {
+      expect(isWriteAction()({ command: 'rm -rf /' })).toBe(true);
+      expect(isWriteAction()({ command: 'git push' })).toBe(true);
+      expect(isWriteAction()({ command: 'ls | wc -l' })).toBe(true);
+      expect(isWriteAction()({ command: 'ls\nrm -rf /' })).toBe(true);
+    });
+
+    it('treats missing/non-string command as a write (fail-safe)', () => {
+      expect(isWriteAction()({})).toBe(true);
+      expect(isWriteAction()(undefined)).toBe(true);
+    });
+  });
+
   it('executes a safe command and returns ok envelope', async () => {
     vi.mocked(execSync).mockReturnValue('hello world');
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });

@@ -41,6 +41,10 @@ const HELP_ROWS: HelpRow[] = [
     command: '/agent-options',
     description: 'Configure agent behavior (toggles, thresholds, saved assets)',
   },
+  {
+    command: '/tool-permissions',
+    description: 'View/remove profile tool grants; toggle skip-permissions mode',
+  },
   { command: '/profiles', description: 'Switch / create settings profiles' },
   { command: '/manage-profiles', description: 'Rename or delete saved profiles' },
   { command: '/update', description: 'Check for and install updates' },

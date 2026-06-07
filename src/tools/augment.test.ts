@@ -1137,6 +1137,182 @@ describe('augmentTools', () => {
     });
   });
 
+  describe('profile permission gate (#212)', () => {
+    function makeToolWithMeta(
+      name: string,
+      kind: 'read' | 'write' | 'dangerous' = 'dangerous',
+    ) {
+      const execute = vi.fn(async () => ({ output: 'done', is_error: false }));
+      const t: any = { execute, description: name, parameters: {} };
+      attachMeta(t, { name, kind, deterministic: false, sideEffect: 'local', cacheable: false });
+      return { t, execute };
+    }
+
+    it('profile allow grant skips the confirm prompt', async () => {
+      const { t, execute } = makeToolWithMeta('t');
+      const confirmAction = vi.fn(async () => false);
+      const augmented = augmentTools(
+        { t },
+        {
+          profileStore: store,
+          confirmThreshold: 'high',
+          confirmAction,
+          getToolPermissions: () => ({ t: 'allow' }),
+        },
+      );
+      await augmented.t.execute({}, {});
+      expect(confirmAction).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('profile allow grant on shell:<cmd> skips confirm for that command only', async () => {
+      const { t: shell, execute } = makeToolWithMeta('shell');
+      const confirmAction = vi.fn(async () => false);
+      const augmented = augmentTools(
+        { shell },
+        {
+          profileStore: store,
+          confirmThreshold: 'high',
+          confirmAction,
+          getToolPermissions: () => ({ 'shell:touch': 'allow' }),
+        },
+      );
+      await augmented.shell.execute({ command: 'touch x' }, {});
+      expect(confirmAction).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalledTimes(1);
+      // Different primary command → no grant → prompts (and is denied here).
+      await augmented.shell.execute({ command: 'rm -rf ./x' }, {});
+      expect(confirmAction).toHaveBeenCalledTimes(1);
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('complex shell commands have no stable key → grant ignored, prompt fires', async () => {
+      const { t: shell, execute } = makeToolWithMeta('shell');
+      const confirmAction = vi.fn(async () => false);
+      const augmented = augmentTools(
+        { shell },
+        {
+          profileStore: store,
+          confirmThreshold: 'high',
+          confirmAction,
+          getToolPermissions: () => ({ 'shell:touch': 'allow', shell: 'allow' }),
+        },
+      );
+      await augmented.shell.execute({ command: 'touch x; rm -rf /' }, {});
+      expect(confirmAction).toHaveBeenCalledTimes(1);
+      expect(execute).not.toHaveBeenCalled();
+      // The prompt input carries permissionKey: null so the dialog hides
+      // the "always allow" option.
+      expect(confirmAction).toHaveBeenCalledWith(
+        expect.objectContaining({ permissionKey: null }),
+        undefined,
+      );
+    });
+
+    it('profile deny grant cancels without prompting', async () => {
+      const { t, execute } = makeToolWithMeta('t');
+      const confirmAction = vi.fn(async () => true);
+      const augmented = augmentTools(
+        { t },
+        {
+          profileStore: store,
+          confirmThreshold: 'high',
+          confirmAction,
+          getToolPermissions: () => ({ t: 'deny' }),
+        },
+      );
+      const r = await augmented.t.execute({}, {});
+      expect(confirmAction).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+      expect(r).toEqual({ output: 'Action cancelled by user.', is_error: true });
+    });
+
+    it('profile allow grant bypasses the read-only block gate', async () => {
+      const { t, execute } = makeToolWithMeta('t', 'write');
+      const blockAction = vi.fn(async () => 'deny' as const);
+      const augmented = augmentTools(
+        { t },
+        {
+          profileStore: store,
+          toolMode: 'read-only',
+          blockAction,
+          getToolPermissions: () => ({ t: 'allow' }),
+        },
+      );
+      await augmented.t.execute({}, {});
+      expect(blockAction).not.toHaveBeenCalled();
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('profile deny grant denies at the block gate without prompting', async () => {
+      const { t, execute } = makeToolWithMeta('t', 'write');
+      const blockAction = vi.fn(async () => 'allow-once' as const);
+      const augmented = augmentTools(
+        { t },
+        {
+          profileStore: store,
+          toolMode: 'read-only',
+          blockAction,
+          getToolPermissions: () => ({ t: 'deny' }),
+        },
+      );
+      const r = await augmented.t.execute({}, {});
+      expect(blockAction).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+      expect(r).toEqual({
+        output:
+          'Action denied — read-only mode. Ask the user to allow this tool or switch toolMode to write.',
+        is_error: true,
+      });
+    });
+
+    it("'allow-tool-for-profile' block outcome proceeds without touching the session allowlist", async () => {
+      const { t: shell, execute } = makeToolWithMeta('shell', 'write');
+      const sessionToolAllowlist = new Set<string>();
+      const blockAction = vi.fn(async () => 'allow-tool-for-profile' as const);
+      const augmented = augmentTools(
+        { shell },
+        {
+          profileStore: store,
+          toolMode: 'read-only',
+          blockAction,
+          sessionToolAllowlist,
+        },
+      );
+      await augmented.shell.execute({ command: 'touch x' }, {});
+      expect(execute).toHaveBeenCalledTimes(1);
+      // Persistence is the UI layer's job; the gate must NOT name-allowlist
+      // `shell` (that would over-allow every shell command this session).
+      expect(sessionToolAllowlist.size).toBe(0);
+    });
+
+    it('no getToolPermissions → both gates behave as before', async () => {
+      const { t, execute } = makeToolWithMeta('t');
+      const confirmAction = vi.fn(async () => true);
+      const augmented = augmentTools(
+        { t },
+        { profileStore: store, confirmThreshold: 'high', confirmAction },
+      );
+      await augmented.t.execute({}, {});
+      expect(confirmAction).toHaveBeenCalledTimes(1);
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('confirm prompt input carries the permission key', async () => {
+      const { t: shell } = makeToolWithMeta('shell');
+      const confirmAction = vi.fn(async () => false);
+      const augmented = augmentTools(
+        { shell },
+        { profileStore: store, confirmThreshold: 'high', confirmAction },
+      );
+      await augmented.shell.execute({ command: 'touch x' }, {});
+      expect(confirmAction).toHaveBeenCalledWith(
+        expect.objectContaining({ permissionKey: 'shell:touch' }),
+        undefined,
+      );
+    });
+  });
+
   describe('multiple tools', () => {
     it('augments all tools in the record independently', async () => {
       vi.mocked(detectToolError).mockReturnValue({
