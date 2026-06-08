@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
+import stripAnsi from 'strip-ansi';
 import { StatusBar } from '../StatusBar.js';
 import { COMPRESSION_THRESHOLD } from '../../context.js';
 import type { Agent } from '../../agent.js';
@@ -66,7 +67,9 @@ describe('<StatusBar> context gauge (half-dot resolution)', () => {
 describe('<StatusBar> token readout labels (#234)', () => {
   it('labels the cumulative odometer as session-scoped', () => {
     const { lastFrame } = render(createElement(StatusBar, { agent: stubAgent(0.55) }));
-    const frame = lastFrame() ?? '';
+    // Strip ANSI: Ink inserts color/reset codes between adjacent <Text> nodes,
+    // which would otherwise break regexes that span component boundaries.
+    const frame = stripAnsi(lastFrame() ?? '');
     // The odometer must read "session ...↑ ...↓" so it can't be misread as the
     // adjacent context gauge.
     expect(frame).toMatch(/session\s+1\.2k↑\s+567↓/);
@@ -74,7 +77,7 @@ describe('<StatusBar> token readout labels (#234)', () => {
 
   it('labels the gauge with the current context size (ctx)', () => {
     const { lastFrame } = render(createElement(StatusBar, { agent: stubAgent(0.55) }));
-    const frame = lastFrame() ?? '';
+    const frame = stripAnsi(lastFrame() ?? '');
     // ctx reflects latestPromptTokens (0.55 * 1000 * COMPRESSION_THRESHOLD) and
     // sits between the session odometer and the gauge glyphs.
     expect(frame).toMatch(/ctx \S+ *●/);
