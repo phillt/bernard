@@ -64,25 +64,26 @@ export function StatusBar({ agent }: StatusBarProps) {
           {'   '}
         </Text>
       )}
+      {/* The token readout + context gauge only render once real token stats
+          exist — before the first stats flush (strategy set, stats still null)
+          an all-empty bar would be visual noise. `session` is the cumulative
+          per-session odometer; `ctx` is the current input size (latest step's
+          prompt tokens) — the number the gauge actually depicts, so the two
+          can't be confused. */}
       {stats && (
-        <Text color={colors.muted}>
-          session {up}↑ {down}↓{'   '}
-        </Text>
-      )}
-      {/* Context gauge only renders once real token stats exist — before the
-          first stats flush (strategy set, stats still null) an all-empty bar
-          would be visual noise. The `ctx` readout is the current input size
-          (latest step's prompt tokens) — the number the gauge actually depicts,
-          so it can't be confused with the cumulative `session` odometer above. */}
-      {stats && (
-        <Text color={colors.muted}>ctx {formatTokenCount(stats.latestPromptTokens)} </Text>
-      )}
-      {stats && filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
-      {stats && halfCount > 0 && <Text color={fillColor}>◐</Text>}
-      {stats && emptyCount > 0 && (
-        <Text color={colors.muted} dimColor>
-          {'○'.repeat(emptyCount)}
-        </Text>
+        <>
+          <Text color={colors.muted}>
+            session {up}↑ {down}↓{'   '}
+          </Text>
+          <Text color={colors.muted}>ctx {formatTokenCount(stats.latestPromptTokens)} </Text>
+          {filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
+          {halfCount > 0 && <Text color={fillColor}>◐</Text>}
+          {emptyCount > 0 && (
+            <Text color={colors.muted} dimColor>
+              {'○'.repeat(emptyCount)}
+            </Text>
+          )}
+        </>
       )}
     </Box>
   );
