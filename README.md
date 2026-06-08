@@ -963,4 +963,17 @@ Bernard uses the [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers
 
 ## License
 
-MIT
+Bernard is licensed under the [PolyForm Noncommercial License 1.0.0](./LICENSE).
+
+**You may** use, copy, modify, fork, and share Bernard for any **noncommercial**
+purpose — personal projects, hobby use, research, experimentation, and use by
+nonprofits, schools, and government bodies.
+
+**You may not** use Bernard for commercial purposes. Commercial or for-profit
+use requires a separate commercial license.
+
+**Commercial licensing:** contact **contact@felipetadeo.dev**.
+
+> Note: PolyForm Noncommercial is a _source-available_ license, not an
+> OSI-approved open source license — the noncommercial restriction is
+> intentional.
