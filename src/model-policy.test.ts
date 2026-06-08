@@ -159,6 +159,23 @@ describe('resolveSiteModel — tier mapping per mode (anthropic lineup)', () => 
   });
 });
 
+describe('resolveMainModel — context-window source of truth (#233)', () => {
+  it('returns the lineup-resolved main model, not the stale config.model base field', async () => {
+    const { resolveMainModel } = await loadModule();
+    // base field is sonnet, but `balanced` re-tiers the main site to premium —
+    // window math must follow the model we actually talk to.
+    const config = makeConfig({ modelMode: 'balanced', model: 'claude-sonnet-4-5-20250929' });
+    expect(resolveMainModel(config)).toBe('claude-opus-4-6');
+    expect(resolveMainModel(config)).not.toBe(config.model);
+  });
+
+  it('agrees with resolveSiteModel(config, "main").modelName', async () => {
+    const { resolveMainModel, resolveSiteModel } = await loadModule();
+    const config = makeConfig({ modelMode: 'optimize-performance' });
+    expect(resolveMainModel(config)).toBe(resolveSiteModel(config, 'main').modelName);
+  });
+});
+
 describe('resolveSiteModel — openai lineup', () => {
   it('balanced picks gpt-5.2 / gpt-4.1 / gpt-4.1-mini', async () => {
     const { resolveSiteModel } = await loadModule();

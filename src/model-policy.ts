@@ -120,6 +120,20 @@ const ALL_MODEL_SITES: readonly ModelSite[] = [
 ];
 
 /**
+ * The bare model-name string for the **main** agent under the active lineup /
+ * model-mode policy. Context-window and compression math (`getContextWindow`,
+ * `shouldCompress`) must resolve through this rather than reading the legacy
+ * `config.model` base field directly (#233): the lineup system leaves
+ * `config.model` in place only as a last-resort fallback, so when a lineup
+ * re-tiers the main site to a different model, `config.model` is stale and
+ * yields the wrong context window — i.e. a mistimed compression trigger and a
+ * status gauge measured against the wrong denominator.
+ */
+export function resolveMainModel(config: BernardConfig): string {
+  return resolveSiteModel(config, 'main').modelName;
+}
+
+/**
  * Resolves the effective (provider, model) for a given LLM call site.
  *
  * Precedence (highest to lowest):

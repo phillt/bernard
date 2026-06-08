@@ -83,7 +83,7 @@ import {
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
 import { generateText } from 'ai';
-import { resolveSiteModel, logSiteModelSnapshot } from '../model-policy.js';
+import { resolveSiteModel, resolveMainModel, logSiteModelSnapshot } from '../model-policy.js';
 import { serializeMessages, extractDomainFacts, SUMMARIZATION_PROMPT } from '../context.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
 import { promoteCandidate } from '../candidate-bootstrap.js';
@@ -430,7 +430,11 @@ export function App({
         totalPromptTokens: 0,
         totalCompletionTokens: 0,
         latestPromptTokens: 0,
-        model: config.model,
+        // Lineup-resolved main model, not the stale `config.model` base field
+        // (#233) — the gauge denominator must follow the model we actually talk
+        // to. The agent loop also refreshes this each turn for mid-session
+        // lineup/model switches; this just seeds the first pre-turn render.
+        model: resolveMainModel(config),
         contextWindowOverride: config.tokenWindow || undefined,
       });
     }
@@ -1190,10 +1194,13 @@ export function App({
       saveOption(name, val);
       (config as unknown as Record<string, unknown>)[opt.configKey] = val;
       if (name === 'token-window') {
-        const modelWindow = getContextWindow(config.model);
+        // Validate against the lineup-resolved main model's window, not the
+        // stale base field (#233).
+        const mainModel = resolveMainModel(config);
+        const modelWindow = getContextWindow(mainModel);
         if (val > modelWindow) {
           flashToast(
-            `Set ${name} = ${val} (warning: exceeds ${config.model}'s context window ${modelWindow})`,
+            `Set ${name} = ${val} (warning: exceeds ${mainModel}'s context window ${modelWindow})`,
             'warning',
           );
           return;
