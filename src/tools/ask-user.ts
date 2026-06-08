@@ -24,7 +24,7 @@ export function createAskUserTool(askUser: ToolOptions['askUser']) {
                 .min(2)
                 .optional()
                 .describe(
-                  'Optional list of answer labels. Provide 2+ entries; one-choice menus are rejected.',
+                  'Optional list of answer labels. Provide 2+ entries; one-choice menus are rejected. Do NOT include your own "Other"/"None of the above" entry — an escape-hatch option is appended automatically (control it via allow_other / other_label).',
                 ),
               allow_other: z
                 .boolean()
