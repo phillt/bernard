@@ -6,7 +6,8 @@ import type { MenuEntry, MenuItem, MenuOptions } from '../menu-types.js';
 interface MenuOverlayProps {
   entries: MenuEntry[];
   options?: MenuOptions;
-  onSelect: (index: number, item: MenuItem) => void;
+  /** Single-select commit. Optional because multi-select mode uses {@link onMultiSelect} instead. */
+  onSelect?: (index: number, item: MenuItem) => void;
   onCancel: () => void;
   /**
    * Optional external cancel signal. The legacy `selectFromMenu` accepts one
@@ -92,13 +93,17 @@ export function MenuOverlay({
       if (multiSelect) {
         // Commit the checked set in row order; fall back to the highlighted row
         // when nothing is checked so Enter is never a no-op.
-        const picked = items.filter((_, i) => checked.has(i));
-        const result = picked.length > 0 ? picked : items[highlight] ? [items[highlight]] : [];
-        onMultiSelect?.(result);
+        const picked =
+          checked.size > 0
+            ? items.filter((_, i) => checked.has(i))
+            : items[highlight]
+              ? [items[highlight]]
+              : [];
+        onMultiSelect?.(picked);
         return;
       }
       const item = items[highlight];
-      if (item) onSelect(highlight, item);
+      if (item) onSelect?.(highlight, item);
       return;
     }
     if (key.upArrow) {
@@ -120,7 +125,7 @@ export function MenuOverlay({
         // In multi-select a digit toggles that row's checkbox; in single-select
         // it commits immediately (unchanged behavior).
         if (multiSelect) toggle(idx);
-        else onSelect(idx, items[idx]);
+        else onSelect?.(idx, items[idx]);
       }
     }
   });
