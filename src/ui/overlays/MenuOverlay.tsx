@@ -3,11 +3,9 @@ import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import type { MenuEntry, MenuItem, MenuOptions } from '../menu-types.js';
 
-interface MenuOverlayProps {
+interface MenuOverlayBaseProps {
   entries: MenuEntry[];
   options?: MenuOptions;
-  /** Single-select commit. Optional because multi-select mode uses {@link onMultiSelect} instead. */
-  onSelect?: (index: number, item: MenuItem) => void;
   onCancel: () => void;
   /**
    * Optional external cancel signal. The legacy `selectFromMenu` accepts one
@@ -17,17 +15,35 @@ interface MenuOverlayProps {
    * mid-turn.
    */
   signal?: AbortSignal;
-  /**
-   * Multi-select mode ("select all that apply"). When true, Space and digits
-   * toggle a per-row checkbox instead of committing, and Enter commits the
-   * whole checked set via {@link onMultiSelect} (falling back to the
-   * highlighted row when nothing is checked). When false/absent the overlay is
-   * the unchanged single-select menu. Issue #231.
-   */
-  multiSelect?: boolean;
-  /** Commit callback for multi-select mode — receives the checked items in row order. */
-  onMultiSelect?: (items: MenuItem[]) => void;
 }
+
+/**
+ * Single- vs multi-select is a discriminated union so the right commit callback
+ * is required by the type: `multiSelect: true` demands `onMultiSelect` (and
+ * forbids `onSelect`); the default single-select mode uses `onSelect`. This
+ * makes "set multiSelect but forget onMultiSelect" unrepresentable.
+ */
+type MenuOverlayProps = MenuOverlayBaseProps &
+  (
+    | {
+        multiSelect?: false;
+        /** Single-select commit — receives the highlighted/picked row. */
+        onSelect?: (index: number, item: MenuItem) => void;
+        onMultiSelect?: never;
+      }
+    | {
+        /**
+         * Multi-select mode ("select all that apply"). Space and digits toggle a
+         * per-row checkbox instead of committing; Enter commits the whole checked
+         * set via {@link onMultiSelect} (falling back to the highlighted row when
+         * nothing is checked). Issue #231.
+         */
+        multiSelect: true;
+        /** Commit callback for multi-select mode — receives the checked items in row order. */
+        onMultiSelect: (items: MenuItem[]) => void;
+        onSelect?: never;
+      }
+  );
 
 function isSection(entry: MenuEntry): entry is { type: 'section'; title: string } {
   return 'type' in entry && entry.type === 'section';
@@ -99,7 +115,11 @@ export function MenuOverlay({
             : items[highlight]
               ? [items[highlight]]
               : [];
-        onMultiSelect?.(picked);
+        // The discriminated-union props type requires onMultiSelect in
+        // multi-select mode; the fallback is belt-and-suspenders for untyped JS
+        // callers so a missing handler can never strand the overlay.
+        if (onMultiSelect) onMultiSelect(picked);
+        else onCancel();
         return;
       }
       const item = items[highlight];

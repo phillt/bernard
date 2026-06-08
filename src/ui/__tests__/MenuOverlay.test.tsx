@@ -160,19 +160,17 @@ function mountMulti(opts?: {
   onMultiSelect?: ReturnType<typeof vi.fn>;
   onCancel?: ReturnType<typeof vi.fn>;
 }) {
-  const onSelect = vi.fn();
   const onMultiSelect = opts?.onMultiSelect ?? vi.fn();
   const onCancel = opts?.onCancel ?? vi.fn();
   const harness = render(
     createElement(MenuOverlay, {
       entries: opts?.entries ?? MULTI_ENTRIES,
       multiSelect: true,
-      onSelect,
       onMultiSelect,
       onCancel,
     }),
   );
-  return { ...harness, onSelect, onMultiSelect, onCancel };
+  return { ...harness, onMultiSelect, onCancel };
 }
 
 describe('<MenuOverlay> multi-select (#231)', () => {
@@ -243,5 +241,23 @@ describe('<MenuOverlay> multi-select (#231)', () => {
     await tick();
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onMultiSelect).not.toHaveBeenCalled();
+  });
+
+  it('Enter falls back to onCancel when onMultiSelect is missing (defensive)', async () => {
+    // The props type requires onMultiSelect in multi mode; this guards an
+    // untyped JS caller that forgot it, so Enter can never strand the overlay.
+    const onCancel = vi.fn();
+    const harness = render(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      createElement(MenuOverlay, {
+        entries: MULTI_ENTRIES,
+        multiSelect: true,
+        onCancel,
+      } as any),
+    );
+    await tick();
+    harness.stdin.write(ENTER);
+    await tick();
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });
