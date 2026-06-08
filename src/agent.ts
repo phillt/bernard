@@ -25,6 +25,7 @@ import {
   isTokenOverflowError,
   getContextWindow,
 } from './context.js';
+import { resolveMainModel } from './model-policy.js';
 import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
@@ -385,6 +386,17 @@ export class Agent {
     this.ctx.provenance.clear();
 
     try {
+      // Resolve the model we're actually talking to for this turn (lineup +
+      // model-mode aware), not the stale `config.model` base field (#233).
+      // Refresh the spinner/status-gauge denominator here so mid-session
+      // `/model` / `/lineups` / `/profiles` switches take effect next turn —
+      // the App.tsx mount-seed only fires once.
+      const mainModel = resolveMainModel(this.config);
+      if (this.spinnerStats) {
+        this.spinnerStats.model = mainModel;
+        this.spinnerStats.contextWindowOverride = this.config.tokenWindow || undefined;
+      }
+
       // Check if context compression is needed
       const imageTokens = images ? images.length * IMAGE_TOKEN_ESTIMATE : 0;
       const newMessageEstimate = Math.ceil(wrappedInput.length / 4) + imageTokens;
@@ -392,7 +404,7 @@ export class Agent {
         shouldCompress(
           this.lastPromptTokens,
           newMessageEstimate,
-          this.config.model,
+          mainModel,
           this.config.tokenWindow,
         )
       ) {
@@ -463,7 +475,7 @@ export class Agent {
       const systemForEstimate = buildMainSystemPrompt(this.ctx, inputBase, profile);
       const input: MainInput = { ...inputBase, systemPrompt: systemForEstimate };
       const HARD_LIMIT_RATIO = 0.9;
-      const contextWindow = getContextWindow(this.config.model, this.config.tokenWindow);
+      const contextWindow = getContextWindow(mainModel, this.config.tokenWindow);
       // The per-turn `<system_provided_context>` message is no longer in the
       // SYSTEM prompt (issue #172) — account for it separately in the
       // preflight estimate so token budgeting stays accurate.

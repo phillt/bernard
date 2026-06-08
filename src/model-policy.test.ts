@@ -186,6 +186,30 @@ describe('resolveSiteModel — xai lineup', () => {
   });
 });
 
+describe('resolveMainModel (#233)', () => {
+  it('returns the same model name as resolveSiteModel(config, "main")', async () => {
+    const { resolveMainModel, resolveSiteModel } = await loadModule();
+    const config = makeConfig({ modelMode: 'balanced' });
+    expect(resolveMainModel(config)).toBe(resolveSiteModel(config, 'main').modelName);
+    expect(resolveMainModel(config)).toBe('claude-opus-4-6');
+  });
+
+  it('tracks the active lineup, not the stale config.model base field', async () => {
+    // The bug scenario: base fields still point at a large-window xAI model
+    // while an OpenAI-only optimize-performance lineup re-tiers main to gpt-5.2.
+    // Window math must follow the lineup, not config.model.
+    const { resolveMainModel } = await loadModule();
+    const config = makeConfig({
+      provider: 'xai',
+      model: 'grok-4-fast-non-reasoning',
+      activeLineupId: 'openai',
+      modelMode: 'optimize-performance',
+    });
+    expect(resolveMainModel(config)).toBe('gpt-5.2');
+    expect(resolveMainModel(config)).not.toBe(config.model);
+  });
+});
+
 describe('resolveSiteModel — precedence', () => {
   it('invocation override beats policy tier', async () => {
     const { resolveSiteModel } = await loadModule();
