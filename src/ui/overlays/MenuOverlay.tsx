@@ -16,6 +16,16 @@ interface MenuOverlayProps {
    * mid-turn.
    */
   signal?: AbortSignal;
+  /**
+   * Multi-select mode ("select all that apply"). When true, Space and digits
+   * toggle a per-row checkbox instead of committing, and Enter commits the
+   * whole checked set via {@link onMultiSelect} (falling back to the
+   * highlighted row when nothing is checked). When false/absent the overlay is
+   * the unchanged single-select menu. Issue #231.
+   */
+  multiSelect?: boolean;
+  /** Commit callback for multi-select mode — receives the checked items in row order. */
+  onMultiSelect?: (items: MenuItem[]) => void;
 }
 
 function isSection(entry: MenuEntry): entry is { type: 'section'; title: string } {
@@ -35,10 +45,28 @@ function isSection(entry: MenuEntry): entry is { type: 'section'; title: string 
  * items, never selectable. `options.headerLines` renders above the title so
  * the `ask_user` tab strip continues to work unchanged.
  */
-export function MenuOverlay({ entries, options, onSelect, onCancel, signal }: MenuOverlayProps) {
+export function MenuOverlay({
+  entries,
+  options,
+  onSelect,
+  onCancel,
+  signal,
+  multiSelect = false,
+  onMultiSelect,
+}: MenuOverlayProps) {
   const colors = getThemeColors();
   const items = entries.filter((e): e is MenuItem => !isSection(e));
   const [highlight, setHighlight] = useState(0);
+  // Set of *item* indices (sections excluded) currently checked. Multi-select only.
+  const [checked, setChecked] = useState<Set<number>>(() => new Set());
+
+  const toggle = (idx: number) =>
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
 
   useEffect(() => {
     if (!signal) return;
@@ -61,6 +89,14 @@ export function MenuOverlay({ entries, options, onSelect, onCancel, signal }: Me
       return;
     }
     if (key.return) {
+      if (multiSelect) {
+        // Commit the checked set in row order; fall back to the highlighted row
+        // when nothing is checked so Enter is never a no-op.
+        const picked = items.filter((_, i) => checked.has(i));
+        const result = picked.length > 0 ? picked : items[highlight] ? [items[highlight]] : [];
+        onMultiSelect?.(result);
+        return;
+      }
       const item = items[highlight];
       if (item) onSelect(highlight, item);
       return;
@@ -73,9 +109,19 @@ export function MenuOverlay({ entries, options, onSelect, onCancel, signal }: Me
       setHighlight((h) => Math.min(items.length - 1, h + 1));
       return;
     }
+    // Space toggles the highlighted row in multi-select mode (no-op otherwise).
+    if (multiSelect && input === ' ') {
+      toggle(highlight);
+      return;
+    }
     if (/^[1-9]$/.test(input)) {
       const idx = parseInt(input, 10) - 1;
-      if (idx < items.length) onSelect(idx, items[idx]);
+      if (idx < items.length) {
+        // In multi-select a digit toggles that row's checkbox; in single-select
+        // it commits immediately (unchanged behavior).
+        if (multiSelect) toggle(idx);
+        else onSelect(idx, items[idx]);
+      }
     }
   });
 
@@ -93,14 +139,28 @@ export function MenuOverlay({ entries, options, onSelect, onCancel, signal }: Me
           <Text> </Text>
         </>
       )}
-      <MenuList entries={entries} highlight={highlight} />
+      <MenuList entries={entries} highlight={highlight} multiSelect={multiSelect} checked={checked} />
       <Text> </Text>
-      <Text dimColor>↑/↓ move · Enter select · Esc cancel</Text>
+      <Text dimColor>
+        {multiSelect
+          ? '↑/↓ move · Space toggle · Enter confirm · Esc cancel'
+          : '↑/↓ move · Enter select · Esc cancel'}
+      </Text>
     </Box>
   );
 }
 
-function MenuList({ entries, highlight }: { entries: MenuEntry[]; highlight: number }) {
+function MenuList({
+  entries,
+  highlight,
+  multiSelect = false,
+  checked,
+}: {
+  entries: MenuEntry[];
+  highlight: number;
+  multiSelect?: boolean;
+  checked?: Set<number>;
+}) {
   const colors = getThemeColors();
   let itemIndex = 0;
   return (
@@ -119,7 +179,8 @@ function MenuList({ entries, highlight }: { entries: MenuEntry[]; highlight: num
         const activeMarker = entry.active ? ' (active)' : '';
         const annotation = entry.annotation ? ` ${entry.annotation}` : '';
         const isHighlighted = myIndex === highlight;
-        const label = `${n}. ${entry.label}${activeMarker}${annotation}`;
+        const checkbox = multiSelect ? `${checked?.has(myIndex) ? '[x]' : '[ ]'} ` : '';
+        const label = `${checkbox}${n}. ${entry.label}${activeMarker}${annotation}`;
         return (
           <Box key={`i-${idx}`} flexDirection="column">
             <Box>

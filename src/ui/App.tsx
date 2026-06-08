@@ -179,6 +179,7 @@ type Overlay =
   | 'status'
   | 'sources'
   | 'menu'
+  | 'multi-menu'
   | 'grid'
   | 'confirm'
   | 'help'
@@ -206,6 +207,18 @@ interface PendingMenu {
   resolve: (
     result: { cancelled: true } | { cancelled: false; index: number; item: MenuItem },
   ) => void;
+}
+
+/**
+ * Multi-select counterpart of {@link PendingMenu} (#231). Kept separate so the
+ * heavily-used single-select `requestMenu`/`PendingMenu` contract stays
+ * untouched; only the `ask_user` multi-select path uses this. Resolves with the
+ * checked items in row order.
+ */
+interface PendingMultiMenu {
+  entries: MenuEntry[];
+  options?: MenuOptions;
+  resolve: (result: { cancelled: true } | { cancelled: false; items: MenuItem[] }) => void;
 }
 
 interface PendingGrid {
@@ -268,6 +281,7 @@ export function App({
   const [busy, setBusy] = useState(false);
   const [historyVersion, setHistoryVersion] = useState(0);
   const [pendingMenu, setPendingMenu] = useState<PendingMenu | null>(null);
+  const [pendingMultiMenu, setPendingMultiMenu] = useState<PendingMultiMenu | null>(null);
   const [pendingGrid, setPendingGrid] = useState<PendingGrid | null>(null);
   const [pendingDialog, setPendingDialog] = useState<PendingDialog | null>(null);
   const [pendingTextInput, setPendingTextInput] = useState<PendingTextInput | null>(null);
@@ -2047,6 +2061,17 @@ export function App({
     });
   }
 
+  /** Multi-select sibling of {@link requestMenu} (#231). */
+  function requestMultiMenu(
+    entries: MenuEntry[],
+    options?: MenuOptions,
+  ): Promise<{ cancelled: true } | { cancelled: false; items: MenuItem[] }> {
+    return new Promise((resolve) => {
+      setPendingMultiMenu({ entries, options, resolve });
+      setActiveOverlay('multi-menu');
+    });
+  }
+
   function requestGridMenu(
     items: string[],
     options?: { title?: string; footer?: string; initialIndex?: number; currentItem?: string },
@@ -2214,7 +2239,7 @@ export function App({
     questions: AskUserQuestion[],
     signal?: AbortSignal,
   ): Promise<AskUserBatchResult> {
-    const answers: string[] = [];
+    const answers: (string | string[])[] = [];
     for (const q of questions) {
       if (signal?.aborted) return { cancelled: true, answered: answers };
 
@@ -2235,6 +2260,32 @@ export function App({
       const hasModelOther = q.choices.some((c) => OTHER_RE.test(c.trim()));
       const appendedHatch = q.allowOther && !hasModelOther;
       if (appendedHatch) entries.push({ label: otherLabel });
+
+      // Multi-select question (#231): toggle a checkbox set, commit at once.
+      // The answer is the array of chosen labels; an "Other"-shaped pick still
+      // routes to a free-text follow-up (same dedup behavior as single-select).
+      if (q.multiSelect) {
+        const result = await requestMultiMenu(entries, { title: q.question });
+        if (result.cancelled) return { cancelled: true, answered: answers };
+        const picked: string[] = [];
+        let pickedHatch = false;
+        for (const item of result.items) {
+          const isHatch =
+            (appendedHatch && entries.indexOf(item) === entries.length - 1) ||
+            OTHER_RE.test(item.label.trim());
+          if (isHatch) pickedHatch = true;
+          else picked.push(item.label);
+        }
+        if (pickedHatch) {
+          const free = await requestTextInput({ label: q.question });
+          if (free.cancelled) return { cancelled: true, answered: answers };
+          const typed = free.raw.trim();
+          if (typed) picked.push(typed);
+        }
+        answers.push(picked);
+        continue;
+      }
+
       const result = await requestMenu(entries, { title: q.question });
       if (result.cancelled) return { cancelled: true, answered: answers };
 
@@ -2306,6 +2357,24 @@ export function App({
           onCancel={() => {
             pendingMenu.resolve({ cancelled: true });
             setPendingMenu(null);
+            setActiveOverlay(null);
+          }}
+        />
+      )}
+      {activeOverlay === 'multi-menu' && pendingMultiMenu && (
+        <MenuOverlay
+          multiSelect
+          entries={pendingMultiMenu.entries}
+          options={pendingMultiMenu.options}
+          onSelect={() => {}}
+          onMultiSelect={(items) => {
+            pendingMultiMenu.resolve({ cancelled: false, items });
+            setPendingMultiMenu(null);
+            setActiveOverlay(null);
+          }}
+          onCancel={() => {
+            pendingMultiMenu.resolve({ cancelled: true });
+            setPendingMultiMenu(null);
             setActiveOverlay(null);
           }}
         />

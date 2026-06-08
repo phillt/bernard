@@ -29,6 +29,7 @@ describe('ask_user tool', () => {
           choices: ['open', 'closed'],
           allowOther: true,
           otherLabel: undefined,
+          multiSelect: false,
         },
       ],
       undefined,
@@ -72,6 +73,30 @@ describe('ask_user tool', () => {
     const q = askUser.mock.calls[0][0][0];
     expect(q.choices).toBeUndefined();
     expect(q.allowOther).toBe(true);
+  });
+
+  it('normalizes multi_select=true to multiSelect when choices are present (#231)', async () => {
+    askUser.mockResolvedValue({ answers: [['open', 'closed']] });
+    const tool = createAskUserTool(askUser);
+    await tool.execute!(
+      {
+        questions: [
+          { question: 'which states?', choices: ['open', 'closed'], multi_select: true },
+        ],
+      } as any,
+      {} as any,
+    );
+    expect(askUser.mock.calls[0][0][0].multiSelect).toBe(true);
+  });
+
+  it('leaves multiSelect false for free-form questions even if multi_select is set', async () => {
+    askUser.mockResolvedValue({ answers: ['x'] });
+    const tool = createAskUserTool(askUser);
+    await tool.execute!(
+      { questions: [{ question: 'name?', multi_select: true }] } as any,
+      {} as any,
+    );
+    expect(askUser.mock.calls[0][0][0].multiSelect).toBe(false);
   });
 
   it('forwards other_label to the callback as otherLabel', async () => {

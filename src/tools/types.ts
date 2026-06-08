@@ -35,10 +35,22 @@ export interface AskUserQuestion {
   allowOther: boolean;
   /** Optional label for the escape-hatch row; defaults to a generic "Other" wording. */
   otherLabel?: string;
+  /**
+   * When true and `choices` is present, the menu runs in multi-select mode
+   * ("select all that apply"): the user toggles checkboxes and commits the
+   * whole set at once. That question's answer comes back as a `string[]`.
+   */
+  multiSelect?: boolean;
 }
 
-/** Result of an `askUser` batch interaction. `answered` is aligned by index with the input questions. */
-export type AskUserBatchResult = { answers: string[] } | { cancelled: true; answered: string[] };
+/**
+ * Result of an `askUser` batch interaction. `answers`/`answered` are aligned by
+ * index with the input questions; a multi-select question contributes a
+ * `string[]` at its slot, every other question a plain `string`.
+ */
+export type AskUserBatchResult =
+  | { answers: (string | string[])[] }
+  | { cancelled: true; answered: (string | string[])[] };
 
 /**
  * Input passed to the read-only block callback (issue #179). Assembled by the

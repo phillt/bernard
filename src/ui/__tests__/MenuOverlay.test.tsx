@@ -3,7 +3,7 @@ import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { MenuOverlay } from '../overlays/MenuOverlay.js';
 import type { MenuEntry } from '../menu-types.js';
-import { ESC, ENTER, ARROW_UP, ARROW_DOWN, CTRL_C, tick } from './_keys.js';
+import { ESC, ENTER, ARROW_UP, ARROW_DOWN, CTRL_C, SPACE, tick } from './_keys.js';
 
 const ENTRIES: MenuEntry[] = [
   { type: 'section', title: 'Built-in' },
@@ -150,5 +150,98 @@ describe('<MenuOverlay>', () => {
     expect(qIdx).toBeGreaterThanOrEqual(0);
     expect(qIdx).toBeLessThan(titleIdx);
     expect(titleIdx).toBeLessThan(itemIdx);
+  });
+});
+
+const MULTI_ENTRIES: MenuEntry[] = [{ label: 'A' }, { label: 'B' }, { label: 'C' }];
+
+function mountMulti(opts?: {
+  entries?: MenuEntry[];
+  onMultiSelect?: ReturnType<typeof vi.fn>;
+  onCancel?: ReturnType<typeof vi.fn>;
+}) {
+  const onSelect = vi.fn();
+  const onMultiSelect = opts?.onMultiSelect ?? vi.fn();
+  const onCancel = opts?.onCancel ?? vi.fn();
+  const harness = render(
+    createElement(MenuOverlay, {
+      entries: opts?.entries ?? MULTI_ENTRIES,
+      multiSelect: true,
+      onSelect,
+      onMultiSelect,
+      onCancel,
+    }),
+  );
+  return { ...harness, onSelect, onMultiSelect, onCancel };
+}
+
+describe('<MenuOverlay> multi-select (#231)', () => {
+  it('renders empty checkboxes and the multi-select footer hint', () => {
+    const { lastFrame } = mountMulti();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[ ] 1. A');
+    expect(frame).toContain('[ ] 2. B');
+    expect(frame).toContain('Space toggle');
+    expect(frame).toContain('Enter confirm');
+  });
+
+  it('Space toggles the highlighted row without committing', async () => {
+    const { stdin, lastFrame, onMultiSelect, onCancel } = mountMulti();
+    await tick();
+    stdin.write(SPACE);
+    await tick();
+    expect(lastFrame() ?? '').toContain('[x] 1. A');
+    expect(onMultiSelect).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+    // toggling again clears it
+    stdin.write(SPACE);
+    await tick();
+    expect(lastFrame() ?? '').toContain('[ ] 1. A');
+  });
+
+  it('a digit toggles the matching row instead of committing', async () => {
+    const { stdin, lastFrame, onMultiSelect } = mountMulti();
+    await tick();
+    stdin.write('2');
+    await tick();
+    expect(lastFrame() ?? '').toContain('[x] 2. B');
+    expect(lastFrame() ?? '').toContain('[ ] 1. A');
+    expect(onMultiSelect).not.toHaveBeenCalled();
+  });
+
+  it('Enter commits the checked set in row order', async () => {
+    const { stdin, onMultiSelect } = mountMulti();
+    await tick();
+    stdin.write('1');
+    await tick();
+    stdin.write('3');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onMultiSelect).toHaveBeenCalledTimes(1);
+    expect(onMultiSelect.mock.calls[0][0].map((i: { label: string }) => i.label)).toEqual([
+      'A',
+      'C',
+    ]);
+  });
+
+  it('Enter with nothing checked falls back to the highlighted row', async () => {
+    const { stdin, onMultiSelect } = mountMulti();
+    await tick();
+    stdin.write(ARROW_DOWN); // highlight row 2 (B)
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onMultiSelect).toHaveBeenCalledTimes(1);
+    expect(onMultiSelect.mock.calls[0][0].map((i: { label: string }) => i.label)).toEqual(['B']);
+  });
+
+  it('Esc still cancels in multi-select mode', async () => {
+    const { stdin, onCancel, onMultiSelect } = mountMulti();
+    await tick();
+    stdin.write(ESC);
+    await tick();
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onMultiSelect).not.toHaveBeenCalled();
   });
 });

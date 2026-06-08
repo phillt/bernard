@@ -22,4 +22,6 @@ export const SHIFT_ENTER_CSIU = '\x1b[13;2u';
 export const META_ENTER = '\x1b\r';
 export const BACKSPACE = '';
 
+export const SPACE = ' ';
+
 export const tick = (ms = 10): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
