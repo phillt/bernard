@@ -66,12 +66,17 @@ export function StatusBar({ agent }: StatusBarProps) {
       )}
       {stats && (
         <Text color={colors.muted}>
-          {up}↑ {down}↓{'   '}
+          session {up}↑ {down}↓{'   '}
         </Text>
       )}
       {/* Context gauge only renders once real token stats exist — before the
           first stats flush (strategy set, stats still null) an all-empty bar
-          would be visual noise. */}
+          would be visual noise. The `ctx` readout is the current input size
+          (latest step's prompt tokens) — the number the gauge actually depicts,
+          so it can't be confused with the cumulative `session` odometer above. */}
+      {stats && (
+        <Text color={colors.muted}>ctx {formatTokenCount(stats.latestPromptTokens)} </Text>
+      )}
       {stats && filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
       {stats && halfCount > 0 && <Text color={fillColor}>◐</Text>}
       {stats && emptyCount > 0 && (

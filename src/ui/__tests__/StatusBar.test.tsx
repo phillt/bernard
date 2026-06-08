@@ -62,3 +62,21 @@ describe('<StatusBar> context gauge (half-dot resolution)', () => {
     expect(gauge(lastFrame() ?? '')).toBe('●●●●●●●●●●');
   });
 });
+
+describe('<StatusBar> token readout labels (#234)', () => {
+  it('labels the cumulative odometer as session-scoped', () => {
+    const { lastFrame } = render(createElement(StatusBar, { agent: stubAgent(0.55) }));
+    const frame = lastFrame() ?? '';
+    // The odometer must read "session ...↑ ...↓" so it can't be misread as the
+    // adjacent context gauge.
+    expect(frame).toMatch(/session\s+1\.2k↑\s+567↓/);
+  });
+
+  it('labels the gauge with the current context size (ctx)', () => {
+    const { lastFrame } = render(createElement(StatusBar, { agent: stubAgent(0.55) }));
+    const frame = lastFrame() ?? '';
+    // ctx reflects latestPromptTokens (0.55 * 1000 * COMPRESSION_THRESHOLD) and
+    // sits between the session odometer and the gauge glyphs.
+    expect(frame).toMatch(/ctx \S+ *●/);
+  });
+});
