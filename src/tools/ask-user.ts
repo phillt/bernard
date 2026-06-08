@@ -13,7 +13,7 @@ export function createAskUserTool(askUser: ToolOptions['askUser']) {
   return attachMeta(
     tool({
       description:
-        'Ask the user one or more clarifying questions and wait for their answers. Use this whenever you need information only the user can provide (intent, preferences, missing arguments) — do NOT write the question as prose in your reply, since that gets no response back. Provide each question as an entry in `questions`; supply `choices` per question when the answer is constrained, otherwise the user gets a free-form prompt. Batch related questions in one call (e.g. title + body + labels) — the user sees a tab strip showing progress. Returns JSON: {"answers": ["...", "..."]} aligned by index, {"cancelled": true, "answered": [...]} with whatever was answered before cancel, or {"unavailable": true} if running headless.',
+        'Ask the user one or more clarifying questions and wait for their answers. Use this whenever you need information only the user can provide (intent, preferences, missing arguments) — do NOT write the question as prose in your reply, since that gets no response back. Provide each question as an entry in `questions`; supply `choices` per question when the answer is constrained, otherwise the user gets a free-form prompt. Set `multi_select: true` on a question whose answer can include more than one choice ("select all that apply") — the user then checks several boxes and that question\'s answer comes back as a JSON array. Batch related questions in one call (e.g. title + body + labels) — the user sees a tab strip showing progress. Returns JSON: {"answers": ["...", ["a","b"]]} aligned by index (a multi-select slot is an array), {"cancelled": true, "answered": [...]} with whatever was answered before cancel, or {"unavailable": true} if running headless.',
       parameters: z.object({
         questions: z
           .array(
@@ -38,6 +38,12 @@ export function createAskUserTool(askUser: ToolOptions['askUser']) {
                 .describe(
                   'Label for the appended escape-hatch option. Use this to make the wording specific to your question (e.g. "Other (I will specify title and body)"). Ignored when allow_other is false. Defaults to a generic "Other (type a custom answer)".',
                 ),
+              multi_select: z
+                .boolean()
+                .optional()
+                .describe(
+                  'When choices are given, let the user select MULTIPLE options ("select all that apply") instead of just one. Set true when the choices are independent and more than one can be true at once (e.g. desired features, applicable tags). This question\'s answer is returned as an array of the chosen labels. Default false.',
+                ),
             }),
           )
           .min(1)
@@ -55,6 +61,7 @@ export function createAskUserTool(askUser: ToolOptions['askUser']) {
           choices: q.choices,
           allowOther: q.choices && q.choices.length > 0 ? q.allow_other !== false : true,
           otherLabel: q.other_label,
+          multiSelect: q.choices && q.choices.length > 0 ? q.multi_select === true : false,
         }));
         const result = await askUser(normalised, execOptions?.abortSignal);
         return JSON.stringify(result);

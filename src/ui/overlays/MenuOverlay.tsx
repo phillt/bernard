@@ -3,10 +3,9 @@ import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import type { MenuEntry, MenuItem, MenuOptions } from '../menu-types.js';
 
-interface MenuOverlayProps {
+interface MenuOverlayBaseProps {
   entries: MenuEntry[];
   options?: MenuOptions;
-  onSelect: (index: number, item: MenuItem) => void;
   onCancel: () => void;
   /**
    * Optional external cancel signal. The legacy `selectFromMenu` accepts one
@@ -17,6 +16,34 @@ interface MenuOverlayProps {
    */
   signal?: AbortSignal;
 }
+
+/**
+ * Single- vs multi-select is a discriminated union so the right commit callback
+ * is required by the type: `multiSelect: true` demands `onMultiSelect` (and
+ * forbids `onSelect`); the default single-select mode uses `onSelect`. This
+ * makes "set multiSelect but forget onMultiSelect" unrepresentable.
+ */
+type MenuOverlayProps = MenuOverlayBaseProps &
+  (
+    | {
+        multiSelect?: false;
+        /** Single-select commit — receives the highlighted/picked row. */
+        onSelect?: (index: number, item: MenuItem) => void;
+        onMultiSelect?: never;
+      }
+    | {
+        /**
+         * Multi-select mode ("select all that apply"). Space and digits toggle a
+         * per-row checkbox instead of committing; Enter commits the whole checked
+         * set via {@link onMultiSelect} (falling back to the highlighted row when
+         * nothing is checked). Issue #231.
+         */
+        multiSelect: true;
+        /** Commit callback for multi-select mode — receives the checked items in row order. */
+        onMultiSelect: (items: MenuItem[]) => void;
+        onSelect?: never;
+      }
+  );
 
 function isSection(entry: MenuEntry): entry is { type: 'section'; title: string } {
   return 'type' in entry && entry.type === 'section';
@@ -35,10 +62,28 @@ function isSection(entry: MenuEntry): entry is { type: 'section'; title: string 
  * items, never selectable. `options.headerLines` renders above the title so
  * the `ask_user` tab strip continues to work unchanged.
  */
-export function MenuOverlay({ entries, options, onSelect, onCancel, signal }: MenuOverlayProps) {
+export function MenuOverlay({
+  entries,
+  options,
+  onSelect,
+  onCancel,
+  signal,
+  multiSelect = false,
+  onMultiSelect,
+}: MenuOverlayProps) {
   const colors = getThemeColors();
   const items = entries.filter((e): e is MenuItem => !isSection(e));
   const [highlight, setHighlight] = useState(0);
+  // Set of *item* indices (sections excluded) currently checked. Multi-select only.
+  const [checked, setChecked] = useState<Set<number>>(() => new Set());
+
+  const toggle = (idx: number) =>
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
 
   useEffect(() => {
     if (!signal) return;
@@ -61,8 +106,24 @@ export function MenuOverlay({ entries, options, onSelect, onCancel, signal }: Me
       return;
     }
     if (key.return) {
+      if (multiSelect) {
+        // Commit the checked set in row order; fall back to the highlighted row
+        // when nothing is checked so Enter is never a no-op.
+        const picked =
+          checked.size > 0
+            ? items.filter((_, i) => checked.has(i))
+            : items[highlight]
+              ? [items[highlight]]
+              : [];
+        // The discriminated-union props type requires onMultiSelect in
+        // multi-select mode; the fallback is belt-and-suspenders for untyped JS
+        // callers so a missing handler can never strand the overlay.
+        if (onMultiSelect) onMultiSelect(picked);
+        else onCancel();
+        return;
+      }
       const item = items[highlight];
-      if (item) onSelect(highlight, item);
+      if (item) onSelect?.(highlight, item);
       return;
     }
     if (key.upArrow) {
@@ -73,9 +134,19 @@ export function MenuOverlay({ entries, options, onSelect, onCancel, signal }: Me
       setHighlight((h) => Math.min(items.length - 1, h + 1));
       return;
     }
+    // Space toggles the highlighted row in multi-select mode (no-op otherwise).
+    if (multiSelect && input === ' ') {
+      toggle(highlight);
+      return;
+    }
     if (/^[1-9]$/.test(input)) {
       const idx = parseInt(input, 10) - 1;
-      if (idx < items.length) onSelect(idx, items[idx]);
+      if (idx < items.length) {
+        // In multi-select a digit toggles that row's checkbox; in single-select
+        // it commits immediately (unchanged behavior).
+        if (multiSelect) toggle(idx);
+        else onSelect?.(idx, items[idx]);
+      }
     }
   });
 
@@ -93,14 +164,28 @@ export function MenuOverlay({ entries, options, onSelect, onCancel, signal }: Me
           <Text> </Text>
         </>
       )}
-      <MenuList entries={entries} highlight={highlight} />
+      <MenuList entries={entries} highlight={highlight} multiSelect={multiSelect} checked={checked} />
       <Text> </Text>
-      <Text dimColor>↑/↓ move · Enter select · Esc cancel</Text>
+      <Text dimColor>
+        {multiSelect
+          ? '↑/↓ move · Space toggle · Enter confirm · Esc cancel'
+          : '↑/↓ move · Enter select · Esc cancel'}
+      </Text>
     </Box>
   );
 }
 
-function MenuList({ entries, highlight }: { entries: MenuEntry[]; highlight: number }) {
+function MenuList({
+  entries,
+  highlight,
+  multiSelect = false,
+  checked,
+}: {
+  entries: MenuEntry[];
+  highlight: number;
+  multiSelect?: boolean;
+  checked?: Set<number>;
+}) {
   const colors = getThemeColors();
   let itemIndex = 0;
   return (
@@ -119,7 +204,8 @@ function MenuList({ entries, highlight }: { entries: MenuEntry[]; highlight: num
         const activeMarker = entry.active ? ' (active)' : '';
         const annotation = entry.annotation ? ` ${entry.annotation}` : '';
         const isHighlighted = myIndex === highlight;
-        const label = `${n}. ${entry.label}${activeMarker}${annotation}`;
+        const checkbox = multiSelect ? `${checked?.has(myIndex) ? '[x]' : '[ ]'} ` : '';
+        const label = `${checkbox}${n}. ${entry.label}${activeMarker}${annotation}`;
         return (
           <Box key={`i-${idx}`} flexDirection="column">
             <Box>

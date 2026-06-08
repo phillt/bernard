@@ -179,6 +179,7 @@ type Overlay =
   | 'status'
   | 'sources'
   | 'menu'
+  | 'multi-menu'
   | 'grid'
   | 'confirm'
   | 'help'
@@ -208,6 +209,18 @@ interface PendingMenu {
   ) => void;
 }
 
+/**
+ * Multi-select counterpart of {@link PendingMenu} (#231). Kept separate so the
+ * heavily-used single-select `requestMenu`/`PendingMenu` contract stays
+ * untouched; only the `ask_user` multi-select path uses this. Resolves with the
+ * checked items in row order.
+ */
+interface PendingMultiMenu {
+  entries: MenuEntry[];
+  options?: MenuOptions;
+  resolve: (result: { cancelled: true } | { cancelled: false; items: MenuItem[] }) => void;
+}
+
 interface PendingGrid {
   items: string[];
   options?: { title?: string; footer?: string; initialIndex?: number; currentItem?: string };
@@ -235,6 +248,31 @@ type PendingDialog = PendingConfirm | PendingBlock;
  * escape hatch and routes matching selections to the free-text input.
  */
 const OTHER_RE = /^other\b/i;
+
+/**
+ * Builds the menu entries for an `ask_user` choice question and a predicate for
+ * whether a selected item is the "Other" escape hatch. Shared by the single-
+ * and multi-select paths of `requestAskUser` so the #230 dedup rule lives in
+ * one place: append a hatch row only when the model didn't already supply an
+ * "Other"-shaped choice, and treat either the appended row (by identity — its
+ * label may be custom via `otherLabel`) or any `OTHER_RE`-matching label as the
+ * hatch. The matching selection routes to a free-text follow-up.
+ */
+function buildChoiceMenu(q: AskUserQuestion): {
+  entries: MenuEntry[];
+  isHatch: (item: MenuItem) => boolean;
+} {
+  const otherLabel = q.otherLabel?.trim() || 'Other (type your own)';
+  const entries: MenuEntry[] = (q.choices ?? []).map((c) => ({ label: c }));
+  const hasModelOther = (q.choices ?? []).some((c) => OTHER_RE.test(c.trim()));
+  const appendedHatch = q.allowOther && !hasModelOther;
+  if (appendedHatch) entries.push({ label: otherLabel });
+  const hatchRow = appendedHatch ? entries[entries.length - 1] : undefined;
+  return {
+    entries,
+    isHatch: (item) => item === hatchRow || OTHER_RE.test(item.label.trim()),
+  };
+}
 
 /**
  * Top-level Ink component. Owns the lifecycle of a Bernard REPL session:
@@ -268,6 +306,7 @@ export function App({
   const [busy, setBusy] = useState(false);
   const [historyVersion, setHistoryVersion] = useState(0);
   const [pendingMenu, setPendingMenu] = useState<PendingMenu | null>(null);
+  const [pendingMultiMenu, setPendingMultiMenu] = useState<PendingMultiMenu | null>(null);
   const [pendingGrid, setPendingGrid] = useState<PendingGrid | null>(null);
   const [pendingDialog, setPendingDialog] = useState<PendingDialog | null>(null);
   const [pendingTextInput, setPendingTextInput] = useState<PendingTextInput | null>(null);
@@ -315,6 +354,10 @@ export function App({
     if (pendingMenu) {
       pendingMenu.resolve({ cancelled: true });
       setPendingMenu(null);
+    }
+    if (pendingMultiMenu) {
+      pendingMultiMenu.resolve({ cancelled: true });
+      setPendingMultiMenu(null);
     }
     if (pendingGrid) {
       pendingGrid.resolve({ cancelled: true });
@@ -2047,6 +2090,17 @@ export function App({
     });
   }
 
+  /** Multi-select sibling of {@link requestMenu} (#231). */
+  function requestMultiMenu(
+    entries: MenuEntry[],
+    options?: MenuOptions,
+  ): Promise<{ cancelled: true } | { cancelled: false; items: MenuItem[] }> {
+    return new Promise((resolve) => {
+      setPendingMultiMenu({ entries, options, resolve });
+      setActiveOverlay('multi-menu');
+    });
+  }
+
   function requestGridMenu(
     items: string[],
     options?: { title?: string; footer?: string; initialIndex?: number; currentItem?: string },
@@ -2214,7 +2268,7 @@ export function App({
     questions: AskUserQuestion[],
     signal?: AbortSignal,
   ): Promise<AskUserBatchResult> {
-    const answers: string[] = [];
+    const answers: (string | string[])[] = [];
     for (const q of questions) {
       if (signal?.aborted) return { cancelled: true, answered: answers };
 
@@ -2226,22 +2280,32 @@ export function App({
         continue;
       }
 
-      // Choice question; append an "Other" escape hatch if requested.
-      // Models often include their own "Other" entry despite the tool
-      // description (#230) — when they do, skip the duplicate and treat
-      // the model's entry as the escape hatch instead.
-      const otherLabel = q.otherLabel?.trim() || 'Other (type your own)';
-      const entries: MenuEntry[] = q.choices.map((c) => ({ label: c }));
-      const hasModelOther = q.choices.some((c) => OTHER_RE.test(c.trim()));
-      const appendedHatch = q.allowOther && !hasModelOther;
-      if (appendedHatch) entries.push({ label: otherLabel });
+      // Choice question. `buildChoiceMenu` appends an "Other" escape hatch when
+      // requested and dedupes against a model-supplied "Other" entry (#230);
+      // `isHatch` tells whether a picked row routes to free-text.
+      const { entries, isHatch } = buildChoiceMenu(q);
+
+      // Multi-select question (#231): toggle a checkbox set, commit at once.
+      // The answer is the array of chosen labels; an "Other"-shaped pick still
+      // routes to a free-text follow-up (same dedup behavior as single-select).
+      if (q.multiSelect) {
+        const result = await requestMultiMenu(entries, { title: q.question });
+        if (result.cancelled) return { cancelled: true, answered: answers };
+        const picked = result.items.filter((item) => !isHatch(item)).map((item) => item.label);
+        if (result.items.some(isHatch)) {
+          const free = await requestTextInput({ label: q.question });
+          if (free.cancelled) return { cancelled: true, answered: answers };
+          const typed = free.raw.trim();
+          if (typed) picked.push(typed);
+        }
+        answers.push(picked);
+        continue;
+      }
+
       const result = await requestMenu(entries, { title: q.question });
       if (result.cancelled) return { cancelled: true, answered: answers };
 
-      const pickedHatch =
-        (appendedHatch && result.index === entries.length - 1) ||
-        OTHER_RE.test(result.item.label.trim());
-      if (pickedHatch) {
+      if (isHatch(result.item)) {
         // User picked "Other" — gather free-form text.
         const free = await requestTextInput({ label: q.question });
         if (free.cancelled) return { cancelled: true, answered: answers };
@@ -2306,6 +2370,23 @@ export function App({
           onCancel={() => {
             pendingMenu.resolve({ cancelled: true });
             setPendingMenu(null);
+            setActiveOverlay(null);
+          }}
+        />
+      )}
+      {activeOverlay === 'multi-menu' && pendingMultiMenu && (
+        <MenuOverlay
+          multiSelect
+          entries={pendingMultiMenu.entries}
+          options={pendingMultiMenu.options}
+          onMultiSelect={(items) => {
+            pendingMultiMenu.resolve({ cancelled: false, items });
+            setPendingMultiMenu(null);
+            setActiveOverlay(null);
+          }}
+          onCancel={() => {
+            pendingMultiMenu.resolve({ cancelled: true });
+            setPendingMultiMenu(null);
             setActiveOverlay(null);
           }}
         />

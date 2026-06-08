@@ -509,3 +509,84 @@ describe('<App> requestAskUser "Other" dedup (#230)', () => {
     unmount();
   });
 });
+
+describe('<App> requestAskUser multi-select (#231)', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('routes a multiSelect question to a checkbox menu and returns the chosen labels as an array', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    const pending = getInkHandlers()!.requestAskUser([
+      {
+        question: 'Any must-haves?',
+        choices: ['Bunkhouse', 'Outdoor kitchen', 'Washer/dryer'],
+        allowOther: false,
+        multiSelect: true,
+      },
+    ]);
+    await tick(40);
+    const frame = lastFrame()!;
+    expect(frame).toContain('Any must-haves?');
+    expect(frame).toContain('[ ] 1. Bunkhouse');
+    expect(frame).toContain('Space toggle');
+    // toggle items 1 and 3, then commit
+    stdin.write('1');
+    await tick();
+    stdin.write('3');
+    await tick();
+    stdin.write(ENTER);
+    await tick(40);
+    await expect(pending).resolves.toEqual({ answers: [['Bunkhouse', 'Washer/dryer']] });
+    unmount();
+  });
+
+  it('routes a toggled "Other" to free text and appends it to the array', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    const pending = getInkHandlers()!.requestAskUser([
+      { question: 'Pick features', choices: ['A', 'B'], allowOther: true, multiSelect: true },
+    ]);
+    await tick(40);
+    expect(lastFrame()).toContain('Other (type your own)');
+    // toggle A (1) and the appended Other hatch (3), then commit
+    stdin.write('1');
+    await tick();
+    stdin.write('3');
+    await tick();
+    stdin.write(ENTER);
+    await tick(40);
+    // menu replaced by free-text input
+    expect(lastFrame()).not.toContain('[ ] 1. A');
+    stdin.write('custom feature');
+    await tick();
+    stdin.write(ENTER);
+    await tick(40);
+    await expect(pending).resolves.toEqual({ answers: [['A', 'custom feature']] });
+    unmount();
+  });
+
+  it('keeps index alignment when a batch mixes multi-select and single-select questions', async () => {
+    const { stdin, unmount } = renderApp();
+    await tick();
+    const pending = getInkHandlers()!.requestAskUser([
+      { question: 'Multi', choices: ['A', 'B'], allowOther: false, multiSelect: true },
+      { question: 'Single', choices: ['X', 'Y'], allowOther: false },
+    ]);
+    await tick(40);
+    // multi: toggle A then commit
+    stdin.write('1');
+    await tick();
+    stdin.write(ENTER);
+    await tick(40);
+    // single: pick Y
+    stdin.write('2');
+    await tick(40);
+    await expect(pending).resolves.toEqual({ answers: [['A'], 'Y'] });
+    unmount();
+  });
+});
