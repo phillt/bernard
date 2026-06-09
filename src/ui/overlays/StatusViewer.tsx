@@ -68,7 +68,7 @@ function RowNode({ label, value }: { label: string; value: string }) {
   return (
     <Box>
       <Text dimColor>{label.padEnd(LABEL_WIDTH)}</Text>
-      <Text>{value}</Text>
+      <Text wrap="truncate-end">{value}</Text>
     </Box>
   );
 }
@@ -85,7 +85,7 @@ function pushAssumptions(lines: OverlayLine[], assumptions: AgentStatusInputs['a
       node: (
         <Box>
           <Text dimColor>{(idx === 0 ? 'Assumptions' : '').padEnd(LABEL_WIDTH)}</Text>
-          <Text>{text}</Text>
+          <Text wrap="truncate-end">{text}</Text>
         </Box>
       ),
     });
@@ -110,7 +110,7 @@ function pushPlanStep(
       node: (
         <Box>
           <Text dimColor>{''.padEnd(LABEL_WIDTH)}</Text>
-          <Text dimColor>verify: {truncate(verification, 120)}</Text>
+          <Text dimColor wrap="truncate-end">verify: {truncate(verification, 120)}</Text>
         </Box>
       ),
     });
@@ -153,8 +153,10 @@ function pushVerification(
         <Text color={tagColor} bold>
           {entry.verdict.toUpperCase()}
         </Text>
-        <Text> — {truncate(entry.reason, 120)}</Text>
-        {entry.source && <Text dimColor> ({truncate(entry.source, 60)})</Text>}
+        <Text wrap="truncate-end"> — {truncate(entry.reason, 120)}</Text>
+        {entry.source && (
+          <Text dimColor wrap="truncate-end"> ({truncate(entry.source, 60)})</Text>
+        )}
       </Box>
     ),
   });
