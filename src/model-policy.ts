@@ -254,6 +254,17 @@ export function resolveSiteModel(
 }
 
 /**
+ * Model-name string for the `'main'` LLM call site, resolved through the
+ * active lineup + model-mode policy. Use this anywhere context-window /
+ * compression math needs the model Bernard is actually talking to — the
+ * legacy `config.model` base field is only a fallback and goes stale the
+ * moment a lineup re-tiers `main` to a different provider/model (#233).
+ */
+export function resolveMainModel(config: BernardConfig): string {
+  return resolveSiteModel(config, 'main').modelName;
+}
+
+/**
  * Loads the active lineup once per call. Cheap — `loadLineups()` is a
  * single small JSON read; we don't memoize so a `/lineup` edit takes effect
  * on the next turn without process restart.

@@ -18,6 +18,7 @@ import { MemoryStore } from './memory.js';
 import { printWarning, printInfo } from './output.js';
 import { getModelProfile } from './providers/index.js';
 import { assembleContext } from './framework/context.js';
+import * as modelPolicy from './model-policy.js';
 import { setOutputSink } from './framework/hooks/output-sink.js';
 
 vi.mock('node:fs', () => ({
@@ -852,6 +853,38 @@ describe('Agent', () => {
     await agent.processInput('Hello');
 
     expect(emergencyTruncate).toHaveBeenCalled();
+  });
+
+  it('window math uses the lineup-resolved main model, not the stale config.model base (#233)', async () => {
+    const { shouldCompress, getContextWindow } = await import('./context.js');
+    // Simulate an active lineup re-tiering `main` to a different model than the
+    // profile's base `config.model` (e.g. xAI base + OpenAI lineup).
+    const spy = vi.spyOn(modelPolicy, 'resolveMainModel').mockReturnValue('lineup-resolved-main');
+
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    // Base field is deliberately different from the resolved main model.
+    const agent = makeAgent(makeConfig({ model: 'grok-4-fast-non-reasoning' }), toolOptions, store);
+    await agent.processInput('Hello');
+
+    // Both the compression preflight and the emergency-truncation window lookup
+    // must see the resolved main model, never the stale base field.
+    expect(shouldCompress).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.any(Number),
+      'lineup-resolved-main',
+      expect.anything(),
+    );
+    expect(getContextWindow).toHaveBeenCalledWith('lineup-resolved-main', expect.anything());
+    expect(getContextWindow).not.toHaveBeenCalledWith(
+      'grok-4-fast-non-reasoning',
+      expect.anything(),
+    );
+
+    spy.mockRestore();
   });
 
   it('catch-and-retry triggers on token overflow error', async () => {
