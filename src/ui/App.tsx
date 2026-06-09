@@ -460,18 +460,19 @@ export function App({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- session boundaries are per-mount, not per-config-change
   }, [agent]);
 
-  // Attach a persistent SpinnerStats object so the framework's token-stats
-  // hook accumulates usage across turns. <StatusBar> polls this for the
-  // pinned bottom-right readout. We never null it out — totals carry across
-  // the whole session and only reset on REPL restart. Seeded in a mount-time
-  // effect (StrictMode-safe; render-body side effects double-fire and would
-  // re-overwrite the object on every re-render including the StatusBar tick).
+  // Attach a persistent SpinnerStats object the framework's token-stats hooks
+  // mutate in place. <StatusBar> polls this for the pinned bottom-right readout.
+  // We never null it out — the object lives for the whole session; its per-turn
+  // ↑/↓ odometer (`turnPromptTokens`/`turnCompletionTokens`) is reset at the top
+  // of every turn by `Agent.processInput` (#234). Seeded in a mount-time effect
+  // (StrictMode-safe; render-body side effects double-fire and would re-overwrite
+  // the object on every re-render including the StatusBar tick).
   useEffect(() => {
     if (!agent.spinnerStats) {
       agent.setSpinnerStats({
         startTime: Date.now(),
-        totalPromptTokens: 0,
-        totalCompletionTokens: 0,
+        turnPromptTokens: 0,
+        turnCompletionTokens: 0,
         latestPromptTokens: 0,
         model: resolveMainModel(config),
         contextWindowOverride: config.tokenWindow || undefined,

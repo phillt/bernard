@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
-import { tokenStatsHook, type TokenStatsTarget } from '../token-stats.js';
+import { tokenStatsHook, tokenTotalsHook, type TokenStatsTarget } from '../token-stats.js';
 import type { SpinnerStats } from '../../../output.js';
 
 beforeEach(() => {});
@@ -8,8 +8,8 @@ beforeEach(() => {});
 function makeStats(over: Partial<SpinnerStats> = {}): SpinnerStats {
   return {
     startTime: 0,
-    totalPromptTokens: 0,
-    totalCompletionTokens: 0,
+    turnPromptTokens: 0,
+    turnCompletionTokens: 0,
     latestPromptTokens: 0,
     model: 'claude-x',
     ...over,
@@ -32,7 +32,7 @@ describe('tokenStatsHook', () => {
   it('accumulates spinner stats when present', async () => {
     const target: TokenStatsTarget = {
       lastStepPromptTokens: 0,
-      spinnerStats: makeStats({ totalPromptTokens: 100, totalCompletionTokens: 50 }),
+      spinnerStats: makeStats({ turnPromptTokens: 100, turnCompletionTokens: 50 }),
     };
     const hook = tokenStatsHook(target);
     await hook.onStepFinish!({
@@ -41,8 +41,8 @@ describe('tokenStatsHook', () => {
       toolResults: [],
       usage: { promptTokens: 10, completionTokens: 5 },
     });
-    expect(target.spinnerStats!.totalPromptTokens).toBe(110);
-    expect(target.spinnerStats!.totalCompletionTokens).toBe(55);
+    expect(target.spinnerStats!.turnPromptTokens).toBe(110);
+    expect(target.spinnerStats!.turnCompletionTokens).toBe(55);
     expect(target.spinnerStats!.latestPromptTokens).toBe(10);
   });
 
@@ -63,5 +63,50 @@ describe('tokenStatsHook', () => {
     const hook = tokenStatsHook(target);
     await hook.onStepFinish!({ text: '', toolCalls: [], toolResults: [] });
     expect(target.lastStepPromptTokens).toBe(42);
+  });
+});
+
+describe('tokenTotalsHook', () => {
+  it('bumps only the per-turn odometer, never the gauge or compression headroom', async () => {
+    const target: TokenStatsTarget = {
+      lastStepPromptTokens: 0,
+      spinnerStats: makeStats({ turnPromptTokens: 100, turnCompletionTokens: 50 }),
+    };
+    const hook = tokenTotalsHook(target);
+    await hook.onStepFinish!({
+      text: '',
+      toolCalls: [],
+      toolResults: [],
+      usage: { promptTokens: 10, completionTokens: 5 },
+    });
+    expect(target.spinnerStats!.turnPromptTokens).toBe(110);
+    expect(target.spinnerStats!.turnCompletionTokens).toBe(55);
+    // Sub-agent steps must NOT disturb the main-only context gauge...
+    expect(target.spinnerStats!.latestPromptTokens).toBe(0);
+    // ...nor the main agent's compression-headroom field.
+    expect(target.lastStepPromptTokens).toBe(0);
+  });
+
+  it('no-ops when spinnerStats is null (cron / headless)', async () => {
+    const target: TokenStatsTarget = { lastStepPromptTokens: 0, spinnerStats: null };
+    const hook = tokenTotalsHook(target);
+    await hook.onStepFinish!({
+      text: '',
+      toolCalls: [],
+      toolResults: [],
+      usage: { promptTokens: 10, completionTokens: 5 },
+    });
+    expect(target.lastStepPromptTokens).toBe(0);
+  });
+
+  it('no-ops when usage is missing', async () => {
+    const target: TokenStatsTarget = {
+      lastStepPromptTokens: 0,
+      spinnerStats: makeStats({ turnPromptTokens: 7, turnCompletionTokens: 3 }),
+    };
+    const hook = tokenTotalsHook(target);
+    await hook.onStepFinish!({ text: '', toolCalls: [], toolResults: [] });
+    expect(target.spinnerStats!.turnPromptTokens).toBe(7);
+    expect(target.spinnerStats!.turnCompletionTokens).toBe(3);
   });
 });

@@ -32,8 +32,8 @@ export function StatusBar({ agent }: StatusBarProps) {
   const strategy = agent.currentStrategy;
   if (!stats && !strategy) return null;
 
-  const up = stats ? formatTokenCount(stats.totalPromptTokens) : '0';
-  const down = stats ? formatTokenCount(stats.totalCompletionTokens) : '0';
+  const up = stats ? formatTokenCount(stats.turnPromptTokens) : '0';
+  const down = stats ? formatTokenCount(stats.turnCompletionTokens) : '0';
   const contextWindow = stats ? getContextWindow(stats.model, stats.contextWindowOverride) : 1;
   const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;
   const usedFrac = stats ? Math.min(1, Math.max(0, stats.latestPromptTokens / thresholdTokens)) : 0;
@@ -66,14 +66,15 @@ export function StatusBar({ agent }: StatusBarProps) {
       )}
       {/* The token readout + context gauge only render once real token stats
           exist — before the first stats flush (strategy set, stats still null)
-          an all-empty bar would be visual noise. `session` is the cumulative
-          per-session odometer; `ctx` is the current input size (latest step's
-          prompt tokens) — the number the gauge actually depicts, so the two
-          can't be confused. */}
+          an all-empty bar would be visual noise. `turn` is the per-turn
+          odometer (full turn cost — main agent plus any sub-agents / wrappers /
+          PAC it spawns — reset each turn); `ctx` is the current main-agent input
+          size (latest step's prompt tokens) — the number the gauge actually
+          depicts, so the two can't be confused. */}
       {stats && (
         <>
           <Text color={colors.muted}>
-            session {up}↑ {down}↓{'   '}
+            turn {up}↑ {down}↓{'   '}
           </Text>
           <Text color={colors.muted}>ctx {formatTokenCount(stats.latestPromptTokens)} </Text>
           {filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}

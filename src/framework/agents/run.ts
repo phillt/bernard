@@ -6,6 +6,7 @@ import { makeRepairHook } from '../../tool-call-repair.js';
 import { augmentTools } from '../../tools/augment.js';
 import type { AgentContext } from '../context.js';
 import { getOutputSink } from '../hooks/output-sink.js';
+import { tokenTotalsHook } from '../hooks/token-stats.js';
 import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
@@ -137,6 +138,15 @@ export async function runDefinition<TInput, TFormatted>(
         },
       ]
     : def.hooks(ctx, input);
+  // Per-turn ↑/↓ odometer for non-main dispatches (#234). The main agent's
+  // `tokenStatsHook` already does full accounting (totals + gauge + compression
+  // headroom), so gating on `def.id !== 'main'` prevents double-counting it
+  // here; `ctx.statsTarget` being absent is the cron / headless exemption (the
+  // totals hook is simply not attached). Sub-agents / tool-wrappers / PAC
+  // phases thus add their tokens to the same per-turn odometer without
+  // disturbing the main-only context gauge.
+  const finalHooks =
+    def.id !== 'main' && ctx.statsTarget ? [...hooks, tokenTotalsHook(ctx.statsTarget)] : hooks;
   const baseMaxSteps = def.stepBudget(config, input);
   const prepareStep = def.prepareStep?.(ctx, input, baseMaxSteps);
   const repair = def.repairLabel
@@ -234,7 +244,7 @@ export async function runDefinition<TInput, TFormatted>(
     abortSignal: opts.abortSignal,
     prepareStep,
     repair,
-    hooks,
+    hooks: finalHooks,
     useStreaming,
     onTextDelta,
     onToolCallStart,

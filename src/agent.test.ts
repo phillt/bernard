@@ -15,7 +15,7 @@ import {
 import { buildContextMessage } from './context-message.js';
 import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
-import { printWarning, printInfo } from './output.js';
+import { printWarning, printInfo, type SpinnerStats } from './output.js';
 import { getModelProfile } from './providers/index.js';
 import { assembleContext } from './framework/context.js';
 import * as modelPolicy from './model-policy.js';
@@ -134,6 +134,17 @@ function makeAgent(
     alertContext: opts.alertContext,
     initialHistory: opts.initialHistory,
   });
+}
+
+function makeSpinnerStats(over: Partial<SpinnerStats> = {}): SpinnerStats {
+  return {
+    startTime: 0,
+    turnPromptTokens: 0,
+    turnCompletionTokens: 0,
+    latestPromptTokens: 0,
+    model: 'claude-sonnet-4-5-20250929',
+    ...over,
+  };
 }
 
 describe('buildSystemPrompt', () => {
@@ -1255,6 +1266,62 @@ describe('Agent', () => {
 
       const agent = makeAgent(makeConfig(), toolOptions, store);
       await expect(agent.compactHistory()).rejects.toThrow('LLM down');
+    });
+
+    it('drops the status-bar gauge to the post-compaction size immediately (#234)', async () => {
+      const { compressHistory, estimateHistoryTokens } = await import('./context.js');
+      const compressedHistory = [{ role: 'user' as const, content: 'summary' }];
+      vi.mocked(compressHistory).mockResolvedValueOnce(compressedHistory);
+      vi.mocked(estimateHistoryTokens).mockReturnValue(1234);
+
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+
+      const agent = makeAgent(makeConfig(), toolOptions, store);
+      const stats = makeSpinnerStats({ latestPromptTokens: 99_999 });
+      agent.setSpinnerStats(stats);
+      await agent.processInput('Hello');
+
+      await agent.compactHistory();
+      expect(stats.latestPromptTokens).toBe(1234);
+    });
+  });
+
+  describe('token-readout resets (#234)', () => {
+    it('zeroes the per-turn ↑/↓ odometer at the top of each turn', async () => {
+      mockGenerateText.mockResolvedValue({
+        response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+        usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+      });
+      const agent = makeAgent(makeConfig(), toolOptions, store);
+      const stats = makeSpinnerStats({ turnPromptTokens: 8_000, turnCompletionTokens: 400 });
+      agent.setSpinnerStats(stats);
+
+      await agent.processInput('Hello');
+
+      // The mocked generateText never fires onStepFinish, so the only movement is
+      // the per-turn reset — proving the readout is scoped to this turn, not the
+      // session.
+      expect(stats.turnPromptTokens).toBe(0);
+      expect(stats.turnCompletionTokens).toBe(0);
+    });
+
+    it('clearHistory empties the bar + odometer and compression-headroom fields', () => {
+      const agent = makeAgent(makeConfig(), toolOptions, store);
+      const stats = makeSpinnerStats({
+        latestPromptTokens: 50_000,
+        turnPromptTokens: 8_000,
+        turnCompletionTokens: 400,
+      });
+      agent.setSpinnerStats(stats);
+
+      agent.clearHistory();
+
+      expect(stats.latestPromptTokens).toBe(0);
+      expect(stats.turnPromptTokens).toBe(0);
+      expect(stats.turnCompletionTokens).toBe(0);
     });
   });
 
