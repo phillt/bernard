@@ -12,6 +12,18 @@ export interface TokenStatsTarget {
 }
 
 /**
+ * Adds one step's usage to the per-turn ↑/↓ odometer. The single mutation point
+ * shared by both hooks so the field names never drift between them.
+ */
+function accumulateTurnOdometer(
+  stats: SpinnerStats,
+  usage: { promptTokens: number; completionTokens: number },
+): void {
+  stats.turnPromptTokens += usage.promptTokens;
+  stats.turnCompletionTokens += usage.completionTokens;
+}
+
+/**
  * Full per-step accounting for the **main agent**. After each step:
  *  - writes the latest prompt-token count onto `target.lastStepPromptTokens`
  *    (used downstream for compression-headroom calculations);
@@ -30,8 +42,7 @@ export function tokenStatsHook(target: TokenStatsTarget): AgentHook {
       if (usage) {
         target.lastStepPromptTokens = usage.promptTokens;
         if (target.spinnerStats) {
-          target.spinnerStats.turnPromptTokens += usage.promptTokens;
-          target.spinnerStats.turnCompletionTokens += usage.completionTokens;
+          accumulateTurnOdometer(target.spinnerStats, usage);
           target.spinnerStats.latestPromptTokens = usage.promptTokens;
         }
       }
@@ -52,8 +63,7 @@ export function tokenTotalsHook(target: TokenStatsTarget): AgentHook {
   return {
     onStepFinish: ({ usage }) => {
       if (usage && target.spinnerStats) {
-        target.spinnerStats.turnPromptTokens += usage.promptTokens;
-        target.spinnerStats.turnCompletionTokens += usage.completionTokens;
+        accumulateTurnOdometer(target.spinnerStats, usage);
       }
     },
   };

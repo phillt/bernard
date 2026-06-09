@@ -171,4 +171,17 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
    * concurrent token streams in the terminal.
    */
   streaming?: boolean;
+
+  /**
+   * When `true`, this definition's `hooks()` already installs `tokenStatsHook`
+   * (full per-turn odometer + context gauge + compression headroom). Only the
+   * main-agent definition sets this. `runDefinition` reads it to decide whether
+   * to append the totals-only `tokenTotalsHook`: non-accounting definitions
+   * (sub / task / specialist / tool-wrapper / PAC phases) get it so their tokens
+   * land in the same per-turn ↑/↓ odometer, while the main agent is skipped to
+   * avoid double-counting. Keeping this a flag on the definition (rather than a
+   * hardcoded id check in `runDefinition`) keeps the accounting contract
+   * co-located with the hook wiring it describes. Issue #234.
+   */
+  fullTokenAccounting?: boolean;
 }

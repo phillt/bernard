@@ -378,15 +378,16 @@ describe('runDefinition per-turn token totals hook (#234)', () => {
     expect(target.lastStepPromptTokens).toBe(0);
   });
 
-  it('main dispatch does NOT get a second totals hook (no double count)', async () => {
+  it('a fullTokenAccounting def does NOT get a second totals hook (no double count)', async () => {
     const target = makeTarget();
     const ctx = makeCtx();
     ctx.statsTarget = target as any;
     mockStepWithUsage({ promptTokens: 200, completionTokens: 30 });
 
-    // The fake 'main' def carries no hooks of its own, so if the gate let the
-    // totals hook through the odometer would bump; it must stay at 0.
-    await runDefinition(ctx, fakeDefinition({ id: 'main' }), { text: 'x' });
+    // The fake def carries no hooks of its own, so if the gate let the totals
+    // hook through the odometer would bump; the flag must keep it at 0 (the real
+    // main def installs tokenStatsHook itself).
+    await runDefinition(ctx, fakeDefinition({ fullTokenAccounting: true }), { text: 'x' });
 
     expect(target.spinnerStats.turnPromptTokens).toBe(0);
     expect(target.spinnerStats.turnCompletionTokens).toBe(0);

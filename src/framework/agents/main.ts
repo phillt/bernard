@@ -192,6 +192,11 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
   // activates when `setOutputSink` has registered a consumer.
   streaming: true,
 
+  // #234: this definition installs `tokenStatsHook` below (full per-turn
+  // accounting), so `runDefinition` must NOT also append `tokenTotalsHook` —
+  // that would double-count the main agent's tokens in the ↑/↓ odometer.
+  fullTokenAccounting: true,
+
   systemPrompt(_ctx, input) {
     // The Agent class pre-renders the prompt via `buildMainSystemPrompt` and
     // passes it through `input.systemPrompt` so a single `getModelProfile`

@@ -138,15 +138,17 @@ export async function runDefinition<TInput, TFormatted>(
         },
       ]
     : def.hooks(ctx, input);
-  // Per-turn ↑/↓ odometer for non-main dispatches (#234). The main agent's
-  // `tokenStatsHook` already does full accounting (totals + gauge + compression
-  // headroom), so gating on `def.id !== 'main'` prevents double-counting it
-  // here; `ctx.statsTarget` being absent is the cron / headless exemption (the
-  // totals hook is simply not attached). Sub-agents / tool-wrappers / PAC
-  // phases thus add their tokens to the same per-turn odometer without
-  // disturbing the main-only context gauge.
+  // Per-turn ↑/↓ odometer for non-main dispatches (#234). Definitions that do
+  // their own full accounting (`fullTokenAccounting` — the main agent, which
+  // installs `tokenStatsHook`) are skipped so they aren't double-counted;
+  // everyone else (sub / task / specialist / tool-wrapper / PAC) gets the
+  // totals-only hook so their tokens add to the same odometer without disturbing
+  // the main-only context gauge. `ctx.statsTarget` being absent is the cron /
+  // headless exemption (the hook is simply not attached).
   const finalHooks =
-    def.id !== 'main' && ctx.statsTarget ? [...hooks, tokenTotalsHook(ctx.statsTarget)] : hooks;
+    !def.fullTokenAccounting && ctx.statsTarget
+      ? [...hooks, tokenTotalsHook(ctx.statsTarget)]
+      : hooks;
   const baseMaxSteps = def.stepBudget(config, input);
   const prepareStep = def.prepareStep?.(ctx, input, baseMaxSteps);
   const repair = def.repairLabel
