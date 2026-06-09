@@ -83,3 +83,18 @@ describe('<StatusBar> token readout labels (#234)', () => {
     expect(frame).toMatch(/ctx \S+ *●/);
   });
 });
+
+describe('<StatusBar> idle-tick guard (#232)', () => {
+  it('still refreshes the readout when spinnerStats changes between polls', async () => {
+    // The poll only forces a re-render when a rendered value actually moved
+    // (#232). This guards the positive path: an in-place mutation of the
+    // stable spinnerStats object (exactly how the token hooks update it) must
+    // surface on the next poll, so the equality snapshot can't be over-eager.
+    const agent = stubAgent(0.55);
+    const { lastFrame } = render(createElement(StatusBar, { agent }));
+    expect(stripAnsi(lastFrame() ?? '')).toMatch(/turn\s+1\.2k↑/);
+    (agent.spinnerStats as { turnPromptTokens: number }).turnPromptTokens = 2222;
+    await new Promise((r) => setTimeout(r, 600)); // past the 500ms poll interval
+    expect(stripAnsi(lastFrame() ?? '')).toMatch(/turn\s+2\.2k↑/);
+  });
+});

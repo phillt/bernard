@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Box, Text } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { formatTokenCount, type SpinnerStats } from '../output.js';
@@ -11,10 +11,27 @@ interface StatusBarProps {
 
 const BAR_WIDTH = 10;
 
+/** Serialize the fields StatusBar actually renders, for change detection. */
+function snapshotStats(stats: SpinnerStats | null, strategy: string | null): string {
+  if (!stats) return `null|${strategy ?? ''}`;
+  return [
+    stats.turnPromptTokens,
+    stats.turnCompletionTokens,
+    stats.latestPromptTokens,
+    stats.model,
+    stats.contextWindowOverride ?? '',
+    strategy ?? '',
+  ].join('|');
+}
+
 /**
  * Pinned bottom-right token / context-window readout. Polls `agent.spinnerStats`
  * every 500 ms — cheap, and only mutated by the token-stats hook on step
  * boundaries, so a poll-based refresh is fine (no subscription seam needed).
+ * The poll only forces a re-render when a rendered value actually changed
+ * (#232): when the agent is idle nothing mutates `spinnerStats`, so the
+ * snapshot is stable and the dynamic region stops repainting — which is what
+ * lets the terminal hold its scroll position while idle.
  * The compression-headroom indicator is a `●●●◐○○○○○○` dot gauge (half-dot
  * resolution) that gets louder as it fills: muted while there's >25% headroom,
  * warning between 5%–25%, and the theme's accent color once <5% of the
@@ -23,10 +40,17 @@ const BAR_WIDTH = 10;
 export function StatusBar({ agent }: StatusBarProps) {
   const colors = getThemeColors();
   const [, force] = useState(0);
+  const lastSnapshotRef = useRef<string>(snapshotStats(agent.spinnerStats, agent.currentStrategy));
   useEffect(() => {
-    const id = setInterval(() => force((n) => n + 1), 500);
+    const id = setInterval(() => {
+      const snap = snapshotStats(agent.spinnerStats, agent.currentStrategy);
+      if (snap !== lastSnapshotRef.current) {
+        lastSnapshotRef.current = snap;
+        force((n) => n + 1);
+      }
+    }, 500);
     return () => clearInterval(id);
-  }, []);
+  }, [agent]);
 
   const stats: SpinnerStats | null = agent.spinnerStats;
   const strategy = agent.currentStrategy;

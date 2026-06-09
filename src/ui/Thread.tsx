@@ -1,5 +1,5 @@
 import { useSyncExternalStore, type ReactNode } from 'react';
-import { Box, Text, useStdout } from 'ink';
+import { Box, Static, Text, useStdout } from 'ink';
 import type {
   CoreMessage,
   CoreUserMessage,
@@ -18,77 +18,98 @@ import { truncate } from '../text.js';
 import { renderMarkdown } from './markdown.js';
 import type { MessageStore, StreamEvent } from './message-store.js';
 
+/**
+ * One finalized transcript entry. `<App>` builds these at turn boundaries and
+ * appends them to the append-only log it feeds into `<Static>` (#232). Each
+ * item snapshots everything `<MessageBlock>` needs at commit time — the
+ * rewrite original (known at turn start) and the timing footer (known at turn
+ * end) — because a Static item is written to terminal scrollback once and can
+ * never be re-rendered. `toolDetails` is captured per-item for the same
+ * reason: toggling the setting only affects subsequent turns.
+ */
+export interface StaticItem {
+  /** Stable, monotonic id (never the history index — that shifts on /compact). */
+  key: string;
+  message: CoreMessage;
+  rewriteOriginal?: string;
+  timing?: { endedAt: number; durationMs: number };
+  toolDetails: boolean;
+}
+
 interface ThreadProps {
-  history: CoreMessage[];
+  /**
+   * Append-only log of finalized turns (#232). Rendered through Ink's
+   * `<Static>` so each entry is written to terminal scrollback exactly once
+   * and never repainted — that is what makes scrolling up hold position.
+   */
+  staticItems: StaticItem[];
   /**
    * Phase C (#214): when `busy === true`, `<Thread>` mounts a
    * `<StreamingAssistantMessage>` below the static history that subscribes
    * to `messageStore` and renders per-token deltas + inline tool-call /
    * tool-result blocks as they arrive. Omitted (or `busy === false`) means
-   * the static-history `<Thread>` path runs identically to Phase B.
+   * only the finalized `<Static>` log renders.
    */
   messageStore?: MessageStore;
   busy?: boolean;
   /** Rendered as a dim notice below the transcript when the last turn was Esc-cancelled. */
   interrupted?: boolean;
   /**
-   * Per-history-index map of the user's original text when the rewriter
-   * replaced it before dispatch. `UserMessage` reads this to show the original
-   * (not the rewritten) text and tag it with the rewrite icon next to the
-   * timestamp. Same icon is used in `/agent-options` so the meaning is shared.
+   * Whether the in-flight `<StreamingAssistantMessage>` shows full tool-call
+   * arguments and result bodies. Read live from `config.toolDetails` so the
+   * current turn responds to a mid-turn toggle; finalized items carry their
+   * own snapshot in `StaticItem.toolDetails`.
    */
-  rewriteOriginals?: ReadonlyMap<number, string>;
-  /**
-   * Per-history-index timestamp + duration of completed turns. Rendered as a
-   * dim footer (`hh:mm · 1.2s`) under every assistant message that has an
-   * entry — mirrors the timestamp `<UserMessage>` shows under the outbound
-   * message. Owned by `<App>` so the footer persists across follow-up turns.
-   */
-  turnTimings?: ReadonlyMap<number, { endedAt: number; durationMs: number }>;
-  /**
-   * Whether to show full tool-call arguments and result bodies in the
-   * transcript. Tool names are always shown; only the args summary next to
-   * the name and the `↳ …` result row are suppressed when this is false.
-   * Mirrors the `Tool details` setting in `/agent-options`.
-   */
-  toolDetails?: boolean;
+  streamingToolDetails?: boolean;
 }
 
 /** Icon used wherever the prompt-rewriter feature surfaces in the UI. */
 export const REWRITE_ICON = '✎';
 
 /**
- * Renders the conversation as a flowing list of message blocks. Reads the
- * AI SDK's `CoreMessage[]` shape directly — same array `Agent.getHistory()`
- * returns. Re-renders when `<App>` bumps `historyVersion` after a turn ends.
- *
- * Streaming-output migration (Phase C) will keep this component but feed it
- * from an in-memory message store so the in-flight assistant message updates
- * token-by-token. Phase B renders the message in bulk at turn end.
+ * Renders the conversation. Finalized turns flow through Ink's `<Static>`
+ * (#232): each `StaticItem` is written to terminal scrollback exactly once and
+ * is never repainted, so scrolling up holds position even as the dynamic
+ * region below (streaming message, spinner, prompt, status bar) keeps
+ * repainting. `<App>` owns the append-only `staticItems` log and appends to it
+ * at turn boundaries; only `/clear` remounts this component (via a key bump)
+ * to reset `<Static>`'s internal high-water cursor.
  */
 export function Thread({
-  history,
+  staticItems,
   messageStore,
   busy,
   interrupted,
-  rewriteOriginals,
-  turnTimings,
-  toolDetails = false,
+  streamingToolDetails = false,
 }: ThreadProps) {
   const colors = getThemeColors();
+  const { stdout } = useStdout();
+  // Ink's <Static> hoists its output to the top, OUTSIDE the App's outer
+  // paddingX={2} box and WITHOUT stretching items to the terminal width.
+  // Two consequences each item must compensate for: (1) percentage widths
+  // (UserMessage right-aligns with width="85%") collapse without an explicit
+  // parent width, and (2) static rows would start at column 0 while the
+  // dynamic region (streaming message, prompt) is indented by 2. Give every
+  // item the full terminal width + matching horizontal padding so finalized
+  // turns line up with the live region. Width is captured at commit time;
+  // already-printed rows don't rewrap on resize (an accepted Static tradeoff).
+  const itemWidth = stdout?.columns ?? 80;
   return (
     <Box flexDirection="column">
-      {history.map((msg, idx) => (
-        <MessageBlock
-          key={idx}
-          message={msg}
-          rewriteOriginal={rewriteOriginals?.get(idx)}
-          timing={turnTimings?.get(idx)}
-          toolDetails={toolDetails}
-        />
-      ))}
+      <Static items={staticItems}>
+        {(item) => (
+          <Box key={item.key} width={itemWidth} flexDirection="column" paddingX={2}>
+            <MessageBlock
+              message={item.message}
+              rewriteOriginal={item.rewriteOriginal}
+              timing={item.timing}
+              toolDetails={item.toolDetails}
+            />
+          </Box>
+        )}
+      </Static>
       {busy && messageStore && (
-        <StreamingAssistantMessage store={messageStore} toolDetails={toolDetails} />
+        <StreamingAssistantMessage store={messageStore} toolDetails={streamingToolDetails} />
       )}
       {!busy && interrupted && (
         <Box marginTop={1}>
@@ -347,7 +368,7 @@ function StreamingToolResult({
   );
 }
 
-function MessageBlock({
+export function MessageBlock({
   message,
   rewriteOriginal,
   timing,

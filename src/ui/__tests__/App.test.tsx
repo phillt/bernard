@@ -67,6 +67,7 @@ process.env.BERNARD_HOME = TMP_HOME;
 // ── Imports under test (after mocks + env) ──────────────────────────────
 import { App, type AppStores } from '../App.js';
 import { getInkHandlers } from '../ink-handlers.js';
+import type { CoreMessage } from 'ai';
 import type { BernardConfig } from '../../config.js';
 import type { Agent } from '../../agent.js';
 import type { HistoryStore } from '../../history.js';
@@ -113,15 +114,17 @@ interface AgentSpy {
   compactHistory: ReturnType<typeof vi.fn>;
 }
 
-function makeAgent(spy: Partial<AgentSpy> = {}): Agent {
+function makeAgent(spy: Partial<AgentSpy> = {}, history: CoreMessage[] = []): Agent {
   const stubs: AgentSpy = {
     processInput: vi.fn(async () => {}),
-    clearHistory: vi.fn(),
+    clearHistory: vi.fn(() => {
+      history.length = 0;
+    }),
     compactHistory: vi.fn(async () => ({ compacted: false })),
     ...spy,
   };
   return {
-    getHistory: () => [],
+    getHistory: () => history,
     clearHistory: stubs.clearHistory,
     compactHistory: stubs.compactHistory,
     processInput: stubs.processInput,
@@ -173,6 +176,8 @@ interface HarnessOptions {
   agent?: Partial<AgentSpy>;
   alertBanner?: string;
   config?: Partial<BernardConfig>;
+  /** Live history array `getHistory()` returns; mutate it from `processInput`. */
+  history?: CoreMessage[];
 }
 
 function renderApp(opts: HarnessOptions = {}) {
@@ -198,7 +203,7 @@ function renderApp(opts: HarnessOptions = {}) {
   const config = makeConfig(opts.config);
   const utils = render(
     createElement(App, {
-      agent: makeAgent(agentSpy),
+      agent: makeAgent(agentSpy, opts.history),
       config,
       historyStore,
       provenanceHistoryStore,
@@ -388,6 +393,59 @@ describe('<App> /clear', () => {
     await submit(stdin, '/clear --bogus');
     expect(lastFrame()).toContain('Usage: /clear');
     expect(agentSpy.clearHistory).not.toHaveBeenCalled();
+    unmount();
+  });
+});
+
+describe('<App> Static transcript (#232)', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('commits the user then assistant message into the transcript after a turn', async () => {
+    // Stateful history: processInput pushes the user + assistant messages the
+    // way the real Agent does, so App.commitNewHistory has something to freeze
+    // into the <Static> log.
+    const history: CoreMessage[] = [];
+    const processInput = vi.fn(async (text: string) => {
+      history.push({ role: 'user', content: `[2026-01-01T00:00:00+00:00] ${text}` });
+      history.push({ role: 'assistant', content: 'committed answer' });
+    });
+    const { stdin, lastFrame, unmount } = renderApp({ history, agent: { processInput } });
+    await tick();
+    await submit(stdin, 'render me');
+    const frame = lastFrame() ?? '';
+    expect(processInput).toHaveBeenCalled();
+    expect(frame).toContain('render me');
+    expect(frame).toContain('committed answer');
+    unmount();
+  });
+
+  it('/clear resets the commit boundary so a post-clear turn still commits', async () => {
+    // The physical scrollback wipe (`\x1b[3J\x1b[2J\x1b[H`) goes to the real
+    // process.stdout, not ink-testing-library's buffer, and Ink's <Static>
+    // never un-prints — so a `not.toContain` on the old text isn't observable
+    // in this harness (a real terminal clears it). What IS observable, and is
+    // the actual regression risk, is that /clear resets committedLenRef to 0
+    // so the NEXT turn re-commits from a fresh history without index drift.
+    const history: CoreMessage[] = [];
+    const processInput = vi.fn(async (text: string) => {
+      history.push({ role: 'user', content: `[2026-01-01T00:00:00+00:00] ${text}` });
+      history.push({ role: 'assistant', content: `answer for ${text}` });
+    });
+    const { stdin, lastFrame, agentSpy, unmount } = renderApp({ history, agent: { processInput } });
+    await tick();
+    await submit(stdin, 'first turn');
+    expect(lastFrame() ?? '').toContain('answer for first turn');
+    await submit(stdin, '/clear');
+    expect(agentSpy.clearHistory).toHaveBeenCalled();
+    expect(lastFrame() ?? '').toContain('Conversation history cleared');
+    // History was emptied by clearHistory(); a new turn must commit cleanly.
+    await submit(stdin, 'second turn');
+    expect(lastFrame() ?? '').toContain('answer for second turn');
     unmount();
   });
 });
