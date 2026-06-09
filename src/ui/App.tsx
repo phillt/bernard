@@ -1970,16 +1970,25 @@ export function App({
    * commit only picks up newer messages.
    */
   function commitNewHistory(opts?: {
-    /** Pre-rewrite text, attached to the newest user message in the slice. */
+    /** Pre-rewrite text, attached to the just-pushed user message in the slice. */
     rewriteForLastUser?: string;
-    /** Timing footer, attached to the assistant message at this history index. */
+    /** Timing footer, attached to the last assistant message in the slice. */
     timing?: { endedAt: number; durationMs: number };
-    assistantIndex?: number;
   }): void {
     const history = agent.getHistory();
     const start = committedLenRef.current;
     if (start >= history.length) return;
     const toolDetails = config.toolDetails;
+    // The rewrite original belongs to the just-pushed user message and the
+    // timing footer to the turn's assistant message — i.e. the last of each
+    // role in the slice. Resolve both targets here so callers only pass the
+    // payloads, not history indices to keep in sync.
+    let lastUserIdx = -1;
+    let lastAssistantIdx = -1;
+    for (let i = start; i < history.length; i++) {
+      if (history[i].role === 'user') lastUserIdx = i;
+      else if (history[i].role === 'assistant') lastAssistantIdx = i;
+    }
     const appended: StaticItem[] = [];
     for (let i = start; i < history.length; i++) {
       const message = history[i];
@@ -1987,10 +1996,10 @@ export function App({
         key: String(itemKeyRef.current++),
         message,
         rewriteOriginal:
-          opts?.rewriteForLastUser !== undefined && message.role === 'user'
+          opts?.rewriteForLastUser !== undefined && i === lastUserIdx
             ? opts.rewriteForLastUser
             : undefined,
-        timing: opts?.timing && i === opts.assistantIndex ? opts.timing : undefined,
+        timing: opts?.timing && i === lastAssistantIdx ? opts.timing : undefined,
         toolDetails,
       });
     }
@@ -2054,25 +2063,14 @@ export function App({
       submittingRef.current = false;
       turnAbortRef.current = null;
       setBusy(false);
-      // Commit the assistant message (+ any tool messages) added this turn,
-      // attaching the timing footer to the last assistant message when the
-      // turn ran to completion (an aborted turn gets no footer, same as
+      // Commit the assistant message (+ any tool messages) added this turn.
+      // commitNewHistory attaches the timing footer to the turn's assistant
+      // message itself; an aborted turn passes no timing (no footer, same as
       // before). This append + setBusy(false) land in the same React 18 batch,
       // so the streaming view freezes into scrollback in a single render.
-      let timing: { endedAt: number; durationMs: number } | undefined;
-      let assistantIndex: number | undefined;
-      if (turnCompleted) {
-        const endedAt = Date.now();
-        const history = agent.getHistory();
-        for (let i = history.length - 1; i >= 0; i--) {
-          if (history[i].role === 'assistant') {
-            assistantIndex = i;
-            timing = { endedAt, durationMs: endedAt - turnStartedAt };
-            break;
-          }
-        }
-      }
-      commitNewHistory({ timing, assistantIndex });
+      const endedAt = Date.now();
+      const timing = turnCompleted ? { endedAt, durationMs: endedAt - turnStartedAt } : undefined;
+      commitNewHistory({ timing });
     }
   }
 
