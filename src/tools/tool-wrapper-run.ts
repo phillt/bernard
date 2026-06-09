@@ -189,8 +189,11 @@ export function depsToCtx(deps: ToolWrapperDeps): AgentContext {
     verification: deps.verification ?? new VerificationStore(),
     verificationTracker: deps.verificationTracker ?? new VerificationTracker(),
     postWriteChecks: deps.postWriteChecks ?? [],
-    ...(deps.statsTarget ? { statsTarget: deps.statsTarget } : {}),
-    ...(deps.policyDecision ? { policyDecision: deps.policyDecision } : {}),
+    // Both optional on AgentContext; an explicit `undefined` is identical to an
+    // absent key for every consumer (all guard with `?.`), so assign directly
+    // rather than allocating a throwaway spread object on each wrapper dispatch.
+    statsTarget: deps.statsTarget,
+    policyDecision: deps.policyDecision,
   };
 }
 
