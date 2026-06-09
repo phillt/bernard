@@ -839,9 +839,11 @@ export class Agent {
     this.lastRubric = null;
     // Reset token accounting so the status bar reflects the now-empty
     // conversation the moment /clear finishes, instead of lingering on the old
-    // fullness until the next turn runs (#234). `lastPromptTokens` is the
-    // compression input (zeroing it avoids a spurious compaction on the first
-    // post-clear turn); `lastStepPromptTokens` is the gauge's per-step source.
+    // fullness until the next turn runs (#234). `lastPromptTokens` and
+    // `lastStepPromptTokens` both feed compression headroom (the latter is the
+    // per-step prompt size the next compaction reads); zeroing them avoids a
+    // spurious compaction on the first post-clear turn. The gauge's own source,
+    // `spinnerStats.latestPromptTokens`, is emptied separately below.
     this.lastPromptTokens = 0;
     this.lastStepPromptTokens = 0;
     if (this.spinnerStats) {

@@ -460,8 +460,8 @@ export function App({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- session boundaries are per-mount, not per-config-change
   }, [agent]);
 
-  // Attach a persistent SpinnerStats object the framework's token-stats hooks
-  // mutate in place. <StatusBar> polls this for the pinned bottom-right readout.
+  // Attach a persistent SpinnerStats object that the framework's token-stats
+  // hooks mutate in place. <StatusBar> polls this for the pinned bottom-right readout.
   // We never null it out — the object lives for the whole session; its per-turn
   // ↑/↓ odometer (`turnPromptTokens`/`turnCompletionTokens`) is reset at the top
   // of every turn by `Agent.processInput` (#234). Seeded in a mount-time effect
