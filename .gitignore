@@ -16,3 +16,5 @@ $HOME/
 local_cache/
 
 ~/
+
+.playwright-mcp/
