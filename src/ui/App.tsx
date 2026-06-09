@@ -82,7 +82,7 @@ import {
 } from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
-import { generateText } from 'ai';
+import { generateText, type CoreMessage } from 'ai';
 import { resolveSiteModel, resolveMainModel, logSiteModelSnapshot } from '../model-policy.js';
 import { serializeMessages, extractDomainFacts, SUMMARIZATION_PROMPT } from '../context.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
@@ -113,7 +113,7 @@ import type {
   ValuePromptOptions,
   ValueResult,
 } from './menu-types.js';
-import { Thread, REWRITE_ICON } from './Thread.js';
+import { Thread, REWRITE_ICON, type StaticItem } from './Thread.js';
 import { Prompt } from './Prompt.js';
 import { Spinner } from './Spinner.js';
 import { StatusBar } from './StatusBar.js';
@@ -304,7 +304,30 @@ export function App({
   const { exit } = useApp();
   const [activeOverlay, setActiveOverlay] = useState<Overlay | null>(null);
   const [busy, setBusy] = useState(false);
-  const [historyVersion, setHistoryVersion] = useState(0);
+  // Append-only log of finalized turns, rendered through Ink's `<Static>` so
+  // each entry becomes terminal scrollback that is never repainted (#232).
+  // `<App>` commits to this at turn boundaries; the streaming message and the
+  // rest of the UI stay in the dynamic region.
+  const [staticItems, setStaticItems] = useState<StaticItem[]>([]);
+  // Bumped only by /clear to remount <Thread> and reset <Static>'s internal
+  // high-water cursor (Static only appends — it cannot un-print, so the reset
+  // has to come from a fresh mount). Normal turns never touch this, so they no
+  // longer remount the whole transcript the way the old historyVersion key did.
+  const [staticEpoch, setStaticEpoch] = useState(0);
+  // Number of `agent.getHistory()` messages already committed to `staticItems`.
+  // Each commit appends `history.slice(committedLen)` and advances this.
+  const committedLenRef = useRef(0);
+  // The history ARRAY reference we last committed against. Normal appends mutate
+  // the same array in place (push), so the reference is stable; but
+  // `Agent.processInput` REASSIGNS `this.history` to a new, shorter array when
+  // automatic context compression / emergency truncation fires mid-turn. When
+  // that happens the length cursor above is meaningless for the new array, so
+  // we re-anchor against this turn's user message instead of slicing blindly.
+  const historyRef = useRef<CoreMessage[] | null>(null);
+  // Monotonic source for `StaticItem.key`. Deliberately NOT the history index:
+  // /compact shrinks history, so index-based keys would collide with already
+  // emitted items. A counter never repeats.
+  const itemKeyRef = useRef(0);
   const [pendingMenu, setPendingMenu] = useState<PendingMenu | null>(null);
   const [pendingMultiMenu, setPendingMultiMenu] = useState<PendingMultiMenu | null>(null);
   const [pendingGrid, setPendingGrid] = useState<PendingGrid | null>(null);
@@ -315,15 +338,6 @@ export function App({
   const [bannerVisible, setBannerVisible] = useState<boolean>(!!alertBanner);
   const [interrupted, setInterrupted] = useState(false);
   const [slashActive, setSlashActive] = useState(false);
-  // Per-history-index timing for completed turns: drives the timestamp +
-  // duration footer under every assistant message in <Thread>. Stored as a
-  // ref because re-renders are already triggered by historyVersion bumps; the
-  // map is append-only across the session and cleared by /clear.
-  const turnTimingsRef = useRef<Map<number, { endedAt: number; durationMs: number }>>(new Map());
-  // history-index → user's original text when the rewriter substituted it.
-  // Lives outside React state because it's append-only and not React-reactive
-  // (history re-renders are driven by historyVersion bumps already).
-  const rewriteOriginalsRef = useRef<Map<number, string>>(new Map());
   const colors = getThemeColors();
 
   // Confirm-action session memo: `${toolName}:${stableHash(args)}` → true.
@@ -648,15 +662,19 @@ export function App({
       historyStore.clear();
       provenanceHistoryStore.clear();
       agent.clearHistory();
-      turnTimingsRef.current.clear();
-      rewriteOriginalsRef.current.clear();
       setInterrupted(false);
-      // Wipe scrollback + visible region so the old transcript doesn't linger
-      // above the cleared <Thread>. `\x1b[3J` clears scrollback, `\x1b[2J`
-      // the visible region, `\x1b[H` homes the cursor. Ink repaints on the
-      // next setHistoryVersion bump below.
+      // Reset the append-only log and remount <Thread> (via the epoch bump) so
+      // <Static>'s internal high-water cursor resets to 0 — Static only
+      // appends, so an empty `items` array alone wouldn't un-print the old
+      // transcript. The escape wipes the physical terminal: `\x1b[3J` clears
+      // scrollback, `\x1b[2J` the visible region, `\x1b[H` homes the cursor.
+      setStaticItems([]);
+      committedLenRef.current = 0;
+      // clearHistory() reassigns this.history to a fresh []; track the new
+      // reference so the next commit doesn't mistake it for a mid-turn replace.
+      historyRef.current = agent.getHistory();
       process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
-      setHistoryVersion((v) => v + 1);
+      setStaticEpoch((e) => e + 1);
       flashToast('Conversation history cleared.', 'success');
       return;
     }
@@ -719,10 +737,14 @@ export function App({
         if (!result.compacted) {
           flashToast('Nothing to compact — conversation is already short enough.');
         } else {
-          // History indices shift after compaction; per-index maps would now
-          // attach to the wrong messages.
-          turnTimingsRef.current.clear();
-          rewriteOriginalsRef.current.clear();
+          // Compaction reassigns this.history to a new, shorter array; resync
+          // the commit boundary to its length AND track the new reference so
+          // the next commit doesn't re-anchor as if it were a mid-turn replace.
+          // The already-printed transcript stays in scrollback (it genuinely
+          // happened) and Static keeps appending below — monotonic item keys
+          // can't collide even though history indices shifted, so no remount.
+          committedLenRef.current = agent.getHistory().length;
+          historyRef.current = agent.getHistory();
           const pct = Math.round(
             ((result.tokensBefore - result.tokensAfter) / result.tokensBefore) * 100,
           );
@@ -732,7 +754,6 @@ export function App({
           );
         }
         persistAgentState({ agent, historyStore, provenanceHistoryStore });
-        setHistoryVersion((v) => v + 1);
       } catch (err) {
         flashToast(
           `Compaction failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -1806,10 +1827,11 @@ export function App({
         'Tool details: off',
         (value) => {
           setToolDetailsVisible(value);
-          // <Thread> re-keys on historyVersion, so bumping it here forces a
-          // remount that picks up the new toolDetails flag on the visible
-          // transcript (not just future turns).
-          setHistoryVersion((v) => v + 1);
+          // Finalized transcript items snapshot toolDetails at commit time and
+          // are written to scrollback once (#232), so a toggle can't retroapply
+          // to already-printed turns — it takes effect on subsequent turns. The
+          // in-flight streaming message reads config.toolDetails live, so the
+          // current turn still responds.
         },
       ),
       toggleRow(
@@ -1950,6 +1972,73 @@ export function App({
     return { agentInput, resolvedEntries };
   }
 
+  /**
+   * Freeze every history message added since the last commit into the
+   * append-only `staticItems` log (#232). Called at the two turn boundaries
+   * where the per-message extras are known: at turn start for the just-pushed
+   * user message (its pre-rewrite original), and at turn end for the assistant
+   * message (its timing footer). Each item snapshots `config.toolDetails` and
+   * gets a fresh monotonic key, then `committedLenRef` advances so the next
+   * commit only picks up newer messages.
+   */
+  function commitNewHistory(opts?: {
+    /** Pre-rewrite text, attached to the just-pushed user message in the slice. */
+    rewriteForLastUser?: string;
+    /** Timing footer, attached to the last assistant message in the slice. */
+    timing?: { endedAt: number; durationMs: number };
+  }): void {
+    const history = agent.getHistory();
+    // If the agent replaced its history array mid-turn (auto-compression /
+    // emergency truncation in processInput, which reassigns `this.history` to a
+    // shorter array — #243 review), the length cursor points past the end of
+    // the new array and the slice below would silently drop this turn's
+    // assistant + tool output. Re-anchor on this turn's user message instead:
+    // compression always keeps the most recent user message, so everything
+    // after the last user message is the still-uncommitted turn output (the
+    // user message itself was already committed at turn start). Guard on a
+    // non-null prior ref so the first-ever commit still emits initial history.
+    if (historyRef.current !== null && historyRef.current !== history) {
+      let lastUserIdx = -1;
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].role === 'user') {
+          lastUserIdx = i;
+          break;
+        }
+      }
+      committedLenRef.current = lastUserIdx + 1;
+    }
+    historyRef.current = history;
+    const start = committedLenRef.current;
+    if (start >= history.length) return;
+    const toolDetails = config.toolDetails;
+    // The rewrite original belongs to the just-pushed user message and the
+    // timing footer to the turn's assistant message — i.e. the last of each
+    // role in the slice. Resolve both targets here so callers only pass the
+    // payloads, not history indices to keep in sync.
+    let lastUserIdx = -1;
+    let lastAssistantIdx = -1;
+    for (let i = start; i < history.length; i++) {
+      if (history[i].role === 'user') lastUserIdx = i;
+      else if (history[i].role === 'assistant') lastAssistantIdx = i;
+    }
+    const appended: StaticItem[] = [];
+    for (let i = start; i < history.length; i++) {
+      const message = history[i];
+      appended.push({
+        key: String(itemKeyRef.current++),
+        message,
+        rewriteOriginal:
+          opts?.rewriteForLastUser !== undefined && i === lastUserIdx
+            ? opts.rewriteForLastUser
+            : undefined,
+        timing: opts?.timing && i === lastAssistantIdx ? opts.timing : undefined,
+        toolDetails,
+      });
+    }
+    committedLenRef.current = history.length;
+    setStaticItems((prev) => [...prev, ...appended]);
+  }
+
   async function runAgentTurn(input: string, images?: ImageAttachment[]): Promise<void> {
     // Drop a second Enter that arrives before the busy re-render has propagated
     // to <Prompt disabled={busy}>. Without this, two turns can run concurrently.
@@ -1970,18 +2059,13 @@ export function App({
       // `processInput` pushes the user message to `agent.history` synchronously
       // (before its first internal await), so by the time the returned promise
       // hits this microtask boundary the history already contains the new
-      // entry. Bumping `historyVersion` here makes the static <Thread> re-read
-      // and show the user message above the streaming assistant block instead
-      // of after the turn finishes.
+      // entry. Committing it here shows the user message in the transcript
+      // (above the streaming assistant block) immediately instead of after the
+      // turn finishes. When the rewriter substituted the text, pass the
+      // original so <UserMessage> displays it (the rewrite is an LLM-only
+      // detail) rather than the dispatched version.
       const inflight = agent.processInput(agentInput, images, resolvedEntries);
-      // Capture the original text (pre-rewrite) so <UserMessage> can display
-      // it instead of the rewritten version that was dispatched to the model.
-      // The push has already happened — record at the resulting last index.
-      if (input !== agentInput) {
-        const idx = agent.getHistory().length - 1;
-        rewriteOriginalsRef.current.set(idx, input);
-      }
-      setHistoryVersion((v) => v + 1);
+      commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });
       await inflight;
       turnCompleted = !controller.signal.aborted;
     } catch (err) {
@@ -2001,8 +2085,9 @@ export function App({
           const body = [`⚠ Agent error: ${message}`, stack, cause && `Caused by:\n${cause}`]
             .filter(Boolean)
             .join('\n\n');
+          // The finally-block commit freezes this into the transcript along
+          // with anything else added this turn — no separate bump needed.
           agent.getHistory().push({ role: 'assistant', content: body });
-          setHistoryVersion((v) => v + 1);
         }
       }
     } finally {
@@ -2010,20 +2095,14 @@ export function App({
       submittingRef.current = false;
       turnAbortRef.current = null;
       setBusy(false);
-      if (turnCompleted) {
-        const endedAt = Date.now();
-        const history = agent.getHistory();
-        for (let i = history.length - 1; i >= 0; i--) {
-          if (history[i].role === 'assistant') {
-            turnTimingsRef.current.set(i, {
-              endedAt,
-              durationMs: endedAt - turnStartedAt,
-            });
-            break;
-          }
-        }
-      }
-      setHistoryVersion((v) => v + 1);
+      // Commit the assistant message (+ any tool messages) added this turn.
+      // commitNewHistory attaches the timing footer to the turn's assistant
+      // message itself; an aborted turn passes no timing (no footer, same as
+      // before). This append + setBusy(false) land in the same React 18 batch,
+      // so the streaming view freezes into scrollback in a single render.
+      const endedAt = Date.now();
+      const timing = turnCompleted ? { endedAt, durationMs: endedAt - turnStartedAt } : undefined;
+      commitNewHistory({ timing });
     }
   }
 
@@ -2327,14 +2406,12 @@ export function App({
         </Box>
       )}
       <Thread
-        key={historyVersion}
-        history={agent.getHistory()}
+        key={staticEpoch}
+        staticItems={staticItems}
         messageStore={messageStore}
         busy={busy}
         interrupted={interrupted}
-        rewriteOriginals={rewriteOriginalsRef.current}
-        turnTimings={turnTimingsRef.current}
-        toolDetails={config.toolDetails}
+        streamingToolDetails={config.toolDetails}
       />
       {busy && (
         <Box marginTop={1}>

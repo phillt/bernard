@@ -67,6 +67,7 @@ process.env.BERNARD_HOME = TMP_HOME;
 // ── Imports under test (after mocks + env) ──────────────────────────────
 import { App, type AppStores } from '../App.js';
 import { getInkHandlers } from '../ink-handlers.js';
+import type { CoreMessage } from 'ai';
 import type { BernardConfig } from '../../config.js';
 import type { Agent } from '../../agent.js';
 import type { HistoryStore } from '../../history.js';
@@ -113,15 +114,25 @@ interface AgentSpy {
   compactHistory: ReturnType<typeof vi.fn>;
 }
 
-function makeAgent(spy: Partial<AgentSpy> = {}): Agent {
+function makeAgent(
+  spy: Partial<AgentSpy> = {},
+  history: CoreMessage[] = [],
+  // Optional holder so a test can REPLACE the history array reference mid-turn
+  // (what Agent.processInput does on auto-compression). When omitted, history is
+  // a stable in-place array.
+  holder?: { current: CoreMessage[] },
+): Agent {
+  const box = holder ?? { current: history };
   const stubs: AgentSpy = {
     processInput: vi.fn(async () => {}),
-    clearHistory: vi.fn(),
+    clearHistory: vi.fn(() => {
+      box.current.length = 0;
+    }),
     compactHistory: vi.fn(async () => ({ compacted: false })),
     ...spy,
   };
   return {
-    getHistory: () => [],
+    getHistory: () => box.current,
     clearHistory: stubs.clearHistory,
     compactHistory: stubs.compactHistory,
     processInput: stubs.processInput,
@@ -173,6 +184,10 @@ interface HarnessOptions {
   agent?: Partial<AgentSpy>;
   alertBanner?: string;
   config?: Partial<BernardConfig>;
+  /** Live history array `getHistory()` returns; mutate it from `processInput`. */
+  history?: CoreMessage[];
+  /** Holder whose `.current` `getHistory()` returns; swap it to simulate a mid-turn replace. */
+  holder?: { current: CoreMessage[] };
 }
 
 function renderApp(opts: HarnessOptions = {}) {
@@ -198,7 +213,7 @@ function renderApp(opts: HarnessOptions = {}) {
   const config = makeConfig(opts.config);
   const utils = render(
     createElement(App, {
-      agent: makeAgent(agentSpy),
+      agent: makeAgent(agentSpy, opts.history, opts.holder),
       config,
       historyStore,
       provenanceHistoryStore,
@@ -388,6 +403,92 @@ describe('<App> /clear', () => {
     await submit(stdin, '/clear --bogus');
     expect(lastFrame()).toContain('Usage: /clear');
     expect(agentSpy.clearHistory).not.toHaveBeenCalled();
+    unmount();
+  });
+});
+
+describe('<App> Static transcript (#232)', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('commits the user then assistant message into the transcript after a turn', async () => {
+    // Stateful history: processInput pushes the user + assistant messages the
+    // way the real Agent does, so App.commitNewHistory has something to freeze
+    // into the <Static> log.
+    const history: CoreMessage[] = [];
+    const processInput = vi.fn(async (text: string) => {
+      history.push({ role: 'user', content: `[2026-01-01T00:00:00+00:00] ${text}` });
+      history.push({ role: 'assistant', content: 'committed answer' });
+    });
+    const { stdin, lastFrame, unmount } = renderApp({ history, agent: { processInput } });
+    await tick();
+    await submit(stdin, 'render me');
+    const frame = lastFrame() ?? '';
+    expect(processInput).toHaveBeenCalled();
+    expect(frame).toContain('render me');
+    expect(frame).toContain('committed answer');
+    unmount();
+  });
+
+  it('/clear resets the commit boundary so a post-clear turn still commits', async () => {
+    // The physical scrollback wipe (`\x1b[3J\x1b[2J\x1b[H`) goes to the real
+    // process.stdout, not ink-testing-library's buffer, and Ink's <Static>
+    // never un-prints — so a `not.toContain` on the old text isn't observable
+    // in this harness (a real terminal clears it). What IS observable, and is
+    // the actual regression risk, is that /clear resets committedLenRef to 0
+    // so the NEXT turn re-commits from a fresh history without index drift.
+    const history: CoreMessage[] = [];
+    const processInput = vi.fn(async (text: string) => {
+      history.push({ role: 'user', content: `[2026-01-01T00:00:00+00:00] ${text}` });
+      history.push({ role: 'assistant', content: `answer for ${text}` });
+    });
+    const { stdin, lastFrame, agentSpy, unmount } = renderApp({ history, agent: { processInput } });
+    await tick();
+    await submit(stdin, 'first turn');
+    expect(lastFrame() ?? '').toContain('answer for first turn');
+    await submit(stdin, '/clear');
+    expect(agentSpy.clearHistory).toHaveBeenCalled();
+    expect(lastFrame() ?? '').toContain('Conversation history cleared');
+    // History was emptied by clearHistory(); a new turn must commit cleanly.
+    await submit(stdin, 'second turn');
+    expect(lastFrame() ?? '').toContain('answer for second turn');
+    unmount();
+  });
+
+  it('commits the turn output when history is replaced mid-turn by compression (#243)', async () => {
+    // Reproduces the Copilot review bug: a length-based commit cursor strands
+    // the turn's assistant message when processInput compresses (reassigns) the
+    // history array to a SHORTER one mid-turn. Seed a long prior history so the
+    // stale cursor (its length after the user push) ends up past the end of the
+    // compressed array — the unfixed code would no-op and drop the answer.
+    const prior: CoreMessage[] = Array.from({ length: 12 }, (_, i) => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `prior ${i}`,
+    }));
+    const holder = { current: [...prior] };
+    const processInput = vi.fn(async (text: string) => {
+      // turn start (synchronous, before any await): push the user message onto
+      // the current array — this is what the turn-start commit sees.
+      holder.current.push({ role: 'user', content: `[2026-01-01T00:00:00+00:00] ${text}` });
+      await Promise.resolve();
+      // mid-turn auto-compression: replace history with a much shorter array
+      // that keeps a summary + the most recent user message, then append the
+      // assistant reply (as the real agent loop does).
+      holder.current = [
+        { role: 'assistant', content: 'context summary' },
+        { role: 'user', content: `[2026-01-01T00:00:00+00:00] ${text}` },
+        { role: 'assistant', content: 'answer survives compression' },
+      ];
+    });
+    const { stdin, lastFrame, unmount } = renderApp({ holder, agent: { processInput } });
+    await tick();
+    await submit(stdin, 'trigger compression');
+    expect(processInput).toHaveBeenCalled();
+    expect(lastFrame() ?? '').toContain('answer survives compression');
     unmount();
   });
 });

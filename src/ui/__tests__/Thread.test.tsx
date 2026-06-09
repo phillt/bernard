@@ -3,13 +3,32 @@ import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import stripAnsi from 'strip-ansi';
 import type { CoreMessage } from 'ai';
-import { Thread } from '../Thread.js';
+import { Thread, type StaticItem } from '../Thread.js';
 import { MessageStore } from '../message-store.js';
+
+/**
+ * Build the append-only `staticItems` log <Thread> now renders through
+ * <Static> (#232). Each finalized message snapshots its own `toolDetails`;
+ * `extras` lets a test attach a timing footer or rewrite original to a
+ * specific index.
+ */
+function items(
+  history: CoreMessage[],
+  toolDetails = false,
+  extras?: Record<number, Partial<StaticItem>>,
+): StaticItem[] {
+  return history.map((message, i) => ({
+    key: String(i),
+    message,
+    toolDetails,
+    ...(extras?.[i] ?? {}),
+  }));
+}
 
 describe('<Thread>', () => {
   it('renders a user message with the right-side marker', () => {
     const history: CoreMessage[] = [{ role: 'user', content: 'hello bernard' }];
-    const { lastFrame } = render(createElement(Thread, { history }));
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history) }));
     const frame = lastFrame() ?? '';
     expect(frame).toContain('hello bernard');
     expect(frame).toContain('❯');
@@ -17,16 +36,46 @@ describe('<Thread>', () => {
 
   it('renders an "interrupted" notice when the prop is set and not busy', () => {
     const history: CoreMessage[] = [{ role: 'user', content: 'hi' }];
-    const { lastFrame } = render(createElement(Thread, { history, interrupted: true }));
+    const { lastFrame } = render(
+      createElement(Thread, { staticItems: items(history), interrupted: true }),
+    );
     expect(lastFrame() ?? '').toContain('you interrupted');
   });
 
   it('renders an assistant message with the chevron label', () => {
     const history: CoreMessage[] = [{ role: 'assistant', content: 'hi there' }];
-    const { lastFrame } = render(createElement(Thread, { history }));
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history) }));
     const frame = lastFrame() ?? '';
     expect(frame).toContain('❮');
     expect(frame).toContain('hi there');
+  });
+
+  it('renders the per-item timing footer under an assistant message', () => {
+    const history: CoreMessage[] = [{ role: 'assistant', content: 'done' }];
+    const { lastFrame } = render(
+      createElement(Thread, {
+        staticItems: items(history, false, {
+          0: { timing: { endedAt: new Date('2026-01-01T12:00:00Z').getTime(), durationMs: 1200 } },
+        }),
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('done');
+    // 1200ms → "1.2s" per formatDuration.
+    expect(frame).toContain('1.2s');
+  });
+
+  it('shows the rewrite original (not the dispatched text) with the rewrite icon', () => {
+    const history: CoreMessage[] = [{ role: 'user', content: 'REWRITTEN dispatched text' }];
+    const { lastFrame } = render(
+      createElement(Thread, {
+        staticItems: items(history, false, { 0: { rewriteOriginal: 'original ask' } }),
+      }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('original ask');
+    expect(frame).not.toContain('REWRITTEN dispatched text');
+    expect(frame).toContain('✎');
   });
 
   it('renders structured assistant content (text + reasoning + tool-call)', () => {
@@ -45,7 +94,7 @@ describe('<Thread>', () => {
         ] as unknown as CoreMessage['content'],
       },
     ];
-    const { lastFrame } = render(createElement(Thread, { history, toolDetails: true }));
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history, true) }));
     const frame = lastFrame() ?? '';
     expect(frame).toContain('plain output');
     expect(frame).toContain('thinking…');
@@ -67,7 +116,7 @@ describe('<Thread>', () => {
         ],
       },
     ];
-    const { lastFrame } = render(createElement(Thread, { history, toolDetails: true }));
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history, true) }));
     expect(lastFrame()).toContain('↳');
     expect(lastFrame()).toContain('file1');
   });
@@ -87,7 +136,7 @@ describe('<Thread>', () => {
         ] as unknown as CoreMessage['content'],
       },
     ];
-    const { lastFrame } = render(createElement(Thread, { history, toolDetails: true }));
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history, true) }));
     const frame = lastFrame() ?? '';
     expect(frame).toContain('⚙ shell');
     expect(frame).toContain('…');
@@ -119,7 +168,7 @@ describe('<Thread>', () => {
         ],
       },
     ];
-    const { lastFrame } = render(createElement(Thread, { history }));
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history) }));
     const frame = lastFrame() ?? '';
     expect(frame).toContain('⚙ shell');
     expect(frame).not.toContain('{"cmd":"ls"}');
@@ -132,7 +181,7 @@ describe('<Thread>', () => {
       { role: 'system', content: 'YOU ARE BERNARD' },
       { role: 'user', content: 'hi' },
     ];
-    const { lastFrame } = render(createElement(Thread, { history }));
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history) }));
     const frame = lastFrame() ?? '';
     expect(frame).not.toContain('YOU ARE BERNARD');
     expect(frame).toContain('hi');
@@ -143,7 +192,7 @@ describe('<Thread>', () => {
     store.append({ kind: 'text-delta', text: 'hello' });
     store.append({ kind: 'text-delta', text: ' world' });
     const { lastFrame } = render(
-      createElement(Thread, { history: [], messageStore: store, busy: true }),
+      createElement(Thread, { staticItems: [], messageStore: store, busy: true }),
     );
     const frame = lastFrame() ?? '';
     expect(frame).toContain('❮');
@@ -156,10 +205,10 @@ describe('<Thread>', () => {
     store.append({ kind: 'tool-result', callId: 'c1', result: 'ok', isError: false });
     const { lastFrame } = render(
       createElement(Thread, {
-        history: [],
+        staticItems: [],
         messageStore: store,
         busy: true,
-        toolDetails: true,
+        streamingToolDetails: true,
       }),
     );
     const frame = lastFrame() ?? '';
@@ -173,10 +222,10 @@ describe('<Thread>', () => {
     store.append({ kind: 'text-delta', text: 'sub says', agentLabel: 'sub:1' });
     const { lastFrame } = render(
       createElement(Thread, {
-        history: [],
+        staticItems: [],
         messageStore: store,
         busy: true,
-        toolDetails: true,
+        streamingToolDetails: true,
       }),
     );
     const frame = lastFrame() ?? '';
@@ -205,7 +254,7 @@ describe('<Thread>', () => {
       agentLabel: 'wrap:3',
     });
     const { lastFrame } = render(
-      createElement(Thread, { history: [], messageStore: store, busy: true }),
+      createElement(Thread, { staticItems: [], messageStore: store, busy: true }),
     );
     const frame = lastFrame() ?? '';
     expect(frame).toContain('main says');
@@ -230,7 +279,7 @@ describe('<Thread>', () => {
       isError: false,
     });
     const { lastFrame } = render(
-      createElement(Thread, { history: [], messageStore: store, busy: true }),
+      createElement(Thread, { staticItems: [], messageStore: store, busy: true }),
     );
     const frame = lastFrame() ?? '';
     // Tool name still surfaces (helps the user see "what is bernard doing").
@@ -252,7 +301,7 @@ describe('<Thread>', () => {
       isError: false,
     });
     const { lastFrame } = render(
-      createElement(Thread, { history: [], messageStore: store, busy: true }),
+      createElement(Thread, { staticItems: [], messageStore: store, busy: true }),
     );
     const frame = lastFrame() ?? '';
     expect(frame).toContain('hi');
@@ -265,7 +314,7 @@ describe('<Thread>', () => {
     const store = new MessageStore();
     store.append({ kind: 'text-delta', text: 'streaming answer' });
     const { lastFrame } = render(
-      createElement(Thread, { history: [], messageStore: store, busy: true }),
+      createElement(Thread, { staticItems: [], messageStore: store, busy: true }),
     );
     expect(lastFrame() ?? '').toContain('streaming answer');
   });
@@ -302,7 +351,7 @@ describe('<Thread>', () => {
         content: [{ type: 'text', text: 'done' }] as unknown as CoreMessage['content'],
       },
     ];
-    const { lastFrame } = render(createElement(Thread, { history }));
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history) }));
     const frame = lastFrame() ?? '';
     expect(frame).toContain('⚙ web_read');
     expect(frame).not.toContain('aaro.mil');
@@ -315,7 +364,7 @@ describe('<Thread>', () => {
     const store = new MessageStore();
     store.append({ kind: 'text-delta', text: 'should not render' });
     const { lastFrame } = render(
-      createElement(Thread, { history: [], messageStore: store, busy: false }),
+      createElement(Thread, { staticItems: [], messageStore: store, busy: false }),
     );
     const frame = lastFrame() ?? '';
     expect(frame).not.toContain('should not render');
@@ -341,7 +390,7 @@ describe('<Thread>', () => {
         ] as unknown as CoreMessage['content'],
       },
     ];
-    const { lastFrame } = render(createElement(Thread, { history, toolDetails: true }));
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history, true) }));
     const frame = lastFrame() ?? '';
     expect(frame).toContain('⚙ plan');
     expect(frame).toContain('1. Run the tests');
@@ -362,7 +411,7 @@ describe('<Thread>', () => {
         ] as unknown as CoreMessage['content'],
       },
     ];
-    const { lastFrame } = render(createElement(Thread, { history, toolDetails: true }));
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history, true) }));
     const frame = lastFrame() ?? '';
     expect(frame).toContain('step 1 → done · verified by run');
   });
@@ -384,17 +433,15 @@ describe('<Thread>', () => {
         ] as unknown as CoreMessage['content'],
       },
     ];
-    const { lastFrame } = render(createElement(Thread, { history }));
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history) }));
     const frame = lastFrame() ?? '';
     expect(frame).toContain('⚙ plan');
     expect(frame).not.toContain('hidden step');
   });
 
   it('renders assistant markdown formatted (no literal ** delimiters)', () => {
-    const history: CoreMessage[] = [
-      { role: 'assistant', content: 'some **bold text** here' },
-    ];
-    const { lastFrame } = render(createElement(Thread, { history }));
+    const history: CoreMessage[] = [{ role: 'assistant', content: 'some **bold text** here' }];
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history) }));
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('❮'); // chevron regression guard
     expect(frame).toContain('bold text');
@@ -402,10 +449,8 @@ describe('<Thread>', () => {
   });
 
   it('renders assistant headings without the # prefix', () => {
-    const history: CoreMessage[] = [
-      { role: 'assistant', content: '# Big Title\n\nbody text' },
-    ];
-    const { lastFrame } = render(createElement(Thread, { history }));
+    const history: CoreMessage[] = [{ role: 'assistant', content: '# Big Title\n\nbody text' }];
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history) }));
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('Big Title');
     expect(frame).not.toContain('# Big Title');
@@ -417,7 +462,7 @@ describe('<Thread>', () => {
     store.append({ kind: 'text-delta', text: 'streamed **bo' });
     store.append({ kind: 'text-delta', text: 'ld**' });
     const { lastFrame } = render(
-      createElement(Thread, { history: [], messageStore: store, busy: true }),
+      createElement(Thread, { staticItems: [], messageStore: store, busy: true }),
     );
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('❮');
@@ -435,7 +480,7 @@ describe('<Thread>', () => {
         ] as unknown as CoreMessage['content'],
       },
     ];
-    const { lastFrame } = render(createElement(Thread, { history }));
+    const { lastFrame } = render(createElement(Thread, { staticItems: items(history) }));
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('**scratchpad**');
     expect(frame).toContain('answer');
@@ -452,9 +497,19 @@ describe('<Thread>', () => {
         steps: [{ description: 'streamed step', verification: 'v' }],
       },
     });
-    store.append({ kind: 'tool-result', callId: 'p4', result: 'Plan created with 1 steps.', isError: false });
+    store.append({
+      kind: 'tool-result',
+      callId: 'p4',
+      result: 'Plan created with 1 steps.',
+      isError: false,
+    });
     const { lastFrame } = render(
-      createElement(Thread, { history: [], messageStore: store, busy: true, toolDetails: true }),
+      createElement(Thread, {
+        staticItems: [],
+        messageStore: store,
+        busy: true,
+        streamingToolDetails: true,
+      }),
     );
     const frame = lastFrame() ?? '';
     expect(frame).toContain('⚙ plan');
