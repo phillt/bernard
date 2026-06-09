@@ -5,6 +5,7 @@ import type { TurnProvenance, SourceItem } from '../../provenance.js';
 import { getThemeColors, type ThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
 import { ScrollableOverlay, type OverlayLine } from './ScrollableOverlay.js';
+import { VIEWER_TABS } from './viewer-tabs.js';
 
 interface SourcesViewerProps {
   agent: Agent;
@@ -35,7 +36,13 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
   // changes — not on every scroll keystroke.
   const lines = useMemo(() => buildLines(turns, colors, cols), [turns.length, colors, cols]);
   return (
-    <ScrollableOverlay title="Sources" lines={lines} onClose={onClose} onCycleTab={onCycleTab} />
+    <ScrollableOverlay
+      tabs={VIEWER_TABS}
+      activeTab="sources"
+      lines={lines}
+      onClose={onClose}
+      onCycleTab={onCycleTab}
+    />
   );
 }
 

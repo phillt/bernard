@@ -6,6 +6,7 @@ import { pickActiveStep, summarizePlan, type AgentStatusInputs } from '../../age
 import { getThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
 import { ScrollableOverlay, type OverlayLine } from './ScrollableOverlay.js';
+import { VIEWER_TABS } from './viewer-tabs.js';
 
 interface StatusViewerProps {
   agent: Agent;
@@ -41,7 +42,8 @@ export function StatusViewer({
   );
   return (
     <ScrollableOverlay
-      title="Agent Status"
+      tabs={VIEWER_TABS}
+      activeTab="status"
       lines={lines}
       onClose={onClose}
       onCycleTab={onCycleTab}

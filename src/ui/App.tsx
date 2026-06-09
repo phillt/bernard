@@ -2453,7 +2453,7 @@ export function App({
         <SourcesViewer
           agent={agent}
           onClose={() => setActiveOverlay(null)}
-          onCycleTab={() => setActiveOverlay(null)}
+          onCycleTab={() => setActiveOverlay('status')}
         />
       )}
       {activeOverlay === 'menu' && pendingMenu && (

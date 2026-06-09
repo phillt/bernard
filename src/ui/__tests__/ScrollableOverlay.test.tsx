@@ -6,8 +6,14 @@ import { ESC, ARROW_DOWN, ARROW_UP, SHIFT_TAB, PAGE_DOWN, tick } from './_keys.j
 import { ScrollableOverlay, type OverlayLine } from '../overlays/ScrollableOverlay.js';
 
 // ink-testing-library's stdout reports columns:100 and no `rows` getter, so
-// ScrollableOverlay falls back to rows:24 → viewport = 24 - 4 chrome = 20.
+// ScrollableOverlay falls back to rows:24. With 2 tabs the chrome below the
+// viewport is tabs(2) + gap(1) + footer(1) = 4 → viewport = 24 - 4 = 20.
 const VIEWPORT = 20;
+
+const TABS = [
+  { id: 'alpha', label: 'Alpha' },
+  { id: 'beta', label: 'Beta' },
+];
 
 function makeLines(n: number): OverlayLine[] {
   return Array.from({ length: n }, (_, i) => {
@@ -21,7 +27,8 @@ function renderOverlay(lines: OverlayLine[]) {
   const onCycleTab = vi.fn();
   const utils = render(
     createElement(ScrollableOverlay, {
-      title: 'Test Panel',
+      tabs: TABS,
+      activeTab: 'alpha',
       lines,
       onClose,
       onCycleTab,
@@ -31,10 +38,12 @@ function renderOverlay(lines: OverlayLine[]) {
 }
 
 describe('<ScrollableOverlay>', () => {
-  it('renders the title and only the first viewport of rows', () => {
+  it('renders the bottom tab menu (active marked, others muted) and only the first viewport of rows', () => {
     const { lastFrame } = renderOverlay(makeLines(30));
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('Test Panel');
+    expect(frame).toContain('▸ Alpha'); // active tab marked
+    expect(frame).toContain('Beta'); // other tab present
+    expect(frame).not.toContain('▸ Beta'); // but not marked active
     expect(frame).toContain('entry-00');
     expect(frame).toContain(`entry-${VIEWPORT - 1}`); // entry-19, last visible
     expect(frame).not.toContain(`entry-${VIEWPORT}`); // entry-20, first hidden

@@ -8,9 +8,17 @@ export interface OverlayLine {
   node: ReactNode;
 }
 
+/** A selectable viewer tab rendered in the bottom tab menu. */
+export interface OverlayTab {
+  id: string;
+  label: string;
+}
+
 interface ScrollableOverlayProps {
-  /** Bold accent heading shown at the top of the panel. */
-  title: string;
+  /** All viewer tabs, rendered as a vertical menu pinned to the bottom. */
+  tabs: readonly OverlayTab[];
+  /** `id` of the tab this panel is — highlighted in the menu; the rest are muted. */
+  activeTab: string;
   /**
    * Flat list of visual rows. Each entry must render to exactly one terminal
    * line — the windowing math counts entries, not wrapped height, so a node
@@ -24,10 +32,9 @@ interface ScrollableOverlayProps {
   onCycleTab?: () => void;
 }
 
-// Rows reserved for the panel's own chrome: title + spacer + a one-row gap
-// before the footer (held open by the flexGrow filler) + footer. The remaining
-// terminal height is the scroll viewport.
-const CHROME_ROWS = 4;
+// Rows reserved below the scroll viewport: one menu row per tab, a one-row gap
+// above the menu (held open by the flexGrow filler), and the footer hint.
+const FOOTER_AND_GAP_ROWS = 2;
 
 /**
  * Full-screen scrollable panel shared by the Shift-Tab viewer tabs
@@ -43,7 +50,8 @@ const CHROME_ROWS = 4;
  * reprint scrollback — see `src/ui/Thread.tsx`).
  */
 export function ScrollableOverlay({
-  title,
+  tabs,
+  activeTab,
   lines,
   onClose = () => {},
   onCycleTab = () => {},
@@ -51,7 +59,7 @@ export function ScrollableOverlay({
   const colors = getThemeColors();
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
-  const viewport = Math.max(1, rows - CHROME_ROWS);
+  const viewport = Math.max(1, rows - tabs.length - FOOTER_AND_GAP_ROWS);
   const maxOffset = Math.max(0, lines.length - viewport);
 
   const [offset, setOffset] = useState(0);
@@ -85,15 +93,41 @@ export function ScrollableOverlay({
 
   return (
     <Box flexDirection="column" height={rows}>
-      <Text color={colors.accent} bold>
-        {title}
-      </Text>
-      <Text> </Text>
       {visible.map((line) => (
         <Box key={line.key}>{line.node}</Box>
       ))}
       <Box flexGrow={1} />
+      <TabMenu tabs={tabs} activeTab={activeTab} accent={colors.accent} />
       <Text dimColor>{footerHint(clamped, viewport, lines.length)}</Text>
+    </Box>
+  );
+}
+
+/**
+ * Vertical tab menu pinned to the bottom. The active tab is highlighted (accent
+ * + bold, `▸` marker); the rest are muted. Marker + label share one `<Text>` so
+ * the active row reads as a single contiguous `▸ <label>` string.
+ */
+function TabMenu({
+  tabs,
+  activeTab,
+  accent,
+}: {
+  tabs: readonly OverlayTab[];
+  activeTab: string;
+  accent: string;
+}) {
+  return (
+    <Box flexDirection="column">
+      {tabs.map((tab) => {
+        const active = tab.id === activeTab;
+        return (
+          <Text key={tab.id} color={active ? accent : undefined} bold={active} dimColor={!active}>
+            {active ? '▸ ' : '  '}
+            {tab.label}
+          </Text>
+        );
+      })}
     </Box>
   );
 }
