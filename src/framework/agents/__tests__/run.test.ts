@@ -331,6 +331,77 @@ describe('runDefinition framework-default context injection (issue #143)', () =>
   });
 });
 
+describe('runDefinition per-turn token totals hook (#234)', () => {
+  function makeTarget() {
+    return {
+      lastStepPromptTokens: 0,
+      spinnerStats: {
+        startTime: 0,
+        turnPromptTokens: 0,
+        turnCompletionTokens: 0,
+        latestPromptTokens: 0,
+        model: 'claude-x',
+      },
+    };
+  }
+
+  // Drive the mocked generateText to invoke onStepFinish with a usage payload so
+  // any composed step hooks (the appended tokenTotalsHook) actually fire.
+  function mockStepWithUsage(usage: { promptTokens: number; completionTokens: number }) {
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (arg: any) => {
+      if (arg.onStepFinish) {
+        await arg.onStepFinish({
+          text: '',
+          toolCalls: [],
+          toolResults: [],
+          usage,
+          response: { messages: [] },
+        });
+      }
+      return { text: 'final answer', steps: [], response: { messages: [] }, finishReason: 'stop' };
+    });
+  }
+
+  it('non-main dispatch bumps the per-turn odometer but leaves gauge + headroom alone', async () => {
+    const target = makeTarget();
+    const ctx = makeCtx();
+    ctx.statsTarget = target as any;
+    mockStepWithUsage({ promptTokens: 200, completionTokens: 30 });
+
+    await runDefinition(ctx, fakeDefinition({ id: 'sub' }), { text: 'x' });
+
+    expect(target.spinnerStats.turnPromptTokens).toBe(200);
+    expect(target.spinnerStats.turnCompletionTokens).toBe(30);
+    // Sub-agent work must not move the main-only context gauge...
+    expect(target.spinnerStats.latestPromptTokens).toBe(0);
+    // ...nor the main agent's compression-headroom field.
+    expect(target.lastStepPromptTokens).toBe(0);
+  });
+
+  it('a fullTokenAccounting def does NOT get a second totals hook (no double count)', async () => {
+    const target = makeTarget();
+    const ctx = makeCtx();
+    ctx.statsTarget = target as any;
+    mockStepWithUsage({ promptTokens: 200, completionTokens: 30 });
+
+    // The fake def carries no hooks of its own, so if the gate let the totals
+    // hook through the odometer would bump; the flag must keep it at 0 (the real
+    // main def installs tokenStatsHook itself).
+    await runDefinition(ctx, fakeDefinition({ fullTokenAccounting: true }), { text: 'x' });
+
+    expect(target.spinnerStats.turnPromptTokens).toBe(0);
+    expect(target.spinnerStats.turnCompletionTokens).toBe(0);
+  });
+
+  it('absent statsTarget (cron / headless) appends nothing and does not throw', async () => {
+    const ctx = makeCtx(); // no statsTarget
+    mockStepWithUsage({ promptTokens: 200, completionTokens: 30 });
+
+    const out = await runDefinition(ctx, fakeDefinition({ id: 'sub' }), { text: 'x' });
+    expect(out.formatted).toBe('final answer');
+  });
+});
+
 describe('DefinitionRegistry', () => {
   it('registers, looks up, and reports missing kinds', () => {
     const reg = new DefinitionRegistry();

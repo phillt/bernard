@@ -282,6 +282,12 @@ export class Agent {
   /** Attaches a spinner stats object that will be updated with token usage during generation. */
   setSpinnerStats(stats: SpinnerStats): void {
     this.spinnerStats = stats;
+    // Expose this Agent (a TokenStatsTarget) on the shared context so
+    // `runDefinition` can route non-main dispatches' usage into the same
+    // per-turn odometer (#234). Set here — the moment the Agent is fully wired
+    // for interactive use — rather than at context-assembly time when
+    // spinnerStats is still null.
+    this.ctx.statsTarget = this;
   }
 
   /** Updates the alert context injected into the system prompt (e.g., specialist candidates). */
@@ -395,6 +401,13 @@ export class Agent {
       if (this.spinnerStats) {
         this.spinnerStats.model = mainModel;
         this.spinnerStats.contextWindowOverride = this.config.tokenWindow || undefined;
+        // Reset the per-turn ↑/↓ odometer at the start of every turn (#234).
+        // This single reset point is what makes the readout per-turn: this
+        // turn's main-agent steps AND any sub-agents / tool-wrappers / PAC
+        // phases it spawns then accumulate into a fresh zero via the token
+        // hooks (main: tokenStatsHook; non-main: tokenTotalsHook).
+        this.spinnerStats.turnPromptTokens = 0;
+        this.spinnerStats.turnCompletionTokens = 0;
       }
 
       // Check if context compression is needed
@@ -791,6 +804,14 @@ export class Agent {
       this.lastPromptTokens = estimateHistoryTokens(this.history);
     }
     const tokensAfter = estimateHistoryTokens(this.history);
+    // Drop the status-bar gauge to the new (smaller) context size immediately
+    // rather than waiting for the next turn to re-measure it (#234). The
+    // compression input `lastPromptTokens` is already updated above; this is the
+    // gauge's separate per-step field. The per-turn ↑/↓ odometer is left alone —
+    // compaction happens between turns and the next turn resets it.
+    if (compacted && this.spinnerStats) {
+      this.spinnerStats.latestPromptTokens = tokensAfter;
+    }
     return { compacted, tokensBefore, tokensAfter };
   }
 
@@ -816,6 +837,20 @@ export class Agent {
     this.ctx.postWriteChecks.length = 0;
     this.ctx.verificationTracker.clear();
     this.lastRubric = null;
+    // Reset token accounting so the status bar reflects the now-empty
+    // conversation the moment /clear finishes, instead of lingering on the old
+    // fullness until the next turn runs (#234). `lastPromptTokens` and
+    // `lastStepPromptTokens` both feed compression headroom (the latter is the
+    // per-step prompt size the next compaction reads); zeroing them avoids a
+    // spurious compaction on the first post-clear turn. The gauge's own source,
+    // `spinnerStats.latestPromptTokens`, is emptied separately below.
+    this.lastPromptTokens = 0;
+    this.lastStepPromptTokens = 0;
+    if (this.spinnerStats) {
+      this.spinnerStats.latestPromptTokens = 0; // empty the bar
+      this.spinnerStats.turnPromptTokens = 0;
+      this.spinnerStats.turnCompletionTokens = 0;
+    }
     if (this.ctx.policyDecision) {
       this.ctx = { ...this.ctx, policyDecision: undefined };
     }

@@ -19,11 +19,21 @@ export function isToolDetailsVisible(): boolean {
   return toolDetailsVisible;
 }
 
-/** Cumulative token-usage statistics displayed alongside the thinking spinner. */
+/**
+ * Token-usage statistics displayed alongside the thinking spinner / status bar.
+ *
+ * `turnPromptTokens` / `turnCompletionTokens` are **per-turn** odometers: reset
+ * at the top of every `Agent.processInput` and accumulated across the full turn
+ * — main-agent steps *and* the sub-agents / tool-wrappers / PAC phases spawned
+ * during the turn (the work offloaded off the main context still cost tokens).
+ * `latestPromptTokens` is the **main agent's** most-recent prompt size and is
+ * what the context gauge measures — sub-agent steps never touch it, so the bar
+ * tracks only the main agent's context fullness (#234).
+ */
 export interface SpinnerStats {
   startTime: number;
-  totalPromptTokens: number;
-  totalCompletionTokens: number;
+  turnPromptTokens: number;
+  turnCompletionTokens: number;
   latestPromptTokens: number;
   model: string;
   contextWindowOverride?: number;
@@ -46,12 +56,12 @@ function formatElapsed(ms: number): string {
 export function buildSpinnerMessage(stats: SpinnerStats): string {
   const elapsed = formatElapsed(Date.now() - stats.startTime);
 
-  if (stats.totalPromptTokens === 0 && stats.totalCompletionTokens === 0) {
+  if (stats.turnPromptTokens === 0 && stats.turnCompletionTokens === 0) {
     return `Thinking (${elapsed})`;
   }
 
-  const up = formatTokenCount(stats.totalPromptTokens);
-  const down = formatTokenCount(stats.totalCompletionTokens);
+  const up = formatTokenCount(stats.turnPromptTokens);
+  const down = formatTokenCount(stats.turnCompletionTokens);
   const contextWindow = getContextWindow(stats.model, stats.contextWindowOverride);
   const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;
   const remainingPct = Math.max(

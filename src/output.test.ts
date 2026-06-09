@@ -31,8 +31,8 @@ describe('buildSpinnerMessage', () => {
   function makeStats(overrides: Partial<SpinnerStats> = {}): SpinnerStats {
     return {
       startTime: Date.now(),
-      totalPromptTokens: 0,
-      totalCompletionTokens: 0,
+      turnPromptTokens: 0,
+      turnCompletionTokens: 0,
       latestPromptTokens: 0,
       model: 'claude-sonnet-4-5-20250929',
       ...overrides,
@@ -48,8 +48,8 @@ describe('buildSpinnerMessage', () => {
     const msg = buildSpinnerMessage(
       makeStats({
         startTime: Date.now() - 1000,
-        totalPromptTokens: 1234,
-        totalCompletionTokens: 56,
+        turnPromptTokens: 1234,
+        turnCompletionTokens: 56,
         latestPromptTokens: 1234,
       }),
     );
@@ -61,16 +61,16 @@ describe('buildSpinnerMessage', () => {
   it('honors contextWindowOverride', () => {
     const small = buildSpinnerMessage(
       makeStats({
-        totalPromptTokens: 5000,
-        totalCompletionTokens: 100,
+        turnPromptTokens: 5000,
+        turnCompletionTokens: 100,
         latestPromptTokens: 5000,
         contextWindowOverride: 10_000,
       }),
     );
     const large = buildSpinnerMessage(
       makeStats({
-        totalPromptTokens: 5000,
-        totalCompletionTokens: 100,
+        turnPromptTokens: 5000,
+        turnCompletionTokens: 100,
         latestPromptTokens: 5000,
         contextWindowOverride: 1_000_000,
       }),
@@ -83,8 +83,8 @@ describe('buildSpinnerMessage', () => {
   it('clamps remainingPct to 0 when the latest prompt exceeds the threshold', () => {
     const msg = buildSpinnerMessage(
       makeStats({
-        totalPromptTokens: 999_999,
-        totalCompletionTokens: 1,
+        turnPromptTokens: 999_999,
+        turnCompletionTokens: 1,
         latestPromptTokens: 999_999,
         contextWindowOverride: 10_000,
       }),

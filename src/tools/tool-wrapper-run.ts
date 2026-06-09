@@ -18,6 +18,7 @@ import { CandidateStore, type CandidateStoreReader } from '../specialist-candida
 import type { CorrectionCandidateStore } from '../correction-candidates.js';
 import { ToolProfileStore } from '../tool-profiles.js';
 import type { AgentContext } from '../framework/context.js';
+import type { TokenStatsTarget } from '../framework/hooks/token-stats.js';
 import type { PolicyDecision } from '../policy/types.js';
 import { ProvenanceStore } from '../provenance.js';
 import { VerificationStore } from '../agent-status.js';
@@ -130,6 +131,13 @@ export interface ToolWrapperDeps {
   verificationTracker?: VerificationTracker;
   postWriteChecks?: Check[];
   /**
+   * Parent turn's per-turn token-stats target. Forwarded so a tool-wrapper /
+   * specialist dispatch's steps land in the same per-turn ↑/↓ odometer as the
+   * main agent and its sub-agents — the readout reflects the *full* turn cost,
+   * including work offloaded to wrappers. Absent for cron / headless. Issue #234.
+   */
+  statsTarget?: TokenStatsTarget;
+  /**
    * Parent turn's policy decision. Forwarded so the inner wrapper
    * inherits the user's `toolMode` (#179) — otherwise the augment layer
    * defaults to `'write'` and any write tool the wrapper calls bypasses
@@ -157,6 +165,7 @@ export function ctxToToolWrapperDeps(ctx: AgentContext): ToolWrapperDeps {
     verification: ctx.verification,
     verificationTracker: ctx.verificationTracker,
     postWriteChecks: ctx.postWriteChecks,
+    statsTarget: ctx.statsTarget,
     policyDecision: ctx.policyDecision,
   };
 }
@@ -180,7 +189,11 @@ export function depsToCtx(deps: ToolWrapperDeps): AgentContext {
     verification: deps.verification ?? new VerificationStore(),
     verificationTracker: deps.verificationTracker ?? new VerificationTracker(),
     postWriteChecks: deps.postWriteChecks ?? [],
-    ...(deps.policyDecision ? { policyDecision: deps.policyDecision } : {}),
+    // Both optional on AgentContext; an explicit `undefined` is identical to an
+    // absent key for every consumer (all guard with `?.`), so assign directly
+    // rather than allocating a throwaway spread object on each wrapper dispatch.
+    statsTarget: deps.statsTarget,
+    policyDecision: deps.policyDecision,
   };
 }
 

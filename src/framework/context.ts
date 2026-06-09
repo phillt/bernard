@@ -8,6 +8,7 @@ import { ToolProfileStore } from '../tool-profiles.js';
 import type { RAGStore } from '../rag.js';
 import type { PolicyDecision } from '../policy/types.js';
 import type { ToolOptions } from '../tools/types.js';
+import type { TokenStatsTarget } from './hooks/token-stats.js';
 import { ProvenanceStore } from '../provenance.js';
 import { VerificationStore } from '../agent-status.js';
 import { VerificationTracker } from '../verification-tracker.js';
@@ -70,6 +71,16 @@ export interface AgentContext {
    * `Agent.processInput`. Issue #145 check 3.
    */
   postWriteChecks: Check[];
+  /**
+   * Shared per-turn token-stats accumulator, set by the `Agent` class once it
+   * is wired for interactive use (`setSpinnerStats` → `this`, which implements
+   * {@link TokenStatsTarget}). Shared by reference into sub-agent / tool-wrapper
+   * contexts so `runDefinition` can attach `tokenTotalsHook` to non-main
+   * dispatches — making the per-turn ↑/↓ odometer reflect the full turn cost,
+   * including offloaded sub-agent work. Absent for cron / headless runs (the
+   * totals hook is null-safe and simply not attached). Issue #234.
+   */
+  statsTarget?: TokenStatsTarget;
 }
 
 export interface AssembleContextInput {
