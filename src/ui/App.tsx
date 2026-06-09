@@ -82,7 +82,7 @@ import {
 } from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
-import { generateText } from 'ai';
+import { generateText, type CoreMessage } from 'ai';
 import { resolveSiteModel, resolveMainModel, logSiteModelSnapshot } from '../model-policy.js';
 import { serializeMessages, extractDomainFacts, SUMMARIZATION_PROMPT } from '../context.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
@@ -317,6 +317,13 @@ export function App({
   // Number of `agent.getHistory()` messages already committed to `staticItems`.
   // Each commit appends `history.slice(committedLen)` and advances this.
   const committedLenRef = useRef(0);
+  // The history ARRAY reference we last committed against. Normal appends mutate
+  // the same array in place (push), so the reference is stable; but
+  // `Agent.processInput` REASSIGNS `this.history` to a new, shorter array when
+  // automatic context compression / emergency truncation fires mid-turn. When
+  // that happens the length cursor above is meaningless for the new array, so
+  // we re-anchor against this turn's user message instead of slicing blindly.
+  const historyRef = useRef<CoreMessage[] | null>(null);
   // Monotonic source for `StaticItem.key`. Deliberately NOT the history index:
   // /compact shrinks history, so index-based keys would collide with already
   // emitted items. A counter never repeats.
@@ -663,6 +670,9 @@ export function App({
       // scrollback, `\x1b[2J` the visible region, `\x1b[H` homes the cursor.
       setStaticItems([]);
       committedLenRef.current = 0;
+      // clearHistory() reassigns this.history to a fresh []; track the new
+      // reference so the next commit doesn't mistake it for a mid-turn replace.
+      historyRef.current = agent.getHistory();
       process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
       setStaticEpoch((e) => e + 1);
       flashToast('Conversation history cleared.', 'success');
@@ -727,12 +737,14 @@ export function App({
         if (!result.compacted) {
           flashToast('Nothing to compact — conversation is already short enough.');
         } else {
-          // Compaction shrinks history; resync the commit boundary to the new
-          // length so future turns index correctly. The already-printed
-          // transcript stays in scrollback (it genuinely happened) and Static
-          // keeps appending below — monotonic item keys can't collide even
-          // though history indices shifted, so no remount is needed.
+          // Compaction reassigns this.history to a new, shorter array; resync
+          // the commit boundary to its length AND track the new reference so
+          // the next commit doesn't re-anchor as if it were a mid-turn replace.
+          // The already-printed transcript stays in scrollback (it genuinely
+          // happened) and Static keeps appending below — monotonic item keys
+          // can't collide even though history indices shifted, so no remount.
           committedLenRef.current = agent.getHistory().length;
+          historyRef.current = agent.getHistory();
           const pct = Math.round(
             ((result.tokensBefore - result.tokensAfter) / result.tokensBefore) * 100,
           );
@@ -1976,6 +1988,26 @@ export function App({
     timing?: { endedAt: number; durationMs: number };
   }): void {
     const history = agent.getHistory();
+    // If the agent replaced its history array mid-turn (auto-compression /
+    // emergency truncation in processInput, which reassigns `this.history` to a
+    // shorter array — #243 review), the length cursor points past the end of
+    // the new array and the slice below would silently drop this turn's
+    // assistant + tool output. Re-anchor on this turn's user message instead:
+    // compression always keeps the most recent user message, so everything
+    // after the last user message is the still-uncommitted turn output (the
+    // user message itself was already committed at turn start). Guard on a
+    // non-null prior ref so the first-ever commit still emits initial history.
+    if (historyRef.current !== null && historyRef.current !== history) {
+      let lastUserIdx = -1;
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].role === 'user') {
+          lastUserIdx = i;
+          break;
+        }
+      }
+      committedLenRef.current = lastUserIdx + 1;
+    }
+    historyRef.current = history;
     const start = committedLenRef.current;
     if (start >= history.length) return;
     const toolDetails = config.toolDetails;
