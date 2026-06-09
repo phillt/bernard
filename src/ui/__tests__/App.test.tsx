@@ -23,7 +23,7 @@ import { createElement } from 'react';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { ENTER, tick } from './_keys.js';
+import { ENTER, ESC, SHIFT_TAB, tick } from './_keys.js';
 
 // ── Module mocks (all hoisted by vitest) ────────────────────────────────
 
@@ -288,6 +288,61 @@ describe('<App> exit commands', () => {
     await tick();
     await submit(stdin, '/quit');
     expect(onExit).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+});
+
+describe('<App> Shift-Tab viewer tabs (#211)', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('Shift-Tab replaces the thread chrome with the Status viewer, then cycles to Sources and back', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    // Idle: prompt chrome (HintBar) visible, no viewer.
+    expect(lastFrame()).toContain('commands');
+    expect(lastFrame()).not.toContain('Agent Status');
+
+    // Shift-Tab → Agent Status takes over; the HintBar chrome is hidden.
+    stdin.write(SHIFT_TAB);
+    await tick();
+    let frame = lastFrame() ?? '';
+    expect(frame).toContain('Agent Status');
+    expect(frame).toContain('Esc to close · Shift-Tab to switch tabs');
+    expect(frame).not.toContain('commands');
+
+    // Shift-Tab again → Sources tab (viewer owns the keystream now).
+    stdin.write(SHIFT_TAB);
+    await tick();
+    frame = lastFrame() ?? '';
+    expect(frame).toContain('Sources');
+    expect(frame).not.toContain('Agent Status');
+
+    // Shift-Tab once more → back to the thread with the prompt chrome restored.
+    stdin.write(SHIFT_TAB);
+    await tick();
+    frame = lastFrame() ?? '';
+    expect(frame).toContain('commands');
+    expect(frame).not.toContain('Agent Status');
+    expect(frame).not.toContain('Esc to close · Shift-Tab to switch tabs');
+    unmount();
+  });
+
+  it('Esc closes the viewer and restores the thread chrome', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    stdin.write(SHIFT_TAB);
+    await tick();
+    expect(lastFrame()).toContain('Agent Status');
+    stdin.write(ESC);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('Agent Status');
+    expect(frame).toContain('commands');
     unmount();
   });
 });

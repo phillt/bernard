@@ -391,30 +391,33 @@ export function App({
   };
 
   // Gate the App-level useInput so it never fires concurrently with an
-  // overlay's own useInput. Modal overlays (menu, confirm, help, text-input)
-  // own the keystream; viewer overlays (status, sources) leave it to App so
-  // Esc can close them and Shift-Tab can keep cycling.
-  const appInputActive =
-    activeOverlay === null || activeOverlay === 'status' || activeOverlay === 'sources';
+  // overlay's own useInput. Every overlay — modal (menu, confirm, help,
+  // text-input) AND viewer (status, sources) — owns its own keystream now;
+  // the viewers handle Esc/Shift-Tab/scroll inside <ScrollableOverlay> and
+  // forward close/cycle back via callbacks. App's useInput only runs when no
+  // overlay is open: Shift-Tab opens the first viewer tab, Esc interrupts a
+  // busy turn.
+  const appInputActive = activeOverlay === null;
+  // A Shift-Tab viewer tab takes over the screen: while one is open the live
+  // chrome (spinner, plan panel, toast, prompt, hint/status bars) is hidden so
+  // the viewer reads as a replacement for the thread, not an addition below it.
+  // <Thread> itself stays mounted (unmounting it reprints <Static> scrollback).
+  const viewerActive = activeOverlay === 'status' || activeOverlay === 'sources';
 
   useInput(
     (_input, key) => {
-      // Shift-Tab cycles viewer tabs only while idle.
+      // Shift-Tab opens the first viewer tab (Agent Status) while idle; the
+      // viewer itself cycles to Sources and back to the thread.
       if (key.shift && key.tab) {
         if (busy) return;
-        setActiveOverlay((curr) => {
-          if (curr === null) return 'status';
-          if (curr === 'status') return 'sources';
-          return null;
-        });
+        setActiveOverlay('status');
         return;
       }
       if (key.escape) {
-        debugLog('app:esc', { busy, activeOverlay, hasTurnAbort: !!turnAbortRef.current });
-        if (activeOverlay) {
-          closeOverlay();
-          return;
-        }
+        // This handler only runs when no overlay is open (isActive gate), so
+        // Esc here can only mean "interrupt the in-flight turn". Each overlay
+        // owns its own Esc-to-close via its own useInput.
+        debugLog('app:esc', { busy, hasTurnAbort: !!turnAbortRef.current });
         if (busy) {
           setInterrupted(true);
           turnAbortRef.current?.abort();
@@ -2413,30 +2416,46 @@ export function App({
         interrupted={interrupted}
         streamingToolDetails={config.toolDetails}
       />
-      {busy && (
-        <Box marginTop={1}>
-          <Spinner label="thinking…" />
-        </Box>
+      {!viewerActive && (
+        <>
+          {busy && (
+            <Box marginTop={1}>
+              <Spinner label="thinking…" />
+            </Box>
+          )}
+          <PlanPanel agent={agent} />
+          {toast && <Toast message={toast.message} variant={toast.variant} />}
+          <Prompt
+            disabled={busy || activeOverlay !== null}
+            onSubmit={handleSubmit}
+            onSlashActiveChange={setSlashActive}
+          />
+          <Box justifyContent="space-between">
+            <HintBar
+              busy={busy}
+              overlayActive={activeOverlay !== null}
+              slashActive={slashActive}
+            />
+            <StatusBar agent={agent} />
+          </Box>
+        </>
       )}
-      <PlanPanel agent={agent} />
-      {toast && <Toast message={toast.message} variant={toast.variant} />}
-      <Prompt
-        disabled={busy || activeOverlay !== null}
-        onSubmit={handleSubmit}
-        onSlashActiveChange={setSlashActive}
-      />
-      <Box justifyContent="space-between">
-        <HintBar busy={busy} overlayActive={activeOverlay !== null} slashActive={slashActive} />
-        <StatusBar agent={agent} />
-      </Box>
       {activeOverlay === 'status' && (
         <StatusViewer
           agent={agent}
           config={config}
           sessionAllowedCount={_sessionToolAllowlist.size}
+          onClose={() => setActiveOverlay(null)}
+          onCycleTab={() => setActiveOverlay('sources')}
         />
       )}
-      {activeOverlay === 'sources' && <SourcesViewer agent={agent} />}
+      {activeOverlay === 'sources' && (
+        <SourcesViewer
+          agent={agent}
+          onClose={() => setActiveOverlay(null)}
+          onCycleTab={() => setActiveOverlay(null)}
+        />
+      )}
       {activeOverlay === 'menu' && pendingMenu && (
         <MenuOverlay
           entries={pendingMenu.entries}

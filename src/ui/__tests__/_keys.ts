@@ -24,4 +24,9 @@ export const BACKSPACE = '';
 
 export const SPACE = ' ';
 
+/** Shift+Tab (CSI Z) — Ink decodes this to `{ tab: true, shift: true }`. */
+export const SHIFT_TAB = '\x1b[Z';
+export const PAGE_UP = '\x1b[5~';
+export const PAGE_DOWN = '\x1b[6~';
+
 export const tick = (ms = 10): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

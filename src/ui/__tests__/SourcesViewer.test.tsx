@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
+import { tick } from './_keys.js';
 import { SourcesViewer } from '../overlays/SourcesViewer.js';
 import type { Agent } from '../../agent.js';
 import type { TurnProvenance } from '../../provenance.js';
@@ -9,7 +10,7 @@ function makeAgent(turns: TurnProvenance[]): Agent {
   return { getTurnProvenance: () => turns } as unknown as Agent;
 }
 
-const PREVIEW = 'a'.repeat(300); // exercises the 160-char truncate at SourceRow
+const PREVIEW = 'a'.repeat(300); // exercises the 160-char preview truncate in buildLines
 
 const REGRESSION_TURNS: TurnProvenance[] = [
   // Issue #211 round-1 case: citations only on intermediate steps; final
@@ -105,6 +106,30 @@ describe('<SourcesViewer>', () => {
     expect(frame).toContain('…');
     // The full 300-char preview must NOT appear verbatim.
     expect(frame).not.toContain(PREVIEW);
+  });
+
+  it('windows a long history and scrolls to reveal later turns', async () => {
+    // 10 turns × (header + 1 source) + separators ≈ 29 lines > the 20-row
+    // viewport (rows:24 fallback − 4 chrome), so the last turns start hidden.
+    const turns: TurnProvenance[] = Array.from({ length: 10 }, (_, i) => ({
+      turnIndex: i,
+      userInput: `req-${i}`,
+      sources: [{ id: 'S1', kind: 'web', label: `src-${i}`, timestamp: 0 }],
+      citedIds: ['S1'],
+      timestamp: 0,
+    }));
+    const { stdin, lastFrame } = render(
+      createElement(SourcesViewer, { agent: makeAgent(turns) }),
+    );
+    let frame = lastFrame() ?? '';
+    expect(frame).toContain('Turn 1:');
+    expect(frame).not.toContain('Turn 10:');
+    // Jump to the bottom — the last turn becomes visible.
+    await tick();
+    stdin.write('G');
+    await tick();
+    frame = lastFrame() ?? '';
+    expect(frame).toContain('Turn 10:');
   });
 
   it('renders all turns even when the latest turn cited nothing (regression #211)', () => {
