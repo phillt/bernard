@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../theme.js';
-import { SlashHints, matchSlashCommands } from './SlashHints.js';
+import { SlashHints, matchSlashCommands, type SlashCommand } from './SlashHints.js';
 import { useLineEditor, LineWithCursor } from './use-line-editor.js';
 
 interface PromptProps {
@@ -14,6 +14,20 @@ interface PromptProps {
    * contextual hint bar without lifting the whole input buffer out of Prompt.
    */
   onSlashActiveChange?: (active: boolean) => void;
+  /**
+   * Session input history (oldest → newest) for ↑/↓ recall. Owned by the
+   * parent so it survives this component unmounting (e.g. a Shift-Tab viewer).
+   * Mutated in place by `onRecordInput`; read live on each keystroke.
+   */
+  history?: string[];
+  /** Append a user-submitted line to {@link history} (deduped by the parent). */
+  onRecordInput?: (text: string) => void;
+  /**
+   * Supplies dynamic, session-specific slash commands (the user's saved
+   * routines and tasks) merged into the autocomplete list. A getter, not an
+   * array, so it reads the routine store live without re-render churn.
+   */
+  dynamicCommands?: () => readonly SlashCommand[];
 }
 
 /**
@@ -29,13 +43,26 @@ interface PromptProps {
  * highlighted command. Once the user types a space, hints clear and Enter
  * submits the literal buffer.
  */
-export function Prompt({ disabled = false, onSubmit, onSlashActiveChange }: PromptProps) {
+export function Prompt({
+  disabled = false,
+  onSubmit,
+  onSlashActiveChange,
+  history = [],
+  onRecordInput,
+  dynamicCommands,
+}: PromptProps) {
   const editor = useLineEditor('', { multiline: true });
   const { buffer } = editor;
   const [selectedIndex, setSelectedIndex] = useState(0);
+  // Position in `history` while browsing with ↑/↓; null = editing the live
+  // buffer (not on the history rail).
+  const [historyCursor, setHistoryCursor] = useState<number | null>(null);
   const colors = getThemeColors();
 
-  const matches = useMemo(() => matchSlashCommands(buffer), [buffer]);
+  const matches = useMemo(
+    () => matchSlashCommands(buffer, dynamicCommands?.() ?? []),
+    [buffer, dynamicCommands],
+  );
   // Clamp selection whenever the match list shrinks (e.g. user typed another
   // character and fewer commands match). Avoids dangling out-of-range cursor.
   const clampedIndex = matches.length === 0 ? 0 : Math.min(selectedIndex, matches.length - 1);
@@ -73,6 +100,8 @@ export function Prompt({ disabled = false, onSubmit, onSlashActiveChange }: Prom
           const picked = matches[clampedIndex];
           editor.clear();
           setSelectedIndex(0);
+          setHistoryCursor(null);
+          onRecordInput?.(picked.name);
           onSubmit(picked.name);
           return;
         }
@@ -86,7 +115,28 @@ export function Prompt({ disabled = false, onSubmit, onSlashActiveChange }: Prom
         if (text.length === 0) return;
         editor.clear();
         setSelectedIndex(0);
+        setHistoryCursor(null);
+        onRecordInput?.(text);
         onSubmit(text);
+        return;
+      }
+      // History recall takes precedence while actively browsing — so ↑/↓ keep
+      // walking the history even when a recalled line looks like a slash command.
+      if (historyCursor !== null && key.upArrow) {
+        const next = Math.max(0, historyCursor - 1);
+        setHistoryCursor(next);
+        editor.setBuffer(history[next] ?? '');
+        return;
+      }
+      if (historyCursor !== null && key.downArrow) {
+        const next = historyCursor + 1;
+        if (next >= history.length) {
+          setHistoryCursor(null);
+          editor.clear();
+        } else {
+          setHistoryCursor(next);
+          editor.setBuffer(history[next]);
+        }
         return;
       }
       if (matches.length > 0 && key.upArrow) {
@@ -95,6 +145,14 @@ export function Prompt({ disabled = false, onSubmit, onSlashActiveChange }: Prom
       }
       if (matches.length > 0 && key.downArrow) {
         setSelectedIndex((i) => (i >= matches.length - 1 ? 0 : i + 1));
+        return;
+      }
+      // Start browsing history: ↑ on an empty buffer recalls the most recent
+      // submission (survives interrupts — recorded at submit time).
+      if (key.upArrow && buffer.length === 0 && history.length > 0) {
+        const start = history.length - 1;
+        setHistoryCursor(start);
+        editor.setBuffer(history[start]);
         return;
       }
       if (matches.length > 0 && key.tab) {
@@ -106,9 +164,11 @@ export function Prompt({ disabled = false, onSubmit, onSlashActiveChange }: Prom
         return;
       }
       // Cursor movement, backspace-at-cursor, and printable insertion all
-      // live in the shared line editor (see use-line-editor.tsx).
+      // live in the shared line editor (see use-line-editor.tsx). Editing the
+      // buffer drops us off the history rail (the line is now "taken").
       if (editor.handleKey(input, key)) {
         setSelectedIndex(0);
+        setHistoryCursor(null);
         return;
       }
     },

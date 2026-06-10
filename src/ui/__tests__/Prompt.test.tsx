@@ -5,6 +5,7 @@ import { Prompt } from '../Prompt.js';
 import {
   ENTER,
   BACKSPACE,
+  ARROW_UP,
   ARROW_DOWN,
   ARROW_LEFT,
   ARROW_RIGHT,
@@ -289,5 +290,105 @@ describe('<Prompt>', () => {
     expect(frame).toContain('ab');
     expect(frame).toContain('c');
     expect(frame).not.toContain('▌');
+  });
+});
+
+describe('<Prompt> input history (↑/↓ recall)', () => {
+  // Wire up history like App does: a stable array the Prompt reads live, pushed
+  // to (deduped) on each submit.
+  function renderWithHistory(seed: string[] = []) {
+    const history = [...seed];
+    const onRecordInput = (t: string) => {
+      if (history[history.length - 1] !== t) history.push(t);
+    };
+    const onSubmit = vi.fn();
+    const utils = render(createElement(Prompt, { onSubmit, history, onRecordInput }));
+    return { ...utils, history, onSubmit };
+  }
+
+  it('records submissions and recalls them with ↑, walking newer with ↓', async () => {
+    const { stdin, lastFrame, history } = renderWithHistory();
+    await tick();
+    stdin.write('first');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    stdin.write('second');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(history).toEqual(['first', 'second']);
+
+    // ↑ on the (now empty) buffer recalls the most recent submission.
+    stdin.write(ARROW_UP);
+    await tick();
+    expect(lastFrame()).toContain('second');
+    // ↑ again → older.
+    stdin.write(ARROW_UP);
+    await tick();
+    expect(lastFrame()).toContain('first');
+    // ↓ → newer.
+    stdin.write(ARROW_DOWN);
+    await tick();
+    expect(lastFrame()).toContain('second');
+    // ↓ past the newest → back to an empty buffer.
+    stdin.write(ARROW_DOWN);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('second');
+    expect(frame).not.toContain('first');
+  });
+
+  it('recall survives without a completed turn (recorded at submit time)', async () => {
+    // onSubmit is a no-op spy here — the turn never "runs" — yet ↑ still recalls,
+    // mirroring "I hit interrupt and the prompt was still there".
+    const { stdin, lastFrame } = renderWithHistory();
+    await tick();
+    stdin.write('do the thing');
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    stdin.write(ARROW_UP);
+    await tick();
+    expect(lastFrame()).toContain('do the thing');
+  });
+
+  it('keeps walking history even when a recalled line is a slash command', async () => {
+    const { stdin, lastFrame } = renderWithHistory(['hello there', '/specialists']);
+    await tick();
+    stdin.write(ARROW_UP); // most recent → /specialists
+    await tick();
+    expect(lastFrame()).toContain('/specialists');
+    stdin.write(ARROW_UP); // older → hello there (history wins over slash-hint nav)
+    await tick();
+    expect(lastFrame()).toContain('hello there');
+  });
+
+  it('does nothing on ↑ when there is no history', async () => {
+    const { stdin, lastFrame } = renderWithHistory();
+    await tick();
+    stdin.write(ARROW_UP);
+    await tick();
+    // Empty buffer, just the cursor glyph — no crash, nothing recalled.
+    expect(lastFrame()).toContain('▌');
+  });
+});
+
+describe('<Prompt> dynamic slash commands (routines/tasks)', () => {
+  it('autocompletes saved routines from dynamicCommands and submits the picked one', async () => {
+    const onSubmit = vi.fn();
+    const dynamicCommands = () => [
+      { name: '/morning-triage', description: 'routine · Morning triage' },
+    ];
+    const { stdin, lastFrame } = render(createElement(Prompt, { onSubmit, dynamicCommands }));
+    await tick();
+    stdin.write('/morn');
+    await tick();
+    // The routine shows in the hint strip…
+    expect(lastFrame()).toContain('/morning-triage');
+    // …and Enter submits it (same path the dynamic `/<id>` dispatch uses).
+    stdin.write(ENTER);
+    await tick();
+    expect(onSubmit).toHaveBeenCalledWith('/morning-triage');
   });
 });

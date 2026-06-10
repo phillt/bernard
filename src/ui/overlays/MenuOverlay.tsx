@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import type { MenuEntry, MenuItem, MenuOptions } from '../menu-types.js';
+import { MenuRow } from './MenuRow.js';
 
 interface MenuOverlayBaseProps {
   entries: MenuEntry[];
@@ -208,12 +209,7 @@ function MenuList({
         const label = `${checkbox}${n}. ${entry.label}${activeMarker}${annotation}`;
         return (
           <Box key={`i-${idx}`} flexDirection="column">
-            <Box>
-              <Text color={colors.accent}>{isHighlighted ? '> ' : '  '}</Text>
-              <Text bold={isHighlighted} color={isHighlighted ? colors.accent : undefined}>
-                {label}
-              </Text>
-            </Box>
+            <MenuRow selected={isHighlighted} label={label} />
             {isHighlighted && entry.description && (
               <Box marginLeft={4}>
                 <Text dimColor>{entry.description}</Text>

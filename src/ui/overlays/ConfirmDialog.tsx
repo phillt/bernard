@@ -4,6 +4,7 @@ import { getThemeColors } from '../../theme.js';
 import type { RiskLevel } from '../../risk.js';
 import type { BlockOutcome } from '../../tools/types.js';
 import { permissionKeyLabel } from '../../tool-permissions.js';
+import { MenuRow } from './MenuRow.js';
 
 type ConfirmChoice = 'allow-once' | 'allow-session' | 'allow-profile' | 'cancel';
 type BlockChoice = BlockOutcome;
@@ -143,17 +144,9 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         <Text>{props.reason}</Text>
       </Box>
       <Text> </Text>
-      {labels.map((label, idx) => {
-        const isHighlighted = idx === highlight;
-        return (
-          <Box key={idx}>
-            <Text color={colors.accent}>{isHighlighted ? '> ' : '  '}</Text>
-            <Text bold={isHighlighted} color={isHighlighted ? colors.accent : undefined}>
-              {idx + 1}. {label}
-            </Text>
-          </Box>
-        );
-      })}
+      {labels.map((label, idx) => (
+        <MenuRow key={idx} selected={idx === highlight} label={`${idx + 1}. ${label}`} />
+      ))}
       <Text> </Text>
       <Text dimColor>↑/↓ move · Enter select · Esc cancel</Text>
     </Box>

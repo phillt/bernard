@@ -1,5 +1,5 @@
-import { Box, Text } from 'ink';
-import { getThemeColors } from '../theme.js';
+import { Box } from 'ink';
+import { MenuRow } from './overlays/MenuRow.js';
 
 export interface SlashCommand {
   name: string;
@@ -47,14 +47,23 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/exit', description: 'Quit Bernard' },
 ];
 
-/** Returns the subset of commands whose name prefix-matches the buffer. */
-export function matchSlashCommands(buffer: string): SlashCommand[] {
+/**
+ * Returns the subset of commands whose name prefix-matches the buffer. `extra`
+ * carries dynamic, session-specific commands — the user's saved routines and
+ * tasks — so typing `/my-routine` autocompletes the same way a built-in does.
+ */
+export function matchSlashCommands(
+  buffer: string,
+  extra: readonly SlashCommand[] = [],
+): SlashCommand[] {
   if (!buffer.startsWith('/')) return [];
   // Hide hints once the user has started typing args (a space terminates the
   // command token); they're past the picker at that point.
   if (buffer.includes(' ')) return [];
   const query = buffer.slice(1).toLowerCase();
-  return SLASH_COMMANDS.filter((c) => c.name.slice(1).toLowerCase().startsWith(query));
+  return [...SLASH_COMMANDS, ...extra].filter((c) =>
+    c.name.slice(1).toLowerCase().startsWith(query),
+  );
 }
 
 interface SlashHintsProps {
@@ -70,22 +79,17 @@ interface SlashHintsProps {
  * sync with what's displayed here.
  */
 export function SlashHints({ matches, selectedIndex }: SlashHintsProps) {
-  const colors = getThemeColors();
   if (matches.length === 0) return null;
   return (
     <Box flexDirection="column" marginLeft={2}>
-      {matches.map((cmd, idx) => {
-        const selected = idx === selectedIndex;
-        return (
-          <Box key={cmd.name}>
-            <Text color={selected ? colors.accent : undefined} bold={selected}>
-              {selected ? '› ' : '  '}
-              {cmd.name}
-            </Text>
-            <Text dimColor> — {cmd.description}</Text>
-          </Box>
-        );
-      })}
+      {matches.map((cmd, idx) => (
+        <MenuRow
+          key={cmd.name}
+          selected={idx === selectedIndex}
+          label={cmd.name}
+          trailing={` — ${cmd.description}`}
+        />
+      ))}
     </Box>
   );
 }

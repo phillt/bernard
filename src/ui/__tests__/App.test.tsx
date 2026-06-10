@@ -60,6 +60,16 @@ vi.mock('ai', async (importActual) => {
   };
 });
 
+// Stub daemon control so the /cron menu's enable/disable/delete sync never forks
+// a real daemon process. CronStore / CronLogStore stay real (they operate on the
+// isolated TMP_HOME below).
+vi.mock('../../cron/client.js', () => ({
+  isDaemonRunning: () => false,
+  startDaemon: vi.fn(() => true),
+  stopDaemon: vi.fn(() => true),
+  getDaemonPid: () => null,
+}));
+
 // Isolated XDG home so CronStore / MemoryStore can't see user data.
 const TMP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-app-test-'));
 process.env.BERNARD_HOME = TMP_HOME;
@@ -76,6 +86,8 @@ import type { MemoryStore } from '../../memory.js';
 import type { RoutineStore } from '../../routines.js';
 import type { SpecialistStore } from '../../specialists.js';
 import type { CandidateStore } from '../../specialist-candidates.js';
+import { promoteCandidate } from '../../candidate-bootstrap.js';
+import { CronStore } from '../../cron/store.js';
 
 // ── Stub harness ────────────────────────────────────────────────────────
 
@@ -153,7 +165,7 @@ function makeAgent(
   } as unknown as Agent;
 }
 
-function makeStores(): AppStores {
+function makeStores(overrides: Partial<AppStores> = {}): AppStores {
   return {
     memory: {
       listMemory: () => [],
@@ -168,15 +180,21 @@ function makeStores(): AppStores {
     routines: {
       get: () => undefined,
       list: () => [],
+      delete: vi.fn(() => true),
     } as unknown as RoutineStore,
     specialists: {
       list: () => [],
       get: () => undefined,
+      update: vi.fn(),
+      delete: vi.fn(() => true),
     } as unknown as SpecialistStore,
     candidates: {
       listPending: () => [],
       list: () => [],
+      acknowledge: vi.fn(),
+      updateStatus: vi.fn(() => true),
     } as unknown as CandidateStore,
+    ...overrides,
   };
 }
 
@@ -188,6 +206,8 @@ interface HarnessOptions {
   history?: CoreMessage[];
   /** Holder whose `.current` `getHistory()` returns; swap it to simulate a mid-turn replace. */
   holder?: { current: CoreMessage[] };
+  /** Override individual stores (e.g. seed specialists/routines/candidates). */
+  stores?: Partial<AppStores>;
 }
 
 function renderApp(opts: HarnessOptions = {}) {
@@ -209,7 +229,7 @@ function renderApp(opts: HarnessOptions = {}) {
     load: () => [],
   } as unknown as ProvenanceHistoryStore;
   const sessionToolAllowlist = new Set<string>();
-  const stores = makeStores();
+  const stores = makeStores(opts.stores);
   const config = makeConfig(opts.config);
   const utils = render(
     createElement(App, {
@@ -312,9 +332,9 @@ describe('<App> Shift-Tab viewer tabs (#211)', () => {
     stdin.write(SHIFT_TAB);
     await tick();
     let frame = lastFrame() ?? '';
-    expect(frame).toContain('▸ Agent Status'); // active
+    expect(frame).toContain('> Agent Status'); // active
     expect(frame).toContain('Sources'); // other tab listed
-    expect(frame).not.toContain('▸ Sources'); // but not active
+    expect(frame).not.toContain('> Sources'); // but not active
     expect(frame).toContain('esc close');
     expect(frame).not.toContain('commands');
 
@@ -322,15 +342,15 @@ describe('<App> Shift-Tab viewer tabs (#211)', () => {
     stdin.write(SHIFT_TAB);
     await tick();
     frame = lastFrame() ?? '';
-    expect(frame).toContain('▸ Sources');
-    expect(frame).not.toContain('▸ Agent Status');
+    expect(frame).toContain('> Sources');
+    expect(frame).not.toContain('> Agent Status');
 
     // Shift-Tab once more → wraps back to Status (does not close).
     stdin.write(SHIFT_TAB);
     await tick();
     frame = lastFrame() ?? '';
-    expect(frame).toContain('▸ Agent Status');
-    expect(frame).not.toContain('▸ Sources');
+    expect(frame).toContain('> Agent Status');
+    expect(frame).not.toContain('> Sources');
     expect(frame).not.toContain('commands');
     unmount();
   });
@@ -340,7 +360,7 @@ describe('<App> Shift-Tab viewer tabs (#211)', () => {
     await tick();
     stdin.write(SHIFT_TAB);
     await tick();
-    expect(lastFrame()).toContain('▸ Agent Status');
+    expect(lastFrame()).toContain('> Agent Status');
     stdin.write(ESC);
     await tick();
     const frame = lastFrame() ?? '';
@@ -746,6 +766,152 @@ describe('<App> requestAskUser multi-select (#231)', () => {
     stdin.write('2');
     await tick(40);
     await expect(pending).resolves.toEqual({ answers: [['A'], 'Y'] });
+    unmount();
+  });
+});
+
+// ── Menu-chain management commands (homogenized onto requestMenu) ──────────
+
+describe('<App> management menu chains', () => {
+  const mkSpec = (over: Record<string, unknown> = {}) => ({
+    id: 'my-helper',
+    name: 'My Helper',
+    description: 'helps with things',
+    systemPrompt: 'p',
+    guidelines: [],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...over,
+  });
+
+  it('/specialists: select → Disable calls update({disabled:true})', async () => {
+    const update = vi.fn();
+    const { stdin, unmount } = renderApp({
+      stores: {
+        specialists: { list: () => [mkSpec()], get: () => mkSpec(), update, delete: vi.fn() } as never,
+      },
+    });
+    await tick();
+    await submit(stdin, '/specialists');
+    stdin.write('1'); // select the only specialist
+    await tick(40);
+    stdin.write('2'); // action menu: [Edit, Disable, Delete, Back]
+    await tick(40);
+    expect(update).toHaveBeenCalledWith('my-helper', { disabled: true });
+    unmount();
+  });
+
+  it('/specialists: Delete asks to confirm, then deletes', async () => {
+    const del = vi.fn(() => true);
+    const { stdin, unmount } = renderApp({
+      stores: {
+        specialists: { list: () => [mkSpec()], get: () => mkSpec(), update: vi.fn(), delete: del } as never,
+      },
+    });
+    await tick();
+    await submit(stdin, '/specialists');
+    stdin.write('1'); // select
+    await tick(40);
+    stdin.write('3'); // Delete → confirm menu
+    await tick(40);
+    stdin.write('1'); // confirm: Delete "..."
+    await tick(40);
+    expect(del).toHaveBeenCalledWith('my-helper');
+    unmount();
+  });
+
+  it('/routines: Delete confirms and deletes', async () => {
+    const r = { id: 'my-routine', name: 'My Routine', description: 'does things', content: 'steps' };
+    const del = vi.fn(() => true);
+    const { stdin, unmount } = renderApp({
+      stores: { routines: { list: () => [r], get: () => r, delete: del } as never },
+    });
+    await tick();
+    await submit(stdin, '/routines');
+    stdin.write('1'); // select
+    await tick(40);
+    stdin.write('3'); // Delete → confirm
+    await tick(40);
+    stdin.write('1'); // confirm
+    await tick(40);
+    expect(del).toHaveBeenCalledWith('my-routine');
+    unmount();
+  });
+
+  it('/candidates: Reject sets status; Accept promotes', async () => {
+    const c = {
+      id: 'cand-1',
+      draftId: 'code-review',
+      name: 'Code Review',
+      description: 'reviews code',
+      systemPrompt: 'p',
+      guidelines: [],
+      confidence: 0.9,
+      reasoning: 'seen repeated review requests',
+      detectedAt: '2026-01-01T00:00:00.000Z',
+      source: 'exit',
+      acknowledged: false,
+      status: 'pending',
+    };
+    const updateStatus = vi.fn(() => true);
+    const { stdin, unmount } = renderApp({
+      stores: {
+        candidates: { listPending: () => [c], acknowledge: vi.fn(), updateStatus } as never,
+      },
+    });
+    await tick();
+    await submit(stdin, '/candidates');
+    stdin.write('1'); // select candidate
+    await tick(40);
+    stdin.write('2'); // action menu: [Accept, Reject, View, Back] → Reject
+    await tick(40);
+    expect(updateStatus).toHaveBeenCalledWith('cand-1', 'rejected');
+    unmount();
+  });
+
+  it('/candidates: Accept calls promoteCandidate', async () => {
+    vi.mocked(promoteCandidate).mockClear();
+    const c = {
+      id: 'cand-2',
+      draftId: 'triage',
+      name: 'Triage',
+      description: 'triages',
+      systemPrompt: 'p',
+      guidelines: [],
+      confidence: 0.8,
+      reasoning: 'why',
+      detectedAt: '2026-01-01T00:00:00.000Z',
+      source: 'exit',
+      acknowledged: false,
+      status: 'pending',
+    };
+    const { stdin, unmount } = renderApp({
+      stores: {
+        candidates: { listPending: () => [c], acknowledge: vi.fn(), updateStatus: vi.fn() } as never,
+      },
+    });
+    await tick();
+    await submit(stdin, '/candidates');
+    stdin.write('1'); // select
+    await tick(40);
+    stdin.write('1'); // Accept
+    await tick(40);
+    expect(promoteCandidate).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('/cron: select → Disable flips the job enabled flag', async () => {
+    const store = new CronStore();
+    const job = store.createJob('Nightly', '0 0 * * *', 'do the thing');
+    const { stdin, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/cron');
+    stdin.write('1'); // select the job
+    await tick(40);
+    stdin.write('1'); // action menu: [Disable, View logs, Delete, Back]
+    await tick(40);
+    expect(new CronStore().getJob(job.id)?.enabled).toBe(false);
+    store.deleteJob(job.id);
     unmount();
   });
 });

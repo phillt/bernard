@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import type { Agent } from '../agent.js';
 import type { BernardConfig } from '../config.js';
@@ -47,18 +47,19 @@ import { THEMES, getThemeKeys, getActiveThemeKey, setTheme, getThemeColors } fro
 import type { HistoryStore } from '../history.js';
 import type { ProvenanceHistoryStore } from '../provenance-history.js';
 import type { MemoryStore } from '../memory.js';
-import type { RoutineStore } from '../routines.js';
-import type { SpecialistStore } from '../specialists.js';
+import type { RoutineStore, Routine } from '../routines.js';
+import type { SpecialistStore, Specialist } from '../specialists.js';
 import type { CandidateStore } from '../specialist-candidates.js';
 import type { RAGStore, RAGSearchResult } from '../rag.js';
 import type { MCPManager } from '../mcp.js';
 import { CronStore } from '../cron/store.js';
-import { isDaemonRunning } from '../cron/client.js';
+import { CronLogStore } from '../cron/log-store.js';
+import { isDaemonRunning, startDaemon, stopDaemon } from '../cron/client.js';
 import { getDomain, getDomainIds } from '../domains.js';
 import { MCP_CONFIG_PATH } from '../paths.js';
 import { interactiveUpdate } from '../update.js';
 import { getBuiltinSpecialistIds } from '../specialists.js';
-import { buildCandidateContextBlock, promotePendingCandidates } from '../candidate-bootstrap.js';
+import { promotePendingCandidates } from '../candidate-bootstrap.js';
 import {
   listProfiles,
   createProfile,
@@ -72,6 +73,7 @@ import {
 import { permissionKeyLabel, type ToolPermissionValue } from '../tool-permissions.js';
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible } from '../output.js';
+import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
 import {
   loadImage,
@@ -116,6 +118,7 @@ import type {
 import { Thread, REWRITE_ICON, type StaticItem } from './Thread.js';
 import { formatAgentError, type ErrorPanelData } from './error-format.js';
 import { Prompt } from './Prompt.js';
+import type { SlashCommand } from './SlashHints.js';
 import { Spinner } from './Spinner.js';
 import { StatusBar } from './StatusBar.js';
 import { HintBar } from './HintBar.js';
@@ -340,6 +343,27 @@ export function App({
   const [interrupted, setInterrupted] = useState(false);
   const [slashActive, setSlashActive] = useState(false);
   const colors = getThemeColors();
+
+  // Session input history for the Prompt's ↑/↓ recall. A stable array the Prompt
+  // reads live; appended on each user submit. Lives here (not in Prompt) so it
+  // survives the Prompt unmounting while a Shift-Tab viewer is open.
+  const inputHistory = useRef<string[]>([]).current;
+  const recordInput = (text: string) => {
+    if (inputHistory[inputHistory.length - 1] !== text) inputHistory.push(text);
+    if (inputHistory.length > 200) inputHistory.splice(0, inputHistory.length - 200);
+  };
+
+  // Saved routines + tasks, surfaced as `/<id>` slash-command completions so the
+  // user can autocomplete and invoke them like any built-in command. Read live
+  // from the store (stable getter) so newly-created routines appear immediately.
+  const getDynamicCommands = useCallback(
+    (): SlashCommand[] =>
+      stores.routines.list().map((r) => ({
+        name: `/${r.id}`,
+        description: `${r.id.startsWith('task-') ? 'task' : 'routine'} · ${r.name}`,
+      })),
+    [stores.routines],
+  );
 
   // Confirm-action session memo: `${toolName}:${stableHash(args)}` → true.
   // Mirrors the legacy REPL's confirm-allow-for-session map.
@@ -815,35 +839,82 @@ export function App({
     if (text === '/cron') {
       const store = new CronStore();
       const jobs = store.loadJobs();
-      const running = isDaemonRunning();
-      const lines: PendingInfo['lines'] = [
-        { text: `Daemon: ${running ? 'running' : 'stopped'}`, bold: true },
-      ];
       if (jobs.length === 0) {
-        lines.push({ text: 'No cron jobs configured.', dim: true });
-      } else {
-        lines.push({ text: '' });
-        lines.push({ text: `Jobs (${jobs.length}):`, bold: true });
-        for (const job of jobs) {
-          const status = job.enabled ? 'enabled' : 'disabled';
-          const lastRun = job.lastRun
-            ? `last: ${new Date(job.lastRun).toLocaleString()} (${job.lastRunStatus || 'unknown'})`
-            : 'never run';
-          lines.push({ text: `  ${job.name} [${status}] — ${job.schedule} — ${lastRun}` });
-          lines.push({ text: `    ID: ${job.id}`, dim: true });
-        }
-        const alerts = store.listAlerts().filter((a) => !a.acknowledged);
-        if (alerts.length > 0) {
-          lines.push({ text: '' });
-          lines.push({ text: `Unacknowledged alerts (${alerts.length}):`, bold: true });
-          for (const alert of alerts.slice(0, 5)) {
-            lines.push({
-              text: `  [${new Date(alert.timestamp).toLocaleString()}] ${alert.jobName}: ${alert.message}`,
-            });
-          }
-        }
+        flashToast('No cron jobs configured. Ask me to schedule one.');
+        return;
       }
-      showInfo('Cron', lines);
+      // Start/stop the daemon to match whether any job is enabled — mirrors the
+      // ensureDaemon / stopIfNoEnabledJobs side-effects of the cron tools.
+      const syncDaemon = () => {
+        const anyEnabled = store.loadJobs().some((j) => j.enabled);
+        const running = isDaemonRunning();
+        if (anyEnabled && !running) startDaemon();
+        else if (!anyEnabled && running) stopDaemon();
+      };
+      const byId = new Map(jobs.map((j) => [j.id, j]));
+      const entries: MenuEntry[] = jobs.map((j) => ({
+        label: j.name,
+        annotation: j.enabled ? 'enabled' : 'disabled',
+        description: `${j.schedule} — ${
+          j.lastRun
+            ? `last: ${new Date(j.lastRun).toLocaleString()} (${j.lastRunStatus || 'unknown'})`
+            : 'never run'
+        }`,
+        value: j.id,
+      }));
+      const pick = await requestMenu(entries, {
+        title: 'Cron jobs — select one',
+        headerLines: [`Daemon: ${isDaemonRunning() ? 'running' : 'stopped'}`],
+      });
+      if (pick.cancelled) return;
+      const job = byId.get(pick.item.value as string);
+      if (!job) return;
+      const action = await requestMenu(
+        [
+          { label: job.enabled ? 'Disable' : 'Enable' },
+          { label: 'View logs' },
+          { label: 'Delete' },
+          { label: 'Back' },
+        ],
+        { title: `"${job.name}" — ${job.schedule}` },
+      );
+      if (action.cancelled || action.index === 3) return;
+      if (action.index === 0) {
+        store.updateJob(job.id, { enabled: !job.enabled });
+        syncDaemon();
+        flashToast(`"${job.name}" ${job.enabled ? 'disabled' : 'enabled'}.`, 'success');
+        return;
+      }
+      if (action.index === 1) {
+        const log = new CronLogStore().getEntries(job.id, 10);
+        if (log.length === 0) {
+          showInfo(`Logs — ${job.name}`, [{ text: 'No runs recorded yet.', dim: true }]);
+          return;
+        }
+        const lines: PendingInfo['lines'] = [];
+        for (const e of log) {
+          lines.push({
+            text: `${new Date(e.startedAt).toLocaleString()} — ${e.success ? 'success' : 'error'} (${e.durationMs}ms)`,
+            bold: true,
+          });
+          lines.push({ text: `  ${truncate((e.error || e.finalOutput || '').replace(/\s+/g, ' '), 120)}`, dim: true });
+        }
+        showInfo(`Logs — ${job.name}`, lines);
+        return;
+      }
+      // Delete path — confirm, then remove the job + its logs.
+      const confirm = await requestMenu(
+        [
+          { label: `Delete "${job.name}"`, description: 'This cannot be undone.' },
+          { label: 'Cancel' },
+        ],
+        { title: 'Confirm deletion' },
+      );
+      if (confirm.cancelled || confirm.index === 1) return;
+      store.deleteJob(job.id);
+      new CronLogStore().deleteJobLogs(job.id);
+      syncDaemon();
+      flashToast(`Deleted ${job.name}.`, 'success');
       return;
     }
 
@@ -1279,29 +1350,55 @@ export function App({
         flashToast('No routines saved. Teach me a workflow and I can save it as a routine.');
         return;
       }
-      const tasks = all.filter((r) => r.id.startsWith('task-'));
-      const routines = all.filter((r) => !r.id.startsWith('task-'));
-      const lines: PendingInfo['lines'] = [];
-      if (tasks.length > 0) {
-        lines.push({
-          text: `Tasks (${tasks.length}) — single-step, structured output:`,
-          bold: true,
-        });
-        for (const r of tasks) {
-          lines.push({ text: `  /${r.id} — ${r.name}: ${r.description}` });
+      const byId = new Map(all.map((r) => [r.id, r]));
+      const entries: MenuEntry[] = [];
+      const pushGroup = (title: string, list: Routine[]) => {
+        if (list.length === 0) return;
+        entries.push({ type: 'section', title });
+        for (const r of list) {
+          entries.push({
+            label: r.name,
+            annotation: `/${r.id}`,
+            description: truncate(r.description, 100),
+            value: r.id,
+          });
         }
+      };
+      pushGroup(
+        'Tasks',
+        all.filter((r) => r.id.startsWith('task-')),
+      );
+      pushGroup(
+        'Routines',
+        all.filter((r) => !r.id.startsWith('task-')),
+      );
+      const pick = await requestMenu(entries, { title: 'Routines — select one' });
+      if (pick.cancelled) return;
+      const r = byId.get(pick.item.value as string);
+      if (!r) return;
+      const action = await requestMenu([{ label: 'Run' }, { label: 'Edit' }, { label: 'Delete' }, { label: 'Back' }], {
+        title: `"${r.name}" (/${r.id})`,
+      });
+      if (action.cancelled || action.index === 3) return;
+      if (action.index === 0) {
+        await runRoutine(r);
+        return;
       }
-      if (routines.length > 0) {
-        if (tasks.length > 0) lines.push({ text: '' });
-        lines.push({
-          text: `Routines (${routines.length}) — multi-step workflows:`,
-          bold: true,
-        });
-        for (const r of routines) {
-          lines.push({ text: `  /${r.id} — ${r.name}: ${r.description}` });
-        }
+      if (action.index === 1) {
+        await runAgentTurn(buildRoutineEditSeed(r));
+        return;
       }
-      showInfo('Routines', lines);
+      // Delete path — confirm with the standard two-item menu.
+      const confirm = await requestMenu(
+        [
+          { label: `Delete "${r.name}"`, description: 'This cannot be undone.' },
+          { label: 'Cancel' },
+        ],
+        { title: 'Confirm deletion' },
+      );
+      if (confirm.cancelled || confirm.index === 1) return;
+      stores.routines.delete(r.id);
+      flashToast(`Deleted ${r.name}.`, 'success');
       return;
     }
 
@@ -1314,23 +1411,62 @@ export function App({
         return;
       }
       const builtinIds = getBuiltinSpecialistIds();
-      const bundled = all.filter((s) => builtinIds.has(s.id));
-      const user = all.filter((s) => !builtinIds.has(s.id));
-      const lines: PendingInfo['lines'] = [];
-      if (bundled.length > 0) {
-        lines.push({ text: 'Bundled:', bold: true });
-        for (const s of bundled) {
-          lines.push({ text: `  ${s.id} — ${s.name}: ${s.description}` });
+      const byId = new Map(all.map((s) => [s.id, s]));
+      const entries: MenuEntry[] = [];
+      const pushGroup = (title: string, list: Specialist[]) => {
+        if (list.length === 0) return;
+        entries.push({ type: 'section', title });
+        for (const s of list) {
+          entries.push({
+            label: s.name,
+            annotation: s.disabled ? '(disabled)' : (s.kind ?? 'persona'),
+            description: truncate(s.description, 100),
+            value: s.id,
+          });
         }
+      };
+      pushGroup(
+        'Bundled',
+        all.filter((s) => builtinIds.has(s.id)),
+      );
+      pushGroup(
+        'Yours',
+        all.filter((s) => !builtinIds.has(s.id)),
+      );
+      const pick = await requestMenu(entries, { title: 'Specialists — select one' });
+      if (pick.cancelled) return;
+      const s = byId.get(pick.item.value as string);
+      if (!s) return;
+      const action = await requestMenu(
+        [
+          { label: 'Edit' },
+          { label: s.disabled ? 'Enable' : 'Disable' },
+          { label: 'Delete' },
+          { label: 'Back' },
+        ],
+        { title: `"${s.name}" (${s.id})` },
+      );
+      if (action.cancelled || action.index === 3) return;
+      if (action.index === 0) {
+        await runAgentTurn(buildSpecialistEditSeed(s));
+        return;
       }
-      if (user.length > 0) {
-        if (bundled.length > 0) lines.push({ text: '' });
-        lines.push({ text: 'Yours:', bold: true });
-        for (const s of user) {
-          lines.push({ text: `  ${s.id} — ${s.name}: ${s.description}` });
-        }
+      if (action.index === 1) {
+        stores.specialists.update(s.id, { disabled: !s.disabled });
+        flashToast(`${s.name} ${s.disabled ? 'enabled' : 'disabled'}.`, 'success');
+        return;
       }
-      showInfo(`Specialists (${all.length})`, lines);
+      // Delete path — confirm with the standard two-item menu (house style).
+      const confirm = await requestMenu(
+        [
+          { label: `Delete "${s.name}"`, description: 'This cannot be undone.' },
+          { label: 'Cancel' },
+        ],
+        { title: 'Confirm deletion' },
+      );
+      if (confirm.cancelled || confirm.index === 1) return;
+      stores.specialists.delete(s.id);
+      flashToast(`Deleted ${s.name}.`, 'success');
       return;
     }
 
@@ -1340,23 +1476,48 @@ export function App({
         flashToast('No pending specialist suggestions.');
         return;
       }
-      const lines: PendingInfo['lines'] = [];
-      for (const c of pending) {
-        const pct = Math.round(c.confidence * 100);
-        const date = new Date(c.detectedAt).toLocaleDateString();
-        lines.push({ text: `${c.name} (${c.draftId})`, bold: true });
-        lines.push({ text: `  ${c.description}`, dim: true });
-        lines.push({ text: `  Confidence: ${pct}% | Detected: ${date}`, dim: true });
-        lines.push({ text: `  Reasoning: ${c.reasoning}`, dim: true });
-        lines.push({ text: '' });
-        stores.candidates.acknowledge(c.id);
-      }
-      lines.push({
-        text: 'To accept or reject, tell Bernard conversationally (e.g., "accept the code-review candidate").',
-        dim: true,
+      const byId = new Map(pending.map((c) => [c.id, c]));
+      const entries: MenuEntry[] = pending.map((c) => {
+        stores.candidates.acknowledge(c.id); // mark seen on open (prior behavior)
+        return {
+          label: c.name,
+          annotation: `${Math.round(c.confidence * 100)}%`,
+          description: truncate(c.reasoning || c.description, 100),
+          value: c.id,
+        };
       });
-      agent.setAlertContext(buildCandidateContextBlock(pending));
-      showInfo(`Specialist Suggestions (${pending.length})`, lines);
+      const pick = await requestMenu(entries, { title: 'Specialist suggestions — select one' });
+      if (pick.cancelled) return;
+      const c = byId.get(pick.item.value as string);
+      if (!c) return;
+      const action = await requestMenu([{ label: 'Accept' }, { label: 'Reject' }, { label: 'View' }, { label: 'Back' }], {
+        title: `"${c.name}" (${c.draftId})`,
+      });
+      if (action.cancelled || action.index === 3) return;
+      if (action.index === 0) {
+        try {
+          promoteCandidate(c, stores.specialists, stores.candidates, config.autoCreateThreshold, config);
+          flashToast(`Accepted ${c.name} — specialist created.`, 'success');
+        } catch (err) {
+          flashToast(`Could not create specialist: ${(err as Error).message}`, 'error');
+        }
+        return;
+      }
+      if (action.index === 1) {
+        stores.candidates.updateStatus(c.id, 'rejected');
+        flashToast(`Rejected ${c.name}.`, 'success');
+        return;
+      }
+      // View — read-only detail.
+      showInfo(c.name, [
+        { text: c.description },
+        { text: '' },
+        { text: `Confidence: ${Math.round(c.confidence * 100)}%`, dim: true },
+        { text: `Detected: ${new Date(c.detectedAt).toLocaleString()}`, dim: true },
+        { text: '' },
+        { text: 'Reasoning:', bold: true },
+        { text: c.reasoning, dim: true },
+      ]);
       return;
     }
 
@@ -1435,18 +1596,7 @@ export function App({
       const routineId = parts[0];
       const routine = stores.routines.get(routineId);
       if (routine) {
-        const args = parts.slice(1).join(' ');
-        if (routineId.startsWith('task-')) {
-          await runTaskInk(routine.content, args || undefined);
-          return;
-        }
-        let message = `Execute routine "${routine.name}" (/${routine.id}):\n${routine.description}\n\n## Routine Steps\n${routine.content}`;
-        if (args) {
-          message += `\n\n## Additional Context\n${args}`;
-        }
-        message +=
-          "\n\nFollow this routine intelligently — adapt to the current situation, skip steps that don't apply, and explain any deviations.";
-        await runAgentTurn(message);
+        await runRoutine(routine, parts.slice(1).join(' '));
         return;
       }
       // Unknown slash command — fall through to agent turn (legacy behavior).
@@ -2117,6 +2267,21 @@ export function App({
     }
   }
 
+  // Execute a saved routine: tasks (`task-` prefix) run single-shot via
+  // runTaskInk; routines run as a guided agent turn. Shared by the dynamic
+  // `/<routine-id>` dispatch and the `/routines` menu's Run action.
+  async function runRoutine(routine: Routine, args = ''): Promise<void> {
+    if (routine.id.startsWith('task-')) {
+      await runTaskInk(routine.content, args || undefined);
+      return;
+    }
+    let message = `Execute routine "${routine.name}" (/${routine.id}):\n${routine.description}\n\n## Routine Steps\n${routine.content}`;
+    if (args) message += `\n\n## Additional Context\n${args}`;
+    message +=
+      "\n\nFollow this routine intelligently — adapt to the current situation, skip steps that don't apply, and explain any deviations.";
+    await runAgentTurn(message);
+  }
+
   async function runTaskInk(description: string, context?: string): Promise<void> {
     const slot = acquireSlot();
     if (!slot) {
@@ -2437,6 +2602,9 @@ export function App({
             disabled={busy || activeOverlay !== null}
             onSubmit={handleSubmit}
             onSlashActiveChange={setSlashActive}
+            history={inputHistory}
+            onRecordInput={recordInput}
+            dynamicCommands={getDynamicCommands}
           />
           <Box justifyContent="space-between">
             <HintBar
@@ -2791,6 +2959,54 @@ function buildDebugReportLines(
   lines.push({ text: `  State: ${STATE_DIR}`, dim: true });
 
   return lines;
+}
+
+/**
+ * Seeds a conversational edit of an existing specialist (the `/specialists`
+ * menu's Edit action). The agent is given the current definition and told to ask
+ * what to change, then persist via the `specialist` tool's `update` action.
+ */
+function buildSpecialistEditSeed(s: Specialist): string {
+  const lines = [
+    `The user wants to edit the "${s.name}" specialist (id: ${s.id}).`,
+    '',
+    'Current definition:',
+    `- name: ${s.name}`,
+    `- description: ${s.description}`,
+    `- kind: ${s.kind ?? 'persona'}`,
+  ];
+  if (s.targetTools?.length) lines.push(`- targetTools: ${s.targetTools.join(', ')}`);
+  if (s.provider) lines.push(`- provider: ${s.provider}`);
+  if (s.model) lines.push(`- model: ${s.model}`);
+  if (s.disabled) lines.push('- status: disabled');
+  lines.push(
+    '',
+    'Ask what they would like to change. Once they confirm, apply it with the ' +
+      `specialist tool (action: "update", id: "${s.id}"), changing only the fields ` +
+      'they asked for, then confirm what was saved.',
+  );
+  return lines.join('\n');
+}
+
+/**
+ * Seeds a conversational edit of an existing routine (the `/routines` menu's
+ * Edit action). The agent gets the current definition and persists changes via
+ * the `routine` tool's `update` action.
+ */
+function buildRoutineEditSeed(r: Routine): string {
+  return [
+    `The user wants to edit the "${r.name}" routine (id: ${r.id}).`,
+    '',
+    'Current definition:',
+    `- name: ${r.name}`,
+    `- description: ${r.description}`,
+    '- content:',
+    r.content,
+    '',
+    'Ask what they would like to change. Once they confirm, apply it with the ' +
+      `routine tool (action: "update", id: "${r.id}"), changing only the fields they ` +
+      'asked for, then confirm what was saved.',
+  ].join('\n');
 }
 
 const CREATE_SEED_PROMPTS: Record<string, string> = {

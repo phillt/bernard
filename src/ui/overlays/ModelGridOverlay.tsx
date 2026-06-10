@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Box, Text, useInput, useStdout } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
+import { MenuRow } from './MenuRow.js';
 
 export interface ModelGridOverlayProps {
   title?: string;
@@ -130,17 +131,16 @@ export function ModelGridOverlay({
           <Box key={`r-${rowIdx}`} flexDirection="row">
             {row.map((cellIndex) => {
               const value = items[cellIndex];
-              const isHighlighted = cellIndex === highlight;
               const isCurrent = currentItem !== undefined && value === currentItem;
               const inner = `${value}${isCurrent ? ' *' : ''}`;
               const text = truncate(inner, cellWidth - 2);
               return (
-                <Box key={`c-${cellIndex}`} width={cellWidth}>
-                  <Text color={colors.accent}>{isHighlighted ? '> ' : '  '}</Text>
-                  <Text bold={isHighlighted} color={isHighlighted ? colors.accent : undefined}>
-                    {text}
-                  </Text>
-                </Box>
+                <MenuRow
+                  key={`c-${cellIndex}`}
+                  selected={cellIndex === highlight}
+                  width={cellWidth}
+                  label={text}
+                />
               );
             })}
           </Box>

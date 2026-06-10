@@ -6,10 +6,10 @@ import { ESC, ARROW_DOWN, ARROW_UP, SHIFT_TAB, PAGE_DOWN, tick } from './_keys.j
 import { ScrollableOverlay, type OverlayLine } from '../overlays/ScrollableOverlay.js';
 
 // ink-testing-library's stdout reports columns:100 and no `rows` getter, so
-// ScrollableOverlay falls back to rows:24. frameHeight = rows-1 = 23; with 2
-// tabs the chrome below the viewport is scroll-line(1) + 2 borders + key-hints
-// + tabs(2) = 6 → viewport = 23 - 6 = 17.
-const VIEWPORT = 17;
+// ScrollableOverlay falls back to rows:24. frameHeight = rows-1 = 23; the tabs
+// render as a single horizontal row, so the chrome below the viewport is
+// scroll-line(1) + 2 rules + key-hints(1) + tab-row(1) = 5 → viewport = 23 - 5 = 18.
+const VIEWPORT = 18;
 
 const TABS = [
   { id: 'alpha', label: 'Alpha' },
@@ -42,9 +42,9 @@ describe('<ScrollableOverlay>', () => {
   it('renders the bottom tab menu (active marked, others muted) and only the first viewport of rows', () => {
     const { lastFrame } = renderOverlay(makeLines(30));
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('▸ Alpha'); // active tab marked
+    expect(frame).toContain('> Alpha'); // active tab marked
     expect(frame).toContain('Beta'); // other tab present
-    expect(frame).not.toContain('▸ Beta'); // but not marked active
+    expect(frame).not.toContain('> Beta'); // but not marked active
     expect(frame).toContain('entry-00');
     expect(frame).toContain(`entry-${VIEWPORT - 1}`); // entry-16, last visible
     expect(frame).not.toContain(`entry-${VIEWPORT}`); // entry-17, first hidden
@@ -68,14 +68,14 @@ describe('<ScrollableOverlay>', () => {
     // Window shifted by one: entry-00 gone, entry-19 (first previously-hidden) now visible.
     expect(frame).not.toContain('entry-00');
     expect(frame).toContain(`entry-${VIEWPORT}`);
-    // Page down jumps a viewport and clamps at the last page (maxOffset = 30-17 = 13).
+    // Page down jumps a viewport and clamps at the last page (maxOffset = 30-18 = 12).
     stdin.write(PAGE_DOWN);
     await tick();
     stdin.write(PAGE_DOWN);
     await tick();
     frame = lastFrame() ?? '';
     expect(frame).toContain('entry-29');
-    expect(frame).toContain('rows 14–30 of 30');
+    expect(frame).toContain('rows 13–30 of 30');
   });
 
   it('jumps to top/bottom with g/G', async () => {
