@@ -114,6 +114,7 @@ import type {
   ValueResult,
 } from './menu-types.js';
 import { Thread, REWRITE_ICON, type StaticItem } from './Thread.js';
+import { formatAgentError, type ErrorPanelData } from './error-format.js';
 import { Prompt } from './Prompt.js';
 import { Spinner } from './Spinner.js';
 import { StatusBar } from './StatusBar.js';
@@ -2054,6 +2055,7 @@ export function App({
     setBusy(true);
     const turnStartedAt = Date.now();
     let turnCompleted = false;
+    let errorPanel: ErrorPanelData | null = null;
     const controller = new AbortController();
     turnAbortRef.current = controller;
     try {
@@ -2076,22 +2078,20 @@ export function App({
       const isAbort =
         err instanceof Error && (err.name === 'AbortError' || controller.signal.aborted);
       if (!isAbort) {
-        console.error('agent error:', err);
-        // When debug is on, also surface the error in the chat transcript so
-        // hangs / silent failures are visible without having to grep logs.
-        if (isDebugEnabled()) {
-          const message = err instanceof Error ? err.message : String(err);
-          const stack = err instanceof Error && err.stack ? err.stack : undefined;
-          const cause =
-            err instanceof Error && err.cause instanceof Error ? err.cause.stack : undefined;
-          debugLog('error:turn', { message, stack, cause });
-          const body = [`⚠ Agent error: ${message}`, stack, cause && `Caused by:\n${cause}`]
-            .filter(Boolean)
-            .join('\n\n');
-          // The finally-block commit freezes this into the transcript along
-          // with anything else added this turn — no separate bump needed.
-          agent.getHistory().push({ role: 'assistant', content: body });
+        const debug = isDebugEnabled();
+        if (debug) {
+          debugLog('error:turn', {
+            message: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+            cause: err instanceof Error && err.cause instanceof Error ? err.cause.stack : undefined,
+          });
         }
+        // Surface every failed turn as a styled <ErrorPanel> in the transcript
+        // (committed after this turn's output, in the finally block). The full
+        // stack/cause only rides along under debug. This is a UI-only notice —
+        // deliberately NOT pushed into agent history, so the model's context
+        // isn't polluted with its own error text.
+        errorPanel = formatAgentError(err, debug);
       }
     } finally {
       persistAgentState({ agent, historyStore, provenanceHistoryStore });
@@ -2106,6 +2106,14 @@ export function App({
       const endedAt = Date.now();
       const timing = turnCompleted ? { endedAt, durationMs: endedAt - turnStartedAt } : undefined;
       commitNewHistory({ timing });
+      // Append the error panel after the turn's committed output so it reads
+      // as the turn's outcome (in the same batch as the commit above).
+      if (errorPanel) {
+        setStaticItems((prev) => [
+          ...prev,
+          { key: String(itemKeyRef.current++), toolDetails: config.toolDetails, error: errorPanel! },
+        ]);
+      }
     }
   }
 
