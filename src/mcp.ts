@@ -564,9 +564,10 @@ class MCPVerifyTimeout extends Error {}
  *
  * A timeout almost always means the process started but never completed the MCP
  * handshake — typically an HTTP/SSE server launched as stdio, or a stdio flag
- * (e.g. `--stdio`) missing. (Note: on timeout the spawned child may linger
- * until Bernard exits, since the client never resolved to be closed — acceptable
- * for an intentional one-off probe.)
+ * (e.g. `--stdio`) missing. In that case `createMCPClient` never resolves, so
+ * there's no client to `close()`; we hold the stdio transport reference and
+ * close it directly in `finally` to terminate the spawned child (it owns the
+ * process via an AbortController) rather than leaking it until Bernard exits.
  */
 export async function verifyMCPServer(
   config: MCPServerConfig,
@@ -575,23 +576,26 @@ export async function verifyMCPServer(
   const timeoutMs = opts.timeoutMs ?? 15_000;
   const startedAt = Date.now();
   let client: MCPClient | undefined;
+  // Held separately from `client` so a timeout (createMCPClient never resolves)
+  // can still tear down the spawned stdio child.
+  let transport: Experimental_StdioMCPTransport | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const probe = (async () => {
-      client =
-        'url' in config
-          ? await createMCPClient({
-              transport: { type: config.type ?? 'sse', url: config.url, headers: config.headers },
-            })
-          : await createMCPClient({
-              transport: new Experimental_StdioMCPTransport({
-                command: config.command,
-                args: config.args,
-                env: config.env
-                  ? { ...(process.env as Record<string, string>), ...config.env }
-                  : undefined,
-              }),
-            });
+      if ('url' in config) {
+        client = await createMCPClient({
+          transport: { type: config.type ?? 'sse', url: config.url, headers: config.headers },
+        });
+      } else {
+        transport = new Experimental_StdioMCPTransport({
+          command: config.command,
+          args: config.args,
+          env: config.env
+            ? { ...(process.env as Record<string, string>), ...config.env }
+            : undefined,
+        });
+        client = await createMCPClient({ transport });
+      }
       const names = Object.keys(await client.tools());
       return names;
     })();
@@ -622,12 +626,14 @@ export async function verifyMCPServer(
     };
   } finally {
     if (timer) clearTimeout(timer);
-    if (client) {
-      try {
-        await client.close();
-      } catch {
-        /* best-effort cleanup */
-      }
+    // Prefer closing via the client (closes its transport too); on a timeout
+    // the client never resolved, so close the held stdio transport directly to
+    // kill the spawned child.
+    try {
+      if (client) await client.close();
+      else if (transport) await transport.close();
+    } catch {
+      /* best-effort cleanup */
     }
   }
 }

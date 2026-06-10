@@ -6,7 +6,9 @@ vi.mock('@ai-sdk/mcp', () => ({
 }));
 
 vi.mock('@ai-sdk/mcp/mcp-stdio', () => ({
-  Experimental_StdioMCPTransport: vi.fn(),
+  // Each construction returns an object with its own `close` spy so a test can
+  // assert the spawned child is torn down even when the client never resolves.
+  Experimental_StdioMCPTransport: vi.fn(() => ({ close: vi.fn().mockResolvedValue(undefined) })),
 }));
 
 vi.mock('./output.js', () => ({
@@ -21,6 +23,8 @@ vi.mock('ai', () => ({
 const { createMCPClient } = await import('@ai-sdk/mcp');
 const { printInfo, printError } = await import('./output.js');
 const { MCPManager, verifyMCPServer } = await import('./mcp.js');
+const { Experimental_StdioMCPTransport } = await import('@ai-sdk/mcp/mcp-stdio');
+const mockStdioTransport = Experimental_StdioMCPTransport as unknown as ReturnType<typeof vi.fn>;
 
 const mockCreateMCPClient = createMCPClient as ReturnType<typeof vi.fn>;
 const mockPrintInfo = printInfo as ReturnType<typeof vi.fn>;
@@ -271,10 +275,15 @@ describe('verifyMCPServer', () => {
 
   it('times out (and flags timedOut) when the handshake never completes', async () => {
     // Mirrors an HTTP server launched as stdio: createMCPClient never resolves.
+    mockStdioTransport.mockClear();
     mockCreateMCPClient.mockReturnValue(new Promise(() => {}));
     const r = await verifyMCPServer({ command: 'npx', args: ['figma-developer-mcp'] }, { timeoutMs: 60 });
     expect(r.ok).toBe(false);
     expect(r.timedOut).toBe(true);
     expect(r.error).toMatch(/--stdio|handshake|HTTP/i);
+    // The spawned stdio child is torn down via the transport even though the
+    // client never resolved (no client.close() possible).
+    const transportInstance = mockStdioTransport.mock.results.at(-1)?.value;
+    expect(transportInstance.close).toHaveBeenCalledTimes(1);
   });
 });
