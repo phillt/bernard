@@ -219,11 +219,19 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
       ctx.config,
       ctx.provenance,
     );
-    // Gate plan/evaluate on the SAME effective decision the strategy uses
-    // (see strategy(ctx) below). Reading `ctx.config.coordinatorMode`
-    // directly would let `tools()` and `strategy()` drift apart the moment a
-    // sub-policy (e.g. the Qualifier in 'auto' mode) emits a `strategyId`
-    // that doesn't mirror the global flag.
+    // `evaluate` is gated on the SAME effective decision the strategy uses
+    // (see strategy(ctx) below) — it's the verification half of the ReAct
+    // think→act→evaluate loop and has no meaning in a single-shot turn.
+    // Reading `ctx.config.coordinatorMode` directly would let `tools()` and
+    // `strategy()` drift apart the moment a sub-policy (e.g. the Qualifier in
+    // 'auto' mode) emits a `strategyId` that doesn't mirror the global flag.
+    //
+    // `plan`, by contrast, is available in EVERY mode. The ReAct *enforcement*
+    // loop (re-prompting on unresolved steps) lives in the strategy
+    // (`react.ts`), not the tool — Normal is single-shot and never enforces —
+    // so exposing the tool in Normal just gives the model a place to record a
+    // structured, user-visible plan instead of narrating one in prose (which
+    // is what it did when the tool was gated out). No enforcement, no loop.
     const reactActive = isReactEffective(ctx.config, ctx.policyDecision);
     const tools: Record<string, Tool> = {
       ...baseTools,
@@ -233,21 +241,17 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
       tool_wrapper_run: createToolWrapperRunTool(ctx),
       think: createThinkTool(),
       ask_user: createAskUserTool(ctx.toolOptions.askUser),
-      ...(reactActive
-        ? {
-            plan: createPlanTool(input.planStore, () => {
-              ctx.stores.memory.clearScratch();
-              // Match the payload shape used by `scratchPolicy` so log
-              // consumers can grep `scratch:reset` uniformly.
-              debugLog('scratch:reset', {
-                resetAll: true,
-                deletePlanKey: true,
-                reason: 'plan-replaced',
-              });
-            }),
-            evaluate: createEvaluateTool(ctx.verification),
-          }
-        : {}),
+      plan: createPlanTool(input.planStore, () => {
+        ctx.stores.memory.clearScratch();
+        // Match the payload shape used by `scratchPolicy` so log
+        // consumers can grep `scratch:reset` uniformly.
+        debugLog('scratch:reset', {
+          resetAll: true,
+          deletePlanKey: true,
+          reason: 'plan-replaced',
+        });
+      }),
+      ...(reactActive ? { evaluate: createEvaluateTool(ctx.verification) } : {}),
     };
     // `augmentTools` (profile-recording + confirmation gate) is applied
     // centrally in `runDefinition`. We only need to return the shimmed tools
