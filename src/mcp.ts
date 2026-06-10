@@ -540,3 +540,94 @@ export function removeMCPServer(key: string): void {
   delete config.mcpServers[key];
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8');
 }
+
+/** Outcome of a one-off MCP server connection probe. */
+export interface MCPVerifyResult {
+  ok: boolean;
+  toolCount: number;
+  /** First handful of tool names (for a human-readable confirmation). */
+  toolNames: string[];
+  durationMs: number;
+  /** True when the probe hit the timeout (vs. an explicit connection error). */
+  timedOut: boolean;
+  error?: string;
+}
+
+class MCPVerifyTimeout extends Error {}
+
+/**
+ * Test-connects a single MCP server **without** mutating the live MCPManager or
+ * requiring a Bernard restart: it builds the same transport `connect()` uses,
+ * races the connect + `tools()` listing against `timeoutMs`, then closes the
+ * client. Use it to confirm a freshly added/edited server actually speaks the
+ * protocol and surfaces tools.
+ *
+ * A timeout almost always means the process started but never completed the MCP
+ * handshake — typically an HTTP/SSE server launched as stdio, or a stdio flag
+ * (e.g. `--stdio`) missing. (Note: on timeout the spawned child may linger
+ * until Bernard exits, since the client never resolved to be closed — acceptable
+ * for an intentional one-off probe.)
+ */
+export async function verifyMCPServer(
+  config: MCPServerConfig,
+  opts: { timeoutMs?: number } = {},
+): Promise<MCPVerifyResult> {
+  const timeoutMs = opts.timeoutMs ?? 15_000;
+  const startedAt = Date.now();
+  let client: MCPClient | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const probe = (async () => {
+      client =
+        'url' in config
+          ? await createMCPClient({
+              transport: { type: config.type ?? 'sse', url: config.url, headers: config.headers },
+            })
+          : await createMCPClient({
+              transport: new Experimental_StdioMCPTransport({
+                command: config.command,
+                args: config.args,
+                env: config.env
+                  ? { ...(process.env as Record<string, string>), ...config.env }
+                  : undefined,
+              }),
+            });
+      const names = Object.keys(await client.tools());
+      return names;
+    })();
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new MCPVerifyTimeout()), timeoutMs);
+    });
+    const names = await Promise.race([probe, timeout]);
+    return {
+      ok: true,
+      toolCount: names.length,
+      toolNames: names.slice(0, 20),
+      durationMs: Date.now() - startedAt,
+      timedOut: false,
+    };
+  } catch (err) {
+    const timedOut = err instanceof MCPVerifyTimeout;
+    return {
+      ok: false,
+      toolCount: 0,
+      toolNames: [],
+      durationMs: Date.now() - startedAt,
+      timedOut,
+      error: timedOut
+        ? `Timed out after ${timeoutMs}ms — the server never completed the MCP handshake. Common causes: it's an HTTP/SSE server started as a stdio command (configure it as a "url" server instead), or a stdio flag such as "--stdio" is missing.`
+        : err instanceof Error
+          ? err.message
+          : String(err),
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (client) {
+      try {
+        await client.close();
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
+  }
+}

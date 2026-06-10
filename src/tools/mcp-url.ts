@@ -13,7 +13,7 @@ export function createMCPAddUrlTool() {
   return attachMeta(
     tool({
       description:
-        'Add a URL-based MCP server (SSE or HTTP endpoint). Use this when given an MCP server URL. Changes take effect after restarting Bernard.',
+        'Add a URL-based MCP server (SSE or HTTP endpoint). Use this when given an MCP server URL, or when a stdio package turns out to be an HTTP/SSE server. Changes take effect after restarting Bernard. Run `mcp_verify` afterward to confirm it connects (or let the `mcp-manager` specialist handle add + verify).',
       parameters: z.object({
         key: z.string().describe('Unique name for this server, e.g. "my-mcp"'),
         url: z.string().describe('The MCP server URL, e.g. "http://localhost:6288/web/sse"'),

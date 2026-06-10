@@ -13,7 +13,7 @@ export function createMCPConfigTool() {
   return attachMeta(
     tool({
       description:
-        'Manage MCP server configuration. Add, remove, list, or inspect MCP servers. Changes take effect after restarting Bernard.',
+        'Manage MCP server configuration. Add, remove, list, or inspect MCP servers. Changes take effect after restarting Bernard. For ADDING or FIXING a server, prefer the `mcp-manager` specialist (via tool_wrapper_run) — it auto-detects transport (stdio vs HTTP/SSE), the correct flags (e.g. --stdio) and credential env vars, and verifies the connection. If you add/edit directly here, ALWAYS run `mcp_verify` afterward to confirm it actually connects (an unverified stdio config can hang the next startup).',
       parameters: z.object({
         action: z.enum(['list', 'add', 'remove', 'get']).describe('The action to perform'),
         key: z.string().optional().describe('Server name/key (required for add, remove, get)'),

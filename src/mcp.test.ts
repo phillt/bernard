@@ -20,7 +20,7 @@ vi.mock('ai', () => ({
 
 const { createMCPClient } = await import('@ai-sdk/mcp');
 const { printInfo, printError } = await import('./output.js');
-const { MCPManager } = await import('./mcp.js');
+const { MCPManager, verifyMCPServer } = await import('./mcp.js');
 
 const mockCreateMCPClient = createMCPClient as ReturnType<typeof vi.fn>;
 const mockPrintInfo = printInfo as ReturnType<typeof vi.fn>;
@@ -233,5 +233,48 @@ describe('MCPManager schema pass-through', () => {
 
     const out = manager.getTools();
     expect(out.richTool.parameters).toEqual({ _jsonSchema: richSchema });
+  });
+});
+
+describe('verifyMCPServer', () => {
+  beforeEach(() => {
+    mockCreateMCPClient.mockReset();
+  });
+
+  it('reports ok with the tool count for a server that connects', async () => {
+    const client = makeMockClient({ alpha: {}, beta: {}, gamma: {} });
+    mockCreateMCPClient.mockResolvedValue(client);
+    const r = await verifyMCPServer({ command: 'npx', args: ['some-mcp'] });
+    expect(r.ok).toBe(true);
+    expect(r.toolCount).toBe(3);
+    expect(r.toolNames).toEqual(['alpha', 'beta', 'gamma']);
+    expect(r.timedOut).toBe(false);
+    expect(client.close).toHaveBeenCalled(); // cleaned up after probing
+  });
+
+  it('connects a URL server via the sse transport', async () => {
+    mockCreateMCPClient.mockResolvedValue(makeMockClient({ x: {} }));
+    const r = await verifyMCPServer({ url: 'http://127.0.0.1:3333/sse' });
+    expect(r.ok).toBe(true);
+    expect(mockCreateMCPClient).toHaveBeenCalledWith({
+      transport: { type: 'sse', url: 'http://127.0.0.1:3333/sse', headers: undefined },
+    });
+  });
+
+  it('reports a connection error (not a timeout) when the client rejects', async () => {
+    mockCreateMCPClient.mockRejectedValue(new Error('ECONNREFUSED'));
+    const r = await verifyMCPServer({ command: 'node', args: ['missing.js'] });
+    expect(r.ok).toBe(false);
+    expect(r.timedOut).toBe(false);
+    expect(r.error).toContain('ECONNREFUSED');
+  });
+
+  it('times out (and flags timedOut) when the handshake never completes', async () => {
+    // Mirrors an HTTP server launched as stdio: createMCPClient never resolves.
+    mockCreateMCPClient.mockReturnValue(new Promise(() => {}));
+    const r = await verifyMCPServer({ command: 'npx', args: ['figma-developer-mcp'] }, { timeoutMs: 60 });
+    expect(r.ok).toBe(false);
+    expect(r.timedOut).toBe(true);
+    expect(r.error).toMatch(/--stdio|handshake|HTTP/i);
   });
 });

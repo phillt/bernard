@@ -7,6 +7,7 @@ import { createCronNotesTools } from './cron-notes.js';
 import { createTimeTools } from './time.js';
 import { createMCPConfigTool } from './mcp.js';
 import { createMCPAddUrlTool } from './mcp-url.js';
+import { createMCPVerifyTool } from './mcp-verify.js';
 import { createWebReadTool } from './web.js';
 import { createWebSearchTool } from './web-search.js';
 import { createWaitTool } from './wait.js';
@@ -61,6 +62,7 @@ export function createTools(
     ...createTimeTools(),
     mcp_config: createMCPConfigTool(),
     mcp_add_url: createMCPAddUrlTool(),
+    mcp_verify: createMCPVerifyTool(),
     web_read: createWebReadTool(provenance),
     web_search: createWebSearchTool(provenance),
     wait: createWaitTool(),
