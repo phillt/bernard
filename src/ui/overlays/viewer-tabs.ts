@@ -1,4 +1,4 @@
-import type { OverlayTab } from './ScrollableOverlay.js';
+import type { OverlayTab } from './ViewerShell.js';
 
 /**
  * The Shift-Tab viewer tabs, in cycle order. Single source of truth shared by

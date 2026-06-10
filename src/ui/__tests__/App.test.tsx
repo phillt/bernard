@@ -315,7 +315,7 @@ describe('<App> Shift-Tab viewer tabs (#211)', () => {
     expect(frame).toContain('▸ Agent Status'); // active
     expect(frame).toContain('Sources'); // other tab listed
     expect(frame).not.toContain('▸ Sources'); // but not active
-    expect(frame).toContain('Esc to close · Shift-Tab to switch tabs');
+    expect(frame).toContain('esc close');
     expect(frame).not.toContain('commands');
 
     // Shift-Tab again → Sources tab active.

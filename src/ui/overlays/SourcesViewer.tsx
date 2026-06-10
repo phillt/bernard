@@ -1,90 +1,167 @@
-import { useMemo } from 'react';
-import { Box, Text, useStdout } from 'ink';
+import { useMemo, useState } from 'react';
+import { Box, Text, useInput, useStdout } from 'ink';
 import type { Agent } from '../../agent.js';
 import type { TurnProvenance, SourceItem } from '../../provenance.js';
 import { getThemeColors, type ThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
-import { ScrollableOverlay, type OverlayLine } from './ScrollableOverlay.js';
+import { ViewerShell, viewerViewport, type OverlayLine } from './ViewerShell.js';
 import { VIEWER_TABS } from './viewer-tabs.js';
 
 interface SourcesViewerProps {
   agent: Agent;
-  /** Close the panel (Esc). Defaults to a no-op for standalone rendering/tests. */
   onClose?: () => void;
-  /** Advance to the next Shift-Tab tab. Defaults to a no-op. */
   onCycleTab?: () => void;
 }
 
 /**
- * Scrollable per-turn citation history (issue #211). Consumes
- * `agent.getTurnProvenance()` — the cumulative array of every turn that
- * registered sources — and flattens it into one visual row per line so the
- * shared `ScrollableOverlay` can window it to the terminal height.
- *
- * Accent rule matches the legacy renderer: a source is "cited" when
- * `citedIds.includes(source.id)`. Cited entries render in the theme accent
- * color; uncited entries render dim. Empty state covers both a fresh session
- * and a session where no turn produced citations.
+ * Accordion citation history (issue #211). Each turn is a collapsible row:
+ * collapsed by default into a one-line header so the whole conversation reads
+ * as a clean, scannable list; the focused turn expands (Enter/Space) to show
+ * its sources. `↑/↓` moves the cursor; the view auto-scrolls to keep the
+ * focused turn visible. Esc / Shift-Tab are owned by the surrounding
+ * `ViewerShell`.
  */
 export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps) {
   const colors = getThemeColors();
   const { stdout } = useStdout();
   const cols = stdout?.columns ?? 80;
+  const rows = stdout?.rows ?? 24;
+  const viewport = viewerViewport(rows, VIEWER_TABS.length);
   const turns = agent.getTurnProvenance();
-  // The history is immutable while the viewer owns the keystream (the agent is
-  // idle), so rebuild the flat line list only when the turn count or width
-  // changes — not on every scroll keystroke.
-  const lines = useMemo(() => buildLines(turns, colors, cols), [turns.length, colors, cols]);
+
+  const [selected, setSelected] = useState(0);
+  const [expanded, setExpanded] = useState<Set<number>>(() => new Set());
+  const [offset, setOffset] = useState(0);
+
+  const { lines, headerLineByTurn } = useMemo(
+    () => buildAccordion(turns, expanded, selected, colors, cols),
+    [turns.length, expanded, selected, colors, cols],
+  );
+
+  const maxOffset = Math.max(0, lines.length - viewport);
+  const clamped = Math.min(offset, maxOffset);
+
+  // Re-aim the scroll so turn `sel` (under `exp`) stays visible after a move.
+  const scrollTo = (sel: number, exp: Set<number>) => {
+    const meta = buildAccordion(turns, exp, sel, colors, cols);
+    const total = meta.lines.length;
+    const start = meta.headerLineByTurn[sel] ?? 0;
+    const end = meta.headerLineByTurn[sel + 1] ?? total; // exclusive
+    const maxOff = Math.max(0, total - viewport);
+    setOffset((off) => {
+      const o = Math.min(off, maxOff);
+      const fits = start >= o && end - 1 < o + viewport;
+      return fits ? o : Math.min(maxOff, start);
+    });
+  };
+
+  const move = (delta: number) => {
+    if (turns.length === 0) return;
+    const next = Math.max(0, Math.min(turns.length - 1, selected + delta));
+    setSelected(next);
+    scrollTo(next, expanded);
+  };
+
+  const setOpen = (open: boolean) => {
+    if (turns.length === 0) return;
+    const next = new Set(expanded);
+    if (open) next.add(selected);
+    else next.delete(selected);
+    setExpanded(next);
+    scrollTo(selected, next);
+  };
+
+  useInput((input, key) => {
+    if (turns.length === 0) return;
+    if (key.downArrow || input === 'j') move(1);
+    else if (key.upArrow || input === 'k') move(-1);
+    else if (input === 'g') move(-turns.length);
+    else if (input === 'G') move(turns.length);
+    else if (key.rightArrow) setOpen(true);
+    else if (key.leftArrow) setOpen(false);
+    else if (key.return || input === ' ') setOpen(!expanded.has(selected));
+  });
+
+  const visible = lines.slice(clamped, clamped + viewport);
+  const position =
+    lines.length > viewport
+      ? { first: clamped + 1, last: Math.min(lines.length, clamped + viewport), total: lines.length }
+      : null;
+
   return (
-    <ScrollableOverlay
+    <ViewerShell
       tabs={VIEWER_TABS}
       activeTab="sources"
-      lines={lines}
+      position={position}
+      keyHints="↑/↓ move · ↵ expand · ⇧⇥ switch tab · esc close"
       onClose={onClose}
       onCycleTab={onCycleTab}
-    />
+    >
+      {visible.map((line) => (
+        <Box key={line.key}>{line.node}</Box>
+      ))}
+    </ViewerShell>
   );
 }
 
 /**
- * Flattens the turn list into single-line rows. Every text value is truncated
- * to fit the terminal width so no row wraps — wrapping would desync the
- * overlay's count-based scroll window.
+ * Flattens the turns into single-row lines for the accordion. Returns the line
+ * list plus the line index of each turn's header (for scroll math). Only the
+ * turns in `expanded` contribute source rows; `selected` only drives the header
+ * highlight, so line positions depend on `expanded` alone.
  */
-function buildLines(turns: TurnProvenance[], colors: ThemeColors, cols: number): OverlayLine[] {
+function buildAccordion(
+  turns: TurnProvenance[],
+  expanded: Set<number>,
+  selected: number,
+  colors: ThemeColors,
+  cols: number,
+): { lines: OverlayLine[]; headerLineByTurn: number[] } {
   if (turns.length === 0) {
-    return [{ key: 'empty', node: <Text dimColor>No citations recorded yet.</Text> }];
+    return {
+      lines: [{ key: 'empty', node: <Text dimColor>No citations recorded yet.</Text> }],
+      headerLineByTurn: [],
+    };
   }
-  const w = Math.max(20, cols - 4);
   const lines: OverlayLine[] = [];
-  turns.forEach((turn, ti) => {
-    if (ti > 0) lines.push({ key: `sep-${ti}`, node: <Text> </Text> });
+  const headerLineByTurn: number[] = [];
+  turns.forEach((turn, i) => {
+    const isOpen = expanded.has(i);
+    const isSel = i === selected;
+    headerLineByTurn[i] = lines.length;
+    const count = `${turn.sources.length} source${turn.sources.length === 1 ? '' : 's'}`;
     lines.push({
-      key: `turn-${ti}`,
+      key: `turn-${i}`,
       node: (
-        <Box>
-          <Text color={colors.muted}>Turn {turn.turnIndex + 1}:</Text>
-          <Text> {truncate(turn.userInput, Math.min(80, w - 10))}</Text>
-        </Box>
+        <Text
+          color={isSel ? colors.accent : undefined}
+          bold={isSel}
+          dimColor={!isSel}
+          wrap="truncate-end"
+        >
+          {isOpen ? '▾' : '▸'} Turn {turn.turnIndex + 1} · {turn.userInput} ({count})
+        </Text>
       ),
     });
+    if (!isOpen) return;
     if (turn.sources.length === 0) {
       lines.push({
-        key: `turn-${ti}-empty`,
+        key: `turn-${i}-empty`,
         node: (
-          <Box marginLeft={2}>
+          <Box marginLeft={5}>
             <Text dimColor>(no sources registered)</Text>
           </Box>
         ),
       });
-      return;
+    } else {
+      const citedSet = new Set(turn.citedIds);
+      turn.sources.forEach((src, si) => {
+        pushSourceLines(lines, `turn-${i}-src-${si}`, src, citedSet.has(src.id), colors, cols);
+      });
     }
-    const citedSet = new Set(turn.citedIds);
-    turn.sources.forEach((src, si) => {
-      pushSourceLines(lines, `turn-${ti}-src-${si}`, src, citedSet.has(src.id), colors, w);
-    });
+    lines.push({ key: `turn-${i}-gap`, node: <Text> </Text> });
   });
-  return lines;
+  return { lines, headerLineByTurn };
 }
 
 function pushSourceLines(
@@ -93,19 +170,20 @@ function pushSourceLines(
   source: SourceItem,
   cited: boolean,
   colors: ThemeColors,
-  w: number,
+  cols: number,
 ): void {
-  // Mirrors the legacy SourceRow: cited entries get the accent marker +
-  // un-dimmed label; uncited entries render plain dim.
+  const labelMax = Math.max(10, cols - 24);
   lines.push({
     key: keyBase,
     node: (
-      <Box marginLeft={2}>
+      <Box marginLeft={5}>
         <Text color={cited ? colors.accent : undefined} dimColor={!cited} bold={cited}>
           [^{source.id}]
         </Text>
-        <Text dimColor> ({source.kind}) </Text>
-        <Text dimColor={!cited}>{truncate(source.label, Math.min(80, w - 16))}</Text>
+        <Text dimColor> {source.kind.padEnd(5)} </Text>
+        <Text dimColor={!cited} wrap="truncate-end">
+          {truncate(source.label, labelMax)}
+        </Text>
       </Box>
     ),
   });
@@ -113,8 +191,10 @@ function pushSourceLines(
     lines.push({
       key: `${keyBase}-ref`,
       node: (
-        <Box marginLeft={4}>
-          <Text dimColor>{truncate(source.rawRef, Math.min(120, w - 6))}</Text>
+        <Box marginLeft={10}>
+          <Text dimColor wrap="truncate-end">
+            ↳ {source.rawRef}
+          </Text>
         </Box>
       ),
     });
@@ -123,9 +203,9 @@ function pushSourceLines(
     lines.push({
       key: `${keyBase}-preview`,
       node: (
-        <Box marginLeft={4}>
-          <Text dimColor>
-            {truncate(source.contentPreview.replace(/\s+/g, ' '), Math.min(160, w - 6))}
+        <Box marginLeft={10}>
+          <Text dimColor wrap="truncate-end">
+            {source.contentPreview.replace(/\s+/g, ' ')}
           </Text>
         </Box>
       ),
