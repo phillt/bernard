@@ -39,7 +39,15 @@ export interface SpinnerStats {
   contextWindowOverride?: number;
 }
 
+/** Token counts can arrive NaN/undefined when a turn errors early; treat those as 0. */
+export function finiteOr0(n: number): number {
+  return Number.isFinite(n) ? n : 0;
+}
+
 export function formatTokenCount(n: number): string {
+  // Token fields can be NaN/undefined when a turn errors before any usage is
+  // reported — render those as 0 rather than letting "NaNk" reach the footer.
+  if (!Number.isFinite(n)) return '0';
   if (n < 1000) return String(n);
   const k = n / 1000;
   return k >= 10 ? `${Math.round(k)}k` : `${k.toFixed(1)}k`;
@@ -55,18 +63,23 @@ function formatElapsed(ms: number): string {
 
 export function buildSpinnerMessage(stats: SpinnerStats): string {
   const elapsed = formatElapsed(Date.now() - stats.startTime);
+  // Coalesce non-finite token fields (a turn can error before usage is
+  // reported) so NaN never leaks into the readout or the percentage.
+  const promptTokens = finiteOr0(stats.turnPromptTokens);
+  const completionTokens = finiteOr0(stats.turnCompletionTokens);
+  const latestPromptTokens = finiteOr0(stats.latestPromptTokens);
 
-  if (stats.turnPromptTokens === 0 && stats.turnCompletionTokens === 0) {
+  if (promptTokens === 0 && completionTokens === 0) {
     return `Thinking (${elapsed})`;
   }
 
-  const up = formatTokenCount(stats.turnPromptTokens);
-  const down = formatTokenCount(stats.turnCompletionTokens);
+  const up = formatTokenCount(promptTokens);
+  const down = formatTokenCount(completionTokens);
   const contextWindow = getContextWindow(stats.model, stats.contextWindowOverride);
   const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;
   const remainingPct = Math.max(
     0,
-    Math.round(((thresholdTokens - stats.latestPromptTokens) / thresholdTokens) * 100),
+    Math.round(((thresholdTokens - latestPromptTokens) / thresholdTokens) * 100),
   );
 
   return `Thinking (${elapsed} | ${up}↑ ${down}↓ | ${remainingPct}% until compression)`;

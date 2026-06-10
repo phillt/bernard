@@ -84,6 +84,27 @@ describe('<StatusBar> token readout labels (#234)', () => {
   });
 });
 
+describe('<StatusBar> non-finite token stats', () => {
+  it('renders 0 (never "NaNk") and an all-empty gauge when token fields are NaN', () => {
+    const agent = {
+      spinnerStats: {
+        startTime: 0,
+        turnPromptTokens: NaN,
+        turnCompletionTokens: NaN,
+        latestPromptTokens: NaN,
+        model: 'test-model',
+        contextWindowOverride: 1000,
+      },
+      currentStrategy: null,
+    } as unknown as Agent;
+    const frame = stripAnsi(render(createElement(StatusBar, { agent })).lastFrame() ?? '');
+    expect(frame).not.toContain('NaN');
+    expect(frame).toMatch(/turn\s+0↑\s+0↓/);
+    expect(frame).toContain('ctx 0');
+    expect(gauge(frame)).toBe('○○○○○○○○○○'); // gauge still drawn, fully empty
+  });
+});
+
 describe('<StatusBar> idle-tick guard (#232)', () => {
   it('still refreshes the readout when spinnerStats changes between polls', async () => {
     // The poll only forces a re-render when a rendered value actually moved
