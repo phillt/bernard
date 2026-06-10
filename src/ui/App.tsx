@@ -114,6 +114,7 @@ import type {
   ValueResult,
 } from './menu-types.js';
 import { Thread, REWRITE_ICON, type StaticItem } from './Thread.js';
+import { formatAgentError, type ErrorPanelData } from './error-format.js';
 import { Prompt } from './Prompt.js';
 import { Spinner } from './Spinner.js';
 import { StatusBar } from './StatusBar.js';
@@ -391,30 +392,33 @@ export function App({
   };
 
   // Gate the App-level useInput so it never fires concurrently with an
-  // overlay's own useInput. Modal overlays (menu, confirm, help, text-input)
-  // own the keystream; viewer overlays (status, sources) leave it to App so
-  // Esc can close them and Shift-Tab can keep cycling.
-  const appInputActive =
-    activeOverlay === null || activeOverlay === 'status' || activeOverlay === 'sources';
+  // overlay's own useInput. Every overlay — modal (menu, confirm, help,
+  // text-input) AND viewer (status, sources) — owns its own keystream now;
+  // the viewers handle Esc/Shift-Tab/scroll inside <ScrollableOverlay> and
+  // forward close/cycle back via callbacks. App's useInput only runs when no
+  // overlay is open: Shift-Tab opens the first viewer tab, Esc interrupts a
+  // busy turn.
+  const appInputActive = activeOverlay === null;
+  // A Shift-Tab viewer tab takes over the screen: while one is open the live
+  // chrome (spinner, plan panel, toast, prompt, hint/status bars) is hidden so
+  // the viewer reads as a replacement for the thread, not an addition below it.
+  // <Thread> itself stays mounted (unmounting it reprints <Static> scrollback).
+  const viewerActive = activeOverlay === 'status' || activeOverlay === 'sources';
 
   useInput(
     (_input, key) => {
-      // Shift-Tab cycles viewer tabs only while idle.
+      // Shift-Tab opens the first viewer tab (Agent Status) while idle; the
+      // viewer itself cycles to Sources and back to the thread.
       if (key.shift && key.tab) {
         if (busy) return;
-        setActiveOverlay((curr) => {
-          if (curr === null) return 'status';
-          if (curr === 'status') return 'sources';
-          return null;
-        });
+        setActiveOverlay('status');
         return;
       }
       if (key.escape) {
-        debugLog('app:esc', { busy, activeOverlay, hasTurnAbort: !!turnAbortRef.current });
-        if (activeOverlay) {
-          closeOverlay();
-          return;
-        }
+        // This handler only runs when no overlay is open (isActive gate), so
+        // Esc here can only mean "interrupt the in-flight turn". Each overlay
+        // owns its own Esc-to-close via its own useInput.
+        debugLog('app:esc', { busy, hasTurnAbort: !!turnAbortRef.current });
         if (busy) {
           setInterrupted(true);
           turnAbortRef.current?.abort();
@@ -2051,6 +2055,7 @@ export function App({
     setBusy(true);
     const turnStartedAt = Date.now();
     let turnCompleted = false;
+    let errorPanel: ErrorPanelData | null = null;
     const controller = new AbortController();
     turnAbortRef.current = controller;
     try {
@@ -2073,22 +2078,20 @@ export function App({
       const isAbort =
         err instanceof Error && (err.name === 'AbortError' || controller.signal.aborted);
       if (!isAbort) {
-        console.error('agent error:', err);
-        // When debug is on, also surface the error in the chat transcript so
-        // hangs / silent failures are visible without having to grep logs.
-        if (isDebugEnabled()) {
-          const message = err instanceof Error ? err.message : String(err);
-          const stack = err instanceof Error && err.stack ? err.stack : undefined;
-          const cause =
-            err instanceof Error && err.cause instanceof Error ? err.cause.stack : undefined;
-          debugLog('error:turn', { message, stack, cause });
-          const body = [`⚠ Agent error: ${message}`, stack, cause && `Caused by:\n${cause}`]
-            .filter(Boolean)
-            .join('\n\n');
-          // The finally-block commit freezes this into the transcript along
-          // with anything else added this turn — no separate bump needed.
-          agent.getHistory().push({ role: 'assistant', content: body });
+        const debug = isDebugEnabled();
+        if (debug) {
+          debugLog('error:turn', {
+            message: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+            cause: err instanceof Error && err.cause instanceof Error ? err.cause.stack : undefined,
+          });
         }
+        // Surface every failed turn as a styled <ErrorPanel> in the transcript
+        // (committed after this turn's output, in the finally block). The full
+        // stack/cause only rides along under debug. This is a UI-only notice —
+        // deliberately NOT pushed into agent history, so the model's context
+        // isn't polluted with its own error text.
+        errorPanel = formatAgentError(err, debug);
       }
     } finally {
       persistAgentState({ agent, historyStore, provenanceHistoryStore });
@@ -2103,6 +2106,14 @@ export function App({
       const endedAt = Date.now();
       const timing = turnCompleted ? { endedAt, durationMs: endedAt - turnStartedAt } : undefined;
       commitNewHistory({ timing });
+      // Append the error panel after the turn's committed output so it reads
+      // as the turn's outcome (in the same batch as the commit above).
+      if (errorPanel) {
+        setStaticItems((prev) => [
+          ...prev,
+          { key: String(itemKeyRef.current++), toolDetails: config.toolDetails, error: errorPanel! },
+        ]);
+      }
     }
   }
 
@@ -2413,30 +2424,46 @@ export function App({
         interrupted={interrupted}
         streamingToolDetails={config.toolDetails}
       />
-      {busy && (
-        <Box marginTop={1}>
-          <Spinner label="thinking…" />
-        </Box>
+      {!viewerActive && (
+        <>
+          {busy && (
+            <Box marginTop={1}>
+              <Spinner label="thinking…" />
+            </Box>
+          )}
+          <PlanPanel agent={agent} />
+          {toast && <Toast message={toast.message} variant={toast.variant} />}
+          <Prompt
+            disabled={busy || activeOverlay !== null}
+            onSubmit={handleSubmit}
+            onSlashActiveChange={setSlashActive}
+          />
+          <Box justifyContent="space-between">
+            <HintBar
+              busy={busy}
+              overlayActive={activeOverlay !== null}
+              slashActive={slashActive}
+            />
+            <StatusBar agent={agent} />
+          </Box>
+        </>
       )}
-      <PlanPanel agent={agent} />
-      {toast && <Toast message={toast.message} variant={toast.variant} />}
-      <Prompt
-        disabled={busy || activeOverlay !== null}
-        onSubmit={handleSubmit}
-        onSlashActiveChange={setSlashActive}
-      />
-      <Box justifyContent="space-between">
-        <HintBar busy={busy} overlayActive={activeOverlay !== null} slashActive={slashActive} />
-        <StatusBar agent={agent} />
-      </Box>
       {activeOverlay === 'status' && (
         <StatusViewer
           agent={agent}
           config={config}
           sessionAllowedCount={_sessionToolAllowlist.size}
+          onClose={() => setActiveOverlay(null)}
+          onCycleTab={() => setActiveOverlay('sources')}
         />
       )}
-      {activeOverlay === 'sources' && <SourcesViewer agent={agent} />}
+      {activeOverlay === 'sources' && (
+        <SourcesViewer
+          agent={agent}
+          onClose={() => setActiveOverlay(null)}
+          onCycleTab={() => setActiveOverlay('status')}
+        />
+      )}
       {activeOverlay === 'menu' && pendingMenu && (
         <MenuOverlay
           entries={pendingMenu.entries}

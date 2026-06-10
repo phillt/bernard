@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Box, Text } from 'ink';
 import { getThemeColors } from '../theme.js';
-import { formatTokenCount, type SpinnerStats } from '../output.js';
+import { formatTokenCount, finiteOr0, type SpinnerStats } from '../output.js';
 import { getContextWindow, COMPRESSION_THRESHOLD } from '../context.js';
 import type { Agent } from '../agent.js';
 
@@ -58,9 +58,10 @@ export function StatusBar({ agent }: StatusBarProps) {
 
   const up = stats ? formatTokenCount(stats.turnPromptTokens) : '0';
   const down = stats ? formatTokenCount(stats.turnCompletionTokens) : '0';
+  const latestPromptTokens = stats ? finiteOr0(stats.latestPromptTokens) : 0;
   const contextWindow = stats ? getContextWindow(stats.model, stats.contextWindowOverride) : 1;
   const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;
-  const usedFrac = stats ? Math.min(1, Math.max(0, stats.latestPromptTokens / thresholdTokens)) : 0;
+  const usedFrac = stats ? Math.min(1, Math.max(0, latestPromptTokens / thresholdTokens)) : 0;
   const freePct = (1 - usedFrac) * 100;
 
   // Quantize the fill to half-dot resolution: a dot whose fractional fill

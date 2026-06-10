@@ -16,6 +16,8 @@ type RedactedReasoningPart = { type: 'redacted-reasoning'; data: string };
 import { getThemeColors } from '../theme.js';
 import { truncate } from '../text.js';
 import { renderMarkdown } from './markdown.js';
+import { ErrorPanel } from './ErrorPanel.js';
+import type { ErrorPanelData } from './error-format.js';
 import type { MessageStore, StreamEvent } from './message-store.js';
 
 /**
@@ -30,10 +32,17 @@ import type { MessageStore, StreamEvent } from './message-store.js';
 export interface StaticItem {
   /** Stable, monotonic id (never the history index — that shifts on /compact). */
   key: string;
-  message: CoreMessage;
+  /** The finalized message. Omitted for synthetic items like {@link error}. */
+  message?: CoreMessage;
   rewriteOriginal?: string;
   timing?: { endedAt: number; durationMs: number };
   toolDetails: boolean;
+  /**
+   * When set, this item is a failed-turn notice rendered as `<ErrorPanel>`
+   * instead of a message. Lives in the UI transcript only — never pushed into
+   * the agent's LLM history.
+   */
+  error?: ErrorPanelData;
 }
 
 interface ThreadProps {
@@ -99,12 +108,16 @@ export function Thread({
       <Static items={staticItems}>
         {(item) => (
           <Box key={item.key} width={itemWidth} flexDirection="column" paddingX={2}>
-            <MessageBlock
-              message={item.message}
-              rewriteOriginal={item.rewriteOriginal}
-              timing={item.timing}
-              toolDetails={item.toolDetails}
-            />
+            {item.error ? (
+              <ErrorPanel data={item.error} />
+            ) : item.message ? (
+              <MessageBlock
+                message={item.message}
+                rewriteOriginal={item.rewriteOriginal}
+                timing={item.timing}
+                toolDetails={item.toolDetails}
+              />
+            ) : null}
           </Box>
         )}
       </Static>

@@ -42,6 +42,25 @@ describe('<Thread>', () => {
     expect(lastFrame() ?? '').toContain('you interrupted');
   });
 
+  it('renders an error StaticItem as an ErrorPanel instead of a message', () => {
+    const staticItems: StaticItem[] = [
+      {
+        key: 'e0',
+        toolDetails: false,
+        error: {
+          title: 'Rate limit / quota',
+          category: 'rate_limit',
+          message: 'You exceeded your current quota.',
+          hint: 'wait or switch lineup',
+        },
+      },
+    ];
+    const frame = stripAnsi(render(createElement(Thread, { staticItems })).lastFrame() ?? '');
+    expect(frame).toContain('⚠ Rate limit / quota');
+    expect(frame).toContain('You exceeded your current quota.');
+    expect(frame).toMatch(/[╭╮╰╯]/);
+  });
+
   it('renders an assistant message with the chevron label', () => {
     const history: CoreMessage[] = [{ role: 'assistant', content: 'hi there' }];
     const { lastFrame } = render(createElement(Thread, { staticItems: items(history) }));

@@ -70,7 +70,7 @@ describe('<StatusViewer>', () => {
     expect(frame).toContain('concise');
     expect(frame).toContain('citations: required');
     expect(frame).toContain('evidence: required');
-    expect(frame).toContain('Esc to close · Shift-Tab to switch tabs');
+    expect(frame).toContain('esc close');
   });
 
   it('renders "(none)" for absent values', () => {

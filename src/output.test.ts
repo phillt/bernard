@@ -25,6 +25,12 @@ describe('formatTokenCount', () => {
     expect(formatTokenCount(12345)).toBe('12k');
     expect(formatTokenCount(99999)).toBe('100k');
   });
+
+  it('renders non-finite token counts as 0 (no "NaNk" in the footer)', () => {
+    expect(formatTokenCount(NaN)).toBe('0');
+    expect(formatTokenCount(undefined as unknown as number)).toBe('0');
+    expect(formatTokenCount(Infinity)).toBe('0');
+  });
 });
 
 describe('buildSpinnerMessage', () => {
@@ -42,6 +48,28 @@ describe('buildSpinnerMessage', () => {
   it('returns "Thinking (Xs)" when no tokens have flowed yet', () => {
     const msg = buildSpinnerMessage(makeStats({ startTime: Date.now() - 5000 }));
     expect(msg).toMatch(/^Thinking \(\d+s\)$/);
+  });
+
+  it('treats non-finite token counts as 0 — never emits NaN', () => {
+    const nan = NaN as number;
+    const allNaN = buildSpinnerMessage(
+      makeStats({
+        startTime: Date.now() - 1000,
+        turnPromptTokens: nan,
+        turnCompletionTokens: nan,
+        latestPromptTokens: nan,
+      }),
+    );
+    // No usage yet → the bare "Thinking" form, and no "NaN" anywhere.
+    expect(allNaN).toMatch(/^Thinking \(\d+s\)$/);
+    expect(allNaN).not.toContain('NaN');
+
+    // Tokens present but latest is NaN → percentage must still be a number.
+    const partialNaN = buildSpinnerMessage(
+      makeStats({ turnPromptTokens: 1234, turnCompletionTokens: 56, latestPromptTokens: nan }),
+    );
+    expect(partialNaN).not.toContain('NaN');
+    expect(partialNaN).toMatch(/\d+% until compression/);
   });
 
   it('includes up / down counts and a remaining-percentage tail when populated', () => {
