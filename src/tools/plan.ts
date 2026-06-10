@@ -22,7 +22,11 @@ const stepInputSchema = z.object({
 });
 
 /**
- * Creates the `plan` tool for coordinator (ReAct) mode.
+ * Creates the `plan` tool. Exposed in every mode (not just coordinator/ReAct):
+ * it's a structured, user-visible plan the model can record instead of
+ * narrating one in prose. The ReAct *enforcement* loop (re-prompting on
+ * unresolved steps) lives in the strategy (`react.ts`), not here — so in Normal
+ * mode this is just a scratchpad with no enforcement.
  *
  * Each step carries a verification criterion at creation time. Marking a step
  * `done` requires a `signoff` attesting that the verification was actually

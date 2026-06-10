@@ -57,7 +57,7 @@ export interface MainInput {
   alertContext?: string;
   /** Mutated in place by `tokenStatsHook`. The Agent class owns this object. */
   statsTarget: TokenStatsTarget;
-  /** PlanStore shared with the `plan` tool when coordinator mode is active. */
+  /** PlanStore shared with the `plan` tool (exposed in every mode). */
   planStore: import('../../plan-store.js').PlanStore;
   /**
    * Pre-rendered system prompt. The Agent class builds it once via
@@ -171,8 +171,8 @@ export function buildMainContextMessages(
 /**
  * Main agent definition: persistent history (owned by the caller), full tool
  * registry + dispatch tools (`agent`, `task`, `specialist_run`,
- * `tool_wrapper_run`) + `think` + `ask_user` + (`plan` + `evaluate` when
- * coordinator mode is active), shim routing on low-level tools,
+ * `tool_wrapper_run`) + `think` + `ask_user` + `plan` (every mode) + `evaluate`
+ * (coordinator mode only), shim routing on low-level tools,
  * error-augmentation, `config.maxSteps`, `buildStrategy` (NormalStrategy or
  * ReActStrategy depending on the per-turn policy decision /
  * `config.coordinatorMode`).
