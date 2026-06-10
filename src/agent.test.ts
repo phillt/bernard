@@ -1448,7 +1448,7 @@ describe('Agent', () => {
   });
 
   describe('coordinator (ReAct) mode', () => {
-    it('omits plan and evaluate but keeps think when reactMode is false', async () => {
+    it('keeps plan and think but omits evaluate when reactMode is false', async () => {
       mockGenerateText.mockResolvedValue({
         response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
         usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
@@ -1456,7 +1456,9 @@ describe('Agent', () => {
       const agent = makeAgent(makeConfig({ coordinatorMode: 'off' }), toolOptions, store);
       await agent.processInput('Hello');
       const call = mockGenerateText.mock.calls[0][0];
-      expect(call.tools).not.toHaveProperty('plan');
+      // `plan` is available in every mode (it's a structured scratchpad); only
+      // `evaluate` — the ReAct verification half — is gated out of Normal mode.
+      expect(call.tools).toHaveProperty('plan');
       expect(call.tools).not.toHaveProperty('evaluate');
       expect(call.tools).toHaveProperty('think');
     });
