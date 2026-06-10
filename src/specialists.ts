@@ -46,6 +46,13 @@ export interface Specialist {
   badExamples?: SpecialistBadExample[];
   /** When true, the child agent must emit a JSON `{status, result, error?, reasoning?}` object as its final message. */
   structuredOutput?: boolean;
+  /**
+   * When true the specialist is kept on disk and shown in `/specialists` but
+   * excluded from dispatch: `getSummaries()` omits it (so it leaves the system
+   * prompt and the auto-matcher), and `specialist_run` / `tool_wrapper_run`
+   * refuse to invoke it. Toggle from the `/specialists` menu.
+   */
+  disabled?: boolean;
 }
 
 export interface SpecialistSummary {
@@ -89,6 +96,7 @@ export type SpecialistUpdates = Partial<
     | 'goodExamples'
     | 'badExamples'
     | 'structuredOutput'
+    | 'disabled'
   >
 >;
 
@@ -341,6 +349,11 @@ export class SpecialistStore {
     if (updates.badExamples !== undefined) specialist.badExamples = updates.badExamples;
     if (updates.structuredOutput !== undefined)
       specialist.structuredOutput = updates.structuredOutput;
+    // Store `disabled` only when true so an enabled record stays clean on disk.
+    if (updates.disabled !== undefined) {
+      if (updates.disabled) specialist.disabled = true;
+      else delete specialist.disabled;
+    }
     specialist.updatedAt = new Date().toISOString();
     atomicWriteFileSync(
       path.join(SPECIALISTS_DIR, `${id}.json`),
@@ -384,15 +397,22 @@ export class SpecialistStore {
     return true;
   }
 
-  /** Returns id + name + description + optional model info for all specialists, for system prompt injection. */
+  /**
+   * Returns id + name + description + optional model info for all *enabled*
+   * specialists, for system-prompt injection and the auto-matcher. Disabled
+   * specialists are excluded here so they drop out of dispatch while still
+   * appearing in `list()` (and thus the `/specialists` menu).
+   */
   getSummaries(): SpecialistSummary[] {
-    return this.list().map(({ id, name, description, provider, model, kind }) => ({
-      id,
-      name,
-      description,
-      ...(provider !== undefined ? { provider } : {}),
-      ...(model !== undefined ? { model } : {}),
-      ...(kind !== undefined ? { kind } : {}),
-    }));
+    return this.list()
+      .filter((s) => !s.disabled)
+      .map(({ id, name, description, provider, model, kind }) => ({
+        id,
+        name,
+        description,
+        ...(provider !== undefined ? { provider } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(kind !== undefined ? { kind } : {}),
+      }));
   }
 }

@@ -63,6 +63,9 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
       if (!specialist) {
         return `Error: No specialist found with id "${specialistId}". Use the specialist tool to list or create specialists.`;
       }
+      if (specialist.disabled) {
+        return `Error: Specialist "${specialistId}" is disabled. Re-enable it from the /specialists menu before invoking it.`;
+      }
 
       const resolution = resolveProviderAndModel({
         provider,

@@ -289,6 +289,26 @@ describe('SpecialistStore', () => {
       vi.mocked(fs.existsSync).mockReturnValue(false);
       expect(store.update('nope', { name: 'X' })).toBeUndefined();
     });
+
+    it('sets disabled=true and clears it on false (kept off-disk when enabled)', () => {
+      const original = {
+        id: 'email-triage',
+        name: 'Email Triage',
+        description: 'Triage emails',
+        systemPrompt: 'prompt',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(original));
+      const off = store.update('email-triage', { disabled: true });
+      expect(off!.disabled).toBe(true);
+
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(off));
+      const on = store.update('email-triage', { disabled: false });
+      expect(on!.disabled).toBeUndefined();
+    });
   });
 
   describe('delete', () => {
@@ -361,6 +381,26 @@ describe('SpecialistStore', () => {
           model: 'grok-code-fast-1',
         },
       ]);
+    });
+
+    it('excludes disabled specialists (they leave the prompt + auto-matcher)', () => {
+      const enabled = {
+        id: 'enabled-one',
+        name: 'Enabled',
+        description: 'on',
+        systemPrompt: 'p',
+        guidelines: [],
+        createdAt: '2024-01-01T00:00:00.000Z',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+      };
+      const disabled = { ...enabled, id: 'disabled-one', name: 'Disabled', disabled: true };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readdirSync).mockReturnValue(['enabled-one.json', 'disabled-one.json'] as any);
+      vi.mocked(fs.readFileSync).mockImplementation((p: any) =>
+        JSON.stringify(String(p).includes('disabled-one') ? disabled : enabled),
+      );
+      const summaries = store.getSummaries();
+      expect(summaries.map((s) => s.id)).toEqual(['enabled-one']);
     });
   });
 
