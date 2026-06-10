@@ -59,7 +59,13 @@ export function ScrollableOverlay({
   const colors = getThemeColors();
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
-  const viewport = Math.max(1, rows - tabs.length - FOOTER_AND_GAP_ROWS);
+  // Never occupy the LAST terminal row. A dynamic (non-Static) Ink frame that
+  // fills the full height can't be erased cleanly — the final newline scrolls
+  // the terminal and desyncs Ink's cursor math, so the next render (e.g. after
+  // Esc closes the overlay) leaves stale rows on screen until something forces
+  // a repaint. Capping at rows-1 keeps the erase correct.
+  const frameHeight = Math.max(1, rows - 1);
+  const viewport = Math.max(1, frameHeight - tabs.length - FOOTER_AND_GAP_ROWS);
   const maxOffset = Math.max(0, lines.length - viewport);
 
   const [offset, setOffset] = useState(0);
@@ -92,7 +98,7 @@ export function ScrollableOverlay({
   const visible = lines.slice(clamped, clamped + viewport);
 
   return (
-    <Box flexDirection="column" height={rows}>
+    <Box flexDirection="column" height={frameHeight}>
       {visible.map((line) => (
         <Box key={line.key}>{line.node}</Box>
       ))}

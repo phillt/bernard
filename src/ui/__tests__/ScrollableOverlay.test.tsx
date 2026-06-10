@@ -6,9 +6,10 @@ import { ESC, ARROW_DOWN, ARROW_UP, SHIFT_TAB, PAGE_DOWN, tick } from './_keys.j
 import { ScrollableOverlay, type OverlayLine } from '../overlays/ScrollableOverlay.js';
 
 // ink-testing-library's stdout reports columns:100 and no `rows` getter, so
-// ScrollableOverlay falls back to rows:24. With 2 tabs the chrome below the
-// viewport is tabs(2) + gap(1) + footer(1) = 4 → viewport = 24 - 4 = 20.
-const VIEWPORT = 20;
+// ScrollableOverlay falls back to rows:24. frameHeight = rows-1 = 23; with 2
+// tabs the chrome below the viewport is tabs(2) + gap(1) + footer(1) = 4 →
+// viewport = 23 - 4 = 19.
+const VIEWPORT = 19;
 
 const TABS = [
   { id: 'alpha', label: 'Alpha' },
@@ -45,13 +46,13 @@ describe('<ScrollableOverlay>', () => {
     expect(frame).toContain('Beta'); // other tab present
     expect(frame).not.toContain('▸ Beta'); // but not marked active
     expect(frame).toContain('entry-00');
-    expect(frame).toContain(`entry-${VIEWPORT - 1}`); // entry-19, last visible
-    expect(frame).not.toContain(`entry-${VIEWPORT}`); // entry-20, first hidden
+    expect(frame).toContain(`entry-${VIEWPORT - 1}`); // entry-18, last visible
+    expect(frame).not.toContain(`entry-${VIEWPORT}`); // entry-19, first hidden
     expect(frame).not.toContain('entry-29');
   });
 
   it('shows a position indicator only when content overflows', () => {
-    expect(renderOverlay(makeLines(30)).lastFrame()).toContain('rows 1–20 of 30');
+    expect(renderOverlay(makeLines(30)).lastFrame()).toContain(`rows 1–${VIEWPORT} of 30`);
     // A short list that fits shows the legend without the indicator.
     const frame = renderOverlay(makeLines(3)).lastFrame() ?? '';
     expect(frame).toContain('Esc to close · Shift-Tab to switch tabs');
@@ -64,17 +65,17 @@ describe('<ScrollableOverlay>', () => {
     stdin.write(ARROW_DOWN);
     await tick();
     let frame = lastFrame() ?? '';
-    // Window shifted by one: entry-00 gone, entry-20 now visible.
+    // Window shifted by one: entry-00 gone, entry-19 (first previously-hidden) now visible.
     expect(frame).not.toContain('entry-00');
-    expect(frame).toContain('entry-20');
-    // Page down jumps a viewport and clamps at the last page (maxOffset = 10).
+    expect(frame).toContain(`entry-${VIEWPORT}`);
+    // Page down jumps a viewport and clamps at the last page (maxOffset = 30-19 = 11).
     stdin.write(PAGE_DOWN);
     await tick();
     stdin.write(PAGE_DOWN);
     await tick();
     frame = lastFrame() ?? '';
     expect(frame).toContain('entry-29');
-    expect(frame).toContain('rows 11–30 of 30');
+    expect(frame).toContain('rows 12–30 of 30');
   });
 
   it('jumps to top/bottom with g/G', async () => {
@@ -95,7 +96,7 @@ describe('<ScrollableOverlay>', () => {
     await tick();
     stdin.write(ARROW_UP);
     await tick();
-    expect(lastFrame()).toContain('rows 1–20 of 30');
+    expect(lastFrame()).toContain(`rows 1–${VIEWPORT} of 30`);
   });
 
   it('forwards Esc to onClose and Shift-Tab to onCycleTab', async () => {
