@@ -15,7 +15,8 @@ const rule = (
   effect: PermissionRule['effect'],
   tool: string,
   specifier?: string,
-): PermissionRule => (specifier === undefined ? { effect, tool, _v: 2 } : { effect, tool, specifier, _v: 2 });
+): PermissionRule =>
+  specifier === undefined ? { effect, tool, _v: 2 } : { effect, tool, specifier, _v: 2 };
 
 describe('matchShellSpecifier', () => {
   it('bare specifier matches only the bare command', () => {
@@ -84,7 +85,9 @@ describe('matchMCPSpecifier', () => {
 
 describe('resolveGrant', () => {
   it('dangerous shell always asks, even with a matching allow', () => {
-    expect(resolveGrant('shell', { command: 'rm -rf /' }, [rule('allow', 'shell')], true)).toBe('ask');
+    expect(resolveGrant('shell', { command: 'rm -rf /' }, [rule('allow', 'shell')], true)).toBe(
+      'ask',
+    );
     expect(
       resolveGrant('shell', { command: 'rm -rf /' }, [rule('allow', 'shell', 'rm *')], true),
     ).toBe('ask');
@@ -103,9 +106,9 @@ describe('resolveGrant', () => {
     expect(resolveGrant('shell', { command: 'npm i' }, rules, false)).toBe('ask');
   });
   it('no-specifier rule matches any invocation of the tool', () => {
-    expect(resolveGrant('web_read', { url: 'https://x.com' }, [rule('allow', 'web_read')], false)).toBe(
-      'allow',
-    );
+    expect(
+      resolveGrant('web_read', { url: 'https://x.com' }, [rule('allow', 'web_read')], false),
+    ).toBe('allow');
   });
   it('file path grant covers files under the directory glob', () => {
     const root = path.resolve('/proj');

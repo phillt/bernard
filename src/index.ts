@@ -63,6 +63,7 @@ import { bootstrapPendingCandidates } from './candidate-bootstrap.js';
 import { runCorrectionAgent } from './correction.js';
 import { debugLog, isDebugEnabled } from './logger.js';
 import { installInstrumentedFetchIfDebug } from './framework/instrumented-fetch.js';
+import { initShellParser } from './permissions/shell-ast.js';
 import { App } from './ui/App.js';
 import { getInkHandlers } from './ui/ink-handlers.js';
 import type {
@@ -222,6 +223,11 @@ async function runInkRepl(args: {
 }): Promise<void> {
   const { config, resume, isFreshInstall, alertBanner } = args;
   let { alertContext } = args;
+
+  // Kick off the tree-sitter bash parser load (#261) in the background so
+  // shell permission rules can match compound commands precisely. Best-effort:
+  // until it's ready, the engine falls back to the conservative regex path.
+  void initShellParser();
 
   const memoryStore = new MemoryStore();
   const routineStore = new RoutineStore();

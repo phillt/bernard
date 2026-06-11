@@ -69,16 +69,28 @@ export function breadthOptionsFor(toolName: string, args: unknown): BreadthOptio
     if (!p) return [];
     const abs = path.resolve(p);
     const out: BreadthOption[] = [
-      { label: truncate(abs), specifier: abs, rulePreview: preview(`${toolName} ${truncate(abs)}`) },
+      {
+        label: truncate(abs),
+        specifier: abs,
+        rulePreview: preview(`${toolName} ${truncate(abs)}`),
+      },
     ];
     const dir = path.dirname(abs);
     if (within(dir)) {
       const glob = `${dir}/**`;
-      out.push({ label: glob, specifier: glob, rulePreview: preview(`${toolName} ${truncate(glob)}`) });
+      out.push({
+        label: glob,
+        specifier: glob,
+        rulePreview: preview(`${toolName} ${truncate(glob)}`),
+      });
       const parent = path.dirname(dir);
       if (parent !== dir && within(parent)) {
         const pglob = `${parent}/**`;
-        out.push({ label: pglob, specifier: pglob, rulePreview: preview(`${toolName} ${truncate(pglob)}`) });
+        out.push({
+          label: pglob,
+          specifier: pglob,
+          rulePreview: preview(`${toolName} ${truncate(pglob)}`),
+        });
       }
     }
     return out;

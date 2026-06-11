@@ -105,7 +105,7 @@ function ruleFromLegacyKey(key: string, effect: ToolPermissionValue): Permission
 export function migrateToolPermissions(
   raw: ToolPermissions | ToolPermissionRules | undefined | null,
 ): PermissionRule[] {
-  if (raw == null) return [];
+  if (raw === null || raw === undefined) return [];
   if (Array.isArray(raw)) return raw.filter(isValidRule).map(normalizeRule);
   if (typeof raw !== 'object') return [];
   const out: PermissionRule[] = [];
