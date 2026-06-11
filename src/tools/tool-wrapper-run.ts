@@ -262,6 +262,13 @@ export async function dispatchToolWrapper(
       error: 'not_found',
     };
   }
+  if (specialist.disabled) {
+    return {
+      status: 'error',
+      result: `Specialist "${specialistId}" is disabled. Re-enable it from the /specialists menu before invoking it.`,
+      error: 'disabled',
+    };
+  }
   const kind = specialist.kind ?? 'persona';
   if (kind === 'persona') {
     return {

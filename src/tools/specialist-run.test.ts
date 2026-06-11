@@ -152,6 +152,19 @@ describe('specialist-run tool', () => {
     expect(mockGenerateText).not.toHaveBeenCalled();
   });
 
+  it('refuses to run a disabled specialist', async () => {
+    vi.spyOn(specialistStore, 'get').mockReturnValue({ ...mockSpecialist, disabled: true });
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
+    const result = await tool.execute!(
+      { specialistId: 'email-triage', task: 'Do something' },
+      { toolCallId: '1', messages: [], abortSignal: undefined as any },
+    );
+    expect(result).toContain('disabled');
+    expect(mockGenerateText).not.toHaveBeenCalled();
+  });
+
   it('calls generateText with specialist system prompt and guidelines', async () => {
     mockGenerateText.mockResolvedValue({ text: 'Done' });
     // Mock the specialist store to return our specialist

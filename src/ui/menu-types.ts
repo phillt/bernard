@@ -40,6 +40,12 @@ export interface MenuOptions {
   title?: string;
   /** Header lines rendered above the title (e.g. the `ask_user` tab strip). */
   headerLines?: string[];
+  /**
+   * Item index (sections excluded) to highlight on open. Lets a caller restore
+   * the cursor when re-showing a list — e.g. a looping manager re-highlighting
+   * the item the user just drilled into. Clamped to the item range.
+   */
+  initialIndex?: number;
 }
 
 /** Options for the `TextInputOverlay` component. */

@@ -1,11 +1,18 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { SPECIALISTS_DIR } from './paths.js';
 import { RESERVED_NAMES } from './reserved-names.js';
 import { atomicWriteFileSync, seedOnce } from './fs-utils.js';
+import {
+  findBuiltinSpecialistsDir,
+  assertCanDeleteSpecialist,
+  assertCanEditSpecialist,
+} from './specialist-authority.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Re-exported so existing importers (e.g. the `/specialists` UI grouping) keep
+// resolving it from this module; the authoritative definition lives in
+// `specialist-authority.ts`.
+export { getBuiltinSpecialistIds } from './specialist-authority.js';
 
 /** Specialist category. `persona` is the historical default; `tool-wrapper` specialists front a concrete tool or CLI; `meta` specialists operate on other specialists (e.g. specialist-creator, correction-agent). */
 export type SpecialistKind = 'persona' | 'tool-wrapper' | 'meta';
@@ -46,6 +53,13 @@ export interface Specialist {
   badExamples?: SpecialistBadExample[];
   /** When true, the child agent must emit a JSON `{status, result, error?, reasoning?}` object as its final message. */
   structuredOutput?: boolean;
+  /**
+   * When true the specialist is kept on disk and shown in `/specialists` but
+   * excluded from dispatch: `getSummaries()` omits it (so it leaves the system
+   * prompt and the auto-matcher), and `specialist_run` / `tool_wrapper_run`
+   * refuse to invoke it. Toggle from the `/specialists` menu.
+   */
+  disabled?: boolean;
 }
 
 export interface SpecialistSummary {
@@ -89,6 +103,7 @@ export type SpecialistUpdates = Partial<
     | 'goodExamples'
     | 'badExamples'
     | 'structuredOutput'
+    | 'disabled'
   >
 >;
 
@@ -107,49 +122,6 @@ const SEED_MARKER = '.seeded-v1';
 const POST_V1_BUNDLED = ['mcp-manager.json'];
 
 /**
- * Locates the bundled `builtin-specialists` directory sitting next to the
- * compiled/loaded `specialists.js` (or `.ts` under tsx). Returns `null` when
- * running in an environment where the bundle was not deployed (e.g. certain
- * test harnesses).
- */
-function findBuiltinSpecialistsDir(): string | null {
-  const candidate = path.join(__dirname, 'builtin-specialists');
-  try {
-    if (fs.statSync(candidate).isDirectory()) return candidate;
-  } catch {
-    // fall through
-  }
-  return null;
-}
-
-let cachedBuiltinIds: Set<string> | null = null;
-
-/**
- * Returns the set of specialist IDs that ship bundled with Bernard. Used to
- * distinguish seeded specialists from user-authored ones in the UI. Result is
- * cached after the first call — the bundle is packaged alongside the binary
- * and does not change at runtime.
- */
-export function getBuiltinSpecialistIds(): Set<string> {
-  if (cachedBuiltinIds) return cachedBuiltinIds;
-  const ids = new Set<string>();
-  const bundledDir = findBuiltinSpecialistsDir();
-  if (!bundledDir) {
-    cachedBuiltinIds = ids;
-    return ids;
-  }
-  try {
-    for (const file of fs.readdirSync(bundledDir)) {
-      if (file.endsWith('.json')) ids.add(file.replace(/\.json$/, ''));
-    }
-  } catch {
-    // fall through with whatever we collected
-  }
-  cachedBuiltinIds = ids;
-  return ids;
-}
-
-/**
  * Disk-backed store for named specialists (reusable expert profiles).
  *
  * Each specialist is stored as a separate JSON file under `SPECIALISTS_DIR`.
@@ -163,11 +135,14 @@ export class SpecialistStore {
 
   /**
    * Copies bundled specialists (shell-wrapper, file-wrapper, web-wrapper,
-   * correction-agent, specialist-creator) from the packaged `builtin-specialists`
-   * directory into the user's specialists dir on first run. A `.seeded-v1`
-   * marker prevents re-seeding on subsequent runs, so users can freely edit or
-   * delete the seeded files. Existing files with the same id are never
-   * overwritten.
+   * correction-agent, specialist-creator, mcp-manager) from the packaged
+   * `builtin-specialists` directory into the user's specialists dir on first
+   * run. A `.seeded-v1` marker prevents re-seeding on subsequent runs; existing
+   * files with the same id are never overwritten.
+   *
+   * Bundled specialists are protected at runtime — see `specialist-authority.ts`
+   * — so they cannot be deleted or edited through the store. The correction
+   * flow may still append learned examples to them via {@link appendExamples}.
    */
   private seedBundledSpecialists(): void {
     const bundledDir = findBuiltinSpecialistsDir();
@@ -308,14 +283,29 @@ export class SpecialistStore {
     return specialist;
   }
 
+  /** Stamps `updatedAt` and atomically persists a specialist record. */
+  private writeRecord(specialist: Specialist): void {
+    specialist.updatedAt = new Date().toISOString();
+    atomicWriteFileSync(
+      path.join(SPECIALISTS_DIR, `${specialist.id}.json`),
+      JSON.stringify(specialist, null, 2),
+    );
+  }
+
   /**
    * Updates an existing specialist with partial fields.
    * @returns The updated specialist, or `undefined` if not found.
+   * @throws {ProtectedSpecialistError} If `id` is a bundled specialist — its
+   *   definition and enable/disable state are frozen (see specialist-authority).
    */
   update(id: string, updates: SpecialistUpdates): Specialist | undefined {
     if (!ID_PATTERN.test(id)) return undefined;
     const specialist = this.get(id);
     if (!specialist) return undefined;
+    // Authoritative gate: bundled specialists are read-only. The learned-example
+    // channel (appendExamples) bypasses update() so correction can still teach
+    // bundled wrappers without opening the definition to edits.
+    assertCanEditSpecialist(id);
     if (updates.name !== undefined) specialist.name = updates.name;
     if (updates.description !== undefined) specialist.description = updates.description;
     if (updates.systemPrompt !== undefined) specialist.systemPrompt = updates.systemPrompt;
@@ -341,11 +331,12 @@ export class SpecialistStore {
     if (updates.badExamples !== undefined) specialist.badExamples = updates.badExamples;
     if (updates.structuredOutput !== undefined)
       specialist.structuredOutput = updates.structuredOutput;
-    specialist.updatedAt = new Date().toISOString();
-    atomicWriteFileSync(
-      path.join(SPECIALISTS_DIR, `${id}.json`),
-      JSON.stringify(specialist, null, 2),
-    );
+    // Store `disabled` only when true so an enabled record stays clean on disk.
+    if (updates.disabled !== undefined) {
+      if (updates.disabled) specialist.disabled = true;
+      else delete specialist.disabled;
+    }
+    this.writeRecord(specialist);
     return specialist;
   }
 
@@ -353,6 +344,11 @@ export class SpecialistStore {
    * Appends one good and one bad example to a specialist, dropping the oldest
    * entries once the list exceeds {@link MAX_EXAMPLES_PER_LIST}. Used by the
    * correction agent after a validated fix.
+   *
+   * This is the sanctioned learned-example channel and deliberately bypasses
+   * the {@link update} definition guard, so the correction flow may still teach
+   * bundled (protected) wrappers — appending examples only, never touching the
+   * definition or enable/disable state.
    * @returns The updated specialist, or `undefined` if not found.
    */
   appendExamples(
@@ -372,27 +368,42 @@ export class SpecialistStore {
       badList.push(bad);
       while (badList.length > MAX_EXAMPLES_PER_LIST) badList.shift();
     }
-    return this.update(id, { goodExamples: goodList, badExamples: badList });
+    specialist.goodExamples = goodList;
+    specialist.badExamples = badList;
+    this.writeRecord(specialist);
+    return specialist;
   }
 
-  /** Removes a specialist by ID. Returns `true` if it existed and was deleted. */
+  /**
+   * Removes a specialist by ID. Returns `true` if it existed and was deleted.
+   * @throws {ProtectedSpecialistError} If `id` is a bundled specialist.
+   */
   delete(id: string): boolean {
     if (!ID_PATTERN.test(id)) return false;
+    // Authoritative gate: bundled specialists cannot be deleted.
+    assertCanDeleteSpecialist(id);
     const filePath = path.join(SPECIALISTS_DIR, `${id}.json`);
     if (!fs.existsSync(filePath)) return false;
     fs.unlinkSync(filePath);
     return true;
   }
 
-  /** Returns id + name + description + optional model info for all specialists, for system prompt injection. */
+  /**
+   * Returns id + name + description + optional model info for all *enabled*
+   * specialists, for system-prompt injection and the auto-matcher. Disabled
+   * specialists are excluded here so they drop out of dispatch while still
+   * appearing in `list()` (and thus the `/specialists` menu).
+   */
   getSummaries(): SpecialistSummary[] {
-    return this.list().map(({ id, name, description, provider, model, kind }) => ({
-      id,
-      name,
-      description,
-      ...(provider !== undefined ? { provider } : {}),
-      ...(model !== undefined ? { model } : {}),
-      ...(kind !== undefined ? { kind } : {}),
-    }));
+    return this.list()
+      .filter((s) => !s.disabled)
+      .map(({ id, name, description, provider, model, kind }) => ({
+        id,
+        name,
+        description,
+        ...(provider !== undefined ? { provider } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(kind !== undefined ? { kind } : {}),
+      }));
   }
 }

@@ -24,6 +24,20 @@ describe('matchSlashCommands', () => {
   it('matching is case-insensitive', () => {
     expect(matchSlashCommands('/EX').map((c) => c.name)).toEqual(['/exit']);
   });
+
+  it('includes dynamic (routine/task) commands and filters them by prefix', () => {
+    const extra = [
+      { name: '/morning-triage', description: 'routine · Morning triage' },
+      { name: '/task-deploy', description: 'task · Deploy' },
+    ];
+    // A prefix unique to a dynamic command surfaces only that command.
+    expect(matchSlashCommands('/morn', extra).map((c) => c.name)).toEqual(['/morning-triage']);
+    // Dynamic commands appear after the built-ins for an all-match query.
+    const all = matchSlashCommands('/', extra).map((c) => c.name);
+    expect(all).toContain('/morning-triage');
+    expect(all).toContain('/task-deploy');
+    expect(all.indexOf('/morning-triage')).toBeGreaterThan(all.indexOf('/exit'));
+  });
 });
 
 describe('<SlashHints>', () => {
@@ -38,6 +52,6 @@ describe('<SlashHints>', () => {
     const frame = lastFrame() ?? '';
     for (const cmd of matches) expect(frame).toContain(cmd.name);
     // The selection marker prefixes only the highlighted row.
-    expect(frame).toContain(`› ${matches[0].name}`);
+    expect(frame).toContain(`> ${matches[0].name}`);
   });
 });

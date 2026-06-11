@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import type { MenuEntry, MenuItem, MenuOptions } from '../menu-types.js';
+import { MenuRow } from './MenuRow.js';
 
 interface MenuOverlayBaseProps {
   entries: MenuEntry[];
@@ -73,7 +74,11 @@ export function MenuOverlay({
 }: MenuOverlayProps) {
   const colors = getThemeColors();
   const items = entries.filter((e): e is MenuItem => !isSection(e));
-  const [highlight, setHighlight] = useState(0);
+  // Start on the caller-requested item (clamped) so a looping manager can
+  // restore the cursor when it re-shows a list; defaults to the first item.
+  const [highlight, setHighlight] = useState(() =>
+    Math.min(Math.max(0, options?.initialIndex ?? 0), Math.max(0, items.length - 1)),
+  );
   // Set of *item* indices (sections excluded) currently checked. Multi-select only.
   const [checked, setChecked] = useState<Set<number>>(() => new Set());
 
@@ -208,12 +213,7 @@ function MenuList({
         const label = `${checkbox}${n}. ${entry.label}${activeMarker}${annotation}`;
         return (
           <Box key={`i-${idx}`} flexDirection="column">
-            <Box>
-              <Text color={colors.accent}>{isHighlighted ? '> ' : '  '}</Text>
-              <Text bold={isHighlighted} color={isHighlighted ? colors.accent : undefined}>
-                {label}
-              </Text>
-            </Box>
+            <MenuRow selected={isHighlighted} label={label} />
             {isHighlighted && entry.description && (
               <Box marginLeft={4}>
                 <Text dimColor>{entry.description}</Text>

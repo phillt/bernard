@@ -236,6 +236,31 @@ function MarkdownLines({ text, streaming = false }: { text: string; streaming?: 
   );
 }
 
+/**
+ * One assistant text block — the markdown body, optionally prefixed inline by
+ * the `❮` chevron. Shared by the committed `<AssistantMessage>` and the live
+ * `<StreamGroupBody>` so both render text identically; the `streaming` flag is
+ * the only legitimate difference (it heals partial mid-stream markdown).
+ */
+function AssistantTextBlock({
+  text,
+  prefix,
+  streaming = false,
+}: {
+  text: string;
+  prefix?: ReactNode;
+  streaming?: boolean;
+}) {
+  return prefix ? (
+    <Box>
+      {prefix}
+      <MarkdownLines text={text} streaming={streaming} />
+    </Box>
+  ) : (
+    <MarkdownLines text={text} streaming={streaming} />
+  );
+}
+
 function StreamGroupBody({
   events,
   toolDetails,
@@ -252,27 +277,15 @@ function StreamGroupBody({
       {'❮  '}
     </Text>
   );
-  let chevronPending = inlineChevron;
-  // Concatenate text-deltas into a single rolling string so we don't render
-  // one <Text> per token (which Ink would lay out as separate lines).
+  // Each text-run and each tool-call renders as its own block with a top
+  // margin (except the first) and its own chevron — mirroring how the
+  // committed <AssistantMessage> renders one block per agent step. This is
+  // what keeps the live view from reflowing/restyling when the turn ends.
+  // Tool-call rendering itself is delegated to the shared <ToolCallBlock> so
+  // the streaming and committed paths can't drift.
   const elements: ReactNode[] = [];
   let textBuffer = '';
   let textKey = 0;
-  const flushText = () => {
-    if (textBuffer.length === 0) return;
-    if (chevronPending) {
-      elements.push(
-        <Box key={`t-${textKey++}`}>
-          {chevron}
-          <MarkdownLines text={textBuffer} streaming />
-        </Box>,
-      );
-      chevronPending = false;
-    } else {
-      elements.push(<MarkdownLines key={`t-${textKey++}`} text={textBuffer} streaming />);
-    }
-    textBuffer = '';
-  };
   // Pair tool-calls with their results by callId so the result renders
   // directly under its call instead of as a separate orphan block. The
   // callsById set lets the orphan check below run in O(1) rather than
@@ -284,6 +297,28 @@ function StreamGroupBody({
     if (ev.kind === 'tool-result') resultsByCall.set(ev.callId, ev);
     else if (ev.kind === 'tool-call') callsById.add(ev.callId);
   }
+  // Wrap each logical block so consecutive blocks get a blank line between
+  // them (the first rides the outer wrapper's marginTop, matching the first
+  // committed AssistantMessage of a turn).
+  const pushBlock = (key: string, child: ReactNode) => {
+    elements.push(
+      <Box key={key} flexDirection="column" marginTop={elements.length === 0 ? 0 : 1}>
+        {child}
+      </Box>,
+    );
+  };
+  const flushText = () => {
+    if (textBuffer.length === 0) return;
+    pushBlock(
+      `t-${textKey++}`,
+      <AssistantTextBlock
+        text={textBuffer}
+        prefix={inlineChevron ? chevron : undefined}
+        streaming
+      />,
+    );
+    textBuffer = '';
+  };
   for (const ev of events) {
     if (ev.kind === 'text-delta') {
       textBuffer += ev.text;
@@ -291,55 +326,23 @@ function StreamGroupBody({
     }
     if (ev.kind === 'tool-call') {
       flushText();
-      if (ev.toolName === 'think') {
-        const thought = extractThought(ev.args);
-        if (thought) {
-          elements.push(
-            <Box key={`c-${ev.callId}`}>
-              {chevronPending && chevron}
-              <Text dimColor italic>
-                💭 {thought}
-              </Text>
-            </Box>,
-          );
-          chevronPending = false;
-        }
-        continue;
-      }
-      if (ev.toolName === 'plan' && toolDetails) {
-        const planLines = formatPlanLines(ev.args);
-        if (planLines.length > 0) {
-          elements.push(
-            <Box key={`c-${ev.callId}`} flexDirection="column">
-              <Box>
-                {chevronPending && chevron}
-                <Text color={colors.toolCall}>⚙ plan</Text>
-              </Box>
-              <PlanEchoLines lines={planLines} />
-              {resultsByCall.has(ev.callId) && (
-                <StreamingToolResult result={resultsByCall.get(ev.callId)!} />
-              )}
-            </Box>,
-          );
-          chevronPending = false;
-          continue;
-        }
-      }
-      const argsSummary = toolDetails ? summariseArgs(ev.args) : '';
-      const headPrefix = chevronPending ? chevron : null;
-      elements.push(
-        <Box key={`c-${ev.callId}`} flexDirection="column">
-          <Box>
-            {headPrefix}
-            <Text color={colors.toolCall}>⚙ {ev.toolName}</Text>
-            {argsSummary && <Text dimColor> {argsSummary}</Text>}
-          </Box>
-          {toolDetails && resultsByCall.has(ev.callId) && (
-            <StreamingToolResult result={resultsByCall.get(ev.callId)!} />
-          )}
-        </Box>,
+      // `think` with an empty thought renders nothing — don't emit a block
+      // (mirrors <ToolCallBlock> returning null + the static skip).
+      if (ev.toolName === 'think' && !extractThought(ev.args)) continue;
+      // `think` never shows a `↳` result row (its result is internal).
+      const showResult =
+        ev.toolName !== 'think' && toolDetails && resultsByCall.has(ev.callId);
+      pushBlock(
+        `c-${ev.callId}`,
+        <>
+          <ToolCallBlock
+            part={{ toolName: ev.toolName, args: ev.args }}
+            toolDetails={toolDetails}
+            prefix={inlineChevron ? chevron : undefined}
+          />
+          {showResult && <StreamingToolResult result={resultsByCall.get(ev.callId)!} />}
+        </>,
       );
-      chevronPending = false;
       continue;
     }
     // tool-result handled inline above; skip if it has a matching call.
@@ -347,8 +350,9 @@ function StreamGroupBody({
     // render it as a standalone row so the user still sees it.
     if (toolDetails && !callsById.has(ev.callId)) {
       flushText();
-      elements.push(
-        <Box key={`r-${ev.callId}`} marginLeft={2}>
+      pushBlock(
+        `r-${ev.callId}`,
+        <Box marginLeft={2}>
           <Text color={ev.isError ? colors.error : undefined} dimColor={!ev.isError}>
             ↳ {renderResultSnippet(ev.result)}
           </Text>
@@ -360,7 +364,7 @@ function StreamGroupBody({
   // Group produced no renderable content (e.g. only suppressed think events)
   // but a chevron was promised — emit it on its own line so the assistant
   // turn still shows up.
-  if (chevronPending) {
+  if (elements.length === 0 && inlineChevron) {
     elements.push(<Box key="chev-only">{chevron}</Box>);
   }
   return <>{elements}</>;
@@ -464,14 +468,11 @@ function AssistantMessage({
     const part = parts[idx];
     if (part.type === 'text') {
       rendered.push(
-        chevronUsed ? (
-          <MarkdownLines key={idx} text={part.text} />
-        ) : (
-          <Box key={idx}>
-            {chevron}
-            <MarkdownLines text={part.text} />
-          </Box>
-        ),
+        <AssistantTextBlock
+          key={idx}
+          text={part.text}
+          prefix={chevronUsed ? undefined : chevron}
+        />,
       );
       chevronUsed = true;
       continue;
@@ -532,7 +533,10 @@ function ToolCallBlock({
   toolDetails,
   prefix,
 }: {
-  part: ToolCallPart;
+  // Only `toolName`/`args` are read, so both the committed path (a full
+  // `ToolCallPart`) and the streaming path (a `StreamEvent` tool-call, same
+  // field names) can share this component.
+  part: { toolName: string; args: unknown };
   toolDetails: boolean;
   /** Optional inline node rendered before the `⚙ name` text (the chevron). */
   prefix?: ReactNode;

@@ -37,7 +37,7 @@ export function ScrollableOverlay({
 }: ScrollableOverlayProps) {
   const { stdout } = useStdout();
   const rows = stdout?.rows ?? 24;
-  const viewport = viewerViewport(rows, tabs.length);
+  const viewport = viewerViewport(rows, { tabCount: tabs.length });
   const maxOffset = Math.max(0, lines.length - viewport);
 
   const [offset, setOffset] = useState(0);
