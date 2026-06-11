@@ -13,7 +13,11 @@ import { RESPONSE_STYLE_IDS, type ResponseStyle } from './agent-prompt.js';
 import { normalizeStoredModelMode, type ModelMode } from './model-policy.js';
 import { getCatalogForProvider } from './providers/catalog.js';
 import { BUILTIN_PROVIDERS, type BuiltinProvider } from './providers/types.js';
-import type { ToolPermissions } from './tool-permissions.js';
+import {
+  type PermissionRule,
+  type ToolPermissions,
+  sanitizePermissionRules,
+} from './tool-permissions.js';
 import { FALLBACK_TIERS } from './lineups.js';
 
 /** Resolved runtime configuration for a Bernard session. */
@@ -57,12 +61,12 @@ export interface BernardConfig {
    */
   activeLineupId?: string;
   /**
-   * Profile-persisted tool permission grants (#212), keyed by tool name or
-   * `shell:<primary-command>`. `allow` bypasses the block + confirm gates;
-   * `deny` refuses without prompting. Mutated in place when the user picks
+   * Profile-persisted tool permission rules (#212/#261). An ordered list of
+   * `{effect, tool, specifier?}` rules evaluated deny→ask→allow by the
+   * permission engine (`src/permissions/`). Appended to when the user picks
    * "Always allow … for this profile" at a permission dialog.
    */
-  toolPermissions: ToolPermissions;
+  toolPermissions: PermissionRule[];
   /**
    * "Run Without Permission Checks or Safeguards" (#212). Forces
    * `toolMode: 'write'` + `confirmThreshold: 'never'` at the policy layer.
@@ -329,7 +333,7 @@ export function savePreferences(prefs: {
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;
   activeLineupId?: string;
-  toolPermissions?: ToolPermissions;
+  toolPermissions?: PermissionRule[] | ToolPermissions;
   skipPermissions?: boolean;
 }): void {
   // Patch shape matches ProfileSettings exactly — keys present in `prefs`
@@ -338,6 +342,11 @@ export function savePreferences(prefs: {
   const patch: Record<string, unknown> = {};
   for (const k of Object.keys(prefs)) {
     patch[k] = (prefs as Record<string, unknown>)[k];
+  }
+  // Normalize any tool-permission value (legacy object or v2 rules) to the v2
+  // array shape before it's written to disk (#261).
+  if ('toolPermissions' in patch && patch.toolPermissions !== undefined) {
+    patch.toolPermissions = sanitizePermissionRules(patch.toolPermissions);
   }
   saveActiveSettings(patch as ProfileSettings);
 }
@@ -371,7 +380,7 @@ export function loadPreferences(): {
   maxConcurrentAgents?: number;
   responseStyle?: ResponseStyle;
   activeLineupId?: string;
-  toolPermissions?: ToolPermissions;
+  toolPermissions?: PermissionRule[];
   skipPermissions?: boolean;
 } {
   // Routes through the active profile in profiles.json (#207). Each field is
@@ -420,30 +429,10 @@ export function loadPreferences(): {
       typeof parsed.activeLineupId === 'string' && parsed.activeLineupId.length > 0
         ? parsed.activeLineupId
         : undefined,
-    toolPermissions: sanitizeToolPermissions(parsed.toolPermissions),
+    toolPermissions: sanitizePermissionRules(parsed.toolPermissions),
     skipPermissions:
       typeof parsed.skipPermissions === 'boolean' ? parsed.skipPermissions : undefined,
   };
-}
-
-/**
- * Validates a stored `toolPermissions` blob (#212): must be a plain object;
- * entries whose value isn't exactly `'allow'` or `'deny'` are dropped so a
- * hand-edited profiles.json can't smuggle garbage into the permission gates.
- * Prototype-pollution keys are skipped — no legitimate permission key is
- * named `__proto__`/`constructor`/`prototype`, and assigning them onto a
- * plain object can rewire its prototype.
- */
-const FORBIDDEN_PERMISSION_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-
-function sanitizeToolPermissions(raw: unknown): ToolPermissions | undefined {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
-  const out: ToolPermissions = {};
-  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (FORBIDDEN_PERMISSION_KEYS.has(k)) continue;
-    if (v === 'allow' || v === 'deny') out[k] = v;
-  }
-  return out;
 }
 
 function loadStoredKeys(): Record<string, string> {
@@ -1100,7 +1089,7 @@ export function loadConfig(overrides?: {
     customProviders,
     providerBaseUrl,
     activeLineupId: prefs.activeLineupId,
-    toolPermissions: prefs.toolPermissions ?? {},
+    toolPermissions: prefs.toolPermissions ?? [],
     skipPermissions: prefs.skipPermissions ?? false,
   };
 

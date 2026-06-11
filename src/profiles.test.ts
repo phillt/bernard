@@ -70,7 +70,10 @@ describe('profiles store', () => {
     vi.resetModules();
     const config = await import('./config.js');
     const prefs = config.loadPreferences();
-    expect(prefs.toolPermissions).toEqual({ 'shell:ls': 'allow' });
+    // Legacy v1 blob is migrated to v2 rules on read (#261); garbage dropped.
+    expect(prefs.toolPermissions).toEqual([
+      { effect: 'allow', tool: 'shell', specifier: 'ls *', _v: 2 },
+    ]);
   });
 
   it('loadPreferences drops prototype-pollution keys from toolPermissions (#212)', async () => {
@@ -103,8 +106,10 @@ describe('profiles store', () => {
     vi.resetModules();
     const config = await import('./config.js');
     const prefs = config.loadPreferences();
-    expect(prefs.toolPermissions).toEqual({ 'shell:ls': 'allow' });
-    expect(Object.getPrototypeOf(prefs.toolPermissions)).toBe(Object.prototype);
+    // Forbidden keys are dropped during migration; only the real grant survives.
+    expect(prefs.toolPermissions).toEqual([
+      { effect: 'allow', tool: 'shell', specifier: 'ls *', _v: 2 },
+    ]);
   });
 
   it('loadPreferences normalizes a legacy modelMode="off" on disk to "optimize-performance"', async () => {

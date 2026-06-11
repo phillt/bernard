@@ -1157,7 +1157,7 @@ describe('augmentTools', () => {
           profileStore: store,
           confirmThreshold: 'high',
           confirmAction,
-          getToolPermissions: () => ({ t: 'allow' }),
+          getToolPermissions: () => [{ effect: 'allow', tool: 't', _v: 2 }],
         },
       );
       await augmented.t.execute({}, {});
@@ -1174,13 +1174,13 @@ describe('augmentTools', () => {
           profileStore: store,
           confirmThreshold: 'high',
           confirmAction,
-          getToolPermissions: () => ({ 'shell:touch': 'allow' }),
+          getToolPermissions: () => [{ effect: 'allow', tool: 'shell', specifier: 'touch *', _v: 2 }],
         },
       );
       await augmented.shell.execute({ command: 'touch x' }, {});
       expect(confirmAction).not.toHaveBeenCalled();
       expect(execute).toHaveBeenCalledTimes(1);
-      // Different primary command → no grant → prompts (and is denied here).
+      // Different (dangerous) command → grant doesn't match / dangerous floor → prompts.
       await augmented.shell.execute({ command: 'rm -rf ./x' }, {});
       expect(confirmAction).toHaveBeenCalledTimes(1);
       expect(execute).toHaveBeenCalledTimes(1);
@@ -1195,7 +1195,10 @@ describe('augmentTools', () => {
           profileStore: store,
           confirmThreshold: 'high',
           confirmAction,
-          getToolPermissions: () => ({ 'shell:touch': 'allow', shell: 'allow' }),
+          getToolPermissions: () => [
+            { effect: 'allow', tool: 'shell', specifier: 'touch *', _v: 2 },
+            { effect: 'allow', tool: 'shell', _v: 2 },
+          ],
         },
       );
       await augmented.shell.execute({ command: 'touch x; rm -rf /' }, {});
@@ -1218,7 +1221,7 @@ describe('augmentTools', () => {
           profileStore: store,
           confirmThreshold: 'high',
           confirmAction,
-          getToolPermissions: () => ({ t: 'deny' }),
+          getToolPermissions: () => [{ effect: 'deny', tool: 't', _v: 2 }],
         },
       );
       const r = await augmented.t.execute({}, {});
@@ -1236,7 +1239,7 @@ describe('augmentTools', () => {
           profileStore: store,
           toolMode: 'read-only',
           blockAction,
-          getToolPermissions: () => ({ t: 'allow' }),
+          getToolPermissions: () => [{ effect: 'allow', tool: 't', _v: 2 }],
         },
       );
       await augmented.t.execute({}, {});
@@ -1253,7 +1256,7 @@ describe('augmentTools', () => {
           profileStore: store,
           toolMode: 'read-only',
           blockAction,
-          getToolPermissions: () => ({ t: 'deny' }),
+          getToolPermissions: () => [{ effect: 'deny', tool: 't', _v: 2 }],
         },
       );
       const r = await augmented.t.execute({}, {});

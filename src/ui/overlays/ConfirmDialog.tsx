@@ -4,6 +4,7 @@ import { getThemeColors } from '../../theme.js';
 import type { RiskLevel } from '../../risk.js';
 import type { BlockOutcome } from '../../tools/types.js';
 import { permissionKeyLabel } from '../../tool-permissions.js';
+import type { BreadthOption } from '../../permissions/breadth.js';
 import { MenuRow } from './MenuRow.js';
 
 type ConfirmChoice = 'allow-once' | 'allow-session' | 'allow-profile' | 'cancel';
@@ -14,48 +15,58 @@ interface ConfirmDialogPropsCommon {
   reason: string;
   onCancel: () => void;
   /**
-   * Profile-grant key for this call (#212). When non-null, an
-   * "Always allow … for this profile" choice is appended; `null`/`undefined`
-   * (complex shell commands, legacy callers) keeps the historic 3-choice
-   * list.
+   * Profile-grant key for this call (#212), used only for the command-level
+   * header framing (`shell (touch)`).
    */
   permissionKey?: string | null;
+  /**
+   * Scope/breadth ladder (#261): ordered narrow→broad options the user cycles
+   * with ←/→. When non-empty, the "Always allow … for this profile" choice is
+   * offered (its label reflects the selected breadth). Empty/absent ⇒ no
+   * profile row (dangerous/complex shell).
+   */
+  breadthOptions?: BreadthOption[];
+  /** Initial breadth selection (default 0 = narrowest = today's behavior). */
+  initialBreadthIndex?: number;
 }
 
 interface ConfirmKindProps extends ConfirmDialogPropsCommon {
   kind: 'confirm';
   risk?: RiskLevel;
-  onResolve: (allowed: boolean, scope: 'once' | 'session' | 'profile') => void;
+  onResolve: (
+    allowed: boolean,
+    scope: 'once' | 'session' | 'profile',
+    breadth: BreadthOption | undefined,
+  ) => void;
 }
 
 interface BlockKindProps extends ConfirmDialogPropsCommon {
   kind: 'block';
-  onResolve: (outcome: BlockOutcome) => void;
+  onResolve: (outcome: BlockOutcome, breadth: BreadthOption | undefined) => void;
 }
 
 export type ConfirmDialogProps = ConfirmKindProps | BlockKindProps;
 
 /**
- * Replaces the legacy three-option dialogs from `src/repl.ts`:
- *   - `kind: 'confirm'` mirrors `confirmActionFn` (risk-based, #144):
- *       "Allow once / Allow for session / [Always allow for this profile] / Cancel"
- *   - `kind: 'block'`   mirrors `blockActionFn` (read-only mode, #179):
- *       "Allow once / Enable for this tool, this session / [Always allow for this profile] / Deny"
+ * Risk/read-only confirmation dialog with two orthogonal axes (#144/#179/#261):
+ *   - ↑/↓ = **duration**: Allow once / for session / [for this profile] / Cancel
+ *   - ←/→ = **breadth**:  this exact call → this command/tool with any args
  *
- * The bracketed profile choice (#212) appears only when `permissionKey` is
- * set — the augment layer passes `shell:<primary>` for simple shell commands
- * and the tool name otherwise; complex shell lines carry `null` and keep the
- * historic 3-choice list.
- *
- * Wire-shape (props named after the tool-side callback contracts in
- * `src/tools/types.ts`) is identical to the legacy callbacks so Phase D can
- * drop the readline implementations and route to this component without
- * touching tool code.
+ * The profile choice (and the breadth axis) appear only when `breadthOptions`
+ * is non-empty — the augment layer omits them for dangerous/complex shell, so
+ * a breadth grant can never silence a dangerous invocation. Picking a profile
+ * grant persists a `PermissionRule` built from the selected breadth.
  */
 export function ConfirmDialog(props: ConfirmDialogProps) {
   const colors = getThemeColors();
-  const keyLabel = props.permissionKey ? permissionKeyLabel(props.permissionKey) : null;
-  const profileLabel = keyLabel ? `Always allow \`${keyLabel}\` for this profile` : null;
+  const breadthOptions = props.breadthOptions ?? [];
+  const hasBreadth = breadthOptions.length > 0;
+  const [breadthIdx, setBreadthIdx] = useState(
+    Math.min(Math.max(props.initialBreadthIndex ?? 0, 0), Math.max(breadthOptions.length - 1, 0)),
+  );
+  const breadth = hasBreadth ? breadthOptions[breadthIdx] : undefined;
+  const profileLabel = breadth ? `Always allow \`${breadth.label}\` for this profile` : null;
+
   // Choice/label pairs assembled together so the two can't drift.
   const rows: Array<{ choice: ConfirmChoice | BlockChoice; label: string }> =
     props.kind === 'confirm'
@@ -80,12 +91,13 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   const commit = (idx: number) => {
     if (props.kind === 'confirm') {
       const choice = choices[idx] as ConfirmChoice;
-      if (choice === 'cancel') props.onResolve(false, 'once');
-      else if (choice === 'allow-profile') props.onResolve(true, 'profile');
-      else props.onResolve(true, choice === 'allow-session' ? 'session' : 'once');
+      if (choice === 'cancel') props.onResolve(false, 'once', undefined);
+      else if (choice === 'allow-profile') props.onResolve(true, 'profile', breadth);
+      else props.onResolve(true, choice === 'allow-session' ? 'session' : 'once', undefined);
     } else {
       const choice = choices[idx] as BlockChoice;
-      props.onResolve(choice);
+      const isProfile = choice === 'allow-tool-for-profile';
+      props.onResolve(choice, isProfile ? breadth : undefined);
     }
   };
 
@@ -110,6 +122,14 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       setHighlight((h) => Math.min(choices.length - 1, h + 1));
       return;
     }
+    if (key.leftArrow) {
+      if (hasBreadth) setBreadthIdx((b) => Math.max(0, b - 1));
+      return;
+    }
+    if (key.rightArrow) {
+      if (hasBreadth) setBreadthIdx((b) => Math.min(breadthOptions.length - 1, b + 1));
+      return;
+    }
     if (/^[1-9]$/.test(input)) {
       const idx = parseInt(input, 10) - 1;
       if (idx < choices.length) commit(idx);
@@ -123,13 +143,20 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         ? colors.warning
         : colors.accent;
 
+  const keyLabel = props.permissionKey ? permissionKeyLabel(props.permissionKey) : null;
   // Command-level header framing (#212): `shell (touch)` instead of bare
-  // `shell` when the permission key carries a primary command — the label
-  // differs from the raw key exactly when a `shell:` prefix was stripped.
+  // `shell` when the permission key carries a primary command.
   const toolLabel =
     keyLabel && keyLabel !== props.permissionKey
       ? `${props.toolName} (${keyLabel})`
       : props.toolName;
+
+  // The profile row's index (if present) so we can show the breadth selector
+  // only while it's highlighted.
+  const profileRowIdx = choices.findIndex(
+    (c) => c === 'allow-profile' || c === 'allow-tool-for-profile',
+  );
+  const showBreadth = hasBreadth && highlight === profileRowIdx;
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -147,8 +174,22 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       {labels.map((label, idx) => (
         <MenuRow key={idx} selected={idx === highlight} label={`${idx + 1}. ${label}`} />
       ))}
+      {showBreadth && breadth ? (
+        <Box marginLeft={2} marginTop={1} flexDirection="column">
+          <Text color={colors.accent}>
+            {breadthOptions.length > 1
+              ? `← scope: ${breadth.label} →  (${breadthIdx + 1}/${breadthOptions.length})`
+              : `scope: ${breadth.label}`}
+          </Text>
+          <Text dimColor>{breadth.rulePreview}</Text>
+        </Box>
+      ) : null}
       <Text> </Text>
-      <Text dimColor>↑/↓ move · Enter select · Esc cancel</Text>
+      <Text dimColor>
+        {hasBreadth
+          ? '↑/↓ choose · ←/→ scope · Enter select · Esc cancel'
+          : '↑/↓ move · Enter select · Esc cancel'}
+      </Text>
     </Box>
   );
 }

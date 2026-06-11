@@ -25,8 +25,111 @@
 
 export type ToolPermissionValue = 'allow' | 'deny';
 
-/** Permission key → grant. Persisted per-profile (`ProfileSettings.toolPermissions`). */
+/** Permission key → grant. Legacy v1 shape (still read from disk + migrated). */
 export type ToolPermissions = Record<string, ToolPermissionValue>;
+
+/**
+ * Permission-rule effects (#261). `allow`/`deny` mirror the legacy grant
+ * values; `ask` forces a prompt even when a broader allow would otherwise
+ * match (used for the dangerous-command floor and explicit user "ask" rules).
+ */
+export type ToolPermissionEffect = 'allow' | 'deny' | 'ask';
+
+/**
+ * A single profile-scoped permission rule (#261) — the deterministic,
+ * Claude-Code-style grant unit that carries both axes: which tool (and how
+ * broadly, via `specifier`) and what effect.
+ */
+export interface PermissionRule {
+  effect: ToolPermissionEffect;
+  /** Tool name: `shell`, `web_read`, `server__tool`, etc. */
+  tool: string;
+  /**
+   * Scope/breadth pattern. **Absent** = matches ANY invocation of the tool.
+   * - `shell`: a glob like `git` (exact, no args) or `git *` (any args)
+   * - `file_*`: a gitignore-style path pattern (`*` = one segment, `**` = recursive)
+   * - `web_*`: `domain:example.com` or an exact URL
+   * - MCP / other: `*` (any args) or an exact-args JSON string
+   */
+  specifier?: string;
+  /** Schema-version discriminant so migration can tell v2 rules from a v1 blob. */
+  _v: 2;
+}
+
+/** Ordered rule list. Persisted per-profile (`ProfileSettings.toolPermissions`). */
+export type ToolPermissionRules = PermissionRule[];
+
+/**
+ * Prototype-pollution keys: no legitimate tool name is named `__proto__` /
+ * `constructor` / `prototype`, and assigning them onto a plain object can
+ * rewire its prototype.
+ */
+export const FORBIDDEN_PERMISSION_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isValidRule(r: unknown): r is PermissionRule {
+  if (!r || typeof r !== 'object') return false;
+  const rule = r as Record<string, unknown>;
+  if (rule.effect !== 'allow' && rule.effect !== 'deny' && rule.effect !== 'ask') return false;
+  if (typeof rule.tool !== 'string' || rule.tool.length === 0) return false;
+  if (FORBIDDEN_PERMISSION_KEYS.has(rule.tool)) return false;
+  if (rule.specifier !== undefined && typeof rule.specifier !== 'string') return false;
+  return true;
+}
+
+function normalizeRule(r: PermissionRule): PermissionRule {
+  // Drop any extra fields a hand-edited file may carry; re-stamp `_v`.
+  return r.specifier === undefined
+    ? { effect: r.effect, tool: r.tool, _v: 2 }
+    : { effect: r.effect, tool: r.tool, specifier: r.specifier, _v: 2 };
+}
+
+/**
+ * Converts a legacy v1 key (`shell:ls` or a bare tool name) into a v2 rule.
+ * `shell:<primary>` becomes `{ tool: 'shell', specifier: '<primary> *' }` to
+ * preserve the legacy "any args to that command" semantics (the v1 key matched
+ * regardless of the command's arguments).
+ */
+function ruleFromLegacyKey(key: string, effect: ToolPermissionValue): PermissionRule {
+  if (key.startsWith('shell:')) {
+    const primary = key.slice('shell:'.length);
+    return { effect, tool: 'shell', specifier: `${primary} *`, _v: 2 };
+  }
+  return { effect, tool: key, _v: 2 };
+}
+
+/**
+ * Lazily migrates a stored `toolPermissions` value (v1 object or v2 array)
+ * into a `PermissionRule[]`. Non-destructive — callers persist the v2 form on
+ * the next save, so a v1 file remains readable for rollback until then.
+ */
+export function migrateToolPermissions(
+  raw: ToolPermissions | ToolPermissionRules | undefined | null,
+): PermissionRule[] {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return raw.filter(isValidRule).map(normalizeRule);
+  if (typeof raw !== 'object') return [];
+  const out: PermissionRule[] = [];
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (FORBIDDEN_PERMISSION_KEYS.has(key)) continue;
+    if (value !== 'allow' && value !== 'deny') continue;
+    out.push(ruleFromLegacyKey(key, value));
+  }
+  return out;
+}
+
+/**
+ * Validates + migrates an untrusted stored value into a `PermissionRule[]`.
+ * Accepts both the legacy v1 object and the v2 array shape; drops malformed
+ * entries so a hand-edited profiles.json can't smuggle garbage into the gates.
+ */
+export function sanitizePermissionRules(raw: unknown): PermissionRule[] {
+  return migrateToolPermissions(raw as ToolPermissions | ToolPermissionRules | undefined);
+}
+
+/** Human label for a rule in `/tool-permissions` and dialogs. */
+export function ruleLabel(rule: PermissionRule): string {
+  return rule.specifier ? `${rule.tool} ${rule.specifier}` : `${rule.tool} (any args)`;
+}
 
 /**
  * Characters that make a command line "complex": pipes, separators,
