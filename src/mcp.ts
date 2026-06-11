@@ -41,19 +41,22 @@ interface ServerStatus {
 
 const DEFAULT_MCP_CONNECT_TIMEOUT_MS = 15_000;
 
-/** Read at call time (not module load) so tests can stub the env var. */
+/**
+ * Read at call time (not module load) so tests can stub the env var. Only a
+ * positive integer is honored — a zero, negative, or non-numeric value (which
+ * would make `setTimeout` fire immediately and spuriously time out every
+ * server) falls back to the default.
+ */
 function mcpConnectTimeoutMs(): number {
-  return (
-    parseInt(process.env.BERNARD_MCP_CONNECT_TIMEOUT_MS || '', 10) ||
-    DEFAULT_MCP_CONNECT_TIMEOUT_MS
-  );
+  const parsed = parseInt(process.env.BERNARD_MCP_CONNECT_TIMEOUT_MS || '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MCP_CONNECT_TIMEOUT_MS;
 }
 
-/** Sentinel rejection used to distinguish a handshake timeout from a real error. */
+/** Sentinel rejection used to distinguish a connect/listing timeout from a real error. */
 class MCPHandshakeTimeout extends Error {}
 
 function handshakeTimeoutMessage(timeoutMs: number): string {
-  return `Timed out after ${timeoutMs}ms — the server never completed the MCP handshake. Common causes: it's an HTTP/SSE server started as a stdio command (configure it as a "url" server instead), or a stdio flag such as "--stdio" is missing.`;
+  return `Timed out after ${timeoutMs}ms — the server didn't connect and list its tools in time. Common causes: it's an HTTP/SSE server started as a stdio command (configure it as a "url" server instead), or a stdio flag such as "--stdio" is missing.`;
 }
 
 /**
