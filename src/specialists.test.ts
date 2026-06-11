@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SpecialistStore } from './specialists.js';
+import {
+  _resetBuiltinSpecialistCache,
+  ProtectedSpecialistError,
+} from './specialist-authority.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
@@ -9,6 +13,12 @@ vi.mock('node:fs', () => ({
   writeFileSync: vi.fn(),
   unlinkSync: vi.fn(),
   renameSync: vi.fn(),
+  // Default: pretend the bundled manifest dir is absent so roleOf() classifies
+  // everything as a user specialist (existing tests use user ids). The bundled
+  // protection block below overrides this to expose a bundled id.
+  statSync: vi.fn(() => {
+    throw new Error('ENOENT');
+  }),
 }));
 
 vi.mock('./fs-utils.js', async () => {
@@ -674,6 +684,73 @@ describe('SpecialistStore', () => {
       const summaries = store.getSummaries();
       expect(summaries).toHaveLength(1);
       expect('kind' in summaries[0]).toBe(false);
+    });
+  });
+
+  describe('bundled protection', () => {
+    const bundledRecord = JSON.stringify({
+      id: 'shell-wrapper',
+      name: 'Shell Wrapper',
+      description: 'd',
+      systemPrompt: 's',
+      guidelines: [],
+      kind: 'tool-wrapper',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    beforeEach(() => {
+      // Expose `shell-wrapper` as a bundled specialist: make the manifest dir
+      // resolvable and list it. Reset the authority cache so each test re-reads.
+      _resetBuiltinSpecialistCache();
+      vi.mocked(fs.statSync).mockReturnValue({ isDirectory: () => true } as any);
+      vi.mocked(fs.readdirSync).mockReturnValue(['shell-wrapper.json'] as any);
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(bundledRecord);
+    });
+
+    it('refuses to delete a bundled specialist', () => {
+      expect(() => store.delete('shell-wrapper')).toThrow(ProtectedSpecialistError);
+      expect(fs.unlinkSync).not.toHaveBeenCalled();
+    });
+
+    it('refuses to update a bundled specialist definition', () => {
+      expect(() => store.update('shell-wrapper', { systemPrompt: 'hacked' })).toThrow(
+        ProtectedSpecialistError,
+      );
+      expect(fsUtils.atomicWriteFileSync).not.toHaveBeenCalled();
+    });
+
+    it('refuses to toggle disabled on a bundled specialist', () => {
+      expect(() => store.update('shell-wrapper', { disabled: true })).toThrow(
+        ProtectedSpecialistError,
+      );
+    });
+
+    it('still lets the correction flow append learned examples to a bundled specialist', () => {
+      const updated = store.appendExamples('shell-wrapper', {
+        input: 'list files',
+        call: 'shell { command: "ls" }',
+      });
+      expect(updated).toBeDefined();
+      expect(updated?.goodExamples).toHaveLength(1);
+      expect(fsUtils.atomicWriteFileSync).toHaveBeenCalled();
+    });
+
+    it('does not protect user specialists', () => {
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          id: 'email-triage',
+          name: 'Email Triage',
+          description: 'd',
+          systemPrompt: 's',
+          guidelines: [],
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        }),
+      );
+      expect(() => store.update('email-triage', { name: 'Renamed' })).not.toThrow();
+      expect(store.delete('email-triage')).toBe(true);
     });
   });
 });

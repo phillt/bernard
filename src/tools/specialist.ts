@@ -6,6 +6,7 @@ import {
   type SpecialistExample,
   type SpecialistBadExample,
 } from '../specialists.js';
+import { ProtectedSpecialistError } from '../specialist-authority.js';
 import type { CandidateStoreReader } from '../specialist-candidates.js';
 import {
   type BernardConfig,
@@ -47,7 +48,7 @@ export function createSpecialistTool(
   return attachMeta(
     tool({
       description:
-        'Manage reusable expert profiles (specialists). Specialists are persistent personas with custom instructions and behavioral guidelines that shape how a sub-agent approaches work. Unlike routines (step-by-step procedures), specialists define expertise and behavioral rules for recurring task patterns.',
+        'Manage reusable expert profiles (specialists). Specialists are persistent personas with custom instructions and behavioral guidelines that shape how a sub-agent approaches work. Unlike routines (step-by-step procedures), specialists define expertise and behavioral rules for recurring task patterns. Bundled specialists (those that ship with Bernard, e.g. shell-wrapper, specialist-creator) are protected: update and delete are refused on them.',
       parameters: z.object({
         action: z
           .enum(['create', 'update', 'list', 'read', 'delete'])
@@ -270,16 +271,26 @@ export function createSpecialistTool(
             if (provider === '' && model === undefined) updates.model = '';
             if (Object.keys(updates).length === 0)
               return 'Error: provide at least one field to update (name, description, systemPrompt, guidelines, provider, model, kind, targetTools, goodExamples, badExamples, or structuredOutput).';
-            const updated = store.update(id, updates);
-            if (!updated) return `No specialist found with id "${id}".`;
-            return `Specialist "${updated.name}" (${updated.id}) updated.`;
+            try {
+              const updated = store.update(id, updates);
+              if (!updated) return `No specialist found with id "${id}".`;
+              return `Specialist "${updated.name}" (${updated.id}) updated.`;
+            } catch (err: unknown) {
+              if (err instanceof ProtectedSpecialistError) return `Error: ${err.message}`;
+              throw err;
+            }
           }
 
           case 'delete': {
             if (!id) return 'Error: id is required for delete action.';
-            const deleted = store.delete(id);
-            if (!deleted) return `No specialist found with id "${id}".`;
-            return `Specialist "${id}" deleted.`;
+            try {
+              const deleted = store.delete(id);
+              if (!deleted) return `No specialist found with id "${id}".`;
+              return `Specialist "${id}" deleted.`;
+            } catch (err: unknown) {
+              if (err instanceof ProtectedSpecialistError) return `Error: ${err.message}`;
+              throw err;
+            }
           }
 
           default:
