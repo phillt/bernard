@@ -96,11 +96,6 @@ export function roleOf(id: string): SpecialistRole {
   return getBuiltinSpecialistIds().has(id) ? 'builtin' : 'user';
 }
 
-/** True when `id` names a bundled (protected) specialist. */
-export function isBuiltinSpecialist(id: string): boolean {
-  return roleOf(id) === 'builtin';
-}
-
 /** Resolves the full permission set for a specialist id. */
 export function permissionsFor(id: string): SpecialistPermissions {
   if (roleOf(id) === 'builtin') {

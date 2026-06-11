@@ -32,6 +32,15 @@ const badExampleSchema = z.object({
 });
 
 /**
+ * Converts a {@link ProtectedSpecialistError} (raised when a mutation targets a
+ * bundled specialist) into the tool's `Error: …` string; rethrows anything else.
+ */
+function protectedOrThrow(err: unknown): string {
+  if (err instanceof ProtectedSpecialistError) return `Error: ${err.message}`;
+  throw err;
+}
+
+/**
  * Creates the specialist management tool for saving and retrieving reusable expert profiles.
  *
  * Specialists are persistent personas with custom system prompts and behavioral guidelines
@@ -276,8 +285,7 @@ export function createSpecialistTool(
               if (!updated) return `No specialist found with id "${id}".`;
               return `Specialist "${updated.name}" (${updated.id}) updated.`;
             } catch (err: unknown) {
-              if (err instanceof ProtectedSpecialistError) return `Error: ${err.message}`;
-              throw err;
+              return protectedOrThrow(err);
             }
           }
 
@@ -288,8 +296,7 @@ export function createSpecialistTool(
               if (!deleted) return `No specialist found with id "${id}".`;
               return `Specialist "${id}" deleted.`;
             } catch (err: unknown) {
-              if (err instanceof ProtectedSpecialistError) return `Error: ${err.message}`;
-              throw err;
+              return protectedOrThrow(err);
             }
           }
 

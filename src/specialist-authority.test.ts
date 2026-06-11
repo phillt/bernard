@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   getBuiltinSpecialistIds,
   roleOf,
-  isBuiltinSpecialist,
   permissionsFor,
   assertCanDeleteSpecialist,
   assertCanEditSpecialist,
@@ -27,8 +26,6 @@ describe('specialist-authority', () => {
   it('assigns the builtin role to bundled ids and user to everything else', () => {
     expect(roleOf(BUNDLED)).toBe('builtin');
     expect(roleOf(USER)).toBe('user');
-    expect(isBuiltinSpecialist(BUNDLED)).toBe(true);
-    expect(isBuiltinSpecialist(USER)).toBe(false);
   });
 
   it('locks every mutation on bundled specialists except learned examples', () => {
