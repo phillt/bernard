@@ -39,6 +39,22 @@ interface ServerStatus {
   error?: string;
 }
 
+const DEFAULT_MCP_CONNECT_TIMEOUT_MS = 15_000;
+
+/** Read at call time (not module load) so tests can stub the env var. */
+function mcpConnectTimeoutMs(): number {
+  return (
+    parseInt(process.env.BERNARD_MCP_CONNECT_TIMEOUT_MS || '', 10) ||
+    DEFAULT_MCP_CONNECT_TIMEOUT_MS
+  );
+}
+
+class MCPConnectTimeout extends Error {}
+
+function handshakeTimeoutMessage(timeoutMs: number): string {
+  return `Timed out after ${timeoutMs}ms — the server never completed the MCP handshake. Common causes: it's an HTTP/SSE server started as a stdio command (configure it as a "url" server instead), or a stdio flag such as "--stdio" is missing.`;
+}
+
 /**
  * Manages the lifecycle of MCP (Model Context Protocol) server connections.
  *
@@ -74,27 +90,61 @@ export class MCPManager {
   }
 
   /**
-   * Creates an MCP client for the given server configuration.
+   * Creates an MCP client for the given server configuration and lists its
+   * tools, racing both against `BERNARD_MCP_CONNECT_TIMEOUT_MS` (default 15s).
+   *
+   * A server that never completes the MCP handshake (e.g. an HTTP/SSE server
+   * misconfigured as stdio) would otherwise leave `createMCPClient` pending
+   * forever and block `connect()` — and with it the whole REPL (#254). The
+   * stdio transport is held separately from the client so a timeout can still
+   * tear down the spawned child process (the transport owns it via an
+   * AbortController); the client never resolved, so it can't be closed.
    * @internal
    */
-  private async createClientForConfig(serverConfig: MCPServerConfig): Promise<MCPClient> {
-    if ('url' in serverConfig) {
-      return createMCPClient({
-        transport: {
-          type: serverConfig.type ?? 'sse',
-          url: serverConfig.url,
-          headers: serverConfig.headers,
-        },
+  private async connectAndListWithTimeout(
+    serverConfig: MCPServerConfig,
+  ): Promise<{ client: MCPClient; serverTools: Record<string, any> }> {
+    const timeoutMs = mcpConnectTimeoutMs();
+    let client: MCPClient | undefined;
+    let transport: Experimental_StdioMCPTransport | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const probe = (async () => {
+        if ('url' in serverConfig) {
+          client = await createMCPClient({
+            transport: {
+              type: serverConfig.type ?? 'sse',
+              url: serverConfig.url,
+              headers: serverConfig.headers,
+            },
+          });
+        } else {
+          transport = new Experimental_StdioMCPTransport({
+            command: serverConfig.command,
+            args: serverConfig.args,
+            env: serverConfig.env
+              ? { ...(process.env as Record<string, string>), ...serverConfig.env }
+              : undefined,
+          });
+          client = await createMCPClient({ transport });
+        }
+        const serverTools = await client.tools();
+        return { client, serverTools };
+      })();
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new MCPConnectTimeout()), timeoutMs);
       });
-    } else {
-      const transport = new Experimental_StdioMCPTransport({
-        command: serverConfig.command,
-        args: serverConfig.args,
-        env: serverConfig.env
-          ? { ...(process.env as Record<string, string>), ...serverConfig.env }
-          : undefined,
-      });
-      return createMCPClient({ transport });
+      return await Promise.race([probe, timeout]);
+    } catch (err) {
+      try {
+        if (client) await client.close();
+        else if (transport) await transport.close();
+      } catch {
+        /* best-effort cleanup */
+      }
+      throw err instanceof MCPConnectTimeout ? new Error(handshakeTimeoutMessage(timeoutMs)) : err;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -121,8 +171,8 @@ export class MCPManager {
     const results = await Promise.allSettled(
       serverEntries.map(async ([name, serverConfig]) => {
         this.serverConfigs.set(name, serverConfig);
-        const client = await this.createClientForConfig(serverConfig);
-        return { name, client };
+        const { client, serverTools } = await this.connectAndListWithTimeout(serverConfig);
+        return { name, client, serverTools };
       }),
     );
 
@@ -131,36 +181,24 @@ export class MCPManager {
       const name = serverEntries[i][0];
 
       if (result.status === 'fulfilled') {
-        const { client } = result.value;
+        const { client, serverTools } = result.value;
         this.clients.set(name, client);
 
-        try {
-          const serverTools = await client.tools();
-          const toolNames = Object.keys(serverTools);
+        const toolNames = Object.keys(serverTools);
 
-          for (const toolName of toolNames) {
-            if (this.tools[toolName]) {
-              printInfo(`  Warning: MCP tool "${toolName}" from "${name}" overrides existing tool`);
-            }
-            this.tools[toolName] = serverTools[toolName];
-            this.toolServerMap.set(toolName, name);
+        for (const toolName of toolNames) {
+          if (this.tools[toolName]) {
+            printInfo(`  Warning: MCP tool "${toolName}" from "${name}" overrides existing tool`);
           }
-
-          this.serverStatuses.push({
-            name,
-            connected: true,
-            toolCount: toolNames.length,
-          });
-        } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          this.serverStatuses.push({
-            name,
-            connected: false,
-            toolCount: 0,
-            error: message,
-          });
-          printError(`MCP server "${name}" failed to list tools: ${message}`);
+          this.tools[toolName] = serverTools[toolName];
+          this.toolServerMap.set(toolName, name);
         }
+
+        this.serverStatuses.push({
+          name,
+          connected: true,
+          toolCount: toolNames.length,
+        });
       } else {
         const message =
           result.reason instanceof Error ? result.reason.message : String(result.reason);
@@ -219,10 +257,9 @@ export class MCPManager {
     }
 
     try {
-      const client = await this.createClientForConfig(config);
+      const { client, serverTools } = await this.connectAndListWithTimeout(config);
       this.clients.set(name, client);
 
-      const serverTools = await client.tools();
       const toolNames = Object.keys(serverTools);
 
       // Remove old tools from this server.
@@ -619,7 +656,7 @@ export async function verifyMCPServer(
       durationMs: Date.now() - startedAt,
       timedOut,
       error: timedOut
-        ? `Timed out after ${timeoutMs}ms — the server never completed the MCP handshake. Common causes: it's an HTTP/SSE server started as a stdio command (configure it as a "url" server instead), or a stdio flag such as "--stdio" is missing.`
+        ? handshakeTimeoutMessage(timeoutMs)
         : err instanceof Error
           ? err.message
           : String(err),
