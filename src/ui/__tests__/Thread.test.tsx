@@ -535,4 +535,43 @@ describe('<Thread>', () => {
     expect(frame).toContain('1. streamed step');
     expect(frame).toContain('↳ Plan created with 1 steps.');
   });
+
+  it('gives each streaming tool-call its own chevron block (no reflow at turn end)', () => {
+    // Two sequential tool-calls must each render their own `❮` gutter, matching
+    // the committed view where each agent step is a separate AssistantMessage.
+    const store = new MessageStore();
+    store.append({ kind: 'tool-call', callId: 'c1', toolName: 'web_search', args: {} });
+    store.append({ kind: 'tool-call', callId: 'c2', toolName: 'web_read', args: {} });
+    const { lastFrame } = render(
+      createElement(Thread, { staticItems: [], messageStore: store, busy: true }),
+    );
+    const frame = lastFrame() ?? '';
+    expect((frame.match(/❮/g) ?? []).length).toBe(2);
+    expect(frame).toContain('⚙ web_search');
+    expect(frame).toContain('⚙ web_read');
+  });
+
+  it('renders streaming text and a following tool-call as two chevron blocks', () => {
+    const store = new MessageStore();
+    store.append({ kind: 'text-delta', text: 'intro line' });
+    store.append({ kind: 'tool-call', callId: 'c1', toolName: 'shell', args: { cmd: 'ls' } });
+    const { lastFrame } = render(
+      createElement(Thread, { staticItems: [], messageStore: store, busy: true }),
+    );
+    const frame = lastFrame() ?? '';
+    expect((frame.match(/❮/g) ?? []).length).toBe(2);
+    expect(frame).toContain('intro line');
+    expect(frame).toContain('⚙ shell');
+  });
+
+  it('falls back to a lone chevron when a streaming think has an empty thought', () => {
+    const store = new MessageStore();
+    store.append({ kind: 'tool-call', callId: 't1', toolName: 'think', args: { thought: '' } });
+    const { lastFrame } = render(
+      createElement(Thread, { staticItems: [], messageStore: store, busy: true }),
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('❮');
+    expect(frame).not.toContain('💭');
+  });
 });
