@@ -206,11 +206,11 @@ describe('createShellTool', () => {
     expect(execSync).not.toHaveBeenCalled();
   });
 
-  it('does NOT call confirmAction even when wired — the unified gate runs in augmentTools (#144)', async () => {
-    // Shell used to call confirmAction itself, but that double-prompted when
-    // augmentTools also gated the same call. Confirmation is now applied
-    // centrally in `runDefinition`; shell's own check only runs the legacy
-    // `confirmDangerous` fallback for callers that don't go through augment.
+  it('does NOT prompt at all when confirmAction is wired — the unified gate owns it (#144/#212)', async () => {
+    // When the unified gate is wired (the REPL), it gates dangerous shell calls
+    // centrally and is profile-/session-/skip-permissions-aware. Shell must NOT
+    // call confirmAction OR confirmDangerous itself — doing so double-prompts
+    // and ignores every "always allow" / skip-permissions decision (#212).
     const confirmAction = vi.fn().mockResolvedValue(true);
     confirmDangerous.mockResolvedValue(true);
     vi.mocked(execSync).mockReturnValue('done');
@@ -221,7 +221,8 @@ describe('createShellTool', () => {
     });
     await shellTool.execute({ command: 'rm -rf /tmp/test' }, {});
     expect(confirmAction).not.toHaveBeenCalled();
-    expect(confirmDangerous).toHaveBeenCalledWith('rm -rf /tmp/test', undefined);
+    expect(confirmDangerous).not.toHaveBeenCalled();
+    expect(execSync).toHaveBeenCalled();
   });
 
   it('falls back to confirmDangerous when confirmAction is not wired (#144)', async () => {
