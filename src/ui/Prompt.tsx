@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { SlashHints, matchSlashCommands, type SlashCommand } from './SlashHints.js';
@@ -67,10 +67,12 @@ export function Prompt({
   const [historyCursor, setHistoryCursor] = useState<number | null>(null);
   const colors = getThemeColors();
 
-  const matches = useMemo(
-    () => matchSlashCommands(buffer, dynamicCommands?.() ?? []),
-    [buffer, dynamicCommands],
-  );
+  // Computed every render rather than memoized: `dynamicCommands` is a stable
+  // getter whose *returned* list changes when routines/tasks are added/removed,
+  // so a memo keyed on the getter identity would serve a stale hint list when
+  // the buffer is unchanged. The match is a cheap prefix filter over a small
+  // command set, so recomputing is negligible.
+  const matches = matchSlashCommands(buffer, dynamicCommands?.() ?? []);
   // Clamp selection whenever the match list shrinks (e.g. user typed another
   // character and fewer commands match). Avoids dangling out-of-range cursor.
   const clampedIndex = matches.length === 0 ? 0 : Math.min(selectedIndex, matches.length - 1);

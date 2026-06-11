@@ -841,10 +841,21 @@ export function App({
       // Start/stop the daemon to match whether any job is enabled — mirrors the
       // ensureDaemon / stopIfNoEnabledJobs side-effects of the cron tools.
       const syncDaemon = () => {
-        const anyEnabled = store.loadJobs().some((j) => j.enabled);
-        const running = isDaemonRunning();
-        if (anyEnabled && !running) startDaemon();
-        else if (!anyEnabled && running) stopDaemon();
+        try {
+          const anyEnabled = store.loadJobs().some((j) => j.enabled);
+          const running = isDaemonRunning();
+          if (anyEnabled && !running) startDaemon();
+          else if (!anyEnabled && running) stopDaemon();
+        } catch (err) {
+          // startDaemon/stopDaemon can throw (e.g. the compiled daemon script is
+          // missing in a dev/test checkout). Surface it instead of letting the
+          // exception bubble out of the /cron menu and crash the UI — mirrors how
+          // the cron tools' ensureDaemon() path catches and reports.
+          flashToast(
+            `Daemon control failed: ${err instanceof Error ? err.message : String(err)}`,
+            'error',
+          );
+        }
       };
       let firstPass = true;
       let listIndex = 0;
