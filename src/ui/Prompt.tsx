@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { SlashHints, matchSlashCommands, type SlashCommand } from './SlashHints.js';
@@ -28,6 +28,13 @@ interface PromptProps {
    * array, so it reads the routine store live without re-render churn.
    */
   dynamicCommands?: () => readonly SlashCommand[];
+  /**
+   * Optional content rendered inside the input box, above the input line —
+   * the pinned `<PlanPanel>` slots in here so the plan + input share one
+   * rounded border (the plan reads as an extension of the input box). When
+   * absent (or `null`), the box collapses to a plain single-line input.
+   */
+  renderAbove?: ReactNode;
 }
 
 /**
@@ -50,6 +57,7 @@ export function Prompt({
   history = [],
   onRecordInput,
   dynamicCommands,
+  renderAbove,
 }: PromptProps) {
   const editor = useLineEditor('', { multiline: true });
   const { buffer } = editor;
@@ -92,6 +100,18 @@ export function Prompt({
       if (newlineIntent) {
         editor.insert('\n');
         setSelectedIndex(0);
+        return;
+      }
+      // Esc dismisses the slash-command picker or a recalled history line —
+      // clearing the buffer so the hint strip goes away. (While a turn is busy
+      // the Prompt is disabled and App owns Esc for interrupt, so this only
+      // fires when the user is actively editing.)
+      if (key.escape) {
+        if (matches.length > 0 || historyCursor !== null) {
+          editor.clear();
+          setSelectedIndex(0);
+          setHistoryCursor(null);
+        }
         return;
       }
       if (key.return) {
@@ -177,18 +197,29 @@ export function Prompt({
 
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Box borderStyle="round" borderColor={disabled ? colors.muted : colors.accent} paddingX={1}>
-        <Text>
-          <Text color={colors.accent} bold>
-            {'› '}
+      {/* The rounded box wraps both the pinned plan (renderAbove) and the input
+          line so they read as one container. paddingX lives on the input row,
+          not the box, so a plan's full-width interior divider touches the
+          walls. SlashHints stays below the box (an autocomplete dropdown). */}
+      <Box
+        flexDirection="column"
+        borderStyle="round"
+        borderColor={disabled ? colors.muted : colors.accent}
+      >
+        {renderAbove}
+        <Box paddingX={1}>
+          <Text>
+            <Text color={colors.accent} bold>
+              {'› '}
+            </Text>
+            <LineWithCursor
+              buffer={buffer}
+              cursor={editor.cursor}
+              showCursor={!disabled}
+              cursorColor={colors.accent}
+            />
           </Text>
-          <LineWithCursor
-            buffer={buffer}
-            cursor={editor.cursor}
-            showCursor={!disabled}
-            cursorColor={colors.accent}
-          />
-        </Text>
+        </Box>
       </Box>
       <SlashHints matches={matches} selectedIndex={clampedIndex} />
     </Box>

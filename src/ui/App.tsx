@@ -838,11 +838,6 @@ export function App({
 
     if (text === '/cron') {
       const store = new CronStore();
-      const jobs = store.loadJobs();
-      if (jobs.length === 0) {
-        flashToast('No cron jobs configured. Ask me to schedule one.');
-        return;
-      }
       // Start/stop the daemon to match whether any job is enabled — mirrors the
       // ensureDaemon / stopIfNoEnabledJobs side-effects of the cron tools.
       const syncDaemon = () => {
@@ -851,71 +846,85 @@ export function App({
         if (anyEnabled && !running) startDaemon();
         else if (!anyEnabled && running) stopDaemon();
       };
-      const byId = new Map(jobs.map((j) => [j.id, j]));
-      const entries: MenuEntry[] = jobs.map((j) => ({
-        label: j.name,
-        annotation: j.enabled ? 'enabled' : 'disabled',
-        description: `${j.schedule} — ${
-          j.lastRun
-            ? `last: ${new Date(j.lastRun).toLocaleString()} (${j.lastRunStatus || 'unknown'})`
-            : 'never run'
-        }`,
-        value: j.id,
-      }));
-      const pick = await requestMenu(entries, {
-        title: 'Cron jobs — select one',
-        headerLines: [`Daemon: ${isDaemonRunning() ? 'running' : 'stopped'}`],
-      });
-      if (pick.cancelled) return;
-      const job = byId.get(pick.item.value as string);
-      if (!job) return;
-      const action = await requestMenu(
-        [
-          { label: job.enabled ? 'Disable' : 'Enable' },
-          { label: 'View logs' },
-          { label: 'Delete' },
-          { label: 'Back' },
-        ],
-        { title: `"${job.name}" — ${job.schedule}` },
-      );
-      if (action.cancelled || action.index === 3) return;
-      if (action.index === 0) {
-        store.updateJob(job.id, { enabled: !job.enabled });
-        syncDaemon();
-        flashToast(`"${job.name}" ${job.enabled ? 'disabled' : 'enabled'}.`, 'success');
-        return;
-      }
-      if (action.index === 1) {
-        const log = new CronLogStore().getEntries(job.id, 10);
-        if (log.length === 0) {
-          showInfo(`Logs — ${job.name}`, [{ text: 'No runs recorded yet.', dim: true }]);
+      let firstPass = true;
+      let listIndex = 0;
+      for (;;) {
+        const jobs = store.loadJobs();
+        if (jobs.length === 0) {
+          if (firstPass) flashToast('No cron jobs configured. Ask me to schedule one.');
           return;
         }
-        const lines: PendingInfo['lines'] = [];
-        for (const e of log) {
-          lines.push({
-            text: `${new Date(e.startedAt).toLocaleString()} — ${e.success ? 'success' : 'error'} (${e.durationMs}ms)`,
-            bold: true,
-          });
-          lines.push({ text: `  ${truncate((e.error || e.finalOutput || '').replace(/\s+/g, ' '), 120)}`, dim: true });
+        firstPass = false;
+        const byId = new Map(jobs.map((j) => [j.id, j]));
+        const entries: MenuEntry[] = jobs.map((j) => ({
+          label: j.name,
+          annotation: j.enabled ? 'enabled' : 'disabled',
+          description: `${j.schedule} — ${
+            j.lastRun
+              ? `last: ${new Date(j.lastRun).toLocaleString()} (${j.lastRunStatus || 'unknown'})`
+              : 'never run'
+          }`,
+          value: j.id,
+        }));
+        const pick = await requestMenu(entries, {
+          title: 'Cron jobs — select one',
+          headerLines: [`Daemon: ${isDaemonRunning() ? 'running' : 'stopped'}`],
+          initialIndex: listIndex,
+        });
+        if (pick.cancelled) return; // Esc on the list → exit
+        listIndex = pick.index;
+        const job = byId.get(pick.item.value as string);
+        if (!job) continue;
+        const action = await requestMenu(
+          [
+            { label: job.enabled ? 'Disable' : 'Enable' },
+            { label: 'View logs' },
+            { label: 'Delete' },
+            { label: 'Back' },
+          ],
+          { title: `"${job.name}" — ${job.schedule}` },
+        );
+        if (action.cancelled || action.index === 3) continue; // Back / Esc → list
+        if (action.index === 0) {
+          store.updateJob(job.id, { enabled: !job.enabled });
+          syncDaemon();
+          flashToast(`"${job.name}" ${job.enabled ? 'disabled' : 'enabled'}.`, 'success');
+          continue; // back to the refreshed list
         }
-        showInfo(`Logs — ${job.name}`, lines);
-        return;
+        if (action.index === 1) {
+          // View logs opens an InfoOverlay → exit the loop (it would otherwise
+          // be replaced by the next menu immediately).
+          const log = new CronLogStore().getEntries(job.id, 10);
+          if (log.length === 0) {
+            showInfo(`Logs — ${job.name}`, [{ text: 'No runs recorded yet.', dim: true }]);
+            return;
+          }
+          const lines: PendingInfo['lines'] = [];
+          for (const e of log) {
+            lines.push({
+              text: `${new Date(e.startedAt).toLocaleString()} — ${e.success ? 'success' : 'error'} (${e.durationMs}ms)`,
+              bold: true,
+            });
+            lines.push({ text: `  ${truncate((e.error || e.finalOutput || '').replace(/\s+/g, ' '), 120)}`, dim: true });
+          }
+          showInfo(`Logs — ${job.name}`, lines);
+          return;
+        }
+        // Delete path — confirm, then remove the job + its logs.
+        const confirm = await requestMenu(
+          [
+            { label: `Delete "${job.name}"`, description: 'This cannot be undone.' },
+            { label: 'Cancel' },
+          ],
+          { title: 'Confirm deletion' },
+        );
+        if (confirm.cancelled || confirm.index === 1) continue; // back to list
+        store.deleteJob(job.id);
+        new CronLogStore().deleteJobLogs(job.id);
+        syncDaemon();
+        flashToast(`Deleted ${job.name}.`, 'success');
+        continue;
       }
-      // Delete path — confirm, then remove the job + its logs.
-      const confirm = await requestMenu(
-        [
-          { label: `Delete "${job.name}"`, description: 'This cannot be undone.' },
-          { label: 'Cancel' },
-        ],
-        { title: 'Confirm deletion' },
-      );
-      if (confirm.cancelled || confirm.index === 1) return;
-      store.deleteJob(job.id);
-      new CronLogStore().deleteJobLogs(job.id);
-      syncDaemon();
-      flashToast(`Deleted ${job.name}.`, 'success');
-      return;
     }
 
     if (text === '/rag') {
@@ -1345,180 +1354,230 @@ export function App({
     }
 
     if (text === '/routines') {
-      const all = stores.routines.list();
-      if (all.length === 0) {
-        flashToast('No routines saved. Teach me a workflow and I can save it as a routine.');
-        return;
-      }
-      const byId = new Map(all.map((r) => [r.id, r]));
-      const entries: MenuEntry[] = [];
-      const pushGroup = (title: string, list: Routine[]) => {
-        if (list.length === 0) return;
-        entries.push({ type: 'section', title });
-        for (const r of list) {
-          entries.push({
-            label: r.name,
-            annotation: `/${r.id}`,
-            description: truncate(r.description, 100),
-            value: r.id,
-          });
+      let firstPass = true;
+      let listIndex = 0;
+      for (;;) {
+        const all = stores.routines.list();
+        if (all.length === 0) {
+          if (firstPass) {
+            flashToast('No routines saved. Teach me a workflow and I can save it as a routine.');
+          }
+          return;
         }
-      };
-      pushGroup(
-        'Tasks',
-        all.filter((r) => r.id.startsWith('task-')),
-      );
-      pushGroup(
-        'Routines',
-        all.filter((r) => !r.id.startsWith('task-')),
-      );
-      const pick = await requestMenu(entries, { title: 'Routines — select one' });
-      if (pick.cancelled) return;
-      const r = byId.get(pick.item.value as string);
-      if (!r) return;
-      const action = await requestMenu([{ label: 'Run' }, { label: 'Edit' }, { label: 'Delete' }, { label: 'Back' }], {
-        title: `"${r.name}" (/${r.id})`,
-      });
-      if (action.cancelled || action.index === 3) return;
-      if (action.index === 0) {
-        await runRoutine(r);
-        return;
+        firstPass = false;
+        const byId = new Map(all.map((r) => [r.id, r]));
+        const entries: MenuEntry[] = [];
+        const pushGroup = (title: string, list: Routine[]) => {
+          if (list.length === 0) return;
+          entries.push({ type: 'section', title });
+          for (const r of list) {
+            entries.push({
+              label: r.name,
+              annotation: `/${r.id}`,
+              description: truncate(r.description, 100),
+              value: r.id,
+            });
+          }
+        };
+        pushGroup(
+          'Tasks',
+          all.filter((r) => r.id.startsWith('task-')),
+        );
+        pushGroup(
+          'Routines',
+          all.filter((r) => !r.id.startsWith('task-')),
+        );
+        const pick = await requestMenu(entries, {
+          title: 'Routines — select one',
+          initialIndex: listIndex,
+        });
+        if (pick.cancelled) return; // Esc on the list → exit
+        listIndex = pick.index;
+        const r = byId.get(pick.item.value as string);
+        if (!r) continue;
+        const action = await requestMenu(
+          [{ label: 'Run' }, { label: 'Edit' }, { label: 'Delete' }, { label: 'Back' }],
+          { title: `"${r.name}" (/${r.id})` },
+        );
+        if (action.cancelled || action.index === 3) continue; // Back / Esc → list
+        if (action.index === 0) {
+          await runRoutine(r); // hand off → exit
+          return;
+        }
+        if (action.index === 1) {
+          await runAgentTurn(buildRoutineEditSeed(r)); // hand off to chat → exit
+          return;
+        }
+        // Delete path — confirm with the standard two-item menu.
+        const confirm = await requestMenu(
+          [
+            { label: `Delete "${r.name}"`, description: 'This cannot be undone.' },
+            { label: 'Cancel' },
+          ],
+          { title: 'Confirm deletion' },
+        );
+        if (confirm.cancelled || confirm.index === 1) continue; // back to list
+        stores.routines.delete(r.id);
+        flashToast(`Deleted ${r.name}.`, 'success');
+        continue;
       }
-      if (action.index === 1) {
-        await runAgentTurn(buildRoutineEditSeed(r));
-        return;
-      }
-      // Delete path — confirm with the standard two-item menu.
-      const confirm = await requestMenu(
-        [
-          { label: `Delete "${r.name}"`, description: 'This cannot be undone.' },
-          { label: 'Cancel' },
-        ],
-        { title: 'Confirm deletion' },
-      );
-      if (confirm.cancelled || confirm.index === 1) return;
-      stores.routines.delete(r.id);
-      flashToast(`Deleted ${r.name}.`, 'success');
-      return;
     }
 
     if (text === '/specialists') {
-      const all = stores.specialists.list();
-      if (all.length === 0) {
-        flashToast(
-          'No specialist agents defined yet. Ask me to create one or use /create-specialist.',
-        );
-        return;
-      }
       const builtinIds = getBuiltinSpecialistIds();
-      const byId = new Map(all.map((s) => [s.id, s]));
-      const entries: MenuEntry[] = [];
-      const pushGroup = (title: string, list: Specialist[]) => {
-        if (list.length === 0) return;
-        entries.push({ type: 'section', title });
-        for (const s of list) {
-          entries.push({
-            label: s.name,
-            annotation: s.disabled ? '(disabled)' : (s.kind ?? 'persona'),
-            description: truncate(s.description, 100),
-            value: s.id,
-          });
+      // Loop so Back / Esc in an action menu returns to the (refreshed) list;
+      // only Esc on the list itself, or a hand-off action (Edit), exits.
+      // `listIndex` restores the cursor onto the item the user drilled into.
+      let firstPass = true;
+      let listIndex = 0;
+      for (;;) {
+        const all = stores.specialists.list();
+        if (all.length === 0) {
+          if (firstPass) {
+            flashToast(
+              'No specialist agents defined yet. Ask me to create one or use /create-specialist.',
+            );
+          }
+          return;
         }
-      };
-      pushGroup(
-        'Bundled',
-        all.filter((s) => builtinIds.has(s.id)),
-      );
-      pushGroup(
-        'Yours',
-        all.filter((s) => !builtinIds.has(s.id)),
-      );
-      const pick = await requestMenu(entries, { title: 'Specialists — select one' });
-      if (pick.cancelled) return;
-      const s = byId.get(pick.item.value as string);
-      if (!s) return;
-      const action = await requestMenu(
-        [
-          { label: 'Edit' },
-          { label: s.disabled ? 'Enable' : 'Disable' },
-          { label: 'Delete' },
-          { label: 'Back' },
-        ],
-        { title: `"${s.name}" (${s.id})` },
-      );
-      if (action.cancelled || action.index === 3) return;
-      if (action.index === 0) {
-        await runAgentTurn(buildSpecialistEditSeed(s));
-        return;
+        firstPass = false;
+        const byId = new Map(all.map((s) => [s.id, s]));
+        const entries: MenuEntry[] = [];
+        const pushGroup = (title: string, list: Specialist[]) => {
+          if (list.length === 0) return;
+          entries.push({ type: 'section', title });
+          for (const s of list) {
+            const locked = builtinIds.has(s.id);
+            entries.push({
+              label: s.name,
+              annotation: locked
+                ? `🔒 ${s.kind ?? 'persona'}`
+                : s.disabled
+                  ? '(disabled)'
+                  : (s.kind ?? 'persona'),
+              description: truncate(s.description, 100),
+              value: s.id,
+            });
+          }
+        };
+        pushGroup(
+          'Bundled',
+          all.filter((s) => builtinIds.has(s.id)),
+        );
+        pushGroup(
+          'Yours',
+          all.filter((s) => !builtinIds.has(s.id)),
+        );
+        const pick = await requestMenu(entries, {
+          title: 'Specialists — select one',
+          initialIndex: listIndex,
+        });
+        if (pick.cancelled) return; // Esc on the list → exit
+        listIndex = pick.index; // remember for the next loop (Back restores it)
+        const s = byId.get(pick.item.value as string);
+        if (!s) continue;
+        // Bundled specialists are protected (read-only) — offer no mutating
+        // actions. The store would refuse anyway; this keeps the UI honest.
+        if (builtinIds.has(s.id)) {
+          flashToast(
+            `🔒 "${s.name}" is a bundled specialist — read-only. It can't be edited, disabled, or deleted.`,
+          );
+          continue;
+        }
+        const action = await requestMenu(
+          [
+            { label: 'Edit' },
+            { label: s.disabled ? 'Enable' : 'Disable' },
+            { label: 'Delete' },
+            { label: 'Back' },
+          ],
+          { title: `"${s.name}" (${s.id})` },
+        );
+        if (action.cancelled || action.index === 3) continue; // Back / Esc → list
+        if (action.index === 0) {
+          await runAgentTurn(buildSpecialistEditSeed(s)); // hand off to chat → exit
+          return;
+        }
+        if (action.index === 1) {
+          stores.specialists.update(s.id, { disabled: !s.disabled });
+          flashToast(`${s.name} ${s.disabled ? 'enabled' : 'disabled'}.`, 'success');
+          continue; // back to the refreshed list
+        }
+        // Delete path — confirm with the standard two-item menu (house style).
+        const confirm = await requestMenu(
+          [
+            { label: `Delete "${s.name}"`, description: 'This cannot be undone.' },
+            { label: 'Cancel' },
+          ],
+          { title: 'Confirm deletion' },
+        );
+        if (confirm.cancelled || confirm.index === 1) continue; // back to list
+        stores.specialists.delete(s.id);
+        flashToast(`Deleted ${s.name}.`, 'success');
+        continue;
       }
-      if (action.index === 1) {
-        stores.specialists.update(s.id, { disabled: !s.disabled });
-        flashToast(`${s.name} ${s.disabled ? 'enabled' : 'disabled'}.`, 'success');
-        return;
-      }
-      // Delete path — confirm with the standard two-item menu (house style).
-      const confirm = await requestMenu(
-        [
-          { label: `Delete "${s.name}"`, description: 'This cannot be undone.' },
-          { label: 'Cancel' },
-        ],
-        { title: 'Confirm deletion' },
-      );
-      if (confirm.cancelled || confirm.index === 1) return;
-      stores.specialists.delete(s.id);
-      flashToast(`Deleted ${s.name}.`, 'success');
-      return;
     }
 
     if (text === '/candidates') {
-      const pending = stores.candidates.listPending();
-      if (pending.length === 0) {
-        flashToast('No pending specialist suggestions.');
-        return;
-      }
-      const byId = new Map(pending.map((c) => [c.id, c]));
-      const entries: MenuEntry[] = pending.map((c) => {
-        stores.candidates.acknowledge(c.id); // mark seen on open (prior behavior)
-        return {
-          label: c.name,
-          annotation: `${Math.round(c.confidence * 100)}%`,
-          description: truncate(c.reasoning || c.description, 100),
-          value: c.id,
-        };
-      });
-      const pick = await requestMenu(entries, { title: 'Specialist suggestions — select one' });
-      if (pick.cancelled) return;
-      const c = byId.get(pick.item.value as string);
-      if (!c) return;
-      const action = await requestMenu([{ label: 'Accept' }, { label: 'Reject' }, { label: 'View' }, { label: 'Back' }], {
-        title: `"${c.name}" (${c.draftId})`,
-      });
-      if (action.cancelled || action.index === 3) return;
-      if (action.index === 0) {
-        try {
-          promoteCandidate(c, stores.specialists, stores.candidates, config.autoCreateThreshold, config);
-          flashToast(`Accepted ${c.name} — specialist created.`, 'success');
-        } catch (err) {
-          flashToast(`Could not create specialist: ${(err as Error).message}`, 'error');
+      let firstPass = true;
+      let listIndex = 0;
+      for (;;) {
+        const pending = stores.candidates.listPending();
+        if (pending.length === 0) {
+          if (firstPass) flashToast('No pending specialist suggestions.');
+          return;
         }
+        firstPass = false;
+        const byId = new Map(pending.map((c) => [c.id, c]));
+        const entries: MenuEntry[] = pending.map((c) => {
+          stores.candidates.acknowledge(c.id); // mark seen on open (prior behavior)
+          return {
+            label: c.name,
+            annotation: `${Math.round(c.confidence * 100)}%`,
+            description: truncate(c.reasoning || c.description, 100),
+            value: c.id,
+          };
+        });
+        const pick = await requestMenu(entries, {
+          title: 'Specialist suggestions — select one',
+          initialIndex: listIndex,
+        });
+        if (pick.cancelled) return; // Esc on the list → exit
+        listIndex = pick.index;
+        const c = byId.get(pick.item.value as string);
+        if (!c) continue;
+        const action = await requestMenu(
+          [{ label: 'Accept' }, { label: 'Reject' }, { label: 'View' }, { label: 'Back' }],
+          { title: `"${c.name}" (${c.draftId})` },
+        );
+        if (action.cancelled || action.index === 3) continue; // Back / Esc → list
+        if (action.index === 0) {
+          try {
+            promoteCandidate(c, stores.specialists, stores.candidates, config.autoCreateThreshold, config);
+            flashToast(`Accepted ${c.name} — specialist created.`, 'success');
+          } catch (err) {
+            flashToast(`Could not create specialist: ${(err as Error).message}`, 'error');
+          }
+          continue; // back to the refreshed list (accepted drops out of pending)
+        }
+        if (action.index === 1) {
+          stores.candidates.updateStatus(c.id, 'rejected');
+          flashToast(`Rejected ${c.name}.`, 'success');
+          continue; // back to the refreshed list
+        }
+        // View — read-only detail. Opens an InfoOverlay, so exit the menu loop
+        // (the loop would otherwise immediately replace it with the next menu).
+        showInfo(c.name, [
+          { text: c.description },
+          { text: '' },
+          { text: `Confidence: ${Math.round(c.confidence * 100)}%`, dim: true },
+          { text: `Detected: ${new Date(c.detectedAt).toLocaleString()}`, dim: true },
+          { text: '' },
+          { text: 'Reasoning:', bold: true },
+          { text: c.reasoning, dim: true },
+        ]);
         return;
       }
-      if (action.index === 1) {
-        stores.candidates.updateStatus(c.id, 'rejected');
-        flashToast(`Rejected ${c.name}.`, 'success');
-        return;
-      }
-      // View — read-only detail.
-      showInfo(c.name, [
-        { text: c.description },
-        { text: '' },
-        { text: `Confidence: ${Math.round(c.confidence * 100)}%`, dim: true },
-        { text: `Detected: ${new Date(c.detectedAt).toLocaleString()}`, dim: true },
-        { text: '' },
-        { text: 'Reasoning:', bold: true },
-        { text: c.reasoning, dim: true },
-      ]);
-      return;
     }
 
     if (text === '/create-routine' || text === '/create-task' || text === '/create-specialist') {
@@ -2596,7 +2655,6 @@ export function App({
               <Spinner label="thinking…" />
             </Box>
           )}
-          <PlanPanel agent={agent} />
           {toast && <Toast message={toast.message} variant={toast.variant} />}
           <Prompt
             disabled={busy || activeOverlay !== null}
@@ -2605,6 +2663,7 @@ export function App({
             history={inputHistory}
             onRecordInput={recordInput}
             dynamicCommands={getDynamicCommands}
+            renderAbove={<PlanPanel agent={agent} />}
           />
           <Box justifyContent="space-between">
             <HintBar

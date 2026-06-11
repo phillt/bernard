@@ -74,7 +74,11 @@ export function MenuOverlay({
 }: MenuOverlayProps) {
   const colors = getThemeColors();
   const items = entries.filter((e): e is MenuItem => !isSection(e));
-  const [highlight, setHighlight] = useState(0);
+  // Start on the caller-requested item (clamped) so a looping manager can
+  // restore the cursor when it re-shows a list; defaults to the first item.
+  const [highlight, setHighlight] = useState(() =>
+    Math.min(Math.max(0, options?.initialIndex ?? 0), Math.max(0, items.length - 1)),
+  );
   // Set of *item* indices (sections excluded) currently checked. Multi-select only.
   const [checked, setChecked] = useState<Set<number>>(() => new Set());
 

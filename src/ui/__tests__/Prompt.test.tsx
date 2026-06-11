@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { Prompt } from '../Prompt.js';
 import {
   ENTER,
+  ESC,
   BACKSPACE,
   ARROW_UP,
   ARROW_DOWN,
@@ -371,6 +372,19 @@ describe('<Prompt> input history (↑/↓ recall)', () => {
     await tick();
     // Empty buffer, just the cursor glyph — no crash, nothing recalled.
     expect(lastFrame()).toContain('▌');
+  });
+});
+
+describe('<Prompt> Esc dismisses the slash picker', () => {
+  it('clears the buffer (and the hint strip) on Esc while the picker is open', async () => {
+    const { stdin, lastFrame } = render(createElement(Prompt, { onSubmit: () => {} }));
+    await tick();
+    stdin.write('/spec');
+    await tick();
+    expect(lastFrame()).toContain('/specialists'); // hint strip showing
+    stdin.write(ESC);
+    await tick();
+    expect(lastFrame()).not.toContain('/specialists'); // dismissed
   });
 });
 

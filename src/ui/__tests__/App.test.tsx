@@ -784,6 +784,56 @@ describe('<App> management menu chains', () => {
     ...over,
   });
 
+  it('/specialists: Back returns to the list; Esc on the list exits', async () => {
+    const { stdin, lastFrame, unmount } = renderApp({
+      stores: {
+        specialists: { list: () => [mkSpec()], get: () => mkSpec(), update: vi.fn(), delete: vi.fn() } as never,
+      },
+    });
+    await tick();
+    await submit(stdin, '/specialists');
+    expect(lastFrame()).toContain('Specialists — select one'); // the list
+    stdin.write('1'); // select → action menu
+    await tick(40);
+    expect(lastFrame()).toContain('Edit');
+    stdin.write('4'); // Back → returns to the list (loop), not exit
+    await tick(40);
+    expect(lastFrame()).toContain('Specialists — select one');
+    stdin.write(ESC); // Esc on the list → exit the manager
+    await tick(40);
+    expect(lastFrame()).not.toContain('Specialists — select one');
+    unmount();
+  });
+
+  it('/specialists: returning to the list restores the cursor onto the item you entered', async () => {
+    const specs = [
+      mkSpec({ id: 'alpha', name: 'Alpha' }),
+      mkSpec({ id: 'beta', name: 'Beta' }),
+      mkSpec({ id: 'gamma', name: 'Gamma' }),
+    ];
+    const { stdin, lastFrame, unmount } = renderApp({
+      stores: {
+        specialists: {
+          list: () => specs,
+          get: (id: string) => specs.find((s) => s.id === id),
+          update: vi.fn(),
+          delete: vi.fn(),
+        } as never,
+      },
+    });
+    await tick();
+    await submit(stdin, '/specialists');
+    stdin.write('3'); // drill into the 3rd item (Gamma)
+    await tick(40);
+    expect(lastFrame()).toContain('Edit'); // action menu
+    stdin.write('4'); // Back → list
+    await tick(40);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('> 3. Gamma'); // cursor restored onto Gamma
+    expect(frame).not.toContain('> 1. Alpha');
+    unmount();
+  });
+
   it('/specialists: select → Disable calls update({disabled:true})', async () => {
     const update = vi.fn();
     const { stdin, unmount } = renderApp({
