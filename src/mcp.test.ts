@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock external dependencies before importing MCPManager
 vi.mock('@ai-sdk/mcp', () => ({
@@ -237,6 +237,103 @@ describe('MCPManager schema pass-through', () => {
 
     const out = manager.getTools();
     expect(out.richTool.parameters).toEqual({ _jsonSchema: richSchema });
+  });
+});
+
+describe('MCPManager connect timeout (#254)', () => {
+  let manager: InstanceType<typeof MCPManager>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv('BERNARD_MCP_CONNECT_TIMEOUT_MS', '60');
+    manager = new MCPManager();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('a hung handshake does not block connect(); the server is marked failed and its child killed', async () => {
+    // Mirrors the Figma/Framelink case: an HTTP server launched as stdio, so
+    // createMCPClient never resolves.
+    mockCreateMCPClient.mockReturnValue(new Promise(() => {}));
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { hung: { command: 'npx', args: ['figma-developer-mcp'] } },
+    });
+
+    await manager.connect();
+
+    const status = manager.getServerStatuses().find((s) => s.name === 'hung');
+    expect(status?.connected).toBe(false);
+    expect(status?.error).toMatch(/timed out/i);
+    expect(mockPrintError).toHaveBeenCalledWith(
+      expect.stringContaining('MCP server "hung" failed to connect'),
+    );
+    // The spawned stdio child is torn down via the transport even though the
+    // client never resolved (no client.close() possible).
+    const transportInstance = mockStdioTransport.mock.results.at(-1)?.value;
+    expect(transportInstance.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('healthy servers still connect when another server hangs', async () => {
+    const healthyClient = makeMockClient({ goodTool: makeDynamicTool(vi.fn()) });
+    mockCreateMCPClient.mockImplementation((opts: any) =>
+      opts.transport?.url === 'http://healthy'
+        ? Promise.resolve(healthyClient)
+        : new Promise(() => {}),
+    );
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: {
+        healthy: { url: 'http://healthy' },
+        hung: { command: 'npx', args: ['broken-mcp'] },
+      },
+    });
+
+    await manager.connect();
+
+    const statuses = manager.getServerStatuses();
+    expect(statuses.find((s) => s.name === 'healthy')).toEqual({
+      name: 'healthy',
+      connected: true,
+      toolCount: 1,
+    });
+    expect(statuses.find((s) => s.name === 'hung')?.connected).toBe(false);
+    expect(manager.getTools().goodTool).toBeDefined();
+  });
+
+  it('a hung tools() listing also trips the timeout and closes the client', async () => {
+    const client = {
+      tools: vi.fn().mockReturnValue(new Promise(() => {})),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    mockCreateMCPClient.mockResolvedValue(client);
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { slow: { url: 'http://slow' } },
+    });
+
+    await manager.connect();
+
+    const status = manager.getServerStatuses().find((s) => s.name === 'slow');
+    expect(status?.connected).toBe(false);
+    expect(status?.error).toMatch(/timed out/i);
+    expect(client.close).toHaveBeenCalled();
+  });
+
+  it('reconnectServer times out instead of hanging and marks the server failed', async () => {
+    const client = makeMockClient({ myTool: makeDynamicTool(vi.fn()) });
+    mockCreateMCPClient.mockResolvedValue(client);
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { 'test-server': { url: 'http://test-server' } },
+    });
+    await manager.connect();
+
+    mockCreateMCPClient.mockReturnValue(new Promise(() => {}));
+    const result = await manager.reconnectServer('test-server');
+
+    expect(result).toBe(false);
+    const status = manager.getServerStatuses().find((s) => s.name === 'test-server');
+    expect(status?.connected).toBe(false);
+    expect(status?.error).toMatch(/timed out/i);
   });
 });
 
