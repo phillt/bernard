@@ -45,7 +45,7 @@ import { PlanStore } from './plan-store.js';
 import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
-import type { PolicyEngine, PolicyResult } from './policy/index.js';
+import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
 import type { Step } from './plan-store.js';
 import type { VerificationEntry } from './agent-status.js';
@@ -271,6 +271,25 @@ export class Agent {
    */
   getContext(): AgentContext {
     return this.ctx;
+  }
+
+  /**
+   * Resolves a {@link PolicyDecision} for a dispatch that runs OUTSIDE the
+   * normal `processInput` turn loop (e.g. `/task`, `task-` routines). Between
+   * turns `this.ctx.policyDecision` is `undefined`, so a definition dispatched
+   * directly via `runDefinition` would inherit no decision — and the augment
+   * gate would default `confirmThreshold` to `'high'`, silently ignoring the
+   * user's `skipPermissions` / `confirmMode` / `toolMode` settings. Callers
+   * should spread the returned decision onto the ctx they hand to
+   * `runDefinition` so out-of-turn tasks honor the same per-turn policy a
+   * chat turn would.
+   */
+  resolvePolicyDecisionFor(userInput: string): PolicyDecision {
+    return this.policyEngine.decide({
+      userInput,
+      config: this.config,
+      previousUserInput: extractRecentUserTexts(this.history, 1)[0],
+    }).decision;
   }
 
   /** Returns step limit hit info from last processInput, or null if limit wasn't hit. */

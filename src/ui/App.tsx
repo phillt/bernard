@@ -2366,7 +2366,18 @@ export function App({
       const input: TaskInput = context
         ? { task: description, context, slotId: slot.id }
         : { task: description, slotId: slot.id };
-      const { result, formatted } = await runDefinition(ctx, taskDefinition, input);
+      // Tasks dispatch OUTSIDE the normal turn loop, so `ctx.policyDecision` is
+      // undefined here (it's only set during `processInput`). Without it the
+      // augment gate defaults `confirmThreshold` to 'high' and ignores the
+      // user's skipPermissions / confirmMode / toolMode — re-prompting on
+      // dangerous shell even in unrestricted mode. Resolve the same per-turn
+      // decision a chat turn would, feeding the policy engine the exact user
+      // message the model sees (`buildUserMessage` adds the `Task:`/`Context:`
+      // framing) so the decision can't diverge from the real dispatch.
+      const taskMessage = taskDefinition.buildUserMessage(input).content;
+      const policyInput = typeof taskMessage === 'string' ? taskMessage : description;
+      const taskCtx = { ...ctx, policyDecision: agent.resolvePolicyDecisionFor(policyInput) };
+      const { result, formatted } = await runDefinition(taskCtx, taskDefinition, input);
       if (result.finishReason === 'length') {
         const recommended = Math.ceil((config.maxTokens * 2) / 1024) * 1024;
         flashToast(

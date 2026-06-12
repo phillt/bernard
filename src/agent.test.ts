@@ -503,6 +503,39 @@ describe('buildContextMessage', () => {
   });
 });
 
+describe('resolvePolicyDecisionFor (out-of-turn task dispatch)', () => {
+  let store: MemoryStore;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readFileSync).mockReturnValue('');
+    store = new MemoryStore();
+  });
+
+  it('honors skipPermissions → confirmThreshold "never" for a /task dispatch', () => {
+    // Regression: /task and task- routines dispatch outside the processInput
+    // turn loop, so ctx.policyDecision is undefined and the augment gate would
+    // default confirmThreshold to 'high' — re-prompting on dangerous shell
+    // even in unrestricted mode. The Agent must resolve a real decision.
+    const agent = makeAgent(
+      makeConfig({ skipPermissions: true, confirmMode: 'strict', toolMode: 'read-only' }),
+      {},
+      store,
+    );
+    const decision = agent.resolvePolicyDecisionFor('cd repo && gh pr list --json number || true');
+    expect(decision.toolMode?.confirmThreshold).toBe('never');
+    expect(decision.toolMode?.mode).toBe('write');
+  });
+
+  it('reflects confirmMode for a guarded profile (no skipPermissions)', () => {
+    const agent = makeAgent(makeConfig({ confirmMode: 'auto', toolMode: 'write' }), {}, store);
+    const decision = agent.resolvePolicyDecisionFor('rm -rf ./build && make');
+    expect(decision.toolMode?.confirmThreshold).toBe('high');
+  });
+});
+
 describe('prompt-injection regression (issue #172)', () => {
   let store: MemoryStore;
 
