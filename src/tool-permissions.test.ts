@@ -140,6 +140,15 @@ describe('migrateToolPermissions (#261)', () => {
     expect(rules).toEqual([{ effect: 'allow', tool: 'shell', specifier: 'git *', _v: 2 }]);
   });
 
+  it('drops rules with empty/whitespace specifiers (never-matching, misleading)', () => {
+    const rules = migrateToolPermissions([
+      { effect: 'allow', tool: 'shell', specifier: '', _v: 2 } as never,
+      { effect: 'allow', tool: 'shell', specifier: '   ', _v: 2 } as never,
+      { effect: 'allow', tool: 'shell', specifier: 'git *', _v: 2 },
+    ]);
+    expect(rules).toEqual([{ effect: 'allow', tool: 'shell', specifier: 'git *', _v: 2 }]);
+  });
+
   it('drops prototype-pollution keys from a legacy blob', () => {
     const rules = migrateToolPermissions({ __proto__: 'allow', ls: 'allow' } as never);
     expect(rules.every((r) => r.tool !== '__proto__')).toBe(true);

@@ -72,7 +72,11 @@ function isValidRule(r: unknown): r is PermissionRule {
   if (rule.effect !== 'allow' && rule.effect !== 'deny' && rule.effect !== 'ask') return false;
   if (typeof rule.tool !== 'string' || rule.tool.length === 0) return false;
   if (FORBIDDEN_PERMISSION_KEYS.has(rule.tool)) return false;
-  if (rule.specifier !== undefined && typeof rule.specifier !== 'string') return false;
+  if (rule.specifier !== undefined) {
+    // Reject empty/whitespace specifiers: they never match yet would render as
+    // "(any args)", a misleading persisted rule. Drop them during sanitization.
+    if (typeof rule.specifier !== 'string' || rule.specifier.trim() === '') return false;
+  }
   return true;
 }
 
@@ -128,7 +132,10 @@ export function sanitizePermissionRules(raw: unknown): PermissionRule[] {
 
 /** Human label for a rule in `/tool-permissions` and dialogs. */
 export function ruleLabel(rule: PermissionRule): string {
-  return rule.specifier ? `${rule.tool} ${rule.specifier}` : `${rule.tool} (any args)`;
+  // Explicit undefined check: only a truly absent specifier is "(any args)".
+  return rule.specifier !== undefined
+    ? `${rule.tool} ${rule.specifier}`
+    : `${rule.tool} (any args)`;
 }
 
 /**

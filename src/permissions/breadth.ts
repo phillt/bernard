@@ -33,9 +33,10 @@ function within(dir: string): boolean {
   // Only offer a directory-level grant inside cwd or home, and never the root.
   const root = path.parse(dir).root;
   if (dir === root) return false;
-  const cwd = process.cwd();
-  const home = os.homedir();
-  return dir.startsWith(cwd) || dir.startsWith(home);
+  // Separator-aware containment so a sibling like `/home/me/proj2` is not
+  // treated as "within" `/home/me/proj`.
+  const under = (base: string): boolean => dir === base || dir.startsWith(base + path.sep);
+  return under(process.cwd()) || under(os.homedir());
 }
 
 /**

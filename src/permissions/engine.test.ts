@@ -148,4 +148,18 @@ describe('breadthOptionsFor', () => {
     const opts = breadthOptionsFor('srv__tool', { a: 1 });
     expect(opts.map((o) => o.specifier)).toEqual(['{"a":1}', '*']);
   });
+  it('web_search (no url arg) falls back to the generic args ladder', () => {
+    const opts = breadthOptionsFor('web_search', { query: 'cats', limit: 5 });
+    expect(opts.map((o) => o.specifier)).toEqual(['{"limit":5,"query":"cats"}', '*']);
+  });
+});
+
+describe('stableArgsString totality', () => {
+  it('fails closed to a fixed string on unstringifiable args', () => {
+    expect(matchMCPSpecifier('null', undefined)).toBe(true);
+    expect(matchMCPSpecifier('null', 10n)).toBe(true);
+  });
+  it('still distinguishes real args', () => {
+    expect(matchMCPSpecifier('null', { a: 1 })).toBe(false);
+  });
 });

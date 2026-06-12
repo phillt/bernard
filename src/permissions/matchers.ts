@@ -13,10 +13,18 @@ import * as os from 'node:os';
 
 /** Tools whose breadth/scope is a filesystem path (gitignore-glob matched). */
 export const FILE_TOOLS = new Set(['file_read_lines', 'file_edit_lines', 'file_write']);
-/** Tools whose breadth/scope is a URL (exact or `domain:` matched). */
-export const WEB_TOOLS = new Set(['web_read', 'web_search']);
+/**
+ * Tools whose breadth/scope is a URL (exact or `domain:` matched). Only
+ * `web_read` takes a `url`; `web_search` (`{query, limit}`) is intentionally
+ * excluded so it falls back to the generic exact-args/any-args ladder.
+ */
+export const WEB_TOOLS = new Set(['web_read']);
 
-/** Stable, key-sorted JSON of an args object — used as the exact-args specifier. */
+/**
+ * Stable, key-sorted JSON of an args object — used as the exact-args specifier.
+ * Total: always returns a string, failing closed to `'null'` on unstringifiable
+ * input (BigInt, `undefined`) so a rule can never silently widen to "any args".
+ */
 export function stableArgsString(args: unknown): string {
   const seen = new WeakSet<object>();
   const norm = (v: unknown): unknown => {
@@ -30,7 +38,11 @@ export function stableArgsString(args: unknown): string {
     }
     return out;
   };
-  return JSON.stringify(norm(args));
+  try {
+    return JSON.stringify(norm(args)) ?? 'null';
+  } catch {
+    return 'null';
+  }
 }
 
 /**
