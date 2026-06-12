@@ -381,10 +381,11 @@ export function augmentTools(
     toolName: string,
     args: unknown,
     gate: 'block' | 'confirm',
+    isDangerousShell: boolean,
   ): 'allow' | 'deny' | 'ask' => {
     const rules = opts.getToolPermissions?.() ?? [];
     if (rules.length === 0) return 'ask';
-    const decision = resolveGrant(toolName, args, rules, isDangerousShellCall(toolName, args));
+    const decision = resolveGrant(toolName, args, rules, isDangerousShell);
     if (decision === 'deny') debugLog(`augment:${toolName}:${gate}:profile-deny`, {});
     return decision;
   };
@@ -394,8 +395,12 @@ export function augmentTools(
    * profile-scope grant should be offered (dangerous shell, complex/unparseable
    * commands, missing args) so the dialog omits the "for this profile" row.
    */
-  const computeBreadthOptions = (toolName: string, args: unknown): BreadthOption[] | undefined => {
-    if (isDangerousShellCall(toolName, args)) return undefined;
+  const computeBreadthOptions = (
+    toolName: string,
+    args: unknown,
+    isDangerousShell: boolean,
+  ): BreadthOption[] | undefined => {
+    if (isDangerousShell) return undefined;
     const ladder = breadthOptionsFor(toolName, args);
     return ladder.length ? ladder : undefined;
   };
@@ -419,8 +424,9 @@ export function augmentTools(
     const meta = readToolMeta(toolDef);
     if (!shouldBlockInReadOnly(meta, args)) return true;
     if (sessionToolAllowlist.has(toolName)) return true;
+    const dangerousShell = isDangerousShellCall(toolName, args);
     const permissionKey = permissionKeyFor(toolName, args);
-    const grant = resolveProfileGrant(toolName, args, 'block');
+    const grant = resolveProfileGrant(toolName, args, 'block', dangerousShell);
     if (grant === 'allow') return true;
     if (grant === 'deny') return false;
     if (!blockAction) {
@@ -432,7 +438,7 @@ export function augmentTools(
       args,
       reason: buildConfirmReason(toolName, args),
       permissionKey,
-      breadthOptions: computeBreadthOptions(toolName, args),
+      breadthOptions: computeBreadthOptions(toolName, args, dangerousShell),
     };
     const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
     let outcome: BlockOutcome;
@@ -468,8 +474,9 @@ export function augmentTools(
     const meta = readToolMeta(toolDef);
     const risk = riskFromMeta(meta, args);
     if (!shouldConfirm(risk, confirmThreshold)) return true;
+    const dangerousShell = isDangerousShellCall(toolName, args);
     const permissionKey = permissionKeyFor(toolName, args);
-    const grant = resolveProfileGrant(toolName, args, 'confirm');
+    const grant = resolveProfileGrant(toolName, args, 'confirm', dangerousShell);
     if (grant === 'allow') return true;
     if (grant === 'deny') return false;
     const input: ConfirmActionInput = {
@@ -478,7 +485,7 @@ export function augmentTools(
       risk,
       reason: buildConfirmReason(toolName, args),
       permissionKey,
-      breadthOptions: computeBreadthOptions(toolName, args),
+      breadthOptions: computeBreadthOptions(toolName, args, dangerousShell),
     };
     const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
     try {

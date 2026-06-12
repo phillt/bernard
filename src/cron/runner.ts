@@ -44,9 +44,10 @@ export interface RunJobResult {
  */
 export async function runJob(job: CronJob, log: (msg: string) => void): Promise<RunJobResult> {
   registerBuiltinDefinitions();
-  // Load the bash parser so dangerous-command detection / rule matching is
-  // precise in headless runs too (#261). Await so the first shell call sees it.
-  await initShellParser();
+  // Warm the bash parser in the background (#261). Cron carries no profile
+  // rules so the parser isn't consulted for matching, and dangerous-command
+  // detection uses regex — so this never needs to block job startup.
+  void initShellParser();
   const config = loadConfig();
   const store = new CronStore();
 

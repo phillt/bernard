@@ -11,6 +11,11 @@
 import * as path from 'node:path';
 import * as os from 'node:os';
 
+/** Tools whose breadth/scope is a filesystem path (gitignore-glob matched). */
+export const FILE_TOOLS = new Set(['file_read_lines', 'file_edit_lines', 'file_write']);
+/** Tools whose breadth/scope is a URL (exact or `domain:` matched). */
+export const WEB_TOOLS = new Set(['web_read', 'web_search']);
+
 /** Stable, key-sorted JSON of an args object — used as the exact-args specifier. */
 export function stableArgsString(args: unknown): string {
   const seen = new WeakSet<object>();

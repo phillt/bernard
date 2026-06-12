@@ -13,38 +13,28 @@
  */
 
 import type { PermissionRule } from '../tool-permissions.js';
-import { parseShellCommand } from './shell-ast.js';
+import { parseShellCommand, type ParsedShell } from './shell-ast.js';
 import {
   matchShellSpecifier,
   matchPathSpecifier,
   matchDomainSpecifier,
   matchMCPSpecifier,
+  FILE_TOOLS,
+  WEB_TOOLS,
 } from './matchers.js';
 
 export type GrantDecision = 'allow' | 'deny' | 'ask';
 
-const FILE_TOOLS = new Set(['file_read_lines', 'file_edit_lines', 'file_write']);
-const WEB_TOOLS = new Set(['web_read', 'web_search']);
-
-/** Does a single rule cover a single simple shell command string? */
+/** Does a rule cover a single simple shell command string? */
 function ruleMatchesShell(rule: PermissionRule, command: string): boolean {
   if (rule.tool !== 'shell') return false;
-  if (rule.specifier === undefined) return true;
-  return matchShellSpecifier(rule.specifier, command);
+  return rule.specifier === undefined || matchShellSpecifier(rule.specifier, command);
 }
 
-/** Does a single rule cover this concrete (toolName, args) call? */
-function ruleMatchesCall(rule: PermissionRule, toolName: string, args: unknown): boolean {
+/** Does a rule cover a non-shell (toolName, args) call? */
+function ruleMatchesNonShell(rule: PermissionRule, toolName: string, args: unknown): boolean {
   if (rule.tool !== toolName) return false;
   if (rule.specifier === undefined) return true; // matches any invocation of the tool
-
-  if (toolName === 'shell') {
-    const cmd = (args as Record<string, unknown> | undefined)?.command;
-    if (typeof cmd !== 'string') return false;
-    const parsed = parseShellCommand(cmd);
-    if (parsed.kind === 'simple') return matchShellSpecifier(rule.specifier, parsed.command);
-    return false; // compound handled in resolveGrant; parse-error never matches
-  }
   if (FILE_TOOLS.has(toolName)) {
     const p = (args as Record<string, unknown> | undefined)?.path;
     return typeof p === 'string' && matchPathSpecifier(rule.specifier, p);
@@ -74,36 +64,52 @@ function scanRules(
   return 'ask';
 }
 
+/**
+ * Flattens a parsed shell command into its simple-subcommand strings, or `null`
+ * when no specifier can safely cover it (parse-error / unhandled construct). A
+ * simple command is the degenerate 1-element case, so the engine resolves
+ * simple and compound commands through the same path.
+ */
+function shellSubcommands(parsed: ParsedShell): string[] | null {
+  if (parsed.kind === 'simple') return [parsed.command];
+  if (parsed.kind === 'compound') {
+    const out: string[] = [];
+    for (const sub of parsed.subcommands) {
+      if (sub.kind !== 'simple') return null;
+      out.push(sub.command);
+    }
+    return out;
+  }
+  return null; // parse-error
+}
+
 export function resolveGrant(
   toolName: string,
   args: unknown,
   rules: PermissionRule[],
   isDangerousShell: boolean,
 ): GrantDecision {
-  // Invariant: dangerous shell always re-prompts, no rule can override it.
-  if (toolName === 'shell' && isDangerousShell) return 'ask';
-
-  // Compound shell: every subcommand must independently resolve to allow, and
-  // any subcommand that denies sinks the whole command (deny-first).
-  if (toolName === 'shell') {
-    const cmd = (args as Record<string, unknown> | undefined)?.command;
-    if (typeof cmd === 'string') {
-      const parsed = parseShellCommand(cmd);
-      if (parsed.kind === 'compound') {
-        let anyAsk = false;
-        for (const sub of parsed.subcommands) {
-          if (sub.kind !== 'simple') {
-            anyAsk = true;
-            continue;
-          }
-          const d = scanRules(rules, (rule) => ruleMatchesShell(rule, sub.command));
-          if (d === 'deny') return 'deny';
-          if (d !== 'allow') anyAsk = true;
-        }
-        return anyAsk ? 'ask' : 'allow';
-      }
-    }
+  if (toolName !== 'shell') {
+    return scanRules(rules, (rule) => ruleMatchesNonShell(rule, toolName, args));
   }
 
-  return scanRules(rules, (rule) => ruleMatchesCall(rule, toolName, args));
+  // Invariant: dangerous shell always re-prompts, no rule can override it.
+  if (isDangerousShell) return 'ask';
+
+  const cmd = (args as Record<string, unknown> | undefined)?.command;
+  // Parse once. Each subcommand (simple = 1 element) is resolved independently;
+  // the compound is allowed only when every subcommand allows, and any denied
+  // subcommand sinks the whole command (deny-first). Parse-error / non-string
+  // commands can only be covered by a no-specifier `shell` rule.
+  const subs = typeof cmd === 'string' ? shellSubcommands(parseShellCommand(cmd)) : null;
+  if (!subs) {
+    return scanRules(rules, (rule) => rule.tool === 'shell' && rule.specifier === undefined);
+  }
+  let anyAsk = false;
+  for (const sub of subs) {
+    const d = scanRules(rules, (rule) => ruleMatchesShell(rule, sub));
+    if (d === 'deny') return 'deny';
+    if (d !== 'allow') anyAsk = true;
+  }
+  return anyAsk ? 'ask' : 'allow';
 }

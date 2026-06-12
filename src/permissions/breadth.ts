@@ -11,7 +11,8 @@
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { primaryShellCommand } from '../tool-permissions.js';
-import { stableArgsString } from './matchers.js';
+import { truncate } from '../text.js';
+import { stableArgsString, FILE_TOOLS, WEB_TOOLS } from './matchers.js';
 
 export interface BreadthOption {
   /** Short label shown in the breadth selector. */
@@ -22,15 +23,10 @@ export interface BreadthOption {
   rulePreview: string;
 }
 
-const FILE_TOOLS = new Set(['file_read_lines', 'file_edit_lines', 'file_write']);
-const WEB_TOOLS = new Set(['web_read', 'web_search']);
+const LABEL_MAX = 48;
 
 function preview(label: string): string {
   return `Will allow: \`${label}\` for this profile`;
-}
-
-function truncate(s: string, n = 48): string {
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 
 function within(dir: string): boolean {
@@ -55,10 +51,11 @@ export function breadthOptionsFor(toolName: string, args: unknown): BreadthOptio
     const primary = cmd ? primaryShellCommand(cmd) : null;
     if (!primary) return []; // complex/empty → no stable grant (legacy parity)
     const anyArgs = `${primary} *`;
+    const shortCmd = truncate(cmd, LABEL_MAX);
     const exact: BreadthOption = {
-      label: truncate(cmd),
+      label: shortCmd,
       specifier: cmd,
-      rulePreview: preview(truncate(cmd)),
+      rulePreview: preview(shortCmd),
     };
     if (cmd === primary || cmd === anyArgs) return [exact]; // bare command: one level
     return [exact, { label: anyArgs, specifier: anyArgs, rulePreview: preview(anyArgs) }];
@@ -68,30 +65,18 @@ export function breadthOptionsFor(toolName: string, args: unknown): BreadthOptio
     const p = typeof a?.path === 'string' ? (a.path as string) : '';
     if (!p) return [];
     const abs = path.resolve(p);
-    const out: BreadthOption[] = [
-      {
-        label: truncate(abs),
-        specifier: abs,
-        rulePreview: preview(`${toolName} ${truncate(abs)}`),
-      },
-    ];
+    // One construction shape for every path level (exact file, dir/**, parent/**).
+    const pathOption = (spec: string): BreadthOption => ({
+      label: truncate(spec, LABEL_MAX),
+      specifier: spec,
+      rulePreview: preview(`${toolName} ${truncate(spec, LABEL_MAX)}`),
+    });
+    const out: BreadthOption[] = [pathOption(abs)];
     const dir = path.dirname(abs);
     if (within(dir)) {
-      const glob = `${dir}/**`;
-      out.push({
-        label: glob,
-        specifier: glob,
-        rulePreview: preview(`${toolName} ${truncate(glob)}`),
-      });
+      out.push(pathOption(`${dir}/**`));
       const parent = path.dirname(dir);
-      if (parent !== dir && within(parent)) {
-        const pglob = `${parent}/**`;
-        out.push({
-          label: pglob,
-          specifier: pglob,
-          rulePreview: preview(`${toolName} ${truncate(pglob)}`),
-        });
-      }
+      if (parent !== dir && within(parent)) out.push(pathOption(`${parent}/**`));
     }
     return out;
   }
@@ -99,10 +84,11 @@ export function breadthOptionsFor(toolName: string, args: unknown): BreadthOptio
   if (WEB_TOOLS.has(toolName)) {
     const u = typeof a?.url === 'string' ? (a.url as string) : '';
     if (!u) return [];
+    const shortUrl = truncate(u, LABEL_MAX);
     const exact: BreadthOption = {
-      label: truncate(u),
+      label: shortUrl,
       specifier: u,
-      rulePreview: preview(`${toolName} ${truncate(u)}`),
+      rulePreview: preview(`${toolName} ${shortUrl}`),
     };
     let host = '';
     try {
