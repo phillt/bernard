@@ -307,7 +307,7 @@ export function printHelp(): void {
     '  /mcp     — List MCP servers and tools',
     '  /cron    — Show cron jobs and daemon status',
     '  /facts   — Show RAG facts in current context window',
-    '  /lineup  — Edit the active tier lineup (premium/mid/cheap)',
+    '  /lineup  — Edit the active lineup (per-role × premium/mid/cheap grid)',
     '  /lineups — List, switch, or create tier lineups',
     '  /models  — Browse the model catalog and add custom providers',
     '  /provider — Manage providers (alias of /models)',

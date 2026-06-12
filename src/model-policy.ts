@@ -9,6 +9,7 @@ import {
 } from './config.js';
 import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import { loadLineups, resolveActiveLineup, type Lineup } from './lineups.js';
+import { DEFAULT_ROLE_TIERS, SITE_ROLE, type RoleId } from './model-roles.js';
 import { debugLog } from './logger.js';
 
 /**
@@ -37,41 +38,20 @@ export type ModelMode = 'optimize-tokens' | 'balanced' | 'optimize-performance';
 export type ModelTier = 'cheap' | 'mid' | 'premium';
 
 /**
- * Per-site tier assignment for each `ModelMode`. The tier maps to a concrete
- * `(provider, model)` via the user's active lineup (`src/lineups.ts`).
+ * Resolves the cost tier for a call site under the active `modelMode`. Two
+ * steps, both data-driven from {@link module:model-roles}: `site → role`
+ * (via {@link SITE_ROLE}) → `tier` (via {@link DEFAULT_ROLE_TIERS}). This
+ * replaces the legacy hardcoded per-site `TIER_TABLE`; the role tier rows
+ * reproduce the old per-site assignments exactly (#264).
  */
-const TIER_TABLE: Record<ModelMode, Record<ModelSite, ModelTier>> = {
-  'optimize-tokens': {
-    main: 'mid',
-    specialist: 'cheap',
-    'tool-wrapper': 'cheap',
-    compressor: 'cheap',
-    'specialist-detector': 'cheap',
-    rewriter: 'cheap',
-    'reference-resolver': 'cheap',
-    'reference-lookup': 'cheap',
-  },
-  balanced: {
-    main: 'premium',
-    specialist: 'mid',
-    'tool-wrapper': 'mid',
-    compressor: 'mid',
-    'specialist-detector': 'cheap',
-    rewriter: 'cheap',
-    'reference-resolver': 'cheap',
-    'reference-lookup': 'cheap',
-  },
-  'optimize-performance': {
-    main: 'premium',
-    specialist: 'premium',
-    'tool-wrapper': 'premium',
-    compressor: 'premium',
-    'specialist-detector': 'premium',
-    rewriter: 'premium',
-    'reference-resolver': 'premium',
-    'reference-lookup': 'premium',
-  },
-};
+function tierForSite(mode: ModelMode, site: ModelSite): ModelTier {
+  return DEFAULT_ROLE_TIERS[mode][SITE_ROLE[site]];
+}
+
+/** True when `mode` is a recognized {@link ModelMode}. */
+function isKnownMode(mode: unknown): mode is ModelMode {
+  return mode === 'optimize-tokens' || mode === 'balanced' || mode === 'optimize-performance';
+}
 
 /**
  * Normalizes any modelMode-shaped value read from disk or env. Returns the
@@ -190,11 +170,7 @@ export function resolveSiteModel(
         specialistProvider: specialist.provider,
         specialistModel: specialist.model,
         lineupId: activeLineup.id,
-        lineupProviders: [
-          activeLineup.premium.provider,
-          activeLineup.mid.provider,
-          activeLineup.cheap.provider,
-        ],
+        lineupProviders: lineupProviders(activeLineup),
         reason: 'pin-dropped',
       });
       specialist.provider = undefined;
@@ -231,10 +207,11 @@ export function resolveSiteModel(
   // Step 3 — tier-table lookup against the active lineup. Defensively
   // normalize an unknown/undefined `modelMode` (legacy `'off'`, missing key in
   // test fixtures) to `'balanced'` so resolution never crashes.
-  const mode: ModelMode = TIER_TABLE[config.modelMode] ? config.modelMode : 'balanced';
-  const tier = TIER_TABLE[mode][site];
+  const mode: ModelMode = isKnownMode(config.modelMode) ? config.modelMode : 'balanced';
+  const role = SITE_ROLE[site];
+  const tier = tierForSite(mode, site);
   const lineup = getActiveLineup();
-  const slot = lineup[tier];
+  const slot = lineup.roles[role][tier];
   if (hasProviderKey(config, slot.provider)) {
     return buildSiteModel(config, slot.provider, slot.model, 'policy', site, tier, lineup);
   }
@@ -274,13 +251,23 @@ function loadActiveLineup(config: BernardConfig): Lineup {
   return resolveActiveLineup(lineups, config.activeLineupId, config.provider);
 }
 
-/** True when any tier slot of the lineup is bound to the given provider. */
+/** True when any role×tier slot of the lineup is bound to the given provider. */
 function isProviderInLineup(provider: string, lineup: Lineup): boolean {
-  return (
-    lineup.premium.provider === provider ||
-    lineup.mid.provider === provider ||
-    lineup.cheap.provider === provider
-  );
+  for (const ladder of Object.values(lineup.roles)) {
+    for (const slot of Object.values(ladder)) {
+      if (slot.provider === provider) return true;
+    }
+  }
+  return false;
+}
+
+/** Unique provider names referenced anywhere in the lineup (debug logging). */
+function lineupProviders(lineup: Lineup): string[] {
+  const out = new Set<string>();
+  for (const ladder of Object.values(lineup.roles)) {
+    for (const slot of Object.values(ladder)) out.add(slot.provider);
+  }
+  return [...out];
 }
 
 function buildSiteModel(
@@ -333,6 +320,7 @@ export function _resetModelPolicyLogCacheForTests(): void {
 
 export interface SiteModelSnapshotEntry {
   site: ModelSite;
+  role: RoleId;
   tier: ModelTier | undefined;
   provider: string;
   model: string;
@@ -357,15 +345,17 @@ export interface SiteModelSnapshot {
  * implementation note below).
  */
 export function snapshotSiteModels(config: BernardConfig): SiteModelSnapshot {
-  const mode: ModelMode = TIER_TABLE[config.modelMode] ? config.modelMode : 'balanced';
+  const mode: ModelMode = isKnownMode(config.modelMode) ? config.modelMode : 'balanced';
   const lineup = loadActiveLineup(config);
   const sites = {} as Record<ModelSite, SiteModelSnapshotEntry>;
   for (const site of ALL_MODEL_SITES) {
-    const tier = TIER_TABLE[mode][site];
-    const slot = lineup[tier];
+    const role = SITE_ROLE[site];
+    const tier = tierForSite(mode, site);
+    const slot = lineup.roles[role][tier];
     if (hasProviderKey(config, slot.provider)) {
       sites[site] = {
         site,
+        role,
         tier,
         provider: slot.provider,
         model: slot.model,
@@ -374,6 +364,7 @@ export function snapshotSiteModels(config: BernardConfig): SiteModelSnapshot {
     } else {
       sites[site] = {
         site,
+        role,
         tier,
         provider: config.provider,
         model: config.model,

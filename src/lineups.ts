@@ -1,22 +1,32 @@
 /**
  * @module lineups
  *
- * Disk-backed registry of **tier lineups**. A lineup is a user-named mapping
- * of `{premium, mid, cheap}` → `(provider, model)` pairs. The active profile
- * (`ProfileSettings.activeLineupId`) selects which lineup `resolveSiteModel`
- * consults when `config.modelMode` is on, replacing the legacy hard-coded
- * `PROVIDER_TIERS` table.
+ * Disk-backed registry of **lineups**. A lineup is a user-named 2D matrix
+ * binding `(role, cost-tier) → (provider, model)` (#264). The *cost tier*
+ * (`premium / mid / cheap`) is how much model to spend; the *role*
+ * (orchestrator, executor, function-caller, summarizer, classifier, coder —
+ * see {@link module:model-roles}) is what kind of work the call site does.
+ * Each role carries its own `{premium, mid, cheap}` ladder, so a user can give
+ * e.g. their `coder` role a top-tier model in performance mode and a cheaper
+ * one in token-saving mode.
  *
- * Lineups may freely mix providers — built-in or custom — for any tier. This
- * dissolves the previous "active provider" concept (which silently broke
- * tiered model-resolution for custom/local providers because they had no
- * `PROVIDER_TIERS` entry).
+ * The active profile (`ProfileSettings.activeLineupId`) selects which lineup
+ * `resolveSiteModel` consults: `site → role` (static) → `tier`
+ * (via `config.modelMode`) → `lineup.roles[role][tier]`.
+ *
+ * Lineups may freely mix providers — built-in or custom — for any (role, tier)
+ * cell. This dissolves the previous "active provider" concept.
  *
  * Storage: `~/.config/bernard/lineups.json`.
  *
  * Lineups themselves are **global**, shared across profiles, just like
  * `custom-providers.json` and `keys.json`. Only the *selection* is profile-
  * scoped.
+ *
+ * Pre-#264 lineups stored flat top-level `{premium, mid, cheap}` slots; those
+ * are auto-migrated on load by replicating each cost slot across all roles
+ * (see {@link migrateLineupShape}), so behavior is identical until a user
+ * customizes a role.
  */
 
 import * as fs from 'node:fs';
@@ -26,8 +36,9 @@ import { atomicWriteFileSync } from './fs-utils.js';
 import { getCatalogForProvider } from './providers/catalog.js';
 import { deriveTiers } from './providers/tiers.js';
 import { BUILTIN_PROVIDERS, type BuiltinProvider } from './providers/types.js';
+import { ALL_ROLE_IDS, type RoleId } from './model-roles.js';
 
-/** The three tier slots every lineup must define. */
+/** The three cost-tier slots every role defines. */
 export const LINEUP_TIERS = ['premium', 'mid', 'cheap'] as const;
 export type LineupTier = (typeof LINEUP_TIERS)[number];
 
@@ -37,15 +48,17 @@ export interface LineupSlot {
   model: string;
 }
 
-/** A single named tier lineup. */
+/** The `{premium, mid, cheap}` cost ladder for one role. */
+export type RoleSlots = Record<LineupTier, LineupSlot>;
+
+/** A single named lineup: a `role → {premium, mid, cheap}` matrix. */
 export interface Lineup {
   /** Stable id used for `activeLineupId` lookups. Lowercase slug. */
   id: string;
   /** User-editable display name. */
   name: string;
-  premium: LineupSlot;
-  mid: LineupSlot;
-  cheap: LineupSlot;
+  /** Per-role cost ladders. Always covers every {@link RoleId}. */
+  roles: Record<RoleId, RoleSlots>;
   createdAt: string;
   updatedAt: string;
 }
@@ -154,6 +167,27 @@ function isLineupSlot(v: unknown): v is LineupSlot {
   );
 }
 
+function isRoleSlots(v: unknown): v is RoleSlots {
+  if (!v || typeof v !== 'object') return false;
+  return LINEUP_TIERS.every((tier) => isLineupSlot((v as Record<string, unknown>)[tier]));
+}
+
+/** Deep-copies one `{premium, mid, cheap}` ladder (no shared slot refs). */
+function cloneRoleSlots(slots: RoleSlots): RoleSlots {
+  return {
+    premium: { ...slots.premium },
+    mid: { ...slots.mid },
+    cheap: { ...slots.cheap },
+  };
+}
+
+/** Builds a full `role → ladder` map, replicating one ladder across every role. */
+function replicateAcrossRoles(slots: RoleSlots): Record<RoleId, RoleSlots> {
+  const out = {} as Record<RoleId, RoleSlots>;
+  for (const role of ALL_ROLE_IDS) out[role] = cloneRoleSlots(slots);
+  return out;
+}
+
 function writeFile(lineups: Record<string, Lineup>): void {
   fs.mkdirSync(path.dirname(LINEUPS_PATH), { recursive: true });
   const payload: LineupsFile = { lineups };
@@ -172,12 +206,15 @@ function seedForProvider(provider: BuiltinProvider, now: string): Lineup {
   } else {
     tiers = FALLBACK_TIERS[provider];
   }
-  return {
-    id: provider,
-    name: `${PROVIDER_DISPLAY_NAMES[provider]}-only`,
+  const ladder: RoleSlots = {
     premium: { provider, model: tiers.premium },
     mid: { provider, model: tiers.mid },
     cheap: { provider, model: tiers.cheap },
+  };
+  return {
+    id: provider,
+    name: `${PROVIDER_DISPLAY_NAMES[provider]}-only`,
+    roles: replicateAcrossRoles(ladder),
     createdAt: now,
     updatedAt: now,
   };
@@ -217,10 +254,78 @@ export function seedDefaultLineups(existing: Record<string, Lineup>): Record<str
 }
 
 /**
+ * Normalizes one stored lineup entry into the current role-keyed shape,
+ * migrating where needed. Returns `null` for unrecoverable entries (caller
+ * drops them and re-seeds if the map ends up empty).
+ *
+ * Handled shapes:
+ *  1. **Old flat** (`{premium, mid, cheap}` at top level, no `roles`): replicate
+ *     the cost ladder across every role → behavior identical to pre-#264.
+ *  2. **Role-keyed** (`{roles: {...}}`): validate each known role; backfill any
+ *     role missing from `ALL_ROLE_IDS` (e.g. a role added after this lineup was
+ *     saved) from an anchor role (`orchestrator`, else the first valid role).
+ *  3. **Neither**: `null`.
+ *
+ * Sets `mutatedRef.value = true` whenever it changes the on-disk shape so the
+ * caller can persist the upgrade.
+ */
+function migrateLineupShape(
+  id: string,
+  entry: unknown,
+  mutatedRef: { value: boolean },
+): Lineup | null {
+  if (!entry || typeof entry !== 'object') return null;
+  const e = entry as Record<string, unknown>;
+  if (typeof e.id !== 'string' || typeof e.name !== 'string') return null;
+  const createdAt = typeof e.createdAt === 'string' ? e.createdAt : nowIso();
+  const updatedAt = typeof e.updatedAt === 'string' ? e.updatedAt : nowIso();
+
+  // Case 2 — already role-keyed.
+  if (e.roles && typeof e.roles === 'object') {
+    const stored = e.roles as Record<string, unknown>;
+    // Anchor for backfilling missing roles: prefer orchestrator, else any valid.
+    const anchorId =
+      ALL_ROLE_IDS.find((r) => isRoleSlots(stored[r])) ?? null;
+    if (!anchorId) return null;
+    const anchor = stored[anchorId] as RoleSlots;
+    const roles = {} as Record<RoleId, RoleSlots>;
+    for (const role of ALL_ROLE_IDS) {
+      if (isRoleSlots(stored[role])) {
+        roles[role] = cloneRoleSlots(stored[role] as RoleSlots);
+      } else {
+        roles[role] = cloneRoleSlots(anchor);
+        mutatedRef.value = true; // backfilled a missing/invalid role
+      }
+    }
+    return { id: e.id, name: e.name, roles, createdAt, updatedAt };
+  }
+
+  // Case 1 — legacy flat shape.
+  if (isLineupSlot(e.premium) && isLineupSlot(e.mid) && isLineupSlot(e.cheap)) {
+    mutatedRef.value = true;
+    const ladder: RoleSlots = {
+      premium: e.premium,
+      mid: e.mid,
+      cheap: e.cheap,
+    };
+    return {
+      id: e.id,
+      name: e.name,
+      roles: replicateAcrossRoles(ladder),
+      createdAt,
+      updatedAt,
+    };
+  }
+
+  return null;
+}
+
+/**
  * Reads `lineups.json`. If the file is missing or unparseable, seeds the
  * three built-in provider lineups, persists them, and returns the result.
  * Always returns at least the seeded set so callers never have to handle an
- * empty-map case.
+ * empty-map case. Auto-migrates legacy flat lineups and backfills newly-added
+ * roles, persisting the upgraded shape when anything changed.
  */
 export function loadLineups(): Record<string, Lineup> {
   try {
@@ -233,28 +338,22 @@ export function loadLineups(): Record<string, Lineup> {
       typeof parsed.lineups === 'object'
     ) {
       const out: Record<string, Lineup> = {};
+      const mutatedRef = { value: false };
       for (const [id, entry] of Object.entries(parsed.lineups)) {
-        if (!entry || typeof entry !== 'object') continue;
-        const e = entry as Partial<Lineup>;
-        if (
-          typeof e.id === 'string' &&
-          typeof e.name === 'string' &&
-          isLineupSlot(e.premium) &&
-          isLineupSlot(e.mid) &&
-          isLineupSlot(e.cheap)
-        ) {
-          out[id] = {
-            id: e.id,
-            name: e.name,
-            premium: e.premium,
-            mid: e.mid,
-            cheap: e.cheap,
-            createdAt: typeof e.createdAt === 'string' ? e.createdAt : nowIso(),
-            updatedAt: typeof e.updatedAt === 'string' ? e.updatedAt : nowIso(),
-          };
-        }
+        const migrated = migrateLineupShape(id, entry, mutatedRef);
+        if (migrated) out[id] = migrated;
+        else mutatedRef.value = true; // dropped a corrupt entry
       }
-      if (Object.keys(out).length > 0) return out;
+      if (Object.keys(out).length > 0) {
+        if (mutatedRef.value) {
+          try {
+            writeFile(out);
+          } catch {
+            // best-effort; the in-memory migration still applies this session
+          }
+        }
+        return out;
+      }
     }
   } catch {
     // fall through to seed
@@ -295,9 +394,7 @@ export function resolveActiveLineup(
 export interface SaveLineupInput {
   id?: string;
   name: string;
-  premium: LineupSlot;
-  mid: LineupSlot;
-  cheap: LineupSlot;
+  roles: Record<RoleId, RoleSlots>;
 }
 
 /**
@@ -309,10 +406,14 @@ export interface SaveLineupInput {
 export function saveLineup(input: SaveLineupInput): Lineup {
   const nameErr = validateLineupName(input.name);
   if (nameErr) throw new Error(nameErr);
-  for (const tier of LINEUP_TIERS) {
-    const slot = input[tier];
-    if (!isLineupSlot(slot)) {
-      throw new Error(`Tier "${tier}" must have non-empty provider and model.`);
+  for (const role of ALL_ROLE_IDS) {
+    const ladder = input.roles[role];
+    for (const tier of LINEUP_TIERS) {
+      if (!isLineupSlot(ladder?.[tier])) {
+        throw new Error(
+          `Role "${role}" tier "${tier}" must have non-empty provider and model.`,
+        );
+      }
     }
   }
   const existing = loadLineups();
@@ -320,12 +421,12 @@ export function saveLineup(input: SaveLineupInput): Lineup {
   const idErr = validateLineupId(id);
   if (idErr) throw new Error(idErr);
   const now = nowIso();
+  const roles = {} as Record<RoleId, RoleSlots>;
+  for (const role of ALL_ROLE_IDS) roles[role] = cloneRoleSlots(input.roles[role]);
   const entry: Lineup = {
     id,
     name: input.name.trim(),
-    premium: input.premium,
-    mid: input.mid,
-    cheap: input.cheap,
+    roles,
     createdAt: existing[id]?.createdAt ?? now,
     updatedAt: now,
   };

@@ -268,12 +268,17 @@ function formatLineupPromptLine(config: BernardConfig): string {
   try {
     const lineups = loadLineups();
     const lineup = resolveActiveLineup(lineups, config.activeLineupId, config.provider);
+    // Show the orchestrator role's cost ladder — that's the model governing the
+    // main agent (this turn). Other roles (executor, function-caller, …) have
+    // their own ladders, editable per-role via /lineup.
+    const o = lineup.roles.orchestrator;
     return (
-      `\nActive lineup: ${lineup.name} — ` +
-      `premium ${lineup.premium.provider}/${lineup.premium.model}, ` +
-      `mid ${lineup.mid.provider}/${lineup.mid.model}, ` +
-      `cheap ${lineup.cheap.provider}/${lineup.cheap.model}. ` +
-      `The user can edit it with /lineup or switch lineups with /lineups.`
+      `\nActive lineup: ${lineup.name} (orchestrator role) — ` +
+      `premium ${o.premium.provider}/${o.premium.model}, ` +
+      `mid ${o.mid.provider}/${o.mid.model}, ` +
+      `cheap ${o.cheap.provider}/${o.cheap.model}. ` +
+      `Each role has its own premium/mid/cheap binding; the user can edit them ` +
+      `with /lineup or switch lineups with /lineups.`
     );
   } catch {
     return `\nYou are running as provider: ${config.provider}, model: ${config.model}.`;

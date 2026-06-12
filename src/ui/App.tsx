@@ -34,6 +34,7 @@ import {
   type Lineup,
   type LineupSlot,
   type LineupTier,
+  type RoleSlots,
   loadLineups,
   resolveActiveLineup,
   saveLineup,
@@ -42,6 +43,7 @@ import {
   validateLineupName,
   PROVIDER_DISPLAY_NAMES,
 } from '../lineups.js';
+import { MODEL_ROLES, getRole, type RoleId } from '../model-roles.js';
 import type { SupportedSdk } from '../providers/types.js';
 import { THEMES, getThemeKeys, getActiveThemeKey, setTheme, getThemeColors } from '../theme.js';
 import type { HistoryStore } from '../history.js';
@@ -1110,7 +1112,7 @@ export function App({
         label: l.name,
         annotation: `(${l.id})`,
         active: l.id === activeId,
-        description: `premium ${l.premium.provider}/${l.premium.model} · mid ${l.mid.provider}/${l.mid.model} · cheap ${l.cheap.provider}/${l.cheap.model}`,
+        description: `orchestrator — ${summarizeRoleSlots(l.roles.orchestrator)}`,
         value: l.id,
       }));
       entries.push({ type: 'section', title: '' });
@@ -1768,7 +1770,7 @@ export function App({
       {
         value: 'balanced',
         label: 'Balanced',
-        desc: 'Premium main; mid sub-agents; cheap routing.',
+        desc: 'Premium orchestrator; mid executor/function-caller/summarizer; cheap classifier.',
       },
       {
         value: 'optimize-tokens',
@@ -2022,7 +2024,7 @@ export function App({
           label: 'Tier lineup',
           annotation: `= ${resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider).name}`,
           description:
-            'Switch, edit, or create lineups that bind premium/mid/cheap tiers to specific (provider, model) pairs.',
+            'Switch, edit, or create lineups that bind each functional role × cost tier (premium/mid/cheap) to a (provider, model) pair.',
         },
         action: () => handleSubmit('/lineups'),
       },
@@ -3260,7 +3262,10 @@ async function pickLineupSlotInk(
   requestGridMenu: RequestGridMenu,
   requestTextInput: RequestTextInput,
   flashToast: FlashToast,
+  roleLabel?: string,
 ): Promise<LineupSlot | null> {
+  const slotLabel = (t: LineupTier): string =>
+    roleLabel ? `${roleLabel} / ${t.toUpperCase()}` : `${t.toUpperCase()}`;
   const providerDisplayName = (name: string): string => {
     if (Object.hasOwn(PROVIDER_DISPLAY_NAMES, name)) {
       return PROVIDER_DISPLAY_NAMES[name as keyof typeof PROVIDER_DISPLAY_NAMES];
@@ -3323,7 +3328,7 @@ async function pickLineupSlotInk(
     entries.push({ label: '+ Add custom provider…', value: { kind: 'add-custom' } as const });
 
     const pick = await requestMenu(entries, {
-      title: `Pick provider for ${tier.toUpperCase()} slot`,
+      title: `Pick provider for ${slotLabel(tier)} slot`,
       headerLines: [formatCatalogFooter()],
     });
     if (pick.cancelled) return null;
@@ -3363,7 +3368,7 @@ async function pickLineupSlotInk(
         : 0;
 
     const result = await requestGridMenu(items, {
-      title: `Pick ${providerDisplayName(provider)} model for ${tier.toUpperCase()} slot`,
+      title: `Pick ${providerDisplayName(provider)} model for ${slotLabel(tier)} slot`,
       footer: formatCatalogFooter(),
       initialIndex,
       currentItem: currentModelForProvider,
@@ -3433,10 +3438,76 @@ async function runModelsCatalogInk(
   }
 }
 
+/** One-line `premium · mid · cheap` summary of a role's cost ladder. */
+function summarizeRoleSlots(slots: RoleSlots): string {
+  return (
+    `premium ${slots.premium.provider}/${slots.premium.model} · ` +
+    `mid ${slots.mid.provider}/${slots.mid.model} · ` +
+    `cheap ${slots.cheap.provider}/${slots.cheap.model}`
+  );
+}
+
 /**
- * Editor for one lineup. Shows three rows (premium / mid / cheap) plus
- * rename and either "Save" (existing) or "Save as new" (draft). Returns
- * the persisted lineup on save, or `null` on cancel.
+ * Level-2 editor: the three cost-tier slots (premium / mid / cheap) for one
+ * role. Mutates a copy of `slots` and returns it on `← Back`, or `null` on Esc
+ * (caller treats both the same — edits are already applied into the returned
+ * ladder). Selecting a tier opens the provider→model picker.
+ */
+async function runRoleSlotsEditorInk(
+  roleId: RoleId,
+  initial: RoleSlots,
+  config: BernardConfig,
+  requestMenu: RequestMenu,
+  requestGridMenu: RequestGridMenu,
+  requestTextInput: RequestTextInput,
+  flashToast: FlashToast,
+): Promise<RoleSlots> {
+  const role = getRole(roleId);
+  let slots: RoleSlots = {
+    premium: { ...initial.premium },
+    mid: { ...initial.mid },
+    cheap: { ...initial.cheap },
+  };
+  while (true) {
+    const tierRows: MenuEntry[] = LINEUP_TIERS.map((tier) => ({
+      label: `${tier.toUpperCase()}`,
+      annotation: `→ ${slots[tier].provider} / ${slots[tier].model}`,
+      value: { kind: 'tier', tier },
+    }));
+    const entries: MenuEntry[] = [
+      ...tierRows,
+      { type: 'section', title: '' },
+      { label: '← Back to roles', value: { kind: 'back' } },
+    ];
+    const pick = await requestMenu(entries, {
+      title: `${role.label} — pick cost tier to bind`,
+      headerLines: [role.description],
+    });
+    if (pick.cancelled) return slots;
+    const value = pick.item.value as
+      | { kind: 'tier'; tier: LineupTier }
+      | { kind: 'back' };
+    if (value.kind === 'back') return slots;
+    const next = await pickLineupSlotInk(
+      config,
+      value.tier,
+      slots[value.tier],
+      requestMenu,
+      requestGridMenu,
+      requestTextInput,
+      flashToast,
+      role.label,
+    );
+    if (next) slots = { ...slots, [value.tier]: next };
+  }
+}
+
+/**
+ * Editor for one lineup. Two levels: the top menu lists the functional roles
+ * (orchestrator / executor / …), each showing its current premium·mid·cheap
+ * binding; selecting a role opens its three cost-tier slots. Plus rename and
+ * either "Save" (existing) or "Save as new" (draft). Returns the persisted
+ * lineup on save, or `null` on cancel.
  */
 async function runLineupEditorInk(
   initial: Lineup,
@@ -3449,13 +3520,14 @@ async function runLineupEditorInk(
 ): Promise<Lineup | null> {
   let draft: Lineup = { ...initial };
   while (true) {
-    const tierRows: MenuEntry[] = LINEUP_TIERS.map((tier) => ({
-      label: `${tier.toUpperCase()}`,
-      annotation: `→ ${draft[tier].provider} / ${draft[tier].model}`,
-      value: { kind: 'tier', tier },
+    const roleRows: MenuEntry[] = MODEL_ROLES.map((role) => ({
+      label: role.label,
+      description: role.description,
+      annotation: summarizeRoleSlots(draft.roles[role.id]),
+      value: { kind: 'role', roleId: role.id },
     }));
     const entries: MenuEntry[] = [
-      ...tierRows,
+      ...roleRows,
       { type: 'section', title: '' },
       { label: 'Rename lineup', value: { kind: 'rename' } },
       ...(opts.isNew
@@ -3468,24 +3540,27 @@ async function runLineupEditorInk(
       { label: 'Cancel', value: { kind: 'cancel' } },
     ];
     const pick = await requestMenu(entries, {
-      title: `Lineup: ${draft.name}${opts.isNew ? ' (draft)' : ''}`,
+      title: `Lineup: ${draft.name}${opts.isNew ? ' (draft)' : ''} — pick a role`,
     });
     if (pick.cancelled) return null;
     const value = pick.item.value as
-      | { kind: 'tier'; tier: LineupTier }
+      | { kind: 'role'; roleId: RoleId }
       | { kind: 'rename' | 'save' | 'save-new' | 'delete' | 'cancel' };
     if (value.kind === 'cancel') return null;
-    if (value.kind === 'tier') {
-      const next = await pickLineupSlotInk(
+    if (value.kind === 'role') {
+      const nextSlots = await runRoleSlotsEditorInk(
+        value.roleId,
+        draft.roles[value.roleId],
         config,
-        value.tier,
-        draft[value.tier],
         requestMenu,
         requestGridMenu,
         requestTextInput,
         flashToast,
       );
-      if (next) draft = { ...draft, [value.tier]: next };
+      draft = {
+        ...draft,
+        roles: { ...draft.roles, [value.roleId]: nextSlots },
+      };
       continue;
     }
     if (value.kind === 'rename') {
@@ -3507,9 +3582,7 @@ async function runLineupEditorInk(
         const saved = saveLineup({
           id: draft.id,
           name: draft.name,
-          premium: draft.premium,
-          mid: draft.mid,
-          cheap: draft.cheap,
+          roles: draft.roles,
         });
         return saved;
       } catch (err) {
@@ -3522,9 +3595,7 @@ async function runLineupEditorInk(
         const saved = saveLineup({
           // omit id so saveLineup slugs from name
           name: draft.name,
-          premium: draft.premium,
-          mid: draft.mid,
-          cheap: draft.cheap,
+          roles: draft.roles,
         });
         return saved;
       } catch (err) {
