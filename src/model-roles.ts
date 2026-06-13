@@ -38,6 +38,12 @@ export interface ModelRole {
   /** One-line description shown in the lineup editor for discoverability. */
   description: string;
   /**
+   * Guidance shown in the lineup editor's detail card: *what kind of model to
+   * look for* when binding this role. Phrased as advice to the user choosing a
+   * model, not a description of the role's job (that's {@link description}).
+   */
+  lookFor: string;
+  /**
    * Per-`ModelMode` cost-tier assignment for this role. This is the data behind
    * the legacy `TIER_TABLE` — re-keyed from `[mode][site]` to `[mode][role]`.
    * The values reproduce Bernard's pre-#264 per-site behavior exactly (every
@@ -64,6 +70,8 @@ export const MODEL_ROLES: readonly ModelRole[] = [
     id: 'orchestrator',
     label: 'Orchestrator',
     description: 'Main interactive agent + cron — long-context planning & tool orchestration.',
+    lookFor:
+      'A strong long-context reasoner with dependable tool-calling. This model drives every turn — favor capability over cost.',
     defaultTiers: {
       'optimize-tokens': 'mid',
       balanced: 'premium',
@@ -74,6 +82,8 @@ export const MODEL_ROLES: readonly ModelRole[] = [
     id: 'executor',
     label: 'Task executor',
     description: 'Sub-agents, specialists & tasks — focused multi-step execution of delegated work.',
+    lookFor:
+      'A capable all-rounder that follows multi-step instructions and uses tools reliably. Balance cost against how much delegated work you run.',
     defaultTiers: {
       'optimize-tokens': 'cheap',
       balanced: 'mid',
@@ -84,6 +94,8 @@ export const MODEL_ROLES: readonly ModelRole[] = [
     id: 'function-caller',
     label: 'Function caller',
     description: 'Tool-wrapper specialists — natural language → schema-conformant structured calls.',
+    lookFor:
+      'A fast model with strong structured-output / JSON adherence. Argument accuracy matters more than deep reasoning here.',
     defaultTiers: {
       'optimize-tokens': 'cheap',
       balanced: 'mid',
@@ -94,6 +106,8 @@ export const MODEL_ROLES: readonly ModelRole[] = [
     id: 'summarizer',
     label: 'Summarizer',
     description: 'History compression & fact extraction — synthesis, not reasoning.',
+    lookFor:
+      'A model good at faithful synthesis and extraction. It runs on every compression, so lean cost-efficient.',
     defaultTiers: {
       'optimize-tokens': 'cheap',
       balanced: 'mid',
@@ -104,6 +118,8 @@ export const MODEL_ROLES: readonly ModelRole[] = [
     id: 'classifier',
     label: 'Classifier / router',
     description: 'Rewriter, reference resolver/lookup, specialist detector — cheap single-shot decisions.',
+    lookFor:
+      'The cheapest model that still judges reliably. These are quick single-shot routing calls where latency and price dominate.',
     defaultTiers: {
       'optimize-tokens': 'cheap',
       balanced: 'cheap',
@@ -114,6 +130,8 @@ export const MODEL_ROLES: readonly ModelRole[] = [
     id: 'coder',
     label: 'Coder',
     description: 'Reserved for a future dedicated code-generation role (no call site yet).',
+    lookFor:
+      'A model strong at code generation and editing. Reserved — no call site uses this role yet, but it is fully configurable.',
     defaultTiers: {
       'optimize-tokens': 'cheap',
       balanced: 'mid',

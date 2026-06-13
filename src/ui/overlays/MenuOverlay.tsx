@@ -155,6 +155,13 @@ export function MenuOverlay({
     }
   });
 
+  // Split layout: numbered list on the left, a bordered detail card for the
+  // highlighted row on the right. Falls back to the classic single column when
+  // no detail renderer is supplied. Multi-select never uses split (checkboxes
+  // belong in a flat list), so the branch is single-select only.
+  const isSplit = options?.layout === 'split' && !multiSelect && !!options?.renderDetail;
+  const highlightedItem = items[highlight];
+
   return (
     <Box flexDirection="column" marginTop={1}>
       {options?.headerLines?.map((line, idx) => (
@@ -169,7 +176,41 @@ export function MenuOverlay({
           <Text> </Text>
         </>
       )}
-      <MenuList entries={entries} highlight={highlight} multiSelect={multiSelect} checked={checked} />
+      {isSplit ? (
+        <Box flexDirection="row">
+          <Box flexDirection="column" marginRight={3}>
+            <MenuList
+              entries={entries}
+              highlight={highlight}
+              multiSelect={false}
+              checked={checked}
+              suppressDescription
+            />
+          </Box>
+          {highlightedItem && (
+            <Box
+              flexDirection="column"
+              borderStyle="round"
+              borderColor={colors.muted}
+              paddingX={1}
+              minWidth={50}
+            >
+              <Text color={colors.accent} bold>
+                {highlightedItem.label}
+              </Text>
+              <Text> </Text>
+              {options!.renderDetail!(highlightedItem)}
+            </Box>
+          )}
+        </Box>
+      ) : (
+        <MenuList
+          entries={entries}
+          highlight={highlight}
+          multiSelect={multiSelect}
+          checked={checked}
+        />
+      )}
       <Text> </Text>
       <Text dimColor>
         {multiSelect
@@ -185,11 +226,14 @@ function MenuList({
   highlight,
   multiSelect = false,
   checked,
+  suppressDescription = false,
 }: {
   entries: MenuEntry[];
   highlight: number;
   multiSelect?: boolean;
   checked?: Set<number>;
+  /** Split layout hides the per-row description — the detail card shows it. */
+  suppressDescription?: boolean;
 }) {
   const colors = getThemeColors();
   let itemIndex = 0;
@@ -214,7 +258,7 @@ function MenuList({
         return (
           <Box key={`i-${idx}`} flexDirection="column">
             <MenuRow selected={isHighlighted} label={label} />
-            {isHighlighted && entry.description && (
+            {!suppressDescription && isHighlighted && entry.description && (
               <Box marginLeft={4}>
                 <Text dimColor>{entry.description}</Text>
               </Box>

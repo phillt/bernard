@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import type { Agent } from '../agent.js';
 import type { BernardConfig } from '../config.js';
@@ -17,7 +17,12 @@ import {
 import { MAX_CONCURRENT_AGENTS_LIMIT, setMaxConcurrentAgents } from '../tools/agent-pool.js';
 import { RESPONSE_STYLE_IDS, type ResponseStyle } from '../agent-prompt.js';
 import { getContextWindow } from '../context.js';
-import { loadCatalog, getCatalogAgeMs, getCatalogSource } from '../providers/catalog.js';
+import {
+  loadCatalog,
+  getCatalogAgeMs,
+  getCatalogSource,
+  refreshCatalogWithDiff,
+} from '../providers/catalog.js';
 import { getLocalVersion } from '../update.js';
 import { CONFIG_DIR, DATA_DIR, CACHE_DIR, STATE_DIR } from '../paths.js';
 import * as os from 'node:os';
@@ -584,6 +589,37 @@ export function App({
       }
     })();
   }, [isFreshInstall]);
+
+  // Startup model-catalog refresh (#264 follow-up). Every launch force-fetches
+  // the live gateway catalog in the background and toasts when new models
+  // appeared since the last run. Non-blocking and fail-silent — an offline
+  // gateway just leaves the cached/vendored catalog in place. We skip the
+  // notification when there was no real prior baseline (`previousSource ===
+  // 'vendored'`) so a fresh install doesn't announce the entire bundled
+  // snapshot as "new".
+  const catalogRefreshRanRef = useRef(false);
+  useEffect(() => {
+    if (catalogRefreshRanRef.current) return;
+    catalogRefreshRanRef.current = true;
+    void (async () => {
+      try {
+        const diff = await refreshCatalogWithDiff();
+        if (diff.error || diff.previousSource === 'vendored' || diff.added.length === 0) return;
+        const names = diff.added
+          .slice(0, 3)
+          .map((e) => `${e.provider}/${e.model}`)
+          .join(', ');
+        const more = diff.added.length > 3 ? ` +${diff.added.length - 3} more` : '';
+        flashToast(
+          `${diff.added.length} new model${diff.added.length === 1 ? '' : 's'} available: ${names}${more}. Use /model to switch.`,
+          'success',
+        );
+      } catch {
+        // Never block or crash startup over a catalog refresh.
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, []);
 
   const flashToast = (message: string, variant: ToastVariant = 'info') => {
     setToast({ message, variant });
@@ -3351,9 +3387,12 @@ async function pickLineupSlotInk(
     const provider = choice.provider;
     const isCustom = Object.hasOwn(customProviders, provider);
     const models = modelsForProvider(provider);
+    // Free-type is offered for every provider, not just custom ones: the
+    // built-in catalog (Vercel AI Gateway) omits some real models (e.g. xAI's
+    // grok-code-fast-1 isn't proxied under the `xai/` prefix), so without this
+    // escape hatch those models are unreachable through the picker.
     const FREE_TYPE = '+ Type a new model name…';
-    const items: string[] = [...models];
-    if (isCustom) items.push(FREE_TYPE);
+    const items: string[] = [...models, FREE_TYPE];
 
     if (items.length === 0) {
       flashToast(`No models known for provider "${provider}".`, 'error');
@@ -3380,8 +3419,13 @@ async function pickLineupSlotInk(
       const modelRes = await requestTextInput({ label: `New model name for ${provider}` });
       if (modelRes.cancelled || !modelRes.raw.trim()) continue;
       const model = modelRes.raw.trim();
-      rememberCustomModel(provider, model);
-      config.customProviders = loadCustomProviders();
+      // Only the custom-provider store remembers typed model names; built-in
+      // providers draw their list from the catalog, so a free-typed built-in
+      // model is used as-is for this slot without persisting it there.
+      if (isCustom) {
+        rememberCustomModel(provider, model);
+        config.customProviders = loadCustomProviders();
+      }
       return { provider, model };
     }
     return { provider, model: picked };
@@ -3444,6 +3488,71 @@ function summarizeRoleSlots(slots: RoleSlots): string {
     `premium ${slots.premium.provider}/${slots.premium.model} · ` +
     `mid ${slots.mid.provider}/${slots.mid.model} · ` +
     `cheap ${slots.cheap.provider}/${slots.cheap.model}`
+  );
+}
+
+/**
+ * Right-pane detail card content for the split-layout lineup editor (Style 2).
+ * A role row shows its premium/mid/cheap ladder, the role description, and an
+ * "edit" hint; a lineup-level action row shows a one-line explainer + hint. The
+ * overlay supplies the surrounding border and the row's label as the card title.
+ */
+function renderLineupDetail(item: MenuItem, draft: Lineup): ReactNode {
+  const colors = getThemeColors();
+  const value = item.value as
+    | { kind: 'role'; roleId: RoleId }
+    | { kind: 'rename' | 'save' | 'save-new' | 'delete' | 'cancel' };
+
+  if (value.kind === 'role') {
+    const role = getRole(value.roleId);
+    const slots = draft.roles[value.roleId];
+    // Dotted-leader rows: `tier ......... provider/model`, value right-aligned
+    // against a fixed inner width so the three tiers line up like a contents list.
+    const LEADER_WIDTH = 44;
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>{role.description}</Text>
+        <Text> </Text>
+        {LINEUP_TIERS.map((tier) => {
+          const val = `${slots[tier].provider}/${slots[tier].model}`;
+          const dots = '.'.repeat(Math.max(2, LEADER_WIDTH - tier.length - val.length));
+          return (
+            <Text key={tier}>
+              {tier}
+              <Text dimColor>{dots}</Text>
+              <Text color={colors.accent}>{val}</Text>
+            </Text>
+          );
+        })}
+        <Text> </Text>
+        <Text dimColor>What to look for when selecting:</Text>
+        <Text>{role.lookFor}</Text>
+        <Text> </Text>
+        <Text color={colors.accent}>↵ edit this role</Text>
+      </Box>
+    );
+  }
+
+  const explain: Record<string, string> = {
+    rename: 'Give this lineup a new display name.',
+    save: 'Persist your edits to this lineup.',
+    'save-new': 'Clone the current grid into a new lineup under a name you choose.',
+    delete: 'Remove this lineup (refuses if it is the last one).',
+    cancel: 'Discard changes and close the editor.',
+  };
+  const hint: Record<string, string> = {
+    rename: '↵ rename',
+    save: '↵ save',
+    'save-new': '↵ save as new',
+    delete: '↵ delete',
+    cancel: '↵ cancel',
+  };
+  return (
+    <Box flexDirection="column">
+      <Text dimColor>{explain[value.kind]}</Text>
+      <Text> </Text>
+      <Text color={colors.accent}>{hint[value.kind]}</Text>
+    </Box>
   );
 }
 
@@ -3520,10 +3629,10 @@ async function runLineupEditorInk(
 ): Promise<Lineup | null> {
   let draft: Lineup = { ...initial };
   while (true) {
+    // Left-pane rows stay lean (just the role/action label); the right-pane
+    // detail card carries the premium/mid/cheap ladder and the description.
     const roleRows: MenuEntry[] = MODEL_ROLES.map((role) => ({
       label: role.label,
-      description: role.description,
-      annotation: summarizeRoleSlots(draft.roles[role.id]),
       value: { kind: 'role', roleId: role.id },
     }));
     const entries: MenuEntry[] = [
@@ -3541,6 +3650,8 @@ async function runLineupEditorInk(
     ];
     const pick = await requestMenu(entries, {
       title: `Lineup: ${draft.name}${opts.isNew ? ' (draft)' : ''} — pick a role`,
+      layout: 'split',
+      renderDetail: (item) => renderLineupDetail(item, draft),
     });
     if (pick.cancelled) return null;
     const value = pick.item.value as
