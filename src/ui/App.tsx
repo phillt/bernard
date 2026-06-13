@@ -184,6 +184,14 @@ interface AppProps {
    * overlays the user's choices on top of it.
    */
   isFreshInstall?: boolean;
+  /**
+   * One-time transcript notice (#264 follow-up). Set by `src/index.ts` when the
+   * stored `activeLineupId` pointed at a lineup that no longer exists and was
+   * auto-switched to a valid one. Rendered as a synthetic assistant message at
+   * the top of the transcript on mount — UI-only, never pushed into the agent's
+   * LLM history.
+   */
+  startupNotice?: string;
 }
 
 type Overlay =
@@ -311,6 +319,7 @@ export function App({
   onExit,
   alertBanner,
   isFreshInstall,
+  startupNotice,
 }: AppProps) {
   const { exit } = useApp();
   const [activeOverlay, setActiveOverlay] = useState<Overlay | null>(null);
@@ -618,6 +627,28 @@ export function App({
         // Never block or crash startup over a catalog refresh.
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, []);
+
+  // One-time lineup-correction notice (#264 follow-up). When `src/index.ts`
+  // auto-switched a dangling `activeLineupId`, surface a synthetic assistant
+  // message at the top of the transcript so the silent fallback is visible.
+  // UI-only: it goes straight into `staticItems`, never into `agent.history`,
+  // so it isn't persisted to conversation-history.json or replayed on resume.
+  // Does NOT advance `committedLenRef` (that cursor tracks the agent's real
+  // history slice); a synthetic item carries no backing history message.
+  const startupNoticeRanRef = useRef(false);
+  useEffect(() => {
+    if (startupNoticeRanRef.current || !startupNotice) return;
+    startupNoticeRanRef.current = true;
+    setStaticItems((prev) => [
+      ...prev,
+      {
+        key: String(itemKeyRef.current++),
+        message: { role: 'assistant', content: startupNotice },
+        toolDetails: false,
+      },
+    ]);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, []);
 

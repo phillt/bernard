@@ -225,6 +225,42 @@ describe('lineups store', () => {
     });
   });
 
+  describe('resolveActiveLineupWithCorrection', () => {
+    it('reports no correction when the explicit id exists', async () => {
+      const m = await loadModule();
+      const lineups = m.loadLineups();
+      const res = m.resolveActiveLineupWithCorrection(lineups, 'openai', 'anthropic');
+      expect(res.lineup.id).toBe('openai');
+      expect(res.corrected).toBeUndefined();
+    });
+
+    it('reports no correction when no explicit id is set (normal fallback)', async () => {
+      const m = await loadModule();
+      const lineups = m.loadLineups();
+      const res = m.resolveActiveLineupWithCorrection(lineups, undefined, 'xai');
+      expect(res.lineup.id).toBe('xai');
+      expect(res.corrected).toBeUndefined();
+    });
+
+    it('reports a correction when the explicit id is missing, falling back by provider', async () => {
+      const m = await loadModule();
+      const lineups = m.loadLineups();
+      const res = m.resolveActiveLineupWithCorrection(lineups, 'openai-only', 'xai');
+      // 'openai-only' doesn't exist; provider 'xai' does → fall back to it.
+      expect(res.lineup.id).toBe('xai');
+      expect(res.corrected).toEqual({ requestedId: 'openai-only', resolvedId: 'xai' });
+    });
+
+    it('reports a correction and falls back to the first lineup when nothing matches', async () => {
+      const m = await loadModule();
+      const lineups = m.loadLineups();
+      const first = Object.values(lineups)[0];
+      const res = m.resolveActiveLineupWithCorrection(lineups, 'gone', 'unknown-provider');
+      expect(res.lineup.id).toBe(first.id);
+      expect(res.corrected).toEqual({ requestedId: 'gone', resolvedId: first.id });
+    });
+  });
+
   describe('saveLineup / renameLineup / deleteLineup', () => {
     it('writes a new lineup with a derived id', async () => {
       const m = await loadModule();

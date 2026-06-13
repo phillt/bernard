@@ -30,6 +30,7 @@ import {
   getAvailableProviders,
 } from './config.js';
 import { normalizeStoredModelMode } from './model-policy.js';
+import { loadLineups, resolveActiveLineupWithCorrection } from './lineups.js';
 import { setMaxConcurrentAgents, MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
 import {
   loadCustomProviders,
@@ -305,6 +306,46 @@ async function runInkRepl(args: {
     getToolPermissions: () => config.toolPermissions,
   };
 
+  // Auto-correct a dangling `activeLineupId` (#264 follow-up). A stale id —
+  // left over from a deleted lineup, or a typo in a hand-edited profile —
+  // otherwise falls back silently inside model-policy, so the user has no idea
+  // their selection isn't in effect. Detect it here, persist the corrected id
+  // to the active profile, and pass a transcript notice into <App> so the
+  // switch is visible. Best-effort: a persistence failure still keeps the
+  // in-memory correction for this session.
+  let startupNotice: string | undefined;
+  if (config.activeLineupId) {
+    try {
+      const resolution = resolveActiveLineupWithCorrection(
+        loadLineups(),
+        config.activeLineupId,
+        config.provider,
+      );
+      if (resolution.corrected) {
+        const { requestedId, resolvedId } = resolution.corrected;
+        config.activeLineupId = resolvedId;
+        try {
+          savePreferences({
+            provider: config.provider,
+            model: config.model,
+            activeLineupId: resolvedId,
+          });
+        } catch {
+          // best-effort; the in-memory correction still applies this session
+        }
+        startupNotice =
+          `Heads up — your selected model lineup "${requestedId}" no longer exists, ` +
+          `so I switched you to "${resolution.lineup.name}" (${resolvedId}) and saved that choice. ` +
+          `Use /lineups to pick a different one.`;
+        debugLog('lineup:auto-corrected', { requestedId, resolvedId });
+      }
+    } catch (err: unknown) {
+      // loadLineups always seeds, so this should be unreachable — but never let
+      // a lineup-resolution hiccup block REPL startup.
+      debugLog('lineup:auto-correct-error', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   let initialHistory: CoreMessage[] | undefined;
   if (resume) {
     const loaded = historyStore.load();
@@ -467,6 +508,7 @@ async function runInkRepl(args: {
       onExit: async () => {},
       alertBanner,
       isFreshInstall,
+      startupNotice,
     }),
   );
 

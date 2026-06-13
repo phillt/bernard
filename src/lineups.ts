@@ -391,6 +391,40 @@ export function resolveActiveLineup(
   return first;
 }
 
+/** Outcome of {@link resolveActiveLineupWithCorrection}. */
+export interface LineupResolution {
+  /** The lineup that will actually be used. */
+  lineup: Lineup;
+  /**
+   * Set only when `activeLineupId` was non-empty but pointed at a lineup that
+   * doesn't exist (e.g. a stale id left over from a deleted lineup, or a typo in
+   * a hand-edited profile). Carries the id that was requested and the id we fell
+   * back to, so the caller can persist the correction and tell the user.
+   */
+  corrected?: { requestedId: string; resolvedId: string };
+}
+
+/**
+ * Like {@link resolveActiveLineup}, but additionally reports whether the
+ * requested `activeLineupId` was *invalid* (set, but absent from `lineups`).
+ * When that happens the caller should persist `corrected.resolvedId` back onto
+ * the active profile and surface a note so the silent fallback isn't invisible.
+ *
+ * An empty/undefined `activeLineupId` is NOT a correction — that's the normal
+ * "no explicit selection, use the provider/first fallback" path.
+ */
+export function resolveActiveLineupWithCorrection(
+  lineups: Record<string, Lineup>,
+  activeLineupId: string | undefined,
+  fallbackProviderName: string | undefined,
+): LineupResolution {
+  const lineup = resolveActiveLineup(lineups, activeLineupId, fallbackProviderName);
+  if (activeLineupId && !lineups[activeLineupId]) {
+    return { lineup, corrected: { requestedId: activeLineupId, resolvedId: lineup.id } };
+  }
+  return { lineup };
+}
+
 export interface SaveLineupInput {
   id?: string;
   name: string;
