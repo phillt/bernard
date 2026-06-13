@@ -30,7 +30,8 @@ import {
   getAvailableProviders,
 } from './config.js';
 import { normalizeStoredModelMode } from './model-policy.js';
-import { loadLineups, resolveActiveLineupWithCorrection } from './lineups.js';
+import { loadLineups, resolveActiveLineup, resolveActiveLineupWithCorrection } from './lineups.js';
+import { validateLineup, formatLineupValidation } from './model-validate.js';
 import { setMaxConcurrentAgents, MAX_CONCURRENT_AGENTS_LIMIT } from './tools/agent-pool.js';
 import {
   loadCustomProviders,
@@ -576,6 +577,26 @@ program
       printInfo(
         'To add a custom provider: bernard add-provider <name> --sdk <openai|anthropic|xai> --base-url <url> --model <model>',
       );
+    }
+  });
+
+program
+  .command('validate-lineup [id]')
+  .description('Live-probe every model in a lineup (defaults to the active one). Exits non-zero if any model is unreachable.')
+  .action(async (id?: string) => {
+    const config = loadConfig();
+    const lineups = loadLineups();
+    const target = id && lineups[id] ? lineups[id] : resolveActiveLineup(lineups, config.activeLineupId, config.provider);
+    if (id && !lineups[id]) {
+      printError(`No lineup with id "${id}". Available: ${Object.keys(lineups).join(', ')}.`);
+      process.exit(1);
+    }
+    printInfo(`Validating lineup "${target.name}" (${target.id})…`);
+    const v = await validateLineup(config, target);
+    printInfo(formatLineupValidation(v));
+    if (!v.ok) {
+      printInfo('\nNote: a reachable model can still be too weak for a real task — a probe only checks access.');
+      process.exit(1);
     }
   });
 

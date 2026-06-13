@@ -15,6 +15,7 @@ import {
 import { ALL_ROLE_IDS, getRole, type RoleId } from '../model-roles.js';
 import { savePreferences, type BernardConfig } from '../config.js';
 import { BUILTIN_PROVIDERS } from '../providers/types.js';
+import { validateLineup, formatLineupValidation } from '../model-validate.js';
 
 /**
  * Agent-facing lineup editor (feature follow-up to #264). Lets Bernard read,
@@ -98,11 +99,13 @@ export function createLineupTool(config?: BernardConfig) {
         'Use this when the user pastes provider/model values and asks you to set up or change a lineup.\n\n' +
         '- action="list": show every lineup and its current bindings. Call this first if the user did not say WHICH lineup to change — then ask them with the ask_user tool.\n' +
         '- action="update": change slots on an existing lineup (pass its `id`). Unspecified slots keep their current value.\n' +
-        '- action="create": make a new lineup (pass `name`). Unspecified slots are copied from `base` (or the active lineup).\n\n' +
+        '- action="create": make a new lineup (pass `name`). Unspecified slots are copied from `base` (or the active lineup).\n' +
+        '- action="validate": live-probe every distinct model in a lineup (pass `id`, or omit for the active lineup) with the real API key and report which are reachable.\n\n' +
         'Provide bindings via `slots`: each entry is {role, tier, provider, model}. Use role="all" to set one tier for every role at once (the usual case). ' +
-        'Set activate=true to make the lineup active immediately. Do NOT guess an id — if unsure which lineup the user means, list and ask.',
+        'Set activate=true to make the lineup active immediately. Do NOT guess an id — if unsure which lineup the user means, list and ask.\n\n' +
+        'After create/update the new bindings are AUTOMATICALLY live-validated (set validate=false to skip). A model can pass validation and still be too weak for real work, so a green check means "reachable", not "good".',
       parameters: z.object({
-        action: z.enum(['list', 'update', 'create']),
+        action: z.enum(['list', 'update', 'create', 'validate']),
         id: z
           .string()
           .optional()
@@ -124,8 +127,14 @@ export function createLineupTool(config?: BernardConfig) {
           .boolean()
           .optional()
           .describe('When true, switch Bernard to this lineup after saving it.'),
+        validate: z
+          .boolean()
+          .optional()
+          .describe(
+            'For create/update: live-probe the resulting models to confirm they are reachable (default true). Set false to skip the network calls.',
+          ),
       }),
-      execute: async ({ action, id, name, base, slots, activate }): Promise<string> => {
+      execute: async ({ action, id, name, base, slots, activate, validate }): Promise<string> => {
         try {
           const lineups = loadLineups();
           const activeId = resolveActiveLineup(
@@ -146,6 +155,17 @@ export function createLineupTool(config?: BernardConfig) {
               `Lineups (${all.length}). Roles: ${ALL_ROLE_IDS.join(', ')}. Tiers: ${LINEUP_TIERS.join('/')}.\n\n` +
               blocks.join('\n\n')
             );
+          }
+
+          if (action === 'validate') {
+            if (!config) return 'Cannot validate — no live config available.';
+            const targetId = id && lineups[id] ? id : activeId;
+            const target = lineups[targetId];
+            if (!target) {
+              return `No lineup to validate. Available: ${Object.keys(lineups).join(', ')}.`;
+            }
+            const v = await validateLineup(config, target);
+            return formatLineupValidation(v);
           }
 
           const applied = slots ?? [];
@@ -174,6 +194,20 @@ export function createLineupTool(config?: BernardConfig) {
               : '';
           };
 
+          // After create/update, live-probe the saved lineup so Bernard can tell
+          // the user which pasted models actually work. Default on; opt out with
+          // validate=false. Fails open — a probe layer error never blocks the save.
+          const validateIfAsked = async (saved: Lineup): Promise<string> => {
+            if (validate === false) return '';
+            if (!config) return '';
+            try {
+              const v = await validateLineup(config, saved);
+              return `\n\n${formatLineupValidation(v)}` + (v.ok ? '' : '\n(Note: a passing probe means reachable, not necessarily good at the task.)');
+            } catch (err) {
+              return `\n\n(Could not validate models: ${(err as Error).message})`;
+            }
+          };
+
           if (action === 'update') {
             if (!id || !lineups[id]) {
               const ids = Object.keys(lineups);
@@ -195,7 +229,8 @@ export function createLineupTool(config?: BernardConfig) {
             return (
               `Updated lineup "${saved.name}" (id: ${saved.id}).\n${formatMatrix(saved)}` +
               warnUnknown() +
-              activateIfAsked(saved)
+              activateIfAsked(saved) +
+              (await validateIfAsked(saved))
             );
           }
 
@@ -213,7 +248,8 @@ export function createLineupTool(config?: BernardConfig) {
           return (
             `Created lineup "${saved.name}" (id: ${saved.id}), based on "${baseLineup.name}".\n${formatMatrix(saved)}` +
             warnUnknown() +
-            activateIfAsked(saved)
+            activateIfAsked(saved) +
+            (await validateIfAsked(saved))
           );
         } catch (err: unknown) {
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -226,9 +262,11 @@ export function createLineupTool(config?: BernardConfig) {
       deterministic: false,
       sideEffect: 'local',
       cacheable: false,
-      // action="list" is read-only; only update/create mutate on-disk lineups.
-      isWriteAction: (args: unknown) =>
-        (args as { action?: string } | undefined)?.action !== 'list',
+      // list/validate are read-only; only update/create mutate on-disk lineups.
+      isWriteAction: (args: unknown) => {
+        const a = (args as { action?: string } | undefined)?.action;
+        return a !== 'list' && a !== 'validate';
+      },
     },
   );
 }

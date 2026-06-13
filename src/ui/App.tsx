@@ -49,6 +49,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
 } from '../lineups.js';
 import { MODEL_ROLES, getRole, type RoleId } from '../model-roles.js';
+import { validateLineup, formatLineupValidation } from '../model-validate.js';
 import type { SupportedSdk } from '../providers/types.js';
 import { THEMES, getThemeKeys, getActiveThemeKey, setTheme, getThemeColors } from '../theme.js';
 import type { HistoryStore } from '../history.js';
@@ -656,6 +657,36 @@ export function App({
     setToast({ message, variant });
   };
 
+  // Push a UI-only assistant notice into the transcript (same mechanism as the
+  // startup lineup-correction notice): straight into `staticItems`, never into
+  // `agent.history`, so it isn't persisted or replayed.
+  const pushAssistantNotice = (content: string) => {
+    setStaticItems((prev) => [
+      ...prev,
+      { key: String(itemKeyRef.current++), message: { role: 'assistant', content }, toolDetails: false },
+    ]);
+  };
+
+  // Warn-only lineup validation (#264 follow-up). After a save/switch we
+  // live-probe the lineup's models in the background and, IF any are
+  // unreachable, surface a notice. Never blocks the save and fails open — a
+  // probe-layer error or offline gateway just skips the warning.
+  const warnValidateLineup = (lineup: Lineup) => {
+    void (async () => {
+      try {
+        const v = await validateLineup(config, lineup);
+        if (v.ok) return;
+        pushAssistantNotice(
+          `⚠ Lineup "${v.lineupName}" was saved, but ${v.failures} of ${v.results.length} model(s) failed a live check:\n\n` +
+            formatLineupValidation(v) +
+            `\n\nFix the names with /lineup, or switch with /lineups. (A reachable model can still be too weak for a task — this only checks access.)`,
+        );
+      } catch {
+        // fail open — never let validation noise block or crash the REPL
+      }
+    })();
+  };
+
   const showInfo = (title: string, lines: PendingInfo['lines']) => {
     setPendingInfo({ title, lines });
     setActiveOverlay('info');
@@ -1161,6 +1192,7 @@ export function App({
         });
         logSiteModelSnapshot(config, 'lineup-change');
         flashToast(`Lineup "${edited.name}" saved.`, 'success');
+        warnValidateLineup(edited);
       }
       return;
     }
@@ -1221,6 +1253,7 @@ export function App({
           });
           logSiteModelSnapshot(config, 'lineup-change');
           flashToast(`Created and switched to "${created.name}".`, 'success');
+          warnValidateLineup(created);
         }
         return;
       }
@@ -1245,6 +1278,7 @@ export function App({
           });
           logSiteModelSnapshot(config, 'lineup-change');
           flashToast(`Lineup "${edited.name}" saved.`, 'success');
+          warnValidateLineup(edited);
         }
         return;
       }
@@ -1256,6 +1290,7 @@ export function App({
       });
       logSiteModelSnapshot(config, 'lineup-change');
       flashToast(`Switched to lineup "${target.name}".`, 'success');
+      warnValidateLineup(target);
       return;
     }
 
