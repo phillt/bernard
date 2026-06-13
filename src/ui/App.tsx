@@ -3659,6 +3659,59 @@ async function runLineupEditorInk(
   opts: { isNew?: boolean } = {},
 ): Promise<Lineup | null> {
   let draft: Lineup = { ...initial };
+  // Snapshot the starting shape so we can tell whether the user actually
+  // changed anything. The multi-level editor only persists on an explicit
+  // "Save changes", so without this a user who edits roles and then backs out
+  // (Esc / Cancel) silently loses all their work — the #1 "lineups don't save"
+  // complaint. We compare against this baseline to decide whether to guard the
+  // exit. Rename keys off `name`; role edits off the per-role slot ladders.
+  const baseline = stableStringify({ name: initial.name, roles: initial.roles });
+  const isDirty = (): boolean =>
+    stableStringify({ name: draft.name, roles: draft.roles }) !== baseline;
+
+  /** Persist the current draft. Returns the saved lineup, or null on error. */
+  const commit = (asNew: boolean): Lineup | null => {
+    try {
+      return saveLineup({
+        // Omit id for "save as new" so saveLineup slugs a fresh one from name.
+        ...(asNew ? {} : { id: draft.id }),
+        name: draft.name,
+        roles: draft.roles,
+      });
+    } catch (err) {
+      flashToast(`Failed to save: ${(err as Error).message}`, 'error');
+      return null;
+    }
+  };
+
+  /**
+   * Common exit path for Esc / Cancel. If there are unsaved edits, prompt
+   * rather than silently discarding them. Returns `{ done: true, result }` to
+   * leave the editor, or `{ done: false }` to keep editing.
+   */
+  const handleExit = async (): Promise<
+    { done: true; result: Lineup | null } | { done: false }
+  > => {
+    if (!isDirty()) return { done: true, result: null };
+    const confirm = await requestMenu(
+      [
+        { label: opts.isNew ? 'Save as new lineup' : 'Save changes', value: 'save' },
+        { label: 'Discard changes', value: 'discard' },
+        { label: 'Keep editing', value: 'keep' },
+      ],
+      { title: 'You have unsaved lineup changes' },
+    );
+    // Esc on the guard itself = "keep editing" (safest — never lose work).
+    if (confirm.cancelled) return { done: false };
+    const action = confirm.item.value as 'save' | 'discard' | 'keep';
+    if (action === 'keep') return { done: false };
+    if (action === 'discard') return { done: true, result: null };
+    const saved = commit(opts.isNew ?? false);
+    // Save failed (toast already shown) → fall back to keep-editing so the
+    // user doesn't lose their draft to a transient validation error.
+    return saved ? { done: true, result: saved } : { done: false };
+  };
+
   while (true) {
     // Left-pane rows stay lean (just the role/action label); the right-pane
     // detail card carries the premium/mid/cheap ladder and the description.
@@ -3666,6 +3719,7 @@ async function runLineupEditorInk(
       label: role.label,
       value: { kind: 'role', roleId: role.id },
     }));
+    const dirtyMark = isDirty() ? ' •' : '';
     const entries: MenuEntry[] = [
       ...roleRows,
       { type: 'section', title: '' },
@@ -3673,22 +3727,32 @@ async function runLineupEditorInk(
       ...(opts.isNew
         ? [{ label: 'Save as new lineup', value: { kind: 'save-new' } } as MenuEntry]
         : [
-            { label: 'Save changes', value: { kind: 'save' } } as MenuEntry,
+            { label: `Save changes${dirtyMark}`, value: { kind: 'save' } } as MenuEntry,
             { label: 'Save as new lineup', value: { kind: 'save-new' } } as MenuEntry,
             { label: 'Delete lineup', value: { kind: 'delete' } } as MenuEntry,
           ]),
       { label: 'Cancel', value: { kind: 'cancel' } },
     ];
     const pick = await requestMenu(entries, {
-      title: `Lineup: ${draft.name}${opts.isNew ? ' (draft)' : ''} — pick a role`,
+      title: `Lineup: ${draft.name}${opts.isNew ? ' (draft)' : ''}${
+        dirtyMark ? ' — unsaved changes' : ''
+      } — pick a role`,
       layout: 'split',
       renderDetail: (item) => renderLineupDetail(item, draft),
     });
-    if (pick.cancelled) return null;
+    if (pick.cancelled) {
+      const exit = await handleExit();
+      if (exit.done) return exit.result;
+      continue;
+    }
     const value = pick.item.value as
       | { kind: 'role'; roleId: RoleId }
       | { kind: 'rename' | 'save' | 'save-new' | 'delete' | 'cancel' };
-    if (value.kind === 'cancel') return null;
+    if (value.kind === 'cancel') {
+      const exit = await handleExit();
+      if (exit.done) return exit.result;
+      continue;
+    }
     if (value.kind === 'role') {
       const nextSlots = await runRoleSlotsEditorInk(
         value.roleId,
@@ -3720,30 +3784,14 @@ async function runLineupEditorInk(
       continue;
     }
     if (value.kind === 'save') {
-      try {
-        const saved = saveLineup({
-          id: draft.id,
-          name: draft.name,
-          roles: draft.roles,
-        });
-        return saved;
-      } catch (err) {
-        flashToast(`Failed to save: ${(err as Error).message}`, 'error');
-        continue;
-      }
+      const saved = commit(false);
+      if (saved) return saved;
+      continue;
     }
     if (value.kind === 'save-new') {
-      try {
-        const saved = saveLineup({
-          // omit id so saveLineup slugs from name
-          name: draft.name,
-          roles: draft.roles,
-        });
-        return saved;
-      } catch (err) {
-        flashToast(`Failed to save: ${(err as Error).message}`, 'error');
-        continue;
-      }
+      const saved = commit(true);
+      if (saved) return saved;
+      continue;
     }
     if (value.kind === 'delete') {
       const confirm = await requestMenu(
