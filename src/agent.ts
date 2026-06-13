@@ -648,6 +648,54 @@ export class Agent {
             }
           }
 
+          // Reasoning-model safety net: some reasoning models end a turn having
+          // emitted only *reasoning* content and an EMPTY answer — finishReason
+          // 'stop', completion tokens spent, but `result.text` is blank. The
+          // user sees the thinking trail cut off mid-sentence ("...the dates
+          // are:") with no actual answer. The `length` loop above doesn't catch
+          // this (finishReason isn't 'length'), so without a guard the blank
+          // turn is accepted as "complete." Nudge the model to write its answer
+          // as plain text. Bounded and abort-aware like the length path.
+          const MAX_EMPTY_ANSWER_RETRIES = 2;
+          let emptyAnswerRetries = 0;
+          // Trigger only on the "reasoning dump" signature: the model produced
+          // reasoning but routed its whole answer there, leaving `text` blank.
+          // An empty-text 'stop' with NO reasoning is a legitimately silent turn
+          // (e.g. a model that has nothing more to say) and must NOT loop.
+          const hasReasoning = (reasoning: unknown): boolean => {
+            if (typeof reasoning === 'string') return reasoning.trim().length > 0;
+            if (Array.isArray(reasoning)) return reasoning.length > 0;
+            return false;
+          };
+          while (
+            emptyAnswerRetries < MAX_EMPTY_ANSWER_RETRIES &&
+            result.finishReason === 'stop' &&
+            (result.text ?? '').trim() === '' &&
+            (result.usage?.completionTokens ?? 0) > 0 &&
+            hasReasoning((result as { reasoning?: unknown }).reasoning)
+          ) {
+            if (this.abortController?.signal.aborted) break;
+            emptyAnswerRetries++;
+            debugLog('agent:empty-answer-continue', {
+              attempt: emptyAnswerRetries,
+              completionTokens: result.usage?.completionTokens ?? 0,
+            });
+
+            const partialMessages = truncateToolResults(result.response.messages as CoreMessage[]);
+            this.history.push(...partialMessages);
+            this.history.push({
+              role: 'user' as const,
+              content:
+                '[You produced reasoning but no visible answer. Write your final answer to me now, as plain text.]',
+            });
+
+            if (this.spinnerStats) {
+              startSpinner(() => buildSpinnerMessage(this.spinnerStats!));
+            }
+
+            result = await inner(innerOpts);
+          }
+
           if (result.finishReason === 'tool-calls' && result.steps.length >= maxStepsForCall) {
             this.lastStepLimitHit = true;
             this.stepLimitHitCount++;
