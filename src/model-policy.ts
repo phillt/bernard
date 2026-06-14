@@ -38,14 +38,15 @@ export type ModelMode = 'optimize-tokens' | 'balanced' | 'optimize-performance';
 export type ModelTier = 'cheap' | 'mid' | 'premium';
 
 /**
- * Resolves the cost tier for a call site under the active `modelMode`. Two
- * steps, both data-driven from {@link module:model-roles}: `site → role`
- * (via {@link SITE_ROLE}) → `tier` (via {@link DEFAULT_ROLE_TIERS}). This
- * replaces the legacy hardcoded per-site `TIER_TABLE`; the role tier rows
- * reproduce the old per-site assignments exactly (#264).
+ * Resolves the cost tier for a functional role under the active `modelMode`,
+ * data-driven from {@link DEFAULT_ROLE_TIERS} in {@link module:model-roles}.
+ * Callers map `site → role` via {@link SITE_ROLE} first (they already need the
+ * role for the lineup-slot lookup and the snapshot log). This replaces the
+ * legacy hardcoded per-site `TIER_TABLE`; the role tier rows reproduce the old
+ * per-site assignments exactly (#264).
  */
-function tierForSite(mode: ModelMode, site: ModelSite): ModelTier {
-  return DEFAULT_ROLE_TIERS[mode][SITE_ROLE[site]];
+function tierForRole(mode: ModelMode, role: RoleId): ModelTier {
+  return DEFAULT_ROLE_TIERS[mode][role];
 }
 
 /** True when `mode` is a recognized {@link ModelMode}. */
@@ -209,7 +210,7 @@ export function resolveSiteModel(
   // test fixtures) to `'balanced'` so resolution never crashes.
   const mode: ModelMode = isKnownMode(config.modelMode) ? config.modelMode : 'balanced';
   const role = SITE_ROLE[site];
-  const tier = tierForSite(mode, site);
+  const tier = tierForRole(mode, role);
   const lineup = getActiveLineup();
   const slot = lineup.roles[role][tier];
   if (hasProviderKey(config, slot.provider)) {
@@ -350,7 +351,7 @@ export function snapshotSiteModels(config: BernardConfig): SiteModelSnapshot {
   const sites = {} as Record<ModelSite, SiteModelSnapshotEntry>;
   for (const site of ALL_MODEL_SITES) {
     const role = SITE_ROLE[site];
-    const tier = tierForSite(mode, site);
+    const tier = tierForRole(mode, role);
     const slot = lineup.roles[role][tier];
     if (hasProviderKey(config, slot.provider)) {
       sites[site] = {

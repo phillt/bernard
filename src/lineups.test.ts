@@ -3,26 +3,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { ALL_ROLE_IDS } from './model-roles.js';
+import { fullRoles, type Ladder } from './__tests__/lineup-fixtures.js';
 
 async function loadModule() {
   vi.resetModules();
   return import('./lineups.js');
-}
-
-type Slot = { provider: string; model: string };
-type Ladder = { premium: Slot; mid: Slot; cheap: Slot };
-
-/** Builds a full `role → ladder` map by replicating one ladder across roles. */
-function fullRoles(ladder: Ladder): Record<string, Ladder> {
-  const out: Record<string, Ladder> = {};
-  for (const r of ALL_ROLE_IDS) {
-    out[r] = {
-      premium: { ...ladder.premium },
-      mid: { ...ladder.mid },
-      cheap: { ...ladder.cheap },
-    };
-  }
-  return out;
 }
 
 const SAMPLE: Ladder = {

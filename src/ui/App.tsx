@@ -621,7 +621,7 @@ export function App({
           .join(', ');
         const more = diff.added.length > 3 ? ` +${diff.added.length - 3} more` : '';
         flashToast(
-          `${diff.added.length} new model${diff.added.length === 1 ? '' : 's'} available: ${names}${more}. Use /model to switch.`,
+          `${diff.added.length} new model${diff.added.length === 1 ? '' : 's'} available: ${names}${more}. Browse with /models or bind one via /lineup.`,
           'success',
         );
       } catch {
@@ -1207,11 +1207,12 @@ export function App({
         config.activeLineupId,
         config.provider,
       ).id;
+      const primaryRole = MODEL_ROLES[0];
       const entries: MenuEntry[] = all.map((l) => ({
         label: l.name,
         annotation: `(${l.id})`,
         active: l.id === activeId,
-        description: `orchestrator — ${summarizeRoleSlots(l.roles.orchestrator)}`,
+        description: `${primaryRole.id} — ${summarizeRoleSlots(l.roles[primaryRole.id])}`,
         value: l.id,
       }));
       entries.push({ type: 'section', title: '' });
@@ -3599,34 +3600,32 @@ function renderLineupDetail(item: MenuItem, draft: Lineup): ReactNode {
     );
   }
 
-  const explain: Record<string, string> = {
-    rename: 'Give this lineup a new display name.',
-    save: 'Persist your edits to this lineup.',
-    'save-new': 'Clone the current grid into a new lineup under a name you choose.',
-    delete: 'Remove this lineup (refuses if it is the last one).',
-    cancel: 'Discard changes and close the editor.',
+  const actionDetail: Record<string, { explain: string; hint: string }> = {
+    rename: { explain: 'Give this lineup a new display name.', hint: '↵ rename' },
+    save: { explain: 'Persist your edits to this lineup.', hint: '↵ save' },
+    'save-new': {
+      explain: 'Clone the current grid into a new lineup under a name you choose.',
+      hint: '↵ save as new',
+    },
+    delete: { explain: 'Remove this lineup (refuses if it is the last one).', hint: '↵ delete' },
+    cancel: { explain: 'Discard changes and close the editor.', hint: '↵ cancel' },
   };
-  const hint: Record<string, string> = {
-    rename: '↵ rename',
-    save: '↵ save',
-    'save-new': '↵ save as new',
-    delete: '↵ delete',
-    cancel: '↵ cancel',
-  };
+  const { explain, hint } = actionDetail[value.kind];
   return (
     <Box flexDirection="column">
-      <Text dimColor>{explain[value.kind]}</Text>
+      <Text dimColor>{explain}</Text>
       <Text> </Text>
-      <Text color={colors.accent}>{hint[value.kind]}</Text>
+      <Text color={colors.accent}>{hint}</Text>
     </Box>
   );
 }
 
 /**
  * Level-2 editor: the three cost-tier slots (premium / mid / cheap) for one
- * role. Mutates a copy of `slots` and returns it on `← Back`, or `null` on Esc
- * (caller treats both the same — edits are already applied into the returned
- * ladder). Selecting a tier opens the provider→model picker.
+ * role. Mutates a copy of `slots` and returns it on both `← Back` and Esc —
+ * edits are applied live into the returned ladder, so cancel and back are
+ * equivalent (there is no discard path here; the parent editor owns that).
+ * Selecting a tier opens the provider→model picker.
  */
 async function runRoleSlotsEditorInk(
   roleId: RoleId,
@@ -3851,8 +3850,8 @@ async function runLineupEditorInk(
 
 /**
  * Sort-keys-first JSON so `{a:1,b:2}` and `{b:2,a:1}` produce the same string.
- * Mirrors `stableStringify` at `src/repl.ts:1122` — keeps the confirm-allow
- * session memo stable across re-renders that reshuffle object key order.
+ * Keeps the confirm-allow session memo stable across re-renders that reshuffle
+ * object key order.
  */
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
@@ -3862,7 +3861,7 @@ function stableStringify(value: unknown): string {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
 }
 
-/** djb2 over the stable-JSON form. Matches `stableHash` at `src/repl.ts:1113`. */
+/** djb2 over the stable-JSON form. */
 function stableHash(value: unknown): string {
   let json: string;
   try {

@@ -4,7 +4,6 @@ import { attachMeta } from '../framework/tools/adapter.js';
 import {
   loadLineups,
   saveLineup,
-  listLineups,
   resolveActiveLineup,
   validateLineupName,
   LINEUP_TIERS,
@@ -109,7 +108,9 @@ export function createLineupTool(config?: BernardConfig) {
         id: z
           .string()
           .optional()
-          .describe('For action="update": the id of the lineup to edit (see action="list").'),
+          .describe(
+            'The id of the lineup to act on (see action="list"). Required for action="update"; for action="validate" the lineup to probe (omit to probe the active one). Not used by action="create" — see `base` to clone slots from another lineup.',
+          ),
         name: z
           .string()
           .optional()
@@ -144,7 +145,7 @@ export function createLineupTool(config?: BernardConfig) {
           ).id;
 
           if (action === 'list') {
-            const all = listLineups();
+            const all = Object.values(lineups);
             const blocks = all.map(
               (l) =>
                 `${l.id === activeId ? '➤ ' : '  '}${l.name} (id: ${l.id})${
@@ -159,8 +160,14 @@ export function createLineupTool(config?: BernardConfig) {
 
           if (action === 'validate') {
             if (!config) return 'Cannot validate — no live config available.';
-            const targetId = id && lineups[id] ? id : activeId;
-            const target = lineups[targetId];
+            // A supplied-but-unknown id is an error, not a silent fall-through to
+            // the active lineup — otherwise the agent gets a report for the wrong
+            // lineup and never learns its id was wrong. Omitting id still probes
+            // the active one.
+            if (id && !lineups[id]) {
+              return `No lineup with id "${id}". Available: ${Object.keys(lineups).join(', ')}.`;
+            }
+            const target = lineups[id ?? activeId];
             if (!target) {
               return `No lineup to validate. Available: ${Object.keys(lineups).join(', ')}.`;
             }

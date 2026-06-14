@@ -4,23 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { BernardConfig } from './config.js';
 import type { Specialist } from './specialists.js';
-import { ALL_ROLE_IDS } from './model-roles.js';
-
-type Slot = { provider: string; model: string };
-type Ladder = { premium: Slot; mid: Slot; cheap: Slot };
-
-/** Replicates one cost ladder across all 6 roles (the migration shape). */
-function fullRoles(ladder: Ladder): Record<string, Ladder> {
-  const out: Record<string, Ladder> = {};
-  for (const r of ALL_ROLE_IDS) {
-    out[r] = {
-      premium: { ...ladder.premium },
-      mid: { ...ladder.mid },
-      cheap: { ...ladder.cheap },
-    };
-  }
-  return out;
-}
+import { fullRoles } from './__tests__/lineup-fixtures.js';
 
 vi.mock('./logger.js', () => ({
   debugLog: vi.fn(),
