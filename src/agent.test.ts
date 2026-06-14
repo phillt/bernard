@@ -757,6 +757,71 @@ describe('Agent', () => {
     expect(call.messages.length).toBeGreaterThan(2);
   });
 
+  it('continues when the model returns only reasoning and an empty answer', async () => {
+    // Regression: a reasoning model ended a turn with finishReason 'stop' but a
+    // blank `text` — it dumped its answer into the reasoning channel and emitted
+    // nothing. completionTokens>0 proves it generated. The turn should not be
+    // accepted as a (blank) "complete" answer; the loop nudges for the real one.
+    mockGenerateText.mockResolvedValueOnce({
+      text: '',
+      reasoning: 'The dates I added are:',
+      finishReason: 'stop',
+      steps: [],
+      response: {
+        messages: [
+          { role: 'assistant', content: [{ type: 'reasoning', text: 'The dates I added are:' }] },
+        ],
+      },
+      usage: { promptTokens: 100, completionTokens: 80, totalTokens: 180 },
+    });
+    mockGenerateText.mockResolvedValueOnce({
+      text: 'June 1 and June 8.',
+      finishReason: 'stop',
+      steps: [],
+      response: { messages: [{ role: 'assistant', content: 'June 1 and June 8.' }] },
+      usage: { promptTokens: 120, completionTokens: 20, totalTokens: 140 },
+    });
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    await agent.processInput('what were the dates?');
+    expect(mockGenerateText).toHaveBeenCalledTimes(2);
+    const secondCall = mockGenerateText.mock.calls[1][0];
+    const nudges = secondCall.messages.filter(
+      (m: any) =>
+        m.role === 'user' && typeof m.content === 'string' && m.content.includes('no visible answer'),
+    );
+    expect(nudges.length).toBe(1);
+  });
+
+  it('does not continue when the model returns a normal answer', async () => {
+    mockGenerateText.mockResolvedValue({
+      text: 'Here is the answer.',
+      finishReason: 'stop',
+      steps: [],
+      response: { messages: [{ role: 'assistant', content: 'Here is the answer.' }] },
+      usage: { promptTokens: 100, completionTokens: 40, totalTokens: 140 },
+    });
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    await agent.processInput('hi');
+    expect(mockGenerateText).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds empty-answer continuations so a persistently-blank model cannot loop forever', async () => {
+    mockGenerateText.mockResolvedValue({
+      text: '',
+      reasoning: 'thinking',
+      finishReason: 'stop',
+      steps: [],
+      response: {
+        messages: [{ role: 'assistant', content: [{ type: 'reasoning', text: 'thinking' }] }],
+      },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    await agent.processInput('hi');
+    // initial call + MAX_EMPTY_ANSWER_RETRIES (2) = 3 total.
+    expect(mockGenerateText).toHaveBeenCalledTimes(3);
+  });
+
   it('clearHistory resets messages and clears scratch', () => {
     store.writeScratch('todo', 'test');
     const agent = makeAgent(makeConfig(), toolOptions, store);

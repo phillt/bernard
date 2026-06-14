@@ -8,6 +8,8 @@
  * wiring keep a stable shape without importing the deleted runtime.
  */
 
+import type { ReactNode } from 'react';
+
 /** A single selectable item in a menu. */
 export interface MenuItem {
   /** Text shown next to the number. */
@@ -46,6 +48,21 @@ export interface MenuOptions {
    * the item the user just drilled into. Clamped to the item range.
    */
   initialIndex?: number;
+  /**
+   * Menu layout. `'list'` (default) is the classic single column. `'split'`
+   * renders the numbered list in a narrow left pane and a bordered detail card
+   * for the highlighted row on the right (driven by {@link renderDetail}). The
+   * per-row highlight description is suppressed in split mode — the detail card
+   * carries that information instead.
+   */
+  layout?: 'list' | 'split';
+  /**
+   * Detail renderer for the right-hand card in `'split'` layout. Receives the
+   * currently-highlighted item and returns the inner content of the card; the
+   * overlay supplies the border and the item's `label` as the card title.
+   * Ignored unless `layout === 'split'`.
+   */
+  renderDetail?: (item: MenuItem) => ReactNode;
 }
 
 /** Options for the `TextInputOverlay` component. */

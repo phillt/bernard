@@ -21,7 +21,7 @@ const HELP_ROWS: HelpRow[] = [
   { command: '/mcp', description: 'List MCP servers and tools' },
   { command: '/cron', description: 'Show cron jobs and daemon status' },
   { command: '/facts', description: 'Show RAG facts in the current context window' },
-  { command: '/lineup', description: 'Edit the active tier lineup (premium/mid/cheap)' },
+  { command: '/lineup', description: 'Edit the active lineup (per-role × premium/mid/cheap)' },
   { command: '/lineups', description: 'List, switch, or create tier lineups' },
   { command: '/models', description: 'Browse the model catalog and add custom providers' },
   { command: '/refresh-models', description: 'Force-refresh the model catalog from the gateway' },

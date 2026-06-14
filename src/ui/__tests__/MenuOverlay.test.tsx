@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
+import { Text } from 'ink';
 import { MenuOverlay } from '../overlays/MenuOverlay.js';
 import type { MenuEntry } from '../menu-types.js';
 import { ESC, ENTER, ARROW_UP, ARROW_DOWN, CTRL_C, SPACE, tick } from './_keys.js';
@@ -150,6 +151,66 @@ describe('<MenuOverlay>', () => {
     expect(qIdx).toBeGreaterThanOrEqual(0);
     expect(qIdx).toBeLessThan(titleIdx);
     expect(titleIdx).toBeLessThan(itemIdx);
+  });
+});
+
+describe('<MenuOverlay> split layout', () => {
+  const SPLIT_ENTRIES: MenuEntry[] = [
+    { label: 'Orchestrator', description: 'left-list desc (should be hidden)', value: 'orch' },
+    { label: 'Coder', value: 'coder' },
+  ];
+  const renderDetail = (item: { label: string; value?: unknown }) =>
+    createElement(Text, null, `detail for ${String(item.value)}`);
+
+  function mountSplit(extra?: Partial<Parameters<typeof MenuOverlay>[0]['options']>) {
+    const onSelect = vi.fn();
+    const onCancel = vi.fn();
+    const harness = render(
+      createElement(MenuOverlay, {
+        entries: SPLIT_ENTRIES,
+        onSelect,
+        onCancel,
+        options: { layout: 'split', renderDetail, ...extra },
+      }),
+    );
+    return { ...harness, onSelect, onCancel };
+  }
+
+  it('renders the detail card for the highlighted row and hides the left-list description', () => {
+    const { lastFrame } = mountSplit();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('1. Orchestrator');
+    expect(frame).toContain('2. Coder');
+    // The card title (label) + detail content for the first (highlighted) row.
+    expect(frame).toContain('detail for orch');
+    // The per-row highlight description is suppressed in split mode.
+    expect(frame).not.toContain('left-list desc');
+  });
+
+  it('updates the detail card as the highlight moves', async () => {
+    const { lastFrame, stdin } = mountSplit();
+    await tick();
+    stdin.write(ARROW_DOWN);
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('detail for coder');
+    expect(frame).not.toContain('detail for orch');
+  });
+
+  it('falls back to the list layout when renderDetail is absent', () => {
+    const { lastFrame } = mountSplit({ renderDetail: undefined });
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('1. Orchestrator');
+    expect(frame).not.toContain('detail for');
+  });
+
+  it('Enter still commits the highlighted item in split mode', async () => {
+    const { stdin, onSelect } = mountSplit();
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect.mock.calls[0][1].value).toBe('orch');
   });
 });
 

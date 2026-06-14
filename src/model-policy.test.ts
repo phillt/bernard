@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { BernardConfig } from './config.js';
 import type { Specialist } from './specialists.js';
+import { fullRoles } from './__tests__/lineup-fixtures.js';
 
 vi.mock('./logger.js', () => ({
   debugLog: vi.fn(),
@@ -81,27 +82,33 @@ function seedTestLineups(dir: string): void {
           anthropic: {
             id: 'anthropic',
             name: 'Anthropic-only',
-            premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
-            mid: { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
-            cheap: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+            roles: fullRoles({
+              premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
+              mid: { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
+              cheap: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+            }),
             createdAt: now,
             updatedAt: now,
           },
           openai: {
             id: 'openai',
             name: 'OpenAI-only',
-            premium: { provider: 'openai', model: 'gpt-5.2' },
-            mid: { provider: 'openai', model: 'gpt-4.1' },
-            cheap: { provider: 'openai', model: 'gpt-4.1-mini' },
+            roles: fullRoles({
+              premium: { provider: 'openai', model: 'gpt-5.2' },
+              mid: { provider: 'openai', model: 'gpt-4.1' },
+              cheap: { provider: 'openai', model: 'gpt-4.1-mini' },
+            }),
             createdAt: now,
             updatedAt: now,
           },
           xai: {
             id: 'xai',
             name: 'xAI-only',
-            premium: { provider: 'xai', model: 'grok-4-1-fast-reasoning' },
-            mid: { provider: 'xai', model: 'grok-4-fast-non-reasoning' },
-            cheap: { provider: 'xai', model: 'grok-3-mini' },
+            roles: fullRoles({
+              premium: { provider: 'xai', model: 'grok-4-1-fast-reasoning' },
+              mid: { provider: 'xai', model: 'grok-4-fast-non-reasoning' },
+              cheap: { provider: 'xai', model: 'grok-3-mini' },
+            }),
             createdAt: now,
             updatedAt: now,
           },
@@ -271,9 +278,11 @@ describe('resolveSiteModel — cross-provider lineup', () => {
           mixed: {
             id: 'mixed',
             name: 'Mixed',
-            premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
-            mid: { provider: 'openai', model: 'gpt-4.1' },
-            cheap: { provider: 'xai', model: 'grok-3-mini' },
+            roles: fullRoles({
+              premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
+              mid: { provider: 'openai', model: 'gpt-4.1' },
+              cheap: { provider: 'xai', model: 'grok-3-mini' },
+            }),
             createdAt: '2026-01-01T00:00:00.000Z',
             updatedAt: '2026-01-01T00:00:00.000Z',
           },

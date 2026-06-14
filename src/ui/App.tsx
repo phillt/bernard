@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import type { Agent } from '../agent.js';
 import type { BernardConfig } from '../config.js';
@@ -17,7 +17,12 @@ import {
 import { MAX_CONCURRENT_AGENTS_LIMIT, setMaxConcurrentAgents } from '../tools/agent-pool.js';
 import { RESPONSE_STYLE_IDS, type ResponseStyle } from '../agent-prompt.js';
 import { getContextWindow } from '../context.js';
-import { loadCatalog, getCatalogAgeMs, getCatalogSource } from '../providers/catalog.js';
+import {
+  loadCatalog,
+  getCatalogAgeMs,
+  getCatalogSource,
+  refreshCatalogWithDiff,
+} from '../providers/catalog.js';
 import { getLocalVersion } from '../update.js';
 import { CONFIG_DIR, DATA_DIR, CACHE_DIR, STATE_DIR } from '../paths.js';
 import * as os from 'node:os';
@@ -34,6 +39,7 @@ import {
   type Lineup,
   type LineupSlot,
   type LineupTier,
+  type RoleSlots,
   loadLineups,
   resolveActiveLineup,
   saveLineup,
@@ -42,6 +48,8 @@ import {
   validateLineupName,
   PROVIDER_DISPLAY_NAMES,
 } from '../lineups.js';
+import { MODEL_ROLES, getRole, type RoleId } from '../model-roles.js';
+import { validateLineup, formatLineupValidation } from '../model-validate.js';
 import type { SupportedSdk } from '../providers/types.js';
 import { THEMES, getThemeKeys, getActiveThemeKey, setTheme, getThemeColors } from '../theme.js';
 import type { HistoryStore } from '../history.js';
@@ -177,6 +185,14 @@ interface AppProps {
    * overlays the user's choices on top of it.
    */
   isFreshInstall?: boolean;
+  /**
+   * One-time transcript notice (#264 follow-up). Set by `src/index.ts` when the
+   * stored `activeLineupId` pointed at a lineup that no longer exists and was
+   * auto-switched to a valid one. Rendered as a synthetic assistant message at
+   * the top of the transcript on mount — UI-only, never pushed into the agent's
+   * LLM history.
+   */
+  startupNotice?: string;
 }
 
 type Overlay =
@@ -304,6 +320,7 @@ export function App({
   onExit,
   alertBanner,
   isFreshInstall,
+  startupNotice,
 }: AppProps) {
   const { exit } = useApp();
   const [activeOverlay, setActiveOverlay] = useState<Overlay | null>(null);
@@ -583,8 +600,91 @@ export function App({
     })();
   }, [isFreshInstall]);
 
+  // Startup model-catalog refresh (#264 follow-up). Every launch force-fetches
+  // the live gateway catalog in the background and toasts when new models
+  // appeared since the last run. Non-blocking and fail-silent — an offline
+  // gateway just leaves the cached/vendored catalog in place. We skip the
+  // notification when there was no real prior baseline (`previousSource ===
+  // 'vendored'`) so a fresh install doesn't announce the entire bundled
+  // snapshot as "new".
+  const catalogRefreshRanRef = useRef(false);
+  useEffect(() => {
+    if (catalogRefreshRanRef.current) return;
+    catalogRefreshRanRef.current = true;
+    void (async () => {
+      try {
+        const diff = await refreshCatalogWithDiff();
+        if (diff.error || diff.previousSource === 'vendored' || diff.added.length === 0) return;
+        const names = diff.added
+          .slice(0, 3)
+          .map((e) => `${e.provider}/${e.model}`)
+          .join(', ');
+        const more = diff.added.length > 3 ? ` +${diff.added.length - 3} more` : '';
+        flashToast(
+          `${diff.added.length} new model${diff.added.length === 1 ? '' : 's'} available: ${names}${more}. Browse with /models or bind one via /lineup.`,
+          'success',
+        );
+      } catch {
+        // Never block or crash startup over a catalog refresh.
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, []);
+
+  // One-time lineup-correction notice (#264 follow-up). When `src/index.ts`
+  // auto-switched a dangling `activeLineupId`, surface a synthetic assistant
+  // message at the top of the transcript so the silent fallback is visible.
+  // UI-only: it goes straight into `staticItems`, never into `agent.history`,
+  // so it isn't persisted to conversation-history.json or replayed on resume.
+  // Does NOT advance `committedLenRef` (that cursor tracks the agent's real
+  // history slice); a synthetic item carries no backing history message.
+  const startupNoticeRanRef = useRef(false);
+  useEffect(() => {
+    if (startupNoticeRanRef.current || !startupNotice) return;
+    startupNoticeRanRef.current = true;
+    setStaticItems((prev) => [
+      ...prev,
+      {
+        key: String(itemKeyRef.current++),
+        message: { role: 'assistant', content: startupNotice },
+        toolDetails: false,
+      },
+    ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+  }, []);
+
   const flashToast = (message: string, variant: ToastVariant = 'info') => {
     setToast({ message, variant });
+  };
+
+  // Push a UI-only assistant notice into the transcript (same mechanism as the
+  // startup lineup-correction notice): straight into `staticItems`, never into
+  // `agent.history`, so it isn't persisted or replayed.
+  const pushAssistantNotice = (content: string) => {
+    setStaticItems((prev) => [
+      ...prev,
+      { key: String(itemKeyRef.current++), message: { role: 'assistant', content }, toolDetails: false },
+    ]);
+  };
+
+  // Warn-only lineup validation (#264 follow-up). After a save/switch we
+  // live-probe the lineup's models in the background and, IF any are
+  // unreachable, surface a notice. Never blocks the save and fails open — a
+  // probe-layer error or offline gateway just skips the warning.
+  const warnValidateLineup = (lineup: Lineup) => {
+    void (async () => {
+      try {
+        const v = await validateLineup(config, lineup);
+        if (v.ok) return;
+        pushAssistantNotice(
+          `⚠ Lineup "${v.lineupName}" was saved, but ${v.failures} of ${v.results.length} model(s) failed a live check:\n\n` +
+            formatLineupValidation(v) +
+            `\n\nFix the names with /lineup, or switch with /lineups. (A reachable model can still be too weak for a task — this only checks access.)`,
+        );
+      } catch {
+        // fail open — never let validation noise block or crash the REPL
+      }
+    })();
   };
 
   const showInfo = (title: string, lines: PendingInfo['lines']) => {
@@ -1092,6 +1192,7 @@ export function App({
         });
         logSiteModelSnapshot(config, 'lineup-change');
         flashToast(`Lineup "${edited.name}" saved.`, 'success');
+        warnValidateLineup(edited);
       }
       return;
     }
@@ -1106,11 +1207,12 @@ export function App({
         config.activeLineupId,
         config.provider,
       ).id;
+      const primaryRole = MODEL_ROLES[0];
       const entries: MenuEntry[] = all.map((l) => ({
         label: l.name,
         annotation: `(${l.id})`,
         active: l.id === activeId,
-        description: `premium ${l.premium.provider}/${l.premium.model} · mid ${l.mid.provider}/${l.mid.model} · cheap ${l.cheap.provider}/${l.cheap.model}`,
+        description: `${primaryRole.id} — ${summarizeRoleSlots(l.roles[primaryRole.id])}`,
         value: l.id,
       }));
       entries.push({ type: 'section', title: '' });
@@ -1152,6 +1254,7 @@ export function App({
           });
           logSiteModelSnapshot(config, 'lineup-change');
           flashToast(`Created and switched to "${created.name}".`, 'success');
+          warnValidateLineup(created);
         }
         return;
       }
@@ -1176,6 +1279,7 @@ export function App({
           });
           logSiteModelSnapshot(config, 'lineup-change');
           flashToast(`Lineup "${edited.name}" saved.`, 'success');
+          warnValidateLineup(edited);
         }
         return;
       }
@@ -1187,6 +1291,7 @@ export function App({
       });
       logSiteModelSnapshot(config, 'lineup-change');
       flashToast(`Switched to lineup "${target.name}".`, 'success');
+      warnValidateLineup(target);
       return;
     }
 
@@ -1768,7 +1873,7 @@ export function App({
       {
         value: 'balanced',
         label: 'Balanced',
-        desc: 'Premium main; mid sub-agents; cheap routing.',
+        desc: 'Premium orchestrator; mid executor/function-caller/summarizer; cheap classifier.',
       },
       {
         value: 'optimize-tokens',
@@ -2022,7 +2127,7 @@ export function App({
           label: 'Tier lineup',
           annotation: `= ${resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider).name}`,
           description:
-            'Switch, edit, or create lineups that bind premium/mid/cheap tiers to specific (provider, model) pairs.',
+            'Switch, edit, or create lineups that bind each functional role × cost tier (premium/mid/cheap) to a (provider, model) pair.',
         },
         action: () => handleSubmit('/lineups'),
       },
@@ -3260,7 +3365,10 @@ async function pickLineupSlotInk(
   requestGridMenu: RequestGridMenu,
   requestTextInput: RequestTextInput,
   flashToast: FlashToast,
+  roleLabel?: string,
 ): Promise<LineupSlot | null> {
+  const slotLabel = (t: LineupTier): string =>
+    roleLabel ? `${roleLabel} / ${t.toUpperCase()}` : `${t.toUpperCase()}`;
   const providerDisplayName = (name: string): string => {
     if (Object.hasOwn(PROVIDER_DISPLAY_NAMES, name)) {
       return PROVIDER_DISPLAY_NAMES[name as keyof typeof PROVIDER_DISPLAY_NAMES];
@@ -3323,7 +3431,7 @@ async function pickLineupSlotInk(
     entries.push({ label: '+ Add custom provider…', value: { kind: 'add-custom' } as const });
 
     const pick = await requestMenu(entries, {
-      title: `Pick provider for ${tier.toUpperCase()} slot`,
+      title: `Pick provider for ${slotLabel(tier)} slot`,
       headerLines: [formatCatalogFooter()],
     });
     if (pick.cancelled) return null;
@@ -3346,9 +3454,12 @@ async function pickLineupSlotInk(
     const provider = choice.provider;
     const isCustom = Object.hasOwn(customProviders, provider);
     const models = modelsForProvider(provider);
+    // Free-type is offered for every provider, not just custom ones: the
+    // built-in catalog (Vercel AI Gateway) omits some real models (e.g. xAI's
+    // grok-code-fast-1 isn't proxied under the `xai/` prefix), so without this
+    // escape hatch those models are unreachable through the picker.
     const FREE_TYPE = '+ Type a new model name…';
-    const items: string[] = [...models];
-    if (isCustom) items.push(FREE_TYPE);
+    const items: string[] = [...models, FREE_TYPE];
 
     if (items.length === 0) {
       flashToast(`No models known for provider "${provider}".`, 'error');
@@ -3363,7 +3474,7 @@ async function pickLineupSlotInk(
         : 0;
 
     const result = await requestGridMenu(items, {
-      title: `Pick ${providerDisplayName(provider)} model for ${tier.toUpperCase()} slot`,
+      title: `Pick ${providerDisplayName(provider)} model for ${slotLabel(tier)} slot`,
       footer: formatCatalogFooter(),
       initialIndex,
       currentItem: currentModelForProvider,
@@ -3375,8 +3486,13 @@ async function pickLineupSlotInk(
       const modelRes = await requestTextInput({ label: `New model name for ${provider}` });
       if (modelRes.cancelled || !modelRes.raw.trim()) continue;
       const model = modelRes.raw.trim();
-      rememberCustomModel(provider, model);
-      config.customProviders = loadCustomProviders();
+      // Only the custom-provider store remembers typed model names; built-in
+      // providers draw their list from the catalog, so a free-typed built-in
+      // model is used as-is for this slot without persisting it there.
+      if (isCustom) {
+        rememberCustomModel(provider, model);
+        config.customProviders = loadCustomProviders();
+      }
       return { provider, model };
     }
     return { provider, model: picked };
@@ -3433,10 +3549,139 @@ async function runModelsCatalogInk(
   }
 }
 
+/** One-line `premium · mid · cheap` summary of a role's cost ladder. */
+function summarizeRoleSlots(slots: RoleSlots): string {
+  return (
+    `premium ${slots.premium.provider}/${slots.premium.model} · ` +
+    `mid ${slots.mid.provider}/${slots.mid.model} · ` +
+    `cheap ${slots.cheap.provider}/${slots.cheap.model}`
+  );
+}
+
 /**
- * Editor for one lineup. Shows three rows (premium / mid / cheap) plus
- * rename and either "Save" (existing) or "Save as new" (draft). Returns
- * the persisted lineup on save, or `null` on cancel.
+ * Right-pane detail card content for the split-layout lineup editor (Style 2).
+ * A role row shows its premium/mid/cheap ladder, the role description, and an
+ * "edit" hint; a lineup-level action row shows a one-line explainer + hint. The
+ * overlay supplies the surrounding border and the row's label as the card title.
+ */
+function renderLineupDetail(item: MenuItem, draft: Lineup): ReactNode {
+  const colors = getThemeColors();
+  const value = item.value as
+    | { kind: 'role'; roleId: RoleId }
+    | { kind: 'rename' | 'save' | 'save-new' | 'delete' | 'cancel' };
+
+  if (value.kind === 'role') {
+    const role = getRole(value.roleId);
+    const slots = draft.roles[value.roleId];
+    // Dotted-leader rows: `tier ......... provider/model`, value right-aligned
+    // against a fixed inner width so the three tiers line up like a contents list.
+    const LEADER_WIDTH = 44;
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>{role.description}</Text>
+        <Text> </Text>
+        {LINEUP_TIERS.map((tier) => {
+          const val = `${slots[tier].provider}/${slots[tier].model}`;
+          const dots = '.'.repeat(Math.max(2, LEADER_WIDTH - tier.length - val.length));
+          return (
+            <Text key={tier}>
+              {tier}
+              <Text dimColor>{dots}</Text>
+              <Text color={colors.accent}>{val}</Text>
+            </Text>
+          );
+        })}
+        <Text> </Text>
+        <Text dimColor>What to look for when selecting:</Text>
+        <Text>{role.lookFor}</Text>
+        <Text> </Text>
+        <Text color={colors.accent}>↵ edit this role</Text>
+      </Box>
+    );
+  }
+
+  const actionDetail: Record<string, { explain: string; hint: string }> = {
+    rename: { explain: 'Give this lineup a new display name.', hint: '↵ rename' },
+    save: { explain: 'Persist your edits to this lineup.', hint: '↵ save' },
+    'save-new': {
+      explain: 'Clone the current grid into a new lineup under a name you choose.',
+      hint: '↵ save as new',
+    },
+    delete: { explain: 'Remove this lineup (refuses if it is the last one).', hint: '↵ delete' },
+    cancel: { explain: 'Discard changes and close the editor.', hint: '↵ cancel' },
+  };
+  const { explain, hint } = actionDetail[value.kind];
+  return (
+    <Box flexDirection="column">
+      <Text dimColor>{explain}</Text>
+      <Text> </Text>
+      <Text color={colors.accent}>{hint}</Text>
+    </Box>
+  );
+}
+
+/**
+ * Level-2 editor: the three cost-tier slots (premium / mid / cheap) for one
+ * role. Mutates a copy of `slots` and returns it on both `← Back` and Esc —
+ * edits are applied live into the returned ladder, so cancel and back are
+ * equivalent (there is no discard path here; the parent editor owns that).
+ * Selecting a tier opens the provider→model picker.
+ */
+async function runRoleSlotsEditorInk(
+  roleId: RoleId,
+  initial: RoleSlots,
+  config: BernardConfig,
+  requestMenu: RequestMenu,
+  requestGridMenu: RequestGridMenu,
+  requestTextInput: RequestTextInput,
+  flashToast: FlashToast,
+): Promise<RoleSlots> {
+  const role = getRole(roleId);
+  let slots: RoleSlots = {
+    premium: { ...initial.premium },
+    mid: { ...initial.mid },
+    cheap: { ...initial.cheap },
+  };
+  while (true) {
+    const tierRows: MenuEntry[] = LINEUP_TIERS.map((tier) => ({
+      label: `${tier.toUpperCase()}`,
+      annotation: `→ ${slots[tier].provider} / ${slots[tier].model}`,
+      value: { kind: 'tier', tier },
+    }));
+    const entries: MenuEntry[] = [
+      ...tierRows,
+      { type: 'section', title: '' },
+      { label: '← Back to roles', value: { kind: 'back' } },
+    ];
+    const pick = await requestMenu(entries, {
+      title: `${role.label} — pick cost tier to bind`,
+      headerLines: [role.description],
+    });
+    if (pick.cancelled) return slots;
+    const value = pick.item.value as
+      | { kind: 'tier'; tier: LineupTier }
+      | { kind: 'back' };
+    if (value.kind === 'back') return slots;
+    const next = await pickLineupSlotInk(
+      config,
+      value.tier,
+      slots[value.tier],
+      requestMenu,
+      requestGridMenu,
+      requestTextInput,
+      flashToast,
+      role.label,
+    );
+    if (next) slots = { ...slots, [value.tier]: next };
+  }
+}
+
+/**
+ * Editor for one lineup. Two levels: the top menu lists the functional roles
+ * (orchestrator / executor / …), each showing its current premium·mid·cheap
+ * binding; selecting a role opens its three cost-tier slots. Plus rename and
+ * either "Save" (existing) or "Save as new" (draft). Returns the persisted
+ * lineup on save, or `null` on cancel.
  */
 async function runLineupEditorInk(
   initial: Lineup,
@@ -3448,44 +3693,114 @@ async function runLineupEditorInk(
   opts: { isNew?: boolean } = {},
 ): Promise<Lineup | null> {
   let draft: Lineup = { ...initial };
+  // Snapshot the starting shape so we can tell whether the user actually
+  // changed anything. The multi-level editor only persists on an explicit
+  // "Save changes", so without this a user who edits roles and then backs out
+  // (Esc / Cancel) silently loses all their work — the #1 "lineups don't save"
+  // complaint. We compare against this baseline to decide whether to guard the
+  // exit. Rename keys off `name`; role edits off the per-role slot ladders.
+  const baseline = stableStringify({ name: initial.name, roles: initial.roles });
+  const isDirty = (): boolean =>
+    stableStringify({ name: draft.name, roles: draft.roles }) !== baseline;
+
+  /** Persist the current draft. Returns the saved lineup, or null on error. */
+  const commit = (asNew: boolean): Lineup | null => {
+    try {
+      return saveLineup({
+        // Omit id for "save as new" so saveLineup slugs a fresh one from name.
+        ...(asNew ? {} : { id: draft.id }),
+        name: draft.name,
+        roles: draft.roles,
+      });
+    } catch (err) {
+      flashToast(`Failed to save: ${(err as Error).message}`, 'error');
+      return null;
+    }
+  };
+
+  /**
+   * Common exit path for Esc / Cancel. If there are unsaved edits, prompt
+   * rather than silently discarding them. Returns `{ done: true, result }` to
+   * leave the editor, or `{ done: false }` to keep editing.
+   */
+  const handleExit = async (): Promise<
+    { done: true; result: Lineup | null } | { done: false }
+  > => {
+    if (!isDirty()) return { done: true, result: null };
+    const confirm = await requestMenu(
+      [
+        { label: opts.isNew ? 'Save as new lineup' : 'Save changes', value: 'save' },
+        { label: 'Discard changes', value: 'discard' },
+        { label: 'Keep editing', value: 'keep' },
+      ],
+      { title: 'You have unsaved lineup changes' },
+    );
+    // Esc on the guard itself = "keep editing" (safest — never lose work).
+    if (confirm.cancelled) return { done: false };
+    const action = confirm.item.value as 'save' | 'discard' | 'keep';
+    if (action === 'keep') return { done: false };
+    if (action === 'discard') return { done: true, result: null };
+    const saved = commit(opts.isNew ?? false);
+    // Save failed (toast already shown) → fall back to keep-editing so the
+    // user doesn't lose their draft to a transient validation error.
+    return saved ? { done: true, result: saved } : { done: false };
+  };
+
   while (true) {
-    const tierRows: MenuEntry[] = LINEUP_TIERS.map((tier) => ({
-      label: `${tier.toUpperCase()}`,
-      annotation: `→ ${draft[tier].provider} / ${draft[tier].model}`,
-      value: { kind: 'tier', tier },
+    // Left-pane rows stay lean (just the role/action label); the right-pane
+    // detail card carries the premium/mid/cheap ladder and the description.
+    const roleRows: MenuEntry[] = MODEL_ROLES.map((role) => ({
+      label: role.label,
+      value: { kind: 'role', roleId: role.id },
     }));
+    const dirtyMark = isDirty() ? ' •' : '';
     const entries: MenuEntry[] = [
-      ...tierRows,
+      ...roleRows,
       { type: 'section', title: '' },
       { label: 'Rename lineup', value: { kind: 'rename' } },
       ...(opts.isNew
         ? [{ label: 'Save as new lineup', value: { kind: 'save-new' } } as MenuEntry]
         : [
-            { label: 'Save changes', value: { kind: 'save' } } as MenuEntry,
+            { label: `Save changes${dirtyMark}`, value: { kind: 'save' } } as MenuEntry,
             { label: 'Save as new lineup', value: { kind: 'save-new' } } as MenuEntry,
             { label: 'Delete lineup', value: { kind: 'delete' } } as MenuEntry,
           ]),
       { label: 'Cancel', value: { kind: 'cancel' } },
     ];
     const pick = await requestMenu(entries, {
-      title: `Lineup: ${draft.name}${opts.isNew ? ' (draft)' : ''}`,
+      title: `Lineup: ${draft.name}${opts.isNew ? ' (draft)' : ''}${
+        dirtyMark ? ' — unsaved changes' : ''
+      } — pick a role`,
+      layout: 'split',
+      renderDetail: (item) => renderLineupDetail(item, draft),
     });
-    if (pick.cancelled) return null;
+    if (pick.cancelled) {
+      const exit = await handleExit();
+      if (exit.done) return exit.result;
+      continue;
+    }
     const value = pick.item.value as
-      | { kind: 'tier'; tier: LineupTier }
+      | { kind: 'role'; roleId: RoleId }
       | { kind: 'rename' | 'save' | 'save-new' | 'delete' | 'cancel' };
-    if (value.kind === 'cancel') return null;
-    if (value.kind === 'tier') {
-      const next = await pickLineupSlotInk(
+    if (value.kind === 'cancel') {
+      const exit = await handleExit();
+      if (exit.done) return exit.result;
+      continue;
+    }
+    if (value.kind === 'role') {
+      const nextSlots = await runRoleSlotsEditorInk(
+        value.roleId,
+        draft.roles[value.roleId],
         config,
-        value.tier,
-        draft[value.tier],
         requestMenu,
         requestGridMenu,
         requestTextInput,
         flashToast,
       );
-      if (next) draft = { ...draft, [value.tier]: next };
+      draft = {
+        ...draft,
+        roles: { ...draft.roles, [value.roleId]: nextSlots },
+      };
       continue;
     }
     if (value.kind === 'rename') {
@@ -3503,34 +3818,14 @@ async function runLineupEditorInk(
       continue;
     }
     if (value.kind === 'save') {
-      try {
-        const saved = saveLineup({
-          id: draft.id,
-          name: draft.name,
-          premium: draft.premium,
-          mid: draft.mid,
-          cheap: draft.cheap,
-        });
-        return saved;
-      } catch (err) {
-        flashToast(`Failed to save: ${(err as Error).message}`, 'error');
-        continue;
-      }
+      const saved = commit(false);
+      if (saved) return saved;
+      continue;
     }
     if (value.kind === 'save-new') {
-      try {
-        const saved = saveLineup({
-          // omit id so saveLineup slugs from name
-          name: draft.name,
-          premium: draft.premium,
-          mid: draft.mid,
-          cheap: draft.cheap,
-        });
-        return saved;
-      } catch (err) {
-        flashToast(`Failed to save: ${(err as Error).message}`, 'error');
-        continue;
-      }
+      const saved = commit(true);
+      if (saved) return saved;
+      continue;
     }
     if (value.kind === 'delete') {
       const confirm = await requestMenu(
@@ -3555,8 +3850,8 @@ async function runLineupEditorInk(
 
 /**
  * Sort-keys-first JSON so `{a:1,b:2}` and `{b:2,a:1}` produce the same string.
- * Mirrors `stableStringify` at `src/repl.ts:1122` — keeps the confirm-allow
- * session memo stable across re-renders that reshuffle object key order.
+ * Keeps the confirm-allow session memo stable across re-renders that reshuffle
+ * object key order.
  */
 function stableStringify(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
@@ -3566,7 +3861,7 @@ function stableStringify(value: unknown): string {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
 }
 
-/** djb2 over the stable-JSON form. Matches `stableHash` at `src/repl.ts:1113`. */
+/** djb2 over the stable-JSON form. */
 function stableHash(value: unknown): string {
   let json: string;
   try {

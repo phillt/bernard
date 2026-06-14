@@ -15,10 +15,14 @@ export interface OverlayTab {
 }
 
 /**
- * Height of the overlay frame. Always one short of the terminal: a dynamic
+ * Upper bound for the overlay frame, used only to size the content viewport
+ * (see {@link viewerViewport}). Always one short of the terminal: a dynamic
  * (non-Static) Ink frame that fills the last row can't be erased cleanly — the
  * trailing newline scrolls the terminal and desyncs the cursor math, leaving
  * stale rows after the overlay closes.
+ *
+ * NOTE: the shell deliberately does NOT pin its Box to this height — see the
+ * `ViewerShell` body for why. This is a windowing bound, not a layout height.
  */
 export function viewerFrameHeight(rows: number): number {
   return Math.max(1, rows - 1);
@@ -62,9 +66,18 @@ interface ViewerShellProps {
  * layered inside owns its own navigation keys via a separate `useInput` (Ink
  * dispatches to both).
  *
- * The frame is pinned to `viewerFrameHeight(rows)` so it fills the screen and
- * reads as a replacement for the thread, while `<Thread>` stays mounted
- * (unmounting it would reprint `<Static>` scrollback — see `src/ui/Thread.tsx`).
+ * The shell sizes to its (already windowed) content rather than pinning to the
+ * full terminal height. An earlier version pinned the Box to
+ * `viewerFrameHeight(rows)` to read as a full-screen "replacement" for the
+ * thread, but that ballooned Ink's dynamic region from a few lines to nearly
+ * the whole screen on open. Since the welcome splash and finalized turns live
+ * in terminal scrollback *above* Ink's region (printed pre-Ink / via `<Static>`
+ * — see `src/index.ts` `printWelcome` and `src/ui/Thread.tsx`), that growth
+ * scrolled them off the top; on close Ink shrank the region back and the prompt
+ * was stranded at the top of an otherwise-blank screen. Sizing to content keeps
+ * the region small, so closing the viewer restores the prior layout in place.
+ * The caller still windows content to `viewerViewport(rows)`, so the frame can
+ * never exceed the screen.
  */
 export function ViewerShell({
   tabs = [],
@@ -76,7 +89,6 @@ export function ViewerShell({
   onCycleTab = () => {},
 }: ViewerShellProps) {
   const { stdout } = useStdout();
-  const rows = stdout?.rows ?? 24;
   const cols = stdout?.columns ?? 80;
   // App wraps the overlay in paddingX={2}, so the usable width is cols - 4.
   const rule = '─'.repeat(Math.max(4, cols - 4));
@@ -87,9 +99,8 @@ export function ViewerShell({
   });
 
   return (
-    <Box flexDirection="column" height={viewerFrameHeight(rows)}>
+    <Box flexDirection="column">
       {children}
-      <Box flexGrow={1} />
       <Text dimColor>
         {position ? `rows ${position.first}–${position.last} of ${position.total}` : ' '}
       </Text>

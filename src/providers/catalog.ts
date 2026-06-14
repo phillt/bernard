@@ -282,6 +282,60 @@ export function getCatalogSource(): CatalogSource {
   return loadCatalogSync().source;
 }
 
+/** Stable identity for a catalog entry — `provider/model`. */
+function entryKey(e: ModelCatalogEntry): string {
+  return `${e.provider}/${e.model}`;
+}
+
+/** Outcome of {@link refreshCatalogWithDiff}. */
+export interface CatalogRefreshDiff {
+  /** Entries present after the refresh but not before. */
+  added: ModelCatalogEntry[];
+  /** Entries present before the refresh but gone after. */
+  removed: ModelCatalogEntry[];
+  /** Total entry count after the refresh. */
+  total: number;
+  /** Source of the catalog after the refresh. */
+  source: CatalogSource;
+  /** Source of the catalog *before* the refresh (`'vendored'` ⇒ no real baseline). */
+  previousSource: CatalogSource;
+  /** Set when the forced network fetch failed; the diff is empty in that case. */
+  error?: Error;
+}
+
+/**
+ * Force-refresh the catalog from the gateway and report what changed relative
+ * to the previously-loaded copy. Used by the REPL startup hook to notify the
+ * user when new models become available.
+ *
+ * Never throws — a network failure is reported in `error` with an empty diff,
+ * so startup is never blocked or crashed by an offline gateway. Callers should
+ * treat `previousSource === 'vendored'` as "no real baseline" and skip
+ * notifying (a fresh install diffing the bundled snapshot against the live
+ * gateway would otherwise produce noise).
+ */
+export async function refreshCatalogWithDiff(): Promise<CatalogRefreshDiff> {
+  const prev = loadCatalogSync();
+  const previousSource = prev.source;
+  const before = new Set(prev.entries.map(entryKey));
+  try {
+    const refreshed = await loadCatalog({ force: true });
+    const afterKeys = new Set(refreshed.entries.map(entryKey));
+    const added = refreshed.entries.filter((e) => !before.has(entryKey(e)));
+    const removed = prev.entries.filter((e) => !afterKeys.has(entryKey(e)));
+    return { added, removed, total: refreshed.entries.length, source: refreshed.source, previousSource };
+  } catch (err) {
+    return {
+      added: [],
+      removed: [],
+      total: prev.entries.length,
+      source: previousSource,
+      previousSource,
+      error: err instanceof Error ? err : new Error(String(err)),
+    };
+  }
+}
+
 /** Test-only hook to flush the in-memory cache so a fresh load is forced. */
 export function _resetCatalogCacheForTests(): void {
   memoryCache = null;

@@ -13,6 +13,7 @@ import { createWebSearchTool } from './web-search.js';
 import { createWaitTool } from './wait.js';
 import { createFileTools } from './file.js';
 import { createRoutineTool } from './routine.js';
+import { createLineupTool } from './lineup.js';
 import { createSpecialistTool } from './specialist.js';
 import { createCiteTool } from './cite.js';
 import { toolToAISDK } from '../framework/tools/adapter.js';
@@ -54,6 +55,7 @@ export function createTools(
     memory: toolToAISDK(createMemoryTool(memoryStore, provenance)),
     scratch: toolToAISDK(createScratchTool(memoryStore, provenance)),
     routine: createRoutineTool(routineStore),
+    lineup_edit: createLineupTool(config),
     specialist: createSpecialistTool(specialistStore, candidateStore, config),
     datetime: createDateTimeTool(),
     ...createCronTools(),

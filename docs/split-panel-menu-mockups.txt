@@ -1,0 +1,183 @@
+================================================================================
+SPLIT-PANEL MENU — RIGHT-PANEL STYLE VARIATIONS
+================================================================================
+
+Decided so far:
+  • LEFT = the existing numbered list, unchanged in spirit: `›`/number markers,
+    section divider before the lineup-level actions. NO per-row description line
+    on highlight (that info now lives in the right panel).
+  • RIGHT = a detail panel for the highlighted row. This is the part we're
+    styling — every variation below keeps the SAME left list and only swaps the
+    right pane.
+
+Sample data: the xAI-only lineup, "Orchestrator" highlighted.
+
+Shared left list (identical in every option):
+
+     1. Orchestrator
+     2. Task executor
+     3. Function caller
+     4. Summarizer
+     5. Classifier / router
+     6. Coder
+    ───────────────────
+     7. Rename lineup
+     8. Save changes
+     9. Save as new lineup
+    10. Delete lineup
+    11. Cancel
+
+
+================================================================================
+STYLE 1 — Aligned labeled lines (plain)
+================================================================================
+Right pane: role title, three tier lines with aligned labels, description below.
+No borders. Simplest possible.
+
+ Lineup: xAI-only — pick a role
+
+  › 1. Orchestrator           Orchestrator
+    2. Task executor
+    3. Function caller        premium   xai / grok-4.3
+    4. Summarizer             mid       xai / grok-4.20-non-reasoning
+    5. Classifier / router    cheap     xai / grok-4.1-fast-reasoning
+    6. Coder
+   ───────────────────        Main interactive agent + cron — long-context
+    7. Rename lineup          planning & tool orchestration.
+    8. Save changes
+    9. Save as new lineup
+   10. Delete lineup
+   11. Cancel
+
+ ↑/↓ move · Enter select · Esc cancel
+
+
+================================================================================
+STYLE 2 — Boxed card
+================================================================================
+Right pane wrapped in a border with the role name as the box title.
+
+  › 1. Orchestrator         ┌─ Orchestrator ──────────────────────────────────┐
+    2. Task executor        │                                                 │
+    3. Function caller      │   premium   xai / grok-4.3                       │
+    4. Summarizer           │   mid       xai / grok-4.20-non-reasoning        │
+    5. Classifier / router  │   cheap     xai / grok-4.1-fast-reasoning        │
+    6. Coder                │                                                 │
+   ───────────────────      │   Main interactive agent + cron — long-context  │
+    7. Rename lineup        │   planning & tool orchestration.                │
+    8. Save changes         │                                                 │
+    9. Save as new lineup   └─────────────────────────────────────────────────┘
+   10. Delete lineup
+   11. Cancel
+
+
+================================================================================
+STYLE 3 — Mini table (header row)
+================================================================================
+Right pane renders the ladder as a TIER / PROVIDER / MODEL table.
+
+  › 1. Orchestrator           Orchestrator
+    2. Task executor          Main interactive agent + cron.
+    3. Function caller
+    4. Summarizer             TIER     PROVIDER   MODEL
+    5. Classifier / router    ───────  ─────────  ─────────────────────────
+    6. Coder                  premium  xai        grok-4.3
+   ───────────────────        mid      xai        grok-4.20-non-reasoning
+    7. Rename lineup          cheap    xai        grok-4.1-fast-reasoning
+    8. Save changes
+    9. Save as new lineup
+   10. Delete lineup
+   11. Cancel
+
+
+================================================================================
+STYLE 4 — Stacked tier blocks (label above value, color-emphasis)
+================================================================================
+Each tier is a two-line block: a dim UPPERCASE label, then the model in the
+accent color. Airier, easier to read one tier at a time.
+
+  › 1. Orchestrator           ORCHESTRATOR
+    2. Task executor
+    3. Function caller        PREMIUM
+    4. Summarizer               xai / grok-4.3
+    5. Classifier / router
+    6. Coder                  MID
+   ───────────────────          xai / grok-4.20-non-reasoning
+    7. Rename lineup
+    8. Save changes           CHEAP
+    9. Save as new lineup       xai / grok-4.1-fast-reasoning
+   10. Delete lineup
+   11. Cancel
+
+
+================================================================================
+STYLE 5 — Provider/model split with separators (spec-sheet)
+================================================================================
+Provider and model on separate aligned columns, with a faint rule under the
+title. Leans "configuration screen."
+
+  › 1. Orchestrator           Orchestrator
+    2. Task executor          ──────────────────────────────────────────
+    3. Function caller         premium    xai  ·  grok-4.3
+    4. Summarizer              mid        xai  ·  grok-4.20-non-reasoning
+    5. Classifier / router     cheap      xai  ·  grok-4.1-fast-reasoning
+    6. Coder                  ──────────────────────────────────────────
+   ───────────────────         used by: main agent + cron daemon
+    7. Rename lineup
+    8. Save changes
+    9. Save as new lineup
+   10. Delete lineup
+   11. Cancel
+
+
+================================================================================
+STYLE 6 — Compact badges (single-line tiers)
+================================================================================
+Tightest vertical footprint: each tier is one line with a colored badge.
+Good when the detail pane must stay short.
+
+  › 1. Orchestrator           Orchestrator — main agent + cron
+
+    2. Task executor          [premium]  xai / grok-4.3
+    3. Function caller        [  mid  ]  xai / grok-4.20-non-reasoning
+    4. Summarizer             [ cheap ]  xai / grok-4.1-fast-reasoning
+    5. Classifier / router
+    6. Coder
+   ───────────────────
+    7. Rename lineup
+    8. Save changes
+    9. Save as new lineup
+   10. Delete lineup
+   11. Cancel
+
+
+================================================================================
+STYLE 7 — Tree / hierarchy
+================================================================================
+Right pane drawn as a tree rooted at the role. Visually ties the three tiers to
+the one role they belong to.
+
+  › 1. Orchestrator           Orchestrator
+    2. Task executor          │ Main interactive agent + cron.
+    3. Function caller        │
+    4. Summarizer             ├─ premium   xai / grok-4.3
+    5. Classifier / router    ├─ mid       xai / grok-4.20-non-reasoning
+    6. Coder                  └─ cheap     xai / grok-4.1-fast-reasoning
+   ───────────────────
+    7. Rename lineup
+    8. Save changes
+    9. Save as new lineup
+   10. Delete lineup
+   11. Cancel
+
+
+================================================================================
+NOTES
+================================================================================
+• Actions (rows 7–11) have no tier ladder; their right pane would show just a
+  one-line explainer (e.g. "Save as new lineup → clone this grid under a new
+  name"), or stay blank — your call.
+• Whatever style we pick, the right pane is a `renderDetail(item)` callback, so
+  the split layout is reusable for any list-with-detail menu and Enter can still
+  hand off to any sub-menu component.
+• Below ~80 cols we fall back to today's single column.

@@ -2,11 +2,19 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { ALL_ROLE_IDS } from './model-roles.js';
+import { fullRoles, type Ladder } from './__tests__/lineup-fixtures.js';
 
 async function loadModule() {
   vi.resetModules();
   return import('./lineups.js');
 }
+
+const SAMPLE: Ladder = {
+  premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
+  mid: { provider: 'openai', model: 'gpt-4.1' },
+  cheap: { provider: 'xai', model: 'grok-3-mini' },
+};
 
 describe('lineups store', () => {
   let tmpDir: string;
@@ -55,13 +63,11 @@ describe('lineups store', () => {
         mixed: {
           id: 'mixed',
           name: 'Mixed',
-          premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
-          mid: { provider: 'anthropic', model: 'claude-sonnet' },
-          cheap: { provider: 'anthropic', model: 'claude-haiku' },
+          roles: fullRoles(SAMPLE),
           createdAt: 'x',
           updatedAt: 'x',
         },
-      };
+      } as never;
       expect(m.uniqueLineupId('Mixed', existing)).toBe('mixed-2');
     });
   });
@@ -74,12 +80,16 @@ describe('lineups store', () => {
       // Models are derived dynamically from the catalog; assert structural
       // shape rather than exact names so a catalog refresh doesn't break this.
       for (const provider of ['anthropic', 'openai', 'xai'] as const) {
-        expect(lineups[provider].premium.provider).toBe(provider);
-        expect(lineups[provider].mid.provider).toBe(provider);
-        expect(lineups[provider].cheap.provider).toBe(provider);
-        expect(lineups[provider].premium.model.length).toBeGreaterThan(0);
-        expect(lineups[provider].mid.model.length).toBeGreaterThan(0);
-        expect(lineups[provider].cheap.model.length).toBeGreaterThan(0);
+        // Every role is present and seeded to the same provider for all tiers.
+        for (const role of ALL_ROLE_IDS) {
+          const ladder = lineups[provider].roles[role];
+          expect(ladder.premium.provider).toBe(provider);
+          expect(ladder.mid.provider).toBe(provider);
+          expect(ladder.cheap.provider).toBe(provider);
+          expect(ladder.premium.model.length).toBeGreaterThan(0);
+          expect(ladder.mid.model.length).toBeGreaterThan(0);
+          expect(ladder.cheap.model.length).toBeGreaterThan(0);
+        }
       }
     });
 
@@ -90,6 +100,7 @@ describe('lineups store', () => {
       expect(fs.existsSync(filePath)).toBe(true);
       const onDisk = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
       expect(onDisk.lineups.anthropic.name).toBe('Anthropic-only');
+      expect(onDisk.lineups.anthropic.roles.orchestrator.premium.provider).toBe('anthropic');
     });
 
     it('reseeds when the file is corrupt JSON', async () => {
@@ -110,6 +121,71 @@ describe('lineups store', () => {
       const lineups = m.loadLineups();
       expect(lineups.junk).toBeUndefined();
       expect(lineups.anthropic).toBeDefined();
+    });
+  });
+
+  describe('migration (legacy flat → role-keyed)', () => {
+    it('replicates a legacy flat lineup across all roles and rewrites the file', async () => {
+      fs.mkdirSync(path.join(tmpDir, 'bernard'), { recursive: true });
+      const filePath = path.join(tmpDir, 'bernard', 'lineups.json');
+      // Pre-#264 flat shape: premium/mid/cheap at the top level, no `roles`.
+      fs.writeFileSync(
+        filePath,
+        JSON.stringify({
+          lineups: {
+            legacy: {
+              id: 'legacy',
+              name: 'Legacy',
+              premium: SAMPLE.premium,
+              mid: SAMPLE.mid,
+              cheap: SAMPLE.cheap,
+              createdAt: 'c',
+              updatedAt: 'u',
+            },
+          },
+        }),
+      );
+      const m = await loadModule();
+      const lineups = m.loadLineups();
+      expect(lineups.legacy).toBeDefined();
+      // Every role inherits the old cost ladder verbatim.
+      for (const role of ALL_ROLE_IDS) {
+        expect(lineups.legacy.roles[role].premium).toEqual(SAMPLE.premium);
+        expect(lineups.legacy.roles[role].mid).toEqual(SAMPLE.mid);
+        expect(lineups.legacy.roles[role].cheap).toEqual(SAMPLE.cheap);
+      }
+      // The on-disk shape was upgraded: role-keyed, no top-level flat slots.
+      const onDisk = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      expect(onDisk.lineups.legacy.roles).toBeDefined();
+      expect(onDisk.lineups.legacy.premium).toBeUndefined();
+    });
+
+    it('backfills a role missing from a stored role-keyed lineup', async () => {
+      fs.mkdirSync(path.join(tmpDir, 'bernard'), { recursive: true });
+      const partial = fullRoles(SAMPLE);
+      // Simulate a lineup saved before the `coder` role existed.
+      delete partial.coder;
+      fs.writeFileSync(
+        path.join(tmpDir, 'bernard', 'lineups.json'),
+        JSON.stringify({
+          lineups: {
+            partial: {
+              id: 'partial',
+              name: 'Partial',
+              roles: partial,
+              createdAt: 'c',
+              updatedAt: 'u',
+            },
+          },
+        }),
+      );
+      const m = await loadModule();
+      const lineups = m.loadLineups();
+      // coder is backfilled from the orchestrator anchor.
+      expect(lineups.partial.roles.coder).toBeDefined();
+      expect(lineups.partial.roles.coder.premium).toEqual(
+        lineups.partial.roles.orchestrator.premium,
+      );
     });
   });
 
@@ -134,50 +210,73 @@ describe('lineups store', () => {
     });
   });
 
+  describe('resolveActiveLineupWithCorrection', () => {
+    it('reports no correction when the explicit id exists', async () => {
+      const m = await loadModule();
+      const lineups = m.loadLineups();
+      const res = m.resolveActiveLineupWithCorrection(lineups, 'openai', 'anthropic');
+      expect(res.lineup.id).toBe('openai');
+      expect(res.corrected).toBeUndefined();
+    });
+
+    it('reports no correction when no explicit id is set (normal fallback)', async () => {
+      const m = await loadModule();
+      const lineups = m.loadLineups();
+      const res = m.resolveActiveLineupWithCorrection(lineups, undefined, 'xai');
+      expect(res.lineup.id).toBe('xai');
+      expect(res.corrected).toBeUndefined();
+    });
+
+    it('reports a correction when the explicit id is missing, falling back by provider', async () => {
+      const m = await loadModule();
+      const lineups = m.loadLineups();
+      const res = m.resolveActiveLineupWithCorrection(lineups, 'openai-only', 'xai');
+      // 'openai-only' doesn't exist; provider 'xai' does → fall back to it.
+      expect(res.lineup.id).toBe('xai');
+      expect(res.corrected).toEqual({ requestedId: 'openai-only', resolvedId: 'xai' });
+    });
+
+    it('reports a correction and falls back to the first lineup when nothing matches', async () => {
+      const m = await loadModule();
+      const lineups = m.loadLineups();
+      const first = Object.values(lineups)[0];
+      const res = m.resolveActiveLineupWithCorrection(lineups, 'gone', 'unknown-provider');
+      expect(res.lineup.id).toBe(first.id);
+      expect(res.corrected).toEqual({ requestedId: 'gone', resolvedId: first.id });
+    });
+  });
+
   describe('saveLineup / renameLineup / deleteLineup', () => {
     it('writes a new lineup with a derived id', async () => {
       const m = await loadModule();
       const entry = m.saveLineup({
         name: 'My Mix',
-        premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
-        mid: { provider: 'openai', model: 'gpt-4.1' },
-        cheap: { provider: 'xai', model: 'grok-3-mini' },
+        roles: fullRoles(SAMPLE) as never,
       });
       expect(entry.id).toBe('my-mix');
-      expect(entry.mid.provider).toBe('openai');
+      expect(entry.roles.executor.mid.provider).toBe('openai');
       const all = m.loadLineups();
       expect(all['my-mix']).toBeDefined();
     });
 
     it('updates an existing lineup in place', async () => {
       const m = await loadModule();
-      m.saveLineup({
-        id: 'mix',
-        name: 'Mix',
-        premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
-        mid: { provider: 'openai', model: 'gpt-4.1' },
-        cheap: { provider: 'xai', model: 'grok-3-mini' },
-      });
-      const updated = m.saveLineup({
-        id: 'mix',
-        name: 'Mix',
-        premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
-        mid: { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
-        cheap: { provider: 'xai', model: 'grok-3-mini' },
-      });
-      expect(updated.mid.provider).toBe('anthropic');
+      m.saveLineup({ id: 'mix', name: 'Mix', roles: fullRoles(SAMPLE) as never });
+      const tweaked = fullRoles(SAMPLE);
+      tweaked.executor.mid = { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' };
+      const updated = m.saveLineup({ id: 'mix', name: 'Mix', roles: tweaked as never });
+      expect(updated.roles.executor.mid.provider).toBe('anthropic');
+      // Other roles untouched.
+      expect(updated.roles.orchestrator.mid.provider).toBe('openai');
     });
 
-    it('rejects empty slot fields', async () => {
+    it('rejects empty slot fields with a role+tier message', async () => {
       const m = await loadModule();
-      expect(() =>
-        m.saveLineup({
-          name: 'Bad',
-          premium: { provider: '', model: 'x' },
-          mid: { provider: 'anthropic', model: 'x' },
-          cheap: { provider: 'anthropic', model: 'x' },
-        }),
-      ).toThrow(/premium/);
+      const bad = fullRoles(SAMPLE);
+      bad.orchestrator.premium = { provider: '', model: 'x' };
+      expect(() => m.saveLineup({ name: 'Bad', roles: bad as never })).toThrow(
+        /orchestrator.*premium/,
+      );
     });
 
     it('renameLineup updates the display name', async () => {
