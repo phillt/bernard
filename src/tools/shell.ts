@@ -123,12 +123,16 @@ export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, Sh
     description: SHELL_DESCRIPTION,
     parameters: SHELL_PARAMETERS,
     execute: async ({ command }, execOptions) => {
-      if (isDangerous(command) && !isSafelisted(command)) {
-        // The unified `confirmAction` gate (#144) is installed centrally in
-        // `runDefinition` (`augmentTools`), so when both confirmAction and
-        // confirmDangerous are wired we'd otherwise prompt twice. Only fall
-        // back to the legacy `confirmDangerous` callback — covers tests and
-        // callers that haven't migrated to the unified gate.
+      // The unified `confirmAction` gate (#144/#212) is installed centrally in
+      // `runDefinition` (`augmentTools`) and is profile-, session-, and
+      // skip-permissions-aware; it already gates dangerous shell calls
+      // (meta.kind: 'dangerous' → high risk). When it's wired (the REPL),
+      // calling `confirmDangerous` here too would prompt a SECOND time and
+      // ignore every "always allow" / "allow for session" / skip-permissions
+      // decision the user already made (#212). So only fall back to the legacy
+      // `confirmDangerous` callback when the unified gate is ABSENT — covers
+      // tests and callers that haven't migrated.
+      if (!options.confirmAction && isDangerous(command) && !isSafelisted(command)) {
         const confirmed = await options.confirmDangerous(command, execOptions?.abortSignal);
         if (!confirmed) {
           return ok({ output: 'Command cancelled by user.', is_error: false });

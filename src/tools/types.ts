@@ -1,5 +1,6 @@
 import type { RiskLevel } from '../risk.js';
-import type { ToolPermissions } from '../tool-permissions.js';
+import type { PermissionRule } from '../tool-permissions.js';
+import type { BreadthOption } from '../permissions/breadth.js';
 
 /**
  * Input passed to the unified pre-execution confirmation callback (issue #144).
@@ -25,6 +26,12 @@ export interface ConfirmActionInput {
    * "Always allow for this profile" option.
    */
   permissionKey?: string | null;
+  /**
+   * Breadth ladder (#261) for the scope axis: ordered narrow→broad scope
+   * options the user picks with ←/→. Absent/empty ⇒ no profile-scope grant is
+   * offered (complex/dangerous shell), so the dialog omits the profile row.
+   */
+  breadthOptions?: BreadthOption[];
 }
 
 /** A single question for the `askUser` callback. */
@@ -66,6 +73,8 @@ export interface BlockActionInput {
   reason: string;
   /** Profile-grant key for this call (#212) — see {@link ConfirmActionInput.permissionKey}. */
   permissionKey?: string | null;
+  /** Breadth ladder (#261) — see {@link ConfirmActionInput.breadthOptions}. */
+  breadthOptions?: BreadthOption[];
 }
 
 /**
@@ -139,7 +148,7 @@ export interface ToolOptions {
    * snapshot) so mid-session grants and profile switches take effect
    * immediately. Omitted by cron — headless runs never honor profile grants.
    */
-  getToolPermissions?: () => ToolPermissions | undefined;
+  getToolPermissions?: () => PermissionRule[] | undefined;
 }
 
 /** Outcome of a shell tool invocation. */

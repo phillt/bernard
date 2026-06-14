@@ -11,8 +11,10 @@ import { CACHE_MISS, getCachedResult, setCachedResult } from '../framework/tools
 import { redactArgs, REDACTED } from '../framework/tools/redact.js';
 import type { ProvenanceStore } from '../provenance.js';
 import type { ToolMeta } from '../framework/tools/types.js';
-import { isDangerous } from './shell.js';
+import { isDangerous, isSafelisted } from './shell.js';
 import { permissionKeyFor } from '../tool-permissions.js';
+import { resolveGrant } from '../permissions/engine.js';
+import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js';
 
 /**
  * The wrapper shim prepends `[failure: <category>] <playbook.model>` to
@@ -359,21 +361,48 @@ export function augmentTools(
   const augmented: Record<string, any> = {};
 
   /**
-   * Profile-persisted grant lookup (#212), shared by both gates: `allow`
-   * skips the gate's prompt, `deny` refuses without prompting, `prompt`
-   * falls through to the gate's dialog. Checked after the session
+   * Is this shell call a dangerous, non-safelisted command? Such calls always
+   * re-prompt and are never offered a profile-scope grant (#261).
+   */
+  const isDangerousShellCall = (toolName: string, args: unknown): boolean => {
+    if (toolName !== 'shell') return false;
+    const cmd = (args as Record<string, unknown> | undefined)?.command;
+    return typeof cmd === 'string' && isDangerous(cmd) && !isSafelisted(cmd);
+  };
+
+  /**
+   * Profile-persisted grant resolution (#212/#261), shared by both gates.
+   * Evaluates the active profile's `PermissionRule[]` through the deterministic
+   * engine: `allow` skips the gate's prompt, `deny` refuses without prompting,
+   * `ask` falls through to the gate's dialog. Checked after the session
    * allowlist, before prompting.
    */
   const resolveProfileGrant = (
     toolName: string,
-    permissionKey: string | null,
+    args: unknown,
     gate: 'block' | 'confirm',
-  ): 'allow' | 'deny' | 'prompt' => {
-    const grant = permissionKey ? opts.getToolPermissions?.()?.[permissionKey] : undefined;
-    if (grant === 'deny') {
-      debugLog(`augment:${toolName}:${gate}:profile-deny`, { permissionKey });
-    }
-    return grant ?? 'prompt';
+    isDangerousShell: boolean,
+  ): 'allow' | 'deny' | 'ask' => {
+    const rules = opts.getToolPermissions?.() ?? [];
+    if (rules.length === 0) return 'ask';
+    const decision = resolveGrant(toolName, args, rules, isDangerousShell);
+    if (decision === 'deny') debugLog(`augment:${toolName}:${gate}:profile-deny`, {});
+    return decision;
+  };
+
+  /**
+   * Breadth ladder for the confirm/block dialog (#261), or `undefined` when no
+   * profile-scope grant should be offered (dangerous shell, complex/unparseable
+   * commands, missing args) so the dialog omits the "for this profile" row.
+   */
+  const computeBreadthOptions = (
+    toolName: string,
+    args: unknown,
+    isDangerousShell: boolean,
+  ): BreadthOption[] | undefined => {
+    if (isDangerousShell) return undefined;
+    const ladder = breadthOptionsFor(toolName, args);
+    return ladder.length ? ladder : undefined;
   };
 
   /**
@@ -395,8 +424,9 @@ export function augmentTools(
     const meta = readToolMeta(toolDef);
     if (!shouldBlockInReadOnly(meta, args)) return true;
     if (sessionToolAllowlist.has(toolName)) return true;
+    const dangerousShell = isDangerousShellCall(toolName, args);
     const permissionKey = permissionKeyFor(toolName, args);
-    const grant = resolveProfileGrant(toolName, permissionKey, 'block');
+    const grant = resolveProfileGrant(toolName, args, 'block', dangerousShell);
     if (grant === 'allow') return true;
     if (grant === 'deny') return false;
     if (!blockAction) {
@@ -408,6 +438,7 @@ export function augmentTools(
       args,
       reason: buildConfirmReason(toolName, args),
       permissionKey,
+      breadthOptions: computeBreadthOptions(toolName, args, dangerousShell),
     };
     const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
     let outcome: BlockOutcome;
@@ -443,8 +474,9 @@ export function augmentTools(
     const meta = readToolMeta(toolDef);
     const risk = riskFromMeta(meta, args);
     if (!shouldConfirm(risk, confirmThreshold)) return true;
+    const dangerousShell = isDangerousShellCall(toolName, args);
     const permissionKey = permissionKeyFor(toolName, args);
-    const grant = resolveProfileGrant(toolName, permissionKey, 'confirm');
+    const grant = resolveProfileGrant(toolName, args, 'confirm', dangerousShell);
     if (grant === 'allow') return true;
     if (grant === 'deny') return false;
     const input: ConfirmActionInput = {
@@ -453,6 +485,7 @@ export function augmentTools(
       risk,
       reason: buildConfirmReason(toolName, args),
       permissionKey,
+      breadthOptions: computeBreadthOptions(toolName, args, dangerousShell),
     };
     const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
     try {

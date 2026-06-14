@@ -1,5 +1,6 @@
 import * as crypto from 'node:crypto';
 import { loadConfig } from '../config.js';
+import { initShellParser } from '../permissions/shell-ast.js';
 import { assembleContext } from '../framework/context.js';
 import { RAGStore, type RAGSearchResult } from '../rag.js';
 import { debugLog } from '../logger.js';
@@ -43,6 +44,10 @@ export interface RunJobResult {
  */
 export async function runJob(job: CronJob, log: (msg: string) => void): Promise<RunJobResult> {
   registerBuiltinDefinitions();
+  // Warm the bash parser in the background (#261). Cron carries no profile
+  // rules so the parser isn't consulted for matching, and dangerous-command
+  // detection uses regex — so this never needs to block job startup.
+  void initShellParser();
   const config = loadConfig();
   const store = new CronStore();
 

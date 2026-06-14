@@ -4,6 +4,9 @@ import {
   permissionKeyFor,
   permissionKeyLabel,
   primaryShellCommand,
+  migrateToolPermissions,
+  sanitizePermissionRules,
+  ruleLabel,
 } from './tool-permissions.js';
 
 describe('primaryShellCommand', () => {
@@ -111,5 +114,57 @@ describe('permissionKeyLabel', () => {
   it('strips the shell: prefix and passes other keys through', () => {
     expect(permissionKeyLabel('shell:ls')).toBe('ls');
     expect(permissionKeyLabel('web_read')).toBe('web_read');
+  });
+});
+
+describe('migrateToolPermissions (#261)', () => {
+  it('returns [] for null/undefined', () => {
+    expect(migrateToolPermissions(undefined)).toEqual([]);
+    expect(migrateToolPermissions(null)).toEqual([]);
+  });
+
+  it('migrates a legacy v1 object, preserving "any args" semantics for shell', () => {
+    const rules = migrateToolPermissions({ 'shell:ls': 'allow', web_read: 'deny' });
+    expect(rules).toEqual([
+      { effect: 'allow', tool: 'shell', specifier: 'ls *', _v: 2 },
+      { effect: 'deny', tool: 'web_read', _v: 2 },
+    ]);
+  });
+
+  it('passes a v2 array through, dropping malformed entries', () => {
+    const rules = migrateToolPermissions([
+      { effect: 'allow', tool: 'shell', specifier: 'git *', _v: 2 },
+      { effect: 'bogus', tool: 'x', _v: 2 } as never,
+      { effect: 'deny', tool: '', _v: 2 } as never,
+    ]);
+    expect(rules).toEqual([{ effect: 'allow', tool: 'shell', specifier: 'git *', _v: 2 }]);
+  });
+
+  it('drops rules with empty/whitespace specifiers (never-matching, misleading)', () => {
+    const rules = migrateToolPermissions([
+      { effect: 'allow', tool: 'shell', specifier: '', _v: 2 } as never,
+      { effect: 'allow', tool: 'shell', specifier: '   ', _v: 2 } as never,
+      { effect: 'allow', tool: 'shell', specifier: 'git *', _v: 2 },
+    ]);
+    expect(rules).toEqual([{ effect: 'allow', tool: 'shell', specifier: 'git *', _v: 2 }]);
+  });
+
+  it('drops prototype-pollution keys from a legacy blob', () => {
+    const rules = migrateToolPermissions({ __proto__: 'allow', ls: 'allow' } as never);
+    expect(rules.every((r) => r.tool !== '__proto__')).toBe(true);
+  });
+
+  it('sanitizePermissionRules accepts both shapes and junk', () => {
+    expect(sanitizePermissionRules('garbage')).toEqual([]);
+    expect(sanitizePermissionRules({ web_read: 'allow' })).toEqual([
+      { effect: 'allow', tool: 'web_read', _v: 2 },
+    ]);
+  });
+});
+
+describe('ruleLabel (#261)', () => {
+  it('renders tool + specifier, or "(any args)" when absent', () => {
+    expect(ruleLabel({ effect: 'allow', tool: 'shell', specifier: 'git *', _v: 2 })).toBe('shell git *');
+    expect(ruleLabel({ effect: 'deny', tool: 'web_read', _v: 2 })).toBe('web_read (any args)');
   });
 });

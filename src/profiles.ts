@@ -25,7 +25,7 @@ import * as path from 'node:path';
 import { PREFS_PATH, PROFILES_PATH, PROFILES_MIGRATED_MARKER } from './paths.js';
 import { atomicWriteFileSync } from './fs-utils.js';
 import type { ResponseStyle } from './agent-prompt.js';
-import type { ToolPermissions } from './tool-permissions.js';
+import type { ToolPermissions, ToolPermissionRules } from './tool-permissions.js';
 
 /** Slug pattern + length cap used for profile ids. */
 const ID_PATTERN = /^[a-z][a-z0-9_-]*$/;
@@ -77,9 +77,11 @@ export interface ProfileSettings {
    * (`web_read`) or `shell:<primary-command>` (`shell:ls`); see
    * `permissionKeyFor` in `src/tool-permissions.ts`. `allow` bypasses both
    * the read-only block gate and the risk confirm gate; `deny` refuses the
-   * call without prompting.
+   * call without prompting. On disk this may be a legacy v1 object or the v2
+   * `PermissionRule[]` (#261); both are migrated on read by
+   * `sanitizePermissionRules`.
    */
-  toolPermissions?: ToolPermissions;
+  toolPermissions?: ToolPermissions | ToolPermissionRules;
   /**
    * "Run Without Permission Checks or Safeguards" (#212). When true the
    * policy engine forces `toolMode: 'write'` + `confirmThreshold: 'never'`

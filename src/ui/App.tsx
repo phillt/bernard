@@ -78,7 +78,12 @@ import {
   saveActiveSettings,
   type ProfileSettings,
 } from '../profiles.js';
-import { permissionKeyLabel, type ToolPermissionValue } from '../tool-permissions.js';
+import {
+  ruleLabel,
+  type PermissionRule,
+  type ToolPermissionEffect,
+} from '../tool-permissions.js';
+import type { BreadthOption } from '../permissions/breadth.js';
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible } from '../output.js';
 import { truncate } from '../text.js';
@@ -250,13 +255,17 @@ interface PendingGrid {
 interface PendingConfirm {
   kind: 'confirm';
   input: ConfirmActionInput;
-  resolve: (allowed: boolean, scope: 'once' | 'session' | 'profile') => void;
+  resolve: (
+    allowed: boolean,
+    scope: 'once' | 'session' | 'profile',
+    breadth: BreadthOption | undefined,
+  ) => void;
 }
 
 interface PendingBlock {
   kind: 'block';
   input: BlockActionInput;
-  resolve: (outcome: BlockOutcome) => void;
+  resolve: (outcome: BlockOutcome, breadth: BreadthOption | undefined) => void;
 }
 
 type PendingDialog = PendingConfirm | PendingBlock;
@@ -420,8 +429,8 @@ export function App({
       setPendingGrid(null);
     }
     if (pendingDialog) {
-      if (pendingDialog.kind === 'confirm') pendingDialog.resolve(false, 'once');
-      else pendingDialog.resolve('deny');
+      if (pendingDialog.kind === 'confirm') pendingDialog.resolve(false, 'once', undefined);
+      else pendingDialog.resolve('deny', undefined);
       setPendingDialog(null);
     }
     if (pendingTextInput) {
@@ -2560,19 +2569,31 @@ export function App({
    * gates read it through `getToolPermissions` on every call) and writes the
    * active profile so the grant survives REPL restarts.
    */
-  function persistToolPermission(key: string, value: ToolPermissionValue): void {
-    config.toolPermissions = { ...config.toolPermissions, [key]: value };
+  /** Build a PermissionRule from a tool + selected breadth option (#261). */
+  function buildRuleFromBreadth(
+    toolName: string,
+    breadth: BreadthOption | undefined,
+    effect: ToolPermissionEffect,
+  ): PermissionRule {
+    return breadth
+      ? { effect, tool: toolName, specifier: breadth.specifier, _v: 2 }
+      : { effect, tool: toolName, _v: 2 };
+  }
+
+  /** Append a rule to the active profile and persist (#261). */
+  function persistPermissionRule(rule: PermissionRule): void {
+    config.toolPermissions = [...config.toolPermissions, rule];
     saveActiveSettings({ toolPermissions: config.toolPermissions });
   }
 
   /**
-   * `/tool-permissions` (#212): inspect/remove the active profile's persisted
-   * grants and toggle the global "Run Without Permission Checks or
-   * Safeguards" escape hatch.
+   * `/tool-permissions` (#212/#261): inspect/remove/flip the active profile's
+   * persisted permission rules and toggle the global "Run Without Permission
+   * Checks or Safeguards" escape hatch.
    */
   async function runToolPermissionsMenu(): Promise<void> {
     const skipOn = config.skipPermissions;
-    const keys = Object.keys(config.toolPermissions).sort();
+    const rules = config.toolPermissions;
     const entries: MenuEntry[] = [
       {
         label: 'Run Without Permission Checks or Safeguards',
@@ -2582,20 +2603,20 @@ export function App({
           : 'Disable the block gate and every confirmation prompt for this profile.',
         value: '__skip__',
       },
-      ...(keys.length > 0
+      ...(rules.length > 0
         ? [
-            { type: 'section' as const, title: 'Profile grants:' },
-            ...keys.map((k) => ({
-              label: k,
-              annotation: config.toolPermissions[k],
-              value: k,
+            { type: 'section' as const, title: 'Profile rules (deny → ask → allow):' },
+            ...rules.map((r, i) => ({
+              label: ruleLabel(r),
+              annotation: r.effect,
+              value: String(i),
             })),
-            { label: 'Reset all grants', value: '__reset__' },
+            { label: 'Reset all rules', value: '__reset__' },
           ]
-        : [{ type: 'section' as const, title: 'No tool grants saved for this profile.' }]),
+        : [{ type: 'section' as const, title: 'No tool rules saved for this profile.' }]),
     ];
     const result = await requestMenu(entries, {
-      title: `Tool permissions — profile grants persist across sessions`,
+      title: `Tool permissions — profile rules persist across sessions`,
     });
     if (result.cancelled) return;
     const value = result.item.value as string;
@@ -2606,35 +2627,37 @@ export function App({
     }
 
     if (value === '__reset__') {
-      config.toolPermissions = {};
-      saveActiveSettings({ toolPermissions: {} });
-      flashToast('All profile tool grants removed.', 'success');
+      config.toolPermissions = [];
+      saveActiveSettings({ toolPermissions: [] });
+      flashToast('All profile tool rules removed.', 'success');
       return;
     }
 
-    // Per-grant submenu.
-    const current = config.toolPermissions[value];
-    if (!current) return;
-    const flipped: ToolPermissionValue = current === 'allow' ? 'deny' : 'allow';
+    // Per-rule submenu.
+    const idx = Number(value);
+    const rule = rules[idx];
+    if (!rule) return;
+    const flipped: ToolPermissionEffect = rule.effect === 'allow' ? 'deny' : 'allow';
     const sub = await requestMenu(
       [
-        { label: 'Remove grant', value: 'remove' },
+        { label: 'Remove rule', value: 'remove' },
         { label: `Switch to ${flipped}`, value: 'switch' },
         { label: 'Cancel', value: 'cancel' },
       ],
-      { title: `${value} — currently ${current}` },
+      { title: `${ruleLabel(rule)} — currently ${rule.effect}` },
     );
     if (sub.cancelled || sub.item.value === 'cancel') return;
     if (sub.item.value === 'remove') {
-      const updated = { ...config.toolPermissions };
-      delete updated[value];
+      const updated = rules.filter((_, i) => i !== idx);
       config.toolPermissions = updated;
       saveActiveSettings({ toolPermissions: updated });
-      flashToast(`Removed grant for "${permissionKeyLabel(value)}".`, 'success');
+      flashToast(`Removed rule "${ruleLabel(rule)}".`, 'success');
       return;
     }
-    persistToolPermission(value, flipped);
-    flashToast(`"${permissionKeyLabel(value)}" switched to ${flipped}.`, 'success');
+    const updated = rules.map((r, i) => (i === idx ? { ...r, effect: flipped } : r));
+    config.toolPermissions = updated;
+    saveActiveSettings({ toolPermissions: updated });
+    flashToast(`"${ruleLabel(rule)}" switched to ${flipped}.`, 'success');
   }
 
   function requestConfirm(input: ConfirmActionInput, signal?: AbortSignal): Promise<boolean> {
@@ -2657,11 +2680,11 @@ export function App({
       setPendingDialog({
         kind: 'confirm',
         input,
-        resolve: (allowed, scope) => {
+        resolve: (allowed, scope, breadth) => {
           signal?.removeEventListener('abort', onAbort);
           if (allowed && scope === 'session') confirmAllowSession.current.set(key, true);
-          if (allowed && scope === 'profile' && input.permissionKey) {
-            persistToolPermission(input.permissionKey, 'allow');
+          if (allowed && scope === 'profile') {
+            persistPermissionRule(buildRuleFromBreadth(input.toolName, breadth, 'allow'));
           }
           finish(allowed);
         },
@@ -2688,10 +2711,10 @@ export function App({
       setPendingDialog({
         kind: 'block',
         input,
-        resolve: (outcome) => {
+        resolve: (outcome, breadth) => {
           signal?.removeEventListener('abort', onAbort);
-          if (outcome === 'allow-tool-for-profile' && input.permissionKey) {
-            persistToolPermission(input.permissionKey, 'allow');
+          if (outcome === 'allow-tool-for-profile') {
+            persistPermissionRule(buildRuleFromBreadth(input.toolName, breadth, 'allow'));
           }
           finish(outcome);
         },
@@ -2877,13 +2900,14 @@ export function App({
           reason={pendingDialog.input.reason}
           risk={pendingDialog.input.risk}
           permissionKey={pendingDialog.input.permissionKey}
-          onResolve={(allowed, scope) => {
-            pendingDialog.resolve(allowed, scope);
+          breadthOptions={pendingDialog.input.breadthOptions}
+          onResolve={(allowed, scope, breadth) => {
+            pendingDialog.resolve(allowed, scope, breadth);
             setPendingDialog(null);
             setActiveOverlay(null);
           }}
           onCancel={() => {
-            pendingDialog.resolve(false, 'once');
+            pendingDialog.resolve(false, 'once', undefined);
             setPendingDialog(null);
             setActiveOverlay(null);
           }}
@@ -2916,13 +2940,14 @@ export function App({
           toolName={pendingDialog.input.toolName}
           reason={pendingDialog.input.reason}
           permissionKey={pendingDialog.input.permissionKey}
-          onResolve={(outcome) => {
-            pendingDialog.resolve(outcome);
+          breadthOptions={pendingDialog.input.breadthOptions}
+          onResolve={(outcome, breadth) => {
+            pendingDialog.resolve(outcome, breadth);
             setPendingDialog(null);
             setActiveOverlay(null);
           }}
           onCancel={() => {
-            pendingDialog.resolve('deny');
+            pendingDialog.resolve('deny', undefined);
             setPendingDialog(null);
             setActiveOverlay(null);
           }}
