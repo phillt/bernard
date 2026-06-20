@@ -251,8 +251,10 @@ export function createFileTools(provenance?: ProvenanceStore) {
             if (provenance && lines.length > 0) {
               const startLine = lines[0].num;
               const endLine = lines[lines.length - 1].num;
+              // Keep a wider slice so the Sources viewer's content panel shows
+              // a meaningful excerpt; ProvenanceStore caps it at MAX_PREVIEW.
               const preview = lines
-                .slice(0, 5)
+                .slice(0, 40)
                 .map((l) => l.content)
                 .join('\n');
               sourceId = provenance.add({
