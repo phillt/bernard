@@ -5,7 +5,7 @@ import type { SourceItem } from '../../provenance.js';
 import { getThemeColors, type ThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
 import { ViewerShell, viewerViewport } from './ViewerShell.js';
-import { MenuRow } from './MenuRow.js';
+import { MenuRow, MENU_MARKER } from './MenuRow.js';
 import { VIEWER_TABS } from './viewer-tabs.js';
 
 interface SourcesViewerProps {
@@ -14,16 +14,30 @@ interface SourcesViewerProps {
   onCycleTab?: () => void;
 }
 
+/** Width of the `MenuRow` selection gutter (`> ` / `  `). */
+const GUTTER = MENU_MARKER.length;
+
 /**
  * Two-panel citation history (issue #211 redesign). Level 1 is a scrollable
  * list of turns; pressing Enter/→ on a turn drills into a split panel: the
- * turn's citations on the left, a human-friendly render of the highlighted
- * citation's content on the right (the same left-list + detail-card shape as
- * the lineup role picker). Esc/← steps back to the turn list; a second Esc (at
- * the turn list) closes the viewer. Shift-Tab cycles tabs at either level.
+ * turn's citations on the left (cited first), a human-friendly render of the
+ * highlighted citation's content on the right (the same left-list + detail-card
+ * shape as the lineup role picker).
  *
- * Navigation is owned here via two `isActive`-gated `useInput`s; the shell owns
- * Shift-Tab always and Esc only at the turn list (`escClosesViewer`).
+ * Navigation has three focus states, each owned by an `isActive`-gated
+ * `useInput`:
+ *   - turn list  (`drillTarget === null`)            — ↑/↓ move, Enter/→ drill.
+ *   - citation list (`drillTarget !== null`, list)   — ↑/↓ move the highlight,
+ *     Enter/→ focuses the content panel when it overflows, Esc/← back to turns.
+ *   - content    (`drillTarget !== null`, content)   — ↑/↓ scroll the right
+ *     panel so long excerpts are fully readable, Esc/← back to the citations.
+ *
+ * Every row is clamped to a single terminal line and every panel is clamped to
+ * the live viewport height, so the frame can never exceed the terminal (which
+ * previously made the list look endless and the right card render blank).
+ *
+ * The shell owns Shift-Tab always and Esc only at the turn list
+ * (`escClosesViewer`); the inner handlers own Esc everywhere deeper.
  */
 export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps) {
   const colors = getThemeColors();
@@ -39,10 +53,38 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
   const [turnOffset, setTurnOffset] = useState(0);
   const [srcCursor, setSrcCursor] = useState(0);
   const [srcOffset, setSrcOffset] = useState(0);
+  // When drilled in: 'list' navigates citations, 'content' scrolls the card.
+  const [focus, setFocus] = useState<'list' | 'content'>('list');
+  const [contentOffset, setContentOffset] = useState(0);
 
   const atList = drillTarget === null;
   const drilledTurn = atList ? null : turns[drillTarget];
-  const sources = drilledTurn?.sources ?? [];
+  const citedSet = new Set(drilledTurn?.citedIds ?? []);
+  // Cited sources first, then uncited; `sort` is stable so within-group order
+  // (registration order) is preserved.
+  const sources = atList
+    ? []
+    : [...(drilledTurn?.sources ?? [])].sort(
+        (a, b) => (citedSet.has(b.id) ? 1 : 0) - (citedSet.has(a.id) ? 1 : 0),
+      );
+
+  // --- Split-panel geometry (only meaningful when drilled in) ---
+  const usableCols = Math.max(20, cols - 4); // App wraps the overlay in paddingX={2}.
+  const leftWidth = clamp(Math.floor(usableCols * 0.42), 24, 44);
+  const cardWidth = Math.max(24, usableCols - leftWidth - 2);
+  const innerWidth = Math.max(8, cardWidth - 4); // border (2) + paddingX 1 each side (2).
+  // One row is reserved above the panels for the turn header line.
+  const bodyRows = Math.max(1, viewport - 1);
+  const innerHeight = Math.max(1, bodyRows - 2); // card border top + bottom.
+
+  const selected = sources[srcCursor];
+  const detail = selected ? buildCitationDetail(selected, citedSet.has(selected.id), innerWidth, colors) : null;
+  const maxPreviewLines = detail ? Math.max(1, innerHeight - detail.header.length) : 1;
+  const contentOverflows = detail ? detail.lines.length > maxPreviewLines : false;
+  // Reserve a row for the position hint when the excerpt overflows.
+  const previewBudget = contentOverflows ? Math.max(1, maxPreviewLines - 1) : maxPreviewLines;
+  const maxContentOffset = detail ? Math.max(0, detail.lines.length - previewBudget) : 0;
+  const clampedContentOffset = clamp(contentOffset, 0, maxContentOffset);
 
   // --- Level 1: turn list navigation ---
   useInput(
@@ -58,14 +100,29 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
         setDrillTarget(turnCursor);
         setSrcCursor(0);
         setSrcOffset(0);
+        setFocus('list');
+        setContentOffset(0);
       }
     },
     { isActive: atList },
   );
 
-  // --- Level 2: split-panel (citation) navigation ---
+  // --- Level 2: split-panel (citation list + content scroll) navigation ---
   useInput(
     (input, key) => {
+      if (focus === 'content') {
+        if (key.escape || key.leftArrow) {
+          setFocus('list');
+          setContentOffset(0);
+        } else if (key.downArrow || input === 'j') setContentOffset((o) => clamp(o + 1, 0, maxContentOffset));
+        else if (key.upArrow || input === 'k') setContentOffset((o) => clamp(o - 1, 0, maxContentOffset));
+        else if (key.pageDown) setContentOffset((o) => clamp(o + previewBudget, 0, maxContentOffset));
+        else if (key.pageUp) setContentOffset((o) => clamp(o - previewBudget, 0, maxContentOffset));
+        else if (input === 'g') setContentOffset(0);
+        else if (input === 'G') setContentOffset(maxContentOffset);
+        return;
+      }
+      // focus === 'list'
       if (key.escape || key.leftArrow) {
         setDrillTarget(null);
         return;
@@ -73,10 +130,14 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
       if (sources.length === 0) return;
       if (key.downArrow || input === 'j') moveSrc(1);
       else if (key.upArrow || input === 'k') moveSrc(-1);
-      else if (key.pageDown) moveSrc(viewport);
-      else if (key.pageUp) moveSrc(-viewport);
+      else if (key.pageDown) moveSrc(bodyRows);
+      else if (key.pageUp) moveSrc(-bodyRows);
       else if (input === 'g') moveSrc(-sources.length);
       else if (input === 'G') moveSrc(sources.length);
+      else if ((key.return || key.rightArrow) && contentOverflows) {
+        setFocus('content');
+        setContentOffset(0);
+      }
     },
     { isActive: !atList },
   );
@@ -89,7 +150,8 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
   function moveSrc(delta: number): void {
     const next = clamp(srcCursor + delta, 0, sources.length - 1);
     setSrcCursor(next);
-    setSrcOffset((o) => clampOffset(next, o, viewport, sources.length));
+    setSrcOffset((o) => clampOffset(next, o, bodyRows, sources.length));
+    setContentOffset(0); // new citation selected → reset its scroll.
   }
 
   if (atList) {
@@ -106,40 +168,43 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
         {turns.length === 0 ? (
           <Text dimColor>No citations recorded yet.</Text>
         ) : (
-          turns
-            .slice(turnOffset, turnOffset + viewport)
-            .map((turn, i) => {
-              const idx = turnOffset + i;
-              const count = `${turn.sources.length} source${turn.sources.length === 1 ? '' : 's'}`;
-              return (
-                <MenuRow
-                  key={`turn-${idx}`}
-                  selected={idx === turnCursor}
-                  label={truncate(`Turn ${turn.turnIndex + 1} · ${turn.userInput}`, Math.max(10, cols - 18))}
-                  trailing={` (${count})`}
-                />
-              );
-            })
+          turns.slice(turnOffset, turnOffset + viewport).map((turn, i) => {
+            const idx = turnOffset + i;
+            const count = `${turn.sources.length} source${turn.sources.length === 1 ? '' : 's'}`;
+            const trailing = ` (${count})`;
+            const budget = Math.max(10, usableCols - GUTTER - trailing.length);
+            return (
+              <MenuRow
+                key={`turn-${idx}`}
+                selected={idx === turnCursor}
+                label={truncate(`Turn ${turn.turnIndex + 1} · ${turn.userInput}`, budget)}
+                trailing={trailing}
+              />
+            );
+          })
         )}
       </ViewerShell>
     );
   }
 
   // Drilled in. `drilledTurn` is defined here (drillTarget is a valid index).
-  const citedSet = new Set(drilledTurn?.citedIds ?? []);
-  const selected = sources[srcCursor];
-  // App wraps the overlay in paddingX={2}; reserve a left column for the list.
-  const usableCols = Math.max(20, cols - 4);
-  const leftWidth = clamp(Math.floor(usableCols * 0.42), 24, 44);
-  const cardWidth = Math.max(24, usableCols - leftWidth - 2);
-  const position = listPosition(srcOffset, viewport, sources.length);
+  const position =
+    focus === 'content'
+      ? { first: clampedContentOffset + 1, last: Math.min(detail!.lines.length, clampedContentOffset + previewBudget), total: detail!.lines.length }
+      : listPosition(srcOffset, bodyRows, sources.length);
+  const keyHints =
+    focus === 'content'
+      ? '↑/↓ scroll · esc/← back to list · ⇧⇥ switch tab'
+      : contentOverflows
+        ? '↑/↓ move · → read · esc/← back · ⇧⇥ switch tab'
+        : '↑/↓ move · esc/← back · ⇧⇥ switch tab';
 
   return (
     <ViewerShell
       tabs={VIEWER_TABS}
       activeTab="sources"
       position={position}
-      keyHints="↑/↓ move · esc/← back · ⇧⇥ switch tab"
+      keyHints={keyHints}
       onClose={onClose}
       onCycleTab={onCycleTab}
       escClosesViewer={false}
@@ -152,29 +217,45 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
           {sources.length === 0 ? (
             <Text dimColor>(no sources registered)</Text>
           ) : (
-            sources.slice(srcOffset, srcOffset + viewport).map((src, i) => {
+            sources.slice(srcOffset, srcOffset + bodyRows).map((src, i) => {
               const idx = srcOffset + i;
-              const label = `[^${src.id}] ${src.kind.padEnd(5)} ${truncate(src.label, Math.max(6, leftWidth - 14))}`;
+              const tick = citedSet.has(src.id) ? ' ✓' : '';
+              // Clamp the whole composed row to one terminal line so the list
+              // windowing stays honest and the frame never overflows.
+              const budget = Math.max(6, leftWidth - GUTTER - 2);
+              const label = truncate(`[^${src.id}] ${src.kind} ${src.label}`, budget);
               return (
                 <MenuRow
                   key={src.id}
-                  selected={idx === srcCursor}
+                  selected={idx === srcCursor && focus === 'list'}
                   label={label}
-                  trailing={citedSet.has(src.id) ? ' ✓' : undefined}
+                  trailing={tick || undefined}
                 />
               );
             })
           )}
         </Box>
-        {selected && (
+        {detail && (
           <Box
             flexDirection="column"
             borderStyle="round"
-            borderColor={colors.muted}
+            borderColor={focus === 'content' ? colors.accent : colors.muted}
             paddingX={1}
             width={cardWidth}
           >
-            {renderCitationDetail(selected, citedSet.has(selected.id), cardWidth - 4, viewport - 2, colors)}
+            {detail.header}
+            {detail.lines.slice(clampedContentOffset, clampedContentOffset + previewBudget).map((line, i) => (
+              <Text key={`p-${i}`} dimColor={!selected!.contentPreview}>
+                {line || ' '}
+              </Text>
+            ))}
+            {contentOverflows && (
+              <Text dimColor>
+                ↕ lines {clampedContentOffset + 1}–
+                {Math.min(detail.lines.length, clampedContentOffset + previewBudget)} of {detail.lines.length}
+                {focus === 'list' ? ' (→ to scroll)' : ''}
+              </Text>
+            )}
           </Box>
         )}
       </Box>
@@ -183,18 +264,18 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
 }
 
 /**
- * Right-hand detail card body for a single citation: title, kind + cited
- * status, the actionable `rawRef`, then a word-wrapped content excerpt clipped
- * to the available height. Returns the nodes inside the bordered card (the card
- * supplies the border + horizontal padding).
+ * Build the right-hand detail card body for a single citation: a header block
+ * (title, kind + cited status, the actionable `rawRef`) and the word-wrapped
+ * content lines. The caller windows `lines` to the available height and slices
+ * the header is rendered as-is — splitting build from render lets the navigation
+ * handler clamp the scroll offset against the real wrapped-line count.
  */
-function renderCitationDetail(
+function buildCitationDetail(
   source: SourceItem,
   cited: boolean,
   innerWidth: number,
-  innerHeight: number,
   colors: ThemeColors,
-): ReactNode {
+): { header: ReactNode[]; lines: string[] } {
   const w = Math.max(8, innerWidth);
   const header: ReactNode[] = [
     <Text key="title" color={colors.accent} bold wrap="truncate-end">
@@ -216,23 +297,8 @@ function renderCitationDetail(
   }
   header.push(<Text key="gap"> </Text>);
 
-  const previewLines = source.contentPreview ? wrapText(source.contentPreview, w) : ['(no content preview)'];
-  // Leave room for the header and a possible "more" hint within the card.
-  const budget = Math.max(1, innerHeight - header.length - 1);
-  const shown = previewLines.slice(0, budget);
-  const hidden = previewLines.length - shown.length;
-
-  return (
-    <>
-      {header}
-      {shown.map((line, i) => (
-        <Text key={`p-${i}`} dimColor={!source.contentPreview}>
-          {line || ' '}
-        </Text>
-      ))}
-      {hidden > 0 && <Text dimColor>… ({hidden} more line{hidden === 1 ? '' : 's'})</Text>}
-    </>
-  );
+  const lines = source.contentPreview ? wrapText(source.contentPreview, w) : ['(no content preview)'];
+  return { header, lines };
 }
 
 /** Greedy word-wrap that preserves paragraph breaks and hard-splits overlong words. */

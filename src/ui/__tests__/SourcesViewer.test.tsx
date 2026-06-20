@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
-import { ENTER, ESC, ARROW_DOWN, ARROW_LEFT, SHIFT_TAB, tick } from './_keys.js';
+import { ENTER, ESC, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT, SHIFT_TAB, tick } from './_keys.js';
 import { SourcesViewer } from '../overlays/SourcesViewer.js';
 import type { Agent } from '../../agent.js';
 import type { TurnProvenance } from '../../provenance.js';
@@ -167,15 +167,54 @@ describe('<SourcesViewer> two-panel browser', () => {
     expect(onCycleTab).toHaveBeenCalledTimes(2);
   });
 
-  it('clips a long content preview and reports how many lines are hidden', async () => {
+  it('windows a long content preview and scrolls the right panel on demand', async () => {
     const { stdin, lastFrame } = render(
       createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS) }),
     );
     await tick();
     stdin.write(ENTER);
     await tick();
-    // The 400+ char "guarantee" run wraps to many lines; the card clips them.
-    expect(lastFrame() ?? '').toMatch(/… \(\d+ more line/);
+    // The long "guarantee" run wraps past the card height → a windowed excerpt
+    // with a position indicator starting at line 1, and a hint to scroll.
+    expect(lastFrame() ?? '').toMatch(/lines 1–\d+ of \d+/);
+    expect(lastFrame() ?? '').toContain('→ read');
+    // Focus the content panel and scroll down — the window advances.
+    stdin.write(ARROW_RIGHT);
+    await tick();
+    stdin.write(ARROW_DOWN);
+    await tick();
+    expect(lastFrame() ?? '').toMatch(/lines 2–/);
+    // Esc steps back to the citation list (not out of the viewer).
+    stdin.write(ESC);
+    await tick();
+    expect(lastFrame() ?? '').toContain('[^S1]');
+    expect(lastFrame() ?? '').toMatch(/lines 1–/);
+  });
+
+  it('orders citations cited-first regardless of registration order', async () => {
+    const turns: TurnProvenance[] = [
+      {
+        turnIndex: 0,
+        userInput: 'mixed citation order',
+        sources: [
+          { id: 'S1', kind: 'web', label: 'uncited-first', contentPreview: 'alpha', rawRef: 'https://a', timestamp: 0 },
+          { id: 'S2', kind: 'web', label: 'the-cited-one', contentPreview: 'bravo', rawRef: 'https://b', timestamp: 0 },
+        ],
+        citedIds: ['S2'],
+        timestamp: 0,
+      },
+    ];
+    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    const frame = lastFrame() ?? '';
+    // The cited source sorts to the top, so it is the initial highlight and
+    // the right panel shows its content + cited status (not the uncited S1).
+    expect(frame).toContain('the-cited-one');
+    expect(frame).toContain('bravo');
+    expect(frame).toContain('· cited');
+    expect(frame).not.toContain('not cited');
   });
 
   it('windows a long turn history and scrolls to reveal later turns', async () => {
