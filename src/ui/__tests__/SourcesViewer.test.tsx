@@ -191,6 +191,61 @@ describe('<SourcesViewer> two-panel browser', () => {
     expect(lastFrame() ?? '').toMatch(/lines 1–/);
   });
 
+  it('wraps a long title onto new lines instead of cutting it off', async () => {
+    const longLabel =
+      'MyChart browser automation workflow if not authenticated automation cannot proceed';
+    const turns: TurnProvenance[] = [
+      {
+        turnIndex: 0,
+        userInput: 'long title turn',
+        sources: [
+          { id: 'S1', kind: 'rag', label: longLabel, contentPreview: 'body', rawRef: 'rag://x', timestamp: 0 },
+        ],
+        citedIds: [],
+        timestamp: 0,
+      },
+    ];
+    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    const frame = lastFrame() ?? '';
+    // The tail of the title that an ellipsis-truncate would have dropped is
+    // still present (it wrapped onto a later line).
+    expect(frame).toContain('automation cannot proceed');
+  });
+
+  it('renders JSON tool-result content as an aligned key/value table', async () => {
+    const turns: TurnProvenance[] = [
+      {
+        turnIndex: 0,
+        userInput: 'json turn',
+        sources: [
+          {
+            id: 'S1',
+            kind: 'tool-result',
+            label: 'plan',
+            contentPreview: 'plan: {"action":"update","id":"step-1","done":true}',
+            rawRef: 'tool:plan',
+            timestamp: 0,
+          },
+        ],
+        citedIds: [],
+        timestamp: 0,
+      },
+    ];
+    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    const frame = lastFrame() ?? '';
+    // Keys and values are laid out as a table — no raw braces/quotes.
+    expect(frame).toContain('action');
+    expect(frame).toContain('update');
+    expect(frame).toContain('step-1');
+    expect(frame).not.toContain('{"action"');
+  });
+
   it('orders citations cited-first regardless of registration order', async () => {
     const turns: TurnProvenance[] = [
       {

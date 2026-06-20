@@ -270,6 +270,9 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
  * the header is rendered as-is — splitting build from render lets the navigation
  * handler clamp the scroll offset against the real wrapped-line count.
  */
+/** Cap on how many wrapped lines the title may occupy before it truncates. */
+const MAX_TITLE_LINES = 3;
+
 function buildCitationDetail(
   source: SourceItem,
   cited: boolean,
@@ -277,10 +280,22 @@ function buildCitationDetail(
   colors: ThemeColors,
 ): { header: ReactNode[]; lines: string[] } {
   const w = Math.max(8, innerWidth);
+
+  // Wrap the title onto new lines rather than cutting it off with an ellipsis.
+  // Each wrapped line is exactly one terminal row, so the height math (which
+  // counts header nodes) stays honest.
+  const titleLines = wrapText(source.label, w);
+  if (titleLines.length > MAX_TITLE_LINES) {
+    titleLines.length = MAX_TITLE_LINES;
+    titleLines[MAX_TITLE_LINES - 1] = truncate(titleLines[MAX_TITLE_LINES - 1] + '…', w);
+  }
+
   const header: ReactNode[] = [
-    <Text key="title" color={colors.accent} bold wrap="truncate-end">
-      {truncate(source.label, w)}
-    </Text>,
+    ...titleLines.map((line, i) => (
+      <Text key={`title-${i}`} color={colors.accent} bold>
+        {line}
+      </Text>
+    )),
     <Text key="kind">
       <Text dimColor>{source.kind}</Text>
       <Text color={cited ? colors.success : undefined} dimColor={!cited}>
@@ -297,11 +312,65 @@ function buildCitationDetail(
   }
   header.push(<Text key="gap"> </Text>);
 
-  const lines = source.contentPreview ? wrapText(source.contentPreview, w) : ['(no content preview)'];
+  const lines = source.contentPreview
+    ? wrapText(humanizeContent(source.contentPreview), w)
+    : ['(no content preview)'];
   return { header, lines };
 }
 
-/** Greedy word-wrap that preserves paragraph breaks and hard-splits overlong words. */
+/**
+ * Make machine-y content human-readable. Tool-result previews are typically
+ * `<tool>: <json>` — detect the embedded JSON, parse it, and render it as an
+ * aligned key/value table (flat objects) or 2-space-indented JSON (nested /
+ * arrays). Falls back to the raw string when there's no JSON or the preview was
+ * truncated mid-object (so it won't parse).
+ */
+function humanizeContent(content: string): string {
+  const m = content.match(/^([A-Za-z0-9_.\- ]{1,40}?):\s*([[{][\s\S]*)$/);
+  const prefix = m ? m[1].trim() : null;
+  const body = (m ? m[2] : content).trim();
+  if (body[0] === '{' || body[0] === '[') {
+    const cleaned = body.replace(/[\s…]*$/, ''); // drop a trailing ellipsis from truncation.
+    const parsed = tryParseJson(cleaned);
+    if (parsed !== undefined) {
+      const rendered = renderJsonValue(parsed);
+      return prefix ? `${prefix}:\n${rendered}` : rendered;
+    }
+  }
+  return content;
+}
+
+function tryParseJson(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Aligned key/value lines for a flat object; pretty-printed JSON otherwise. */
+function renderJsonValue(v: unknown): string {
+  if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+    const entries = Object.entries(v as Record<string, unknown>);
+    const allScalar = entries.length > 0 && entries.every(([, val]) => val === null || typeof val !== 'object');
+    if (allScalar) {
+      const keyW = Math.min(18, Math.max(...entries.map(([k]) => k.length)));
+      return entries.map(([k, val]) => `${k.padEnd(keyW)}  ${scalarString(val)}`).join('\n');
+    }
+  }
+  return JSON.stringify(v, null, 2);
+}
+
+function scalarString(v: unknown): string {
+  if (v === null) return 'null';
+  return typeof v === 'string' ? v : String(v);
+}
+
+/**
+ * Greedy word-wrap that preserves paragraph breaks, keeps each paragraph's
+ * leading indentation on its continuation lines (so pretty-printed JSON stays
+ * readable), and hard-splits overlong words.
+ */
 function wrapText(s: string, width: number): string[] {
   const w = Math.max(1, width);
   const out: string[] = [];
@@ -310,25 +379,30 @@ function wrapText(s: string, width: number): string[] {
       out.push('');
       continue;
     }
+    const rawIndent = (para.match(/^[ \t]*/)?.[0] ?? '').replace(/\t/g, '  ');
+    const indent = rawIndent.length > w - 1 ? rawIndent.slice(0, w - 1) : rawIndent;
+    const avail = Math.max(1, w - indent.length);
+    const content = para.slice((para.match(/^[ \t]*/)?.[0] ?? '').length);
     let line = '';
-    for (const word of para.split(/\s+/).filter(Boolean)) {
+    const flush = () => {
+      out.push(indent + line);
+      line = '';
+    };
+    for (const word of content.split(/\s+/).filter(Boolean)) {
       let token = word;
-      while (token.length > w) {
-        if (line) {
-          out.push(line);
-          line = '';
-        }
-        out.push(token.slice(0, w));
-        token = token.slice(w);
+      while (token.length > avail) {
+        if (line) flush();
+        out.push(indent + token.slice(0, avail));
+        token = token.slice(avail);
       }
       if (!line) line = token;
-      else if (line.length + 1 + token.length <= w) line += ` ${token}`;
+      else if (line.length + 1 + token.length <= avail) line += ` ${token}`;
       else {
-        out.push(line);
+        flush();
         line = token;
       }
     }
-    if (line) out.push(line);
+    if (line) flush();
   }
   return out;
 }
