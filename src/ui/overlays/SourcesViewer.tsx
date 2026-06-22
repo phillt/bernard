@@ -79,7 +79,11 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
 
   const selected = sources[srcCursor];
   const detail = selected ? buildCitationDetail(selected, citedSet.has(selected.id), innerWidth, colors) : null;
-  const maxPreviewLines = detail ? Math.max(1, innerHeight - detail.header.length) : 1;
+  // Clamp the header so a tall header (e.g. a 3-line wrapped title) on a short
+  // terminal can't push the card past the viewport — always leave room for at
+  // least one preview line plus the overflow hint.
+  const headerShown = detail ? detail.header.slice(0, Math.max(1, innerHeight - 2)) : [];
+  const maxPreviewLines = detail ? Math.max(1, innerHeight - headerShown.length) : 1;
   const contentOverflows = detail ? detail.lines.length > maxPreviewLines : false;
   // Reserve a row for the position hint when the excerpt overflows.
   const previewBudget = contentOverflows ? Math.max(1, maxPreviewLines - 1) : maxPreviewLines;
@@ -189,8 +193,12 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
 
   // Drilled in. `drilledTurn` is defined here (drillTarget is a valid index).
   const position =
-    focus === 'content'
-      ? { first: clampedContentOffset + 1, last: Math.min(detail!.lines.length, clampedContentOffset + previewBudget), total: detail!.lines.length }
+    focus === 'content' && detail
+      ? {
+          first: clampedContentOffset + 1,
+          last: Math.min(detail.lines.length, clampedContentOffset + previewBudget),
+          total: detail.lines.length,
+        }
       : listPosition(srcOffset, bodyRows, sources.length);
   const keyHints =
     focus === 'content'
@@ -243,7 +251,7 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
             paddingX={1}
             width={cardWidth}
           >
-            {detail.header}
+            {headerShown}
             {detail.lines.slice(clampedContentOffset, clampedContentOffset + previewBudget).map((line, i) => (
               <Text key={`p-${i}`} dimColor={!selected!.contentPreview}>
                 {line || ' '}
@@ -263,16 +271,16 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
   );
 }
 
-/**
- * Build the right-hand detail card body for a single citation: a header block
- * (title, kind + cited status, the actionable `rawRef`) and the word-wrapped
- * content lines. The caller windows `lines` to the available height and slices
- * the header is rendered as-is — splitting build from render lets the navigation
- * handler clamp the scroll offset against the real wrapped-line count.
- */
 /** Cap on how many wrapped lines the title may occupy before it truncates. */
 const MAX_TITLE_LINES = 3;
 
+/**
+ * Build the right-hand detail card body for a single citation: a header block
+ * (title, kind + cited status, the actionable `rawRef`) plus the word-wrapped
+ * content lines. Splitting "build" from "render" lets the caller window `lines`
+ * to the available height and lets the navigation handler clamp the scroll
+ * offset against the real wrapped-line count.
+ */
 function buildCitationDetail(
   source: SourceItem,
   cited: boolean,
@@ -379,10 +387,11 @@ function wrapText(s: string, width: number): string[] {
       out.push('');
       continue;
     }
-    const rawIndent = (para.match(/^[ \t]*/)?.[0] ?? '').replace(/\t/g, '  ');
+    const leading = para.match(/^[ \t]*/)?.[0] ?? '';
+    const rawIndent = leading.replace(/\t/g, '  ');
     const indent = rawIndent.length > w - 1 ? rawIndent.slice(0, w - 1) : rawIndent;
     const avail = Math.max(1, w - indent.length);
-    const content = para.slice((para.match(/^[ \t]*/)?.[0] ?? '').length);
+    const content = para.slice(leading.length);
     let line = '';
     const flush = () => {
       out.push(indent + line);

@@ -246,6 +246,89 @@ describe('<SourcesViewer> two-panel browser', () => {
     expect(frame).not.toContain('{"action"');
   });
 
+  it('pretty-prints nested JSON tool-result content with indentation', async () => {
+    const turns: TurnProvenance[] = [
+      {
+        turnIndex: 0,
+        userInput: 'nested json turn',
+        sources: [
+          {
+            id: 'S1',
+            kind: 'tool-result',
+            label: 'plan',
+            contentPreview: 'plan: {"action":"create","steps":["a","b"]}',
+            rawRef: 'tool:plan',
+            timestamp: 0,
+          },
+        ],
+        citedIds: [],
+        timestamp: 0,
+      },
+    ];
+    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    const frame = lastFrame() ?? '';
+    // Nested value → indented JSON (not the flat key/value table).
+    expect(frame).toContain('"action": "create"');
+    expect(frame).toContain('"steps"');
+  });
+
+  it('falls back to raw text when the JSON preview was truncated mid-object', async () => {
+    const turns: TurnProvenance[] = [
+      {
+        turnIndex: 0,
+        userInput: 'truncated json turn',
+        sources: [
+          {
+            id: 'S1',
+            kind: 'tool-result',
+            label: 'plan',
+            // Trailing ellipsis from the store cap → unparseable.
+            contentPreview: 'plan: {"action":"update","id":"step-1"…',
+            rawRef: 'tool:plan',
+            timestamp: 0,
+          },
+        ],
+        citedIds: [],
+        timestamp: 0,
+      },
+    ];
+    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    // Unparseable → shown verbatim (with the raw braces), not as a table.
+    expect(lastFrame() ?? '').toContain('{"action"');
+  });
+
+  it('does not enter content focus when the excerpt already fits', async () => {
+    const turns: TurnProvenance[] = [
+      {
+        turnIndex: 0,
+        userInput: 'short content turn',
+        sources: [
+          { id: 'S1', kind: 'web', label: 'tiny', contentPreview: 'one short line', rawRef: 'https://a', timestamp: 0 },
+        ],
+        citedIds: [],
+        timestamp: 0,
+      },
+    ];
+    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    // No overflow → list-focus hint, no scroll affordance.
+    expect(lastFrame() ?? '').not.toContain('→ read');
+    expect(lastFrame() ?? '').not.toMatch(/lines \d+–\d+ of/);
+    // → is a no-op (stays in list focus): the back hint remains the list one.
+    stdin.write(ARROW_RIGHT);
+    await tick();
+    expect(lastFrame() ?? '').toContain('esc/← back');
+    expect(lastFrame() ?? '').not.toContain('back to list');
+  });
+
   it('orders citations cited-first regardless of registration order', async () => {
     const turns: TurnProvenance[] = [
       {
