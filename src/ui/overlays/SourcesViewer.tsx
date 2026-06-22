@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react';
-import { Box, Text, useInput, useStdout } from 'ink';
+import { useMemo, useState, type ReactNode } from 'react';
+import { Box, Text, useInput, useStdout, type Key } from 'ink';
 import type { Agent } from '../../agent.js';
 import type { SourceItem } from '../../provenance.js';
 import { getThemeColors, type ThemeColors } from '../../theme.js';
@@ -78,7 +78,14 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
   const innerHeight = Math.max(1, bodyRows - 2); // card border top + bottom.
 
   const selected = sources[srcCursor];
-  const detail = selected ? buildCitationDetail(selected, citedSet.has(selected.id), innerWidth, colors) : null;
+  const selectedCited = selected ? citedSet.has(selected.id) : false;
+  // Memoized so scrolling the content panel (a keypress that doesn't change the
+  // selection) doesn't re-run the regex + JSON.parse + word-wrap over the whole
+  // preview. `colors` is a stable reference from the theme registry.
+  const detail = useMemo(
+    () => (selected ? buildCitationDetail(selected, selectedCited, innerWidth, colors) : null),
+    [selected?.id, selectedCited, innerWidth, colors],
+  );
   // Clamp the header so a tall header (e.g. a 3-line wrapped title) on a short
   // terminal can't push the card past the viewport — always leave room for at
   // least one preview line plus the overflow hint.
@@ -94,13 +101,9 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
   useInput(
     (input, key) => {
       if (turns.length === 0) return;
-      if (key.downArrow || input === 'j') moveTurn(1);
-      else if (key.upArrow || input === 'k') moveTurn(-1);
-      else if (key.pageDown) moveTurn(viewport);
-      else if (key.pageUp) moveTurn(-viewport);
-      else if (input === 'g') moveTurn(-turns.length);
-      else if (input === 'G') moveTurn(turns.length);
-      else if (key.return || key.rightArrow) {
+      const delta = navDelta(input, key, viewport, turns.length);
+      if (delta !== null) return void moveTurn(delta);
+      if (key.return || key.rightArrow) {
         setDrillTarget(turnCursor);
         setSrcCursor(0);
         setSrcOffset(0);
@@ -118,12 +121,10 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
         if (key.escape || key.leftArrow) {
           setFocus('list');
           setContentOffset(0);
-        } else if (key.downArrow || input === 'j') setContentOffset((o) => clamp(o + 1, 0, maxContentOffset));
-        else if (key.upArrow || input === 'k') setContentOffset((o) => clamp(o - 1, 0, maxContentOffset));
-        else if (key.pageDown) setContentOffset((o) => clamp(o + previewBudget, 0, maxContentOffset));
-        else if (key.pageUp) setContentOffset((o) => clamp(o - previewBudget, 0, maxContentOffset));
-        else if (input === 'g') setContentOffset(0);
-        else if (input === 'G') setContentOffset(maxContentOffset);
+          return;
+        }
+        const delta = navDelta(input, key, previewBudget, detail?.lines.length ?? 0);
+        if (delta !== null) setContentOffset((o) => clamp(o + delta, 0, maxContentOffset));
         return;
       }
       // focus === 'list'
@@ -132,13 +133,9 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
         return;
       }
       if (sources.length === 0) return;
-      if (key.downArrow || input === 'j') moveSrc(1);
-      else if (key.upArrow || input === 'k') moveSrc(-1);
-      else if (key.pageDown) moveSrc(bodyRows);
-      else if (key.pageUp) moveSrc(-bodyRows);
-      else if (input === 'g') moveSrc(-sources.length);
-      else if (input === 'G') moveSrc(sources.length);
-      else if ((key.return || key.rightArrow) && contentOverflows) {
+      const delta = navDelta(input, key, bodyRows, sources.length);
+      if (delta !== null) return void moveSrc(delta);
+      if ((key.return || key.rightArrow) && contentOverflows) {
         setFocus('content');
         setContentOffset(0);
       }
@@ -191,7 +188,8 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
     );
   }
 
-  // Drilled in. `drilledTurn` is defined here (drillTarget is a valid index).
+  // Drilled in: `drillTarget` is a valid index, so the turn is non-null.
+  const turn = drilledTurn!;
   const position =
     focus === 'content' && detail
       ? {
@@ -200,12 +198,11 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
           total: detail.lines.length,
         }
       : listPosition(srcOffset, bodyRows, sources.length);
+  const readHint = contentOverflows ? ' · → read' : '';
   const keyHints =
     focus === 'content'
       ? '↑/↓ scroll · esc/← back to list · ⇧⇥ switch tab'
-      : contentOverflows
-        ? '↑/↓ move · → read · esc/← back · ⇧⇥ switch tab'
-        : '↑/↓ move · esc/← back · ⇧⇥ switch tab';
+      : `↑/↓ move${readHint} · esc/← back · ⇧⇥ switch tab`;
 
   return (
     <ViewerShell
@@ -218,7 +215,7 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
       escClosesViewer={false}
     >
       <Text dimColor wrap="truncate-end">
-        Turn {(drilledTurn?.turnIndex ?? 0) + 1} · {drilledTurn?.userInput ?? ''}
+        Turn {turn.turnIndex + 1} · {turn.userInput}
       </Text>
       <Box flexDirection="row">
         <Box flexDirection="column" marginRight={2} width={leftWidth}>
@@ -414,6 +411,22 @@ function wrapText(s: string, width: number): string[] {
     if (line) flush();
   }
   return out;
+}
+
+/**
+ * The list-navigation keystream shared by all three panes: ↑/↓ (or j/k) by one,
+ * PgUp/PgDn by a page, g/G to the ends. Returns the signed delta to apply, or
+ * `null` if the key isn't a movement key. g/G return ±`total` so a clamped
+ * consumer lands on the first/last item.
+ */
+function navDelta(input: string, key: Key, pageSize: number, total: number): number | null {
+  if (key.downArrow || input === 'j') return 1;
+  if (key.upArrow || input === 'k') return -1;
+  if (key.pageDown) return pageSize;
+  if (key.pageUp) return -pageSize;
+  if (input === 'g') return -total;
+  if (input === 'G') return total;
+  return null;
 }
 
 function clamp(n: number, lo: number, hi: number): number {
