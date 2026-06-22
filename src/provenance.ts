@@ -48,7 +48,11 @@ export interface TurnProvenance {
   timestamp: number;
 }
 
-const MAX_PREVIEW = 200;
+// Kept generous so the Shift+Tab Sources viewer can show a substantial,
+// human-readable excerpt in its right-hand content panel (issue #211 redesign).
+// The dedup/upgrade path in `add()` replaces a shorter stored preview with a
+// longer one, so raising this only ever retains MORE of what tools already pass.
+const MAX_PREVIEW = 2000;
 
 function truncatePreview(s: string): string {
   return s.length > MAX_PREVIEW ? s.slice(0, MAX_PREVIEW) + '…' : s;

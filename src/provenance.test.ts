@@ -60,12 +60,19 @@ describe('ProvenanceStore', () => {
     expect(s.size()).toBe(2);
   });
 
-  it('truncates contentPreview beyond 200 chars with ellipsis', () => {
+  it('retains a substantial preview but truncates beyond the cap with ellipsis', () => {
     const s = new ProvenanceStore();
-    const longPreview = 'x'.repeat(300);
-    s.add({ kind: 'web', label: 'a', contentPreview: longPreview, rawRef: 'https://a' });
-    const item = s.list()[0];
-    expect(item.contentPreview.length).toBeLessThanOrEqual(201);
+    // A 1 KB excerpt is kept verbatim so the Sources viewer can show real content…
+    const kept = 'x'.repeat(1000);
+    s.add({ kind: 'web', label: 'a', contentPreview: kept, rawRef: 'https://a' });
+    expect(s.list()[0].contentPreview).toBe(kept);
+
+    // …while anything past the 2000-char cap is still trimmed with an ellipsis.
+    const s2 = new ProvenanceStore();
+    s2.add({ kind: 'web', label: 'b', contentPreview: 'y'.repeat(5000), rawRef: 'https://b' });
+    const item = s2.list()[0];
+    expect(item.contentPreview.length).toBeLessThanOrEqual(2001);
+    expect(item.contentPreview.length).toBeGreaterThan(2000);
     expect(item.contentPreview.endsWith('…')).toBe(true);
   });
 

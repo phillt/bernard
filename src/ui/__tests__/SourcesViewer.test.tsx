@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
-import { ENTER, ARROW_DOWN, tick } from './_keys.js';
+import { ENTER, ESC, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT, SHIFT_TAB, tick } from './_keys.js';
 import { SourcesViewer } from '../overlays/SourcesViewer.js';
 import type { Agent } from '../../agent.js';
 import type { TurnProvenance } from '../../provenance.js';
@@ -10,12 +10,13 @@ function makeAgent(turns: TurnProvenance[]): Agent {
   return { getTurnProvenance: () => turns } as unknown as Agent;
 }
 
-const PREVIEW = 'a'.repeat(300); // exercises preview truncation in an expanded source
+// A multi-line excerpt longer than a single wrapped line, to exercise the
+// right-panel content render. Well under the 2000-char store cap.
+// Long, multi-line excerpt: a recognizable first line plus a run long enough to
+// overflow the right-panel card at any reasonable terminal height (forces clip).
+const PREVIEW = 'The Rust programming language emphasizes memory safety.\n' + 'guarantee '.repeat(200);
 
 const REGRESSION_TURNS: TurnProvenance[] = [
-  // Issue #211 round-1 case: citations only on intermediate steps; final
-  // message cited none. The viewer still has to render the sources from
-  // the prior turns with the right accent/dim treatment.
   {
     turnIndex: 0,
     userInput: 'tell me about Rust',
@@ -25,14 +26,14 @@ const REGRESSION_TURNS: TurnProvenance[] = [
         kind: 'web',
         label: 'rust-lang.org',
         contentPreview: PREVIEW,
-        rawRef: 'https://www.rust-lang.org/' + 'x'.repeat(200),
+        rawRef: 'https://www.rust-lang.org/',
         timestamp: 0,
       },
       {
         id: 'S2',
         kind: 'rag',
         label: 'rust-fact-1',
-        contentPreview: 'short',
+        contentPreview: 'short snippet',
         rawRef: 'rag://rust-fact-1',
         timestamp: 0,
       },
@@ -58,7 +59,7 @@ const REGRESSION_TURNS: TurnProvenance[] = [
   },
 ];
 
-describe('<SourcesViewer> accordion', () => {
+describe('<SourcesViewer> two-panel browser', () => {
   it('renders empty state when no turns have provenance', () => {
     const { lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent([]) }));
     const frame = lastFrame() ?? '';
@@ -66,7 +67,7 @@ describe('<SourcesViewer> accordion', () => {
     expect(frame).toContain('esc close');
   });
 
-  it('lists every turn collapsed by default — headers with source counts, no source rows', () => {
+  it('lists every turn with its source count (no citation rows yet)', () => {
     const { lastFrame } = render(
       createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS) }),
     );
@@ -75,12 +76,12 @@ describe('<SourcesViewer> accordion', () => {
     expect(frame).toContain('Turn 2 · follow-up question');
     expect(frame).toContain('(2 sources)');
     expect(frame).toContain('(1 source)');
-    // Collapsed → no source rows rendered yet.
+    // Turn list level — no per-citation rows are shown.
     expect(frame).not.toContain('[^S1]');
     expect(frame).not.toContain('rust-lang.org');
   });
 
-  it('expands the focused turn on Enter, revealing its sources', async () => {
+  it('drills into a turn on Enter, showing the split panel of citations + content', async () => {
     const { stdin, lastFrame } = render(
       createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS) }),
     );
@@ -88,71 +89,288 @@ describe('<SourcesViewer> accordion', () => {
     stdin.write(ENTER);
     await tick();
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('▾ Turn 1'); // expanded marker
+    // Left list shows both citations for the turn.
     expect(frame).toContain('[^S1]');
-    expect(frame).toContain('rust-lang.org'); // S1 (cited)
-    expect(frame).toContain('rust-fact-1'); // S2 (uncited) — both render
-    // Turn 2 stays collapsed.
-    expect(frame).not.toContain('shell:cargo --version');
+    expect(frame).toContain('[^S2]');
+    expect(frame).toContain('rust-lang.org');
+    // Right panel shows the highlighted (first) citation's content + status.
+    expect(frame).toContain('cited');
+    expect(frame).toContain('https://www.rust-lang.org/');
+    expect(frame).toContain('The Rust programming language');
+    // Back hint replaces the close hint while drilled in.
+    expect(frame).toContain('esc/← back');
   });
 
-  it('moves the cursor with the down arrow and expands the newly-focused turn', async () => {
+  it('updates the right content panel as the citation highlight moves', async () => {
     const { stdin, lastFrame } = render(
       createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS) }),
     );
     await tick();
-    stdin.write(ARROW_DOWN); // focus Turn 2
+    stdin.write(ENTER);
     await tick();
-    stdin.write(ENTER); // expand Turn 2
+    stdin.write(ARROW_DOWN); // highlight S2
     await tick();
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('▾ Turn 2');
-    expect(frame).toContain('shell:cargo --version');
-    // Turn 1 stays collapsed.
-    expect(frame).not.toContain('rust-lang.org');
+    // S2 content + ref now in the panel; it is uncited.
+    expect(frame).toContain('rust-fact-1');
+    expect(frame).toContain('short snippet');
+    expect(frame).toContain('not cited');
   });
 
-  it('renders the empty-sources hint when an expanded turn registered nothing', async () => {
+  it('Esc from the split panel returns to the turn list (does NOT close the viewer)', async () => {
+    const onClose = vi.fn();
+    const { stdin, lastFrame } = render(
+      createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS), onClose }),
+    );
+    await tick();
+    stdin.write(ENTER); // drill in
+    await tick();
+    stdin.write(ESC); // back to list
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(onClose).not.toHaveBeenCalled();
+    expect(frame).toContain('Turn 1 · tell me about Rust');
+    expect(frame).toContain('esc close');
+    // Left-arrow also steps back: re-drill then ←.
+    stdin.write(ENTER);
+    await tick();
+    stdin.write(ARROW_LEFT);
+    await tick();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(lastFrame() ?? '').toContain('Turn 2 · follow-up question');
+  });
+
+  it('Esc at the turn list closes the viewer via the shell', async () => {
+    const onClose = vi.fn();
+    const { stdin } = render(
+      createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS), onClose }),
+    );
+    await tick();
+    stdin.write(ESC);
+    await tick();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('Shift+Tab cycles tabs at both the turn list and the split panel', async () => {
+    const onCycleTab = vi.fn();
+    const { stdin } = render(
+      createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS), onCycleTab }),
+    );
+    await tick();
+    stdin.write(SHIFT_TAB); // at turn list
+    await tick();
+    expect(onCycleTab).toHaveBeenCalledTimes(1);
+    stdin.write(ENTER); // drill in
+    await tick();
+    stdin.write(SHIFT_TAB); // in split panel
+    await tick();
+    expect(onCycleTab).toHaveBeenCalledTimes(2);
+  });
+
+  it('windows a long content preview and scrolls the right panel on demand', async () => {
+    const { stdin, lastFrame } = render(
+      createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS) }),
+    );
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    // The long "guarantee" run wraps past the card height → a windowed excerpt
+    // with a position indicator starting at line 1, and a hint to scroll.
+    expect(lastFrame() ?? '').toMatch(/lines 1–\d+ of \d+/);
+    expect(lastFrame() ?? '').toContain('→ read');
+    // Focus the content panel and scroll down — the window advances.
+    stdin.write(ARROW_RIGHT);
+    await tick();
+    stdin.write(ARROW_DOWN);
+    await tick();
+    expect(lastFrame() ?? '').toMatch(/lines 2–/);
+    // Esc steps back to the citation list (not out of the viewer).
+    stdin.write(ESC);
+    await tick();
+    expect(lastFrame() ?? '').toContain('[^S1]');
+    expect(lastFrame() ?? '').toMatch(/lines 1–/);
+  });
+
+  it('wraps a long title onto new lines instead of cutting it off', async () => {
+    const longLabel =
+      'MyChart browser automation workflow if not authenticated automation cannot proceed';
     const turns: TurnProvenance[] = [
-      { turnIndex: 0, userInput: 'hi', sources: [], citedIds: [], timestamp: 0 },
+      {
+        turnIndex: 0,
+        userInput: 'long title turn',
+        sources: [
+          { id: 'S1', kind: 'rag', label: longLabel, contentPreview: 'body', rawRef: 'rag://x', timestamp: 0 },
+        ],
+        citedIds: [],
+        timestamp: 0,
+      },
     ];
     const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
     await tick();
     stdin.write(ENTER);
     await tick();
-    expect(lastFrame()).toContain('(no sources registered)');
+    const frame = lastFrame() ?? '';
+    // The tail of the title that an ellipsis-truncate would have dropped is
+    // still present (it wrapped onto a later line).
+    expect(frame).toContain('automation cannot proceed');
   });
 
-  it('truncates a long rawRef and contentPreview in an expanded source', async () => {
-    const { stdin, lastFrame } = render(
-      createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS) }),
-    );
+  it('renders JSON tool-result content as an aligned key/value table', async () => {
+    const turns: TurnProvenance[] = [
+      {
+        turnIndex: 0,
+        userInput: 'json turn',
+        sources: [
+          {
+            id: 'S1',
+            kind: 'tool-result',
+            label: 'plan',
+            contentPreview: 'plan: {"action":"update","id":"step-1","done":true}',
+            rawRef: 'tool:plan',
+            timestamp: 0,
+          },
+        ],
+        citedIds: [],
+        timestamp: 0,
+      },
+    ];
+    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
     await tick();
     stdin.write(ENTER);
     await tick();
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('…');
-    expect(frame).not.toContain(PREVIEW); // full 300-char preview never shown verbatim
+    // Keys and values are laid out as a table — no raw braces/quotes.
+    expect(frame).toContain('action');
+    expect(frame).toContain('update');
+    expect(frame).toContain('step-1');
+    expect(frame).not.toContain('{"action"');
   });
 
-  it('windows a long collapsed history and scrolls to reveal later turns', async () => {
-    // 25 collapsed headers > the 17-row viewport, so the last turns start hidden.
-    const turns: TurnProvenance[] = Array.from({ length: 25 }, (_, i) => ({
+  it('pretty-prints nested JSON tool-result content with indentation', async () => {
+    const turns: TurnProvenance[] = [
+      {
+        turnIndex: 0,
+        userInput: 'nested json turn',
+        sources: [
+          {
+            id: 'S1',
+            kind: 'tool-result',
+            label: 'plan',
+            contentPreview: 'plan: {"action":"create","steps":["a","b"]}',
+            rawRef: 'tool:plan',
+            timestamp: 0,
+          },
+        ],
+        citedIds: [],
+        timestamp: 0,
+      },
+    ];
+    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    const frame = lastFrame() ?? '';
+    // Nested value → indented JSON (not the flat key/value table).
+    expect(frame).toContain('"action": "create"');
+    expect(frame).toContain('"steps"');
+  });
+
+  it('falls back to raw text when the JSON preview was truncated mid-object', async () => {
+    const turns: TurnProvenance[] = [
+      {
+        turnIndex: 0,
+        userInput: 'truncated json turn',
+        sources: [
+          {
+            id: 'S1',
+            kind: 'tool-result',
+            label: 'plan',
+            // Trailing ellipsis from the store cap → unparseable.
+            contentPreview: 'plan: {"action":"update","id":"step-1"…',
+            rawRef: 'tool:plan',
+            timestamp: 0,
+          },
+        ],
+        citedIds: [],
+        timestamp: 0,
+      },
+    ];
+    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    // Unparseable → shown verbatim (with the raw braces), not as a table.
+    expect(lastFrame() ?? '').toContain('{"action"');
+  });
+
+  it('does not enter content focus when the excerpt already fits', async () => {
+    const turns: TurnProvenance[] = [
+      {
+        turnIndex: 0,
+        userInput: 'short content turn',
+        sources: [
+          { id: 'S1', kind: 'web', label: 'tiny', contentPreview: 'one short line', rawRef: 'https://a', timestamp: 0 },
+        ],
+        citedIds: [],
+        timestamp: 0,
+      },
+    ];
+    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    // No overflow → list-focus hint, no scroll affordance.
+    expect(lastFrame() ?? '').not.toContain('→ read');
+    expect(lastFrame() ?? '').not.toMatch(/lines \d+–\d+ of/);
+    // → is a no-op (stays in list focus): the back hint remains the list one.
+    stdin.write(ARROW_RIGHT);
+    await tick();
+    expect(lastFrame() ?? '').toContain('esc/← back');
+    expect(lastFrame() ?? '').not.toContain('back to list');
+  });
+
+  it('orders citations cited-first regardless of registration order', async () => {
+    const turns: TurnProvenance[] = [
+      {
+        turnIndex: 0,
+        userInput: 'mixed citation order',
+        sources: [
+          { id: 'S1', kind: 'web', label: 'uncited-first', contentPreview: 'alpha', rawRef: 'https://a', timestamp: 0 },
+          { id: 'S2', kind: 'web', label: 'the-cited-one', contentPreview: 'bravo', rawRef: 'https://b', timestamp: 0 },
+        ],
+        citedIds: ['S2'],
+        timestamp: 0,
+      },
+    ];
+    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    const frame = lastFrame() ?? '';
+    // The cited source sorts to the top, so it is the initial highlight and
+    // the right panel shows its content + cited status (not the uncited S1).
+    expect(frame).toContain('the-cited-one');
+    expect(frame).toContain('bravo');
+    expect(frame).toContain('· cited');
+    expect(frame).not.toContain('not cited');
+  });
+
+  it('windows a long turn history and scrolls to reveal later turns', async () => {
+    const turns: TurnProvenance[] = Array.from({ length: 30 }, (_, i) => ({
       turnIndex: i,
       userInput: `req-${i}`,
-      sources: [{ id: 'S1', kind: 'web', label: `src-${i}`, timestamp: 0 }],
+      sources: [{ id: 'S1', kind: 'web', label: `src-${i}`, contentPreview: '', rawRef: 'r', timestamp: 0 }],
       citedIds: ['S1'],
       timestamp: 0,
     }));
     const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
     let frame = lastFrame() ?? '';
     expect(frame).toContain('Turn 1 ·');
-    expect(frame).not.toContain('Turn 25 ·');
-    // Jump the cursor to the last turn — it scrolls into view.
+    expect(frame).not.toContain('Turn 30 ·');
     await tick();
-    stdin.write('G');
+    stdin.write('G'); // jump to last turn
     await tick();
     frame = lastFrame() ?? '';
-    expect(frame).toContain('Turn 25 ·');
+    expect(frame).toContain('Turn 30 ·');
   });
 });

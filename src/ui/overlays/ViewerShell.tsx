@@ -56,6 +56,16 @@ interface ViewerShellProps {
   children: ReactNode;
   onClose?: () => void;
   onCycleTab?: () => void;
+  /**
+   * Whether Esc closes the whole viewer. Defaults to `true`. A content
+   * component with its own internal navigation (e.g. `SourcesViewer` drilled
+   * into a turn) sets this `false` so its own `useInput` can claim Esc for
+   * "go back" — Ink broadcasts every keypress to all active `useInput`s with no
+   * stop-propagation, so without this gate the shell's Esc would close the
+   * viewer at the same moment the inner handler tries to step back a level.
+   * Shift-Tab tab-cycling stays live in both states.
+   */
+  escClosesViewer?: boolean;
 }
 
 /**
@@ -87,6 +97,7 @@ export function ViewerShell({
   children,
   onClose = () => {},
   onCycleTab = () => {},
+  escClosesViewer = true,
 }: ViewerShellProps) {
   const { stdout } = useStdout();
   const cols = stdout?.columns ?? 80;
@@ -94,8 +105,9 @@ export function ViewerShell({
   const rule = '─'.repeat(Math.max(4, cols - 4));
 
   useInput((_input, key) => {
-    if (key.escape) onClose();
-    else if (key.shift && key.tab) onCycleTab();
+    if (key.escape) {
+      if (escClosesViewer) onClose();
+    } else if (key.shift && key.tab) onCycleTab();
   });
 
   return (
