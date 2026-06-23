@@ -47,6 +47,8 @@ import type { AgentContext } from './framework/context.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
+import { SemanticResponseCache } from './semantic-cache.js';
+import { isPureQuestion } from './policy/tool-mode.js';
 import type { Step } from './plan-store.js';
 import type { VerificationEntry } from './agent-status.js';
 import { verdictOf, renderRubricLine, type Check, type Rubric } from './rubric.js';
@@ -107,6 +109,11 @@ export class Agent {
    * by {@link clearHistory}; loaded on resume via {@link setTurnProvenance}.
    */
   private turnProvenance: TurnProvenance[] = [];
+  /**
+   * Semantic response cache (#269, Layer 3). Opt-in via `config.semanticCache`.
+   * Only consulted/populated for read-only Q&A turns (no tool actions).
+   */
+  private semanticCache = new SemanticResponseCache();
   /** Most recent per-turn rubric (#145). Composed at end of `processInput`. */
   private lastRubric: Rubric | null = null;
   private abortController: AbortController | null = null;
@@ -409,6 +416,22 @@ export class Agent {
     this.lastCitedSources = [];
     // Fresh per-turn provenance — sources from prior turns don't leak across.
     this.ctx.provenance.clear();
+
+    // Semantic response cache (#269, Layer 3). Opt-in; read-only Q&A turns only
+    // (no images, no tool actions). On a near-identical hit, answer from the
+    // cache and skip the model call entirely. The pushed assistant message is
+    // committed to the transcript by App's post-turn history commit, so no
+    // streaming-sink work is needed. Fails open.
+    const semanticEligible =
+      this.config.semanticCache && !(images && images.length > 0) && isPureQuestion(userInput);
+    if (semanticEligible) {
+      const hit = await this.semanticCache.get(userInput);
+      if (hit !== null && !this.abortController.signal.aborted) {
+        debugLog('turn:semantic-cache-hit', { inputLen: userInput.length });
+        this.history.push({ role: 'assistant', content: hit });
+        return;
+      }
+    }
 
     try {
       // Resolve the model we're actually talking to for this turn (lineup +
@@ -740,6 +763,14 @@ export class Agent {
       // Track token usage for compression decisions — use last step's prompt tokens
       // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)
       this.lastPromptTokens = this.lastStepPromptTokens ?? result.usage?.promptTokens ?? 0;
+
+      // Populate the semantic response cache (#269, Layer 3) — only for read-only
+      // Q&A turns that took NO tool actions, so a future near-duplicate ask can
+      // be answered without a model call. Gated identically to the lookup above.
+      const usedTools = (result.steps ?? []).some((s) => (s.toolCalls?.length ?? 0) > 0);
+      if (semanticEligible && !usedTools && result.text?.trim()) {
+        void this.semanticCache.put(userInput, result.text);
+      }
 
       // Snapshot provenance for the REPL viewer. `lastSources` is everything
       // registered this turn; `lastCitedSources` is the subset whose ids
