@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { detectSpecialistCandidate } from './specialist-detector.js';
+import { clearLLMCache } from './llm-cache.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),
@@ -57,6 +58,7 @@ describe('detectSpecialistCandidate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGenerateText.mockReset();
+    clearLLMCache();
   });
 
   it('returns null for short conversations', async () => {

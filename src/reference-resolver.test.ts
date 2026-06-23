@@ -50,6 +50,7 @@ import {
 import { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import type { BernardConfig } from './config.js';
+import { clearLLMCache } from './llm-cache.js';
 import type { CoreMessage } from 'ai';
 
 function makeConfig(): BernardConfig {
@@ -148,6 +149,7 @@ describe('renderResolvedBlock', () => {
 describe('resolveReferences', () => {
   beforeEach(() => {
     generateTextMock.mockReset();
+    clearLLMCache();
   });
 
   it('calls the resolver when memory is empty but prompt has references (may return unknown)', async () => {
@@ -158,6 +160,17 @@ describe('resolveReferences', () => {
     const result = await resolveReferences('did my brother email me', store, makeConfig());
     expect(result.status).toBe('unknown');
     expect(generateTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('caches identical resolver calls — second call skips generateText (#171/#269)', async () => {
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({ status: 'unknown', reference: 'my brother' }),
+    });
+    const store = makeStore({});
+    const a = await resolveReferences('did my brother email me', store, makeConfig());
+    const b = await resolveReferences('did my brother email me', store, makeConfig());
+    expect(a).toEqual(b);
+    expect(generateTextMock).toHaveBeenCalledTimes(1); // second served from cache
   });
 
   it('returns noop when prompt has no reference patterns', async () => {
@@ -297,6 +310,7 @@ describe('resolveReferences', () => {
 describe('resolveReferences with RAG', () => {
   beforeEach(() => {
     generateTextMock.mockReset();
+    clearLLMCache();
   });
 
   it('resolves a reference from a RAG fact with sourceKey "rag"', async () => {
@@ -568,6 +582,7 @@ describe('buildRecentTurnsBlock', () => {
 describe('resolveReferences with history', () => {
   beforeEach(() => {
     generateTextMock.mockReset();
+    clearLLMCache();
   });
 
   it('injects the recent-conversation block into the user message', async () => {
@@ -677,6 +692,7 @@ describe('stripToolResolvableTokens', () => {
 describe('resolveReferences short-circuits tool-resolvable input', () => {
   beforeEach(() => {
     generateTextMock.mockReset();
+    clearLLMCache();
   });
 
   it('does not call generateText when the reference phrase is entirely a URL', async () => {
