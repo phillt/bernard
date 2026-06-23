@@ -48,6 +48,11 @@ const BUCKET_ORDER: Record<UsageBucket, number> = {
   pinned: LINEUP_TIERS.length,
 } as Record<UsageBucket, number>;
 
+/** Row display order: by tier (premium → cheap → pinned), then larger prompt spend first. */
+function compareUsageRows(a: UsageReportRow, b: UsageReportRow): number {
+  return BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || b.promptTokens - a.promptTokens;
+}
+
 /**
  * Estimated USD cost of a (prompt, completion) token spend on a given model from
  * catalog pricing ($/M tok), or `null` when the model isn't in the catalog
@@ -109,7 +114,7 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
       sites: Array.from(siteSet).sort(),
       costUsd: priceUsageUsd(row.provider, row.modelName, row.promptTokens, row.completionTokens),
     }))
-    .sort((a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || b.promptTokens - a.promptTokens);
+    .sort(compareUsageRows);
 
   // Single pass over the (small) row set for every total.
   let totalPromptTokens = 0;
@@ -150,8 +155,9 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
  */
 export function representativeTierModels(config: BernardConfig): Record<LineupTier, LineupSlot> {
   const lineup = resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider);
-  const ladder = lineup.roles.orchestrator;
-  return { premium: ladder.premium, mid: ladder.mid, cheap: ladder.cheap };
+  // `RoleSlots` is already `Record<LineupTier, LineupSlot>`, so the orchestrator
+  // ladder is exactly the shape we want (and stays correct if a tier is added).
+  return lineup.roles.orchestrator;
 }
 
 /**
@@ -168,10 +174,9 @@ export function fillTierRows(
   rows: UsageReportRow[],
   tierModels: Record<LineupTier, LineupSlot>,
 ): UsageReportRow[] {
-  const present = new Set(rows.map((r) => r.bucket));
   const filled = [...rows];
   for (const tier of LINEUP_TIERS) {
-    if (present.has(tier)) continue;
+    if (rows.some((r) => r.bucket === tier)) continue;
     const slot = tierModels[tier];
     filled.push({
       bucket: tier,
@@ -186,9 +191,7 @@ export function fillTierRows(
       sites: [],
     });
   }
-  return filled.sort(
-    (a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || b.promptTokens - a.promptTokens,
-  );
+  return filled.sort(compareUsageRows);
 }
 
 /** Format a USD amount with precision scaled to magnitude (e.g. `$0.07`, `$0.0042`, `$1.20`). */

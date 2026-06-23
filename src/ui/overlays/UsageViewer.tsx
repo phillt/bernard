@@ -4,7 +4,7 @@ import type { Agent } from '../../agent.js';
 import { formatTokenCount } from '../../output.js';
 import { computeTurnUsageReport, fillTierRows, formatUsd, type UsageReportRow } from '../../usage-report.js';
 import { LINEUP_TIERS, type LineupTier, type LineupSlot } from '../../lineups.js';
-import { DEFAULT_ROLE_TIERS } from '../../model-roles.js';
+import { tiersReachableInMode } from '../../model-roles.js';
 import type { ModelMode } from '../../model-policy.js';
 import { getThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
@@ -193,7 +193,7 @@ function buildTierNote(rows: UsageReportRow[], modelMode?: ModelMode): string | 
   if (unused.length === 0) return null;
 
   if (modelMode) {
-    const reachable = new Set(Object.values(DEFAULT_ROLE_TIERS[modelMode]));
+    const reachable = tiersReachableInMode(modelMode);
     const structural = unused.filter((t) => !reachable.has(t));
     const idle = unused.filter((t) => reachable.has(t));
     const parts: string[] = [`Mode: ${modelMode}.`];
@@ -228,7 +228,7 @@ function UsageRow({ row, colors }: { row: UsageReportRow; colors: ReturnType<typ
         cost: zero ? dash : row.costUsd === null ? 'n/a' : `~${formatUsd(row.costUsd)}`,
       }}
       labelColor={tierColor}
-      costColor={zero ? colors.muted : row.costUsd === null ? colors.muted : colors.text}
+      costColor={!zero && row.costUsd !== null ? colors.text : colors.muted}
       dim={zero}
     />
   );

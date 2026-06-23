@@ -169,6 +169,17 @@ export const DEFAULT_ROLE_TIERS: Record<ModelMode, Record<RoleId, ModelTier>> = 
 })();
 
 /**
+ * The set of cost tiers any role actually resolves to under a given mode. Lets
+ * callers ask "can this mode ever reach `premium`?" without traversing
+ * {@link DEFAULT_ROLE_TIERS} themselves — e.g. the Usage & Cost panel uses it to
+ * tell a *structurally unused* tier (premium under `optimize-tokens`) apart from
+ * one that was merely idle this turn.
+ */
+export function tiersReachableInMode(mode: ModelMode): Set<ModelTier> {
+  return new Set(Object.values(DEFAULT_ROLE_TIERS[mode]));
+}
+
+/**
  * Static map from every policy-resolved call site to its functional role.
  * Every `ModelSite` must appear here — this is the documented, single-place
  * assignment required by #264 requirement 2.

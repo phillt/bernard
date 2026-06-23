@@ -341,9 +341,13 @@ export function App({
   // Representative per-tier models for the active lineup, so the Usage & Cost
   // panel can always render all three tiers (premium/mid/cheap) — dimmed zero-
   // rows for tiers with no traffic — instead of silently hiding the high-end
-  // tier in modes that never reach it (#258 follow-up). `config` is a stable
-  // App-lifetime ref; the single small lineup-file read happens once on mount.
-  const usageTierModels = useMemo(() => representativeTierModels(config), [config]);
+  // tier in modes that never reach it (#258 follow-up). Resolved lazily: the
+  // small lineup-file read only happens once the user opens the panel, not at
+  // startup for every session.
+  const usageTierModels = useMemo(
+    () => (activeOverlay === 'usage' ? representativeTierModels(config) : undefined),
+    [activeOverlay, config],
+  );
   // Append-only log of finalized turns, rendered through Ink's `<Static>` so
   // each entry becomes terminal scrollback that is never repainted (#232).
   // `<App>` commits to this at turn boundaries; the streaming message and the
