@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isReactEffective } from './effective.js';
+import { isReactEffective, isReactPossible } from './effective.js';
 
 describe('isReactEffective', () => {
   it('returns true when policy says "react", regardless of config.coordinatorMode', () => {
@@ -25,5 +25,13 @@ describe('isReactEffective', () => {
     expect(isReactEffective({ coordinatorMode: 'on' }, {})).toBe(true);
     expect(isReactEffective({ coordinatorMode: 'off' }, {})).toBe(false);
     expect(isReactEffective({ coordinatorMode: 'auto' }, {})).toBe(false);
+  });
+});
+
+describe('isReactPossible (session-stable tool-set membership, #269)', () => {
+  it('is true whenever ReAct could run this session (on or auto), false only for off', () => {
+    expect(isReactPossible({ coordinatorMode: 'on' })).toBe(true);
+    expect(isReactPossible({ coordinatorMode: 'auto' })).toBe(true);
+    expect(isReactPossible({ coordinatorMode: 'off' })).toBe(false);
   });
 });
