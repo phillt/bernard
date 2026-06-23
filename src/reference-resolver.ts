@@ -4,6 +4,7 @@ import { sanitizeKey, REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
+import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 
 /** Sentinel sourceKey used for resolutions drawn from the RAG knowledge base. */
 export const RAG_SOURCE_KEY = 'rag';
@@ -304,26 +305,51 @@ export async function resolveReferences(
 
   try {
     const site = resolveSiteModel(config, 'reference-resolver');
-    const result = await traceLlm('reference-resolver', site.model.modelId, () =>
-      generateText({
-        model: site.model,
-        providerOptions: site.providerOptions,
-        system: RESOLVER_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: userMessage }],
-        maxSteps: 1,
-        maxTokens: RESOLVER_MAX_TOKENS,
-        abortSignal,
-      }),
-    );
 
-    if (!result.text) {
-      debugLog('reference-resolver:empty-response', null);
-      return { status: 'noop' };
+    // LLM subcall cache (#171): deterministic (temperature 0) classification, so
+    // identical (model, system, user content) reuse the prior result for the TTL.
+    const cacheOn = config.cacheEnabled !== false;
+    const cacheKey: LLMCacheKey | null = cacheOn
+      ? {
+          siteName: 'reference-resolver',
+          modelId: site.model.modelId,
+          providerOptions: site.providerOptions,
+          system: RESOLVER_SYSTEM_PROMPT,
+          userContent: userMessage,
+        }
+      : null;
+    let rawText: string;
+    const cached = cacheKey ? getCachedLLM(cacheKey) : undefined;
+    if (cached !== undefined) {
+      if (abortSignal?.aborted) return { status: 'noop' };
+      debugLog('cache:llm:hit', { site: 'reference-resolver' });
+      rawText = cached;
+    } else {
+      if (cacheKey) debugLog('cache:llm:miss', { site: 'reference-resolver' });
+      const result = await traceLlm('reference-resolver', site.model.modelId, () =>
+        generateText({
+          model: site.model,
+          providerOptions: site.providerOptions,
+          system: RESOLVER_SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userMessage }],
+          maxSteps: 1,
+          maxTokens: RESOLVER_MAX_TOKENS,
+          temperature: 0,
+          abortSignal,
+        }),
+      );
+      if (!result.text) {
+        debugLog('reference-resolver:empty-response', null);
+        return { status: 'noop' };
+      }
+      rawText = result.text;
+      if (cacheKey) setCachedLLM(cacheKey, rawText);
     }
-    debugLog('reference-resolver:response', result.text.slice(0, 200));
-    const parsed = parseResolverResponse(result.text);
+
+    debugLog('reference-resolver:response', rawText.slice(0, 200));
+    const parsed = parseResolverResponse(rawText);
     if (!parsed) {
-      debugLog('reference-resolver:parse-failed', result.text.slice(0, 200));
+      debugLog('reference-resolver:parse-failed', rawText.slice(0, 200));
       return { status: 'noop' };
     }
     const validated = validateAgainstMemory(parsed, new Set(memoryKeys), ragFacts.length > 0);

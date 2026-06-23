@@ -54,6 +54,8 @@ function makeConfig(overrides: Partial<BernardConfig> = {}): BernardConfig {
     correctionEnabled: false,
     promptRewriter: true,
     cacheEnabled: true,
+    promptCache: true,
+    semanticCache: false,
     ...overrides,
   };
 }

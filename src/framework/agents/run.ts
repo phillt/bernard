@@ -1,6 +1,10 @@
 import type { CoreMessage } from 'ai';
 import { buildContextMessage, type ContextMessageInputs } from '../../context-message.js';
 import { resolveSiteModel } from '../../model-policy.js';
+import {
+  applyAnthropicPromptCache,
+  isAnthropicPromptCacheActive,
+} from '../../providers/prompt-cache.js';
 import { detectToolError } from '../../tool-profiles.js';
 import { makeRepairHook } from '../../tool-call-repair.js';
 import { augmentTools } from '../../tools/augment.js';
@@ -265,10 +269,23 @@ export async function runDefinition<TInput, TFormatted>(
     const messages = composeMessages(def.historyMode, seedWithContext, iterOpts.extra);
     const sysWithSuffix = iterOpts.systemSuffix ? `${system}\n\n${iterOpts.systemSuffix}` : system;
     const callMaxSteps = iterOpts.maxStepsOverride ?? baseMaxSteps;
+    // Anthropic prompt caching (#269): mark the system+tools prefix and the
+    // rolling history breakpoint. Scoped to the built-in `anthropic` provider
+    // AND to the persistent-history (main) agent — ephemeral one-shot
+    // dispatches (sub-agents, specialists, tool-wrappers, PAC, cron) repeat
+    // their prefix rarely within the 5-min TTL, so marking them risks paying
+    // Anthropic's 1.25x cache-WRITE surcharge for a read that never comes. The
+    // main agent re-sends a stable prefix every turn, so it's the only site
+    // with a guaranteed payoff. No-op for every other provider/definition.
+    const promptCacheActive =
+      def.historyMode === 'persistent' && isAnthropicPromptCacheActive(ctx.config, resolved.provider);
+    const cached = promptCacheActive
+      ? applyAnthropicPromptCache({ system: sysWithSuffix, messages })
+      : { system: sysWithSuffix, messages };
     const r = await runAgent({
       ...baseSpec,
-      system: sysWithSuffix,
-      messages,
+      system: cached.system,
+      messages: cached.messages,
       maxSteps: callMaxSteps,
     });
     stepLimitHit = r.finishReason === 'tool-calls' && (r.steps?.length ?? 0) >= callMaxSteps;

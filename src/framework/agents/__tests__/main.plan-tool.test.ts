@@ -19,6 +19,8 @@ function baseConfig(coordinatorMode: BernardConfig['coordinatorMode']): BernardC
     maxSteps: 25,
     ragEnabled: false,
     cacheEnabled: true,
+    promptCache: true,
+    semanticCache: false,
     theme: 'bernard',
     coordinatorMode,
     modelMode: 'off',
@@ -71,19 +73,24 @@ function toolNames(coordinatorMode: BernardConfig['coordinatorMode'], strategyId
 }
 
 describe('main agent plan/evaluate tool gating', () => {
-  it('exposes `plan` in Normal mode (strategy=normal) but not `evaluate`', () => {
-    const names = toolNames('auto', 'normal');
-    expect(names).toContain('plan');
-    expect(names).not.toContain('evaluate');
+  // `evaluate` membership is SESSION-stable (#269): present whenever ReAct is
+  // possible this session (coordinatorMode !== 'off'), independent of the
+  // per-turn strategy. This keeps the tool block byte-identical across turns so
+  // the Anthropic prompt cache holds. `plan` is always present.
+
+  it('in `auto` mode, exposes `plan` AND `evaluate` regardless of the per-turn strategy', () => {
+    // Even on a Normal turn, evaluate stays present so the tool block doesn't
+    // flip between turns (cache stability).
+    const normalTurn = toolNames('auto', 'normal');
+    expect(normalTurn).toContain('plan');
+    expect(normalTurn).toContain('evaluate');
+
+    const reactTurn = toolNames('auto', 'react');
+    expect(reactTurn).toContain('plan');
+    expect(reactTurn).toContain('evaluate');
   });
 
-  it('exposes both `plan` and `evaluate` in ReAct mode (strategy=react)', () => {
-    const names = toolNames('auto', 'react');
-    expect(names).toContain('plan');
-    expect(names).toContain('evaluate');
-  });
-
-  it('exposes `plan` even with coordinatorMode off and no policy decision', () => {
+  it('with coordinatorMode off, exposes `plan` but never `evaluate`', () => {
     const names = toolNames('off', undefined);
     expect(names).toContain('plan');
     expect(names).not.toContain('evaluate');
@@ -93,5 +100,9 @@ describe('main agent plan/evaluate tool gating', () => {
     const names = toolNames('on', undefined);
     expect(names).toContain('plan');
     expect(names).toContain('evaluate');
+  });
+
+  it('tool set is identical across Normal and ReAct turns within a session (cache stability)', () => {
+    expect(toolNames('auto', 'normal').sort()).toEqual(toolNames('auto', 'react').sort());
   });
 });

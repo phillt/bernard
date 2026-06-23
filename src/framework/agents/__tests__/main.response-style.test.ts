@@ -21,6 +21,8 @@ function makeCtx(style: ResponseStyle): AgentContext {
     maxSteps: 25,
     ragEnabled: false,
     cacheEnabled: true,
+    promptCache: true,
+    semanticCache: false,
     theme: 'bernard',
     coordinatorMode: 'off',
     modelMode: 'balanced',

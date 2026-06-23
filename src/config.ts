@@ -93,6 +93,20 @@ export interface BernardConfig {
    */
   cacheEnabled: boolean;
   /**
+   * Provider prompt caching (#269). When true (default), the main agent's
+   * system+tools prefix and rolling history are marked with Anthropic
+   * `cache_control` breakpoints so repeated input tokens are billed at the
+   * cache-read discount. Effect is scoped to the built-in `anthropic` provider;
+   * other providers ignore the markers. Env: `BERNARD_PROMPT_CACHE`.
+   */
+  promptCache: boolean;
+  /**
+   * Semantic response cache (#269). Opt-in (default false). When true, read-only
+   * Q&A turns may be answered from a local embedding-similarity cache of prior
+   * answers, skipping the model call. Env: `BERNARD_SEMANTIC_CACHE`.
+   */
+  semanticCache: boolean;
+  /**
    * Risk-based confirmation policy (#144). `'off'` never prompts; `'auto'`
    * (default) prompts only for `high`-risk tool calls (destructive shell,
    * external-API mutations); `'strict'` adds `medium` (all local writes
@@ -913,6 +927,11 @@ export function loadConfig(overrides?: {
 
   const ragEnabled = process.env.BERNARD_RAG_ENABLED !== 'false';
   const cacheEnabled = process.env.BERNARD_CACHE_ENABLED !== 'false';
+  // Provider prompt caching: on by default (#269). Off only when explicitly disabled.
+  const promptCache = process.env.BERNARD_PROMPT_CACHE !== 'false';
+  // Semantic response cache: opt-in, off by default (#269).
+  const semanticCache =
+    process.env.BERNARD_SEMANTIC_CACHE === 'true' || process.env.BERNARD_SEMANTIC_CACHE === '1';
   const theme = prefs.theme || 'bernard';
 
   // Tri-state coordinator mode (#167). Precedence: explicit pref >
@@ -1065,6 +1084,8 @@ export function loadConfig(overrides?: {
     maxSteps,
     ragEnabled,
     cacheEnabled,
+    promptCache,
+    semanticCache,
     theme,
     coordinatorMode,
     modelMode,
@@ -1174,8 +1195,8 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
  * so downstream subsystems holding a reference to `config` see the new values.
  *
  * Does not touch API keys, custom providers, the cached `providerBaseUrl`, or
- * env-only flags (`ragEnabled`, `cacheEnabled`, `correctionEnabled`,
- * `referenceLookupTools`) — those are not profile-scoped.
+ * env-only flags (`ragEnabled`, `cacheEnabled`, `promptCache`, `semanticCache`,
+ * `correctionEnabled`, `referenceLookupTools`) — those are not profile-scoped.
  *
  * @throws if the new profile selects a provider with no configured API key.
  */

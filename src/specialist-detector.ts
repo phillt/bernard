@@ -2,6 +2,7 @@ import { generateText } from 'ai';
 import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
+import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 import type { Specialist, SpecialistSummary } from './specialists.js';
 import type { SpecialistCandidate } from './specialist-candidates.js';
 import { checkOverlaps, computeConfidence, OVERLAP_THRESHOLD } from './overlap-checker.js';
@@ -126,22 +127,42 @@ export async function detectSpecialistCandidate(
 
   try {
     const site = resolveSiteModel(config, 'specialist-detector');
-    const result = await traceLlm('specialist-detector', site.model.modelId, () =>
-      generateText({
-        model: site.model,
-        providerOptions: site.providerOptions,
-        maxTokens: 2048,
-        system: DETECTION_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: 'user',
-            content: `Analyze this conversation for recurring specialist patterns:${existingList}${pendingList}\n\n---\n\n${serializedText}`,
-          },
-        ],
-      }),
-    );
+    const userContent = `Analyze this conversation for recurring specialist patterns:${existingList}${pendingList}\n\n---\n\n${serializedText}`;
 
-    const text = result.text?.trim();
+    // LLM subcall cache (#171): identical (model, system, conversation) reuse the
+    // prior detection for the TTL, skipping the round-trip.
+    const cacheOn = config.cacheEnabled !== false;
+    const cacheKey: LLMCacheKey | null = cacheOn
+      ? {
+          siteName: 'specialist-detector',
+          modelId: site.model.modelId,
+          providerOptions: site.providerOptions,
+          system: DETECTION_SYSTEM_PROMPT,
+          userContent,
+        }
+      : null;
+    let rawText: string;
+    const cached = cacheKey ? getCachedLLM(cacheKey) : undefined;
+    if (cached !== undefined) {
+      debugLog('cache:llm:hit', { site: 'specialist-detector' });
+      rawText = cached;
+    } else {
+      if (cacheKey) debugLog('cache:llm:miss', { site: 'specialist-detector' });
+      const result = await traceLlm('specialist-detector', site.model.modelId, () =>
+        generateText({
+          model: site.model,
+          providerOptions: site.providerOptions,
+          maxTokens: 2048,
+          temperature: 0,
+          system: DETECTION_SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userContent }],
+        }),
+      );
+      rawText = result.text ?? '';
+      if (rawText && cacheKey) setCachedLLM(cacheKey, rawText);
+    }
+
+    const text = rawText.trim();
     if (!text) return null;
 
     // Parse JSON — handle markdown code fences

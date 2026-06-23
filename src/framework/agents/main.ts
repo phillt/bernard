@@ -3,6 +3,7 @@ import { buildStrategy } from '../strategies/index.js';
 import { tokenStatsHook, type TokenStatsTarget } from '../hooks/token-stats.js';
 import { outputHook } from '../hooks/output.js';
 import { createTools } from '../../tools/index.js';
+import { formatCurrentDateTime } from '../../tools/datetime.js';
 import { createSubAgentTool } from '../../tools/subagent.js';
 import { createTaskTool } from '../../tools/task.js';
 import { createSpecialistRunTool } from '../../tools/specialist-run.js';
@@ -16,7 +17,7 @@ import { ctxToToolWrapperDeps } from '../../tools/tool-wrapper-run.js';
 import { toolToAISDK } from '../tools/adapter.js';
 import { buildToolProfilesPrompt } from '../../tool-profiles.js';
 import { getModelProfile } from '../../providers/index.js';
-import { isReactEffective } from '../../policy/effective.js';
+import { isReactPossible } from '../../policy/effective.js';
 import { debugLog } from '../../logger.js';
 import { buildSystemPrompt } from '../../agent-prompt.js';
 import {
@@ -139,6 +140,11 @@ export function buildMainSystemPrompt(
  */
 function buildMainContextInputs(ctx: AgentContext, input: Omit<MainInput, 'systemPrompt'>) {
   return {
+    // Rendered in the volatile per-turn block (not the system prompt) so the
+    // main agent's cacheable system prefix stays byte-stable for prompt
+    // caching (#269). Scoped to the main agent — ephemeral sub-agents keep
+    // their prior (often context-less) message shape.
+    currentDateTime: formatCurrentDateTime(),
     ragResults: input.ragResults,
     mcpServerNames: ctx.mcp.serverNames,
     routineSummaries: input.routineSummaries,
@@ -219,20 +225,21 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
       ctx.config,
       ctx.provenance,
     );
-    // `evaluate` is gated on the SAME effective decision the strategy uses
-    // (see strategy(ctx) below) — it's the verification half of the ReAct
-    // think→act→evaluate loop and has no meaning in a single-shot turn.
-    // Reading `ctx.config.coordinatorMode` directly would let `tools()` and
-    // `strategy()` drift apart the moment a sub-policy (e.g. the Qualifier in
-    // 'auto' mode) emits a `strategyId` that doesn't mirror the global flag.
+    // `evaluate` is the verification half of the ReAct think→act→evaluate loop.
+    // It is gated on whether ReAct is POSSIBLE this SESSION (`isReactPossible`,
+    // config-only) rather than the per-turn decision (#269). Gating it per turn
+    // (`isReactEffective`) made the tool block flip between Normal and ReAct
+    // turns in 'auto' mode, which invalidates the Anthropic prompt cache every
+    // time the strategy changes — tools are the first/largest cached block and
+    // can't carry a mid-array breakpoint, so the whole block must stay
+    // byte-identical across turns for the cache to hit.
     //
-    // `plan`, by contrast, is available in EVERY mode. The ReAct *enforcement*
-    // loop (re-prompting on unresolved steps) lives in the strategy
-    // (`react.ts`), not the tool — Normal is single-shot and never enforces —
-    // so exposing the tool in Normal just gives the model a place to record a
-    // structured, user-visible plan instead of narrating one in prose (which
-    // is what it did when the tool was gated out). No enforcement, no loop.
-    const reactActive = isReactEffective(ctx.config, ctx.policyDecision);
+    // Keeping `evaluate` present for the whole session (when mode != 'off') is
+    // harmless on Normal turns: like the always-on `plan` tool, the ReAct
+    // *enforcement* loop lives in the strategy (`react.ts`), not the tool, so an
+    // exposed-but-unenforced tool on a single-shot turn just gives the model a
+    // place to record a verification — no enforcement, no loop.
+    const reactToolsAvailable = isReactPossible(ctx.config);
     const tools: Record<string, Tool> = {
       ...baseTools,
       agent: createSubAgentTool(ctx),
@@ -251,7 +258,7 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
           reason: 'plan-replaced',
         });
       }),
-      ...(reactActive ? { evaluate: createEvaluateTool(ctx.verification) } : {}),
+      ...(reactToolsAvailable ? { evaluate: createEvaluateTool(ctx.verification) } : {}),
     };
     // `augmentTools` (profile-recording + confirmation gate) is applied
     // centrally in `runDefinition`. We only need to return the shimmed tools

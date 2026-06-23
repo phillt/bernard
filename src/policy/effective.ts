@@ -24,3 +24,20 @@ export function isReactEffective(
   if (id === 'normal') return false;
   return config.coordinatorMode === 'on';
 }
+
+/**
+ * Whether ReAct could run at ANY point this session — `'on'` always, `'auto'`
+ * because the per-turn Qualifier may escalate. Session-stable (depends only on
+ * the mode, not the per-turn decision), so it's the right predicate for
+ * TOOL-SET membership: gating the `evaluate` tool on the per-turn
+ * {@link isReactEffective} makes the tool block flip between Normal and ReAct
+ * turns, which invalidates the Anthropic prompt cache (tools are the first,
+ * largest cached block and can't carry a mid-array breakpoint). Keeping the
+ * tool present for the whole session keeps the block byte-identical so the
+ * cache holds. The ReAct *enforcement* loop still keys off the per-turn
+ * {@link isReactEffective} in the strategy — same rationale as the always-on
+ * `plan` tool: an exposed-but-unenforced tool on a Normal turn is harmless.
+ */
+export function isReactPossible(config: Pick<BernardConfig, 'coordinatorMode'>): boolean {
+  return config.coordinatorMode !== 'off';
+}

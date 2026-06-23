@@ -47,6 +47,8 @@ import type { AgentContext } from './framework/context.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
+import { SemanticResponseCache } from './semantic-cache.js';
+import { isPureQuestion } from './policy/tool-mode.js';
 import type { Step } from './plan-store.js';
 import type { VerificationEntry } from './agent-status.js';
 import { verdictOf, renderRubricLine, type Check, type Rubric } from './rubric.js';
@@ -107,6 +109,11 @@ export class Agent {
    * by {@link clearHistory}; loaded on resume via {@link setTurnProvenance}.
    */
   private turnProvenance: TurnProvenance[] = [];
+  /**
+   * Semantic response cache (#269, Layer 3). Opt-in via `config.semanticCache`.
+   * Only consulted/populated for read-only Q&A turns (no tool actions).
+   */
+  private semanticCache = new SemanticResponseCache();
   /** Most recent per-turn rubric (#145). Composed at end of `processInput`. */
   private lastRubric: Rubric | null = null;
   private abortController: AbortController | null = null;
@@ -292,6 +299,19 @@ export class Agent {
     }).decision;
   }
 
+  /**
+   * Zero the per-turn ↑/↓ + prompt-cache token odometers (#234, #269). Single
+   * source of truth so the normal turn start, the semantic-cache-hit
+   * short-circuit, and `clearHistory` never drift on which counters to reset.
+   */
+  private resetTurnTokenOdometer(): void {
+    if (!this.spinnerStats) return;
+    this.spinnerStats.turnPromptTokens = 0;
+    this.spinnerStats.turnCompletionTokens = 0;
+    this.spinnerStats.turnCacheReadTokens = 0;
+    this.spinnerStats.turnCacheWriteTokens = 0;
+  }
+
   /** Returns step limit hit info from last processInput, or null if limit wasn't hit. */
   getStepLimitHit(): { currentLimit: number; hitCount: number } | null {
     if (!this.lastStepLimitHit) return null;
@@ -410,6 +430,33 @@ export class Agent {
     // Fresh per-turn provenance — sources from prior turns don't leak across.
     this.ctx.provenance.clear();
 
+    // Semantic response cache (#269, Layer 3). Opt-in; read-only Q&A turns only
+    // (no images, no tool actions). On a near-identical hit, answer from the
+    // cache and skip the model call entirely. The pushed assistant message is
+    // committed to the transcript by App's post-turn history commit, so no
+    // streaming-sink work is needed. Fails open.
+    // Eligible only when the turn is self-contained: opt-in flag on, no images,
+    // a pure question, AND no resolved references (a reference-dependent ask like
+    // "summarize §3" keys only on the raw text, so a same-worded ask resolving to
+    // different content would collide). The store-on-miss path below reuses the
+    // same gate.
+    const semanticEligible =
+      this.config.semanticCache &&
+      !images?.length &&
+      !resolvedReferences?.length &&
+      isPureQuestion(userInput);
+    if (semanticEligible) {
+      const hit = await this.semanticCache.get(userInput);
+      if (hit !== null && !this.abortController.signal.aborted) {
+        // The hit short-circuits before the normal per-turn reset below, so zero
+        // the odometers here — otherwise the spinner shows the prior turn's
+        // token/⚡cached counts for a turn that made no model call.
+        this.resetTurnTokenOdometer();
+        this.history.push({ role: 'assistant', content: hit });
+        return;
+      }
+    }
+
     try {
       // Resolve the model we're actually talking to for this turn (lineup +
       // model-mode aware), not the stale `config.model` base field (#233).
@@ -425,8 +472,7 @@ export class Agent {
         // turn's main-agent steps AND any sub-agents / tool-wrappers / PAC
         // phases it spawns then accumulate into a fresh zero via the token
         // hooks (main: tokenStatsHook; non-main: tokenTotalsHook).
-        this.spinnerStats.turnPromptTokens = 0;
-        this.spinnerStats.turnCompletionTokens = 0;
+        this.resetTurnTokenOdometer();
       }
 
       // Check if context compression is needed
@@ -739,6 +785,14 @@ export class Agent {
       // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)
       this.lastPromptTokens = this.lastStepPromptTokens ?? result.usage?.promptTokens ?? 0;
 
+      // Populate the semantic response cache (#269, Layer 3) — only for read-only
+      // Q&A turns that took NO tool actions, so a future near-duplicate ask can
+      // be answered without a model call. Gated identically to the lookup above.
+      const usedTools = (result.steps ?? []).some((s) => (s.toolCalls?.length ?? 0) > 0);
+      if (semanticEligible && !usedTools && result.text?.trim()) {
+        void this.semanticCache.put(userInput, result.text);
+      }
+
       // Snapshot provenance for the REPL viewer. `lastSources` is everything
       // registered this turn; `lastCitedSources` is the subset whose ids
       // appeared as `[^Sn]` markers anywhere in the turn's emitted text.
@@ -915,8 +969,7 @@ export class Agent {
     this.lastStepPromptTokens = 0;
     if (this.spinnerStats) {
       this.spinnerStats.latestPromptTokens = 0; // empty the bar
-      this.spinnerStats.turnPromptTokens = 0;
-      this.spinnerStats.turnCompletionTokens = 0;
+      this.resetTurnTokenOdometer();
     }
     if (this.ctx.policyDecision) {
       this.ctx = { ...this.ctx, policyDecision: undefined };
