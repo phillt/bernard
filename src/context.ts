@@ -179,7 +179,7 @@ export async function extractDomainFacts(
       });
 
       // Count this off-loop call toward the per-turn ledger (#258).
-      onUsage?.(usageRecordFromSite(site, 'compressor', result.usage));
+      onUsage?.(usageRecordFromSite(site, 'compressor', result.usage, result.providerMetadata));
 
       const text = result.text?.trim();
       if (!text) return { domain: domainId, facts: [] };
@@ -282,7 +282,7 @@ export async function compressHistory(
     const [result, domainFacts] = await Promise.all([summarizePromise, extractPromise]);
 
     // Count the summarization call toward the per-turn ledger (#258).
-    onUsage?.(usageRecordFromSite(summarizerSite, 'compressor', result.usage));
+    onUsage?.(usageRecordFromSite(summarizerSite, 'compressor', result.usage, result.providerMetadata));
 
     // Store extracted facts per domain — await to prevent races on persist()
     if (ragStore && domainFacts.length > 0) {

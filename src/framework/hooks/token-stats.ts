@@ -65,7 +65,9 @@ export function usageRecordFromSite(
   site: SiteModelLike,
   siteName: string,
   usage: { promptTokens: number; completionTokens: number } | undefined,
+  providerMetadata?: { anthropic?: { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null } },
 ): UsageRecord {
+  const a = providerMetadata?.anthropic;
   return {
     bucket: bucketForTier(site.tier),
     site: siteName,
@@ -73,6 +75,8 @@ export function usageRecordFromSite(
     modelName: site.modelName,
     promptTokens: usage?.promptTokens ?? 0,
     completionTokens: usage?.completionTokens ?? 0,
+    cacheReadTokens: a?.cacheReadInputTokens ?? 0,
+    cacheWriteTokens: a?.cacheCreationInputTokens ?? 0,
   };
 }
 
@@ -129,6 +133,10 @@ function recordStep(
   usage: { promptTokens: number; completionTokens: number } | undefined,
   providerMetadata: { anthropic?: { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null } } | undefined,
 ): void {
+  // A step that reports no usage payload isn't a billable model call we can
+  // attribute — skip it rather than minting a zero-token ledger row that would
+  // inflate the per-model `calls` count (the old guarded odometer did the same).
+  if (!usage) return;
   const a = providerMetadata?.anthropic;
   recordTurnUsage(stats, {
     ...info,

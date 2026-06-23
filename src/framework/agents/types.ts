@@ -182,15 +182,15 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
   streaming?: boolean;
 
   /**
-   * When `true`, this definition's `hooks()` already installs `tokenStatsHook`
-   * (full per-turn odometer + context gauge + compression headroom). Only the
-   * main-agent definition sets this. `runDefinition` reads it to decide whether
-   * to append the totals-only `tokenTotalsHook`: non-accounting definitions
-   * (sub / task / specialist / tool-wrapper / PAC phases) get it so their tokens
-   * land in the same per-turn ↑/↓ odometer, while the main agent is skipped to
-   * avoid double-counting. Keeping this a flag on the definition (rather than a
-   * hardcoded id check in `runDefinition`) keeps the accounting contract
-   * co-located with the hook wiring it describes. Issue #234.
+   * Selects which token-accounting hook `runDefinition` installs centrally
+   * (#258): `true` → `tokenStatsHook` (full per-turn odometer + context gauge +
+   * compression headroom); `false`/unset → the totals-only `tokenTotalsHook`
+   * (adds tokens to the per-turn ↑/↓ ledger without touching the gauge/headroom).
+   * Only the main-agent definition sets `true`. The definitions' own `hooks()` no
+   * longer install either hook — `runDefinition` owns it from the one place that
+   * has the resolved model identity in scope, so exactly one hook is wired per
+   * dispatch (no double-count). Keeping this a flag (rather than a hardcoded id
+   * check) keeps the accounting contract co-located with what it describes. #234.
    */
   fullTokenAccounting?: boolean;
 }

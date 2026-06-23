@@ -48,13 +48,41 @@ function cell(value: string, width: number, align: 'left' | 'right' = 'left'): s
   return align === 'right' ? v.padStart(width) : v.padEnd(width);
 }
 
-function rowCells(label: string, calls: string, tin: string, tout: string, cost: string): string {
+interface RowCells {
+  label: string;
+  calls: string;
+  tin: string;
+  tout: string;
+  cost: string;
+}
+
+/**
+ * The single 5-column row renderer for the table — used by the header, every
+ * data row, and the total — so column widths and alignment live in exactly one
+ * place. `labelColor`/`costColor` tint those two cells; `bold`/`dim` style the
+ * whole row.
+ */
+function Row({
+  cells,
+  labelColor,
+  costColor,
+  bold,
+  dim,
+}: {
+  cells: RowCells;
+  labelColor?: string;
+  costColor?: string;
+  bold?: boolean;
+  dim?: boolean;
+}) {
   return (
-    cell(label, LABEL_W) +
-    cell(calls, NUM_W, 'right') +
-    cell(tin, NUM_W, 'right') +
-    cell(tout, NUM_W, 'right') +
-    cell(cost, NUM_W + 1, 'right')
+    <Box>
+      <Text color={labelColor} bold={bold} dimColor={dim}>{cell(cells.label, LABEL_W)}</Text>
+      <Text bold={bold} dimColor={dim}>{cell(cells.calls, NUM_W, 'right')}</Text>
+      <Text bold={bold} dimColor={dim}>{cell(cells.tin, NUM_W, 'right')}</Text>
+      <Text bold={bold} dimColor={dim}>{cell(cells.tout, NUM_W, 'right')}</Text>
+      <Text color={costColor} bold={bold} dimColor={dim}>{cell(cells.cost, NUM_W + 1, 'right')}</Text>
+    </Box>
   );
 }
 
@@ -73,11 +101,7 @@ function buildLines(agent: Agent): OverlayLine[] {
 
   lines.push({
     key: 'header',
-    node: (
-      <Text dimColor bold>
-        {rowCells('TIER / MODEL', 'calls', 'in', 'out', '~cost')}
-      </Text>
-    ),
+    node: <Row cells={{ label: 'TIER / MODEL', calls: 'calls', tin: 'in', tout: 'out', cost: '~cost' }} bold dim />,
   });
 
   for (const row of report.rows) {
@@ -88,15 +112,16 @@ function buildLines(agent: Agent): OverlayLine[] {
   lines.push({
     key: 'total',
     node: (
-      <Text bold>
-        {rowCells(
-          'TOTAL',
-          String(report.totalCalls),
-          formatTokenCount(report.totalPromptTokens),
-          formatTokenCount(report.totalCompletionTokens),
-          report.totalCostUsd === null ? 'n/a' : `~${formatUsd(report.totalCostUsd)}`,
-        )}
-      </Text>
+      <Row
+        cells={{
+          label: 'TOTAL',
+          calls: String(report.totalCalls),
+          tin: formatTokenCount(report.totalPromptTokens),
+          tout: formatTokenCount(report.totalCompletionTokens),
+          cost: report.totalCostUsd === null ? 'n/a' : `~${formatUsd(report.totalCostUsd)}`,
+        }}
+        bold
+      />
     ),
   });
 
@@ -138,15 +163,17 @@ function UsageRow({ row, colors }: { row: UsageReportRow; colors: ReturnType<typ
       : row.bucket === 'pinned'
         ? colors.warning
         : colors.text;
-  const label = `${row.bucket.padEnd(7)} ${row.modelName}`;
-  const cost = row.costUsd === null ? 'n/a' : `~${formatUsd(row.costUsd)}`;
   return (
-    <Box>
-      <Text color={tierColor}>{cell(label, LABEL_W)}</Text>
-      <Text>{cell(String(row.calls), NUM_W, 'right')}</Text>
-      <Text>{cell(formatTokenCount(row.promptTokens), NUM_W, 'right')}</Text>
-      <Text>{cell(formatTokenCount(row.completionTokens), NUM_W, 'right')}</Text>
-      <Text color={row.costUsd === null ? colors.muted : colors.text}>{cell(cost, NUM_W + 1, 'right')}</Text>
-    </Box>
+    <Row
+      cells={{
+        label: `${row.bucket.padEnd(7)} ${row.modelName}`,
+        calls: String(row.calls),
+        tin: formatTokenCount(row.promptTokens),
+        tout: formatTokenCount(row.completionTokens),
+        cost: row.costUsd === null ? 'n/a' : `~${formatUsd(row.costUsd)}`,
+      }}
+      labelColor={tierColor}
+      costColor={row.costUsd === null ? colors.muted : colors.text}
+    />
   );
 }

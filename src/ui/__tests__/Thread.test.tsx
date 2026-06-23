@@ -84,6 +84,35 @@ describe('<Thread>', () => {
     expect(frame).toContain('1.2s');
   });
 
+  it('appends the per-turn cost label to the timing footer (#258)', () => {
+    const history: CoreMessage[] = [{ role: 'assistant', content: 'done' }];
+    const { lastFrame } = render(
+      createElement(Thread, {
+        staticItems: items(history, false, {
+          0: {
+            timing: { endedAt: new Date('2026-01-01T12:00:00Z').getTime(), durationMs: 1200 },
+            costUsd: 0.0123,
+          },
+        }),
+      }),
+    );
+    const frame = stripAnsi(lastFrame() ?? '');
+    // formatUsd(0.0123) → "$0.012" (>= 0.01 → 3 decimals), prefixed with " · ~".
+    expect(frame).toContain('~$0.012');
+  });
+
+  it('omits the cost label when costUsd is undefined', () => {
+    const history: CoreMessage[] = [{ role: 'assistant', content: 'done' }];
+    const { lastFrame } = render(
+      createElement(Thread, {
+        staticItems: items(history, false, {
+          0: { timing: { endedAt: new Date('2026-01-01T12:00:00Z').getTime(), durationMs: 1200 } },
+        }),
+      }),
+    );
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('~$');
+  });
+
   it('shows the rewrite original (not the dispatched text) with the rewrite icon', () => {
     const history: CoreMessage[] = [{ role: 'user', content: 'REWRITTEN dispatched text' }];
     const { lastFrame } = render(

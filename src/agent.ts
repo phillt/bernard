@@ -45,7 +45,7 @@ import { PlanStore } from './plan-store.js';
 import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
 import { recordTurnUsage } from './framework/hooks/token-stats.js';
-import { computeTurnUsageReport } from './usage-report.js';
+import { computeTurnUsageReport, priceUsageUsd } from './usage-report.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
@@ -335,6 +335,21 @@ export class Agent {
     this.resetTurnTokenOdometer();
   }
 
+  /**
+   * Closes the just-ended turn's stats window (#258 follow-up). Prices the
+   * still-populated per-turn ledger, folds the priced total into the
+   * session-cumulative `sessionCostUsd` (which survives the next turn's reset),
+   * and returns this turn's cost so the REPL can stamp it onto the transcript.
+   * Returns `undefined` when there are no stats or no priced rows. Must run before
+   * the next `beginTurnStats()` clears the ledger.
+   */
+  finalizeTurnStats(): number | undefined {
+    if (!this.spinnerStats) return undefined;
+    const report = computeTurnUsageReport(this.spinnerStats);
+    this.spinnerStats.sessionCostUsd += report.totalCostUsd ?? 0;
+    return report.totalCostUsd ?? undefined;
+  }
+
   /** Returns step limit hit info from last processInput, or null if limit wasn't hit. */
   getStepLimitHit(): { currentLimit: number; hitCount: number } | null {
     if (!this.lastStepLimitHit) return null;
@@ -473,8 +488,11 @@ export class Agent {
       if (hit !== null && !this.abortController.signal.aborted) {
         // The hit short-circuits before the normal per-turn reset below, so zero
         // the odometers here — otherwise the spinner shows the prior turn's
-        // token/⚡cached counts for a turn that made no model call.
-        this.resetTurnTokenOdometer();
+        // token/⚡cached counts for a turn that made no model call. Skip the reset
+        // when the REPL opened the turn via `beginTurnStats()`: the ledger then
+        // already holds *this* turn's pre-turn pipeline spend (resolver/rewriter),
+        // which a reset would silently drop from the cost label + session total.
+        if (!this.turnStatsBegun) this.resetTurnTokenOdometer();
         this.history.push({ role: 'assistant', content: hit });
         return;
       }
@@ -972,7 +990,23 @@ export class Agent {
   /** Compresses conversation history in-place, returning token usage stats. */
   async compactHistory(): Promise<CompactResult> {
     const tokensBefore = estimateHistoryTokens(this.history);
-    const compressed = await compressHistory(this.history, this.config, this.ragStore);
+    // Manual /compact runs between turns, so its summarizer + domain-extraction
+    // LLM spend can't ride a turn's ledger (the next `beginTurnStats()` would
+    // clear it). Price it here and fold it straight into the session total so the
+    // footer's "session ~$" doesn't silently undercount (#258).
+    let compactionCostUsd = 0;
+    const compressed = await compressHistory(
+      this.history,
+      this.config,
+      this.ragStore,
+      this.spinnerStats
+        ? (rec) => {
+            const cost = priceUsageUsd(rec.provider, rec.modelName, rec.promptTokens, rec.completionTokens);
+            if (cost != null) compactionCostUsd += cost;
+          }
+        : undefined,
+    );
+    if (this.spinnerStats) this.spinnerStats.sessionCostUsd += compactionCostUsd;
     const compacted = compressed !== this.history;
     if (compacted) {
       this.history = compressed;
@@ -1024,6 +1058,9 @@ export class Agent {
     if (this.spinnerStats) {
       this.spinnerStats.latestPromptTokens = 0; // empty the bar
       this.resetTurnTokenOdometer();
+      // `sessionCostUsd` is deliberately NOT zeroed here: the footer's "session"
+      // total is REPL-process-lifetime spend (#258), independent of /clear, which
+      // only drops the conversation context.
     }
     if (this.ctx.policyDecision) {
       this.ctx = { ...this.ctx, policyDecision: undefined };

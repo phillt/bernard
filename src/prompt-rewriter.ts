@@ -189,7 +189,7 @@ export async function rewritePrompt(
       );
       // Count this pre-turn call toward the per-turn ledger (#258). Cache hits
       // above spent no tokens, so only the real-call branch records.
-      onUsage?.(usageRecordFromSite(site, 'rewriter', result.usage));
+      onUsage?.(usageRecordFromSite(site, 'rewriter', result.usage, result.providerMetadata));
       if (!result.text) {
         debugLog('prompt-rewriter:empty-response', null);
         return { status: 'noop' };

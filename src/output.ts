@@ -78,6 +78,13 @@ export interface SpinnerStats {
    * `/usage` viewer, the StatusBar `~$cost` suffix, and the `turn-stats` log.
    */
   turnLedger: Map<string, TurnUsageEntry>;
+  /**
+   * Cumulative priced cost (USD) across all turns this REPL session (#258
+   * follow-up). NOT reset by `resetTurnTokenOdometer` — it survives turn
+   * boundaries so the StatusBar can show a running session total. Folded in once
+   * per turn by `Agent.finalizeTurnStats()`.
+   */
+  sessionCostUsd: number;
 }
 
 /** Token counts can arrive NaN/undefined when a turn errors early; treat those as 0. */

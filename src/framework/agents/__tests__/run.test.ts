@@ -344,6 +344,7 @@ describe('runDefinition per-turn token totals hook (#234)', () => {
         turnCacheWriteTokens: 0,
         model: 'claude-x',
         turnLedger: new Map(),
+        sessionCostUsd: 0,
       },
     };
   }

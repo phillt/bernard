@@ -14,7 +14,7 @@ vi.mock('./providers/catalog.js', () => ({
   },
 }));
 
-const { computeTurnUsageReport, formatUsd, formatTurnCost } = await import('./usage-report.js');
+const { computeTurnUsageReport, formatUsd, formatTurnCost, formatCostSuffix } = await import('./usage-report.js');
 
 function entry(over: Partial<TurnUsageEntry> & Pick<TurnUsageEntry, 'bucket' | 'provider' | 'modelName' | 'site'>): TurnUsageEntry {
   return {
@@ -39,12 +39,13 @@ function statsWith(entries: TurnUsageEntry[]): SpinnerStats {
     turnCacheWriteTokens: 0,
     model: 'claude-opus-4-8',
     turnLedger,
+    sessionCostUsd: 0,
   };
 }
 
 describe('computeTurnUsageReport (#258)', () => {
   it('returns an empty, zero-cost report for null / empty stats', () => {
-    expect(computeTurnUsageReport(null)).toMatchObject({ rows: [], totalCostUsd: 0, partial: false });
+    expect(computeTurnUsageReport(null)).toMatchObject({ rows: [], totalCostUsd: null, partial: false });
     expect(computeTurnUsageReport(statsWith([]))).toMatchObject({ rows: [], partial: false });
   });
 
@@ -95,6 +96,14 @@ describe('formatUsd / formatTurnCost', () => {
     expect(formatUsd(0.07)).toBe('$0.070');
     expect(formatUsd(0.0003)).toBe('$0.0003');
     expect(formatUsd(0)).toBe('$0.00');
+  });
+
+  it('formatCostSuffix returns a bare ~$ fragment, empty for null/zero/negative', () => {
+    expect(formatCostSuffix(0.07)).toBe('~$0.070');
+    expect(formatCostSuffix(null)).toBe('');
+    expect(formatCostSuffix(undefined)).toBe('');
+    expect(formatCostSuffix(0)).toBe('');
+    expect(formatCostSuffix(-1)).toBe('');
   });
 
   it('returns a ` ~$` suffix only when there is priced cost', () => {

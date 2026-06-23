@@ -162,6 +162,7 @@ function makeAgent(
     setAlertContext: () => {},
     setSpinnerStats: () => {},
     beginTurnStats: () => {},
+    finalizeTurnStats: () => undefined,
     spinnerStats: null,
   } as unknown as Agent;
 }

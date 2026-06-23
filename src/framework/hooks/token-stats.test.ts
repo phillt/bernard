@@ -28,6 +28,7 @@ function makeTarget(): TokenStatsTarget & { spinnerStats: SpinnerStats } {
       turnCacheWriteTokens: 0,
       model: 'claude-opus-4-8',
       turnLedger: new Map<string, TurnUsageEntry>(),
+      sessionCostUsd: 0,
     },
   };
 }
@@ -72,6 +73,14 @@ describe('token-stats cache accumulation (#269)', () => {
     await hook.onStepFinish!(step({ usage: { promptTokens: 300, completionTokens: 5 } }));
     expect(target.spinnerStats.turnCacheReadTokens).toBe(0);
     expect(target.spinnerStats.turnCompletionTokens).toBe(5);
+  });
+
+  it('records nothing for a step with no usage payload (no phantom ledger row)', async () => {
+    const target = makeTarget();
+    const hook = tokenStatsHook(target, MAIN_INFO);
+    await hook.onStepFinish!(step({ usage: undefined }));
+    expect(target.spinnerStats.turnLedger.size).toBe(0);
+    expect(target.spinnerStats.turnPromptTokens).toBe(0);
   });
 });
 

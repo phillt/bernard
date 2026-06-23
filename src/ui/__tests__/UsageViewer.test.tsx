@@ -16,6 +16,7 @@ function agentWithLedger(entries: TurnUsageEntry[] | null): Agent {
         turnCacheWriteTokens: 0,
         model: 'claude-opus-4-8',
         turnLedger: new Map(entries.map((e) => [`${e.bucket}|${e.provider}|${e.modelName}|${e.site}`, e])),
+        sessionCostUsd: 0,
       }
     : null;
   return { spinnerStats } as unknown as Agent;

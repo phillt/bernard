@@ -15,6 +15,7 @@ type ReasoningPart = { type: 'reasoning'; text: string };
 type RedactedReasoningPart = { type: 'redacted-reasoning'; data: string };
 import { getThemeColors } from '../theme.js';
 import { truncate } from '../text.js';
+import { formatCostSuffix } from '../usage-report.js';
 import { renderMarkdown } from './markdown.js';
 import { ErrorPanel } from './ErrorPanel.js';
 import type { ErrorPanelData } from './error-format.js';
@@ -36,6 +37,9 @@ export interface StaticItem {
   message?: CoreMessage;
   rewriteOriginal?: string;
   timing?: { endedAt: number; durationMs: number };
+  /** Estimated priced cost (USD) of this turn (#258), shown beside the timing
+   *  footer. Undefined when the turn was aborted or no tokens were priced. */
+  costUsd?: number;
   toolDetails: boolean;
   /**
    * When set, this item is a failed-turn notice rendered as `<ErrorPanel>`
@@ -115,6 +119,7 @@ export function Thread({
                 message={item.message}
                 rewriteOriginal={item.rewriteOriginal}
                 timing={item.timing}
+                costUsd={item.costUsd}
                 toolDetails={item.toolDetails}
               />
             ) : null}
@@ -389,11 +394,13 @@ export function MessageBlock({
   message,
   rewriteOriginal,
   timing,
+  costUsd,
   toolDetails,
 }: {
   message: CoreMessage;
   rewriteOriginal?: string;
   timing?: { endedAt: number; durationMs: number };
+  costUsd?: number;
   toolDetails: boolean;
 }) {
   if (message.role === 'user')
@@ -403,6 +410,7 @@ export function MessageBlock({
       <AssistantMessage
         message={message as CoreAssistantMessage}
         timing={timing}
+        costUsd={costUsd}
         toolDetails={toolDetails}
       />
     );
@@ -446,14 +454,17 @@ function UserMessage({
 function AssistantMessage({
   message,
   timing,
+  costUsd,
   toolDetails,
 }: {
   message: CoreAssistantMessage;
   timing?: { endedAt: number; durationMs: number };
+  costUsd?: number;
   toolDetails: boolean;
 }) {
   const colors = getThemeColors();
   const parts = normalizeAssistantContent(message.content);
+  const costSuffix = formatCostSuffix(costUsd);
   const chevron = (
     <Text color={colors.accent} bold>
       {'❮  '}
@@ -521,6 +532,7 @@ function AssistantMessage({
           <Text dimColor>
             {formatDuration(timing.durationMs)} ·{' '}
             {formatFriendlyTimestamp(new Date(timing.endedAt))}
+            {costSuffix && ` · ${costSuffix}`}
           </Text>
         </Box>
       )}

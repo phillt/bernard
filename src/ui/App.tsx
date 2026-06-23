@@ -551,6 +551,7 @@ export function App({
         model: resolveMainModel(config),
         contextWindowOverride: config.tokenWindow || undefined,
         turnLedger: new Map(),
+        sessionCostUsd: 0,
       });
     }
   }, [agent, config.model, config.tokenWindow]);
@@ -2352,6 +2353,8 @@ export function App({
     rewriteForLastUser?: string;
     /** Timing footer, attached to the last assistant message in the slice. */
     timing?: { endedAt: number; durationMs: number };
+    /** Estimated turn cost (#258), attached beside the timing footer. */
+    costUsd?: number;
   }): void {
     const history = agent.getHistory();
     // If the agent replaced its history array mid-turn (auto-compression /
@@ -2398,6 +2401,7 @@ export function App({
             ? opts.rewriteForLastUser
             : undefined,
         timing: opts?.timing && i === lastAssistantIdx ? opts.timing : undefined,
+        costUsd: opts?.timing && i === lastAssistantIdx ? opts.costUsd : undefined,
         toolDetails,
       });
     }
@@ -2472,7 +2476,12 @@ export function App({
       // so the streaming view freezes into scrollback in a single render.
       const endedAt = Date.now();
       const timing = turnCompleted ? { endedAt, durationMs: endedAt - turnStartedAt } : undefined;
-      commitNewHistory({ timing });
+      // Price this turn's ledger before the next turn's beginTurnStats() clears
+      // it, and fold the total into the session-cumulative footer (#258). The
+      // per-turn label only shows on completed turns (gated by `timing` in
+      // commitNewHistory), matching the duration/timestamp footer.
+      const turnCostUsd = agent.finalizeTurnStats();
+      commitNewHistory({ timing, costUsd: turnCostUsd });
       // Append the error panel after the turn's committed output so it reads
       // as the turn's outcome (in the same batch as the commit above).
       if (errorPanel) {

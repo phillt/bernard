@@ -1,5 +1,6 @@
 import type { SpinnerStats, TurnUsageEntry, UsageBucket } from './output.js';
 import { getModelMeta } from './providers/catalog.js';
+import { LINEUP_TIERS } from './lineups.js';
 
 /**
  * Per-turn token + cost insights (#258). Aggregates the {@link SpinnerStats}
@@ -37,11 +38,22 @@ export interface UsageReport {
   partial: boolean;
 }
 
-/** Tier display order, premium first; `pinned` (off-lineup) trails. */
-const BUCKET_ORDER: Record<UsageBucket, number> = { premium: 0, mid: 1, cheap: 2, pinned: 3 };
+/**
+ * Tier display order, derived from the canonical `LINEUP_TIERS` (premium first)
+ * so it can't drift if a tier is renamed/added; `pinned` (off-lineup) trails.
+ */
+const BUCKET_ORDER: Record<UsageBucket, number> = {
+  ...Object.fromEntries(LINEUP_TIERS.map((tier, i) => [tier, i])),
+  pinned: LINEUP_TIERS.length,
+} as Record<UsageBucket, number>;
 
-/** Per-row cost from catalog pricing ($/M tok), or null when the model is unknown. */
-function rowCostUsd(provider: string, modelName: string, prompt: number, completion: number): number | null {
+/**
+ * Estimated USD cost of a (prompt, completion) token spend on a given model from
+ * catalog pricing ($/M tok), or `null` when the model isn't in the catalog
+ * (custom provider / unknown). Shared by the per-turn report and one-off pricing
+ * (e.g. `/compact` compaction spend).
+ */
+export function priceUsageUsd(provider: string, modelName: string, prompt: number, completion: number): number | null {
   const meta = getModelMeta(provider, modelName);
   if (!meta) return null;
   return (prompt / 1_000_000) * meta.pricing.inputPerMTok + (completion / 1_000_000) * meta.pricing.outputPerMTok;
@@ -54,7 +66,9 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
     totalCompletionTokens: 0,
     totalCacheReadTokens: 0,
     totalCalls: 0,
-    totalCostUsd: 0,
+    // `null`, not 0: an empty ledger has no pricing data, matching the
+    // all-unpriced path below. `null` = "nothing priced"; 0 = "priced at zero".
+    totalCostUsd: null,
     partial: false,
   };
   if (!stats?.turnLedger || stats.turnLedger.size === 0) return empty;
@@ -92,7 +106,7 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
     .map(({ siteSet, ...row }) => ({
       ...row,
       sites: Array.from(siteSet).sort(),
-      costUsd: rowCostUsd(row.provider, row.modelName, row.promptTokens, row.completionTokens),
+      costUsd: priceUsageUsd(row.provider, row.modelName, row.promptTokens, row.completionTokens),
     }))
     .sort((a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || b.promptTokens - a.promptTokens);
 
@@ -126,19 +140,30 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
 
 /** Format a USD amount with precision scaled to magnitude (e.g. `$0.07`, `$0.0042`, `$1.20`). */
 export function formatUsd(n: number): string {
+  // Non-finite (NaN/Infinity from a malformed catalog price) or non-positive →
+  // the neutral '$0.00' rather than '$Infinity' / '$NaN' garbage in the UI.
+  if (!Number.isFinite(n) || n <= 0) return '$0.00';
   if (n >= 1) return `$${n.toFixed(2)}`;
   if (n >= 0.01) return `$${n.toFixed(3)}`;
-  if (n > 0) return `$${n.toFixed(4)}`;
-  return '$0.00';
+  return `$${n.toFixed(4)}`;
 }
 
 /**
- * Compact `~$cost` suffix for the StatusBar odometer (#258). Returns `''` when
+ * Bare `~$cost` cost fragment (no leading space/separator) for a raw amount, or
+ * `''` when there's nothing priced to show (null/zero/negative). The single home
+ * for the `~$` convention + zero-guard so the StatusBar turn cell, the StatusBar
+ * session cell, and the per-turn transcript label can't drift (#258).
+ */
+export function formatCostSuffix(n: number | null | undefined): string {
+  return n != null && n > 0 ? `~${formatUsd(n)}` : '';
+}
+
+/**
+ * Compact ` ~$cost` suffix for the StatusBar odometer (#258). Returns `''` when
  * there's no priced cost yet (no tokens, or only unpriced custom-provider models)
  * so the bar stays clean.
  */
 export function formatTurnCost(stats: SpinnerStats | null): string {
-  const report = computeTurnUsageReport(stats);
-  if (report.totalCostUsd === null || report.totalCostUsd <= 0) return '';
-  return ` ~${formatUsd(report.totalCostUsd)}`;
+  const cost = formatCostSuffix(computeTurnUsageReport(stats).totalCostUsd);
+  return cost ? ` ${cost}` : '';
 }
