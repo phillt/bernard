@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import type { Agent } from '../agent.js';
 import type { BernardConfig } from '../config.js';
@@ -143,6 +143,7 @@ import { ConfirmDialog } from './overlays/ConfirmDialog.js';
 import { StatusViewer } from './overlays/StatusViewer.js';
 import { SourcesViewer } from './overlays/SourcesViewer.js';
 import { UsageViewer } from './overlays/UsageViewer.js';
+import { representativeTierModels } from '../usage-report.js';
 import { HelpOverlay } from './overlays/HelpOverlay.js';
 import { TextInputOverlay } from './overlays/TextInputOverlay.js';
 import { InfoOverlay } from './overlays/InfoOverlay.js';
@@ -337,6 +338,19 @@ export function App({
   const { exit } = useApp();
   const [activeOverlay, setActiveOverlay] = useState<Overlay | null>(null);
   const [busy, setBusy] = useState(false);
+  // Representative per-tier models for the active lineup, so the Usage & Cost
+  // panel can always render all three tiers (premium/mid/cheap) — dimmed zero-
+  // rows for tiers with no traffic — instead of silently hiding the high-end
+  // tier in modes that never reach it (#258 follow-up). Resolved only while the
+  // panel is open (no read at startup if it's never opened) and re-read on each
+  // open: `config` is mutated in place on a profile/lineup switch (stable
+  // identity), so re-resolving per open is what keeps the tiers in sync with a
+  // mid-session switch. The lineup file is tiny and already read per turn by
+  // model-policy, so the per-open read is negligible.
+  const usageTierModels = useMemo(
+    () => (activeOverlay === 'usage' ? representativeTierModels(config) : undefined),
+    [activeOverlay, config],
+  );
   // Append-only log of finalized turns, rendered through Ink's `<Static>` so
   // each entry becomes terminal scrollback that is never repainted (#232).
   // `<App>` commits to this at turn boundaries; the streaming message and the
@@ -2886,6 +2900,8 @@ export function App({
       {activeOverlay === 'usage' && (
         <UsageViewer
           agent={agent}
+          tierModels={usageTierModels}
+          modelMode={config.modelMode}
           onClose={() => setActiveOverlay(null)}
           onCycleTab={() => setActiveOverlay('status')}
         />

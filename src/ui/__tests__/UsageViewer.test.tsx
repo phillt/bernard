@@ -43,4 +43,36 @@ describe('<UsageViewer>', () => {
     const { lastFrame } = render(createElement(UsageViewer, { agent: agentWithLedger(null) }));
     expect(lastFrame() ?? '').toContain('No usage recorded yet');
   });
+
+  it('always shows all tiers (incl. dimmed premium) with a mode note when tierModels is given', () => {
+    // optimize-tokens turn: only mid + cheap billed tokens — premium had none.
+    const agent = agentWithLedger([
+      entry({ bucket: 'mid', provider: 'xai', modelName: 'grok-4.3', site: 'main', promptTokens: 761000, completionTokens: 516, calls: 8 }),
+      entry({ bucket: 'cheap', provider: 'xai', modelName: 'grok-4.20', site: 'rewriter', promptTokens: 302000, completionTokens: 937, calls: 7 }),
+    ]);
+    const tierModels = {
+      premium: { provider: 'xai', model: 'grok-4.3' },
+      mid: { provider: 'xai', model: 'grok-4.3' },
+      cheap: { provider: 'xai', model: 'grok-4.20' },
+    };
+    const { lastFrame } = render(
+      createElement(UsageViewer, { agent, tierModels, modelMode: 'optimize-tokens' }),
+    );
+    const frame = lastFrame() ?? '';
+    // The high-end tier is now visible even though it had no calls this turn.
+    expect(frame).toContain('premium');
+    expect(frame).toContain('mid');
+    expect(frame).toContain('cheap');
+    // Footer note explains the absence: premium is structurally unused here.
+    expect(frame).toContain('optimize-tokens');
+    expect(frame).toMatch(/premium is not used in this mode/);
+  });
+
+  it('omits zero-fill (legacy behavior) when no tierModels is provided', () => {
+    const agent = agentWithLedger([
+      entry({ bucket: 'mid', provider: 'xai', modelName: 'grok-4.3', site: 'main', promptTokens: 1000, completionTokens: 100, calls: 2 }),
+    ]);
+    const { lastFrame } = render(createElement(UsageViewer, { agent }));
+    expect(lastFrame() ?? '').not.toContain('premium');
+  });
 });

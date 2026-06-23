@@ -1,6 +1,7 @@
 import type { SpinnerStats, TurnUsageEntry, UsageBucket } from './output.js';
+import type { BernardConfig } from './config.js';
 import { getModelMeta } from './providers/catalog.js';
-import { LINEUP_TIERS } from './lineups.js';
+import { LINEUP_TIERS, loadLineups, resolveActiveLineup, type LineupTier, type LineupSlot } from './lineups.js';
 
 /**
  * Per-turn token + cost insights (#258). Aggregates the {@link SpinnerStats}
@@ -46,6 +47,11 @@ const BUCKET_ORDER: Record<UsageBucket, number> = {
   ...Object.fromEntries(LINEUP_TIERS.map((tier, i) => [tier, i])),
   pinned: LINEUP_TIERS.length,
 } as Record<UsageBucket, number>;
+
+/** Row display order: by tier (premium → cheap → pinned), then larger prompt spend first. */
+function compareUsageRows(a: UsageReportRow, b: UsageReportRow): number {
+  return BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || b.promptTokens - a.promptTokens;
+}
 
 /**
  * Estimated USD cost of a (prompt, completion) token spend on a given model from
@@ -108,7 +114,7 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
       sites: Array.from(siteSet).sort(),
       costUsd: priceUsageUsd(row.provider, row.modelName, row.promptTokens, row.completionTokens),
     }))
-    .sort((a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || b.promptTokens - a.promptTokens);
+    .sort(compareUsageRows);
 
   // Single pass over the (small) row set for every total.
   let totalPromptTokens = 0;
@@ -136,6 +142,59 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
     totalCostUsd: pricedCount > 0 ? costSum : null,
     partial: pricedCount < rows.length,
   };
+}
+
+/**
+ * Representative `(provider, model)` for each cost tier (premium/mid/cheap) of
+ * the active lineup, taken from the headline `orchestrator` role. The Usage &
+ * Cost panel uses this to label the **zero-usage** tier rows it always shows, so
+ * the high-end tier is visible even in modes that never reach it (e.g.
+ * `optimize-tokens` never assigns `premium`). Does a single small lineup-file
+ * read — deliberately kept out of the hot pure path (`computeTurnUsageReport`)
+ * and resolved once at panel-open time by the caller.
+ */
+export function representativeTierModels(config: BernardConfig): Record<LineupTier, LineupSlot> {
+  const lineup = resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider);
+  // `RoleSlots` is already `Record<LineupTier, LineupSlot>`, so the orchestrator
+  // ladder is exactly the shape we want (and stays correct if a tier is added).
+  // Shallow-copy so the caller owns the object — `lineup.roles.orchestrator` is a
+  // live reference into the cached lineup, and returning it bare would let a
+  // caller's reassignment silently mutate the shared lineup for the session.
+  return { ...lineup.roles.orchestrator };
+}
+
+/**
+ * Ensures every lineup cost tier (premium/mid/cheap) is represented in the
+ * display rows: for any tier with no usage this turn, appends a synthetic
+ * **zero-row** (`calls: 0`, all tokens 0) labelled with that tier's
+ * representative model, then re-sorts the combined set by tier order. Purely
+ * presentational — it does NOT touch the report totals (which are computed
+ * upstream over the real ledger only). Zero-rows are identified downstream by
+ * `calls === 0`. `pinned` rows (specialist pins) pass through untouched; only
+ * the three lineup tiers are zero-filled.
+ */
+export function fillTierRows(
+  rows: UsageReportRow[],
+  tierModels: Record<LineupTier, LineupSlot>,
+): UsageReportRow[] {
+  const filled = [...rows];
+  for (const tier of LINEUP_TIERS) {
+    if (rows.some((r) => r.bucket === tier)) continue;
+    const slot = tierModels[tier];
+    filled.push({
+      bucket: tier,
+      provider: slot.provider,
+      modelName: slot.model,
+      promptTokens: 0,
+      completionTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      calls: 0,
+      costUsd: null,
+      sites: [],
+    });
+  }
+  return filled.sort(compareUsageRows);
 }
 
 /** Format a USD amount with precision scaled to magnitude (e.g. `$0.07`, `$0.0042`, `$1.20`). */
