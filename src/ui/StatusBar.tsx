@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Box, Text } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { formatTokenCount, finiteOr0, type SpinnerStats } from '../output.js';
+import { formatTurnCost, formatCostSuffix } from '../usage-report.js';
 import { getContextWindow, COMPRESSION_THRESHOLD } from '../context.js';
 import type { Agent } from '../agent.js';
 
@@ -20,6 +21,7 @@ function snapshotStats(stats: SpinnerStats | null, strategy: string | null): str
     stats.latestPromptTokens,
     stats.model,
     stats.contextWindowOverride ?? '',
+    stats.sessionCostUsd,
     strategy ?? '',
   ].join('|');
 }
@@ -58,6 +60,11 @@ export function StatusBar({ agent }: StatusBarProps) {
 
   const up = stats ? formatTokenCount(stats.turnPromptTokens) : '0';
   const down = stats ? formatTokenCount(stats.turnCompletionTokens) : '0';
+  // Estimated turn cost (#258), e.g. ` ~$0.07`. Empty when no priced tokens yet.
+  const cost = formatTurnCost(stats);
+  // Cumulative session cost across all turns; rendered only once it's > 0.
+  const sessionSuffix = formatCostSuffix(stats?.sessionCostUsd);
+  const sessionCost = sessionSuffix ? `session ${sessionSuffix}   ` : '';
   const latestPromptTokens = stats ? finiteOr0(stats.latestPromptTokens) : 0;
   const contextWindow = stats ? getContextWindow(stats.model, stats.contextWindowOverride) : 1;
   const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;
@@ -99,8 +106,9 @@ export function StatusBar({ agent }: StatusBarProps) {
       {stats && (
         <>
           <Text color={colors.muted}>
-            turn {up}↑ {down}↓{'   '}
+            turn {up}↑ {down}↓{cost}{'   '}
           </Text>
+          {sessionCost ? <Text color={colors.muted}>{sessionCost}</Text> : null}
           <Text color={colors.muted}>ctx {formatTokenCount(stats.latestPromptTokens)} </Text>
           {filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
           {halfCount > 0 && <Text color={fillColor}>◐</Text>}

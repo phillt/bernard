@@ -2,6 +2,7 @@ import type { CoreMessage } from 'ai';
 import { getContextWindow, COMPRESSION_THRESHOLD } from './context.js';
 import { debugLog, isDebugEnabled, getSessionLogPath } from './logger.js';
 import { getThemeColors } from './theme.js';
+import type { ModelTier } from './model-policy.js';
 
 let toolDetailsVisible = false;
 
@@ -30,6 +31,32 @@ export function isToolDetailsVisible(): boolean {
  * what the context gauge measures — sub-agent steps never touch it, so the bar
  * tracks only the main agent's context fullness (#234).
  */
+/**
+ * Cost-tier bucket for a ledger entry (#258): a `ModelTier` plus `pinned` for
+ * calls whose model was hard-pinned by an invocation override or a specialist
+ * record (no tier applies). The `model-policy` import is type-only, so this
+ * low-level module gains no runtime dependency.
+ */
+export type UsageBucket = ModelTier | 'pinned';
+
+/**
+ * One per-turn ledger row (#258): the tokens a single `(bucket, provider,
+ * model, site)` combination spent this turn. Accumulated by `recordTurnUsage`
+ * (one entry per distinct key, `calls` counting the steps that landed on it)
+ * and joined against catalog pricing at render/log time by `usage-report.ts`.
+ */
+export interface TurnUsageEntry {
+  bucket: UsageBucket;
+  site: string;
+  provider: string;
+  modelName: string;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  calls: number;
+}
+
 export interface SpinnerStats {
   startTime: number;
   turnPromptTokens: number;
@@ -44,6 +71,20 @@ export interface SpinnerStats {
   turnCacheWriteTokens: number;
   model: string;
   contextWindowOverride?: number;
+  /**
+   * Per-turn token ledger keyed by `${bucket}|${provider}|${modelName}|${site}`
+   * (#258). Reset alongside the odometers at the turn boundary. The aggregate
+   * `turn*Tokens` counters above are the sum of this ledger's rows. Drives the
+   * `/usage` viewer, the StatusBar `~$cost` suffix, and the `turn-stats` log.
+   */
+  turnLedger: Map<string, TurnUsageEntry>;
+  /**
+   * Cumulative priced cost (USD) across all turns this REPL session (#258
+   * follow-up). NOT reset by `resetTurnTokenOdometer` — it survives turn
+   * boundaries so the StatusBar can show a running session total. Folded in once
+   * per turn by `Agent.finalizeTurnStats()`.
+   */
+  sessionCostUsd: number;
 }
 
 /** Token counts can arrive NaN/undefined when a turn errors early; treat those as 0. */

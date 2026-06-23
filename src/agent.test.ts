@@ -16,6 +16,7 @@ import { buildContextMessage } from './context-message.js';
 import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
 import { printWarning, printInfo, type SpinnerStats } from './output.js';
+import { computeTurnUsageReport } from './usage-report.js';
 import { getModelProfile } from './providers/index.js';
 import { assembleContext } from './framework/context.js';
 import * as modelPolicy from './model-policy.js';
@@ -142,7 +143,11 @@ function makeSpinnerStats(over: Partial<SpinnerStats> = {}): SpinnerStats {
     turnPromptTokens: 0,
     turnCompletionTokens: 0,
     latestPromptTokens: 0,
+    turnCacheReadTokens: 0,
+    turnCacheWriteTokens: 0,
     model: 'claude-sonnet-4-5-20250929',
+    turnLedger: new Map(),
+    sessionCostUsd: 0,
     ...over,
   };
 }
@@ -723,6 +728,79 @@ describe('Agent', () => {
     );
   });
 
+  it('beginTurnStats clears the per-turn odometer + ledger (#258)', () => {
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    agent.setSpinnerStats({
+      startTime: 0,
+      turnPromptTokens: 999,
+      turnCompletionTokens: 42,
+      latestPromptTokens: 100,
+      turnCacheReadTokens: 7,
+      turnCacheWriteTokens: 3,
+      model: 'claude-opus-4-8',
+      turnLedger: new Map([
+        [
+          'premium|anthropic|claude-opus-4-8|main',
+          {
+            bucket: 'premium',
+            site: 'main',
+            provider: 'anthropic',
+            modelName: 'claude-opus-4-8',
+            promptTokens: 999,
+            completionTokens: 42,
+            cacheReadTokens: 7,
+            cacheWriteTokens: 3,
+            calls: 1,
+          },
+        ],
+      ]),
+      sessionCostUsd: 0,
+    });
+
+    agent.beginTurnStats();
+
+    expect(agent.spinnerStats!.turnPromptTokens).toBe(0);
+    expect(agent.spinnerStats!.turnCompletionTokens).toBe(0);
+    expect(agent.spinnerStats!.turnCacheReadTokens).toBe(0);
+    expect(agent.spinnerStats!.turnLedger.size).toBe(0);
+  });
+
+  it('finalizeTurnStats folds the turn cost into a session total that survives resets (#258)', () => {
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    const key = 'premium|anthropic|claude-opus-4-8|main';
+    const ledgerEntry = {
+      bucket: 'premium' as const,
+      site: 'main',
+      provider: 'anthropic',
+      modelName: 'claude-opus-4-8',
+      promptTokens: 1_000_000,
+      completionTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      calls: 1,
+    };
+
+    agent.setSpinnerStats(makeSpinnerStats({ turnLedger: new Map([[key, { ...ledgerEntry }]]) }));
+    // finalizeTurnStats's contract: return computeTurnUsageReport(stats).totalCostUsd
+    // and add it to the session total. Compute the expected cost the same way so
+    // the test holds whether or not the model is priced in the loaded catalog.
+    const expected = computeTurnUsageReport(agent.spinnerStats!).totalCostUsd ?? 0;
+    const turn1 = agent.finalizeTurnStats();
+    expect(turn1 ?? 0).toBeCloseTo(expected, 10);
+    expect(agent.spinnerStats!.sessionCostUsd).toBeCloseTo(expected, 10);
+
+    // A new turn resets the per-turn ledger but the session total persists.
+    agent.beginTurnStats();
+    expect(agent.spinnerStats!.turnLedger.size).toBe(0);
+    expect(agent.spinnerStats!.sessionCostUsd).toBeCloseTo(expected, 10);
+
+    // A second identical turn doubles the session total.
+    agent.spinnerStats!.turnLedger.set(key, { ...ledgerEntry });
+    const turn2 = agent.finalizeTurnStats();
+    expect(turn2 ?? 0).toBeCloseTo(expected, 10);
+    expect(agent.spinnerStats!.sessionCostUsd).toBeCloseTo(expected * 2, 10);
+  });
+
   it('appends the model profile systemSuffix to the system prompt', async () => {
     vi.mocked(getModelProfile).mockReturnValueOnce({
       family: 'custom',
@@ -919,11 +997,13 @@ describe('Agent', () => {
     const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
     await agent.processInput('Hello');
 
-    expect(compressHistory).toHaveBeenCalledWith(
-      expect.any(Array),
-      expect.any(Object),
-      mockRagStore,
-    );
+    // The 4th arg is the optional per-turn usage recorder (#258), undefined here
+    // because this agent has no spinnerStats wired. Assert positionally so the
+    // recorder addition doesn't make the exact-args matcher brittle.
+    const call = vi.mocked(compressHistory).mock.calls[0]!;
+    expect(call[0]).toEqual(expect.any(Array));
+    expect(call[1]).toEqual(expect.any(Object));
+    expect(call[2]).toBe(mockRagStore);
   });
 
   it('truncates tool results before adding to history', async () => {

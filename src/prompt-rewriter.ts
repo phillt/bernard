@@ -5,6 +5,7 @@ import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import { debugLog, traceLlm } from './logger.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
+import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 
 /**
  * Model-specific Prompt Rewriter — a pre-turn LLM pass that restructures the
@@ -129,6 +130,7 @@ export async function rewritePrompt(
   resolvedEntries: ResolvedEntry[],
   config: BernardConfig,
   abortSignal?: AbortSignal,
+  onUsage?: UsageRecorder,
 ): Promise<RewriteResult> {
   if (!config.promptRewriter) {
     debugLog('prompt-rewriter:skip', { reason: 'disabled' });
@@ -185,6 +187,9 @@ export async function rewritePrompt(
           abortSignal,
         }),
       );
+      // Count this pre-turn call toward the per-turn ledger (#258). Cache hits
+      // above spent no tokens, so only the real-call branch records.
+      onUsage?.(usageRecordFromSite(site, 'rewriter', result.usage, result.providerMetadata));
       if (!result.text) {
         debugLog('prompt-rewriter:empty-response', null);
         return { status: 'noop' };

@@ -132,6 +132,9 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
       providerOptions: site.providerOptions,
       provider: site.provider,
       modelName: site.modelName,
+      // Carry the resolved tier so ledger attribution (#258) buckets this
+      // dispatch by tier rather than defaulting to `pinned`.
+      tier: site.tier,
     };
   },
 

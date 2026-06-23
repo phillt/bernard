@@ -9,4 +9,5 @@ import type { OverlayTab } from './ViewerShell.js';
 export const VIEWER_TABS: readonly OverlayTab[] = [
   { id: 'status', label: 'Agent Status' },
   { id: 'sources', label: 'Sources' },
+  { id: 'usage', label: 'Usage & Cost' },
 ];
