@@ -341,9 +341,12 @@ export function App({
   // Representative per-tier models for the active lineup, so the Usage & Cost
   // panel can always render all three tiers (premium/mid/cheap) — dimmed zero-
   // rows for tiers with no traffic — instead of silently hiding the high-end
-  // tier in modes that never reach it (#258 follow-up). Resolved lazily: the
-  // small lineup-file read only happens once the user opens the panel, not at
-  // startup for every session.
+  // tier in modes that never reach it (#258 follow-up). Resolved only while the
+  // panel is open (no read at startup if it's never opened) and re-read on each
+  // open: `config` is mutated in place on a profile/lineup switch (stable
+  // identity), so re-resolving per open is what keeps the tiers in sync with a
+  // mid-session switch. The lineup file is tiny and already read per turn by
+  // model-policy, so the per-open read is negligible.
   const usageTierModels = useMemo(
     () => (activeOverlay === 'usage' ? representativeTierModels(config) : undefined),
     [activeOverlay, config],

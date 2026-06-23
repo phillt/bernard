@@ -157,7 +157,10 @@ export function representativeTierModels(config: BernardConfig): Record<LineupTi
   const lineup = resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider);
   // `RoleSlots` is already `Record<LineupTier, LineupSlot>`, so the orchestrator
   // ladder is exactly the shape we want (and stays correct if a tier is added).
-  return lineup.roles.orchestrator;
+  // Shallow-copy so the caller owns the object — `lineup.roles.orchestrator` is a
+  // live reference into the cached lineup, and returning it bare would let a
+  // caller's reassignment silently mutate the shared lineup for the session.
+  return { ...lineup.roles.orchestrator };
 }
 
 /**
