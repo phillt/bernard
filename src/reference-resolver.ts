@@ -5,7 +5,7 @@ import type { RAGStore, RAGSearchResult } from './rag.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
-import type { UsageRecorder } from './framework/hooks/token-stats.js';
+import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 
 /** Sentinel sourceKey used for resolutions drawn from the RAG knowledge base. */
 export const RAG_SOURCE_KEY = 'rag';
@@ -342,14 +342,7 @@ export async function resolveReferences(
       );
       // Count this pre-turn call toward the per-turn ledger (#258). Only on a
       // real call — a cache hit above spent no tokens.
-      onUsage?.({
-        bucket: site.tier ?? 'pinned',
-        site: 'reference-resolver',
-        provider: site.provider,
-        modelName: site.modelName,
-        promptTokens: result.usage?.promptTokens ?? 0,
-        completionTokens: result.usage?.completionTokens ?? 0,
-      });
+      onUsage?.(usageRecordFromSite(site, 'reference-resolver', result.usage));
       if (!result.text) {
         debugLog('reference-resolver:empty-response', null);
         return { status: 'noop' };

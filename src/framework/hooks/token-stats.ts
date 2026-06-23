@@ -1,5 +1,15 @@
 import type { SpinnerStats, TurnUsageEntry, UsageBucket } from '../../output.js';
+import type { ModelTier } from '../../model-policy.js';
 import type { AgentHook } from './types.js';
+
+/**
+ * Single home for the "a model with no tier is bucketed as `pinned`" rule
+ * (#258). Used by `run.ts` and by every pre-turn / compressor recorder so the
+ * coercion can't drift across call sites.
+ */
+export function bucketForTier(tier: ModelTier | undefined): UsageBucket {
+  return tier ?? 'pinned';
+}
 
 /**
  * Target object whose fields the hook mutates in place. Implemented today
@@ -38,6 +48,33 @@ export interface UsageRecord extends HookModelInfo {
  * REPL / Agent wires it to `(rec) => recordTurnUsage(spinnerStats, rec)`.
  */
 export type UsageRecorder = (rec: UsageRecord) => void;
+
+/** The fields of a resolved `SiteModel` that ledger attribution needs. */
+interface SiteModelLike {
+  tier?: ModelTier;
+  provider: string;
+  modelName: string;
+}
+
+/**
+ * Build a {@link UsageRecord} from a resolved site model + a `generateText`
+ * usage payload (#258). The off-loop recorders (pre-turn pipeline, compressor)
+ * share this so the bucket coercion and field mapping live in one place.
+ */
+export function usageRecordFromSite(
+  site: SiteModelLike,
+  siteName: string,
+  usage: { promptTokens: number; completionTokens: number } | undefined,
+): UsageRecord {
+  return {
+    bucket: bucketForTier(site.tier),
+    site: siteName,
+    provider: site.provider,
+    modelName: site.modelName,
+    promptTokens: usage?.promptTokens ?? 0,
+    completionTokens: usage?.completionTokens ?? 0,
+  };
+}
 
 /**
  * The single per-turn accumulation point (#258). Bumps the aggregate ↑/↓ +
@@ -82,16 +119,24 @@ export function recordTurnUsage(stats: SpinnerStats, rec: UsageRecord): void {
 }
 
 /**
- * Pull Anthropic prompt-cache counts off a step's provider metadata (#269).
- * They arrive as `number | null` (null on a cache miss) → coerce to 0.
+ * Fold one step's usage + Anthropic prompt-cache counts (#269 — `number | null`,
+ * null on a miss → 0) into the per-turn aggregate + ledger. Shared by both hooks
+ * so the record shape lives in one place.
  */
-function cacheTokens(
-  providerMetadata:
-    | { anthropic?: { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null } }
-    | undefined,
-): { read: number; write: number } {
+function recordStep(
+  stats: SpinnerStats,
+  info: HookModelInfo,
+  usage: { promptTokens: number; completionTokens: number } | undefined,
+  providerMetadata: { anthropic?: { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null } } | undefined,
+): void {
   const a = providerMetadata?.anthropic;
-  return { read: a?.cacheReadInputTokens ?? 0, write: a?.cacheCreationInputTokens ?? 0 };
+  recordTurnUsage(stats, {
+    ...info,
+    promptTokens: usage?.promptTokens ?? 0,
+    completionTokens: usage?.completionTokens ?? 0,
+    cacheReadTokens: a?.cacheReadInputTokens ?? 0,
+    cacheWriteTokens: a?.cacheCreationInputTokens ?? 0,
+  });
 }
 
 /**
@@ -114,16 +159,7 @@ export function tokenStatsHook(target: TokenStatsTarget, info: HookModelInfo): A
         target.lastStepPromptTokens = usage.promptTokens;
         if (target.spinnerStats) target.spinnerStats.latestPromptTokens = usage.promptTokens;
       }
-      if (target.spinnerStats) {
-        const c = cacheTokens(providerMetadata);
-        recordTurnUsage(target.spinnerStats, {
-          ...info,
-          promptTokens: usage?.promptTokens ?? 0,
-          completionTokens: usage?.completionTokens ?? 0,
-          cacheReadTokens: c.read,
-          cacheWriteTokens: c.write,
-        });
-      }
+      if (target.spinnerStats) recordStep(target.spinnerStats, info, usage, providerMetadata);
     },
   };
 }
@@ -140,15 +176,7 @@ export function tokenStatsHook(target: TokenStatsTarget, info: HookModelInfo): A
 export function tokenTotalsHook(target: TokenStatsTarget, info: HookModelInfo): AgentHook {
   return {
     onStepFinish: ({ usage, providerMetadata }) => {
-      if (!target.spinnerStats) return;
-      const c = cacheTokens(providerMetadata);
-      recordTurnUsage(target.spinnerStats, {
-        ...info,
-        promptTokens: usage?.promptTokens ?? 0,
-        completionTokens: usage?.completionTokens ?? 0,
-        cacheReadTokens: c.read,
-        cacheWriteTokens: c.write,
-      });
+      if (target.spinnerStats) recordStep(target.spinnerStats, info, usage, providerMetadata);
     },
   };
 }

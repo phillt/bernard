@@ -2,6 +2,7 @@ import type { CoreMessage } from 'ai';
 import { getContextWindow, COMPRESSION_THRESHOLD } from './context.js';
 import { debugLog, isDebugEnabled, getSessionLogPath } from './logger.js';
 import { getThemeColors } from './theme.js';
+import type { ModelTier } from './model-policy.js';
 
 let toolDetailsVisible = false;
 
@@ -31,13 +32,12 @@ export function isToolDetailsVisible(): boolean {
  * tracks only the main agent's context fullness (#234).
  */
 /**
- * Cost-tier bucket for a ledger entry (#258). Mirrors `ModelTier` from
- * `model-policy.ts` plus `pinned` for calls whose model was hard-pinned by an
- * invocation override or a specialist record (no tier applies). Declared here
- * — not imported from `model-policy` — to keep this low-level module free of
- * that dependency.
+ * Cost-tier bucket for a ledger entry (#258): a `ModelTier` plus `pinned` for
+ * calls whose model was hard-pinned by an invocation override or a specialist
+ * record (no tier applies). The `model-policy` import is type-only, so this
+ * low-level module gains no runtime dependency.
  */
-export type UsageBucket = 'premium' | 'mid' | 'cheap' | 'pinned';
+export type UsageBucket = ModelTier | 'pinned';
 
 /**
  * One per-turn ledger row (#258): the tokens a single `(bucket, provider,

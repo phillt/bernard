@@ -15,7 +15,7 @@ import {
   type MainInput,
 } from './framework/agents/main.js';
 import { type IterateFn } from './framework/strategies/index.js';
-import { debugLog } from './logger.js';
+import { debugLog, isDebugEnabled } from './logger.js';
 import {
   shouldCompress,
   compressHistory,
@@ -881,8 +881,10 @@ export class Agent {
 
       // Per-turn token + cost ledger (#258). The full per-tier/model breakdown
       // (including pre-turn pipeline + compressor) for session-JSONL analysis,
-      // paired with the strategy line above. Guarded on spinnerStats (headless).
-      if (this.spinnerStats) {
+      // paired with the strategy line above. Guarded on spinnerStats (headless)
+      // and on the debug gate so the report isn't computed then thrown away when
+      // BERNARD_DEBUG is off (the common case).
+      if (isDebugEnabled() && this.spinnerStats) {
         const report = computeTurnUsageReport(this.spinnerStats);
         debugLog('turn-stats', {
           rows: report.rows,

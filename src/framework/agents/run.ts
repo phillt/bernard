@@ -10,7 +10,7 @@ import { makeRepairHook } from '../../tool-call-repair.js';
 import { augmentTools } from '../../tools/augment.js';
 import type { AgentContext } from '../context.js';
 import { getOutputSink } from '../hooks/output-sink.js';
-import { tokenStatsHook, tokenTotalsHook, type HookModelInfo } from '../hooks/token-stats.js';
+import { tokenStatsHook, tokenTotalsHook, bucketForTier, type HookModelInfo } from '../hooks/token-stats.js';
 import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
@@ -151,7 +151,7 @@ export async function runDefinition<TInput, TFormatted>(
   // ledger without disturbing the main-only gauge. `ctx.statsTarget` being absent
   // is the cron / headless exemption (the hook is simply not attached).
   const modelInfo: HookModelInfo = {
-    bucket: resolved.tier ?? 'pinned',
+    bucket: bucketForTier(resolved.tier),
     site: resolved.site ?? def.site ?? 'main',
     provider: resolved.provider,
     modelName: resolved.modelName,

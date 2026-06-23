@@ -96,15 +96,31 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
     }))
     .sort((a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || b.promptTokens - a.promptTokens);
 
-  const priced = rows.filter((r) => r.costUsd !== null);
+  // Single pass over the (small) row set for every total.
+  let totalPromptTokens = 0;
+  let totalCompletionTokens = 0;
+  let totalCacheReadTokens = 0;
+  let totalCalls = 0;
+  let costSum = 0;
+  let pricedCount = 0;
+  for (const r of rows) {
+    totalPromptTokens += r.promptTokens;
+    totalCompletionTokens += r.completionTokens;
+    totalCacheReadTokens += r.cacheReadTokens;
+    totalCalls += r.calls;
+    if (r.costUsd !== null) {
+      costSum += r.costUsd;
+      pricedCount += 1;
+    }
+  }
   return {
     rows,
-    totalPromptTokens: rows.reduce((s, r) => s + r.promptTokens, 0),
-    totalCompletionTokens: rows.reduce((s, r) => s + r.completionTokens, 0),
-    totalCacheReadTokens: rows.reduce((s, r) => s + r.cacheReadTokens, 0),
-    totalCalls: rows.reduce((s, r) => s + r.calls, 0),
-    totalCostUsd: priced.length > 0 ? priced.reduce((s, r) => s + (r.costUsd ?? 0), 0) : null,
-    partial: priced.length < rows.length,
+    totalPromptTokens,
+    totalCompletionTokens,
+    totalCacheReadTokens,
+    totalCalls,
+    totalCostUsd: pricedCount > 0 ? costSum : null,
+    partial: pricedCount < rows.length,
   };
 }
 
