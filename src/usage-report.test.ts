@@ -14,7 +14,13 @@ vi.mock('./providers/catalog.js', () => ({
   },
 }));
 
-const { computeTurnUsageReport, formatUsd, formatTurnCost, formatCostSuffix } = await import('./usage-report.js');
+const { computeTurnUsageReport, fillTierRows, formatUsd, formatTurnCost, formatCostSuffix } = await import('./usage-report.js');
+
+const TIER_MODELS = {
+  premium: { provider: 'xai', model: 'grok-4.3' },
+  mid: { provider: 'xai', model: 'grok-4.3' },
+  cheap: { provider: 'xai', model: 'grok-4.20-non-reasoning' },
+};
 
 function entry(over: Partial<TurnUsageEntry> & Pick<TurnUsageEntry, 'bucket' | 'provider' | 'modelName' | 'site'>): TurnUsageEntry {
   return {
@@ -87,6 +93,44 @@ describe('computeTurnUsageReport (#258)', () => {
     );
     expect(report.totalCostUsd).toBeNull();
     expect(report.partial).toBe(true);
+  });
+});
+
+describe('fillTierRows (always-show-all-tiers)', () => {
+  function reportRows(stats: SpinnerStats) {
+    return computeTurnUsageReport(stats).rows;
+  }
+
+  it('appends dimmed zero-rows for tiers with no usage, premium first', () => {
+    // optimize-tokens-style turn: only mid + cheap had traffic, no premium.
+    const rows = reportRows(
+      statsWith([
+        entry({ bucket: 'mid', provider: 'xai', modelName: 'grok-4.3', site: 'main', promptTokens: 761000, completionTokens: 516, calls: 8 }),
+        entry({ bucket: 'cheap', provider: 'xai', modelName: 'grok-4.20-non-reasoning', site: 'rewriter', promptTokens: 302000, completionTokens: 937, calls: 7 }),
+      ]),
+    );
+    const filled = fillTierRows(rows, TIER_MODELS);
+
+    expect(filled.map((r) => r.bucket)).toEqual(['premium', 'mid', 'cheap']);
+    const premium = filled.find((r) => r.bucket === 'premium')!;
+    expect(premium.calls).toBe(0);
+    expect(premium.promptTokens).toBe(0);
+    expect(premium.costUsd).toBeNull();
+    expect(premium.modelName).toBe('grok-4.3'); // representative from the lineup
+  });
+
+  it('leaves present tiers untouched and never duplicates them', () => {
+    const rows = reportRows(
+      statsWith([
+        entry({ bucket: 'premium', provider: 'xai', modelName: 'grok-4.3', site: 'main', promptTokens: 1000, completionTokens: 100, calls: 3 }),
+      ]),
+    );
+    const filled = fillTierRows(rows, TIER_MODELS);
+
+    expect(filled.map((r) => r.bucket)).toEqual(['premium', 'mid', 'cheap']);
+    const premium = filled.filter((r) => r.bucket === 'premium');
+    expect(premium).toHaveLength(1);
+    expect(premium[0]!.calls).toBe(3); // real usage preserved, not zeroed
   });
 });
 

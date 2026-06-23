@@ -1,6 +1,7 @@
 import type { SpinnerStats, TurnUsageEntry, UsageBucket } from './output.js';
+import type { BernardConfig } from './config.js';
 import { getModelMeta } from './providers/catalog.js';
-import { LINEUP_TIERS } from './lineups.js';
+import { LINEUP_TIERS, loadLineups, resolveActiveLineup, type LineupTier, type LineupSlot } from './lineups.js';
 
 /**
  * Per-turn token + cost insights (#258). Aggregates the {@link SpinnerStats}
@@ -136,6 +137,58 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
     totalCostUsd: pricedCount > 0 ? costSum : null,
     partial: pricedCount < rows.length,
   };
+}
+
+/**
+ * Representative `(provider, model)` for each cost tier (premium/mid/cheap) of
+ * the active lineup, taken from the headline `orchestrator` role. The Usage &
+ * Cost panel uses this to label the **zero-usage** tier rows it always shows, so
+ * the high-end tier is visible even in modes that never reach it (e.g.
+ * `optimize-tokens` never assigns `premium`). Does a single small lineup-file
+ * read — deliberately kept out of the hot pure path (`computeTurnUsageReport`)
+ * and resolved once at panel-open time by the caller.
+ */
+export function representativeTierModels(config: BernardConfig): Record<LineupTier, LineupSlot> {
+  const lineup = resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider);
+  const ladder = lineup.roles.orchestrator;
+  return { premium: ladder.premium, mid: ladder.mid, cheap: ladder.cheap };
+}
+
+/**
+ * Ensures every lineup cost tier (premium/mid/cheap) is represented in the
+ * display rows: for any tier with no usage this turn, appends a synthetic
+ * **zero-row** (`calls: 0`, all tokens 0) labelled with that tier's
+ * representative model, then re-sorts the combined set by tier order. Purely
+ * presentational — it does NOT touch the report totals (which are computed
+ * upstream over the real ledger only). Zero-rows are identified downstream by
+ * `calls === 0`. `pinned` rows (specialist pins) pass through untouched; only
+ * the three lineup tiers are zero-filled.
+ */
+export function fillTierRows(
+  rows: UsageReportRow[],
+  tierModels: Record<LineupTier, LineupSlot>,
+): UsageReportRow[] {
+  const present = new Set(rows.map((r) => r.bucket));
+  const filled = [...rows];
+  for (const tier of LINEUP_TIERS) {
+    if (present.has(tier)) continue;
+    const slot = tierModels[tier];
+    filled.push({
+      bucket: tier,
+      provider: slot.provider,
+      modelName: slot.model,
+      promptTokens: 0,
+      completionTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      calls: 0,
+      costUsd: null,
+      sites: [],
+    });
+  }
+  return filled.sort(
+    (a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || b.promptTokens - a.promptTokens,
+  );
 }
 
 /** Format a USD amount with precision scaled to magnitude (e.g. `$0.07`, `$0.0042`, `$1.20`). */
