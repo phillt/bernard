@@ -542,6 +542,8 @@ export function App({
         turnPromptTokens: 0,
         turnCompletionTokens: 0,
         latestPromptTokens: 0,
+        turnCacheReadTokens: 0,
+        turnCacheWriteTokens: 0,
         model: resolveMainModel(config),
         contextWindowOverride: config.tokenWindow || undefined,
       });

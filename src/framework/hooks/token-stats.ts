@@ -24,6 +24,21 @@ function accumulateTurnOdometer(
 }
 
 /**
+ * Add a step's Anthropic prompt-cache token counts to the per-turn counters
+ * (#269). `cache_read_input_tokens` / `cache_creation_input_tokens` arrive as
+ * `number | null` (null on a cache miss), so coerce to 0.
+ */
+function accumulateCacheTokens(
+  stats: SpinnerStats,
+  providerMetadata: { anthropic?: { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null } } | undefined,
+): void {
+  const a = providerMetadata?.anthropic;
+  if (!a) return;
+  stats.turnCacheReadTokens += a.cacheReadInputTokens ?? 0;
+  stats.turnCacheWriteTokens += a.cacheCreationInputTokens ?? 0;
+}
+
+/**
  * Full per-step accounting for the **main agent**. After each step:
  *  - writes the latest prompt-token count onto `target.lastStepPromptTokens`
  *    (used downstream for compression-headroom calculations);
@@ -38,7 +53,7 @@ function accumulateTurnOdometer(
  */
 export function tokenStatsHook(target: TokenStatsTarget): AgentHook {
   return {
-    onStepFinish: ({ usage }) => {
+    onStepFinish: ({ usage, providerMetadata }) => {
       if (usage) {
         target.lastStepPromptTokens = usage.promptTokens;
         if (target.spinnerStats) {
@@ -46,6 +61,7 @@ export function tokenStatsHook(target: TokenStatsTarget): AgentHook {
           target.spinnerStats.latestPromptTokens = usage.promptTokens;
         }
       }
+      if (target.spinnerStats) accumulateCacheTokens(target.spinnerStats, providerMetadata);
     },
   };
 }
@@ -61,9 +77,10 @@ export function tokenStatsHook(target: TokenStatsTarget): AgentHook {
  */
 export function tokenTotalsHook(target: TokenStatsTarget): AgentHook {
   return {
-    onStepFinish: ({ usage }) => {
-      if (usage && target.spinnerStats) {
-        accumulateTurnOdometer(target.spinnerStats, usage);
+    onStepFinish: ({ usage, providerMetadata }) => {
+      if (target.spinnerStats) {
+        if (usage) accumulateTurnOdometer(target.spinnerStats, usage);
+        accumulateCacheTokens(target.spinnerStats, providerMetadata);
       }
     },
   };

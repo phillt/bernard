@@ -427,6 +427,8 @@ export class Agent {
         // hooks (main: tokenStatsHook; non-main: tokenTotalsHook).
         this.spinnerStats.turnPromptTokens = 0;
         this.spinnerStats.turnCompletionTokens = 0;
+        this.spinnerStats.turnCacheReadTokens = 0;
+        this.spinnerStats.turnCacheWriteTokens = 0;
       }
 
       // Check if context compression is needed

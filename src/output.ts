@@ -35,6 +35,13 @@ export interface SpinnerStats {
   turnPromptTokens: number;
   turnCompletionTokens: number;
   latestPromptTokens: number;
+  /**
+   * Per-turn Anthropic prompt-cache token counters (#269). `read` = input tokens
+   * served from cache (billed at ~10%); `write` = tokens written to cache (billed
+   * at ~125%). Both 0 when caching is off or the provider isn't Anthropic.
+   */
+  turnCacheReadTokens: number;
+  turnCacheWriteTokens: number;
   model: string;
   contextWindowOverride?: number;
 }
@@ -82,7 +89,12 @@ export function buildSpinnerMessage(stats: SpinnerStats): string {
     Math.round(((thresholdTokens - latestPromptTokens) / thresholdTokens) * 100),
   );
 
-  return `Thinking (${elapsed} | ${up}↑ ${down}↓ | ${remainingPct}% until compression)`;
+  // Surface prompt-cache reads when present (#269): tokens served from cache at
+  // the ~90% discount. e.g. "12k⚡cached".
+  const cacheRead = finiteOr0(stats.turnCacheReadTokens);
+  const cacheSegment = cacheRead > 0 ? ` | ${formatTokenCount(cacheRead)}⚡cached` : '';
+
+  return `Thinking (${elapsed} | ${up}↑ ${down}↓${cacheSegment} | ${remainingPct}% until compression)`;
 }
 
 // Spinner is a no-op in Phase D — Ink renders its own animated status line.

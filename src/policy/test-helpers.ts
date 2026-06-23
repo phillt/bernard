@@ -21,6 +21,8 @@ export function makePolicyInput(overrides?: {
     tokenWindow: 0,
     ragEnabled: true,
     cacheEnabled: true,
+    promptCache: true,
+    semanticCache: false,
     theme: 'bernard',
     maxSteps: 25,
     coordinatorMode: 'off',

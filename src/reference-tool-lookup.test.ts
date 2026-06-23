@@ -51,6 +51,8 @@ function makeConfig(overrides: Partial<BernardConfig> = {}): BernardConfig {
     scratchSubjectThreshold: 0.15,
     conciseMode: true,
     cacheEnabled: true,
+    promptCache: true,
+    semanticCache: false,
     ...overrides,
   };
 }

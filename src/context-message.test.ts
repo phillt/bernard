@@ -2,6 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { buildContextMessage } from './context-message.js';
 import { ProvenanceStore } from './provenance.js';
 
+describe('buildContextMessage — <current_datetime> (issue #269)', () => {
+  it('renders the current date/time as the first section when provided', () => {
+    const msg = buildContextMessage({ currentDateTime: 'Monday, June 22, 2026 at 3:00 PM EDT' });
+    const content = msg!.content as string;
+    expect(content).toContain('<current_datetime>');
+    expect(content).toContain('Monday, June 22, 2026 at 3:00 PM EDT');
+  });
+
+  it('omits the section (and returns null) when no datetime or other sections are present', () => {
+    expect(buildContextMessage({})).toBeNull();
+  });
+});
+
 describe('buildContextMessage — <available_sources> (issue #173)', () => {
   it('omits the section when provenance is undefined', () => {
     const msg = buildContextMessage({ mcpServerNames: ['anything'] });

@@ -3,6 +3,7 @@ import { buildStrategy } from '../strategies/index.js';
 import { tokenStatsHook, type TokenStatsTarget } from '../hooks/token-stats.js';
 import { outputHook } from '../hooks/output.js';
 import { createTools } from '../../tools/index.js';
+import { formatCurrentDateTime } from '../../tools/datetime.js';
 import { createSubAgentTool } from '../../tools/subagent.js';
 import { createTaskTool } from '../../tools/task.js';
 import { createSpecialistRunTool } from '../../tools/specialist-run.js';
@@ -139,6 +140,11 @@ export function buildMainSystemPrompt(
  */
 function buildMainContextInputs(ctx: AgentContext, input: Omit<MainInput, 'systemPrompt'>) {
   return {
+    // Rendered in the volatile per-turn block (not the system prompt) so the
+    // main agent's cacheable system prefix stays byte-stable for prompt
+    // caching (#269). Scoped to the main agent — ephemeral sub-agents keep
+    // their prior (often context-less) message shape.
+    currentDateTime: formatCurrentDateTime(),
     ragResults: input.ragResults,
     mcpServerNames: ctx.mcp.serverNames,
     routineSummaries: input.routineSummaries,

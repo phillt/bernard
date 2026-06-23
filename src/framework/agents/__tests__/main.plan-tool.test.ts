@@ -19,6 +19,8 @@ function baseConfig(coordinatorMode: BernardConfig['coordinatorMode']): BernardC
     maxSteps: 25,
     ragEnabled: false,
     cacheEnabled: true,
+    promptCache: true,
+    semanticCache: false,
     theme: 'bernard',
     coordinatorMode,
     modelMode: 'off',

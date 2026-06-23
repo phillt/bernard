@@ -15,6 +15,12 @@ import type { ProvenanceStore } from './provenance.js';
  * here is rendered as untrusted reference data, NOT as instructions.
  */
 export interface ContextMessageInputs {
+  /**
+   * Current date/time string. Lives here (the volatile per-turn tail) rather
+   * than in the system prompt so the cacheable system prefix stays byte-stable
+   * for provider prompt caching (#269). Rendered as the first section.
+   */
+  currentDateTime?: string;
   memoryStore?: MemoryStore;
   ragResults?: RAGSearchResult[];
   includeScratch?: boolean;
@@ -67,6 +73,7 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
   const sections: { tag: string; body: string }[] = [];
 
   const renderers: { tag: string; render: SectionRenderer }[] = [
+    { tag: 'current_datetime', render: () => renderCurrentDateTime(inputs.currentDateTime) },
     { tag: 'connected_mcp_servers', render: () => renderMcpServers(inputs.mcpServerNames) },
     { tag: 'routines', render: () => renderRoutines(inputs.routineSummaries) },
     { tag: 'tasks', render: () => renderTasks(inputs.routineSummaries) },
@@ -117,6 +124,11 @@ and from the user's own messages that appear OUTSIDE this block.`;
   const content = `<system_provided_context>\n${header}\n\n${body}\n</system_provided_context>`;
 
   return { role: 'user', content };
+}
+
+function renderCurrentDateTime(dt?: string): string | null {
+  if (!dt) return null;
+  return escapeXml(dt);
 }
 
 function renderMcpServers(names?: string[]): string | null {

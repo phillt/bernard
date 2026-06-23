@@ -179,6 +179,10 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
           textChars: payload.text?.length ?? 0,
           promptTokens: payload.usage?.promptTokens,
           completionTokens: payload.usage?.completionTokens,
+          // Anthropic prompt-cache counters (#269); null/absent when not caching.
+          cacheReadTokens: payload.providerMetadata?.anthropic?.cacheReadInputTokens ?? undefined,
+          cacheWriteTokens:
+            payload.providerMetadata?.anthropic?.cacheCreationInputTokens ?? undefined,
           ttlms: Date.now() - lastStepStartAt,
         });
       }

@@ -163,11 +163,12 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('You are Bernard');
   });
 
-  it('includes current date and time', () => {
+  it('does NOT embed the current date/time (kept out of the cacheable prefix, #269)', () => {
+    // The timestamp changes every turn; embedding it here would poison provider
+    // prompt caching. It now lives in the per-turn <current_datetime> context
+    // section instead — see context-message.test.ts.
     const prompt = buildSystemPrompt(makeConfig());
-    expect(prompt).toContain('Current date and time:');
-    expect(prompt).toMatch(/\d{4}/);
-    expect(prompt).toMatch(/\d{1,2}:\d{2}/);
+    expect(prompt).not.toContain('Current date and time:');
   });
 
   it('includes the active lineup summary', () => {

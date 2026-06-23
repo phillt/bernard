@@ -13,6 +13,17 @@ export interface StepFinishPayload {
   usage?: { promptTokens: number; completionTokens: number };
   finishReason?: string;
   /**
+   * Per-step provider metadata. Anthropic reports prompt-cache token counts here
+   * (#269); values are `number | null` (null on a cache miss). Optional because
+   * hooks are also exercised with hand-built payloads in tests.
+   */
+  providerMetadata?: {
+    anthropic?: {
+      cacheCreationInputTokens?: number | null;
+      cacheReadInputTokens?: number | null;
+    };
+  };
+  /**
    * The AI SDK's `StepResult.response` — `messages` is a CUMULATIVE snapshot
    * of every response message generated so far in this call (verified for
    * both `generateText` and `streamText` in ai@4.1). Optional because hooks

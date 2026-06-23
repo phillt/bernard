@@ -40,10 +40,25 @@ describe('buildSpinnerMessage', () => {
       turnPromptTokens: 0,
       turnCompletionTokens: 0,
       latestPromptTokens: 0,
+      turnCacheReadTokens: 0,
+      turnCacheWriteTokens: 0,
       model: 'claude-sonnet-4-5-20250929',
       ...overrides,
     };
   }
+
+  it('shows a ⚡cached segment when prompt-cache reads occurred (#269)', () => {
+    const msg = buildSpinnerMessage(
+      makeStats({ turnPromptTokens: 5000, turnCompletionTokens: 100, turnCacheReadTokens: 12000 }),
+    );
+    expect(msg).toContain('⚡cached');
+    expect(msg).toContain('12k⚡cached');
+  });
+
+  it('omits the cached segment when there were no cache reads', () => {
+    const msg = buildSpinnerMessage(makeStats({ turnPromptTokens: 5000, turnCompletionTokens: 100 }));
+    expect(msg).not.toContain('cached');
+  });
 
   it('returns "Thinking (Xs)" when no tokens have flowed yet', () => {
     const msg = buildSpinnerMessage(makeStats({ startTime: Date.now() - 5000 }));

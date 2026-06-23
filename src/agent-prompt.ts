@@ -1,5 +1,4 @@
 import type { BernardConfig } from './config.js';
-import { formatCurrentDateTime } from './tools/datetime.js';
 import { loadLineups, resolveActiveLineup } from './lineups.js';
 
 /**
@@ -297,7 +296,14 @@ function formatLineupPromptLine(config: BernardConfig): string {
  * @internal Exported for testing only.
  */
 export function buildSystemPrompt(config: BernardConfig): string {
-  let prompt = BASE_SYSTEM_PROMPT + `\n\nCurrent date and time: ${formatCurrentDateTime()}.`;
+  // NOTE: the current date/time is deliberately NOT included here. It changes
+  // every turn, and embedding it in the system prompt would poison provider
+  // prompt caching (the cached prefix must be byte-identical turn-to-turn). It
+  // is rendered instead in the per-turn `<system_provided_context>` message
+  // (the volatile tail after the cached prefix) — see `buildContextMessage`'s
+  // `current_datetime` section and `getContextMessages` in
+  // `src/framework/agents/run.ts`. (#269)
+  let prompt = BASE_SYSTEM_PROMPT;
   prompt += formatLineupPromptLine(config);
 
   prompt += `\n\n## MCP Servers

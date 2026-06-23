@@ -1,6 +1,10 @@
 import type { CoreMessage } from 'ai';
 import { buildContextMessage, type ContextMessageInputs } from '../../context-message.js';
 import { resolveSiteModel } from '../../model-policy.js';
+import {
+  applyAnthropicPromptCache,
+  isAnthropicPromptCacheActive,
+} from '../../providers/prompt-cache.js';
 import { detectToolError } from '../../tool-profiles.js';
 import { makeRepairHook } from '../../tool-call-repair.js';
 import { augmentTools } from '../../tools/augment.js';
@@ -265,10 +269,16 @@ export async function runDefinition<TInput, TFormatted>(
     const messages = composeMessages(def.historyMode, seedWithContext, iterOpts.extra);
     const sysWithSuffix = iterOpts.systemSuffix ? `${system}\n\n${iterOpts.systemSuffix}` : system;
     const callMaxSteps = iterOpts.maxStepsOverride ?? baseMaxSteps;
+    // Anthropic prompt caching (#269): mark the system+tools prefix and the
+    // rolling history breakpoint. Scoped to the built-in `anthropic` provider;
+    // a no-op for every other provider.
+    const cached = isAnthropicPromptCacheActive(ctx.config, resolved.provider)
+      ? applyAnthropicPromptCache({ system: sysWithSuffix, messages })
+      : { system: sysWithSuffix, messages };
     const r = await runAgent({
       ...baseSpec,
-      system: sysWithSuffix,
-      messages,
+      system: cached.system,
+      messages: cached.messages,
       maxSteps: callMaxSteps,
     });
     stepLimitHit = r.finishReason === 'tool-calls' && (r.steps?.length ?? 0) >= callMaxSteps;
