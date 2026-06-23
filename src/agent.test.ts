@@ -723,6 +723,42 @@ describe('Agent', () => {
     );
   });
 
+  it('beginTurnStats clears the per-turn odometer + ledger (#258)', () => {
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    agent.setSpinnerStats({
+      startTime: 0,
+      turnPromptTokens: 999,
+      turnCompletionTokens: 42,
+      latestPromptTokens: 100,
+      turnCacheReadTokens: 7,
+      turnCacheWriteTokens: 3,
+      model: 'claude-opus-4-8',
+      turnLedger: new Map([
+        [
+          'premium|anthropic|claude-opus-4-8|main',
+          {
+            bucket: 'premium',
+            site: 'main',
+            provider: 'anthropic',
+            modelName: 'claude-opus-4-8',
+            promptTokens: 999,
+            completionTokens: 42,
+            cacheReadTokens: 7,
+            cacheWriteTokens: 3,
+            calls: 1,
+          },
+        ],
+      ]),
+    });
+
+    agent.beginTurnStats();
+
+    expect(agent.spinnerStats!.turnPromptTokens).toBe(0);
+    expect(agent.spinnerStats!.turnCompletionTokens).toBe(0);
+    expect(agent.spinnerStats!.turnCacheReadTokens).toBe(0);
+    expect(agent.spinnerStats!.turnLedger.size).toBe(0);
+  });
+
   it('appends the model profile systemSuffix to the system prompt', async () => {
     vi.mocked(getModelProfile).mockReturnValueOnce({
       family: 'custom',
@@ -919,11 +955,13 @@ describe('Agent', () => {
     const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
     await agent.processInput('Hello');
 
-    expect(compressHistory).toHaveBeenCalledWith(
-      expect.any(Array),
-      expect.any(Object),
-      mockRagStore,
-    );
+    // The 4th arg is the optional per-turn usage recorder (#258), undefined here
+    // because this agent has no spinnerStats wired. Assert positionally so the
+    // recorder addition doesn't make the exact-args matcher brittle.
+    const call = vi.mocked(compressHistory).mock.calls[0]!;
+    expect(call[0]).toEqual(expect.any(Array));
+    expect(call[1]).toEqual(expect.any(Object));
+    expect(call[2]).toBe(mockRagStore);
   });
 
   it('truncates tool results before adding to history', async () => {

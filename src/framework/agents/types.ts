@@ -40,6 +40,15 @@ export interface ResolvedModel {
   provider: string;
   /** Model name used (post-override). */
   modelName: string;
+  /**
+   * Cost tier this dispatch resolved to (#258), carried through from
+   * {@link SiteModel} so the token hooks can attribute each step to a tier.
+   * `undefined` when the model was pinned by an override/specialist (no tier
+   * applies) — the hooks bucket those as `pinned`.
+   */
+  tier?: import('../../model-policy.js').ModelTier;
+  /** Logical site this dispatch belongs to (#258), for ledger attribution. */
+  site?: import('../../model-policy.js').ModelSite;
 }
 
 /**

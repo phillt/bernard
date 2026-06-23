@@ -26,6 +26,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/rag', description: 'Toggle / inspect the RAG store' },
   { name: '/facts', description: 'Show RAG facts in the current context window' },
   { name: '/policy', description: 'Show last policy decision' },
+  { name: '/usage', description: 'Last turn token + cost breakdown by tier (alias /cost)' },
   { name: '/lineup', description: 'Edit the active lineup (per-role × premium/mid/cheap)' },
   { name: '/lineups', description: 'List, switch, or create tier lineups' },
   { name: '/models', description: 'Browse the model catalog and add custom providers' },

@@ -43,6 +43,7 @@ describe('buildSpinnerMessage', () => {
       turnCacheReadTokens: 0,
       turnCacheWriteTokens: 0,
       model: 'claude-sonnet-4-5-20250929',
+      turnLedger: new Map(),
       ...overrides,
     };
   }

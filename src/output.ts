@@ -30,6 +30,33 @@ export function isToolDetailsVisible(): boolean {
  * what the context gauge measures — sub-agent steps never touch it, so the bar
  * tracks only the main agent's context fullness (#234).
  */
+/**
+ * Cost-tier bucket for a ledger entry (#258). Mirrors `ModelTier` from
+ * `model-policy.ts` plus `pinned` for calls whose model was hard-pinned by an
+ * invocation override or a specialist record (no tier applies). Declared here
+ * — not imported from `model-policy` — to keep this low-level module free of
+ * that dependency.
+ */
+export type UsageBucket = 'premium' | 'mid' | 'cheap' | 'pinned';
+
+/**
+ * One per-turn ledger row (#258): the tokens a single `(bucket, provider,
+ * model, site)` combination spent this turn. Accumulated by `recordTurnUsage`
+ * (one entry per distinct key, `calls` counting the steps that landed on it)
+ * and joined against catalog pricing at render/log time by `usage-report.ts`.
+ */
+export interface TurnUsageEntry {
+  bucket: UsageBucket;
+  site: string;
+  provider: string;
+  modelName: string;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  calls: number;
+}
+
 export interface SpinnerStats {
   startTime: number;
   turnPromptTokens: number;
@@ -44,6 +71,13 @@ export interface SpinnerStats {
   turnCacheWriteTokens: number;
   model: string;
   contextWindowOverride?: number;
+  /**
+   * Per-turn token ledger keyed by `${bucket}|${provider}|${modelName}|${site}`
+   * (#258). Reset alongside the odometers at the turn boundary. The aggregate
+   * `turn*Tokens` counters above are the sum of this ledger's rows. Drives the
+   * `/usage` viewer, the StatusBar `~$cost` suffix, and the `turn-stats` log.
+   */
+  turnLedger: Map<string, TurnUsageEntry>;
 }
 
 /** Token counts can arrive NaN/undefined when a turn errors early; treat those as 0. */

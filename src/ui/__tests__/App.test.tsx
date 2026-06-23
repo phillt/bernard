@@ -161,6 +161,7 @@ function makeAgent(
     abort: () => {},
     setAlertContext: () => {},
     setSpinnerStats: () => {},
+    beginTurnStats: () => {},
     spinnerStats: null,
   } as unknown as Agent;
 }
@@ -345,12 +346,19 @@ describe('<App> Shift-Tab viewer tabs (#211)', () => {
     expect(frame).toContain('> Sources');
     expect(frame).not.toContain('> Agent Status');
 
+    // Shift-Tab again → Usage & Cost tab active.
+    stdin.write(SHIFT_TAB);
+    await tick();
+    frame = lastFrame() ?? '';
+    expect(frame).toContain('> Usage & Cost');
+    expect(frame).not.toContain('> Sources');
+
     // Shift-Tab once more → wraps back to Status (does not close).
     stdin.write(SHIFT_TAB);
     await tick();
     frame = lastFrame() ?? '';
     expect(frame).toContain('> Agent Status');
-    expect(frame).not.toContain('> Sources');
+    expect(frame).not.toContain('> Usage & Cost');
     expect(frame).not.toContain('commands');
     unmount();
   });

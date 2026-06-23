@@ -86,6 +86,7 @@ import {
 import type { BreadthOption } from '../permissions/breadth.js';
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible } from '../output.js';
+import { recordTurnUsage, type UsageRecorder } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
 import {
@@ -141,6 +142,7 @@ import { ModelGridOverlay } from './overlays/ModelGridOverlay.js';
 import { ConfirmDialog } from './overlays/ConfirmDialog.js';
 import { StatusViewer } from './overlays/StatusViewer.js';
 import { SourcesViewer } from './overlays/SourcesViewer.js';
+import { UsageViewer } from './overlays/UsageViewer.js';
 import { HelpOverlay } from './overlays/HelpOverlay.js';
 import { TextInputOverlay } from './overlays/TextInputOverlay.js';
 import { InfoOverlay } from './overlays/InfoOverlay.js';
@@ -203,6 +205,7 @@ interface AppProps {
 type Overlay =
   | 'status'
   | 'sources'
+  | 'usage'
   | 'menu'
   | 'multi-menu'
   | 'grid'
@@ -453,7 +456,8 @@ export function App({
   // chrome (spinner, plan panel, toast, prompt, hint/status bars) is hidden so
   // the viewer reads as a replacement for the thread, not an addition below it.
   // <Thread> itself stays mounted (unmounting it reprints <Static> scrollback).
-  const viewerActive = activeOverlay === 'status' || activeOverlay === 'sources';
+  const viewerActive =
+    activeOverlay === 'status' || activeOverlay === 'sources' || activeOverlay === 'usage';
 
   useInput(
     (_input, key) => {
@@ -546,6 +550,7 @@ export function App({
         turnCacheWriteTokens: 0,
         model: resolveMainModel(config),
         contextWindowOverride: config.tokenWindow || undefined,
+        turnLedger: new Map(),
       });
     }
   }, [agent, config.model, config.tokenWindow]);
@@ -920,6 +925,13 @@ export function App({
         ...Object.entries(last.reasons).map(([k, r]) => ({ text: `  ${k}: ${r}` })),
       ];
       showInfo('Last policy decision', lines);
+      return;
+    }
+
+    if (text === '/usage' || text === '/cost') {
+      // Opens the scrollable Usage & Cost viewer (#258) — the same tab reachable
+      // via Shift-Tab. Shows the last turn's per-tier/model token + cost breakdown.
+      setActiveOverlay('usage');
       return;
     }
 
@@ -2252,6 +2264,12 @@ export function App({
     // rewriter LLM call so they see only this turn's facts.
     stores.rag?.clearTurnCache();
 
+    // Fold pre-turn LLM calls into the per-turn ledger (#258). No-op when the
+    // spinner stats aren't wired (headless paths never hit runPreTurnPipeline).
+    const recordPreTurnUsage: UsageRecorder = (rec) => {
+      if (agent.spinnerStats) recordTurnUsage(agent.spinnerStats, rec);
+    };
+
     let resolvedEntries: ResolvedEntry[] = [];
     if (!shouldSkipResolver(input)) {
       const resolverInput = stripToolResolvableTokens(stripImagePaths(input));
@@ -2266,6 +2284,7 @@ export function App({
             signal,
             stores.rag,
             agent.getHistory(),
+            recordPreTurnUsage,
           );
           if (result.status === 'resolved') {
             resolvedEntries = result.entries;
@@ -2289,7 +2308,14 @@ export function App({
           config.model,
           config.customProviders?.[config.provider]?.sdk,
         );
-        const result = await rewritePrompt(input, profile, resolvedEntries, config, signal);
+        const result = await rewritePrompt(
+          input,
+          profile,
+          resolvedEntries,
+          config,
+          signal,
+          recordPreTurnUsage,
+        );
         if (result.status === 'rewritten') {
           agentInput = result.text;
           debugLog('app:prompt-rewritten', {
@@ -2395,6 +2421,11 @@ export function App({
     const controller = new AbortController();
     turnAbortRef.current = controller;
     try {
+      // Open the per-turn stats window here — at the true turn boundary, before
+      // the pre-turn pipeline runs (#258) — so reference-resolver / rewriter
+      // tokens land in the same ledger as the main loop. `processInput` then
+      // won't reset and wipe them.
+      agent.beginTurnStats();
       const { agentInput, resolvedEntries } = await runPreTurnPipeline(input, controller.signal);
       if (controller.signal.aborted) return;
       // `processInput` pushes the user message to `agent.history` synchronously
@@ -2838,6 +2869,13 @@ export function App({
       )}
       {activeOverlay === 'sources' && (
         <SourcesViewer
+          agent={agent}
+          onClose={() => setActiveOverlay(null)}
+          onCycleTab={() => setActiveOverlay('usage')}
+        />
+      )}
+      {activeOverlay === 'usage' && (
+        <UsageViewer
           agent={agent}
           onClose={() => setActiveOverlay(null)}
           onCycleTab={() => setActiveOverlay('status')}

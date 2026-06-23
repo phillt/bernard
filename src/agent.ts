@@ -44,6 +44,8 @@ import { type ImageAttachment, IMAGE_TOKEN_ESTIMATE } from './image.js';
 import { PlanStore } from './plan-store.js';
 import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
+import { recordTurnUsage } from './framework/hooks/token-stats.js';
+import { computeTurnUsageReport } from './usage-report.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
@@ -131,6 +133,14 @@ export class Agent {
   // after each agent step. See src/framework/hooks/token-stats.ts.
   lastStepPromptTokens: number = 0;
   spinnerStats: SpinnerStats | null = null;
+  /**
+   * True between `beginTurnStats()` and the end of the following `processInput`
+   * (#258). When the REPL opens a turn it calls `beginTurnStats()` *before* the
+   * pre-turn pipeline so resolver/rewriter tokens land in the ledger; the flag
+   * then suppresses `processInput`'s own reset so those entries survive. Direct
+   * callers (cron, tests) never set it, so `processInput` resets as before.
+   */
+  private turnStatsBegun = false;
   /**
    * The execution strategy chosen for the current (or most recent) turn,
    * resolved by the Policy Engine + Qualifier. `null` between turns. Read by
@@ -310,6 +320,19 @@ export class Agent {
     this.spinnerStats.turnCompletionTokens = 0;
     this.spinnerStats.turnCacheReadTokens = 0;
     this.spinnerStats.turnCacheWriteTokens = 0;
+    this.spinnerStats.turnLedger?.clear();
+  }
+
+  /**
+   * Opens a new turn's stats window (#258). The REPL calls this at the true turn
+   * boundary — before the pre-turn pipeline (reference-resolver, rewriter) runs —
+   * so those LLM calls accumulate into the same per-turn ledger as the main loop.
+   * Resets the odometer + ledger and marks the turn begun so the subsequent
+   * `processInput` won't reset again and wipe the pre-turn entries.
+   */
+  beginTurnStats(): void {
+    this.turnStatsBegun = true;
+    this.resetTurnTokenOdometer();
   }
 
   /** Returns step limit hit info from last processInput, or null if limit wasn't hit. */
@@ -467,12 +490,16 @@ export class Agent {
       if (this.spinnerStats) {
         this.spinnerStats.model = mainModel;
         this.spinnerStats.contextWindowOverride = this.config.tokenWindow || undefined;
-        // Reset the per-turn ↑/↓ odometer at the start of every turn (#234).
-        // This single reset point is what makes the readout per-turn: this
-        // turn's main-agent steps AND any sub-agents / tool-wrappers / PAC
-        // phases it spawns then accumulate into a fresh zero via the token
-        // hooks (main: tokenStatsHook; non-main: tokenTotalsHook).
-        this.resetTurnTokenOdometer();
+        // Reset the per-turn ↑/↓ odometer + ledger at the start of every turn
+        // (#234). This single reset point is what makes the readout per-turn:
+        // this turn's main-agent steps AND any sub-agents / tool-wrappers / PAC
+        // phases it spawns then accumulate into a fresh zero via the token hooks
+        // (main: tokenStatsHook; non-main: tokenTotalsHook).
+        //
+        // SKIP when the REPL already opened the turn via `beginTurnStats()`
+        // (#258): the pre-turn pipeline ran since that reset and recorded into
+        // the ledger, so resetting again here would wipe those entries.
+        if (!this.turnStatsBegun) this.resetTurnTokenOdometer();
       }
 
       // Check if context compression is needed
@@ -487,7 +514,13 @@ export class Agent {
         )
       ) {
         printInfo('Compressing conversation context...');
-        this.history = await compressHistory(this.history, this.config, this.ragStore);
+        this.history = await compressHistory(
+          this.history,
+          this.config,
+          this.ragStore,
+          // Count compression's off-loop LLM calls toward the per-turn ledger (#258).
+          this.spinnerStats ? (rec) => recordTurnUsage(this.spinnerStats!, rec) : undefined,
+        );
       }
 
       // RAG search for relevant memories with sliding-window query
@@ -846,6 +879,22 @@ export class Agent {
         coordinatorMode: this.config.coordinatorMode,
       });
 
+      // Per-turn token + cost ledger (#258). The full per-tier/model breakdown
+      // (including pre-turn pipeline + compressor) for session-JSONL analysis,
+      // paired with the strategy line above. Guarded on spinnerStats (headless).
+      if (this.spinnerStats) {
+        const report = computeTurnUsageReport(this.spinnerStats);
+        debugLog('turn-stats', {
+          rows: report.rows,
+          totalPromptTokens: report.totalPromptTokens,
+          totalCompletionTokens: report.totalCompletionTokens,
+          totalCacheReadTokens: report.totalCacheReadTokens,
+          totalCalls: report.totalCalls,
+          totalCostUsd: report.totalCostUsd,
+          partial: report.partial,
+        });
+      }
+
       // Compose per-turn rubric (#145). Combines:
       //   - PlanStore.evaluateRubric (steps-terminal, signoffs, error-step count)
       //   - Post-write hook results recorded by augmentTools
@@ -904,6 +953,9 @@ export class Agent {
     } finally {
       this.abortController = null;
       this.currentStrategy = null;
+      // Close this turn's stats window (#258) so the next turn that doesn't go
+      // through `beginTurnStats()` (cron / direct callers) resets normally.
+      this.turnStatsBegun = false;
       // Drop any unflushed partials so a stale snapshot can never leak into a
       // later turn's abort flush.
       this.partialStepMessages = [];

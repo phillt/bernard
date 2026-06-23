@@ -340,7 +340,10 @@ describe('runDefinition per-turn token totals hook (#234)', () => {
         turnPromptTokens: 0,
         turnCompletionTokens: 0,
         latestPromptTokens: 0,
+        turnCacheReadTokens: 0,
+        turnCacheWriteTokens: 0,
         model: 'claude-x',
+        turnLedger: new Map(),
       },
     };
   }
@@ -378,19 +381,35 @@ describe('runDefinition per-turn token totals hook (#234)', () => {
     expect(target.lastStepPromptTokens).toBe(0);
   });
 
-  it('a fullTokenAccounting def does NOT get a second totals hook (no double count)', async () => {
+  it('a fullTokenAccounting def gets the FULL stats hook (odometer + gauge + headroom)', async () => {
     const target = makeTarget();
     const ctx = makeCtx();
     ctx.statsTarget = target as any;
     mockStepWithUsage({ promptTokens: 200, completionTokens: 30 });
 
-    // The fake def carries no hooks of its own, so if the gate let the totals
-    // hook through the odometer would bump; the flag must keep it at 0 (the real
-    // main def installs tokenStatsHook itself).
+    // #258: runDefinition installs the token-accounting hook centrally now (it
+    // has the resolved tier/site in scope). A fullTokenAccounting def (the main
+    // agent) gets the *full* `tokenStatsHook`, which — unlike the totals-only
+    // variant — also drives the context gauge + compression headroom.
     await runDefinition(ctx, fakeDefinition({ fullTokenAccounting: true }), { text: 'x' });
 
-    expect(target.spinnerStats.turnPromptTokens).toBe(0);
-    expect(target.spinnerStats.turnCompletionTokens).toBe(0);
+    expect(target.spinnerStats.turnPromptTokens).toBe(200);
+    expect(target.spinnerStats.turnCompletionTokens).toBe(30);
+    expect(target.spinnerStats.latestPromptTokens).toBe(200);
+    expect(target.lastStepPromptTokens).toBe(200);
+  });
+
+  it('attributes a step to the ledger keyed by tier + model (#258)', async () => {
+    const target = makeTarget();
+    const ctx = makeCtx();
+    ctx.statsTarget = target as any;
+    mockStepWithUsage({ promptTokens: 200, completionTokens: 30 });
+
+    await runDefinition(ctx, fakeDefinition({ id: 'sub' }), { text: 'x' });
+
+    const rows = Array.from(target.spinnerStats.turnLedger.values());
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ promptTokens: 200, completionTokens: 30, calls: 1 });
   });
 
   it('absent statsTarget (cron / headless) appends nothing and does not throw', async () => {

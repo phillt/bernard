@@ -6,6 +6,7 @@ import type { RAGStore } from './rag.js';
 import { DOMAIN_REGISTRY, getDomainIds } from './domains.js';
 import { estimateContentPartTokens } from './image.js';
 import { findModelMetaByName } from './providers/catalog.js';
+import type { UsageRecorder } from './framework/hooks/token-stats.js';
 
 /** Model name → context window size in tokens */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
@@ -156,6 +157,7 @@ export interface DomainFacts {
 export async function extractDomainFacts(
   serializedText: string,
   config: BernardConfig,
+  onUsage?: UsageRecorder,
 ): Promise<DomainFacts[]> {
   if (!serializedText.trim()) return [];
 
@@ -174,6 +176,16 @@ export async function extractDomainFacts(
         messages: [
           { role: 'user', content: `Extract facts from this conversation:\n\n${serializedText}` },
         ],
+      });
+
+      // Count this off-loop call toward the per-turn ledger (#258).
+      onUsage?.({
+        bucket: site.tier ?? 'pinned',
+        site: 'compressor',
+        provider: site.provider,
+        modelName: site.modelName,
+        promptTokens: result.usage?.promptTokens ?? 0,
+        completionTokens: result.usage?.completionTokens ?? 0,
       });
 
       const text = result.text?.trim();
@@ -242,6 +254,7 @@ export async function compressHistory(
   history: CoreMessage[],
   config: BernardConfig,
   ragStore?: RAGStore,
+  onUsage?: UsageRecorder,
 ): Promise<CoreMessage[]> {
   const splitIndex = countRecentMessages(history, RECENT_TURNS_TO_KEEP);
 
@@ -269,9 +282,21 @@ export async function compressHistory(
       messages: [{ role: 'user', content: `Summarize this conversation:\n\n${serialized}` }],
     });
 
-    const extractPromise = ragStore ? extractDomainFacts(serialized, config) : Promise.resolve([]);
+    const extractPromise = ragStore
+      ? extractDomainFacts(serialized, config, onUsage)
+      : Promise.resolve([]);
 
     const [result, domainFacts] = await Promise.all([summarizePromise, extractPromise]);
+
+    // Count the summarization call toward the per-turn ledger (#258).
+    onUsage?.({
+      bucket: summarizerSite.tier ?? 'pinned',
+      site: 'compressor',
+      provider: summarizerSite.provider,
+      modelName: summarizerSite.modelName,
+      promptTokens: result.usage?.promptTokens ?? 0,
+      completionTokens: result.usage?.completionTokens ?? 0,
+    });
 
     // Store extracted facts per domain — await to prevent races on persist()
     if (ragStore && domainFacts.length > 0) {

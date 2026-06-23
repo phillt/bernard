@@ -10,7 +10,7 @@ import { makeRepairHook } from '../../tool-call-repair.js';
 import { augmentTools } from '../../tools/augment.js';
 import type { AgentContext } from '../context.js';
 import { getOutputSink } from '../hooks/output-sink.js';
-import { tokenTotalsHook } from '../hooks/token-stats.js';
+import { tokenStatsHook, tokenTotalsHook, type HookModelInfo } from '../hooks/token-stats.js';
 import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
@@ -142,17 +142,28 @@ export async function runDefinition<TInput, TFormatted>(
         },
       ]
     : def.hooks(ctx, input);
-  // Per-turn ↑/↓ odometer for non-main dispatches (#234). Definitions that do
-  // their own full accounting (`fullTokenAccounting` — the main agent, which
-  // installs `tokenStatsHook`) are skipped so they aren't double-counted;
-  // everyone else (sub / task / specialist / tool-wrapper / PAC) gets the
-  // totals-only hook so their tokens add to the same odometer without disturbing
-  // the main-only context gauge. `ctx.statsTarget` being absent is the cron /
-  // headless exemption (the hook is simply not attached).
-  const finalHooks =
-    !def.fullTokenAccounting && ctx.statsTarget
-      ? [...hooks, tokenTotalsHook(ctx.statsTarget)]
-      : hooks;
+  // Per-turn token accounting (#234, #258). Installed here — the one place with
+  // the resolved model in scope — so every dispatch's steps are attributed to
+  // its tier/site/model in the per-turn ledger. The main agent
+  // (`fullTokenAccounting`) gets the full hook (also drives the context gauge +
+  // compression headroom); everyone else (sub / task / specialist / tool-wrapper
+  // / PAC) gets the totals-only hook so their tokens add to the same odometer +
+  // ledger without disturbing the main-only gauge. `ctx.statsTarget` being absent
+  // is the cron / headless exemption (the hook is simply not attached).
+  const modelInfo: HookModelInfo = {
+    bucket: resolved.tier ?? 'pinned',
+    site: resolved.site ?? def.site ?? 'main',
+    provider: resolved.provider,
+    modelName: resolved.modelName,
+  };
+  const finalHooks = ctx.statsTarget
+    ? [
+        ...hooks,
+        def.fullTokenAccounting
+          ? tokenStatsHook(ctx.statsTarget, modelInfo)
+          : tokenTotalsHook(ctx.statsTarget, modelInfo),
+      ]
+    : hooks;
   const baseMaxSteps = def.stepBudget(config, input);
   const prepareStep = def.prepareStep?.(ctx, input, baseMaxSteps);
   const repair = def.repairLabel
@@ -317,7 +328,11 @@ function resolveModel<TInput, TFormatted>(
   overrides: ModelOverrides | undefined,
 ): ResolvedModel {
   if (def.resolveModel) {
-    return def.resolveModel(ctx, input, overrides);
+    // Custom resolvers (e.g. per-specialist pins) don't know their site; default
+    // it here so ledger attribution (#258) still labels the dispatch. Tier stays
+    // whatever the resolver set (typically undefined → bucketed `pinned`).
+    const custom = def.resolveModel(ctx, input, overrides);
+    return { site: def.site ?? 'main', ...custom };
   }
   const site = resolveSiteModel(ctx.config, def.site ?? 'main', { overrides });
   return {
@@ -325,6 +340,8 @@ function resolveModel<TInput, TFormatted>(
     providerOptions: site.providerOptions,
     provider: site.provider,
     modelName: site.modelName,
+    tier: site.tier,
+    site: def.site ?? 'main',
   };
 }
 

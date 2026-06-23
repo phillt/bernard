@@ -1,6 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
 import { buildStrategy } from '../strategies/index.js';
-import { tokenStatsHook, type TokenStatsTarget } from '../hooks/token-stats.js';
+import type { TokenStatsTarget } from '../hooks/token-stats.js';
 import { outputHook } from '../hooks/output.js';
 import { createTools } from '../../tools/index.js';
 import { formatCurrentDateTime } from '../../tools/datetime.js';
@@ -198,9 +198,10 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
   // activates when `setOutputSink` has registered a consumer.
   streaming: true,
 
-  // #234: this definition installs `tokenStatsHook` below (full per-turn
-  // accounting), so `runDefinition` must NOT also append `tokenTotalsHook` —
-  // that would double-count the main agent's tokens in the ↑/↓ odometer.
+  // #234/#258: `runDefinition` installs the *full* `tokenStatsHook` for this
+  // definition (instead of the totals-only `tokenTotalsHook`) because it does
+  // full per-turn accounting — driving the context gauge + compression headroom,
+  // not just the ↑/↓ odometer. The flag picks which hook variant is appended.
   fullTokenAccounting: true,
 
   systemPrompt(_ctx, input) {
@@ -281,7 +282,11 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     return { role: 'user', content: '' };
   },
 
-  hooks(_ctx, input) {
-    return [tokenStatsHook(input.statsTarget), outputHook()];
+  hooks(_ctx, _input) {
+    // The token-accounting hook (`tokenStatsHook`) is installed centrally in
+    // `runDefinition` (#258) where the resolved tier/site is in scope, so it can
+    // attribute the main agent's steps to the per-turn ledger. We only add the
+    // output sink here.
+    return [outputHook()];
   },
 };
