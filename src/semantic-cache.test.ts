@@ -9,12 +9,14 @@ const VECTORS: Record<string, number[]> = {
   'how do i bake bread': [0, 1, 0], // orthogonal → miss
 };
 
+const embedSpy = vi.fn(async (texts: string[]) => texts.map((t) => VECTORS[t] ?? [0, 0, 1]));
+
 vi.mock('./embeddings.js', async () => {
   const actual = await vi.importActual<typeof import('./embeddings.js')>('./embeddings.js');
   return {
     ...actual,
     getEmbeddingProvider: vi.fn(async () => ({
-      embed: async (texts: string[]) => texts.map((t) => VECTORS[t] ?? [0, 0, 1]),
+      embed: embedSpy,
       dimensions: () => 3,
     })),
   };
@@ -26,6 +28,7 @@ describe('SemanticResponseCache (#269)', () => {
   let cache: SemanticResponseCache;
   beforeEach(() => {
     cache = new SemanticResponseCache();
+    embedSpy.mockClear();
   });
 
   it('returns null on an empty cache', async () => {
@@ -57,5 +60,14 @@ describe('SemanticResponseCache (#269)', () => {
   it('does not store empty responses', async () => {
     await cache.put('what is rust', '   ');
     expect(cache.size()).toBe(0);
+  });
+
+  it('embeds a query only once across a miss get() + put() in the same turn', async () => {
+    expect(await cache.get('what is rust')).toBeNull(); // empty → no embed
+    await cache.put('what is rust', 'Rust is a systems language.'); // embeds once, memoized
+    embedSpy.mockClear();
+    // A second get for the same query reuses the memoized embedding (no new embed).
+    expect(await cache.get('what is rust')).toBe('Rust is a systems language.');
+    expect(embedSpy).not.toHaveBeenCalled();
   });
 });

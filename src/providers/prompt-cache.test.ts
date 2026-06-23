@@ -77,4 +77,23 @@ describe('applyAnthropicPromptCache', () => {
     expect(out.system).toBeUndefined();
     expect(out.messages.some((m) => m.role === 'system')).toBe(false);
   });
+
+  it('preserves pre-existing anthropic providerOptions when marking a message', () => {
+    const messages: CoreMessage[] = [
+      {
+        role: 'assistant',
+        content: 'prior',
+        providerOptions: { anthropic: { thinking: { type: 'enabled', budgetTokens: 1024 } } },
+      } as CoreMessage,
+      CTX,
+      { role: 'user', content: 'now' },
+    ];
+    const out = applyAnthropicPromptCache({ system: 'S', messages });
+    const assistant = out.messages.find((m) => m.role === 'assistant')!;
+    const anthropic = (assistant as { providerOptions?: { anthropic?: Record<string, unknown> } })
+      .providerOptions?.anthropic;
+    // Both the new cache marker AND the pre-existing thinking option survive.
+    expect(anthropic?.cacheControl).toEqual({ type: 'ephemeral' });
+    expect(anthropic?.thinking).toEqual({ type: 'enabled', budgetTokens: 1024 });
+  });
 });

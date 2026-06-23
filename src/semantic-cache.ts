@@ -31,6 +31,12 @@ interface Entry {
 
 export class SemanticResponseCache {
   private entries: Entry[] = [];
+  /**
+   * Single-slot memo of the most recently embedded query, so a `get(q)` miss
+   * followed by `put(q, …)` in the same turn doesn't run the embedding model
+   * twice on the same string.
+   */
+  private lastEmbed: { query: string; vec: number[] } | null = null;
 
   constructor(
     private readonly ttlMs: number = DEFAULT_SEMANTIC_CACHE_TTL_MS,
@@ -44,11 +50,15 @@ export class SemanticResponseCache {
   }
 
   private async embed(text: string): Promise<number[] | null> {
+    if (this.lastEmbed && this.lastEmbed.query === text) return this.lastEmbed.vec;
     const provider = await getEmbeddingProvider();
     if (!provider) return null;
     try {
       const [vec] = await provider.embed([text]);
-      return vec ? Array.from(vec) : null;
+      if (!vec) return null;
+      const arr = Array.from(vec);
+      this.lastEmbed = { query: text, vec: arr };
+      return arr;
     } catch {
       return null;
     }

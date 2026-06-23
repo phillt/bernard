@@ -270,9 +270,16 @@ export async function runDefinition<TInput, TFormatted>(
     const sysWithSuffix = iterOpts.systemSuffix ? `${system}\n\n${iterOpts.systemSuffix}` : system;
     const callMaxSteps = iterOpts.maxStepsOverride ?? baseMaxSteps;
     // Anthropic prompt caching (#269): mark the system+tools prefix and the
-    // rolling history breakpoint. Scoped to the built-in `anthropic` provider;
-    // a no-op for every other provider.
-    const cached = isAnthropicPromptCacheActive(ctx.config, resolved.provider)
+    // rolling history breakpoint. Scoped to the built-in `anthropic` provider
+    // AND to the persistent-history (main) agent — ephemeral one-shot
+    // dispatches (sub-agents, specialists, tool-wrappers, PAC, cron) repeat
+    // their prefix rarely within the 5-min TTL, so marking them risks paying
+    // Anthropic's 1.25x cache-WRITE surcharge for a read that never comes. The
+    // main agent re-sends a stable prefix every turn, so it's the only site
+    // with a guaranteed payoff. No-op for every other provider/definition.
+    const promptCacheActive =
+      def.historyMode === 'persistent' && isAnthropicPromptCacheActive(ctx.config, resolved.provider);
+    const cached = promptCacheActive
       ? applyAnthropicPromptCache({ system: sysWithSuffix, messages })
       : { system: sysWithSuffix, messages };
     const r = await runAgent({

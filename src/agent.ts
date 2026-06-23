@@ -299,6 +299,19 @@ export class Agent {
     }).decision;
   }
 
+  /**
+   * Zero the per-turn ↑/↓ + prompt-cache token odometers (#234, #269). Single
+   * source of truth so the normal turn start, the semantic-cache-hit
+   * short-circuit, and `clearHistory` never drift on which counters to reset.
+   */
+  private resetTurnTokenOdometer(): void {
+    if (!this.spinnerStats) return;
+    this.spinnerStats.turnPromptTokens = 0;
+    this.spinnerStats.turnCompletionTokens = 0;
+    this.spinnerStats.turnCacheReadTokens = 0;
+    this.spinnerStats.turnCacheWriteTokens = 0;
+  }
+
   /** Returns step limit hit info from last processInput, or null if limit wasn't hit. */
   getStepLimitHit(): { currentLimit: number; hitCount: number } | null {
     if (!this.lastStepLimitHit) return null;
@@ -422,12 +435,23 @@ export class Agent {
     // cache and skip the model call entirely. The pushed assistant message is
     // committed to the transcript by App's post-turn history commit, so no
     // streaming-sink work is needed. Fails open.
+    // Eligible only when the turn is self-contained: opt-in flag on, no images,
+    // a pure question, AND no resolved references (a reference-dependent ask like
+    // "summarize §3" keys only on the raw text, so a same-worded ask resolving to
+    // different content would collide). The store-on-miss path below reuses the
+    // same gate.
     const semanticEligible =
-      this.config.semanticCache && !(images && images.length > 0) && isPureQuestion(userInput);
+      this.config.semanticCache &&
+      !images?.length &&
+      !resolvedReferences?.length &&
+      isPureQuestion(userInput);
     if (semanticEligible) {
       const hit = await this.semanticCache.get(userInput);
       if (hit !== null && !this.abortController.signal.aborted) {
-        debugLog('turn:semantic-cache-hit', { inputLen: userInput.length });
+        // The hit short-circuits before the normal per-turn reset below, so zero
+        // the odometers here — otherwise the spinner shows the prior turn's
+        // token/⚡cached counts for a turn that made no model call.
+        this.resetTurnTokenOdometer();
         this.history.push({ role: 'assistant', content: hit });
         return;
       }
@@ -448,10 +472,7 @@ export class Agent {
         // turn's main-agent steps AND any sub-agents / tool-wrappers / PAC
         // phases it spawns then accumulate into a fresh zero via the token
         // hooks (main: tokenStatsHook; non-main: tokenTotalsHook).
-        this.spinnerStats.turnPromptTokens = 0;
-        this.spinnerStats.turnCompletionTokens = 0;
-        this.spinnerStats.turnCacheReadTokens = 0;
-        this.spinnerStats.turnCacheWriteTokens = 0;
+        this.resetTurnTokenOdometer();
       }
 
       // Check if context compression is needed
@@ -948,8 +969,7 @@ export class Agent {
     this.lastStepPromptTokens = 0;
     if (this.spinnerStats) {
       this.spinnerStats.latestPromptTokens = 0; // empty the bar
-      this.spinnerStats.turnPromptTokens = 0;
-      this.spinnerStats.turnCompletionTokens = 0;
+      this.resetTurnTokenOdometer();
     }
     if (this.ctx.policyDecision) {
       this.ctx = { ...this.ctx, policyDecision: undefined };

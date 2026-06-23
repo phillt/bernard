@@ -26,7 +26,6 @@ import type { CoreMessage } from 'ai';
  */
 
 const EPHEMERAL = { type: 'ephemeral' as const };
-const CACHE_PROVIDER_OPTIONS = { anthropic: { cacheControl: EPHEMERAL } } as const;
 
 /**
  * True when Anthropic prompt-cache markers should be emitted: the flag is on and
@@ -47,12 +46,19 @@ function isContextMessage(m: CoreMessage): boolean {
   );
 }
 
-/** Return a copy of `msg` with an Anthropic ephemeral cache breakpoint attached. */
+/**
+ * Return a copy of `msg` with an Anthropic ephemeral cache breakpoint attached.
+ * Deep-merges into `providerOptions.anthropic` so any pre-existing Anthropic
+ * options on the message (e.g. `thinking`, beta flags) survive — a shallow
+ * spread of `{ anthropic: { cacheControl } }` would replace the whole `anthropic`
+ * sub-object and silently drop them.
+ */
 function withCacheControl(msg: CoreMessage): CoreMessage {
   const existing = (msg as { providerOptions?: Record<string, unknown> }).providerOptions ?? {};
+  const existingAnthropic = (existing.anthropic as Record<string, unknown> | undefined) ?? {};
   return {
     ...msg,
-    providerOptions: { ...existing, ...CACHE_PROVIDER_OPTIONS },
+    providerOptions: { ...existing, anthropic: { ...existingAnthropic, cacheControl: EPHEMERAL } },
   } as CoreMessage;
 }
 
