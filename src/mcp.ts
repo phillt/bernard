@@ -5,6 +5,7 @@ import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
 import { jsonSchema } from 'ai';
 import { printInfo, printError } from './output.js';
 import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
+import { normalizeToolResult } from './text.js';
 
 /** Configuration for an MCP server launched via stdio subprocess. */
 interface MCPStdioConfig {
@@ -302,19 +303,26 @@ export class MCPManager {
         // If the retry also fails, the *retry* error is thrown (not the original)
         // so the caller sees the most recent failure reason.
         execute: async (args: unknown) => {
+          let result: unknown;
           try {
-            return await originalExecute(args);
+            result = await originalExecute(args);
           } catch (error) {
             if (serverName) {
               printInfo(`MCP tool "${name}" failed, reconnecting to "${serverName}"...`);
               const reconnected = await this.reconnectServer(serverName);
               if (reconnected && this.tools[name]) {
                 const freshTool = this.convertTool(name, this.tools[name]);
-                return await freshTool.execute(args);
+                result = await freshTool.execute(args);
+              } else {
+                throw error;
               }
+            } else {
+              throw error;
             }
-            throw error;
           }
+          // Normalize text I/O: repair mojibake and NFC-normalize string content
+          // (covers plain strings, content[].text arrays, and string-valued fields).
+          return normalizeToolResult(result);
         },
       };
     }
