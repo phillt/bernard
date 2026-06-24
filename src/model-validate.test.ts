@@ -64,6 +64,29 @@ describe('validateModel', () => {
     const r = await validateModel(config, 'openai', 'gpt-5.5');
     expect(r.category).toBe('auth');
   });
+
+  it('omits temperature for reasoning models (e.g. claude-opus-4-8)', async () => {
+    generateTextMock.mockResolvedValue({ text: 'ok' });
+    await validateModel(config, 'anthropic', 'claude-opus-4-8');
+    expect(generateTextMock).toHaveBeenCalledOnce();
+    const args = generateTextMock.mock.calls[0]![0];
+    // Temperature must be absent entirely — not undefined, not 0.
+    expect(Object.prototype.hasOwnProperty.call(args, 'temperature')).toBe(false);
+  });
+
+  it('omits temperature for OpenAI o-series reasoning models', async () => {
+    generateTextMock.mockResolvedValue({ text: 'ok' });
+    await validateModel(config, 'openai', 'o3');
+    const args = generateTextMock.mock.calls[0]![0];
+    expect(Object.prototype.hasOwnProperty.call(args, 'temperature')).toBe(false);
+  });
+
+  it('sends temperature: 0 for non-reasoning models', async () => {
+    generateTextMock.mockResolvedValue({ text: 'ok' });
+    await validateModel(config, 'openai', 'gpt-4.1');
+    const args = generateTextMock.mock.calls[0]![0];
+    expect(args.temperature).toBe(0);
+  });
 });
 
 describe('validateLineup', () => {

@@ -1,5 +1,6 @@
 import { generateText } from 'ai';
 import type { ModelProfile } from './providers/profiles.js';
+import { temperatureParam } from './providers/profiles.js';
 import type { ResolvedEntry } from './reference-resolver.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
@@ -183,7 +184,7 @@ export async function rewritePrompt(
           messages: [{ role: 'user', content: userContent }],
           maxSteps: 1,
           maxTokens: REWRITER_MAX_TOKENS,
-          temperature: 0,
+          ...temperatureParam(site.model.modelId, site.provider),
           abortSignal,
         }),
       );

@@ -156,6 +156,81 @@ export function getModelProfile(
   return DEFAULT_PROFILE;
 }
 
+/**
+ * Returns `true` when the model accepts a `temperature` parameter, `false`
+ * when it is a reasoning model that rejects temperature (e.g. claude-opus-4-8,
+ * OpenAI o-series, xAI grok-4 reasoning variants).
+ *
+ * Detection is catalog-first: models tagged `reasoning` in the vendored or
+ * disk-cached catalog return `false`. For catalog misses, provider-specific
+ * pattern matching fires **only when `provider` is explicit** — this prevents
+ * false-positives for custom-provider models whose names match (e.g. a local
+ * model called `o1-uncensored` on a custom Ollama endpoint).
+ *
+ * **Fail-open**: unknown / custom-provider models return `true` so callers
+ * still send temperature for models we don't recognise (safe default for
+ * non-reasoning models that require it).
+ *
+ * Callers should spread the result rather than passing `undefined`:
+ *   `...(modelSupportsTemperature(model, provider) ? { temperature: 0 } : {})`
+ *
+ * @param model    The model id as passed to the AI SDK.
+ * @param provider Provider name (e.g. `'anthropic'`, `'openai'`, `'xai'`).
+ *                 Required for accurate catalog-miss fallback matching.
+ */
+export function modelSupportsTemperature(model: string, provider?: string): boolean {
+  // Catalog-first: if the model is in the catalog and tagged reasoning, it
+  // does not support temperature. The catalog converts dots to dashes for
+  // anthropic (claude-opus-4.8 → claude-opus-4-8) before indexing.
+  const meta = findModelMetaByName(model);
+  if (meta !== null) {
+    return !meta.tags.includes('reasoning');
+  }
+
+  // Catalog miss — fall back to cheap pattern matching for well-known families.
+  // Only apply provider-specific patterns when the provider is explicit, so we
+  // never false-flag a custom-provider model whose name happens to match.
+  const m = model.toLowerCase();
+  const family = provider?.toLowerCase();
+
+  // OpenAI o-series reasoning models: o1, o3, o3-mini, o4-mini, …
+  if (family === 'openai') {
+    if (/^o\d/.test(m)) return false;
+  }
+
+  // xAI grok-4 models with explicit reasoning suffix.
+  if (family === 'xai') {
+    if (m.includes('non-reasoning')) return true; // explicit override
+    if (m.includes('reasoning')) return false;
+    // Grok 4.x is a reasoning family by default.
+    if (/^grok-4(\b|[-.])/.test(m)) return false;
+  }
+
+  // Unknown / custom provider — fail open (assume temperature is supported).
+  return true;
+}
+
+/**
+ * Returns `{ temperature: 0 }` when the model accepts the parameter, or `{}`
+ * when it is a reasoning model that rejects it.
+ *
+ * Convenience wrapper around {@link modelSupportsTemperature} — eliminates the
+ * ternary spread that every call site would otherwise repeat:
+ *
+ *   ```ts
+ *   // before
+ *   ...(modelSupportsTemperature(site.model.modelId, site.provider) ? { temperature: 0 } : {})
+ *   // after
+ *   ...temperatureParam(site.model.modelId, site.provider)
+ *   ```
+ */
+export function temperatureParam(
+  model: string,
+  provider?: string,
+): { temperature: number } | Record<string, never> {
+  return modelSupportsTemperature(model, provider) ? { temperature: 0 } : {};
+}
+
 // References for maintainers updating the suffix constants:
 //   https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
 //   https://developers.openai.com/cookbook/examples/gpt4-1_prompting_guide
