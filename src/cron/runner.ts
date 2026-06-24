@@ -20,9 +20,95 @@ import { CronLogStore, type CronLogStep } from './log-store.js';
 import { CronNotesStore } from './notes-store.js';
 import { createScopedCronNotesTools } from './scoped-notes-tools.js';
 import { sendNotification } from './notify.js';
-import type { CronJob } from './types.js';
+import type { CronJob, CronConfirmMode, CronToolMode } from './types.js';
 import { runPACLoop } from '../pac.js';
 import { makeRepairHook } from '../tool-call-repair.js';
+import { READONLY_SUFFIX_RE } from '../reference-tool-lookup.js';
+
+/**
+ * Builds a headless MCP tool filter for read-only cron jobs.
+ *
+ * MCP tools (identified by `__` in their name per the `@ai-sdk/mcp` convention)
+ * are allowed through when their name matches {@link READONLY_SUFFIX_RE}; all
+ * others are stubbed to return a blocked-message string. Non-MCP built-in tools
+ * pass through unchanged (they are governed by `confirmDangerous` instead).
+ */
+function buildReadOnlyMcpFilter(): (tools: Record<string, any>) => Record<string, any> {
+  return (mcpTools: Record<string, any>): Record<string, any> => {
+    const filtered: Record<string, any> = {};
+    for (const [name, toolDef] of Object.entries(mcpTools)) {
+      // Only MCP tools are filtered (they use the serverName__toolName convention).
+      // Built-in tools (shell, memory, etc.) are handled via confirmDangerous.
+      if (!name.includes('__')) {
+        filtered[name] = toolDef;
+        continue;
+      }
+      if (READONLY_SUFFIX_RE.test(name)) {
+        // Read-only MCP tool — allow through.
+        filtered[name] = toolDef;
+      } else {
+        // Write-capable MCP tool — stub to return a headless-safe error.
+        filtered[name] = {
+          ...toolDef,
+          execute: async (): Promise<string> =>
+            `[blocked] Tool "${name}" is not available in read-only cron mode.`,
+        };
+      }
+    }
+    return filtered;
+  };
+}
+
+/**
+ * Resolves the per-job permission posture into concrete callbacks for cron
+ * headless execution. Never blocks waiting for interactive input.
+ *
+ * Effective defaults when no job-level fields are set reproduce legacy behavior:
+ *   - Dangerous shell commands → auto-denied (confirmDangerous returns false)
+ *   - All other shell commands → proceed
+ *   - Write-capable MCP tools → proceed (no block gate)
+ *
+ * The two axes — shell danger (`confirmMode`) and tool access (`toolMode`) — are
+ * intentionally orthogonal. `confirmMode: 'off'` allows dangerous shell commands
+ * but still enforces `toolMode: 'read-only'` MCP filtering when that is set.
+ * `skipPermissions: true` overrides both axes unconditionally.
+ *
+ * @param job - The job whose permission fields drive the posture.
+ * @returns An object with a `confirmDangerous` callback and a `filterMcpTools`
+ *   function that optionally stubs out write-capable MCP tools.
+ */
+export function resolveCronPermissions(job: Pick<CronJob, 'confirmMode' | 'toolMode' | 'skipPermissions'>): {
+  /** Headless callback passed to `createShellTool` as `confirmDangerous`. */
+  confirmDangerous: (command: string, signal?: AbortSignal) => Promise<boolean>;
+  /**
+   * Optionally wraps the MCP tools map to block write-capable tools when the
+   * job runs in read-only mode. Pass-through when mode is write or skipPermissions.
+   */
+  filterMcpTools: (tools: Record<string, any>) => Record<string, any>;
+} {
+  const effectiveSkip = job.skipPermissions === true;
+  const effectiveToolMode: CronToolMode = job.toolMode ?? 'write';
+  const effectiveConfirmMode: CronConfirmMode = job.confirmMode ?? 'auto';
+
+  // skipPermissions overrides everything — allow all tool calls unconditionally.
+  if (effectiveSkip) {
+    return {
+      confirmDangerous: async () => true,
+      filterMcpTools: (tools) => tools,
+    };
+  }
+
+  // Resolve the two axes independently so they compose correctly.
+  // Shell danger gate: 'off' allows dangerous commands; 'auto'/'strict' deny them.
+  const confirmDangerous: (command: string, signal?: AbortSignal) => Promise<boolean> =
+    effectiveConfirmMode === 'off' ? async () => true : async () => false;
+
+  // MCP write gate: 'read-only' stubs write-capable tools; 'write' passes all through.
+  const filterMcpTools: (tools: Record<string, any>) => Record<string, any> =
+    effectiveToolMode === 'read-only' ? buildReadOnlyMcpFilter() : (tools) => tools;
+
+  return { confirmDangerous, filterMcpTools };
+}
 
 const DAEMON_SYSTEM_PROMPT = `You are Bernard, running as a background cron job in daemon mode. There is no interactive user present — you execute autonomously and have a limited step budget (20 steps), so work efficiently.
 
@@ -170,9 +256,13 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       },
     });
 
+    // Resolve per-job permission posture. Jobs with no fields set reproduce legacy
+    // behavior: dangerous shell commands are auto-denied, everything else proceeds.
+    const { confirmDangerous, filterMcpTools } = resolveCronPermissions(job);
+
     const shellTool = createShellTool({
       shellTimeout: config.shellTimeout,
-      confirmDangerous: async () => false, // Auto-deny in daemon mode
+      confirmDangerous,
       // askUser intentionally omitted — no interactive user; the ask_user tool returns {unavailable}.
     });
 
@@ -189,7 +279,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       notify: notifyTool,
       cron_self_disable: selfDisableTool,
       ...createScopedCronNotesTools(notesStore, job.id, runId),
-      ...mcpTools,
+      ...filterMcpTools(mcpTools),
     };
 
     // RAG search using job prompt as query

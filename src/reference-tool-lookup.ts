@@ -36,8 +36,14 @@ const MAX_TOOLS_IN_PROMPT = 8;
  * Suffix-based read-only allowlist. MCP tools whose name ends in any of these
  * verbs are treated as safe lookup candidates. Excludes write verbs like
  * `create`, `update`, `delete`, `send`, `post`.
+ *
+ * The `(?:^|_)` prefix ensures the verb appears either at the very start of
+ * the tool name (e.g. bare `search`) or immediately after an underscore
+ * (e.g. `contacts__search`, `drive__files_read`). Exported so cron and other
+ * headless callers can apply the same classification without duplicating the
+ * pattern.
  */
-const READONLY_SUFFIX_RE = /(?:^|_)(search|list|find|get|query|read|lookup)$/i;
+export const READONLY_SUFFIX_RE = /(?:^|_)(search|list|find|get|query|read|lookup)$/i;
 
 /**
  * Built-in (non-MCP) tools that are always allowed for resolver lookups.

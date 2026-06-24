@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
-import type { CronJob, CronAlert } from './types.js';
+import type { CronJob, CronAlert, CronConfirmMode, CronToolMode } from './types.js';
 import {
   CRON_DIR,
   CRON_JOBS_FILE as JOBS_FILE,
@@ -81,7 +81,16 @@ export class CronStore {
    *
    * @throws {Error} If the maximum number of jobs ({@link MAX_JOBS}) has been reached.
    */
-  createJob(name: string, schedule: string, prompt: string): CronJob {
+  createJob(
+    name: string,
+    schedule: string,
+    prompt: string,
+    opts?: {
+      confirmMode?: CronConfirmMode;
+      toolMode?: CronToolMode;
+      skipPermissions?: boolean;
+    },
+  ): CronJob {
     const jobs = this.loadJobs();
     if (jobs.length >= MAX_JOBS) {
       throw new Error(`Maximum of ${MAX_JOBS} cron jobs reached.`);
@@ -93,6 +102,9 @@ export class CronStore {
       prompt,
       enabled: true,
       createdAt: new Date().toISOString(),
+      ...(opts?.confirmMode !== undefined ? { confirmMode: opts.confirmMode } : {}),
+      ...(opts?.toolMode !== undefined ? { toolMode: opts.toolMode } : {}),
+      ...(opts?.skipPermissions !== undefined ? { skipPermissions: opts.skipPermissions } : {}),
     };
     jobs.push(job);
     this.saveJobs(jobs);
@@ -109,7 +121,16 @@ export class CronStore {
     updates: Partial<
       Pick<
         CronJob,
-        'name' | 'schedule' | 'prompt' | 'enabled' | 'lastRun' | 'lastRunStatus' | 'lastResult'
+        | 'name'
+        | 'schedule'
+        | 'prompt'
+        | 'enabled'
+        | 'lastRun'
+        | 'lastRunStatus'
+        | 'lastResult'
+        | 'confirmMode'
+        | 'toolMode'
+        | 'skipPermissions'
       >
     >,
   ): CronJob | undefined {

@@ -143,7 +143,7 @@ vi.mock('../rag.js', () => ({
   RAGStore: vi.fn(() => mockRagStoreInstance),
 }));
 
-import { runJob } from './runner.js';
+import { runJob, resolveCronPermissions } from './runner.js';
 import { loadConfig } from '../config.js';
 import type { CronJob } from './types.js';
 
@@ -341,5 +341,239 @@ describe('runJob', () => {
     expect(capturedSystem).toContain('## Persistent Notes');
     expect(capturedSystem).toContain('cron_notes_read');
     expect(capturedSystem).toContain('cron_notes_write');
+  });
+});
+
+// --- resolveCronPermissions unit tests ---
+
+describe('resolveCronPermissions', () => {
+  // Helper: build a minimal write-capable MCP tool stub
+  const makeMcpTool = (name: string) => ({
+    description: `Mock ${name}`,
+    execute: async () => `result of ${name}`,
+  });
+
+  // -------------------------------------------------------------------------
+  // (a) Legacy / unset-fields behavior: high-risk shell denied, non-high-risk proceeds
+  // -------------------------------------------------------------------------
+  describe('unset fields (legacy defaults)', () => {
+    it('denies dangerous shell commands', async () => {
+      const { confirmDangerous } = resolveCronPermissions({});
+      const allowed = await confirmDangerous('rm -rf /important');
+      expect(allowed).toBe(false);
+    });
+
+    it('also denies dangerous shell commands when confirmMode is auto', async () => {
+      const { confirmDangerous } = resolveCronPermissions({ confirmMode: 'auto' });
+      const allowed = await confirmDangerous('sudo something');
+      expect(allowed).toBe(false);
+    });
+
+    it('also denies dangerous shell commands when confirmMode is strict', async () => {
+      const { confirmDangerous } = resolveCronPermissions({ confirmMode: 'strict' });
+      const allowed = await confirmDangerous('rm -rf /');
+      expect(allowed).toBe(false);
+    });
+
+    it('passes MCP tools through unchanged', async () => {
+      const mcpTools = {
+        'email__send_email': makeMcpTool('email__send_email'),
+        'calendar__create_event': makeMcpTool('calendar__create_event'),
+      };
+      const { filterMcpTools } = resolveCronPermissions({});
+      const filtered = filterMcpTools(mcpTools);
+      // Both tools should be the same object references (unmodified)
+      expect(filtered['email__send_email']).toBe(mcpTools['email__send_email']);
+      expect(filtered['calendar__create_event']).toBe(mcpTools['calendar__create_event']);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // (b) read-only toolMode: blocks write tools, allows read-only tools
+  // -------------------------------------------------------------------------
+  describe('toolMode: read-only', () => {
+    it('still denies dangerous shell commands', async () => {
+      const { confirmDangerous } = resolveCronPermissions({ toolMode: 'read-only' });
+      const allowed = await confirmDangerous('rm -rf /tmp/foo');
+      expect(allowed).toBe(false);
+    });
+
+    it('blocks write-capable MCP tools (no read-only suffix)', async () => {
+      const mcpTools = {
+        'email__send_email': makeMcpTool('email__send_email'),
+        'calendar__create_event': makeMcpTool('calendar__create_event'),
+        'github__create_issue': makeMcpTool('github__create_issue'),
+      };
+      const { filterMcpTools } = resolveCronPermissions({ toolMode: 'read-only' });
+      const filtered = filterMcpTools(mcpTools);
+
+      // Stubs should be different objects from originals
+      expect(filtered['email__send_email']).not.toBe(mcpTools['email__send_email']);
+      expect(filtered['calendar__create_event']).not.toBe(mcpTools['calendar__create_event']);
+      expect(filtered['github__create_issue']).not.toBe(mcpTools['github__create_issue']);
+
+      // Stubs should return a blocked-message string
+      const result = await filtered['email__send_email'].execute({});
+      expect(typeof result).toBe('string');
+      expect(result).toContain('[blocked]');
+      expect(result).toContain('email__send_email');
+    });
+
+    it('allows MCP tools with read-only suffixes through unchanged', async () => {
+      // Tool names that END with a recognized read-only suffix.
+      // The READONLY_SUFFIX_RE uses (?:^|_) so it matches both bare-verb names
+      // (e.g. "server__search" — verb directly after "__") and underscore-prefixed
+      // names (e.g. "drive__files_read" — verb after an extra underscore).
+      // Note: "email__list_emails" does NOT qualify — it ends with "_emails", not "_list".
+      const mcpTools = {
+        'contacts__search': makeMcpTool('contacts__search'),          // bare verb after __
+        'drive__files_read': makeMcpTool('drive__files_read'),        // verb after extra _
+        'calendar__events_get': makeMcpTool('calendar__events_get'),  // verb after extra _
+        'db__query': makeMcpTool('db__query'),                        // bare verb after __
+        'api__lookup': makeMcpTool('api__lookup'),                    // bare verb after __
+        'files__find': makeMcpTool('files__find'),                    // bare verb after __
+        'email__list': makeMcpTool('email__list'),                    // bare verb after __
+      };
+      const { filterMcpTools } = resolveCronPermissions({ toolMode: 'read-only' });
+      const filtered = filterMcpTools(mcpTools);
+
+      // Each read-only tool should be the same object reference (unmodified)
+      for (const name of Object.keys(mcpTools)) {
+        expect(filtered[name]).toBe(mcpTools[name]);
+      }
+    });
+
+    it('passes non-MCP built-in tools through unchanged', async () => {
+      const builtinTools = {
+        shell: makeMcpTool('shell'),
+        memory: makeMcpTool('memory'),
+      };
+      const { filterMcpTools } = resolveCronPermissions({ toolMode: 'read-only' });
+      const filtered = filterMcpTools(builtinTools);
+
+      expect(filtered['shell']).toBe(builtinTools['shell']);
+      expect(filtered['memory']).toBe(builtinTools['memory']);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // (c) skipPermissions: true — allows everything unconditionally
+  // -------------------------------------------------------------------------
+  describe('skipPermissions: true', () => {
+    it('allows dangerous shell commands', async () => {
+      const { confirmDangerous } = resolveCronPermissions({ skipPermissions: true });
+      const allowed = await confirmDangerous('rm -rf /important');
+      expect(allowed).toBe(true);
+    });
+
+    it('passes MCP write tools through unchanged', async () => {
+      const mcpTools = {
+        'email__send_email': makeMcpTool('email__send_email'),
+        'github__create_issue': makeMcpTool('github__create_issue'),
+      };
+      const { filterMcpTools } = resolveCronPermissions({ skipPermissions: true });
+      const filtered = filterMcpTools(mcpTools);
+
+      expect(filtered['email__send_email']).toBe(mcpTools['email__send_email']);
+      expect(filtered['github__create_issue']).toBe(mcpTools['github__create_issue']);
+    });
+
+    it('overrides toolMode: read-only', async () => {
+      const mcpTools = {
+        'email__send_email': makeMcpTool('email__send_email'),
+      };
+      const { confirmDangerous, filterMcpTools } = resolveCronPermissions({
+        toolMode: 'read-only',
+        skipPermissions: true,
+      });
+
+      // Dangerous shell should be allowed
+      expect(await confirmDangerous('rm -rf /')).toBe(true);
+      // Write MCP tool should pass through unchanged
+      const filtered = filterMcpTools(mcpTools);
+      expect(filtered['email__send_email']).toBe(mcpTools['email__send_email']);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // (d) confirmMode: off — allow dangerous shell even without skipPermissions
+  // -------------------------------------------------------------------------
+  describe('confirmMode: off', () => {
+    it('allows dangerous shell commands', async () => {
+      const { confirmDangerous } = resolveCronPermissions({ confirmMode: 'off' });
+      const allowed = await confirmDangerous('rm -rf /tmp/something');
+      expect(allowed).toBe(true);
+    });
+
+    it('passes MCP tools through unchanged when toolMode is write (default)', async () => {
+      const mcpTools = {
+        'email__send_email': makeMcpTool('email__send_email'),
+      };
+      const { filterMcpTools } = resolveCronPermissions({ confirmMode: 'off' });
+      const filtered = filterMcpTools(mcpTools);
+      expect(filtered['email__send_email']).toBe(mcpTools['email__send_email']);
+    });
+
+    // Regression test for bug: confirmMode:'off' must NOT bypass toolMode:'read-only' MCP filter.
+    // The two axes are orthogonal — confirmMode controls shell danger gate; toolMode controls MCP gate.
+    it('still enforces toolMode:read-only MCP filter even when confirmMode is off', async () => {
+      const mcpTools = {
+        'email__send_email': makeMcpTool('email__send_email'),  // write tool — should be blocked
+        'contacts__search': makeMcpTool('contacts__search'),    // read-only tool — should pass
+      };
+      const { confirmDangerous, filterMcpTools } = resolveCronPermissions({
+        confirmMode: 'off',
+        toolMode: 'read-only',
+      });
+
+      // Shell danger gate: off → dangerous commands allowed
+      expect(await confirmDangerous('rm -rf /')).toBe(true);
+
+      // MCP write gate: read-only → write MCP tools blocked despite confirmMode:'off'
+      const filtered = filterMcpTools(mcpTools);
+      expect(filtered['email__send_email']).not.toBe(mcpTools['email__send_email']);
+      const result = await filtered['email__send_email'].execute({});
+      expect(result).toContain('[blocked]');
+
+      // Read-only MCP tools still pass through
+      expect(filtered['contacts__search']).toBe(mcpTools['contacts__search']);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // (e) Regex correctness — READONLY_SUFFIX_RE shared with reference-tool-lookup
+  // -------------------------------------------------------------------------
+  describe('read-only suffix matching (READONLY_SUFFIX_RE)', () => {
+    it('allows tool where the verb appears directly after __ (no extra underscore)', async () => {
+      // e.g. "server__search" — verb "search" directly after "__", matched by (?:^|_)
+      const mcpTools = {
+        'server__search': makeMcpTool('server__search'),
+        'server__list': makeMcpTool('server__list'),
+        'server__get': makeMcpTool('server__get'),
+      };
+      const { filterMcpTools } = resolveCronPermissions({ toolMode: 'read-only' });
+      const filtered = filterMcpTools(mcpTools);
+
+      for (const name of Object.keys(mcpTools)) {
+        expect(filtered[name]).toBe(mcpTools[name]);
+      }
+    });
+
+    it('blocks tool whose name contains a read-only verb in the middle but not at the end', async () => {
+      // e.g. "email__list_emails" — "_list" is NOT at the end; ends with "_emails"
+      const mcpTools = {
+        'email__list_emails': makeMcpTool('email__list_emails'),
+        'contacts__search_results': makeMcpTool('contacts__search_results'),
+      };
+      const { filterMcpTools } = resolveCronPermissions({ toolMode: 'read-only' });
+      const filtered = filterMcpTools(mcpTools);
+
+      // These should be stubbed because they don't end with a read-only verb
+      for (const name of Object.keys(mcpTools)) {
+        expect(filtered[name]).not.toBe(mcpTools[name]);
+        const result = await filtered[name].execute({});
+        expect(result).toContain('[blocked]');
+      }
+    });
   });
 });

@@ -1,3 +1,21 @@
+/**
+ * Risk-based confirmation policy for a cron job.
+ *
+ * - `'off'`: auto-allow all tool calls (equivalent to `skipPermissions: true`).
+ * - `'auto'` (default): auto-deny high-risk shell commands; non-high-risk proceeds unprompted.
+ * - `'strict'`: auto-deny high-risk shell commands; this is the same as `auto` for cron
+ *   because there is no interactive user to prompt.
+ */
+export type CronConfirmMode = 'off' | 'auto' | 'strict';
+
+/**
+ * Tool-access mode for a cron job.
+ *
+ * - `'write'` (default): all tools may execute, subject to confirmMode.
+ * - `'read-only'`: dangerous shell commands are denied; write-capable MCP tools are blocked.
+ */
+export type CronToolMode = 'write' | 'read-only';
+
 /** A recurring task that Bernard executes on a cron schedule. */
 export interface CronJob {
   /** Unique identifier (UUID). */
@@ -18,6 +36,27 @@ export interface CronJob {
   lastRunStatus?: 'success' | 'error' | 'running';
   /** Truncated agent response from the most recent execution. */
   lastResult?: string;
+  /**
+   * Risk-based confirmation policy for this job.
+   *
+   * When absent, defaults to `'auto'` (high-risk shell commands are auto-denied;
+   * all other tool calls proceed unprompted). This exactly reproduces legacy behavior.
+   */
+  confirmMode?: CronConfirmMode;
+  /**
+   * Tool-access mode for this job.
+   *
+   * When absent, defaults to `'write'` (all tools may execute, subject to `confirmMode`).
+   * Set to `'read-only'` to deny dangerous shell commands and block write-capable MCP tools.
+   */
+  toolMode?: CronToolMode;
+  /**
+   * When `true`, skip all permission checks — allow every tool call unconditionally.
+   *
+   * Overrides both `confirmMode` and `toolMode`. Use with caution: this grants the
+   * cron job the same unrestricted access as a user-interactive session with no safeguards.
+   */
+  skipPermissions?: boolean;
 }
 
 /** A notification generated when a cron job completes and produces output. */
