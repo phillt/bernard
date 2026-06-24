@@ -84,8 +84,15 @@ export class Scheduler {
       lastRunStatus: 'running',
     });
 
+    // Re-read the job from disk at execution time so that any edits made
+    // between reconcile() and now (e.g. confirmMode / toolMode / skipPermissions
+    // updates, #260) take effect on the next fire without a daemon restart.
+    // Fall back to the captured snapshot if the job was deleted between enqueue
+    // and execution (rare race; running with stale data is better than crashing).
+    const currentJob = this.store.getJob(job.id) ?? job;
+
     try {
-      const result = await runJob(job, this.log);
+      const result = await runJob(currentJob, this.log);
       this.store.updateJob(job.id, {
         lastRunStatus: result.success ? 'success' : 'error',
         lastResult: result.output.slice(0, 2000), // Truncate to avoid huge JSON

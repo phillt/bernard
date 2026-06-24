@@ -157,7 +157,7 @@ vi.mock('../rag.js', () => ({
   RAGStore: vi.fn(() => mockRagStoreInstance),
 }));
 
-import { runJob } from './runner.js';
+import { runJob, resolveCronJobPosture } from './runner.js';
 import { loadConfig } from '../config.js';
 import type { CronJob } from './types.js';
 
@@ -169,6 +169,11 @@ const testJob: CronJob = {
   enabled: true,
   createdAt: new Date().toISOString(),
 };
+
+// Helper to build a minimal ConfirmActionInput for testing.
+function confirmInput(risk: 'low' | 'medium' | 'high') {
+  return { toolName: 'mock', args: {}, risk, reason: 'test' };
+}
 
 describe('runJob', () => {
   beforeEach(() => {
@@ -365,5 +370,190 @@ describe('runJob', () => {
     expect(capturedSystem).toContain('## Persistent Notes');
     expect(capturedSystem).toContain('cron_notes_read');
     expect(capturedSystem).toContain('cron_notes_write');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveCronJobPosture — unit tests for per-job permission posture (#260)
+// ---------------------------------------------------------------------------
+
+describe('resolveCronJobPosture', () => {
+  const baseJob: CronJob = {
+    id: 'job-1',
+    name: 'Test',
+    schedule: '* * * * *',
+    prompt: 'do stuff',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+  };
+
+  // --- (a) Legacy / unset-fields behavior ---
+
+  describe('unset fields — reproduces legacy behavior', () => {
+    it('defaults toolMode to write', () => {
+      const { toolMode } = resolveCronJobPosture(baseJob);
+      expect(toolMode).toBe('write');
+    });
+
+    it('defaults confirmMode to auto', () => {
+      const { confirmMode } = resolveCronJobPosture(baseJob);
+      expect(confirmMode).toBe('auto');
+    });
+
+    it('defaults confirmThreshold to high', () => {
+      const { confirmThreshold } = resolveCronJobPosture(baseJob);
+      expect(confirmThreshold).toBe('high');
+    });
+
+    it('auto-denies high-risk calls', async () => {
+      const { confirmAction } = resolveCronJobPosture(baseJob);
+      expect(await confirmAction(confirmInput('high'))).toBe(false);
+    });
+
+    it('auto-approves medium-risk calls', async () => {
+      const { confirmAction } = resolveCronJobPosture(baseJob);
+      expect(await confirmAction(confirmInput('medium'))).toBe(true);
+    });
+
+    it('auto-approves low-risk calls', async () => {
+      const { confirmAction } = resolveCronJobPosture(baseJob);
+      expect(await confirmAction(confirmInput('low'))).toBe(true);
+    });
+
+    it('dangerous shell commands (risk:high) are auto-denied by the default posture', async () => {
+      // Dangerous shell commands have meta.kind:'dangerous' → riskFromMeta → risk:'high'.
+      // With default posture (confirmMode:'auto', threshold:'high'), augmentTools calls
+      // confirmAction for high-risk tools; confirmAction returns false → DENIED.
+      // This verifies the end-to-end posture for the default (legacy) cron case.
+      const { confirmThreshold, confirmAction } = resolveCronJobPosture(baseJob);
+      expect(confirmThreshold).toBe('high');
+      // confirmAction is invoked by augmentTools when shouldConfirm(risk, threshold) is true.
+      // shouldConfirm('high', 'high') === true, so confirmAction fires:
+      expect(await confirmAction(confirmInput('high'))).toBe(false); // denied
+    });
+  });
+
+  // --- (b) toolMode:'read-only' blocks writes even with confirmMode:'off' ---
+
+  describe('toolMode:read-only + confirmMode:off — orthogonal axes', () => {
+    const job: CronJob = { ...baseJob, toolMode: 'read-only', confirmMode: 'off' };
+
+    it('resolves toolMode to read-only', () => {
+      const { toolMode } = resolveCronJobPosture(job);
+      expect(toolMode).toBe('read-only');
+    });
+
+    it('resolves confirmThreshold to never (confirmMode:off)', () => {
+      const { confirmThreshold } = resolveCronJobPosture(job);
+      expect(confirmThreshold).toBe('never');
+    });
+
+    it('confirmAction approves all risk levels (threshold:never)', async () => {
+      const { confirmAction } = resolveCronJobPosture(job);
+      expect(await confirmAction(confirmInput('high'))).toBe(true);
+      expect(await confirmAction(confirmInput('medium'))).toBe(true);
+      expect(await confirmAction(confirmInput('low'))).toBe(true);
+    });
+
+    it('toolMode is still read-only despite confirmMode:off (axes are orthogonal)', () => {
+      // The confirm gate is open (threshold:never), but the block gate is still
+      // wired as 'read-only'. This is the critical correctness property: a job
+      // with confirmMode:'off' must not bypass the read-only block gate.
+      const { toolMode, confirmThreshold } = resolveCronJobPosture(job);
+      expect(toolMode).toBe('read-only');
+      expect(confirmThreshold).toBe('never');
+      // Both can be inspected independently — block gate reads toolMode, confirm
+      // gate reads confirmThreshold. Neither overrides the other.
+    });
+  });
+
+  // --- (c) skipPermissions:true dissolves both gates ---
+
+  describe('skipPermissions:true — both gates dissolved', () => {
+    const job: CronJob = { ...baseJob, skipPermissions: true };
+
+    it('resolves toolMode to write', () => {
+      const { toolMode } = resolveCronJobPosture(job);
+      expect(toolMode).toBe('write');
+    });
+
+    it('resolves confirmMode to off', () => {
+      const { confirmMode } = resolveCronJobPosture(job);
+      expect(confirmMode).toBe('off');
+    });
+
+    it('resolves confirmThreshold to never', () => {
+      const { confirmThreshold } = resolveCronJobPosture(job);
+      expect(confirmThreshold).toBe('never');
+    });
+
+    it('confirmAction approves all risk levels', async () => {
+      const { confirmAction } = resolveCronJobPosture(job);
+      expect(await confirmAction(confirmInput('high'))).toBe(true);
+      expect(await confirmAction(confirmInput('medium'))).toBe(true);
+      expect(await confirmAction(confirmInput('low'))).toBe(true);
+    });
+
+    it('skipPermissions overrides any explicit toolMode:read-only', () => {
+      const jobWithBoth: CronJob = { ...baseJob, skipPermissions: true, toolMode: 'read-only' };
+      const { toolMode, confirmThreshold } = resolveCronJobPosture(jobWithBoth);
+      expect(toolMode).toBe('write');
+      expect(confirmThreshold).toBe('never');
+    });
+
+    it('dangerous shell commands (risk:high) are ALLOWED by skipPermissions (no safeguards)', async () => {
+      // With skipPermissions:true the threshold is 'never', so augmentTools'
+      // shouldConfirm(risk, 'never') short-circuits to false — confirmAction is
+      // never called. Dangerous shell can run. This is the documented intent:
+      // the user explicitly opted the job in to "no safeguards".
+      const { confirmThreshold, confirmAction } = resolveCronJobPosture({ ...baseJob, skipPermissions: true });
+      expect(confirmThreshold).toBe('never');
+      // confirmAction is never called by augmentTools when threshold='never',
+      // but if called directly it would return true (matches threshold logic):
+      expect(await confirmAction(confirmInput('high'))).toBe(true);
+    });
+  });
+
+  // --- Additional confirmMode variants ---
+
+  describe('confirmMode:strict — denies high and medium risk', () => {
+    const job: CronJob = { ...baseJob, confirmMode: 'strict' };
+
+    it('resolves confirmThreshold to medium', () => {
+      const { confirmThreshold } = resolveCronJobPosture(job);
+      expect(confirmThreshold).toBe('medium');
+    });
+
+    it('auto-denies high-risk calls', async () => {
+      const { confirmAction } = resolveCronJobPosture(job);
+      expect(await confirmAction(confirmInput('high'))).toBe(false);
+    });
+
+    it('auto-denies medium-risk calls', async () => {
+      const { confirmAction } = resolveCronJobPosture(job);
+      expect(await confirmAction(confirmInput('medium'))).toBe(false);
+    });
+
+    it('auto-approves low-risk calls', async () => {
+      const { confirmAction } = resolveCronJobPosture(job);
+      expect(await confirmAction(confirmInput('low'))).toBe(true);
+    });
+  });
+
+  describe('toolMode:read-only with default confirmMode — auto-deny high + block writes', () => {
+    const job: CronJob = { ...baseJob, toolMode: 'read-only' };
+
+    it('resolves toolMode to read-only', () => {
+      expect(resolveCronJobPosture(job).toolMode).toBe('read-only');
+    });
+
+    it('resolves confirmThreshold to high (auto default)', () => {
+      expect(resolveCronJobPosture(job).confirmThreshold).toBe('high');
+    });
+
+    it('still auto-denies high-risk calls via confirm gate', async () => {
+      const { confirmAction } = resolveCronJobPosture(job);
+      expect(await confirmAction(confirmInput('high'))).toBe(false);
+    });
   });
 });
