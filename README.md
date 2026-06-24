@@ -300,6 +300,69 @@ Prefix with `\` to send a `/`-prefixed message as text instead of a command (e.g
 
 ---
 
+## Voice (TTS)
+
+Bernard can speak its responses aloud using the host OS's built-in text-to-speech tool. All speech is non-blocking — the UI never stalls while audio plays.
+
+### Platform backends
+
+| Platform | Backend | Notes |
+| -------- | ------- | ----- |
+| macOS | `say` | Built-in — no install required |
+| Linux | `spd-say` → `espeak-ng` → `espeak` | First available binary is used |
+| Windows | PowerShell `System.Speech` | Built-in — no install required |
+
+### Linux install hints
+
+```bash
+# Ubuntu / Debian
+sudo apt install speech-dispatcher espeak-ng
+
+# Fedora
+sudo dnf install speech-dispatcher espeak-ng
+
+# Arch Linux
+sudo pacman -S speech-dispatcher espeak-ng
+```
+
+### Enabling voice
+
+```bash
+# CLI flag — voice on for this session
+bernard --voice
+
+# Specific backend
+bernard --voice --voice-backend spd-say
+
+# Speech rate (words-per-minute)
+bernard --voice --voice-rate 160
+
+# Smoke-test the TTS backend
+bernard voice-test
+bernard voice-test "Custom phrase here"
+```
+
+### REPL `/voice` command
+
+| Command | Description |
+| ------- | ----------- |
+| `/voice` or `/voice on` | Enable TTS for assistant responses |
+| `/voice off` | Disable TTS and stop any current speech |
+| `/voice status` | Show on/off state and resolved backend |
+| `/voice test [text]` | Speak a phrase immediately |
+
+The on/off state is persisted to the active profile so it survives restarts.
+
+### Environment variables
+
+| Variable | Description | Default |
+| -------- | ----------- | ------- |
+| `BERNARD_VOICE` | Enable TTS (`true` or `1`) | `false` |
+| `BERNARD_VOICE_BACKEND` | Backend override (`auto`, `macos-say`, `spd-say`, `espeak-ng`, `espeak`, `windows-speech`) | `auto` |
+| `BERNARD_VOICE_RATE` | Speech rate in words-per-minute | (backend default) |
+
+---
+
 ## Tools
 
 Bernard has access to the following tools, which it calls automatically based on your requests.

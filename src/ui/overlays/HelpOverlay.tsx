@@ -27,6 +27,7 @@ const HELP_ROWS: HelpRow[] = [
   { command: '/refresh-models', description: 'Force-refresh the model catalog from the gateway' },
   { command: '/provider', description: 'Manage providers (alias of /models)' },
   { command: '/theme', description: 'Switch color theme' },
+  { command: '/voice', description: 'Toggle text-to-speech readback and backend' },
   { command: '/routines', description: 'List saved routines' },
   { command: '/create-routine', description: 'Create a routine with guided AI assistance' },
   { command: '/create-task', description: 'Create a task routine with guided AI assistance' },

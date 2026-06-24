@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { KEYS_PATH, ENV_PATH, LEGACY_DIR } from './paths.js';
 import { loadCustomProviders, validateBaseURL, type CustomProvider } from './custom-providers.js';
+import { type VoiceBackend, VOICE_BACKEND_VALUES } from './voice-service.js';
 import { loadProfiles, saveActiveSettings, type ProfileSettings } from './profiles.js';
 import {
   setMaxConcurrentAgents,
@@ -179,9 +180,19 @@ export interface BernardConfig {
    * env or preferences. See `bernard add-provider` for the persistent path.
    */
   providerBaseUrl?: string;
+  /** Whether text-to-speech readback is active after each assistant turn. */
+  voiceTts: boolean;
+  /** Which TTS backend to use (`'auto'` = platform-detect). */
+  voiceBackend: VoiceBackend;
+  /** Optional voice name passed to the TTS backend. */
+  voiceVoice?: string;
+  /** Optional speech rate in words per minute. */
+  voiceRate?: number;
 }
 
 const DEFAULT_PROVIDER = 'anthropic';
+const DEFAULT_VOICE_TTS = false;
+const DEFAULT_VOICE_BACKEND: VoiceBackend = 'auto';
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_SHELL_TIMEOUT = 30000;
 const DEFAULT_TOKEN_WINDOW = 0;
@@ -224,6 +235,11 @@ export function isModelMode(v: unknown): v is ModelMode {
 /** Type guard for `responseStyle` string values (#133). */
 export function isResponseStyle(v: unknown): v is ResponseStyle {
   return typeof v === 'string' && (RESPONSE_STYLE_IDS as ReadonlyArray<string>).includes(v);
+}
+
+/** Type guard for `voiceBackend` string values. */
+export function isVoiceBackend(v: unknown): v is VoiceBackend {
+  return typeof v === 'string' && (VOICE_BACKEND_VALUES as ReadonlyArray<string>).includes(v);
 }
 
 /**
@@ -349,6 +365,10 @@ export function savePreferences(prefs: {
   activeLineupId?: string;
   toolPermissions?: PermissionRule[] | ToolPermissions;
   skipPermissions?: boolean;
+  voiceTts?: boolean;
+  voiceBackend?: VoiceBackend;
+  voiceVoice?: string;
+  voiceRate?: number;
 }): void {
   // Patch shape matches ProfileSettings exactly — keys present in `prefs`
   // (including explicit `undefined`s from resetOption / resetAllOptions) are
@@ -396,6 +416,10 @@ export function loadPreferences(): {
   activeLineupId?: string;
   toolPermissions?: PermissionRule[];
   skipPermissions?: boolean;
+  voiceTts?: boolean;
+  voiceBackend?: VoiceBackend;
+  voiceVoice?: string;
+  voiceRate?: number;
 } {
   // Routes through the active profile in profiles.json (#207). Each field is
   // type-checked here so a malformed stored value falls through to undefined
@@ -446,6 +470,10 @@ export function loadPreferences(): {
     toolPermissions: sanitizePermissionRules(parsed.toolPermissions),
     skipPermissions:
       typeof parsed.skipPermissions === 'boolean' ? parsed.skipPermissions : undefined,
+    voiceTts: typeof parsed.voiceTts === 'boolean' ? parsed.voiceTts : undefined,
+    voiceBackend: isVoiceBackend(parsed.voiceBackend) ? parsed.voiceBackend : undefined,
+    voiceVoice: typeof parsed.voiceVoice === 'string' ? parsed.voiceVoice : undefined,
+    voiceRate: typeof parsed.voiceRate === 'number' ? parsed.voiceRate : undefined,
   };
 }
 
@@ -856,6 +884,10 @@ export function loadConfig(overrides?: {
   model?: string;
   providerBaseUrl?: string;
   allowProviderBaseUrl?: boolean;
+  voiceTts?: boolean;
+  voiceBackend?: VoiceBackend;
+  voiceVoice?: string;
+  voiceRate?: number;
 }): BernardConfig {
   // Load .env from cwd first, then XDG config dir, then legacy ~/.bernard/
   const cwdEnv = path.join(process.cwd(), '.env');
@@ -1075,6 +1107,31 @@ export function loadConfig(overrides?: {
     customProviders,
   );
 
+  // Voice TTS settings. Precedence: CLI override > prefs > env > default.
+  const voiceTts =
+    overrides?.voiceTts ??
+    prefs.voiceTts ??
+    (process.env.BERNARD_VOICE_TTS === 'true' || process.env.BERNARD_VOICE_TTS === '1'
+      ? true
+      : DEFAULT_VOICE_TTS);
+  const envVoiceBackend = isVoiceBackend(process.env.BERNARD_VOICE_BACKEND)
+    ? (process.env.BERNARD_VOICE_BACKEND as VoiceBackend)
+    : undefined;
+  const voiceBackend: VoiceBackend =
+    overrides?.voiceBackend ?? prefs.voiceBackend ?? envVoiceBackend ?? DEFAULT_VOICE_BACKEND;
+  const voiceVoice =
+    overrides?.voiceVoice ??
+    prefs.voiceVoice ??
+    (process.env.BERNARD_VOICE_VOICE || undefined);
+  const rawVoiceRate =
+    overrides?.voiceRate ??
+    prefs.voiceRate ??
+    (process.env.BERNARD_VOICE_RATE ? parseInt(process.env.BERNARD_VOICE_RATE, 10) : undefined);
+  const voiceRate =
+    rawVoiceRate !== undefined && Number.isFinite(rawVoiceRate) && rawVoiceRate > 0
+      ? rawVoiceRate
+      : undefined;
+
   const config: BernardConfig = {
     provider,
     model,
@@ -1112,6 +1169,10 @@ export function loadConfig(overrides?: {
     activeLineupId: prefs.activeLineupId,
     toolPermissions: prefs.toolPermissions ?? [],
     skipPermissions: prefs.skipPermissions ?? false,
+    voiceTts,
+    voiceBackend,
+    voiceVoice,
+    voiceRate,
   };
 
   validateConfig(config);
@@ -1186,6 +1247,10 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'activeLineupId',
   'toolPermissions',
   'skipPermissions',
+  'voiceTts',
+  'voiceBackend',
+  'voiceVoice',
+  'voiceRate',
 ];
 
 /**

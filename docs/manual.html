@@ -2634,6 +2634,102 @@
           <li>Disable RAG entirely by setting <code>BERNARD_RAG_ENABLED=false</code></li>
         </ul>
 
+        <!-- ═══════════════ Voice TTS ═══════════════ -->
+        <h2 id="voice">Voice (TTS) <span class="vtag">v1.0.0+</span></h2>
+        <p>
+          Bernard can speak its responses aloud using the host OS's built-in text-to-speech engine.
+          All speech is non-blocking — the UI never stalls while audio plays.
+        </p>
+
+        <h3 id="voice-backends">Platform Backends</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Platform</th>
+                <th>Backend</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>macOS</td>
+                <td><code>say</code></td>
+                <td>Built-in — no install required</td>
+              </tr>
+              <tr>
+                <td>Linux</td>
+                <td><code>spd-say</code> &rarr; <code>espeak-ng</code> &rarr; <code>espeak</code></td>
+                <td>First available binary is used; install with your package manager</td>
+              </tr>
+              <tr>
+                <td>Windows</td>
+                <td>PowerShell <code>System.Speech</code></td>
+                <td>Built-in — no install required</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="voice-linux-install">Linux Install</h3>
+        <pre><code><span class="comment"># Ubuntu / Debian</span>
+<span class="accent">$</span> sudo apt install speech-dispatcher espeak-ng
+
+<span class="comment"># Fedora</span>
+<span class="accent">$</span> sudo dnf install speech-dispatcher espeak-ng
+
+<span class="comment"># Arch Linux</span>
+<span class="accent">$</span> sudo pacman -S speech-dispatcher espeak-ng</code></pre>
+
+        <h3 id="voice-usage">Usage</h3>
+        <pre><code><span class="comment"># Enable voice for this session</span>
+<span class="accent">$</span> bernard --voice
+
+<span class="comment"># Choose a specific backend</span>
+<span class="accent">$</span> bernard --voice --voice-backend spd-say
+
+<span class="comment"># Set speech rate (words-per-minute)</span>
+<span class="accent">$</span> bernard --voice --voice-rate 160
+
+<span class="comment"># Smoke-test the TTS backend</span>
+<span class="accent">$</span> bernard voice-test
+<span class="accent">$</span> bernard voice-test "Custom phrase here"</code></pre>
+
+        <h3 id="voice-repl">REPL Commands</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Command</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>/voice</code> or <code>/voice on</code></td>
+                <td>Enable TTS — Bernard speaks assistant responses</td>
+              </tr>
+              <tr>
+                <td><code>/voice off</code></td>
+                <td>Disable TTS and stop any current speech</td>
+              </tr>
+              <tr>
+                <td><code>/voice status</code></td>
+                <td>Show on/off state and resolved backend</td>
+              </tr>
+              <tr>
+                <td><code>/voice test [text]</code></td>
+                <td>Speak a phrase immediately (defaults to a greeting)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          The on/off state is persisted to the active profile so it survives session restarts.
+          Environment variables: <code>BERNARD_VOICE=true</code>, <code>BERNARD_VOICE_BACKEND</code>,
+          <code>BERNARD_VOICE_RATE</code>.
+        </p>
+
         <!-- ═══════════════ 13. Auto-Updates ═══════════════ -->
         <h2 id="updates">15. Auto-Updates <span class="vtag">v0.3.0+</span></h2>
         <p>
