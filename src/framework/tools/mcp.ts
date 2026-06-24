@@ -2,6 +2,7 @@ import type { Tool } from 'ai';
 import type { BernardTool, ToolMeta, ToolResult } from './types.js';
 import { isToolResult } from './types.js';
 import { isReadOnlyMCPSuffix } from '../../risk.js';
+import { normalizeToolResult } from '../../text.js';
 
 /**
  * Wraps an MCP tool at the boundary so it satisfies `BernardTool` with a
@@ -60,7 +61,7 @@ export function wrapMCPTool(
             error: { type: 'exec_failed', message: value.slice(0, 200) },
           };
         }
-        return { status: 'ok', result: value };
+        return { status: 'ok', result: normalizeToolResult(value) };
       } catch (e) {
         return {
           status: 'error',

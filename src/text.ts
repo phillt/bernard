@@ -9,3 +9,102 @@ export function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 1).trimEnd() + '…';
 }
+
+/**
+ * Conservative range of C1 control characters (U+0080–U+009F).
+ * These are invisible bytes that appear in strings incorrectly decoded as
+ * Latin-1 (ISO-8859-1) when the content was actually UTF-8.  They never
+ * appear legitimately in natural-language text, so their presence is a
+ * reliable signal that the string is mis-decoded mojibake.
+ *
+ * Common mojibake patterns seen in practice:
+ *   – (U+2013 EN DASH)     → "â€"" (0xE2 0x80 0x93 decoded as Latin-1 → Ã¢â‚¬â€œ)
+ *   — (U+2014 EM DASH)     → "â€"" (0xE2 0x80 0x94)
+ *   ' (U+2018 LEFT QUOTE)  → "â€˜"
+ *   ' (U+2019 RIGHT QUOTE) → "â€™"
+ *   " (U+201C LEFT DQUOTE) → "â€œ"
+ *   " (U+201D RIGHT DQUOTE)→ "â€"
+ *
+ * The gate strategy:
+ *   1. Only attempt repair when C1 bytes are present (0x80–0x9F as code
+ *      points when the string has already been JS-decoded from Latin-1).
+ *   2. Only ACCEPT the repair when it introduces zero U+FFFD replacement
+ *      characters AND the repaired string is shorter (multi-byte sequences
+ *      collapse, shrinking character count).
+ *   3. Apply NFC normalization unconditionally so combining characters and
+ *      equivalent code-point sequences are in canonical form.
+ *
+ * This avoids false-positives on printable Latin Extended characters that
+ * are legitimately in the data (©, ®, ½, etc.) because re-interpreting
+ * those as UTF-8 always produces U+FFFD — the "only accept when no FFFD"
+ * gate catches them.
+ *
+ * Literal escape un-escaping (\n, \uXXXX) is intentionally omitted: the
+ * risk of breaking legitimate backslash content (code, regex, Windows paths)
+ * outweighs the benefit.  Callers that know their input is JSON-escaped may
+ * apply JSON.parse to a quoted string before passing here.
+ */
+
+/** True when `s` contains at least one C1 control character (U+0080–U+009F). */
+function hasC1Bytes(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0x80 && c <= 0x9f) return true;
+  }
+  return false;
+}
+
+/**
+ * Normalize a single tool output string.
+ *
+ * - Always applies Unicode NFC normalization.
+ * - Attempts UTF-8-decoded-as-Latin-1 mojibake repair when C1 control bytes
+ *   are detected; only accepts the repair when it introduces no U+FFFD
+ *   replacement characters and shrinks the string (sign of successful
+ *   multi-byte reassembly).
+ *
+ * This function is intentionally conservative: clean ASCII, valid UTF-8,
+ * and printable Latin Extended characters (©, ®, …) pass through unchanged.
+ */
+export function normalizeToolText(s: string): string {
+  // Gate: only attempt re-interpretation when C1 bytes are present.
+  if (hasC1Bytes(s)) {
+    try {
+      // Re-interpret the string's raw code points as UTF-8 bytes.
+      const repaired = Buffer.from(s, 'latin1').toString('utf8');
+      // Accept only when no replacement chars were introduced AND the string
+      // shrank (multi-byte reassembly always reduces char count).
+      if (!repaired.includes('�') && repaired.length < s.length) {
+        return repaired.normalize('NFC');
+      }
+    } catch {
+      // Buffer conversion failure is unexpected but should never crash the
+      // caller — fall through to NFC normalization of the original string.
+    }
+  }
+  return s.normalize('NFC');
+}
+
+/**
+ * Recursively normalize all string values inside a tool result value.
+ *
+ * - Strings are passed through {@link normalizeToolText}.
+ * - Arrays have every element normalized recursively.
+ * - Plain objects have every string-valued property normalized recursively.
+ * - Non-string primitives and class instances are returned as-is.
+ *
+ * This is applied to MCP tool results which may contain arbitrary JSON shapes
+ * such as `{content: [{type:'text', text:'...'}]}` from Gmail / Calendar.
+ */
+export function normalizeToolResult(v: unknown): unknown {
+  if (typeof v === 'string') return normalizeToolText(v);
+  if (Array.isArray(v)) return v.map(normalizeToolResult);
+  if (v !== null && typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype) {
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(v as Record<string, unknown>)) {
+      out[key] = normalizeToolResult(val);
+    }
+    return out;
+  }
+  return v;
+}
