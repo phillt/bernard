@@ -151,6 +151,7 @@ import { persistAgentState } from './save.js';
 import { MessageStore } from './message-store.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers } from './ink-handlers.js';
+import { injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -2461,7 +2462,23 @@ export function App({
       // detail) rather than the dispatched version.
       const inflight = agent.processInput(agentInput, images, resolvedEntries);
       commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });
+      // Snapshot history length AFTER the user message push (synchronous) so
+      // the ask_user scanner below knows where this turn's tool results begin.
+      const historyLenAfterUserMsg = agent.getHistory().length;
+      // Per-turn dedup set — one entry per toolCallId we've already injected for.
+      // Prevents double-injection if the agent auto-continues after a length cut.
+      const askUserInjectedIds = new Set<string>();
       await inflight;
+      // Inject synthetic `role:'user'` messages for any ask_user answers that
+      // landed in history this turn (#245). Only run on non-aborted turns so
+      // cancelled turns don't emit a stale partial bubble.
+      if (!controller.signal.aborted) {
+        injectAskUserHistoryMessages(
+          agent.getHistory(),
+          historyLenAfterUserMsg,
+          askUserInjectedIds,
+        );
+      }
       turnCompleted = !controller.signal.aborted;
     } catch (err) {
       // AbortError on user-cancel is expected; don't dump it to the console.
