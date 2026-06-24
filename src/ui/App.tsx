@@ -732,6 +732,8 @@ export function App({
       }
       if (shouldSave) {
         const history = agent.getHistory();
+        // Threshold: 2 messages (one user + one assistant) is the minimum
+        // meaningful conversation. The exit path uses the same threshold.
         if (history.length < 2) {
           flashToast('Not enough conversation to summarize.', 'warning');
         } else {
@@ -739,6 +741,10 @@ export function App({
           try {
             const serialized = serializeMessages(history);
             const summarySite = resolveSiteModel(config, 'compressor');
+            // Cap fact extraction at 60 s to prevent a hung LLM call from
+            // freezing the REPL. Fails open: timeout → empty domain facts.
+            // AbortSignal.timeout auto-cancels without manual teardown.
+            const extractSignal = AbortSignal.timeout(60_000);
             const [summaryResult, domainFacts, candidateResult] = await Promise.all([
               generateText({
                 model: summarySite.model,
@@ -749,7 +755,7 @@ export function App({
                   { role: 'user', content: `Summarize this conversation:\n\n${serialized}` },
                 ],
               }),
-              extractDomainFacts(serialized, config),
+              extractDomainFacts(serialized, config, undefined, extractSignal),
               detectSpecialistCandidate(
                 serialized,
                 config,
@@ -768,11 +774,24 @@ export function App({
                 domainFacts.map((df) => stores.rag!.addFacts(df.facts, 'clear-save', df.domain)),
               );
               let storedFacts = 0;
-              results.forEach((r, i) => {
-                if (r.status === 'fulfilled') storedFacts += domainFacts[i].facts.length;
+              let failedDomains = 0;
+              results.forEach((r) => {
+                if (r.status === 'fulfilled') {
+                  // addFacts returns the number of new facts actually stored
+                  // (after dedup), not the input count.
+                  storedFacts += r.value;
+                } else {
+                  failedDomains++;
+                }
               });
               if (storedFacts > 0) {
                 debugLog('app:clear-save:rag', { storedFacts });
+              }
+              if (failedDomains > 0) {
+                flashToast(
+                  `Warning: ${failedDomains} domain(s) failed to save to RAG memory.`,
+                  'warning',
+                );
               }
             }
             if (candidateResult) {

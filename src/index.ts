@@ -418,7 +418,14 @@ async function runInkRepl(args: {
 
     try {
       const history = agent.getHistory();
-      if (ragStore && history.length >= 4) {
+      // Threshold: 2 messages (one user + one assistant) is the minimum
+      // meaningful conversation. Matches the /clear --save threshold.
+      //
+      // Asymmetry vs /clear --save: this exit path only feeds RAG (spawns the
+      // background worker for fact extraction). It does NOT write a
+      // session-summary memory entry — that is deliberately deferred to
+      // /clear --save, which runs interactively and can show the user the key.
+      if (ragStore && history.length >= 2) {
         const serialized = serializeMessages(history);
         if (serialized.trim()) {
           fs.mkdirSync(RAG_DIR, { recursive: true });
