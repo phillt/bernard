@@ -23,6 +23,7 @@ import { renderAgentStatusPlain, type AgentStatusInputs } from '../agent-status.
 import { verdictOf, type Check, type Verdict } from '../rubric.js';
 import type { ConfirmActionInput } from '../tools/types.js';
 import type { ConfirmThreshold } from '../risk.js';
+import { shouldConfirm } from '../risk.js';
 import { thresholdForMode } from '../policy/tool-mode.js';
 
 export {
@@ -94,12 +95,11 @@ export function resolveCronJobPosture(job: CronJob): CronJobPermissionPosture {
 
   const confirmThreshold: ConfirmThreshold = thresholdForMode(confirmMode);
 
-  const confirmAction = async (input: ConfirmActionInput): Promise<boolean> => {
-    if (confirmThreshold === 'never') return true;
-    if (confirmThreshold === 'high') return input.risk !== 'high';
-    // 'medium': deny both high and medium
-    return input.risk !== 'high' && input.risk !== 'medium';
-  };
+  // Headless decision: approve unless the risk crosses the resolved threshold.
+  // Reuses `shouldConfirm` (the canonical gate in augmentTools) so the
+  // confirmMode → risk → allow/deny logic stays in one place.
+  const confirmAction = async (input: ConfirmActionInput): Promise<boolean> =>
+    !shouldConfirm(input.risk, confirmThreshold);
 
   return { toolMode, confirmMode, confirmThreshold, confirmAction };
 }
