@@ -6,6 +6,7 @@ import type { ToolOptions, ShellResult } from './types.js';
 import { isReadOnlyShellInvocation } from '../tool-permissions.js';
 import type { BernardTool } from '../framework/tools/types.js';
 import { ok, err } from '../framework/tools/types.js';
+import { normalizeToolText } from '../text.js';
 
 const DANGEROUS_PATTERNS = [
   /\brm\s+(-[^\s]*\s+)*-[^\s]*r/, // rm with -r flag
@@ -146,13 +147,14 @@ export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, Sh
           maxBuffer: 1024 * 1024 * 10, // 10MB
           stdio: ['pipe', 'pipe', 'pipe'],
         });
-        return ok({ output: stdout || '(no output)', is_error: false });
+        return ok({ output: normalizeToolText(stdout) || '(no output)', is_error: false });
       } catch (e: unknown) {
         const execError = e as { stderr?: string; stdout?: string; message?: string };
-        const stderr = execError.stderr || '';
-        const stdout = execError.stdout || '';
+        const stderr = normalizeToolText(execError.stderr || '');
+        const stdout = normalizeToolText(execError.stdout || '');
+        const rawMessage = execError.message || 'Command failed';
         const output =
-          [stdout, stderr].filter(Boolean).join('\n') || execError.message || 'Command failed';
+          [stdout, stderr].filter(Boolean).join('\n') || normalizeToolText(rawMessage);
         return err({ type: 'exec_failed', message: output, snippet: output.slice(0, 200) });
       }
     },

@@ -8,6 +8,7 @@ import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
 import { attachMeta } from './framework/tools/adapter.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
+import { normalizeToolResult } from './text.js';
 
 /** Configuration for an MCP server launched via stdio subprocess. */
 interface MCPStdioConfig {
@@ -364,14 +365,16 @@ export class MCPManager {
         // so the caller sees the most recent failure reason.
         execute: async (args: unknown) => {
           try {
-            return await originalExecute(args);
+            const result = await originalExecute(args);
+            return normalizeToolResult(result);
           } catch (error) {
             if (serverName) {
               printInfo(`MCP tool "${name}" failed, reconnecting to "${serverName}"...`);
               const reconnected = await this.reconnectServer(serverName);
               if (reconnected && this.tools[name]) {
                 const freshTool = this.convertTool(name, this.tools[name]);
-                return await freshTool.execute(args);
+                const retryResult = await freshTool.execute(args);
+                return normalizeToolResult(retryResult);
               }
             }
             throw error;
