@@ -26,6 +26,13 @@ export function formatAskUserAnswers(
   // Headless — no user interaction took place.
   if ('unavailable' in payload) return null;
 
+  /** Formats one answer slot: `"Label: value"` or just `"value"`. */
+  const fmtSlot = (a: string | string[], i: number): string => {
+    const label = questions?.[i] ? `${questions[i]}: ` : '';
+    const value = Array.isArray(a) ? a.join(', ') : a;
+    return `${label}${value}`;
+  };
+
   if ('cancelled' in payload && payload.cancelled) {
     const answered = payload.answered;
     if (!answered || answered.length === 0) {
@@ -33,11 +40,7 @@ export function formatAskUserAnswers(
       return null;
     }
     // Partial answers before cancellation.
-    const lines = answered.map((a, i) => {
-      const label = questions?.[i] ? `${questions[i]}: ` : '';
-      const value = Array.isArray(a) ? a.join(', ') : a;
-      return `${label}${value}`;
-    });
+    const lines = answered.map(fmtSlot);
     lines.push('[cancelled]');
     return lines.join('\n');
   }
@@ -46,21 +49,9 @@ export function formatAskUserAnswers(
   const answers = (payload as { answers: (string | string[])[] }).answers;
   if (!answers || answers.length === 0) return null;
 
-  // Format all answers (single or multi-question) uniformly so that question
-  // labels are applied regardless of batch size. This ensures the output is
-  // consistent whether `questions` is provided or not.
-  const formatted = answers.map((a, i) => {
-    const label = questions?.[i] ? `${questions[i]}: ` : '';
-    const value = Array.isArray(a) ? a.join(', ') : a;
-    return `${label}${value}`;
-  });
-
-  if (answers.length === 1) {
-    // Single question — return the single formatted line directly (no newline).
-    return formatted[0];
-  }
-
-  return formatted.join('\n');
+  // Format all answers uniformly. `.join('\n')` on a single element produces no
+  // trailing newline, so no special-case needed for batch size 1.
+  return answers.map(fmtSlot).join('\n');
 }
 
 /**
