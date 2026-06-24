@@ -81,7 +81,12 @@ export class CronStore {
    *
    * @throws {Error} If the maximum number of jobs ({@link MAX_JOBS}) has been reached.
    */
-  createJob(name: string, schedule: string, prompt: string): CronJob {
+  createJob(
+    name: string,
+    schedule: string,
+    prompt: string,
+    options?: Pick<CronJob, 'confirmMode' | 'toolMode' | 'skipPermissions'>,
+  ): CronJob {
     const jobs = this.loadJobs();
     if (jobs.length >= MAX_JOBS) {
       throw new Error(`Maximum of ${MAX_JOBS} cron jobs reached.`);
@@ -93,6 +98,11 @@ export class CronStore {
       prompt,
       enabled: true,
       createdAt: new Date().toISOString(),
+      ...(options?.confirmMode !== undefined ? { confirmMode: options.confirmMode } : {}),
+      ...(options?.toolMode !== undefined ? { toolMode: options.toolMode } : {}),
+      ...(options?.skipPermissions !== undefined
+        ? { skipPermissions: options.skipPermissions }
+        : {}),
     };
     jobs.push(job);
     this.saveJobs(jobs);
@@ -117,6 +127,9 @@ export class CronStore {
         | 'lastRunStatus'
         | 'lastResult'
         | 'lastErrorCategory'
+        | 'confirmMode'
+        | 'toolMode'
+        | 'skipPermissions'
       >
     >,
   ): CronJob | undefined {

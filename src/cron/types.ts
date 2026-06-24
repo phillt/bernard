@@ -22,6 +22,32 @@ export interface CronJob {
   lastResult?: string;
   /** Failure-taxonomy category from the most recent failed execution, if any. */
   lastErrorCategory?: ToolErrorType;
+  /**
+   * Per-job risk-based confirmation posture. Mirrors `BernardConfig.confirmMode`.
+   * When unset, defaults to `'auto'` (deny high-risk, pass through the rest).
+   * - `'off'`    — auto-approve all tool calls regardless of risk (but still
+   *                subject to `toolMode` — an `'off'` job with `toolMode:
+   *                'read-only'` still blocks write tools headlessly).
+   * - `'auto'`   — deny high-risk calls; pass through medium/low (legacy default).
+   * - `'strict'` — deny both high- and medium-risk calls.
+   */
+  confirmMode?: 'off' | 'auto' | 'strict';
+  /**
+   * Per-job least-privilege tool gate. Mirrors `BernardConfig.toolMode`.
+   * When unset, defaults to `'write'` (no block gate) — preserving legacy
+   * behavior where cron jobs opted in to write operations at creation time.
+   * Set to `'read-only'` to prevent the agent from invoking any write or
+   * dangerous tool during this job's run.
+   */
+  toolMode?: 'read-only' | 'write';
+  /**
+   * Per-job "run without any permission checks or safeguards" flag. Mirrors
+   * `BernardConfig.skipPermissions`. When true, both the `toolMode` block
+   * gate and the `confirmMode` confirmation gate are dissolved — every tool
+   * call proceeds without restriction. Takes precedence over `confirmMode`
+   * and `toolMode`.
+   */
+  skipPermissions?: boolean;
 }
 
 /** A notification generated when a cron job completes and produces output. */

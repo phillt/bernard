@@ -31,7 +31,7 @@ export function isPureQuestion(text: string): boolean {
   return QUESTION_WORD_RE.test(trimmed);
 }
 
-function thresholdForMode(mode: 'off' | 'auto' | 'strict'): ConfirmThreshold {
+export function thresholdForMode(mode: 'off' | 'auto' | 'strict'): ConfirmThreshold {
   switch (mode) {
     case 'off':
       return 'never';

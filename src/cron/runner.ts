@@ -21,6 +21,9 @@ import {
 import { runDefinition } from '../framework/agents/run.js';
 import { renderAgentStatusPlain, type AgentStatusInputs } from '../agent-status.js';
 import { verdictOf, type Check, type Verdict } from '../rubric.js';
+import type { ConfirmActionInput } from '../tools/types.js';
+import type { ConfirmThreshold } from '../risk.js';
+import { thresholdForMode } from '../policy/tool-mode.js';
 
 export {
   /** Re-exported so existing imports against the runner module keep working. */
@@ -31,6 +34,74 @@ export {
 export interface RunJobResult {
   success: boolean;
   output: string;
+}
+
+/**
+ * Resolved headless permission posture for a single cron job run.
+ * Exported for unit testing.
+ */
+export interface CronJobPermissionPosture {
+  /** Resolved tool gate mode — drives the block gate in augmentTools. */
+  toolMode: 'read-only' | 'write';
+  /** Resolved confirm mode label (for Agent Status snapshot). */
+  confirmMode: 'off' | 'auto' | 'strict';
+  /** Resolved confirm threshold — drives the confirm gate in augmentTools. */
+  confirmThreshold: ConfirmThreshold;
+  /**
+   * Headless confirm action callback: auto-approves or auto-denies based on
+   * `confirmThreshold` without ever prompting the user.
+   *
+   * Note: shell.ts only invokes `confirmDangerous` when `confirmAction` is
+   * ABSENT (see the `!options.confirmAction` guard). Since cron always wires
+   * `confirmAction`, dangerous shell commands are governed by this callback
+   * (and by the `confirmThreshold` gate in augmentTools that decides whether
+   * to call it at all). With default/auto posture the threshold is 'high' and
+   * dangerous commands (risk:'high') are auto-denied via this callback.
+   * With `skipPermissions:true` the threshold is 'never' so this callback is
+   * never called and dangerous commands are allowed — the user opted the job
+   * in to "no safeguards" explicitly.
+   */
+  confirmAction: (input: ConfirmActionInput) => Promise<boolean>;
+}
+
+/**
+ * Derives the per-job headless permission posture from a {@link CronJob}'s
+ * optional `confirmMode`, `toolMode`, and `skipPermissions` fields.
+ *
+ * Resolution rules (evaluated in order):
+ * 1. `skipPermissions === true` → write + off (all gates dissolved, including
+ *    dangerous-shell denial — the user explicitly opted in to "no safeguards").
+ * 2. `toolMode` defaults to `'write'` (legacy: jobs opted in at creation).
+ * 3. `confirmMode` defaults to `'auto'` (deny high-risk, pass medium/low).
+ *
+ * The two axes are intentionally orthogonal: `confirmMode:'off'` (threshold
+ * `'never'`) does NOT bypass the `toolMode:'read-only'` block gate. The
+ * block gate is driven by `toolMode`; the confirm gate is driven by
+ * `confirmThreshold`. Both are wired independently into `augmentTools` via
+ * `ctx.policyDecision.toolMode`.
+ *
+ * Uses the canonical `thresholdForMode` from `src/policy/tool-mode.ts` so
+ * the `confirmMode → ConfirmThreshold` mapping stays in one place.
+ */
+export function resolveCronJobPosture(job: CronJob): CronJobPermissionPosture {
+  const toolMode: 'read-only' | 'write' = job.skipPermissions
+    ? 'write'
+    : (job.toolMode ?? 'write');
+
+  const confirmMode: 'off' | 'auto' | 'strict' = job.skipPermissions
+    ? 'off'
+    : (job.confirmMode ?? 'auto');
+
+  const confirmThreshold: ConfirmThreshold = thresholdForMode(confirmMode);
+
+  const confirmAction = async (input: ConfirmActionInput): Promise<boolean> => {
+    if (confirmThreshold === 'never') return true;
+    if (confirmThreshold === 'high') return input.risk !== 'high';
+    // 'medium': deny both high and medium
+    return input.risk !== 'high' && input.risk !== 'medium';
+  };
+
+  return { toolMode, confirmMode, confirmThreshold, confirmAction };
 }
 
 /**
@@ -77,20 +148,38 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     log(`MCP initialization failed, continuing without MCP tools: ${message}`);
   }
 
+  // --- Per-job permission posture (#260) ---
+  const {
+    toolMode: jobToolMode,
+    confirmMode: jobConfirmMode,
+    confirmThreshold: jobConfirmThreshold,
+    confirmAction: jobConfirmAction,
+  } = resolveCronJobPosture(job);
+
+  debugLog('cron:job:permissions', {
+    jobId: job.id,
+    jobToolMode,
+    jobConfirmMode,
+    jobConfirmThreshold,
+    skipPermissions: job.skipPermissions ?? false,
+  });
+
   const ctx = assembleContext({
     config,
     toolOptions: {
       shellTimeout: config.shellTimeout,
+      // confirmDangerous is the fallback inside shell.ts for when confirmAction
+      // is absent. Because cron always wires confirmAction below, this callback
+      // is never reached — but ToolOptions requires it, so supply a safe default.
       confirmDangerous: async () => false,
-      // Cron is headless: silently proceed through low/medium-risk tool calls, auto-deny high-risk
-      // (per #144 — "never send email unless explicitly authorized"). The agent receives a
-      // cancelled-shape result and can decide whether to surface the gap to the user.
-      confirmAction: async (input) => input.risk !== 'high',
-      // The read-only block gate (#179) is intentionally NOT wired here. Cron doesn't
-      // run the Policy Engine, so `ctx.policyDecision` is undefined; the augment layer
-      // then defaults `toolMode` to `'write'` and skips the block gate entirely. Cron
-      // jobs are user-scheduled and already opted-in to write operations — the REPL
-      // user did the consent at job-creation time.
+      // Headless confirm gate. augmentTools reads jobConfirmThreshold from
+      // ctx.policyDecision (set below) to decide whether to call this; the
+      // callback's own risk check is a defence-in-depth fallback.
+      confirmAction: jobConfirmAction,
+      // blockAction is intentionally omitted — cron is headless and the augment
+      // layer's fail-closed default (auto-deny when toolMode:'read-only' and no
+      // blockAction is provided) is the correct headless behavior. When the policy
+      // decision below sets mode:'read-only', write tool calls are auto-denied.
       // askUser intentionally omitted — no interactive user; the ask_user tool returns {unavailable}.
     },
     mcp: { tools: mcpTools, serverNames },
@@ -103,6 +192,21 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       toolProfiles: new ToolProfileStore({ seed: false }),
     },
   });
+
+  // Wire the per-job permission posture into the policy decision so that
+  // `runDefinition` → `augmentTools` sees the correct toolMode and
+  // confirmThreshold. Cron normally runs without a policyDecision (undefined),
+  // which causes augmentTools to default to toolMode:'write' and
+  // confirmThreshold derived from confirmAction alone. Setting it here keeps
+  // the two axes orthogonal: confirmMode:'off' does NOT bypass the read-only
+  // block gate because toolMode is consulted independently.
+  ctx.policyDecision = {
+    toolMode: {
+      mode: jobToolMode,
+      requireConfirmForWrite: jobConfirmThreshold !== 'never',
+      confirmThreshold: jobConfirmThreshold,
+    },
+  };
 
   const logStore = new CronLogStore();
   const runId = crypto.randomUUID();
@@ -148,11 +252,13 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     // plan store, so only the fields cron actually populates carry data;
     // everything else renders as `(none)`. Appended after the run's own output
     // so existing log readers still parse `finalOutput` cleanly.
+    // Use per-job resolved values (#260) rather than global config so the
+    // snapshot reflects the actual posture this run executed under.
     const statusInputs: AgentStatusInputs = {
       goal: job.prompt,
       permissions: {
-        toolMode: config.toolMode,
-        confirmMode: config.confirmMode,
+        toolMode: jobToolMode,
+        confirmMode: jobConfirmMode as 'off' | 'auto' | 'strict',
         sessionAllowedCount: 0,
       },
       constraints: null,
