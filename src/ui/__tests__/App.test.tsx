@@ -52,6 +52,16 @@ vi.mock('../../specialist-detector.js', () => ({
   detectSpecialistCandidate: vi.fn(async () => null),
 }));
 
+// Mock extractDomainFacts (but keep serializeMessages, SUMMARIZATION_PROMPT, etc. real).
+const mockExtractDomainFacts = vi.fn(async () => []);
+vi.mock('../../context.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../context.js')>();
+  return {
+    ...actual,
+    extractDomainFacts: (...args: unknown[]) => mockExtractDomainFacts(...args),
+  };
+});
+
 vi.mock('ai', async (importActual) => {
   const actual = await importActual<typeof import('ai')>();
   return {
@@ -86,8 +96,10 @@ import type { MemoryStore } from '../../memory.js';
 import type { RoutineStore } from '../../routines.js';
 import type { SpecialistStore } from '../../specialists.js';
 import type { CandidateStore } from '../../specialist-candidates.js';
+import type { RAGStore } from '../../rag.js';
 import { promoteCandidate } from '../../candidate-bootstrap.js';
 import { CronStore } from '../../cron/store.js';
+import { generateText } from 'ai';
 
 // ── Stub harness ────────────────────────────────────────────────────────
 
@@ -490,6 +502,152 @@ describe('<App> /clear', () => {
     await submit(stdin, '/clear --bogus');
     expect(lastFrame()).toContain('Usage: /clear');
     expect(agentSpy.clearHistory).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('/clear --save skips summarization when history is too short (< 2)', async () => {
+    // history defaults to [] in renderApp, so length is 0 < 2
+    const { stdin, stores, agentSpy, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/clear --save');
+    await tick(40);
+    // Memory should NOT have been written (too short to summarize)
+    expect(stores.memory.writeMemory).not.toHaveBeenCalled();
+    // But history is still cleared (the clear path always runs)
+    expect(agentSpy.clearHistory).toHaveBeenCalled();
+    unmount();
+  });
+});
+
+describe('<App> /clear --save (#228)', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+    vi.clearAllMocks();
+    // Return a non-empty summary by default so writeMemory is exercised.
+    vi.mocked(generateText).mockResolvedValue({ text: 'Test session summary.' } as Awaited<ReturnType<typeof generateText>>);
+    // Return no domain facts by default (can override per test).
+    mockExtractDomainFacts.mockResolvedValue([]);
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeHistory(): CoreMessage[] {
+    return [
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'Hi there!' },
+    ];
+  }
+
+  it('writes a session-summary memory entry and clears history on success', async () => {
+    const history = makeHistory();
+    const { stdin, agentSpy, historyStore, stores, unmount } = renderApp({ history });
+    await tick();
+    await submit(stdin, '/clear --save');
+    await tick(80);
+
+    // Summary should have been saved to memory — check the side effect directly
+    // (the toast is overwritten by the subsequent "Conversation history cleared" toast)
+    expect(stores.memory.writeMemory).toHaveBeenCalledWith(
+      expect.stringMatching(/^session-summary-/),
+      'Test session summary.',
+    );
+
+    // History should still have been cleared after save
+    expect(agentSpy.clearHistory).toHaveBeenCalled();
+    expect(historyStore.clear).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('calls addFacts for each domain returned by extractDomainFacts', async () => {
+    mockExtractDomainFacts.mockResolvedValue([
+      { domain: 'general', facts: ['TypeScript project'] },
+      { domain: 'tool-usage', facts: ['npm run build compiles'] },
+    ]);
+
+    const mockAddFacts = vi.fn(async () => 1);
+    const ragStore = { addFacts: mockAddFacts } as unknown as RAGStore;
+
+    const history = makeHistory();
+    const { stdin, unmount } = renderApp({
+      history,
+      config: { ragEnabled: true },
+      stores: { rag: ragStore },
+    });
+    await tick();
+    await submit(stdin, '/clear --save');
+    await tick(80);
+
+    expect(mockAddFacts).toHaveBeenCalledWith(['TypeScript project'], 'clear-save', 'general');
+    expect(mockAddFacts).toHaveBeenCalledWith(['npm run build compiles'], 'clear-save', 'tool-usage');
+    unmount();
+  });
+
+  it('still clears history and calls addFacts even when some domains reject', async () => {
+    // Exercises the failure path: one domain succeeds, one rejects.
+    // The warning toast fires but is overwritten by "Conversation history cleared"
+    // in the same tick, so we verify the observable side effects instead.
+    mockExtractDomainFacts.mockResolvedValue([
+      { domain: 'general', facts: ['TypeScript project'] },
+      { domain: 'tool-usage', facts: ['npm run build compiles'] },
+    ]);
+
+    const mockAddFacts = vi
+      .fn()
+      .mockResolvedValueOnce(1) // general succeeds
+      .mockRejectedValueOnce(new Error('embedding failed')); // tool-usage fails
+
+    const ragStore = { addFacts: mockAddFacts } as unknown as RAGStore;
+
+    const history = makeHistory();
+    const { stdin, agentSpy, historyStore, lastFrame, unmount } = renderApp({
+      history,
+      config: { ragEnabled: true },
+      stores: { rag: ragStore },
+    });
+    await tick();
+    await submit(stdin, '/clear --save');
+    await tick(80);
+
+    // Both domains were attempted
+    expect(mockAddFacts).toHaveBeenCalledTimes(2);
+    // History is still cleared even when RAG fails
+    expect(agentSpy.clearHistory).toHaveBeenCalled();
+    expect(historyStore.clear).toHaveBeenCalled();
+    // The final frame shows the "cleared" toast (the warning is transient)
+    expect(lastFrame()).toContain('Conversation history cleared');
+    unmount();
+  });
+
+  it('uses the actual addFacts return value (not input fact count) for storedFacts', async () => {
+    // addFacts deduplicates internally and returns how many were actually added.
+    // This test ensures we read r.value (not input facts.length).
+    // If we were using the input count, facts.length=3 and r.value=1 would
+    // both let this path pass silently — but a rejection test above proves
+    // the fulfilled branch correctly reads r.value.
+    mockExtractDomainFacts.mockResolvedValue([
+      { domain: 'general', facts: ['fact one', 'fact two', 'fact three'] },
+    ]);
+
+    // Only 1 of 3 facts passes dedup — returns 1, not 3
+    const mockAddFacts = vi.fn(async () => 1);
+    const ragStore = { addFacts: mockAddFacts } as unknown as RAGStore;
+
+    const history = makeHistory();
+    const { stdin, agentSpy, lastFrame, unmount } = renderApp({
+      history,
+      config: { ragEnabled: true },
+      stores: { rag: ragStore },
+    });
+    await tick();
+    await submit(stdin, '/clear --save');
+    await tick(80);
+
+    // addFacts was called once (one domain)
+    expect(mockAddFacts).toHaveBeenCalledTimes(1);
+    // No crash — history still cleared
+    expect(agentSpy.clearHistory).toHaveBeenCalled();
+    expect(lastFrame()).toContain('Conversation history cleared');
     unmount();
   });
 });

@@ -10,7 +10,7 @@ const mockAddFacts = vi.fn();
 const mockDetectSpecialistCandidate = vi.fn();
 const mockCandidateListPending = vi.fn(() => []);
 const mockCandidateCreate = vi.fn();
-const mockGetSummaries = vi.fn(() => []);
+const mockSpecialistList = vi.fn(() => []);
 
 vi.mock('./config.js', () => ({
   loadConfig: (...args: any[]) => mockLoadConfig(...args),
@@ -40,7 +40,8 @@ vi.mock('./specialist-candidates.js', () => ({
 
 vi.mock('./specialists.js', () => ({
   SpecialistStore: vi.fn().mockImplementation(() => ({
-    getSummaries: mockGetSummaries,
+    // The real worker calls .list() — not .getSummaries() (which was an old drift).
+    list: mockSpecialistList,
   })),
 }));
 
@@ -48,7 +49,10 @@ vi.mock('./specialist-detector.js', () => ({
   detectSpecialistCandidate: (...args: any[]) => mockDetectSpecialistCandidate(...args),
 }));
 
-describe('rag-worker', () => {
+// Import after mocks are wired.
+import { runWorkerForFile } from './rag-worker.js';
+
+describe('rag-worker (runWorkerForFile)', () => {
   let tempDir: string;
   let tempFile: string;
 
@@ -84,50 +88,6 @@ describe('rag-worker', () => {
     }
   });
 
-  async function runWorker(filePath: string): Promise<void> {
-    // Simulate what the worker does (we can't easily exec the script in tests,
-    // so we replicate its logic using our mocked dependencies)
-    const { loadConfig } = await import('./config.js');
-    const { extractDomainFacts } = await import('./context.js');
-    const { RAGStore } = await import('./rag.js');
-    const { CandidateStore, MAX_PENDING_CANDIDATES } = await import('./specialist-candidates.js');
-    const { SpecialistStore } = await import('./specialists.js');
-    const { detectSpecialistCandidate } = await import('./specialist-detector.js');
-
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const payload = JSON.parse(raw);
-
-    const config = loadConfig({ provider: payload.provider, model: payload.model });
-    const domainFacts = await extractDomainFacts(payload.serialized, config);
-
-    const totalFacts = domainFacts.reduce((sum: number, df: any) => sum + df.facts.length, 0);
-    if (totalFacts > 0) {
-      const ragStore = new RAGStore();
-      for (const df of domainFacts) {
-        await ragStore.addFacts(df.facts, 'exit', df.domain);
-      }
-    }
-
-    // Specialist candidate detection (non-blocking)
-    try {
-      const candidateStore = new CandidateStore();
-      if (candidateStore.listPending().length < MAX_PENDING_CANDIDATES) {
-        const specialistStore = new SpecialistStore();
-        const candidate = await detectSpecialistCandidate(
-          payload.serialized,
-          config,
-          specialistStore.getSummaries(),
-          candidateStore.listPending(),
-        );
-        if (candidate) candidateStore.create(candidate, 'exit');
-      }
-    } catch {
-      // Silent — detection failure must not block anything
-    }
-
-    fs.unlinkSync(filePath);
-  }
-
   it('reads temp file, extracts domain facts, stores per-domain, and deletes temp file', async () => {
     const payload = {
       serialized: 'User: I prefer dark mode\nAssistant: Noted!',
@@ -136,13 +96,19 @@ describe('rag-worker', () => {
     };
     fs.writeFileSync(tempFile, JSON.stringify(payload));
 
-    await runWorker(tempFile);
+    await runWorkerForFile(tempFile);
 
     expect(mockLoadConfig).toHaveBeenCalledWith({
       provider: 'anthropic',
       model: 'claude-sonnet-4-5-20250929',
     });
-    expect(mockExtractDomainFacts).toHaveBeenCalledWith(payload.serialized, fakeConfig);
+    // Now called with (serialized, config, undefined, AbortSignal) — check the key args
+    expect(mockExtractDomainFacts).toHaveBeenCalledWith(
+      payload.serialized,
+      fakeConfig,
+      undefined,
+      expect.any(AbortSignal),
+    );
 
     // Should store facts per domain
     expect(mockAddFacts).toHaveBeenCalledWith(
@@ -172,7 +138,7 @@ describe('rag-worker', () => {
     };
     fs.writeFileSync(tempFile, JSON.stringify(payload));
 
-    await runWorker(tempFile);
+    await runWorkerForFile(tempFile);
 
     expect(mockExtractDomainFacts).toHaveBeenCalled();
     expect(RAGStore).not.toHaveBeenCalled();
@@ -187,7 +153,7 @@ describe('rag-worker', () => {
     };
     fs.writeFileSync(tempFile, JSON.stringify(payload));
 
-    await runWorker(tempFile);
+    await runWorkerForFile(tempFile);
 
     expect(mockLoadConfig).toHaveBeenCalledWith({ provider: 'openai', model: 'gpt-4o-mini' });
   });
@@ -204,10 +170,24 @@ describe('rag-worker', () => {
     };
     fs.writeFileSync(tempFile, JSON.stringify(payload));
 
-    await runWorker(tempFile);
+    await runWorkerForFile(tempFile);
 
     expect(mockAddFacts).toHaveBeenCalledTimes(1);
     expect(mockAddFacts).toHaveBeenCalledWith(['Project uses TypeScript'], 'exit', 'general');
+  });
+
+  it('returns early without crashing on a missing temp file', async () => {
+    await expect(runWorkerForFile('/nonexistent/path.json')).resolves.toBeUndefined();
+  });
+
+  it('deletes temp file and returns early when payload fields are missing', async () => {
+    const payload = { serialized: '', provider: 'anthropic' }; // missing model
+    fs.writeFileSync(tempFile, JSON.stringify(payload));
+
+    await runWorkerForFile(tempFile);
+
+    expect(mockExtractDomainFacts).not.toHaveBeenCalled();
+    expect(fs.existsSync(tempFile)).toBe(false);
   });
 
   describe('specialist candidate detection', () => {
@@ -217,23 +197,27 @@ describe('rag-worker', () => {
       model: 'claude-sonnet-4-5-20250929',
     });
 
-    const fakeCandidate = {
-      draftId: 'code-review',
-      name: 'Code Review',
-      description: 'Reviews pull requests',
-      systemPrompt: 'You are a code reviewer.',
-      guidelines: [],
-      confidence: 0.85,
-      reasoning: 'Frequent code review requests',
+    const fakeDetectorResult = {
+      type: 'new-candidate' as const,
+      candidate: {
+        draftId: 'code-review',
+        name: 'Code Review',
+        description: 'Reviews pull requests',
+        systemPrompt: 'You are a code reviewer.',
+        guidelines: [],
+        confidence: 0.85,
+        reasoning: 'Frequent code review requests',
+      },
     };
 
-    it('creates candidate when detection returns a result', async () => {
-      mockDetectSpecialistCandidate.mockResolvedValue(fakeCandidate);
+    it('creates candidate when detection returns a new-candidate result', async () => {
+      mockDetectSpecialistCandidate.mockResolvedValue(fakeDetectorResult);
       mockCandidateListPending.mockReturnValue([]);
+      mockSpecialistList.mockReturnValue([]);
 
       const payload = makePayload();
       fs.writeFileSync(tempFile, JSON.stringify(payload));
-      await runWorker(tempFile);
+      await runWorkerForFile(tempFile);
 
       expect(mockDetectSpecialistCandidate).toHaveBeenCalledWith(
         payload.serialized,
@@ -241,7 +225,7 @@ describe('rag-worker', () => {
         [],
         [],
       );
-      expect(mockCandidateCreate).toHaveBeenCalledWith(fakeCandidate, 'exit');
+      expect(mockCandidateCreate).toHaveBeenCalledWith(fakeDetectorResult.candidate, 'exit');
     });
 
     it('does not create candidate when detection returns null', async () => {
@@ -249,7 +233,7 @@ describe('rag-worker', () => {
       mockCandidateListPending.mockReturnValue([]);
 
       fs.writeFileSync(tempFile, JSON.stringify(makePayload()));
-      await runWorker(tempFile);
+      await runWorkerForFile(tempFile);
 
       expect(mockDetectSpecialistCandidate).toHaveBeenCalled();
       expect(mockCandidateCreate).not.toHaveBeenCalled();
@@ -260,7 +244,7 @@ describe('rag-worker', () => {
       mockCandidateListPending.mockReturnValue(tenCandidates);
 
       fs.writeFileSync(tempFile, JSON.stringify(makePayload()));
-      await runWorker(tempFile);
+      await runWorkerForFile(tempFile);
 
       expect(mockDetectSpecialistCandidate).not.toHaveBeenCalled();
       expect(mockCandidateCreate).not.toHaveBeenCalled();
@@ -271,7 +255,7 @@ describe('rag-worker', () => {
       mockCandidateListPending.mockReturnValue([]);
 
       fs.writeFileSync(tempFile, JSON.stringify(makePayload()));
-      await runWorker(tempFile);
+      await runWorkerForFile(tempFile);
 
       // Facts should still have been stored
       expect(mockAddFacts).toHaveBeenCalledTimes(3);
@@ -279,6 +263,25 @@ describe('rag-worker', () => {
       expect(mockCandidateCreate).not.toHaveBeenCalled();
       // Temp file should still be cleaned up
       expect(fs.existsSync(tempFile)).toBe(false);
+    });
+
+    it('calls specialistStore.list() (not getSummaries) to get existing specialists', async () => {
+      const existingSpecialist = { id: 'shell-wrapper', name: 'Shell Wrapper' };
+      mockSpecialistList.mockReturnValue([existingSpecialist]);
+      mockDetectSpecialistCandidate.mockResolvedValue(null);
+      mockCandidateListPending.mockReturnValue([]);
+
+      fs.writeFileSync(tempFile, JSON.stringify(makePayload()));
+      await runWorkerForFile(tempFile);
+
+      // Verify .list() was called (not .getSummaries())
+      expect(mockSpecialistList).toHaveBeenCalled();
+      expect(mockDetectSpecialistCandidate).toHaveBeenCalledWith(
+        expect.any(String),
+        fakeConfig,
+        [existingSpecialist],
+        [],
+      );
     });
   });
 });

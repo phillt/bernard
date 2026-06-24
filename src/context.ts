@@ -153,11 +153,15 @@ export interface DomainFacts {
  * Extract facts from serialized conversation text using domain-specific prompts.
  * Runs all domain extractors in parallel via Promise.allSettled.
  * Partial failures (one domain errors) don't block others.
+ *
+ * @param abortSignal - Optional signal to cancel in-flight LLM calls (e.g. from a
+ *   timeout or user Esc). All domain extractors share the same signal.
  */
 export async function extractDomainFacts(
   serializedText: string,
   config: BernardConfig,
   onUsage?: UsageRecorder,
+  abortSignal?: AbortSignal,
 ): Promise<DomainFacts[]> {
   if (!serializedText.trim()) return [];
 
@@ -176,6 +180,7 @@ export async function extractDomainFacts(
         messages: [
           { role: 'user', content: `Extract facts from this conversation:\n\n${serializedText}` },
         ],
+        abortSignal,
       });
 
       // Count this off-loop call toward the per-turn ledger (#258).
@@ -225,6 +230,14 @@ export async function extractFacts(
   const domainFacts = await extractDomainFacts(serializedText, config);
   return domainFacts.flatMap((df) => df.facts);
 }
+
+/**
+ * Minimum history length (message count) for RAG fact extraction to be
+ * meaningful — one user turn + one assistant reply. Used by both the REPL exit
+ * path (`src/index.ts`) and the `/clear --save` path (`src/ui/App.tsx`) so the
+ * threshold can't drift between them.
+ */
+export const MIN_HISTORY_FOR_FACTS = 2;
 
 export const SUMMARIZATION_PROMPT = `You are a conversation summarizer. Produce a concise summary of the conversation below, preserving:
 - Key facts, decisions, and outcomes
