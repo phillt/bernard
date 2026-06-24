@@ -677,9 +677,31 @@
           height: 18px;
         }
       }
+
+      /* ── Back-to-home banner ── */
+      .home-banner {
+        position: sticky;
+        top: 0;
+        z-index: 101;
+        background: var(--accent-dim);
+        border-bottom: 1px solid rgba(249, 115, 22, 0.25);
+        padding: 8px 24px;
+        text-align: center;
+        font-size: 13px;
+        color: var(--text-secondary);
+      }
+      .home-banner a {
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .home-banner a:hover {
+        text-decoration: underline;
+      }
     </style>
   </head>
   <body>
+    <!-- Back to landing page -->
+    <div class="home-banner">&#x2190; <a href="index.html">Back to the Bernard home page</a></div>
     <nav>
       <div class="container">
         <a href="index.html" class="logo" style="text-decoration: none"
