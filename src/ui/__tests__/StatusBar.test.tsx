@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import stripAnsi from 'strip-ansi';
@@ -147,5 +147,100 @@ describe('<StatusBar> idle-tick guard (#232)', () => {
     (agent.spinnerStats as { turnPromptTokens: number }).turnPromptTokens = 2222;
     await new Promise((r) => setTimeout(r, 600)); // past the 500ms poll interval
     expect(stripAnsi(lastFrame() ?? '')).toMatch(/turn\s+2\.2k↑/);
+  });
+});
+
+describe('<StatusBar> token counter pulse (#246)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('triggers an extra re-render for the ↑ counter when prompt tokens increase (pulse on), then again when it decays (pulse off)', async () => {
+    // The pulse mechanism fires two state transitions per increment:
+    //   1. setUpPulse(true)  — on the poll tick (500 ms)
+    //   2. setUpPulse(false) — on the decay timeout (+ 250 ms)
+    // Each state transition forces a new frame, so frames.length must grow
+    // by at least 2 compared to idle (no new frames when nothing changes).
+    const agent = stubAgent(0.55);
+    const { frames } = render(createElement(StatusBar, { agent }));
+
+    const framesBeforePoll = frames.length;
+
+    // Increase prompt tokens — the poll will see this at 500 ms.
+    (agent.spinnerStats as { turnPromptTokens: number }).turnPromptTokens = 5000;
+
+    // Advance to 500 ms → poll fires, snapshot changes, setUpPulse(true) + force() called.
+    await vi.advanceTimersByTimeAsync(500);
+    const framesAfterPoll = frames.length;
+
+    // At least one new frame from the poll re-render (pulse on + counter value update).
+    expect(framesAfterPoll).toBeGreaterThan(framesBeforePoll);
+
+    // Advance another 250 ms → decay timeout fires, setUpPulse(false) called.
+    await vi.advanceTimersByTimeAsync(250);
+    const framesAfterDecay = frames.length;
+
+    // At least one more frame from the decay re-render.
+    expect(framesAfterDecay).toBeGreaterThan(framesAfterPoll);
+
+    // The displayed token count must reflect the new value in the final frame.
+    // formatTokenCount(5000) = "5.0k"
+    expect(stripAnsi(frames[framesAfterDecay - 1] ?? '')).toMatch(/5\.0k↑/);
+  });
+
+  it('triggers an extra re-render for the ↓ counter when completion tokens increase (pulse on), then again when it decays (pulse off)', async () => {
+    const agent = stubAgent(0.55);
+    const { frames } = render(createElement(StatusBar, { agent }));
+
+    const framesBeforePoll = frames.length;
+
+    // Increase completion tokens — the poll will see this at 500 ms.
+    (agent.spinnerStats as { turnCompletionTokens: number }).turnCompletionTokens = 3000;
+
+    await vi.advanceTimersByTimeAsync(500);
+    const framesAfterPoll = frames.length;
+
+    expect(framesAfterPoll).toBeGreaterThan(framesBeforePoll);
+
+    await vi.advanceTimersByTimeAsync(250);
+    const framesAfterDecay = frames.length;
+
+    expect(framesAfterDecay).toBeGreaterThan(framesAfterPoll);
+
+    // formatTokenCount(3000) = "3.0k"
+    expect(stripAnsi(frames[framesAfterDecay - 1] ?? '')).toMatch(/3\.0k↓/);
+  });
+
+  it('does NOT trigger a ↓ pulse when only prompt tokens increase', async () => {
+    // When turnCompletionTokens stays constant, only the ↑ pulse fires.
+    // We verify this by confirming that the decay timer for ↓ never fires an
+    // extra frame after the ↑ decay is already done.
+    const agent = stubAgent(0.55);
+    const { frames } = render(createElement(StatusBar, { agent }));
+
+    // Only increase prompt tokens; completion tokens stay at 567.
+    (agent.spinnerStats as { turnPromptTokens: number }).turnPromptTokens = 5000;
+
+    // Advance well past both the poll (500 ms) and the decay (250 ms).
+    await vi.advanceTimersByTimeAsync(500);
+    const framesAtPoll = frames.length;
+    await vi.advanceTimersByTimeAsync(250);
+    const framesAfterUpDecay = frames.length;
+
+    // ↑ pulse should have fired (at least one new frame).
+    expect(framesAfterUpDecay).toBeGreaterThan(framesAtPoll);
+
+    // Now advance a further 500 ms with no token changes — no new frames
+    // should appear, because the ↓ pulse never fired and there's nothing else
+    // to re-render.
+    await vi.advanceTimersByTimeAsync(500);
+    const framesAfterIdle = frames.length;
+    expect(framesAfterIdle).toBe(framesAfterUpDecay);
+
+    // The ↓ value must still be the original 567 throughout.
+    expect(stripAnsi(frames[framesAfterIdle - 1] ?? '')).toMatch(/567↓/);
   });
 });
