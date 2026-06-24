@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getModelProfile } from './profiles.js';
+import { getModelProfile, modelSupportsTemperature } from './profiles.js';
 
 describe('getModelProfile — resolution', () => {
   it('returns anthropic-claude for any anthropic model', () => {
@@ -120,6 +120,63 @@ describe('systemSuffix — per family', () => {
     const p = getModelProfile('unknown', 'mystery-model');
     expect(p.systemSuffix).toBe('');
     expect(p.wrapUserMessage('hi')).toBe('hi');
+  });
+});
+
+describe('modelSupportsTemperature', () => {
+  it('returns false for Anthropic extended-thinking models (the -4-8 generation)', () => {
+    expect(modelSupportsTemperature('claude-opus-4-8', 'anthropic')).toBe(false);
+    // Provider omitted — pattern-matching alone
+    expect(modelSupportsTemperature('claude-opus-4-8')).toBe(false);
+    // Broader -4-8 generation coverage: any future extended-thinking variant
+    expect(modelSupportsTemperature('claude-haiku-4-8', 'anthropic')).toBe(false);
+    expect(modelSupportsTemperature('claude-sonnet-4-8', 'anthropic')).toBe(false);
+  });
+
+  it('returns true for normal Anthropic models', () => {
+    expect(modelSupportsTemperature('claude-haiku-4-5-20251001', 'anthropic')).toBe(true);
+    expect(modelSupportsTemperature('claude-sonnet-4-5-20250929', 'anthropic')).toBe(true);
+    expect(modelSupportsTemperature('claude-opus-4-6', 'anthropic')).toBe(true);
+  });
+
+  it('returns false for OpenAI o-series reasoning models', () => {
+    expect(modelSupportsTemperature('o1', 'openai')).toBe(false);
+    expect(modelSupportsTemperature('o3', 'openai')).toBe(false);
+    expect(modelSupportsTemperature('o3-mini', 'openai')).toBe(false);
+    expect(modelSupportsTemperature('o4-mini', 'openai')).toBe(false);
+  });
+
+  it('returns true for normal OpenAI models', () => {
+    expect(modelSupportsTemperature('gpt-4.1', 'openai')).toBe(true);
+    expect(modelSupportsTemperature('gpt-5.2', 'openai')).toBe(true);
+    expect(modelSupportsTemperature('gpt-4o-mini', 'openai')).toBe(true);
+  });
+
+  it('returns false for xAI grok-4 reasoning variants', () => {
+    expect(modelSupportsTemperature('grok-4-fast-reasoning', 'xai')).toBe(false);
+    expect(modelSupportsTemperature('grok-4-1-fast-reasoning', 'xai')).toBe(false);
+    expect(modelSupportsTemperature('grok-4-0709', 'xai')).toBe(false);
+  });
+
+  it('returns true for xAI explicit non-reasoning variants', () => {
+    expect(modelSupportsTemperature('grok-4-fast-non-reasoning', 'xai')).toBe(true);
+    expect(modelSupportsTemperature('grok-4-1-fast-non-reasoning', 'xai')).toBe(true);
+  });
+
+  it('returns true for older non-reasoning xAI models', () => {
+    expect(modelSupportsTemperature('grok-3', 'xai')).toBe(true);
+    expect(modelSupportsTemperature('grok-3-mini', 'xai')).toBe(true);
+  });
+
+  it('returns true for unknown/custom models (fail-open)', () => {
+    expect(modelSupportsTemperature('mystery-model')).toBe(true);
+    expect(modelSupportsTemperature('llama-3', 'ollama')).toBe(true);
+  });
+
+  it('is case-insensitive', () => {
+    expect(modelSupportsTemperature('Claude-Opus-4-8', 'anthropic')).toBe(false);
+    expect(modelSupportsTemperature('O3', 'openai')).toBe(false);
+    expect(modelSupportsTemperature('Grok-4-Fast-Reasoning', 'xai')).toBe(false);
   });
 });
 

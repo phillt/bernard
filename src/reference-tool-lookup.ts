@@ -1,5 +1,6 @@
 import { generateText } from 'ai';
 import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
+import { modelSupportsTemperature } from './providers/profiles.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 
@@ -160,7 +161,7 @@ export async function selectLookupTool(
       messages: [{ role: 'user', content: buildSelectUserMessage(reference, candidates) }],
       maxSteps: 1,
       maxTokens: SELECT_MAX_TOKENS,
-      temperature: 0,
+      ...(modelSupportsTemperature(config.model, config.provider) ? { temperature: 0 } : {}),
       abortSignal,
     });
     if (!result.text) return null;
@@ -288,7 +289,7 @@ export async function interpretLookupResult(
       ],
       maxSteps: 1,
       maxTokens: INTERPRET_MAX_TOKENS,
-      temperature: 0,
+      ...(modelSupportsTemperature(config.model, config.provider) ? { temperature: 0 } : {}),
       abortSignal,
     });
     if (!result.text) return { status: 'none' };

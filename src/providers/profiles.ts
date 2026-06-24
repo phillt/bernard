@@ -142,6 +142,46 @@ export function getModelProfile(
   return DEFAULT_PROFILE;
 }
 
+/**
+ * Returns `true` when the model accepts a `temperature` parameter.
+ *
+ * Reasoning models (Anthropic claude-opus-4-8 and newer extended-thinking
+ * variants, OpenAI o-series, xAI grok-4 reasoning variants) reject the
+ * `temperature` field with a 400 error. Omit it entirely for those models.
+ *
+ * When `provider` is supplied the check narrows to only that family; when
+ * omitted the helper falls back to pattern-matching the model name alone,
+ * which is sufficient for the deterministic sub-call sites (rewriter,
+ * reference-lookup) that derive the model from `config.model`.
+ *
+ * Non-reasoning models — and unknown models — return `true` (keep sending
+ * temperature) so the fail-open default preserves existing determinism.
+ */
+export function modelSupportsTemperature(model: string, provider?: string): boolean {
+  const m = model.toLowerCase();
+  const family = provider?.toLowerCase();
+
+  // Anthropic: extended-thinking variants reject temperature.
+  // The -4-8 suffix identifies the extended-thinking generation (claude-opus-4-8,
+  // and hypothetical future claude-haiku-4-8 / claude-sonnet-4-8 variants).
+  if (!family || family === 'anthropic') {
+    if (/-4-8(\b|$)/.test(m)) return false;
+  }
+
+  // OpenAI o-series (o1, o3, o3-mini, o4-mini, …)
+  if (!family || family === 'openai') {
+    if (/^o\d/.test(m)) return false;
+  }
+
+  // xAI: grok-4.x reasoning variants (but NOT explicit non-reasoning variants)
+  if (!family || family === 'xai') {
+    if (!m.includes('non-reasoning') && m.includes('reasoning')) return false;
+    if (!m.includes('non-reasoning') && /^grok-4(\b|[-.])/.test(m)) return false;
+  }
+
+  return true;
+}
+
 // References for maintainers updating the suffix constants:
 //   https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
 //   https://developers.openai.com/cookbook/examples/gpt4-1_prompting_guide
