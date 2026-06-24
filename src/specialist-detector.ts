@@ -2,6 +2,7 @@ import { generateText } from 'ai';
 import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
+import { modelSupportsTemperature } from './providers/profiles.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 import type { Specialist, SpecialistSummary } from './specialists.js';
 import type { SpecialistCandidate } from './specialist-candidates.js';
@@ -153,7 +154,8 @@ export async function detectSpecialistCandidate(
           model: site.model,
           providerOptions: site.providerOptions,
           maxTokens: 2048,
-          temperature: 0,
+          // Omit temperature for reasoning models — they reject it with a 400.
+          ...(modelSupportsTemperature(site.model.modelId, site.provider) ? { temperature: 0 } : {}),
           system: DETECTION_SYSTEM_PROMPT,
           messages: [{ role: 'user', content: userContent }],
         }),

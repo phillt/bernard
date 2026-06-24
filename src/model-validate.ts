@@ -6,6 +6,7 @@ import { ALL_ROLE_IDS, type RoleId } from './model-roles.js';
 import { LINEUP_TIERS, type Lineup, type LineupTier } from './lineups.js';
 import type { BernardConfig } from './config.js';
 import { debugLog } from './logger.js';
+import { modelSupportsTemperature } from './providers/profiles.js';
 
 /**
  * @module model-validate
@@ -108,7 +109,9 @@ export async function validateModel(
       // OpenAI's responses endpoint rejects max_output_tokens < 16; keep the
       // probe at that floor so a too-small cap can't masquerade as a failure.
       maxTokens: 16,
-      temperature: 0,
+      // Reasoning models (e.g. claude-opus-4-8, o-series) reject temperature
+      // with a 400. Omit the field entirely for those models.
+      ...(modelSupportsTemperature(model, provider) ? { temperature: 0 } : {}),
       abortSignal: ctrl.signal,
     });
     const latencyMs = Date.now() - t0;

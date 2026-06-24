@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getModelProfile } from './profiles.js';
+import { getModelProfile, modelSupportsTemperature } from './profiles.js';
 
 describe('getModelProfile — resolution', () => {
   it('returns anthropic-claude for any anthropic model', () => {
@@ -148,5 +148,72 @@ describe('rewriterHint — per family', () => {
   it('reasoning-family hints emphasize terseness', () => {
     expect(getModelProfile('openai', 'o3').rewriterHint).toMatch(/terse/i);
     expect(getModelProfile('xai', 'grok-4-fast-reasoning').rewriterHint).toMatch(/terse|direct/i);
+  });
+});
+
+describe('modelSupportsTemperature', () => {
+  it('returns false for claude-opus-4-8 (catalog-tagged reasoning, rejects temperature)', () => {
+    // claude-opus-4-8 is in the vendored catalog with the `reasoning` tag and
+    // rejects temperature with a 400 (it always operates in reasoning mode).
+    expect(modelSupportsTemperature('claude-opus-4-8', 'anthropic')).toBe(false);
+    // Without provider, catalog-first lookup still fires and returns false.
+    expect(modelSupportsTemperature('claude-opus-4-8')).toBe(false);
+  });
+
+  it('returns false for other catalog-tagged Anthropic reasoning models', () => {
+    expect(modelSupportsTemperature('claude-opus-4-6', 'anthropic')).toBe(false);
+    expect(modelSupportsTemperature('claude-sonnet-4-6', 'anthropic')).toBe(false);
+  });
+
+  it('returns false for OpenAI o-series reasoning models (pattern fallback)', () => {
+    // provider must be explicitly 'openai' for the pattern to fire (avoids
+    // false positives for custom providers with o-series–like model names).
+    expect(modelSupportsTemperature('o3', 'openai')).toBe(false);
+    expect(modelSupportsTemperature('o1', 'openai')).toBe(false);
+    expect(modelSupportsTemperature('o4-mini', 'openai')).toBe(false);
+    expect(modelSupportsTemperature('o3-mini', 'openai')).toBe(false);
+  });
+
+  it('returns false for catalog-tagged OpenAI reasoning models', () => {
+    // gpt-5.2 carries the `reasoning` tag in the vendored catalog.
+    expect(modelSupportsTemperature('gpt-5.2', 'openai')).toBe(false);
+  });
+
+  it('returns false for xAI reasoning variants (pattern fallback)', () => {
+    // provider must be explicitly 'xai' for the grok-4 pattern to fire.
+    expect(modelSupportsTemperature('grok-4-fast-reasoning', 'xai')).toBe(false);
+    expect(modelSupportsTemperature('grok-4-0709', 'xai')).toBe(false);
+  });
+
+  it('returns true for non-reasoning OpenAI models', () => {
+    // gpt-4.1 is not tagged reasoning in the catalog.
+    expect(modelSupportsTemperature('gpt-4.1', 'openai')).toBe(true);
+    expect(modelSupportsTemperature('gpt-4.1-mini', 'openai')).toBe(true);
+  });
+
+  it('returns true for xAI explicit non-reasoning variants', () => {
+    expect(modelSupportsTemperature('grok-4-fast-non-reasoning', 'xai')).toBe(true);
+  });
+
+  it('returns true for unknown / custom-provider models (fail-open)', () => {
+    // Unknown models should fail open so callers send temperature for them.
+    expect(modelSupportsTemperature('some-unknown-model')).toBe(true);
+    expect(modelSupportsTemperature('my-fine-tuned-model', 'custom-provider')).toBe(true);
+  });
+
+  it('returns true for versioned Anthropic model IDs not in catalog (fail-open)', () => {
+    // The vendored catalog has claude-haiku-4-5 (without date suffix) but not
+    // claude-haiku-4-5-20251001 — versioned IDs miss the catalog and fail open.
+    expect(modelSupportsTemperature('claude-haiku-4-5-20251001', 'anthropic')).toBe(true);
+  });
+
+  it('does not apply provider-specific patterns without an explicit provider (fail-open for catalog-unknown models)', () => {
+    // Provider-specific patterns (o-series, grok-4) only fire when provider is
+    // explicit. Models not in the catalog and without a provider fail open.
+    // 'o1-uncensored' has a longer id — not in catalog — and no provider, so fails open.
+    expect(modelSupportsTemperature('o1-uncensored')).toBe(true);
+    // 'grok-4-fast-turbo' is not in catalog and no provider → fail open.
+    expect(modelSupportsTemperature('grok-4-fast-turbo')).toBe(true);
+    // Note: 'o3' alone IS in the catalog tagged reasoning so returns false even without provider.
   });
 });

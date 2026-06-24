@@ -3,6 +3,7 @@ import { readToolMeta } from './framework/tools/adapter.js';
 import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
+import { modelSupportsTemperature } from './providers/profiles.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 
@@ -187,7 +188,8 @@ export async function selectLookupTool(
           messages: [{ role: 'user', content: userContent }],
           maxSteps: 1,
           maxTokens: SELECT_MAX_TOKENS,
-          temperature: 0,
+          // Omit temperature for reasoning models — they reject it with a 400.
+          ...(modelSupportsTemperature(site.model.modelId, site.provider) ? { temperature: 0 } : {}),
           abortSignal,
         }),
       );
@@ -335,7 +337,8 @@ export async function interpretLookupResult(
           messages: [{ role: 'user', content: userContent }],
           maxSteps: 1,
           maxTokens: INTERPRET_MAX_TOKENS,
-          temperature: 0,
+          // Omit temperature for reasoning models — they reject it with a 400.
+          ...(modelSupportsTemperature(site.model.modelId, site.provider) ? { temperature: 0 } : {}),
           abortSignal,
         }),
       );

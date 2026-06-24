@@ -1,5 +1,6 @@
 import { generateText } from 'ai';
 import type { ModelProfile } from './providers/profiles.js';
+import { modelSupportsTemperature } from './providers/profiles.js';
 import type { ResolvedEntry } from './reference-resolver.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
@@ -183,7 +184,8 @@ export async function rewritePrompt(
           messages: [{ role: 'user', content: userContent }],
           maxSteps: 1,
           maxTokens: REWRITER_MAX_TOKENS,
-          temperature: 0,
+          // Omit temperature for reasoning models — they reject it with a 400.
+          ...(modelSupportsTemperature(site.model.modelId, site.provider) ? { temperature: 0 } : {}),
           abortSignal,
         }),
       );

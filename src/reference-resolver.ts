@@ -4,6 +4,7 @@ import { sanitizeKey, REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
+import { modelSupportsTemperature } from './providers/profiles.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 
@@ -336,7 +337,8 @@ export async function resolveReferences(
           messages: [{ role: 'user', content: userMessage }],
           maxSteps: 1,
           maxTokens: RESOLVER_MAX_TOKENS,
-          temperature: 0,
+          // Omit temperature for reasoning models — they reject it with a 400.
+          ...(modelSupportsTemperature(site.model.modelId, site.provider) ? { temperature: 0 } : {}),
           abortSignal,
         }),
       );
