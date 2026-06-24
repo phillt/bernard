@@ -45,30 +45,48 @@ export function truncate(s: string, max: number): string {
  * apply JSON.parse to a quoted string before passing here.
  */
 
-/** True when `s` contains at least one C1 control character (U+0080–U+009F). */
-function hasC1Bytes(s: string): boolean {
+/**
+ * Classify `s` in a single pass:
+ *   - returns `'ascii'` when every code point is ≤ 0x7F (pure ASCII — already
+ *     in NFC by definition, no mojibake possible);
+ *   - returns `'c1'` when at least one code point is in the C1 range
+ *     (U+0080–U+009F) — a reliable mojibake signal;
+ *   - returns `'unicode'` for any other non-ASCII content (valid multibyte
+ *     chars like é, ™, etc.) that only needs NFC normalization.
+ */
+function classifyString(s: string): 'ascii' | 'c1' | 'unicode' {
+  let hasNonAscii = false;
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
-    if (c >= 0x80 && c <= 0x9f) return true;
+    if (c >= 0x80) {
+      hasNonAscii = true;
+      if (c <= 0x9f) return 'c1';
+    }
   }
-  return false;
+  return hasNonAscii ? 'unicode' : 'ascii';
 }
 
 /**
  * Normalize a single tool output string.
  *
- * - Always applies Unicode NFC normalization.
+ * - Empty strings and pure-ASCII strings are returned as-is (no NFC needed,
+ *   no mojibake possible — avoids any allocation on the common case).
+ * - Always applies Unicode NFC normalization when non-ASCII chars are present.
  * - Attempts UTF-8-decoded-as-Latin-1 mojibake repair when C1 control bytes
- *   are detected; only accepts the repair when it introduces no U+FFFD
- *   replacement characters and shrinks the string (sign of successful
+ *   (U+0080–U+009F) are detected; only accepts the repair when it introduces
+ *   no U+FFFD replacement characters and shrinks the string (sign of successful
  *   multi-byte reassembly).
  *
  * This function is intentionally conservative: clean ASCII, valid UTF-8,
  * and printable Latin Extended characters (©, ®, …) pass through unchanged.
  */
 export function normalizeToolText(s: string): string {
-  // Gate: only attempt re-interpretation when C1 bytes are present.
-  if (hasC1Bytes(s)) {
+  // Fast-paths: empty string and pure ASCII are already in NFC.
+  if (s.length === 0) return s;
+  const kind = classifyString(s);
+  if (kind === 'ascii') return s;
+
+  if (kind === 'c1') {
     try {
       // Re-interpret the string's raw code points as UTF-8 bytes.
       const repaired = Buffer.from(s, 'latin1').toString('utf8');
