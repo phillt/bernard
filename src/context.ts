@@ -231,6 +231,14 @@ export async function extractFacts(
   return domainFacts.flatMap((df) => df.facts);
 }
 
+/**
+ * Minimum history length (message count) for RAG fact extraction to be
+ * meaningful — one user turn + one assistant reply. Used by both the REPL exit
+ * path (`src/index.ts`) and the `/clear --save` path (`src/ui/App.tsx`) so the
+ * threshold can't drift between them.
+ */
+export const MIN_HISTORY_FOR_FACTS = 2;
+
 export const SUMMARIZATION_PROMPT = `You are a conversation summarizer. Produce a concise summary of the conversation below, preserving:
 - Key facts, decisions, and outcomes
 - Important tool results and command outputs

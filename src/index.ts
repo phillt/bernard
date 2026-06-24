@@ -52,7 +52,7 @@ import { MCP_CONFIG_PATH, PROFILES_PATH, PREFS_PATH, RAG_DIR } from './paths.js'
 import * as fs from 'node:fs';
 import { listProfiles } from './profiles.js';
 import { MemoryStore } from './memory.js';
-import { serializeMessages } from './context.js';
+import { serializeMessages, MIN_HISTORY_FOR_FACTS } from './context.js';
 import { RAGStore } from './rag.js';
 import { RoutineStore } from './routines.js';
 import { SpecialistStore } from './specialists.js';
@@ -418,14 +418,12 @@ async function runInkRepl(args: {
 
     try {
       const history = agent.getHistory();
-      // Threshold: 2 messages (one user + one assistant) is the minimum
-      // meaningful conversation. Matches the /clear --save threshold.
-      //
+      // MIN_HISTORY_FOR_FACTS = 2 (one user + one assistant).
       // Asymmetry vs /clear --save: this exit path only feeds RAG (spawns the
       // background worker for fact extraction). It does NOT write a
       // session-summary memory entry — that is deliberately deferred to
       // /clear --save, which runs interactively and can show the user the key.
-      if (ragStore && history.length >= 2) {
+      if (ragStore && history.length >= MIN_HISTORY_FOR_FACTS) {
         const serialized = serializeMessages(history);
         if (serialized.trim()) {
           fs.mkdirSync(RAG_DIR, { recursive: true });

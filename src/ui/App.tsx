@@ -100,7 +100,7 @@ import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
 import { generateText, type CoreMessage } from 'ai';
 import { resolveSiteModel, resolveMainModel, logSiteModelSnapshot } from '../model-policy.js';
-import { serializeMessages, extractDomainFacts, SUMMARIZATION_PROMPT } from '../context.js';
+import { serializeMessages, extractDomainFacts, SUMMARIZATION_PROMPT, MIN_HISTORY_FOR_FACTS } from '../context.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
 import { promoteCandidate } from '../candidate-bootstrap.js';
 import {
@@ -732,9 +732,9 @@ export function App({
       }
       if (shouldSave) {
         const history = agent.getHistory();
-        // Threshold: 2 messages (one user + one assistant) is the minimum
-        // meaningful conversation. The exit path uses the same threshold.
-        if (history.length < 2) {
+        // MIN_HISTORY_FOR_FACTS = 2 (one user + one assistant);
+        // matches the exit-path threshold in src/index.ts.
+        if (history.length < MIN_HISTORY_FOR_FACTS) {
           flashToast('Not enough conversation to summarize.', 'warning');
         } else {
           setBusy(true);
@@ -891,7 +891,7 @@ export function App({
     }
     if (text === '/compact') {
       const history = agent.getHistory();
-      if (history.length < 2) {
+      if (history.length < MIN_HISTORY_FOR_FACTS) {
         flashToast('Not enough conversation to compact.', 'warning');
         return;
       }

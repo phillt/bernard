@@ -25,6 +25,15 @@ import { detectSpecialistCandidate } from './specialist-detector.js';
 /** Background fact-extraction timeout (ms). Prevents zombie processes at exit. */
 const WORKER_EXTRACT_TIMEOUT_MS = 120_000;
 
+/** Best-effort delete of the temp file; ignores errors (file may already be gone). */
+function tryUnlink(filePath: string): void {
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    // Ignore
+  }
+}
+
 /** Shape of the JSON temp file written by the REPL at exit. */
 export interface TempPayload {
   /** Serialized conversation messages to extract facts from. */
@@ -50,20 +59,12 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
     payload = JSON.parse(raw) as TempPayload;
   } catch {
     // Malformed/missing file — clean up and bail.
-    try {
-      fs.unlinkSync(filePath);
-    } catch {
-      // Ignore — file may already be gone or never existed
-    }
+    tryUnlink(filePath);
     return;
   }
 
   if (!payload.serialized || !payload.provider || !payload.model) {
-    try {
-      fs.unlinkSync(filePath);
-    } catch {
-      // Ignore
-    }
+    tryUnlink(filePath);
     return;
   }
 
@@ -106,11 +107,7 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
   }
 
   // Clean up temp file
-  try {
-    fs.unlinkSync(filePath);
-  } catch {
-    // Ignore — file may already be gone
-  }
+  tryUnlink(filePath);
 }
 
 async function main(): Promise<void> {
