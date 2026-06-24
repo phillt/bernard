@@ -6,7 +6,7 @@ import { ALL_ROLE_IDS, type RoleId } from './model-roles.js';
 import { LINEUP_TIERS, type Lineup, type LineupTier } from './lineups.js';
 import type { BernardConfig } from './config.js';
 import { debugLog } from './logger.js';
-import { modelSupportsTemperature } from './providers/profiles.js';
+import { temperatureParam } from './providers/profiles.js';
 
 /**
  * @module model-validate
@@ -111,7 +111,7 @@ export async function validateModel(
       maxTokens: 16,
       // Reasoning models (e.g. claude-opus-4-8, o-series) reject temperature
       // with a 400. Omit the field entirely for those models.
-      ...(modelSupportsTemperature(model, provider) ? { temperature: 0 } : {}),
+      ...temperatureParam(model, provider),
       abortSignal: ctrl.signal,
     });
     const latencyMs = Date.now() - t0;

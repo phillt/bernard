@@ -210,6 +210,27 @@ export function modelSupportsTemperature(model: string, provider?: string): bool
   return true;
 }
 
+/**
+ * Returns `{ temperature: 0 }` when the model accepts the parameter, or `{}`
+ * when it is a reasoning model that rejects it.
+ *
+ * Convenience wrapper around {@link modelSupportsTemperature} — eliminates the
+ * ternary spread that every call site would otherwise repeat:
+ *
+ *   ```ts
+ *   // before
+ *   ...(modelSupportsTemperature(site.model.modelId, site.provider) ? { temperature: 0 } : {})
+ *   // after
+ *   ...temperatureParam(site.model.modelId, site.provider)
+ *   ```
+ */
+export function temperatureParam(
+  model: string,
+  provider?: string,
+): { temperature: number } | Record<string, never> {
+  return modelSupportsTemperature(model, provider) ? { temperature: 0 } : {};
+}
+
 // References for maintainers updating the suffix constants:
 //   https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices
 //   https://developers.openai.com/cookbook/examples/gpt4-1_prompting_guide
