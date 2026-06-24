@@ -4,6 +4,9 @@ import * as fs from 'node:fs';
 import { PREFS_PATH, KEYS_PATH, ENV_PATH, LEGACY_DIR } from './paths.js';
 import { loadCustomProviders, type CustomProvider } from './custom-providers.js';
 
+/** Multi-model assignment policy modes (mirrors model-policy.ts ModelMode). */
+export type ModelMode = 'optimize-tokens' | 'balanced' | 'optimize-performance';
+
 /** Resolved runtime configuration for a Bernard session. */
 export interface BernardConfig {
   /** Active LLM provider identifier (e.g. "anthropic", "openai", "xai"). */
@@ -54,6 +57,12 @@ export interface BernardConfig {
   apiKeys?: Record<string, string>;
   /** Loaded snapshot of user-defined custom providers from `custom-providers.json`. */
   customProviders: Record<string, CustomProvider>;
+  /** Multi-model assignment policy: which tier each site uses. */
+  modelMode: ModelMode;
+  /** Active lineup id (if a lineup is selected). */
+  activeLineupId?: string;
+  /** Whether LLM sub-call and tool result caches are active. */
+  cacheEnabled: boolean;
 }
 
 const DEFAULT_PROVIDER = 'anthropic';
@@ -785,6 +794,9 @@ export function loadConfig(overrides?: { provider?: string; model?: string }): B
     xaiApiKey: process.env.XAI_API_KEY,
     apiKeys: { ...storedKeys },
     customProviders,
+    modelMode: 'balanced' as ModelMode,
+    activeLineupId: undefined,
+    cacheEnabled: true,
   };
 
   validateConfig(config);

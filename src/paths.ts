@@ -30,6 +30,7 @@ export const KEYS_PATH = path.join(CONFIG_DIR, 'keys.json');
 export const ENV_PATH = path.join(CONFIG_DIR, '.env');
 export const MCP_CONFIG_PATH = path.join(CONFIG_DIR, 'mcp.json');
 export const CUSTOM_PROVIDERS_PATH = path.join(CONFIG_DIR, 'custom-providers.json');
+export const LINEUPS_PATH = path.join(CONFIG_DIR, 'lineups.json');
 
 // Data
 export const MEMORY_DIR = path.join(DATA_DIR, 'memory');
@@ -49,6 +50,7 @@ export const TOOL_PROFILES_DIR = path.join(DATA_DIR, 'tool-profiles');
 // Cache
 export const MODELS_DIR = path.join(CACHE_DIR, 'models');
 export const UPDATE_CACHE_PATH = path.join(CACHE_DIR, 'update-check.json');
+export const MODEL_CATALOG_CACHE = path.join(CACHE_DIR, 'model-catalog.json');
 
 // State
 export const HISTORY_FILE = path.join(STATE_DIR, 'conversation-history.json');
