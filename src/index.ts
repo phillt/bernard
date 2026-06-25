@@ -40,6 +40,7 @@ import {
 } from './custom-providers.js';
 import type { SupportedSdk } from './providers/types.js';
 import { printWelcome, printError, printInfo } from './output.js';
+import { resolveBackend, VoiceService, type VoiceBackend } from './voice-service.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
@@ -133,6 +134,9 @@ program
     '--provider-base-url <url>',
     "Override the active built-in provider's endpoint URL for this session (requires --allow-provider-base-url)",
   )
+  .option('--voice', 'Enable text-to-speech readback after each assistant turn')
+  .option('--voice-backend <backend>', 'TTS backend: auto | macos-say | spd-say | espeak-ng | espeak | windows-speech')
+  .option('--voice-rate <n>', 'Speech rate in words per minute', parseInt)
   .action(async (opts) => {
     try {
       // Detect a fresh install BEFORE any module touches preferences/profiles
@@ -148,6 +152,9 @@ program
         model: opts.model,
         providerBaseUrl: opts.providerBaseUrl,
         allowProviderBaseUrl: opts.allowProviderBaseUrl,
+        voiceTts: opts.voice ? true : undefined,
+        voiceBackend: opts.voiceBackend,
+        voiceRate: opts.voiceRate,
       });
 
       // `loadConfig` runs dotenv, so BERNARD_DEBUG from `.env` is in scope by
@@ -1005,6 +1012,45 @@ program
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('voice-test [text]')
+  .description('Test the TTS backend by speaking a short message')
+  .action(async (text?: string) => {
+    const message = text || 'Hello from Bernard.';
+    // Load config to pick up persisted voice preferences; skip API key validation
+    // by providing a dummy key so the command works without a provider configured.
+    let voiceBackend: VoiceBackend = 'auto';
+    let voiceVoice: string | undefined;
+    let voiceRate: number | undefined;
+    try {
+      const prefs = loadPreferences();
+      voiceBackend = prefs.voiceBackend ?? 'auto';
+      voiceVoice = prefs.voiceVoice;
+      voiceRate = prefs.voiceRate;
+    } catch {
+      // ignore — fall through to defaults
+    }
+    const resolved = resolveBackend(process.platform, voiceBackend);
+    if (!resolved) {
+      printError(
+        'No TTS backend found. Install spd-say, espeak-ng, or espeak on Linux; ' +
+        'macOS uses "say" built-in; Windows uses PowerShell.',
+      );
+      process.exit(1);
+    }
+    printInfo(`TTS backend: ${resolved.backend} (${resolved.bin})`);
+    printInfo(`Speaking: "${message}"`);
+    const svc = new VoiceService(resolved);
+    try {
+      await svc.speak(message, { voice: voiceVoice, rate: voiceRate });
+      printInfo('Done.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      printError(`TTS failed: ${msg}`);
       process.exit(1);
     }
   });

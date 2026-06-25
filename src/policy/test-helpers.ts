@@ -44,6 +44,8 @@ export function makePolicyInput(overrides?: {
     customProviders: {},
     toolPermissions: [],
     skipPermissions: false,
+    voiceTts: false,
+    voiceBackend: 'auto',
   };
   return {
     userInput: overrides?.userInput ?? 'hello',

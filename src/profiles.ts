@@ -26,6 +26,7 @@ import { PREFS_PATH, PROFILES_PATH, PROFILES_MIGRATED_MARKER } from './paths.js'
 import { atomicWriteFileSync } from './fs-utils.js';
 import type { ResponseStyle } from './agent-prompt.js';
 import type { ToolPermissions, ToolPermissionRules } from './tool-permissions.js';
+import type { VoiceBackend } from './voice-service.js';
 
 /** Slug pattern + length cap used for profile ids. */
 const ID_PATTERN = /^[a-z][a-z0-9_-]*$/;
@@ -88,6 +89,14 @@ export interface ProfileSettings {
    * for every turn — no block gate, no confirmation prompts.
    */
   skipPermissions?: boolean;
+  /** Whether text-to-speech readback is active after each assistant turn. */
+  voiceTts?: boolean;
+  /** Which TTS backend to use (`'auto'` = platform-detect). */
+  voiceBackend?: VoiceBackend;
+  /** Optional voice name passed to the TTS backend. */
+  voiceVoice?: string;
+  /** Optional speech rate in words per minute. */
+  voiceRate?: number;
 }
 
 /** A single named profile entry. */

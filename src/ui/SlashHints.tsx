@@ -33,6 +33,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/refresh-models', description: 'Force-refresh the model catalog from the gateway' },
   { name: '/provider', description: 'Manage providers (alias of /models)' },
   { name: '/theme', description: 'Switch color theme' },
+  { name: '/voice', description: 'Toggle text-to-speech readback and backend' },
   { name: '/routines', description: 'List saved routines' },
   { name: '/create-routine', description: 'Create a routine with guided AI assistance' },
   { name: '/create-task', description: 'Create a task routine with guided AI assistance' },
