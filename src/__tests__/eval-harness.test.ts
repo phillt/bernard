@@ -162,7 +162,7 @@ function runInvariant(fixtureName: string, inv: InvariantSpec, idx: number): voi
         ...inv.config,
       };
       const r = resolveSiteModel(config, inv.site);
-      expect(r.modelName, t).toBe(inv.expectedModelName);
+      expect(r.tier, t).toBe(inv.expectedTier);
       return;
     }
     case 'scratch_clears_on_subject_change': {

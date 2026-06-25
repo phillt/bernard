@@ -2,7 +2,7 @@ import type { BernardConfig } from '../../config.js';
 import type { ContextMessageInputs } from '../../context-message.js';
 import type { ToolMeta } from '../../framework/tools/types.js';
 import type { LLMCacheKey } from '../../llm-cache.js';
-import type { ModelSite } from '../../model-policy.js';
+import type { ModelSite, ModelTier } from '../../model-policy.js';
 import type { SourceItemInput } from '../../provenance.js';
 import type { Check, Verdict } from '../../rubric.js';
 import type { Step } from '../../plan-store.js';
@@ -52,7 +52,15 @@ export type InvariantSpec =
       type: 'model_site_resolves_to_tier';
       config: Partial<BernardConfig>;
       site: ModelSite;
-      expectedModelName: string;
+      /**
+       * The cost tier the (modelMode, site) pair must resolve to. We assert the
+       * tier — the stable policy contract (#170/#264) — rather than a concrete
+       * model name, which is sourced from the live model catalog and the
+       * per-role lineup matrix and so drifts whenever a newer model ships.
+       * Model-name → lineup-slot coverage lives in `model-policy.test.ts`,
+       * which injects a fixed lineup.
+       */
+      expectedTier: ModelTier;
     }
   | {
       type: 'scratch_clears_on_subject_change';
