@@ -166,6 +166,89 @@ describe('resolveSiteModel — tier mapping per mode (anthropic lineup)', () => 
   });
 });
 
+describe('resolveSiteModel — per-slot generation params (#286)', () => {
+  // Overwrites the seeded lineups.json with a single lineup whose slots carry
+  // optional `params`, and points `activeLineupId` at it.
+  function seedParamsLineup(slots: {
+    premium: Record<string, unknown>;
+    mid: Record<string, unknown>;
+    cheap: Record<string, unknown>;
+  }): void {
+    const cfgDir = path.join(tmpDir, 'bernard');
+    const now = new Date().toISOString();
+    fs.writeFileSync(
+      path.join(cfgDir, 'lineups.json'),
+      JSON.stringify(
+        {
+          lineups: {
+            paramy: {
+              id: 'paramy',
+              name: 'Paramy',
+              roles: fullRoles(slots as never),
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
+  it('keeps today behavior byte-for-byte when no slot params: rewriter gets temperature 0', async () => {
+    const { resolveSiteModel } = await loadModule();
+    // No params anywhere; anthropic haiku supports temperature, so the rewriter
+    // baseline (formerly the temperatureParam spread) re-injects temperature: 0.
+    const r = resolveSiteModel(makeConfig({ modelMode: 'balanced' }), 'rewriter');
+    expect(r.params).toEqual({ temperature: 0 });
+    // Anthropic carries no providerOptions (no OpenAI strictSchemas).
+    expect(r.providerOptions).toBeUndefined();
+  });
+
+  it('routes a slot reasoningEffort to providerOptions.xai', async () => {
+    seedParamsLineup({
+      premium: { provider: 'xai', model: 'grok-4-1-fast-reasoning', params: { reasoningEffort: 'high' } },
+      mid: { provider: 'xai', model: 'grok-4-fast-non-reasoning' },
+      cheap: { provider: 'xai', model: 'grok-3-mini' },
+    });
+    const { resolveSiteModel } = await loadModule();
+    const config = makeConfig({ activeLineupId: 'paramy', modelMode: 'optimize-performance' });
+    const r = resolveSiteModel(config, 'main'); // premium slot
+    expect(r.modelName).toBe('grok-4-1-fast-reasoning');
+    expect((r.providerOptions as Record<string, unknown>)?.xai).toEqual({ reasoningEffort: 'high' });
+  });
+
+  it('a slot temperature overrides the per-site baseline', async () => {
+    seedParamsLineup({
+      premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
+      mid: { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
+      cheap: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001', params: { temperature: 0.7 } },
+    });
+    const { resolveSiteModel } = await loadModule();
+    // balanced → rewriter resolves to the cheap slot.
+    const r = resolveSiteModel(
+      makeConfig({ activeLineupId: 'paramy', modelMode: 'balanced' }),
+      'rewriter',
+    );
+    expect(r.params).toEqual({ temperature: 0.7 });
+  });
+
+  it('merges OpenAI strictSchemas with a slot reasoningEffort', async () => {
+    seedParamsLineup({
+      premium: { provider: 'openai', model: 'gpt-5.2', params: { reasoningEffort: 'high' } },
+      mid: { provider: 'openai', model: 'gpt-4.1' },
+      cheap: { provider: 'openai', model: 'gpt-4.1-mini' },
+    });
+    const { resolveSiteModel } = await loadModule();
+    const r = resolveSiteModel(
+      makeConfig({ activeLineupId: 'paramy', modelMode: 'optimize-performance' }),
+      'main',
+    );
+    expect(r.providerOptions).toEqual({ openai: { strictSchemas: false, reasoningEffort: 'high' } });
+  });
+});
+
 describe('resolveSiteModel — openai lineup', () => {
   it('balanced picks gpt-5.2 / gpt-4.1 / gpt-4.1-mini', async () => {
     const { resolveSiteModel } = await loadModule();

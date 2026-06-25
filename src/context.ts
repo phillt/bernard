@@ -175,6 +175,9 @@ export async function extractDomainFacts(
       const result = await generateText({
         model: site.model,
         providerOptions: site.providerOptions,
+        // Slot params (temperature/topP) apply, but spread BEFORE maxTokens so
+        // this site's output cap stays authoritative (#286).
+        ...site.params,
         maxTokens: 2048,
         system: domain.extractionPrompt,
         messages: [
@@ -283,6 +286,9 @@ export async function compressHistory(
     const summarizePromise = generateText({
       model: summarizerSite.model,
       providerOptions: summarizerSite.providerOptions,
+      // Slot params (temperature/topP) apply, but spread BEFORE maxTokens so
+      // this site's output cap stays authoritative (#286).
+      ...summarizerSite.params,
       maxTokens: 2048,
       system: SUMMARIZATION_PROMPT,
       messages: [{ role: 'user', content: `Summarize this conversation:\n\n${serialized}` }],

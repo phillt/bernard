@@ -1,6 +1,5 @@
 import { generateText } from 'ai';
 import type { ModelProfile } from './providers/profiles.js';
-import { temperatureParam } from './providers/profiles.js';
 import type { ResolvedEntry } from './reference-resolver.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
@@ -159,6 +158,7 @@ export async function rewritePrompt(
           siteName: 'rewriter',
           modelId: site.model.modelId,
           providerOptions: site.providerOptions,
+          params: site.params,
           system,
           userContent,
         }
@@ -180,11 +180,14 @@ export async function rewritePrompt(
         generateText({
           model: site.model,
           providerOptions: site.providerOptions,
+          // Slot params (temperature/topP) apply, but spread BEFORE maxTokens so
+          // this site's deterministic output cap stays authoritative — a slot
+          // maxOutputTokens must not blow the classifier budget (#286).
+          ...site.params,
           system,
           messages: [{ role: 'user', content: userContent }],
           maxSteps: 1,
           maxTokens: REWRITER_MAX_TOKENS,
-          ...temperatureParam(site.model.modelId, site.provider),
           abortSignal,
         }),
       );

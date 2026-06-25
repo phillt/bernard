@@ -53,6 +53,12 @@ function parseDispatchTimeoutMs(): number | null {
 export interface AgentSpec {
   model: LanguageModel;
   providerOptions?: Parameters<typeof generateText>[0]['providerOptions'];
+  /**
+   * Top-level generation params (issue #286): `temperature`, `topP`,
+   * `maxOutputTokens`. Resolved per lineup slot by `resolveSiteModel` and
+   * spread into the `generateText`/`streamText` call alongside `providerOptions`.
+   */
+  params?: Record<string, unknown>;
   tools?: Record<string, Tool>;
   maxSteps?: number;
   maxTokens?: number;
@@ -310,6 +316,9 @@ async function runNonStreaming(
     experimental_prepareStep: spec.prepareStep,
     experimental_repairToolCall: spec.repair,
     onStepFinish,
+    // Per-slot params last so a slot-set temperature/topP/maxTokens overrides
+    // the defaults above (issue #286).
+    ...spec.params,
   });
   const abortSignal = spec.abortSignal;
   if (!abortSignal) return gen;
@@ -345,6 +354,8 @@ async function runStreaming(
     abortSignal: spec.abortSignal,
     experimental_repairToolCall: spec.repair,
     onStepFinish,
+    // Per-slot params last so they override the defaults above (issue #286).
+    ...spec.params,
   });
   // Defensive: race every await against the parent abort signal. The AI SDK
   // is supposed to settle `textStream` and the result promises when its own

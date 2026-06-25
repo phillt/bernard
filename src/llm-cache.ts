@@ -31,6 +31,11 @@ export interface LLMCacheKey {
   modelId: string;
   /** Provider options passed to `generateText`. */
   providerOptions?: unknown;
+  /**
+   * Top-level generation params (issue #286: `temperature`, `topP`,
+   * `maxOutputTokens`). Included by value so different params hash separately.
+   */
+  params?: unknown;
   /** System prompt. */
   system: string;
   /** Stringified user content (messages or single user message). */
@@ -51,6 +56,7 @@ function stableKey(k: LLMCacheKey): string {
     s: k.siteName,
     m: k.modelId,
     p: k.providerOptions ?? null,
+    pp: k.params ?? null,
     sys: k.system,
     u: k.userContent,
   });

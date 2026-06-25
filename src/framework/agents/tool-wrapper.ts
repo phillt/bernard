@@ -111,6 +111,7 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
     return {
       model: site.model,
       providerOptions: site.providerOptions,
+      params: site.params,
       provider: site.provider,
       modelName: site.modelName,
       // Carry the resolved tier so ledger attribution (#258) buckets this

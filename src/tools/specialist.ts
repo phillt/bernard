@@ -15,6 +15,7 @@ import {
   blankToUndefined,
 } from '../config.js';
 import { resolveSiteModel } from '../model-policy.js';
+import { validateModelParams, PARAM_IDS, type ModelParams } from '../providers/model-params.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 
 const goodExampleSchema = z.object({
@@ -90,6 +91,15 @@ export function createSpecialistTool(
           .describe(
             'Optional model override for this specialist (e.g. "grok-code-fast-1"). Used with create/update.',
           ),
+        params: z
+          .record(z.enum(PARAM_IDS), z.union([z.string(), z.number(), z.boolean()]))
+          .optional()
+          .describe(
+            'Optional generation params for this specialist\'s pinned model (issue #286), keyed by id: ' +
+              '"temperature"/"topP"/"maxOutputTokens" (numbers), "reasoningEffort" (e.g. "low"/"high"), ' +
+              '"thinkingBudget" (Anthropic tokens). Capability-gated against the pinned (provider, model) — ' +
+              'rejected params are dropped. Requires a provider/model pin. Used with create/update.',
+          ),
         kind: z
           .enum(['persona', 'tool-wrapper', 'meta'])
           .optional()
@@ -130,6 +140,7 @@ export function createSpecialistTool(
         guidelines,
         provider,
         model,
+        params,
         kind,
         targetTools,
         goodExamples,
@@ -220,6 +231,17 @@ export function createSpecialistTool(
                 // Policy resolution is best-effort; fall through to no override.
               }
             }
+            // Capability-gate params against the pinned model; needs a pin.
+            // Reject rather than silently drop so the caller knows params
+            // require a provider+model to bind to.
+            let resolvedParams: ModelParams | undefined;
+            if (params && Object.keys(params).length > 0) {
+              if (!resolvedProvider || !resolvedModel) {
+                return 'Error: params require a provider and model pin. Set provider+model on this specialist (or enable a model-mode lineup) before adding params.';
+              }
+              const safe = validateModelParams(resolvedProvider, resolvedModel, params);
+              if (Object.keys(safe).length > 0) resolvedParams = safe;
+            }
             try {
               const specialist = store.createFull({
                 id,
@@ -229,6 +251,7 @@ export function createSpecialistTool(
                 guidelines: guidelines ?? [],
                 provider: resolvedProvider,
                 model: resolvedModel,
+                params: resolvedParams,
                 kind,
                 targetTools,
                 goodExamples: goodExamples as SpecialistExample[] | undefined,
@@ -269,6 +292,21 @@ export function createSpecialistTool(
             if (guidelines !== undefined) updates.guidelines = guidelines;
             if (provider !== undefined) updates.provider = provider;
             if (model !== undefined) updates.model = model;
+            if (params !== undefined) {
+              // Validate against the effective pin: the new provider/model if
+              // supplied, else the specialist's existing one. An empty `params`
+              // object is an explicit "clear". A non-empty `params` with no pin
+              // is rejected rather than silently dropped — params need a
+              // provider+model to bind to.
+              const existing = store.get(id);
+              const effProvider = blankToUndefined(provider) ?? existing?.provider;
+              const effModel = blankToUndefined(model) ?? existing?.model;
+              if (Object.keys(params).length > 0 && (!effProvider || !effModel)) {
+                return 'Error: params require a provider and model pin. Set provider+model on this specialist before adding params.';
+              }
+              updates.params =
+                effProvider && effModel ? validateModelParams(effProvider, effModel, params) : {};
+            }
             if (kind !== undefined) updates.kind = kind;
             if (targetTools !== undefined) updates.targetTools = targetTools;
             if (goodExamples !== undefined)

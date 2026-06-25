@@ -8,6 +8,7 @@ import {
   assertCanDeleteSpecialist,
   assertCanEditSpecialist,
 } from './specialist-authority.js';
+import type { ModelParams } from './providers/model-params.js';
 
 // Re-exported so existing importers (e.g. the `/specialists` UI grouping) keep
 // resolving it from this module; the authoritative definition lives in
@@ -41,6 +42,12 @@ export interface Specialist {
   guidelines: string[];
   provider?: string;
   model?: string;
+  /**
+   * Optional generation parameters applied when this specialist's pinned
+   * `provider`/`model` resolves (issue #286). Absent = model defaults. Keyed
+   * by {@link ParamDescriptor.id}; serialized by `serializeModelParams`.
+   */
+  params?: ModelParams;
   createdAt: string;
   updatedAt: string;
   /** Optional. Defaults to 'persona' for back-compat. */
@@ -68,6 +75,7 @@ export interface SpecialistSummary {
   description: string;
   provider?: string;
   model?: string;
+  params?: ModelParams;
   kind?: SpecialistKind;
 }
 
@@ -82,6 +90,7 @@ export interface CreateSpecialistInput {
   guidelines?: string[];
   provider?: string;
   model?: string;
+  params?: ModelParams;
   kind?: SpecialistKind;
   targetTools?: string[];
   goodExamples?: SpecialistExample[];
@@ -98,6 +107,7 @@ export type SpecialistUpdates = Partial<
     | 'guidelines'
     | 'provider'
     | 'model'
+    | 'params'
     | 'kind'
     | 'targetTools'
     | 'goodExamples'
@@ -268,6 +278,7 @@ export class SpecialistStore {
       guidelines: input.guidelines ?? [],
       ...(input.provider !== undefined ? { provider: input.provider } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
+      ...(input.params !== undefined ? { params: input.params } : {}),
       ...(input.kind !== undefined ? { kind: input.kind } : {}),
       ...(input.targetTools !== undefined ? { targetTools: input.targetTools } : {}),
       ...(input.goodExamples !== undefined ? { goodExamples: input.goodExamples } : {}),
@@ -323,6 +334,14 @@ export class SpecialistStore {
         delete specialist.model;
       } else {
         specialist.model = updates.model;
+      }
+    }
+    // An empty object clears params; undefined means "don't change".
+    if (updates.params !== undefined) {
+      if (Object.keys(updates.params).length === 0) {
+        delete specialist.params;
+      } else {
+        specialist.params = updates.params;
       }
     }
     if (updates.kind !== undefined) specialist.kind = updates.kind;
@@ -397,12 +416,13 @@ export class SpecialistStore {
   getSummaries(): SpecialistSummary[] {
     return this.list()
       .filter((s) => !s.disabled)
-      .map(({ id, name, description, provider, model, kind }) => ({
+      .map(({ id, name, description, provider, model, params, kind }) => ({
         id,
         name,
         description,
         ...(provider !== undefined ? { provider } : {}),
         ...(model !== undefined ? { model } : {}),
+        ...(params !== undefined ? { params } : {}),
         ...(kind !== undefined ? { kind } : {}),
       }));
   }

@@ -36,6 +36,7 @@ import { atomicWriteFileSync } from './fs-utils.js';
 import { getCatalogForProvider } from './providers/catalog.js';
 import { deriveTiers } from './providers/tiers.js';
 import { BUILTIN_PROVIDERS, type BuiltinProvider } from './providers/types.js';
+import type { ModelParams } from './providers/model-params.js';
 import { ALL_ROLE_IDS, type RoleId } from './model-roles.js';
 
 /** The three cost-tier slots every role defines. */
@@ -46,6 +47,13 @@ export type LineupTier = (typeof LINEUP_TIERS)[number];
 export interface LineupSlot {
   provider: string;
   model: string;
+  /**
+   * Optional generation parameters for this slot (issue #286). Absent =
+   * provider/model defaults (today's behavior, byte-for-byte). Keyed by
+   * {@link ParamDescriptor.id}; serialized into the AI-SDK call by
+   * `serializeModelParams` (`src/providers/model-params.ts`).
+   */
+  params?: ModelParams;
 }
 
 /** The `{premium, mid, cheap}` cost ladder for one role. */

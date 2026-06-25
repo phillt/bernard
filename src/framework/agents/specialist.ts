@@ -130,6 +130,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     return {
       model: site.model,
       providerOptions: site.providerOptions,
+      params: site.params,
       provider: site.provider,
       modelName: site.modelName,
       // Carry the resolved tier so ledger attribution (#258) buckets this
