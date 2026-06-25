@@ -194,13 +194,19 @@ export function buildSilenceWav(ms: number, rate = WARMUP_RATE, channels = WARMU
   return buf;
 }
 
+/** Paths of silent WAVs already materialized this process, keyed by duration. */
+const _silenceWavPaths = new Map<number, string>();
+
 /** Write (or reuse a cached) silent WAV of `ms` under the XDG cache dir; returns its path. */
 export function ensureSilenceWav(ms: number): string {
+  const cached = _silenceWavPaths.get(ms);
+  if (cached) return cached;
   const p = join(CACHE_DIR, `tts-warmup-${ms}ms.wav`);
   if (!existsSync(p)) {
     mkdirSync(CACHE_DIR, { recursive: true });
     writeFileSync(p, buildSilenceWav(ms));
   }
+  _silenceWavPaths.set(ms, p);
   return p;
 }
 
@@ -232,7 +238,7 @@ export class VoiceService {
     this.stop();
     const epoch = ++this._epoch; // claim this utterance
 
-    await this._runWarmup(epoch);
+    await this._runWarmup();
     // If stop() or a newer speak() ran during the warmup, abandon this one.
     if (epoch !== this._epoch) return;
 
@@ -269,8 +275,7 @@ export class VoiceService {
 
   /** Play a brief silence through the resolved player to wake a suspended sink.
    *  Best-effort: any failure resolves silently rather than blocking speech. */
-  private _runWarmup(epoch: number): Promise<void> {
-    void epoch; // speak() re-checks the epoch after this resolves; see speak().
+  private _runWarmup(): Promise<void> {
     const w = this._warmup;
     if (!w || !w.player || w.ms <= 0) return Promise.resolve();
 
@@ -293,30 +298,29 @@ export class VoiceService {
       child.unref();
       this._child = child;
 
-      let done = false;
+      let advanced = false;
       let timer: ReturnType<typeof setTimeout>;
-      const finish = (timedOut = false) => {
-        if (done) return;
-        done = true;
+      const finish = () => {
+        if (advanced) return;
+        advanced = true;
         clearTimeout(timer);
-        // On the safety-timeout path the player is still running; kill it so it
-        // can't keep the sink open and play concurrently with speech (EBUSY on
-        // exclusive-access ALSA devices). On the normal close path it's a no-op.
-        if (timedOut) {
-          try {
-            child.kill('SIGTERM');
-          } catch {
-            // ignore
-          }
+        // Kill the player. On the safety-timeout path it's still running, and
+        // letting it keep the sink open would play concurrently with speech
+        // (EBUSY on exclusive-access ALSA devices); on the normal close path
+        // it has already exited, so this is a harmless no-op.
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          // ignore
         }
         if (this._child === child) this._child = null;
         resolve();
       };
       // Safety cap so a hung player can never block speech indefinitely.
-      timer = setTimeout(() => finish(true), w.ms + 1500);
+      timer = setTimeout(finish, w.ms + 1500);
       timer.unref?.();
-      child.on('error', () => finish());
-      child.on('close', () => finish());
+      child.on('error', finish);
+      child.on('close', finish);
     });
   }
 

@@ -28,7 +28,7 @@ import {
   providerEnvVar,
   normalizeMaxConcurrentAgents,
   getAvailableProviders,
-  DEFAULT_VOICE_WARMUP_MS,
+  resolveVoiceWarmupMs,
 } from './config.js';
 import { normalizeStoredModelMode } from './model-policy.js';
 import { loadLineups, resolveActiveLineup, resolveActiveLineupWithCorrection } from './lineups.js';
@@ -1027,22 +1027,13 @@ program
     let voiceBackend: VoiceBackend = 'auto';
     let voiceVoice: string | undefined;
     let voiceRate: number | undefined;
-    // Precedence mirrors loadConfig: prefs > env > default.
-    const envWarmupMs = process.env.BERNARD_VOICE_WARMUP_MS
-      ? parseInt(process.env.BERNARD_VOICE_WARMUP_MS, 10)
-      : undefined;
-    let voiceWarmupMs =
-      envWarmupMs !== undefined && Number.isFinite(envWarmupMs) && envWarmupMs >= 0
-        ? envWarmupMs
-        : DEFAULT_VOICE_WARMUP_MS;
+    let voiceWarmupMs = resolveVoiceWarmupMs();
     try {
       const prefs = loadPreferences();
       voiceBackend = prefs.voiceBackend ?? 'auto';
       voiceVoice = prefs.voiceVoice;
       voiceRate = prefs.voiceRate;
-      if (typeof prefs.voiceWarmupMs === 'number' && prefs.voiceWarmupMs >= 0) {
-        voiceWarmupMs = prefs.voiceWarmupMs;
-      }
+      voiceWarmupMs = resolveVoiceWarmupMs(undefined, prefs.voiceWarmupMs);
     } catch {
       // ignore — fall through to env/default
     }

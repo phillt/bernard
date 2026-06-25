@@ -200,8 +200,23 @@ export interface BernardConfig {
 const DEFAULT_PROVIDER = 'anthropic';
 const DEFAULT_VOICE_TTS = false;
 const DEFAULT_VOICE_BACKEND: VoiceBackend = 'auto';
-/** Default sink-warmup duration (ms). Exported so the `voice-test` CLI shares it. */
-export const DEFAULT_VOICE_WARMUP_MS = 400;
+const DEFAULT_VOICE_WARMUP_MS = 400;
+
+/**
+ * Resolve the sink-warmup duration (ms) with the standard precedence
+ * (override > pref > `BERNARD_VOICE_WARMUP_MS` > default), accepting only
+ * finite, non-negative values. Shared by `loadConfig` and the `voice-test` CLI
+ * so the two never diverge.
+ */
+export function resolveVoiceWarmupMs(override?: number, pref?: number): number {
+  const env = process.env.BERNARD_VOICE_WARMUP_MS
+    ? parseInt(process.env.BERNARD_VOICE_WARMUP_MS, 10)
+    : undefined;
+  for (const v of [override, pref, env]) {
+    if (v !== undefined && Number.isFinite(v) && v >= 0) return v;
+  }
+  return DEFAULT_VOICE_WARMUP_MS;
+}
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_SHELL_TIMEOUT = 30000;
 const DEFAULT_TOKEN_WINDOW = 0;
@@ -1142,14 +1157,7 @@ export function loadConfig(overrides?: {
     rawVoiceRate !== undefined && Number.isFinite(rawVoiceRate) && rawVoiceRate > 0
       ? rawVoiceRate
       : undefined;
-  const rawVoiceWarmupMs =
-    overrides?.voiceWarmupMs ??
-    prefs.voiceWarmupMs ??
-    (process.env.BERNARD_VOICE_WARMUP_MS ? parseInt(process.env.BERNARD_VOICE_WARMUP_MS, 10) : undefined);
-  const voiceWarmupMs =
-    rawVoiceWarmupMs !== undefined && Number.isFinite(rawVoiceWarmupMs) && rawVoiceWarmupMs >= 0
-      ? rawVoiceWarmupMs
-      : DEFAULT_VOICE_WARMUP_MS;
+  const voiceWarmupMs = resolveVoiceWarmupMs(overrides?.voiceWarmupMs, prefs.voiceWarmupMs);
 
   const config: BernardConfig = {
     provider,
