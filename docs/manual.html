@@ -2727,7 +2727,15 @@
         <p>
           The on/off state is persisted to the active profile so it survives session restarts.
           Environment variables: <code>BERNARD_VOICE=true</code>, <code>BERNARD_VOICE_BACKEND</code>,
-          <code>BERNARD_VOICE_RATE</code>.
+          <code>BERNARD_VOICE_RATE</code>, <code>BERNARD_VOICE_WARMUP_MS</code>.
+        </p>
+        <p>
+          <strong>First words getting clipped?</strong> On Linux, PipeWire/PulseAudio suspends idle
+          audio sinks (HDMI outputs especially take a few hundred ms to wake), clipping the first
+          syllables. Bernard plays a brief silence through the sink before each utterance to wake it;
+          tune the duration with <code>BERNARD_VOICE_WARMUP_MS</code> (default <code>400</code>,
+          <code>0</code> disables). It needs <code>pw-play</code>, <code>paplay</code>, or
+          <code>aplay</code> installed and is a no-op on macOS/Windows.
         </p>
 
         <!-- ═══════════════ 13. Auto-Updates ═══════════════ -->

@@ -188,11 +188,35 @@ export interface BernardConfig {
   voiceVoice?: string;
   /** Optional speech rate in words per minute. */
   voiceRate?: number;
+  /**
+   * Milliseconds of silence played through the audio sink immediately before
+   * speaking, to wake a suspended output device so the first words aren't
+   * clipped. `0` disables. Linux-only effect (no-op where no warmup player is
+   * installed or the platform keeps devices awake). Default 400.
+   */
+  voiceWarmupMs: number;
 }
 
 const DEFAULT_PROVIDER = 'anthropic';
 const DEFAULT_VOICE_TTS = false;
 const DEFAULT_VOICE_BACKEND: VoiceBackend = 'auto';
+const DEFAULT_VOICE_WARMUP_MS = 400;
+
+/**
+ * Resolve the sink-warmup duration (ms) with the standard precedence
+ * (override > pref > `BERNARD_VOICE_WARMUP_MS` > default), accepting only
+ * finite, non-negative values. Shared by `loadConfig` and the `voice-test` CLI
+ * so the two never diverge.
+ */
+export function resolveVoiceWarmupMs(override?: number, pref?: number): number {
+  const env = process.env.BERNARD_VOICE_WARMUP_MS
+    ? parseInt(process.env.BERNARD_VOICE_WARMUP_MS, 10)
+    : undefined;
+  for (const v of [override, pref, env]) {
+    if (v !== undefined && Number.isFinite(v) && v >= 0) return v;
+  }
+  return DEFAULT_VOICE_WARMUP_MS;
+}
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_SHELL_TIMEOUT = 30000;
 const DEFAULT_TOKEN_WINDOW = 0;
@@ -369,6 +393,7 @@ export function savePreferences(prefs: {
   voiceBackend?: VoiceBackend;
   voiceVoice?: string;
   voiceRate?: number;
+  voiceWarmupMs?: number;
 }): void {
   // Patch shape matches ProfileSettings exactly — keys present in `prefs`
   // (including explicit `undefined`s from resetOption / resetAllOptions) are
@@ -420,6 +445,7 @@ export function loadPreferences(): {
   voiceBackend?: VoiceBackend;
   voiceVoice?: string;
   voiceRate?: number;
+  voiceWarmupMs?: number;
 } {
   // Routes through the active profile in profiles.json (#207). Each field is
   // type-checked here so a malformed stored value falls through to undefined
@@ -474,6 +500,7 @@ export function loadPreferences(): {
     voiceBackend: isVoiceBackend(parsed.voiceBackend) ? parsed.voiceBackend : undefined,
     voiceVoice: typeof parsed.voiceVoice === 'string' ? parsed.voiceVoice : undefined,
     voiceRate: typeof parsed.voiceRate === 'number' ? parsed.voiceRate : undefined,
+    voiceWarmupMs: typeof parsed.voiceWarmupMs === 'number' ? parsed.voiceWarmupMs : undefined,
   };
 }
 
@@ -888,6 +915,7 @@ export function loadConfig(overrides?: {
   voiceBackend?: VoiceBackend;
   voiceVoice?: string;
   voiceRate?: number;
+  voiceWarmupMs?: number;
 }): BernardConfig {
   // Load .env from cwd first, then XDG config dir, then legacy ~/.bernard/
   const cwdEnv = path.join(process.cwd(), '.env');
@@ -1129,6 +1157,7 @@ export function loadConfig(overrides?: {
     rawVoiceRate !== undefined && Number.isFinite(rawVoiceRate) && rawVoiceRate > 0
       ? rawVoiceRate
       : undefined;
+  const voiceWarmupMs = resolveVoiceWarmupMs(overrides?.voiceWarmupMs, prefs.voiceWarmupMs);
 
   const config: BernardConfig = {
     provider,
@@ -1171,6 +1200,7 @@ export function loadConfig(overrides?: {
     voiceBackend,
     voiceVoice,
     voiceRate,
+    voiceWarmupMs,
   };
 
   validateConfig(config);
@@ -1249,6 +1279,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'voiceBackend',
   'voiceVoice',
   'voiceRate',
+  'voiceWarmupMs',
 ];
 
 /**
