@@ -78,11 +78,7 @@ import {
   saveActiveSettings,
   type ProfileSettings,
 } from '../profiles.js';
-import {
-  ruleLabel,
-  type PermissionRule,
-  type ToolPermissionEffect,
-} from '../tool-permissions.js';
+import { ruleLabel, type PermissionRule, type ToolPermissionEffect } from '../tool-permissions.js';
 import type { BreadthOption } from '../permissions/breadth.js';
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible } from '../output.js';
@@ -100,7 +96,12 @@ import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
 import { generateText, type CoreMessage } from 'ai';
 import { resolveSiteModel, resolveMainModel, logSiteModelSnapshot } from '../model-policy.js';
-import { serializeMessages, extractDomainFacts, SUMMARIZATION_PROMPT, MIN_HISTORY_FOR_FACTS } from '../context.js';
+import {
+  serializeMessages,
+  extractDomainFacts,
+  SUMMARIZATION_PROMPT,
+  MIN_HISTORY_FOR_FACTS,
+} from '../context.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
 import { promoteCandidate } from '../candidate-bootstrap.js';
 import {
@@ -463,33 +464,6 @@ export function App({
   }
   const messageStore = messageStoreRef.current;
 
-  // Closes the active overlay and resolves any pending request as a cancel.
-  const closeOverlay = () => {
-    if (pendingMenu) {
-      pendingMenu.resolve({ cancelled: true });
-      setPendingMenu(null);
-    }
-    if (pendingMultiMenu) {
-      pendingMultiMenu.resolve({ cancelled: true });
-      setPendingMultiMenu(null);
-    }
-    if (pendingGrid) {
-      pendingGrid.resolve({ cancelled: true });
-      setPendingGrid(null);
-    }
-    if (pendingDialog) {
-      if (pendingDialog.kind === 'confirm') pendingDialog.resolve(false, 'once', undefined);
-      else pendingDialog.resolve('deny', undefined);
-      setPendingDialog(null);
-    }
-    if (pendingTextInput) {
-      pendingTextInput.resolve({ cancelled: true });
-      setPendingTextInput(null);
-    }
-    if (pendingInfo) setPendingInfo(null);
-    setActiveOverlay(null);
-  };
-
   // Gate the App-level useInput so it never fires concurrently with an
   // overlay's own useInput. Every overlay — modal (menu, confirm, help,
   // text-input) AND viewer (status, sources) — owns its own keystream now;
@@ -575,7 +549,7 @@ export function App({
         turns: agent.getHistory().filter((m) => m.role === 'user').length,
       });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- session boundaries are per-mount, not per-config-change
+    // Deps intentionally limited to [agent]: session boundaries are per-mount, not per-config-change.
   }, [agent]);
 
   // Attach a persistent SpinnerStats object that the framework's token-stats
@@ -691,7 +665,7 @@ export function App({
         // Never block or crash startup over a catalog refresh.
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+    // Intentionally run once on mount (deps omitted).
   }, []);
 
   // One-time lineup-correction notice (#264 follow-up). When `src/index.ts`
@@ -713,7 +687,7 @@ export function App({
         toolDetails: false,
       },
     ]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
+    // Intentionally run once on mount (deps omitted).
   }, []);
 
   const flashToast = (message: string, variant: ToastVariant = 'info') => {
@@ -726,7 +700,11 @@ export function App({
   const pushAssistantNotice = (content: string) => {
     setStaticItems((prev) => [
       ...prev,
-      { key: String(itemKeyRef.current++), message: { role: 'assistant', content }, toolDetails: false },
+      {
+        key: String(itemKeyRef.current++),
+        message: { role: 'assistant', content },
+        toolDetails: false,
+      },
     ]);
   };
 
@@ -1105,7 +1083,10 @@ export function App({
               text: `${new Date(e.startedAt).toLocaleString()} — ${e.success ? 'success' : 'error'} (${e.durationMs}ms)`,
               bold: true,
             });
-            lines.push({ text: `  ${truncate((e.error || e.finalOutput || '').replace(/\s+/g, ' '), 120)}`, dim: true });
+            lines.push({
+              text: `  ${truncate((e.error || e.finalOutput || '').replace(/\s+/g, ' '), 120)}`,
+              dim: true,
+            });
           }
           showInfo(`Logs — ${job.name}`, lines);
           return;
@@ -1291,7 +1272,10 @@ export function App({
             text: `Resolved backend: ${resolved ? `${resolved.backend} (${resolved.bin})` : 'none available'}`,
             dim: !resolved,
           },
-          { text: config.voiceRate ? `Rate: ${config.voiceRate} wpm` : 'Rate: backend default', dim: true },
+          {
+            text: config.voiceRate ? `Rate: ${config.voiceRate} wpm` : 'Rate: backend default',
+            dim: true,
+          },
           {
             text:
               config.voiceWarmupMs > 0
@@ -1331,11 +1315,13 @@ export function App({
 
       // Step 2: backend picker — only relevant when enabling voice
       if (newVoiceTts) {
-        const backendEntries: MenuEntry[] = (VOICE_BACKEND_VALUES as readonly string[]).map((b) => ({
-          label: b,
-          active: config.voiceBackend === b,
-          value: b,
-        }));
+        const backendEntries: MenuEntry[] = (VOICE_BACKEND_VALUES as readonly string[]).map(
+          (b) => ({
+            label: b,
+            active: config.voiceBackend === b,
+            value: b,
+          }),
+        );
         const backendResult = await requestMenu(backendEntries, {
           title: `Voice backend: ${config.voiceBackend}`,
         });
@@ -1352,7 +1338,10 @@ export function App({
 
       // Persist only the voice fields — saveActiveSettings merges onto the profile.
       persistVoice();
-      flashToast(`Voice TTS ${config.voiceTts ? 'enabled' : 'disabled'} (backend: ${config.voiceBackend}).`, 'success');
+      flashToast(
+        `Voice TTS ${config.voiceTts ? 'enabled' : 'disabled'} (backend: ${config.voiceBackend}).`,
+        'success',
+      );
       return;
     }
 
@@ -1866,7 +1855,13 @@ export function App({
         if (action.cancelled || action.index === 3) continue; // Back / Esc → list
         if (action.index === 0) {
           try {
-            promoteCandidate(c, stores.specialists, stores.candidates, config.autoCreateThreshold, config);
+            promoteCandidate(
+              c,
+              stores.specialists,
+              stores.candidates,
+              config.autoCreateThreshold,
+              config,
+            );
             flashToast(`Accepted ${c.name} — specialist created.`, 'success');
           } catch (err) {
             flashToast(`Could not create specialist: ${(err as Error).message}`, 'error');
@@ -2136,7 +2131,10 @@ export function App({
     const entries: MenuEntry[] = modes.map((m) => ({
       label: m.label,
       description: m.desc,
-      active: m.value === 'skip' ? config.skipPermissions : !config.skipPermissions && config.toolMode === m.value,
+      active:
+        m.value === 'skip'
+          ? config.skipPermissions
+          : !config.skipPermissions && config.toolMode === m.value,
       value: m.value,
     }));
     const current = config.skipPermissions ? 'unrestricted' : config.toolMode;
@@ -2639,7 +2637,12 @@ export function App({
       if (turnCompleted && config.voiceTts) {
         const history = agent.getHistory();
         let lastMsg: (typeof history)[number] | undefined;
-        for (let i = history.length - 1; i >= 0; i--) { if (history[i].role === 'assistant') { lastMsg = history[i]; break; } }
+        for (let i = history.length - 1; i >= 0; i--) {
+          if (history[i].role === 'assistant') {
+            lastMsg = history[i];
+            break;
+          }
+        }
         const ttsText = lastMsg ? extractTextFromContent(lastMsg.content) : '';
         if (ttsText.trim()) {
           void getVoiceService(config)
@@ -2692,7 +2695,11 @@ export function App({
       if (errorPanel) {
         setStaticItems((prev) => [
           ...prev,
-          { key: String(itemKeyRef.current++), toolDetails: config.toolDetails, error: errorPanel! },
+          {
+            key: String(itemKeyRef.current++),
+            toolDetails: config.toolDetails,
+            error: errorPanel!,
+          },
         ]);
       }
     }
@@ -3063,11 +3070,7 @@ export function App({
             renderAbove={<PlanPanel agent={agent} />}
           />
           <Box justifyContent="space-between">
-            <HintBar
-              busy={busy}
-              overlayActive={activeOverlay !== null}
-              slashActive={slashActive}
-            />
+            <HintBar busy={busy} overlayActive={activeOverlay !== null} slashActive={slashActive} />
             <StatusBar agent={agent} />
           </Box>
         </>
@@ -3745,8 +3748,7 @@ async function pickLineupSlotInk(
       continue;
     }
 
-    const currentModelForProvider =
-      provider === current.provider ? current.model : undefined;
+    const currentModelForProvider = provider === current.provider ? current.model : undefined;
     const initialIndex =
       currentModelForProvider && models.includes(currentModelForProvider)
         ? models.indexOf(currentModelForProvider)
@@ -3937,9 +3939,7 @@ async function runRoleSlotsEditorInk(
       headerLines: [role.description],
     });
     if (pick.cancelled) return slots;
-    const value = pick.item.value as
-      | { kind: 'tier'; tier: LineupTier }
-      | { kind: 'back' };
+    const value = pick.item.value as { kind: 'tier'; tier: LineupTier } | { kind: 'back' };
     if (value.kind === 'back') return slots;
     const next = await pickLineupSlotInk(
       config,
@@ -4002,9 +4002,7 @@ async function runLineupEditorInk(
    * rather than silently discarding them. Returns `{ done: true, result }` to
    * leave the editor, or `{ done: false }` to keep editing.
    */
-  const handleExit = async (): Promise<
-    { done: true; result: Lineup | null } | { done: false }
-  > => {
+  const handleExit = async (): Promise<{ done: true; result: Lineup | null } | { done: false }> => {
     if (!isDirty()) return { done: true, result: null };
     const confirm = await requestMenu(
       [

@@ -77,7 +77,10 @@ function applySlots(
 }
 
 /** Returns provider ids referenced by `slots` that Bernard has no key/SDK for. */
-function unknownProviders(config: BernardConfig | undefined, slots: Array<{ provider: string }>): string[] {
+function unknownProviders(
+  config: BernardConfig | undefined,
+  slots: Array<{ provider: string }>,
+): string[] {
   const known = new Set<string>([
     ...BUILTIN_PROVIDERS,
     ...Object.keys(config?.customProviders ?? {}),
@@ -179,7 +182,8 @@ export function createLineupTool(config?: BernardConfig) {
 
           const activateIfAsked = (saved: Lineup): string => {
             if (!activate) return '';
-            if (!config) return '\n(Could not activate — no live config available; switch with /lineups.)';
+            if (!config)
+              return '\n(Could not activate — no live config available; switch with /lineups.)';
             config.activeLineupId = saved.id;
             try {
               savePreferences({
@@ -209,7 +213,12 @@ export function createLineupTool(config?: BernardConfig) {
             if (!config) return '';
             try {
               const v = await validateLineup(config, saved);
-              return `\n\n${formatLineupValidation(v)}` + (v.ok ? '' : '\n(Note: a passing probe means reachable, not necessarily good at the task.)');
+              return (
+                `\n\n${formatLineupValidation(v)}` +
+                (v.ok
+                  ? ''
+                  : '\n(Note: a passing probe means reachable, not necessarily good at the task.)')
+              );
             } catch (err) {
               return `\n\n(Could not validate models: ${(err as Error).message})`;
             }
@@ -242,7 +251,7 @@ export function createLineupTool(config?: BernardConfig) {
           }
 
           // action === 'create'
-          if (!name || !name.trim()) {
+          if (!name?.trim()) {
             return 'To create a lineup, pass a `name`. Ask the user for one if they did not provide it.';
           }
           const nameErr = validateLineupName(name);

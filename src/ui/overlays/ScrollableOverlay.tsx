@@ -1,11 +1,6 @@
 import { useState } from 'react';
 import { Box, useInput, useStdout } from 'ink';
-import {
-  ViewerShell,
-  viewerViewport,
-  type OverlayLine,
-  type OverlayTab,
-} from './ViewerShell.js';
+import { ViewerShell, viewerViewport, type OverlayLine, type OverlayTab } from './ViewerShell.js';
 
 export type { OverlayLine, OverlayTab } from './ViewerShell.js';
 
@@ -64,7 +59,11 @@ export function ScrollableOverlay({
   const visible = lines.slice(clamped, clamped + viewport);
   const position =
     lines.length > viewport
-      ? { first: clamped + 1, last: Math.min(lines.length, clamped + viewport), total: lines.length }
+      ? {
+          first: clamped + 1,
+          last: Math.min(lines.length, clamped + viewport),
+          total: lines.length,
+        }
       : null;
 
   return (

@@ -75,7 +75,10 @@ function RowNode({ label, value }: { label: string; value: string }) {
   );
 }
 
-function pushAssumptions(lines: OverlayLine[], assumptions: AgentStatusInputs['assumptions']): void {
+function pushAssumptions(
+  lines: OverlayLine[],
+  assumptions: AgentStatusInputs['assumptions'],
+): void {
   if (assumptions.length === 0) {
     lines.push({ key: 'assumptions', node: <RowNode label="Assumptions" value="(none)" /> });
     return;
@@ -112,7 +115,9 @@ function pushPlanStep(
       node: (
         <Box>
           <Text dimColor>{''.padEnd(LABEL_WIDTH)}</Text>
-          <Text dimColor wrap="truncate-end">verify: {truncate(verification, 120)}</Text>
+          <Text dimColor wrap="truncate-end">
+            verify: {truncate(verification, 120)}
+          </Text>
         </Box>
       ),
     });
@@ -157,7 +162,10 @@ function pushVerification(
         </Text>
         <Text wrap="truncate-end"> — {truncate(entry.reason, 120)}</Text>
         {entry.source && (
-          <Text dimColor wrap="truncate-end"> ({truncate(entry.source, 60)})</Text>
+          <Text dimColor wrap="truncate-end">
+            {' '}
+            ({truncate(entry.source, 60)})
+          </Text>
         )}
       </Box>
     ),

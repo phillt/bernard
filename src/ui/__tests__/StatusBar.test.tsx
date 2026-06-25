@@ -125,12 +125,16 @@ describe('<StatusBar> session cost cell (#258)', () => {
   }
 
   it('renders a session cost cell once the session total is > 0', () => {
-    const frame = stripAnsi(render(createElement(StatusBar, { agent: agentWithSessionCost(0.42) })).lastFrame() ?? '');
+    const frame = stripAnsi(
+      render(createElement(StatusBar, { agent: agentWithSessionCost(0.42) })).lastFrame() ?? '',
+    );
     expect(frame).toContain('session ~$0.42');
   });
 
   it('omits the session cell at zero cost', () => {
-    const frame = stripAnsi(render(createElement(StatusBar, { agent: agentWithSessionCost(0) })).lastFrame() ?? '');
+    const frame = stripAnsi(
+      render(createElement(StatusBar, { agent: agentWithSessionCost(0) })).lastFrame() ?? '',
+    );
     expect(frame).not.toContain('session');
   });
 });

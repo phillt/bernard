@@ -164,7 +164,9 @@ export class MCPManager {
       } catch {
         /* best-effort cleanup */
       }
-      throw err instanceof MCPHandshakeTimeout ? new Error(handshakeTimeoutMessage(timeoutMs)) : err;
+      throw err instanceof MCPHandshakeTimeout
+        ? new Error(handshakeTimeoutMessage(timeoutMs))
+        : err;
     } finally {
       if (timer) clearTimeout(timer);
     }

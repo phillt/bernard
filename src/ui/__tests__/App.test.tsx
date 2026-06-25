@@ -524,7 +524,9 @@ describe('<App> /clear --save (#228)', () => {
     process.env.BERNARD_HOME = TMP_HOME;
     vi.clearAllMocks();
     // Return a non-empty summary by default so writeMemory is exercised.
-    vi.mocked(generateText).mockResolvedValue({ text: 'Test session summary.' } as Awaited<ReturnType<typeof generateText>>);
+    vi.mocked(generateText).mockResolvedValue({ text: 'Test session summary.' } as Awaited<
+      ReturnType<typeof generateText>
+    >);
     // Return no domain facts by default (can override per test).
     mockExtractDomainFacts.mockResolvedValue([]);
   });
@@ -579,7 +581,11 @@ describe('<App> /clear --save (#228)', () => {
     await tick(80);
 
     expect(mockAddFacts).toHaveBeenCalledWith(['TypeScript project'], 'clear-save', 'general');
-    expect(mockAddFacts).toHaveBeenCalledWith(['npm run build compiles'], 'clear-save', 'tool-usage');
+    expect(mockAddFacts).toHaveBeenCalledWith(
+      ['npm run build compiles'],
+      'clear-save',
+      'tool-usage',
+    );
     unmount();
   });
 
@@ -954,7 +960,12 @@ describe('<App> management menu chains', () => {
   it('/specialists: Back returns to the list; Esc on the list exits', async () => {
     const { stdin, lastFrame, unmount } = renderApp({
       stores: {
-        specialists: { list: () => [mkSpec()], get: () => mkSpec(), update: vi.fn(), delete: vi.fn() } as never,
+        specialists: {
+          list: () => [mkSpec()],
+          get: () => mkSpec(),
+          update: vi.fn(),
+          delete: vi.fn(),
+        } as never,
       },
     });
     await tick();
@@ -1005,7 +1016,12 @@ describe('<App> management menu chains', () => {
     const update = vi.fn();
     const { stdin, unmount } = renderApp({
       stores: {
-        specialists: { list: () => [mkSpec()], get: () => mkSpec(), update, delete: vi.fn() } as never,
+        specialists: {
+          list: () => [mkSpec()],
+          get: () => mkSpec(),
+          update,
+          delete: vi.fn(),
+        } as never,
       },
     });
     await tick();
@@ -1022,7 +1038,12 @@ describe('<App> management menu chains', () => {
     const del = vi.fn(() => true);
     const { stdin, unmount } = renderApp({
       stores: {
-        specialists: { list: () => [mkSpec()], get: () => mkSpec(), update: vi.fn(), delete: del } as never,
+        specialists: {
+          list: () => [mkSpec()],
+          get: () => mkSpec(),
+          update: vi.fn(),
+          delete: del,
+        } as never,
       },
     });
     await tick();
@@ -1038,7 +1059,12 @@ describe('<App> management menu chains', () => {
   });
 
   it('/routines: Delete confirms and deletes', async () => {
-    const r = { id: 'my-routine', name: 'My Routine', description: 'does things', content: 'steps' };
+    const r = {
+      id: 'my-routine',
+      name: 'My Routine',
+      description: 'does things',
+      content: 'steps',
+    };
     const del = vi.fn(() => true);
     const { stdin, unmount } = renderApp({
       stores: { routines: { list: () => [r], get: () => r, delete: del } as never },
@@ -1104,7 +1130,11 @@ describe('<App> management menu chains', () => {
     };
     const { stdin, unmount } = renderApp({
       stores: {
-        candidates: { listPending: () => [c], acknowledge: vi.fn(), updateStatus: vi.fn() } as never,
+        candidates: {
+          listPending: () => [c],
+          acknowledge: vi.fn(),
+          updateStatus: vi.fn(),
+        } as never,
       },
     });
     await tick();

@@ -249,15 +249,18 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
             width={cardWidth}
           >
             {headerShown}
-            {detail.lines.slice(clampedContentOffset, clampedContentOffset + previewBudget).map((line, i) => (
-              <Text key={`p-${i}`} dimColor={!selected!.contentPreview}>
-                {line || ' '}
-              </Text>
-            ))}
+            {detail.lines
+              .slice(clampedContentOffset, clampedContentOffset + previewBudget)
+              .map((line, i) => (
+                <Text key={`p-${i}`} dimColor={!selected!.contentPreview}>
+                  {line || ' '}
+                </Text>
+              ))}
             {contentOverflows && (
               <Text dimColor>
                 ↕ lines {clampedContentOffset + 1}–
-                {Math.min(detail.lines.length, clampedContentOffset + previewBudget)} of {detail.lines.length}
+                {Math.min(detail.lines.length, clampedContentOffset + previewBudget)} of{' '}
+                {detail.lines.length}
                 {focus === 'list' ? ' (→ to scroll)' : ''}
               </Text>
             )}
@@ -357,7 +360,8 @@ function tryParseJson(s: string): unknown {
 function renderJsonValue(v: unknown): string {
   if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
     const entries = Object.entries(v as Record<string, unknown>);
-    const allScalar = entries.length > 0 && entries.every(([, val]) => val === null || typeof val !== 'object');
+    const allScalar =
+      entries.length > 0 && entries.every(([, val]) => val === null || typeof val !== 'object');
     if (allScalar) {
       const keyW = Math.min(18, Math.max(...entries.map(([k]) => k.length)));
       return entries.map(([k, val]) => `${k.padEnd(keyW)}  ${scalarString(val)}`).join('\n');

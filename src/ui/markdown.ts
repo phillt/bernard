@@ -57,7 +57,10 @@ export function normalizeColor(color: string): ChalkInstance {
   return NAMED_COLORS[color] ?? chalk.white;
 }
 
-function buildTerminalOptions(colors: ThemeColors, width: number): Parameters<typeof markedTerminal>[0] {
+function buildTerminalOptions(
+  colors: ThemeColors,
+  width: number,
+): Parameters<typeof markedTerminal>[0] {
   const accent = normalizeColor(colors.accent);
   const code = normalizeColor(colors.toolCall);
   const muted = normalizeColor(colors.muted);
@@ -154,7 +157,7 @@ export function renderMarkdown(
   colors: ThemeColors,
   heal = false,
 ): string {
-  if (!text || !text.trim()) return text;
+  if (!text?.trim()) return text;
   if (text === lastInput && width === lastWidth && colors === lastColors && heal === lastHeal) {
     return lastOutput;
   }

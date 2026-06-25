@@ -1,9 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SpecialistStore } from './specialists.js';
-import {
-  _resetBuiltinSpecialistCache,
-  ProtectedSpecialistError,
-} from './specialist-authority.js';
+import { _resetBuiltinSpecialistCache, ProtectedSpecialistError } from './specialist-authority.js';
 
 vi.mock('node:fs', () => ({
   mkdirSync: vi.fn(),

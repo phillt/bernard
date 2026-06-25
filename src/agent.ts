@@ -1001,7 +1001,12 @@ export class Agent {
       this.ragStore,
       this.spinnerStats
         ? (rec) => {
-            const cost = priceUsageUsd(rec.provider, rec.modelName, rec.promptTokens, rec.completionTokens);
+            const cost = priceUsageUsd(
+              rec.provider,
+              rec.modelName,
+              rec.promptTokens,
+              rec.completionTokens,
+            );
             if (cost != null) compactionCostUsd += cost;
           }
         : undefined,

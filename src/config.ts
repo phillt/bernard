@@ -198,7 +198,6 @@ export interface BernardConfig {
 }
 
 const DEFAULT_PROVIDER = 'anthropic';
-const DEFAULT_VOICE_TTS = false;
 const DEFAULT_VOICE_BACKEND: VoiceBackend = 'auto';
 const DEFAULT_VOICE_WARMUP_MS = 400;
 
@@ -709,32 +708,29 @@ function modelsForBuiltin(provider: BuiltinProvider): string[] {
  * entry is the default for `getDefaultModel`. Custom providers are not
  * represented here — consult `config.customProviders` for those.
  */
-export const PROVIDER_MODELS: Record<string, string[]> = new Proxy(
-  {} as Record<string, string[]>,
-  {
-    get(_target, prop) {
-      if (typeof prop !== 'string') return undefined;
-      if (!BUILTIN_PROVIDERS.includes(prop as BuiltinProvider)) return undefined;
-      return modelsForBuiltin(prop as BuiltinProvider);
-    },
-    has(_target, prop) {
-      return typeof prop === 'string' && BUILTIN_PROVIDERS.includes(prop as BuiltinProvider);
-    },
-    ownKeys() {
-      return [...BUILTIN_PROVIDERS];
-    },
-    getOwnPropertyDescriptor(_target, prop) {
-      if (typeof prop !== 'string') return undefined;
-      if (!BUILTIN_PROVIDERS.includes(prop as BuiltinProvider)) return undefined;
-      return {
-        value: modelsForBuiltin(prop as BuiltinProvider),
-        writable: false,
-        enumerable: true,
-        configurable: true,
-      };
-    },
+export const PROVIDER_MODELS: Record<string, string[]> = new Proxy({} as Record<string, string[]>, {
+  get(_target, prop) {
+    if (typeof prop !== 'string') return undefined;
+    if (!BUILTIN_PROVIDERS.includes(prop as BuiltinProvider)) return undefined;
+    return modelsForBuiltin(prop as BuiltinProvider);
   },
-);
+  has(_target, prop) {
+    return typeof prop === 'string' && BUILTIN_PROVIDERS.includes(prop as BuiltinProvider);
+  },
+  ownKeys() {
+    return [...BUILTIN_PROVIDERS];
+  },
+  getOwnPropertyDescriptor(_target, prop) {
+    if (typeof prop !== 'string') return undefined;
+    if (!BUILTIN_PROVIDERS.includes(prop as BuiltinProvider)) return undefined;
+    return {
+      value: modelsForBuiltin(prop as BuiltinProvider),
+      writable: false,
+      enumerable: true,
+      configurable: true,
+    };
+  },
+});
 
 /**
  * Returns the first (preferred) model for a provider.
@@ -827,7 +823,7 @@ export function providerEnvVar(provider: string): string {
  * the next fallback; this helper makes them fall through.
  */
 export function blankToUndefined(v: string | undefined): string | undefined {
-  return v && v.trim() ? v.trim() : undefined;
+  return v?.trim() ? v.trim() : undefined;
 }
 
 /**
@@ -1146,9 +1142,7 @@ export function loadConfig(overrides?: {
   const voiceBackend: VoiceBackend =
     overrides?.voiceBackend ?? prefs.voiceBackend ?? envVoiceBackend ?? DEFAULT_VOICE_BACKEND;
   const voiceVoice =
-    overrides?.voiceVoice ??
-    prefs.voiceVoice ??
-    (process.env.BERNARD_VOICE_VOICE || undefined);
+    overrides?.voiceVoice ?? prefs.voiceVoice ?? (process.env.BERNARD_VOICE_VOICE || undefined);
   const rawVoiceRate =
     overrides?.voiceRate ??
     prefs.voiceRate ??

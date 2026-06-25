@@ -55,9 +55,7 @@ export function ModelGridOverlay({
     Math.max(8, Math.floor((termWidth - 4) / columns)),
   );
 
-  const [highlight, setHighlight] = useState(
-    Math.max(0, Math.min(items.length - 1, initialIndex)),
-  );
+  const [highlight, setHighlight] = useState(Math.max(0, Math.min(items.length - 1, initialIndex)));
 
   useEffect(() => {
     if (!signal) return;

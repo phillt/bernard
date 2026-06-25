@@ -53,10 +53,18 @@ const BUCKET_ORDER: Record<UsageBucket, number> = {
  * (custom provider / unknown). Shared by the per-turn report and one-off pricing
  * (e.g. `/compact` compaction spend).
  */
-export function priceUsageUsd(provider: string, modelName: string, prompt: number, completion: number): number | null {
+export function priceUsageUsd(
+  provider: string,
+  modelName: string,
+  prompt: number,
+  completion: number,
+): number | null {
   const meta = getModelMeta(provider, modelName);
   if (!meta) return null;
-  return (prompt / 1_000_000) * meta.pricing.inputPerMTok + (completion / 1_000_000) * meta.pricing.outputPerMTok;
+  return (
+    (prompt / 1_000_000) * meta.pricing.inputPerMTok +
+    (completion / 1_000_000) * meta.pricing.outputPerMTok
+  );
 }
 
 export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport {
@@ -108,7 +116,9 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
       sites: Array.from(siteSet).sort(),
       costUsd: priceUsageUsd(row.provider, row.modelName, row.promptTokens, row.completionTokens),
     }))
-    .sort((a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || b.promptTokens - a.promptTokens);
+    .sort(
+      (a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || b.promptTokens - a.promptTokens,
+    );
 
   // Single pass over the (small) row set for every total.
   let totalPromptTokens = 0;

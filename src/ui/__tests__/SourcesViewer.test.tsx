@@ -14,7 +14,8 @@ function makeAgent(turns: TurnProvenance[]): Agent {
 // right-panel content render. Well under the 2000-char store cap.
 // Long, multi-line excerpt: a recognizable first line plus a run long enough to
 // overflow the right-panel card at any reasonable terminal height (forces clip).
-const PREVIEW = 'The Rust programming language emphasizes memory safety.\n' + 'guarantee '.repeat(200);
+const PREVIEW =
+  'The Rust programming language emphasizes memory safety.\n' + 'guarantee '.repeat(200);
 
 const REGRESSION_TURNS: TurnProvenance[] = [
   {
@@ -199,7 +200,14 @@ describe('<SourcesViewer> two-panel browser', () => {
         turnIndex: 0,
         userInput: 'long title turn',
         sources: [
-          { id: 'S1', kind: 'rag', label: longLabel, contentPreview: 'body', rawRef: 'rag://x', timestamp: 0 },
+          {
+            id: 'S1',
+            kind: 'rag',
+            label: longLabel,
+            contentPreview: 'body',
+            rawRef: 'rag://x',
+            timestamp: 0,
+          },
         ],
         citedIds: [],
         timestamp: 0,
@@ -309,7 +317,14 @@ describe('<SourcesViewer> two-panel browser', () => {
         turnIndex: 0,
         userInput: 'short content turn',
         sources: [
-          { id: 'S1', kind: 'web', label: 'tiny', contentPreview: 'one short line', rawRef: 'https://a', timestamp: 0 },
+          {
+            id: 'S1',
+            kind: 'web',
+            label: 'tiny',
+            contentPreview: 'one short line',
+            rawRef: 'https://a',
+            timestamp: 0,
+          },
         ],
         citedIds: [],
         timestamp: 0,
@@ -335,8 +350,22 @@ describe('<SourcesViewer> two-panel browser', () => {
         turnIndex: 0,
         userInput: 'mixed citation order',
         sources: [
-          { id: 'S1', kind: 'web', label: 'uncited-first', contentPreview: 'alpha', rawRef: 'https://a', timestamp: 0 },
-          { id: 'S2', kind: 'web', label: 'the-cited-one', contentPreview: 'bravo', rawRef: 'https://b', timestamp: 0 },
+          {
+            id: 'S1',
+            kind: 'web',
+            label: 'uncited-first',
+            contentPreview: 'alpha',
+            rawRef: 'https://a',
+            timestamp: 0,
+          },
+          {
+            id: 'S2',
+            kind: 'web',
+            label: 'the-cited-one',
+            contentPreview: 'bravo',
+            rawRef: 'https://b',
+            timestamp: 0,
+          },
         ],
         citedIds: ['S2'],
         timestamp: 0,
@@ -359,7 +388,9 @@ describe('<SourcesViewer> two-panel browser', () => {
     const turns: TurnProvenance[] = Array.from({ length: 30 }, (_, i) => ({
       turnIndex: i,
       userInput: `req-${i}`,
-      sources: [{ id: 'S1', kind: 'web', label: `src-${i}`, contentPreview: '', rawRef: 'r', timestamp: 0 }],
+      sources: [
+        { id: 'S1', kind: 'web', label: `src-${i}`, contentPreview: '', rawRef: 'r', timestamp: 0 },
+      ],
       citedIds: ['S1'],
       timestamp: 0,
     }));

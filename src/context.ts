@@ -295,7 +295,9 @@ export async function compressHistory(
     const [result, domainFacts] = await Promise.all([summarizePromise, extractPromise]);
 
     // Count the summarization call toward the per-turn ledger (#258).
-    onUsage?.(usageRecordFromSite(summarizerSite, 'compressor', result.usage, result.providerMetadata));
+    onUsage?.(
+      usageRecordFromSite(summarizerSite, 'compressor', result.usage, result.providerMetadata),
+    );
 
     // Store extracted facts per domain — await to prevent races on persist()
     if (ragStore && domainFacts.length > 0) {

@@ -13,7 +13,13 @@ function defaultHasBin(bin: string): boolean {
   }
 }
 
-export type VoiceBackend = 'auto' | 'macos-say' | 'spd-say' | 'espeak-ng' | 'espeak' | 'windows-speech';
+export type VoiceBackend =
+  | 'auto'
+  | 'macos-say'
+  | 'spd-say'
+  | 'espeak-ng'
+  | 'espeak'
+  | 'windows-speech';
 
 export const VOICE_BACKEND_VALUES: readonly VoiceBackend[] = [
   'auto',
@@ -29,7 +35,7 @@ const BACKEND_BIN: Record<Exclude<VoiceBackend, 'auto'>, string> = {
   'macos-say': 'say',
   'spd-say': 'spd-say',
   'espeak-ng': 'espeak-ng',
-  'espeak': 'espeak',
+  espeak: 'espeak',
   'windows-speech': 'powershell',
 };
 
@@ -162,7 +168,10 @@ export function resolveWarmupPlayer(
 }
 
 /** Build the command to play a WAV through a warmup player. Pure. */
-export function buildWarmupCommand(player: WarmupPlayer, wavPath: string): { bin: string; args: string[] } {
+export function buildWarmupCommand(
+  player: WarmupPlayer,
+  wavPath: string,
+): { bin: string; args: string[] } {
   switch (player) {
     case 'aplay':
       return { bin: 'aplay', args: ['-q', wavPath] };
@@ -173,7 +182,11 @@ export function buildWarmupCommand(player: WarmupPlayer, wavPath: string): { bin
 }
 
 /** Build a minimal PCM (s16le) WAV buffer of `ms` of silence. Pure. */
-export function buildSilenceWav(ms: number, rate = WARMUP_RATE, channels = WARMUP_CHANNELS): Buffer {
+export function buildSilenceWav(
+  ms: number,
+  rate = WARMUP_RATE,
+  channels = WARMUP_CHANNELS,
+): Buffer {
   const frames = Math.max(1, Math.round((rate * ms) / 1000));
   const bytesPerFrame = channels * 2; // 16-bit samples
   const dataLen = frames * bytesPerFrame;
@@ -245,7 +258,6 @@ export class VoiceService {
 
     return new Promise<void>((resolve, reject) => {
       let advanced = false;
-      let child: ChildProcess;
       const _advance = (err?: Error) => {
         if (advanced) return;
         advanced = true;
@@ -254,7 +266,7 @@ export class VoiceService {
         else resolve();
       };
 
-      child = spawn(bin, args, { stdio: 'ignore', detached: false });
+      const child = spawn(bin, args, { stdio: 'ignore', detached: false });
       // Don't let the child's handle keep the event loop alive — the caller
       // voids this promise, so speech must never block process exit. `stop()`
       // still holds the reference and can SIGTERM it while it's playing.
@@ -276,7 +288,7 @@ export class VoiceService {
    *  Best-effort: any failure resolves silently rather than blocking speech. */
   private _runWarmup(): Promise<void> {
     const w = this._warmup;
-    if (!w || !w.player || w.ms <= 0) return Promise.resolve();
+    if (!w?.player || w.ms <= 0) return Promise.resolve();
 
     let wavPath: string;
     try {
@@ -298,7 +310,6 @@ export class VoiceService {
       this._child = child;
 
       let advanced = false;
-      let timer: ReturnType<typeof setTimeout>;
       const finish = () => {
         if (advanced) return;
         advanced = true;
@@ -316,7 +327,7 @@ export class VoiceService {
         resolve();
       };
       // Safety cap so a hung player can never block speech indefinitely.
-      timer = setTimeout(finish, w.ms + 1500);
+      const timer = setTimeout(finish, w.ms + 1500);
       timer.unref?.();
       child.on('error', finish);
       child.on('close', finish);

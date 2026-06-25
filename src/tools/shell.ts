@@ -153,8 +153,7 @@ export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, Sh
         const stderr = normalizeToolText(execError.stderr || '');
         const stdout = normalizeToolText(execError.stdout || '');
         const rawMessage = execError.message || 'Command failed';
-        const output =
-          [stdout, stderr].filter(Boolean).join('\n') || normalizeToolText(rawMessage);
+        const output = [stdout, stderr].filter(Boolean).join('\n') || normalizeToolText(rawMessage);
         return err({ type: 'exec_failed', message: output, snippet: output.slice(0, 200) });
       }
     },

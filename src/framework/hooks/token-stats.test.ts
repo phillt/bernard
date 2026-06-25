@@ -60,7 +60,9 @@ describe('token-stats cache accumulation (#269)', () => {
     await hook.onStepFinish!(
       step({
         usage: { promptTokens: 500, completionTokens: 10 },
-        providerMetadata: { anthropic: { cacheReadInputTokens: null, cacheCreationInputTokens: null } },
+        providerMetadata: {
+          anthropic: { cacheReadInputTokens: null, cacheCreationInputTokens: null },
+        },
       }),
     );
     expect(target.spinnerStats.turnCacheReadTokens).toBe(0);

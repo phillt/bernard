@@ -30,9 +30,14 @@ export const promptBoundaryFixture = defineFixture({
       substring: '## MCP Servers',
     },
     {
+      // Positive control: the prompt DOES surface the active model context, so
+      // the excludes above aren't passing vacuously. Since #264 that context is
+      // the orchestrator lineup ladder ("Active lineup: …"), not a flat
+      // "model: <id>" line, so we assert the stable marker rather than a
+      // concrete (catalog-dependent) model id.
       type: 'system_prompt_includes_when',
-      condition: { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
-      substring: 'claude-sonnet-4-5-20250929',
+      condition: { provider: 'anthropic' },
+      substring: 'Active lineup:',
     },
   ],
 });

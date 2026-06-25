@@ -75,7 +75,12 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
   // Use a hard timeout so a stuck provider doesn't keep this detached process
   // alive indefinitely. AbortSignal.timeout is supported on Node 17.3+.
   const extractSignal = AbortSignal.timeout(WORKER_EXTRACT_TIMEOUT_MS);
-  const domainFacts = await extractDomainFacts(payload.serialized, config, undefined, extractSignal);
+  const domainFacts = await extractDomainFacts(
+    payload.serialized,
+    config,
+    undefined,
+    extractSignal,
+  );
 
   // Store facts per domain if any were extracted
   const totalFacts = domainFacts.reduce((sum, df) => sum + df.facts.length, 0);
@@ -98,7 +103,7 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
         specialistStore.list(),
         candidateStore.listPending(),
       );
-      if (candidate && candidate.type === 'new-candidate') {
+      if (candidate?.type === 'new-candidate') {
         candidateStore.create(candidate.candidate, 'exit');
       }
     }

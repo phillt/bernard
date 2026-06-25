@@ -113,9 +113,7 @@ export function injectAskUserHistoryMessages(
       let payload: AskUserBatchResult & { unavailable?: boolean };
       try {
         payload =
-          typeof raw === 'string'
-            ? (JSON.parse(raw) as typeof payload)
-            : (raw as typeof payload);
+          typeof raw === 'string' ? (JSON.parse(raw) as typeof payload) : (raw as typeof payload);
       } catch {
         continue;
       }

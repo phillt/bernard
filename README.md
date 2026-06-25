@@ -306,11 +306,11 @@ Bernard can speak its responses aloud using the host OS's built-in text-to-speec
 
 ### Platform backends
 
-| Platform | Backend | Notes |
-| -------- | ------- | ----- |
-| macOS | `say` | Built-in — no install required |
-| Linux | `spd-say` → `espeak-ng` → `espeak` | First available binary is used |
-| Windows | PowerShell `System.Speech` | Built-in — no install required |
+| Platform | Backend                            | Notes                          |
+| -------- | ---------------------------------- | ------------------------------ |
+| macOS    | `say`                              | Built-in — no install required |
+| Linux    | `spd-say` → `espeak-ng` → `espeak` | First available binary is used |
+| Windows  | PowerShell `System.Speech`         | Built-in — no install required |
 
 ### Linux install hints
 
@@ -344,23 +344,23 @@ bernard voice-test "Custom phrase here"
 
 ### REPL `/voice` command
 
-| Command | Description |
-| ------- | ----------- |
-| `/voice` or `/voice on` | Enable TTS for assistant responses |
-| `/voice off` | Disable TTS and stop any current speech |
-| `/voice status` | Show on/off state and resolved backend |
-| `/voice test [text]` | Speak a phrase immediately |
+| Command                 | Description                             |
+| ----------------------- | --------------------------------------- |
+| `/voice` or `/voice on` | Enable TTS for assistant responses      |
+| `/voice off`            | Disable TTS and stop any current speech |
+| `/voice status`         | Show on/off state and resolved backend  |
+| `/voice test [text]`    | Speak a phrase immediately              |
 
 The on/off state is persisted to the active profile so it survives restarts.
 
 ### Environment variables
 
-| Variable | Description | Default |
-| -------- | ----------- | ------- |
-| `BERNARD_VOICE` | Enable TTS (`true` or `1`) | `false` |
-| `BERNARD_VOICE_BACKEND` | Backend override (`auto`, `macos-say`, `spd-say`, `espeak-ng`, `espeak`, `windows-speech`) | `auto` |
-| `BERNARD_VOICE_RATE` | Speech rate in words-per-minute | (backend default) |
-| `BERNARD_VOICE_WARMUP_MS` | Silence played to wake a suspended audio sink before speaking, so the first words aren't clipped (Linux-only; needs `pw-play`/`paplay`/`aplay`; `0` disables) | `400` |
+| Variable                  | Description                                                                                                                                                   | Default           |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `BERNARD_VOICE`           | Enable TTS (`true` or `1`)                                                                                                                                    | `false`           |
+| `BERNARD_VOICE_BACKEND`   | Backend override (`auto`, `macos-say`, `spd-say`, `espeak-ng`, `espeak`, `windows-speech`)                                                                    | `auto`            |
+| `BERNARD_VOICE_RATE`      | Speech rate in words-per-minute                                                                                                                               | (backend default) |
+| `BERNARD_VOICE_WARMUP_MS` | Silence played to wake a suspended audio sink before speaking, so the first words aren't clipped (Linux-only; needs `pw-play`/`paplay`/`aplay`; `0` disables) | `400`             |
 
 > **First words getting clipped?** On Linux, PipeWire/PulseAudio suspends idle audio sinks (HDMI outputs especially take a few hundred ms to wake), so the first syllables play into a device that isn't ready yet. Bernard mitigates this by playing a brief silence to wake the sink before each utterance — tune or disable it with `BERNARD_VOICE_WARMUP_MS`. The deeper fix is to stop the sink suspending at all (e.g. set `session.suspend-timeout-seconds = 0` for your output in WirePlumber).
 

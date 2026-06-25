@@ -71,10 +71,10 @@ function withCacheControl(msg: CoreMessage): CoreMessage {
  *
  * Only call when {@link isAnthropicPromptCacheActive} is true.
  */
-export function applyAnthropicPromptCache(input: {
+export function applyAnthropicPromptCache(input: { system?: string; messages: CoreMessage[] }): {
   system?: string;
   messages: CoreMessage[];
-}): { system?: string; messages: CoreMessage[] } {
+} {
   const messages = [...input.messages];
 
   // (2) Rolling breakpoint: the last stable message before the volatile context

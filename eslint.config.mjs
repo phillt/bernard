@@ -41,16 +41,18 @@ export default tseslint.config(
       "@typescript-eslint/prefer-nullish-coalescing": "warn",
       "@typescript-eslint/prefer-optional-chain": "warn",
 
-      // General code quality
-      eqeqeq: "error",
+      // General code quality. `null: "ignore"` keeps the idiomatic `x != null`
+      // nullish guard (matches both null and undefined) while still flagging
+      // every other loose `==`/`!=`.
+      eqeqeq: ["error", "always", { null: "ignore" }],
       "prefer-const": "error",
       "no-var": "error",
     },
   },
 
-  // Relaxed rules for test files
+  // Relaxed rules for test files (both .ts and .tsx)
   {
-    files: ["src/**/*.test.ts"],
+    files: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": [

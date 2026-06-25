@@ -182,5 +182,4 @@ describe('plan tool', () => {
     });
     expect(parsed.success).toBe(true);
   });
-
 });

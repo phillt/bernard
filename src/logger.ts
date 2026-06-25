@@ -72,11 +72,7 @@ export function debugLog(label: string, data: unknown): void {
  * with timing and model id. No-op when debug is off — the wrapped fn runs
  * exactly once either way.
  */
-export async function traceLlm<T>(
-  site: string,
-  model: string,
-  fn: () => Promise<T>,
-): Promise<T> {
+export async function traceLlm<T>(site: string, model: string, fn: () => Promise<T>): Promise<T> {
   if (!isDebugEnabled()) return fn();
   const t0 = Date.now();
   debugLog('llm:start', { site, model });

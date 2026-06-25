@@ -223,7 +223,11 @@ describe('<ConfirmDialog>', () => {
           risk: 'high',
           permissionKey: 'shell:touch',
           breadthOptions: [
-            { label: 'touch', specifier: 'touch *', rulePreview: 'Will allow: `touch` for this profile' },
+            {
+              label: 'touch',
+              specifier: 'touch *',
+              rulePreview: 'Will allow: `touch` for this profile',
+            },
           ],
           onResolve: () => {},
           onCancel: () => {},

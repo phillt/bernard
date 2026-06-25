@@ -44,7 +44,9 @@ describe('validateModel', () => {
 
   it('classifies a "does not exist" message as not_found even on a 400', async () => {
     generateTextMock.mockRejectedValue(
-      Object.assign(new Error("The requested model 'gpt-5-chat' does not exist."), { statusCode: 400 }),
+      Object.assign(new Error("The requested model 'gpt-5-chat' does not exist."), {
+        statusCode: 400,
+      }),
     );
     const r = await validateModel(config, 'openai', 'gpt-5-chat');
     expect(r.ok).toBe(false);

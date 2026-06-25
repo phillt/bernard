@@ -1138,10 +1138,7 @@ describe('augmentTools', () => {
   });
 
   describe('profile permission gate (#212)', () => {
-    function makeToolWithMeta(
-      name: string,
-      kind: 'read' | 'write' | 'dangerous' = 'dangerous',
-    ) {
+    function makeToolWithMeta(name: string, kind: 'read' | 'write' | 'dangerous' = 'dangerous') {
       const execute = vi.fn(async () => ({ output: 'done', is_error: false }));
       const t: any = { execute, description: name, parameters: {} };
       attachMeta(t, { name, kind, deterministic: false, sideEffect: 'local', cacheable: false });
@@ -1174,7 +1171,9 @@ describe('augmentTools', () => {
           profileStore: store,
           confirmThreshold: 'high',
           confirmAction,
-          getToolPermissions: () => [{ effect: 'allow', tool: 'shell', specifier: 'touch *', _v: 2 }],
+          getToolPermissions: () => [
+            { effect: 'allow', tool: 'shell', specifier: 'touch *', _v: 2 },
+          ],
         },
       );
       await augmented.shell.execute({ command: 'touch x' }, {});

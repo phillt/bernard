@@ -15,21 +15,41 @@ function agentWithLedger(entries: TurnUsageEntry[] | null): Agent {
         turnCacheReadTokens: 0,
         turnCacheWriteTokens: 0,
         model: 'claude-opus-4-8',
-        turnLedger: new Map(entries.map((e) => [`${e.bucket}|${e.provider}|${e.modelName}|${e.site}`, e])),
+        turnLedger: new Map(
+          entries.map((e) => [`${e.bucket}|${e.provider}|${e.modelName}|${e.site}`, e]),
+        ),
         sessionCostUsd: 0,
       }
     : null;
   return { spinnerStats } as unknown as Agent;
 }
 
-function entry(over: Partial<TurnUsageEntry> & Pick<TurnUsageEntry, 'bucket' | 'provider' | 'modelName' | 'site'>): TurnUsageEntry {
-  return { promptTokens: 0, completionTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 1, ...over };
+function entry(
+  over: Partial<TurnUsageEntry> &
+    Pick<TurnUsageEntry, 'bucket' | 'provider' | 'modelName' | 'site'>,
+): TurnUsageEntry {
+  return {
+    promptTokens: 0,
+    completionTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    calls: 1,
+    ...over,
+  };
 }
 
 describe('<UsageViewer>', () => {
   it('renders the tab, a per-tier row, and a TOTAL row', () => {
     const agent = agentWithLedger([
-      entry({ bucket: 'premium', provider: 'anthropic', modelName: 'claude-opus-4-8', site: 'main', promptTokens: 12000, completionTokens: 3000, calls: 4 }),
+      entry({
+        bucket: 'premium',
+        provider: 'anthropic',
+        modelName: 'claude-opus-4-8',
+        site: 'main',
+        promptTokens: 12000,
+        completionTokens: 3000,
+        calls: 4,
+      }),
     ]);
     const { lastFrame } = render(createElement(UsageViewer, { agent }));
     const frame = lastFrame() ?? '';

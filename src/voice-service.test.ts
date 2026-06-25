@@ -112,14 +112,14 @@ describe('buildSpeakCommand', () => {
     const resolved: ResolvedBackend = { backend: 'windows-speech', bin: 'powershell' };
     const { bin, args } = buildSpeakCommand(resolved, 'hello world');
     expect(bin).toBe('powershell');
-    expect(args.some(a => a.includes('System.Speech'))).toBe(true);
-    expect(args.some(a => a.includes('hello world'))).toBe(true);
+    expect(args.some((a) => a.includes('System.Speech'))).toBe(true);
+    expect(args.some((a) => a.includes('hello world'))).toBe(true);
   });
 
   it('escapes single quotes in windows-speech', () => {
     const resolved: ResolvedBackend = { backend: 'windows-speech', bin: 'powershell' };
     const { args } = buildSpeakCommand(resolved, "it's a test");
-    expect(args.some(a => a.includes("it''s a test"))).toBe(true);
+    expect(args.some((a) => a.includes("it''s a test"))).toBe(true);
   });
 });
 
@@ -145,12 +145,21 @@ describe('resolveWarmupPlayer', () => {
 
 describe('buildWarmupCommand', () => {
   it('passes -q to aplay', () => {
-    expect(buildWarmupCommand('aplay', '/tmp/s.wav')).toEqual({ bin: 'aplay', args: ['-q', '/tmp/s.wav'] });
+    expect(buildWarmupCommand('aplay', '/tmp/s.wav')).toEqual({
+      bin: 'aplay',
+      args: ['-q', '/tmp/s.wav'],
+    });
   });
 
   it('plays the wav path directly for pw-play and paplay', () => {
-    expect(buildWarmupCommand('pw-play', '/tmp/s.wav')).toEqual({ bin: 'pw-play', args: ['/tmp/s.wav'] });
-    expect(buildWarmupCommand('paplay', '/tmp/s.wav')).toEqual({ bin: 'paplay', args: ['/tmp/s.wav'] });
+    expect(buildWarmupCommand('pw-play', '/tmp/s.wav')).toEqual({
+      bin: 'pw-play',
+      args: ['/tmp/s.wav'],
+    });
+    expect(buildWarmupCommand('paplay', '/tmp/s.wav')).toEqual({
+      bin: 'paplay',
+      args: ['/tmp/s.wav'],
+    });
   });
 });
 

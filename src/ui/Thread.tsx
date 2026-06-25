@@ -335,8 +335,7 @@ function StreamGroupBody({
       // (mirrors <ToolCallBlock> returning null + the static skip).
       if (ev.toolName === 'think' && !extractThought(ev.args)) continue;
       // `think` never shows a `↳` result row (its result is internal).
-      const showResult =
-        ev.toolName !== 'think' && toolDetails && resultsByCall.has(ev.callId);
+      const showResult = ev.toolName !== 'think' && toolDetails && resultsByCall.has(ev.callId);
       pushBlock(
         `c-${ev.callId}`,
         <>
@@ -725,7 +724,9 @@ function formatPlanLines(args: unknown): string[] {
     const steps = a['steps'] as { description?: unknown }[];
     return [
       'create:',
-      ...steps.map((s, i) => `${i + 1}. ${typeof s?.description === 'string' ? s.description : '?'}`),
+      ...steps.map(
+        (s, i) => `${i + 1}. ${typeof s?.description === 'string' ? s.description : '?'}`,
+      ),
     ];
   }
   if (action === 'add' && a['step'] != null && typeof a['step'] === 'object') {
@@ -761,4 +762,3 @@ function renderResultSnippet(result: unknown): string {
     return '(unserializable result)';
   }
 }
-
