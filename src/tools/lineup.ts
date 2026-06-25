@@ -9,11 +9,13 @@ import {
   LINEUP_TIERS,
   type Lineup,
   type LineupTier,
+  type LineupSlot,
   type RoleSlots,
 } from '../lineups.js';
 import { ALL_ROLE_IDS, getRole, type RoleId } from '../model-roles.js';
 import { savePreferences, type BernardConfig } from '../config.js';
 import { BUILTIN_PROVIDERS } from '../providers/types.js';
+import { validateModelParams, PARAM_IDS } from '../providers/model-params.js';
 import { validateLineup, formatLineupValidation } from '../model-validate.js';
 
 /**
@@ -46,13 +48,27 @@ const SlotSchema = z.object({
     .describe('Cost tier: premium (strongest), mid, or cheap.'),
   provider: z.string().describe('Provider id, e.g. "openai", "anthropic", "xai", or a custom one.'),
   model: z.string().describe('Model name as the provider expects it, e.g. "gpt-5.5-pro".'),
+  params: z
+    .record(z.enum(PARAM_IDS), z.union([z.string(), z.number(), z.boolean()]))
+    .optional()
+    .describe(
+      'Optional per-slot generation params (issue #286), keyed by id: ' +
+        '"temperature"/"topP"/"maxOutputTokens" (numbers), "reasoningEffort" ' +
+        '(e.g. "low"/"high"), "thinkingBudget" (Anthropic tokens). Capability-' +
+        'gated — params the model rejects are dropped on save. Omit to use ' +
+        'model defaults.',
+    ),
 });
 
 function formatMatrix(l: Lineup): string {
   const lines: string[] = [];
   for (const roleId of ALL_ROLE_IDS) {
     const slots = l.roles[roleId];
-    const cell = (t: LineupTier): string => `${slots[t].provider}/${slots[t].model}`;
+    const cell = (t: LineupTier): string => {
+      const s = slots[t];
+      const p = s.params ? ` {${Object.entries(s.params).map(([k, v]) => `${k}=${v}`).join(',')}}` : '';
+      return `${s.provider}/${s.model}${p}`;
+    };
     lines.push(
       `  ${getRole(roleId).label.padEnd(16)} premium=${cell('premium')}  mid=${cell('mid')}  cheap=${cell('cheap')}`,
     );
@@ -70,7 +86,16 @@ function applySlots(
 ): void {
   for (const s of slots) {
     const tier = s.tier as LineupTier;
-    const binding = { provider: s.provider.trim(), model: s.model.trim() };
+    const provider = s.provider.trim();
+    const model = s.model.trim();
+    // Capability-gate params: drop anything this (provider, model) rejects so a
+    // bad knob never reaches the API (issue #286). Empty → omit the field.
+    const safeParams = s.params ? validateModelParams(provider, model, s.params) : undefined;
+    const binding: LineupSlot = {
+      provider,
+      model,
+      ...(safeParams && Object.keys(safeParams).length > 0 ? { params: safeParams } : {}),
+    };
     const targets: RoleId[] = s.role === 'all' ? [...ALL_ROLE_IDS] : [s.role as RoleId];
     for (const r of targets) roles[r] = { ...roles[r], [tier]: { ...binding } };
   }

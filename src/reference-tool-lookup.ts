@@ -3,7 +3,6 @@ import { readToolMeta } from './framework/tools/adapter.js';
 import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
-import { temperatureParam } from './providers/profiles.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 
@@ -168,6 +167,7 @@ export async function selectLookupTool(
           siteName: 'reference-lookup:select',
           modelId: site.model.modelId,
           providerOptions: site.providerOptions,
+          params: site.params,
           system: SELECT_SYSTEM_PROMPT,
           userContent,
         }
@@ -184,11 +184,14 @@ export async function selectLookupTool(
         generateText({
           model: site.model,
           providerOptions: site.providerOptions,
+          // Slot params (temperature/topP) apply, but spread BEFORE maxTokens so
+          // this site's output cap stays authoritative — a small slot
+          // maxOutputTokens must not truncate the JSON selection (#286).
+          ...site.params,
           system: SELECT_SYSTEM_PROMPT,
           messages: [{ role: 'user', content: userContent }],
           maxSteps: 1,
           maxTokens: SELECT_MAX_TOKENS,
-          ...temperatureParam(site.model.modelId, site.provider),
           abortSignal,
         }),
       );
@@ -316,6 +319,7 @@ export async function interpretLookupResult(
           siteName: 'reference-lookup:interpret',
           modelId: site.model.modelId,
           providerOptions: site.providerOptions,
+          params: site.params,
           system: INTERPRET_SYSTEM_PROMPT,
           userContent,
         }
@@ -332,11 +336,14 @@ export async function interpretLookupResult(
         generateText({
           model: site.model,
           providerOptions: site.providerOptions,
+          // Slot params (temperature/topP) apply, but spread BEFORE maxTokens so
+          // this site's output cap stays authoritative — a small slot
+          // maxOutputTokens must not truncate the JSON interpretation (#286).
+          ...site.params,
           system: INTERPRET_SYSTEM_PROMPT,
           messages: [{ role: 'user', content: userContent }],
           maxSteps: 1,
           maxTokens: INTERPRET_MAX_TOKENS,
-          ...temperatureParam(site.model.modelId, site.provider),
           abortSignal,
         }),
       );

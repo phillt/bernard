@@ -114,6 +114,13 @@ import { rewritePrompt } from '../prompt-rewriter.js';
 import { loadRewriterHints } from '../memory.js';
 import { stripImagePaths } from '../image.js';
 import { getModelProfile } from '../providers/index.js';
+import {
+  describeModelParams,
+  validateModelParams,
+  type ModelParams,
+  type ParamId,
+  type ParamDescriptor,
+} from '../providers/model-params.js';
 import { debugLog, getSessionId, getSessionLogPath, isDebugEnabled } from '../logger.js';
 import { acquireSlot, releaseSlot, getMaxConcurrentAgents } from '../tools/agent-pool.js';
 import type {
@@ -3629,6 +3636,100 @@ type RequestTextInput = (options: ValuePromptOptions) => Promise<ValueResult>;
 type FlashToast = (message: string, variant?: ToastVariant) => void;
 
 /**
+ * Generation-params editor step (issue #286). Rendered after a model is picked
+ * in a lineup slot (or a specialist pin). If the model exposes no tunable
+ * params (`describeModelParams` empty) it returns immediately, so the UX is
+ * unchanged for models without knobs. Otherwise it loops a menu of descriptors
+ * — enum/toggle via a sub-menu, number/range via a validated text input —
+ * until the user picks Done (or Esc). Returns the chosen {@link ModelParams},
+ * or `undefined` when nothing is set (clean disk record = model defaults).
+ */
+async function pickGenerationParamsInk(
+  provider: string,
+  model: string,
+  sdk: SupportedSdk | undefined,
+  current: ModelParams | undefined,
+  requestMenu: RequestMenu,
+  requestTextInput: RequestTextInput,
+  flashToast: FlashToast,
+): Promise<ModelParams | undefined> {
+  const descriptors = describeModelParams(provider, model, sdk);
+  if (descriptors.length === 0) return current;
+
+  const values: ModelParams = { ...(current ?? {}) };
+
+  while (true) {
+    const entries: MenuEntry[] = descriptors.map((d) => {
+      const v = values[d.id];
+      return {
+        label: d.label,
+        annotation: v === undefined ? '(default)' : String(v),
+        value: { kind: 'edit', descriptor: d } as const,
+      };
+    });
+    entries.push({ type: 'section', title: '' });
+    entries.push({ label: 'Done', value: { kind: 'done' } as const });
+    entries.push({ label: 'Reset to model defaults', value: { kind: 'reset' } as const });
+
+    const pick = await requestMenu(entries, {
+      title: `Generation params · ${model}`,
+      headerLines: ['Leave a param as (default) to use the model default. Esc = done.'],
+    });
+    if (pick.cancelled) break; // Esc commits whatever's set so far
+    const choice = pick.item.value as
+      | { kind: 'edit'; descriptor: ParamDescriptor }
+      | { kind: 'done' }
+      | { kind: 'reset' };
+    if (choice.kind === 'done') break;
+    if (choice.kind === 'reset') {
+      for (const k of Object.keys(values) as ParamId[]) delete values[k];
+      continue;
+    }
+
+    const d = choice.descriptor;
+    if (d.kind === 'enum' || d.kind === 'toggle') {
+      const opts = d.kind === 'toggle' ? ['on', 'off'] : (d.options ?? []);
+      const optEntries: MenuEntry[] = [
+        { label: '(use model default)', value: { clear: true } as const },
+        ...opts.map((o) => ({ label: o, value: { val: o } as const })),
+      ];
+      const sel = await requestMenu(optEntries, { title: d.label });
+      if (sel.cancelled) continue;
+      const sv = sel.item.value as { clear: true } | { val: string };
+      if ('clear' in sv) delete values[d.id];
+      else values[d.id] = d.kind === 'toggle' ? sv.val === 'on' : sv.val;
+    } else {
+      const isFloat = d.kind === 'range';
+      const bounds = `${d.min ?? '−∞'}–${d.max ?? '∞'}`;
+      const res = await requestTextInput({
+        label: `${d.label} (${bounds}; empty = default)`,
+        initialValue: values[d.id] !== undefined ? String(values[d.id]) : '',
+      });
+      if (res.cancelled) continue;
+      const raw = res.raw.trim();
+      if (raw === '') {
+        delete values[d.id];
+        continue;
+      }
+      const parsed = isFloat ? Number.parseFloat(raw) : Number.parseInt(raw, 10);
+      if (
+        Number.isNaN(parsed) ||
+        (!isFloat && String(parsed) !== raw) ||
+        (d.min !== undefined && parsed < d.min) ||
+        (d.max !== undefined && parsed > d.max)
+      ) {
+        flashToast(`${d.label} must be a ${isFloat ? 'number' : 'whole number'} in ${bounds}.`, 'error');
+        continue;
+      }
+      values[d.id] = parsed;
+    }
+  }
+
+  const cleaned = validateModelParams(provider, model, values, sdk);
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+}
+
+/**
  * Two-step picker for a lineup slot: provider first (filtered to those with
  * keys), then model (rendered in a multi-column grid). Esc from the model
  * step returns to the provider step; Esc from the provider step returns
@@ -3762,6 +3863,12 @@ async function pickLineupSlotInk(
     });
     if (result.cancelled) continue; // back to provider step
 
+    const sdk = config.customProviders?.[provider]?.sdk;
+    // Pre-fill the params editor with the slot's existing params only when the
+    // provider+model are unchanged — switching model shouldn't carry stale knobs.
+    const paramsFor = (model: string): ModelParams | undefined =>
+      provider === current.provider && model === current.model ? current.params : undefined;
+
     const picked = items[result.index];
     if (picked === FREE_TYPE) {
       const modelRes = await requestTextInput({ label: `New model name for ${provider}` });
@@ -3774,9 +3881,15 @@ async function pickLineupSlotInk(
         rememberCustomModel(provider, model);
         config.customProviders = loadCustomProviders();
       }
-      return { provider, model };
+      const params = await pickGenerationParamsInk(
+        provider, model, sdk, paramsFor(model), requestMenu, requestTextInput, flashToast,
+      );
+      return { provider, model, ...(params ? { params } : {}) };
     }
-    return { provider, model: picked };
+    const params = await pickGenerationParamsInk(
+      provider, picked, sdk, paramsFor(picked), requestMenu, requestTextInput, flashToast,
+    );
+    return { provider, model: picked, ...(params ? { params } : {}) };
   }
 }
 
@@ -3845,6 +3958,13 @@ function summarizeRoleSlots(slots: RoleSlots): string {
  * "edit" hint; a lineup-level action row shows a one-line explainer + hint. The
  * overlay supplies the surrounding border and the row's label as the card title.
  */
+/** Compact one-line summary of a slot's generation params, '' when none. */
+function formatParamsSummary(params?: ModelParams): string {
+  if (!params) return '';
+  const parts = Object.entries(params).map(([k, v]) => `${k} ${v}`);
+  return parts.length > 0 ? parts.join(', ') : '';
+}
+
 function renderLineupDetail(item: MenuItem, draft: Lineup): ReactNode {
   const colors = getThemeColors();
   const value = item.value as
@@ -3864,11 +3984,13 @@ function renderLineupDetail(item: MenuItem, draft: Lineup): ReactNode {
         {LINEUP_TIERS.map((tier) => {
           const val = `${slots[tier].provider}/${slots[tier].model}`;
           const dots = '.'.repeat(Math.max(2, LEADER_WIDTH - tier.length - val.length));
+          const params = formatParamsSummary(slots[tier].params);
           return (
             <Text key={tier}>
               {tier}
               <Text dimColor>{dots}</Text>
               <Text color={colors.accent}>{val}</Text>
+              {params ? <Text dimColor> · {params}</Text> : null}
             </Text>
           );
         })}
@@ -3924,11 +4046,14 @@ async function runRoleSlotsEditorInk(
     cheap: { ...initial.cheap },
   };
   while (true) {
-    const tierRows: MenuEntry[] = LINEUP_TIERS.map((tier) => ({
-      label: `${tier.toUpperCase()}`,
-      annotation: `→ ${slots[tier].provider} / ${slots[tier].model}`,
-      value: { kind: 'tier', tier },
-    }));
+    const tierRows: MenuEntry[] = LINEUP_TIERS.map((tier) => {
+      const params = formatParamsSummary(slots[tier].params);
+      return {
+        label: `${tier.toUpperCase()}`,
+        annotation: `→ ${slots[tier].provider} / ${slots[tier].model}${params ? ` · ${params}` : ''}`,
+        value: { kind: 'tier', tier },
+      };
+    });
     const entries: MenuEntry[] = [
       ...tierRows,
       { type: 'section', title: '' },

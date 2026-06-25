@@ -2,7 +2,6 @@ import { generateText } from 'ai';
 import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
-import { temperatureParam } from './providers/profiles.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 import type { Specialist, SpecialistSummary } from './specialists.js';
 import type { SpecialistCandidate } from './specialist-candidates.js';
@@ -138,6 +137,7 @@ export async function detectSpecialistCandidate(
           siteName: 'specialist-detector',
           modelId: site.model.modelId,
           providerOptions: site.providerOptions,
+          params: site.params,
           system: DETECTION_SYSTEM_PROMPT,
           userContent,
         }
@@ -153,8 +153,11 @@ export async function detectSpecialistCandidate(
         generateText({
           model: site.model,
           providerOptions: site.providerOptions,
+          // Slot params (temperature/topP) apply, but spread BEFORE maxTokens so
+          // this site's output cap stays authoritative — a small slot
+          // maxOutputTokens must not truncate the JSON detection result (#286).
+          ...site.params,
           maxTokens: 2048,
-          ...temperatureParam(site.model.modelId, site.provider),
           system: DETECTION_SYSTEM_PROMPT,
           messages: [{ role: 'user', content: userContent }],
         }),

@@ -4,7 +4,6 @@ import { sanitizeKey, REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
-import { temperatureParam } from './providers/profiles.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 
@@ -317,6 +316,7 @@ export async function resolveReferences(
           siteName: 'reference-resolver',
           modelId: site.model.modelId,
           providerOptions: site.providerOptions,
+          params: site.params,
           system: RESOLVER_SYSTEM_PROMPT,
           userContent: userMessage,
         }
@@ -333,11 +333,13 @@ export async function resolveReferences(
         generateText({
           model: site.model,
           providerOptions: site.providerOptions,
+          // Slot params (temperature/topP) apply, but spread BEFORE maxTokens so
+          // this site's output cap stays authoritative (#286).
+          ...site.params,
           system: RESOLVER_SYSTEM_PROMPT,
           messages: [{ role: 'user', content: userMessage }],
           maxSteps: 1,
           maxTokens: RESOLVER_MAX_TOKENS,
-          ...temperatureParam(site.model.modelId, site.provider),
           abortSignal,
         }),
       );

@@ -236,6 +236,7 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     return {
       model: site.model,
       providerOptions: site.providerOptions,
+      params: site.params,
       provider: site.provider,
       modelName: site.modelName,
       // Carry the resolved tier for ledger attribution (#258); harmless under

@@ -258,6 +258,7 @@ export async function runDefinition<TInput, TFormatted>(
   const baseSpec: AgentSpec = {
     model: resolved.model,
     providerOptions: resolved.providerOptions,
+    params: resolved.params,
     tools,
     maxSteps: baseMaxSteps,
     maxTokens: config.maxTokens,
@@ -344,6 +345,7 @@ function resolveModel<TInput, TFormatted>(
   return {
     model: site.model,
     providerOptions: site.providerOptions,
+    params: site.params,
     provider: site.provider,
     modelName: site.modelName,
     tier: site.tier,

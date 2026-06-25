@@ -1,4 +1,4 @@
-import type { LanguageModel } from 'ai';
+import type { LanguageModel, generateText } from 'ai';
 import type { BernardConfig } from './config.js';
 import type { Specialist } from './specialists.js';
 import {
@@ -8,6 +8,8 @@ import {
   blankToUndefined,
 } from './config.js';
 import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
+import { modelSupportsTemperature } from './providers/profiles.js';
+import { serializeModelParams, type ModelParams } from './providers/model-params.js';
 import { loadLineups, resolveActiveLineup, type Lineup } from './lineups.js';
 import { DEFAULT_ROLE_TIERS, SITE_ROLE, type RoleId } from './model-roles.js';
 import { debugLog } from './logger.js';
@@ -36,6 +38,9 @@ export type ModelSite =
 export type ModelMode = 'optimize-tokens' | 'balanced' | 'optimize-performance';
 
 export type ModelTier = 'cheap' | 'mid' | 'premium';
+
+/** The AI SDK's `providerOptions` shape (`Record<string, Record<string, JSONValue>>`). */
+type SdkProviderOptions = Parameters<typeof generateText>[0]['providerOptions'];
 
 /**
  * Resolves the cost tier for a functional role under the active `modelMode`,
@@ -72,7 +77,19 @@ export function normalizeStoredModelMode(v: unknown): ModelMode | undefined {
  */
 export interface SiteModel {
   model: LanguageModel;
-  providerOptions: ReturnType<typeof getProviderOptionsForConfig>;
+  /**
+   * Provider-options half (issue #286): the base `getProviderOptionsForConfig`
+   * result (OpenAI `strictSchemas`) deep-merged with any per-slot provider
+   * params (`providerOptions.<sdk>.reasoningEffort`, Anthropic `thinking`).
+   */
+  providerOptions: SdkProviderOptions;
+  /**
+   * Top-level `generateText` params half (issue #286): `temperature`, `topP`,
+   * `maxOutputTokens`. Spread into every `generateText` call alongside
+   * `providerOptions`. `undefined` when the slot has no top-level params and no
+   * per-site baseline applies.
+   */
+  params?: Record<string, unknown>;
   provider: string;
   modelName: string;
   /**
@@ -129,9 +146,10 @@ export function resolveSiteModel(
     provider: blankToUndefined(opts?.overrides?.provider),
     model: blankToUndefined(opts?.overrides?.model),
   };
-  const specialist = {
+  const specialist: { provider?: string; model?: string; params?: ModelParams } = {
     provider: blankToUndefined(opts?.specialist?.provider),
     model: blankToUndefined(opts?.specialist?.model),
+    params: opts?.specialist?.params,
   };
 
   // Loaded at most once per resolve — both the pin guard and the tier lookup
@@ -176,6 +194,7 @@ export function resolveSiteModel(
       });
       specialist.provider = undefined;
       specialist.model = undefined;
+      specialist.params = undefined;
     }
   }
 
@@ -197,12 +216,22 @@ export function resolveSiteModel(
         defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom),
       );
     }
-    const source: SiteModel['source'] =
-      override.provider || override.model ? 'override' : 'specialist';
+    const isOverride = Boolean(override.provider || override.model);
+    const source: SiteModel['source'] = isOverride ? 'override' : 'specialist';
     // Pass `site` so `model-policy:resolve` logs fire on override/specialist
     // short-circuits too. Tier/lineup intentionally omitted — those concepts
-    // don't apply when the lineup was bypassed.
-    return buildSiteModel(config, resolution.provider, resolution.model, source, site);
+    // don't apply when the lineup was bypassed. Specialist params ride along on
+    // the specialist branch only (an invocation override carries no params).
+    return buildSiteModel(
+      config,
+      resolution.provider,
+      resolution.model,
+      source,
+      site,
+      undefined,
+      undefined,
+      isOverride ? undefined : specialist.params,
+    );
   }
 
   // Step 3 — tier-table lookup against the active lineup. Defensively
@@ -214,7 +243,7 @@ export function resolveSiteModel(
   const lineup = getActiveLineup();
   const slot = lineup.roles[role][tier];
   if (hasProviderKey(config, slot.provider)) {
-    return buildSiteModel(config, slot.provider, slot.model, 'policy', site, tier, lineup);
+    return buildSiteModel(config, slot.provider, slot.model, 'policy', site, tier, lineup, slot.params);
   }
   // Lineup slot points at a provider with no key — fall through to the
   // session-global so the turn doesn't crash. This is the only "silent
@@ -271,6 +300,44 @@ function lineupProviders(lineup: Lineup): string[] {
   return [...out];
 }
 
+/**
+ * Sites that historically forced `temperature: 0` via the ad-hoc
+ * `temperatureParam(...)` spread (now retired). To keep "absent slot params =
+ * today's behavior, byte-for-byte" (issue #286 acceptance criterion), we
+ * re-inject that baseline here when the model accepts temperature and the slot
+ * didn't override it. `compressor` never used `temperatureParam`, so it is
+ * deliberately excluded.
+ */
+const TEMPERATURE_ZERO_SITES: ReadonlySet<ModelSite> = new Set([
+  'rewriter',
+  'reference-resolver',
+  'reference-lookup',
+  'specialist-detector',
+]);
+
+/**
+ * Deep-merges two `providerOptions` shapes one level deep (per-SDK key), so the
+ * base OpenAI `{ strictSchemas: false }` survives alongside a serialized
+ * `{ reasoningEffort }`. Returns the base reference unchanged when there's
+ * nothing to merge (preserves identity for byte-for-byte behavior).
+ */
+function mergeProviderOptions(
+  base: SdkProviderOptions,
+  extra: Record<string, unknown>,
+): SdkProviderOptions {
+  if (Object.keys(extra).length === 0) return base;
+  const out: Record<string, unknown> = { ...(base ?? {}) };
+  for (const [sdk, opts] of Object.entries(extra)) {
+    const existing = out[sdk];
+    if (existing && typeof existing === 'object' && opts && typeof opts === 'object') {
+      out[sdk] = { ...(existing as Record<string, unknown>), ...(opts as Record<string, unknown>) };
+    } else {
+      out[sdk] = opts;
+    }
+  }
+  return out as SdkProviderOptions;
+}
+
 function buildSiteModel(
   config: BernardConfig,
   provider: string,
@@ -279,10 +346,32 @@ function buildSiteModel(
   site?: ModelSite,
   tier?: ModelTier,
   lineup?: Lineup,
+  slotParams?: ModelParams,
 ): SiteModel {
+  const sdk = config.customProviders?.[provider]?.sdk;
+  const serialized = serializeModelParams(provider, modelName, slotParams, sdk);
+
+  // Top-level half (temperature/topP/maxOutputTokens), plus the per-site
+  // temperature:0 baseline that preserves the pre-#286 classifier behavior.
+  const params: Record<string, unknown> = { ...serialized.params };
+  if (
+    site &&
+    TEMPERATURE_ZERO_SITES.has(site) &&
+    params.temperature === undefined &&
+    modelSupportsTemperature(modelName, provider)
+  ) {
+    params.temperature = 0;
+  }
+
+  const providerOptions = mergeProviderOptions(
+    getProviderOptionsForConfig(config, provider),
+    serialized.providerOptions,
+  );
+
   const out: SiteModel = {
     model: getModelForConfig(config, provider, modelName),
-    providerOptions: getProviderOptionsForConfig(config, provider),
+    providerOptions,
+    params: Object.keys(params).length > 0 ? params : undefined,
     provider,
     modelName,
     source,
@@ -301,6 +390,8 @@ function buildSiteModel(
         source,
         lineupId: lineup?.id,
         lineupName: lineup?.name,
+        params: out.params,
+        providerOptions: out.providerOptions,
       });
     }
   }

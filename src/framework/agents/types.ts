@@ -36,6 +36,11 @@ export interface ModelOverrides {
 export interface ResolvedModel {
   model: LanguageModel;
   providerOptions?: Parameters<typeof import('ai').generateText>[0]['providerOptions'];
+  /**
+   * Top-level generation params (issue #286), carried from {@link SiteModel}
+   * into the {@link AgentSpec} so the runner spreads them into the call.
+   */
+  params?: Record<string, unknown>;
   /** Provider name used (post-override). Available to hooks that need it. */
   provider: string;
   /** Model name used (post-override). */
