@@ -194,19 +194,18 @@ export function buildSilenceWav(ms: number, rate = WARMUP_RATE, channels = WARMU
   return buf;
 }
 
-/** Paths of silent WAVs already materialized this process, keyed by duration. */
-const _silenceWavPaths = new Map<number, string>();
-
-/** Write (or reuse a cached) silent WAV of `ms` under the XDG cache dir; returns its path. */
+/**
+ * Write (or reuse) a silent WAV of `ms` under the XDG cache dir; returns its
+ * path. The `existsSync` check is re-run on every call (a cheap, OS-cached stat)
+ * so a file removed mid-session — by a cache cleaner or `rm`ed `~/.cache` — is
+ * transparently recreated rather than handed to the player as a dead path.
+ */
 export function ensureSilenceWav(ms: number): string {
-  const cached = _silenceWavPaths.get(ms);
-  if (cached) return cached;
   const p = join(CACHE_DIR, `tts-warmup-${ms}ms.wav`);
   if (!existsSync(p)) {
     mkdirSync(CACHE_DIR, { recursive: true });
     writeFileSync(p, buildSilenceWav(ms));
   }
-  _silenceWavPaths.set(ms, p);
   return p;
 }
 

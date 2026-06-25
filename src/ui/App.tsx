@@ -1278,10 +1278,12 @@ export function App({
 
       // `/voice status` — show on/off state and the resolved backend.
       if (arg === 'status') {
-        const resolved = resolveBackend(process.platform, config.voiceBackend);
-        // Read the warmup player from the (cached) service so we don't re-probe
-        // PATH with synchronous `which` calls on every status invocation.
-        const warmupPlayer = getVoiceService(config).warmupPlayer;
+        // Read both the backend and the warmup player off the (cached) service
+        // so we don't re-probe PATH with synchronous `which` calls on every
+        // status invocation.
+        const svc = getVoiceService(config);
+        const resolved = svc.backend;
+        const warmupPlayer = svc.warmupPlayer;
         showInfo('Voice TTS', [
           { text: `State: ${config.voiceTts ? 'ON' : 'OFF'}`, bold: true },
           { text: `Configured backend: ${config.voiceBackend}` },
