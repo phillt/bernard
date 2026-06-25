@@ -58,7 +58,9 @@ describe('buildSpinnerMessage', () => {
   });
 
   it('omits the cached segment when there were no cache reads', () => {
-    const msg = buildSpinnerMessage(makeStats({ turnPromptTokens: 5000, turnCompletionTokens: 100 }));
+    const msg = buildSpinnerMessage(
+      makeStats({ turnPromptTokens: 5000, turnCompletionTokens: 100 }),
+    );
     expect(msg).not.toContain('cached');
   });
 

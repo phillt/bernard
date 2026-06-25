@@ -80,9 +80,7 @@ describe('ask_user tool', () => {
     const tool = createAskUserTool(askUser);
     await tool.execute!(
       {
-        questions: [
-          { question: 'which states?', choices: ['open', 'closed'], multi_select: true },
-        ],
+        questions: [{ question: 'which states?', choices: ['open', 'closed'], multi_select: true }],
       } as any,
       {} as any,
     );

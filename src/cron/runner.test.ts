@@ -506,7 +506,10 @@ describe('resolveCronJobPosture', () => {
       // shouldConfirm(risk, 'never') short-circuits to false — confirmAction is
       // never called. Dangerous shell can run. This is the documented intent:
       // the user explicitly opted the job in to "no safeguards".
-      const { confirmThreshold, confirmAction } = resolveCronJobPosture({ ...baseJob, skipPermissions: true });
+      const { confirmThreshold, confirmAction } = resolveCronJobPosture({
+        ...baseJob,
+        skipPermissions: true,
+      });
       expect(confirmThreshold).toBe('never');
       // confirmAction is never called by augmentTools when threshold='never',
       // but if called directly it would return true (matches threshold logic):

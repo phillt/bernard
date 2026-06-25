@@ -28,11 +28,9 @@ function makeAbortPromise(abortSignal: AbortSignal): Promise<never> {
       reject(new DOMException('Aborted', 'AbortError'));
       return;
     }
-    abortSignal.addEventListener(
-      'abort',
-      () => reject(new DOMException('Aborted', 'AbortError')),
-      { once: true },
-    );
+    abortSignal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {
+      once: true,
+    });
   });
   p.catch(() => {});
   return p;
@@ -143,8 +141,7 @@ export async function runAgent(spec: AgentSpec): Promise<AgentResult> {
 
 async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<AgentResult> {
   const dispatchStartedAt = Date.now();
-  const modelId =
-    (spec.model as unknown as { modelId?: string }).modelId ?? String(spec.model);
+  const modelId = (spec.model as unknown as { modelId?: string }).modelId ?? String(spec.model);
   const debug = isDebugEnabled();
 
   // Per-step boundary instrumentation. We track stepN locally so step:start
@@ -194,9 +191,7 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   // `onStepFinish` to be defined on every dispatch even when the caller
   // passed no hooks, breaking the param-parity contract.
   const composedHooks: AgentHook[] =
-    debug && !spec.useStreaming
-      ? [stepObserver, ...(spec.hooks ?? [])]
-      : (spec.hooks ?? []);
+    debug && !spec.useStreaming ? [stepObserver, ...(spec.hooks ?? [])] : (spec.hooks ?? []);
   const onStepFinish = composeOnStepFinish(composedHooks);
 
   debugLog('agent:dispatch:start', {
@@ -274,10 +269,9 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
     // here, where the timeout context still exists.
     const wrapped =
       timedOut && err instanceof Error && err.name === 'AbortError' && !spec.abortSignal?.aborted
-        ? new Error(
-            `Dispatch timed out after ${timeoutMs} ms (BERNARD_DISPATCH_TIMEOUT_MS)`,
-            { cause: err },
-          )
+        ? new Error(`Dispatch timed out after ${timeoutMs} ms (BERNARD_DISPATCH_TIMEOUT_MS)`, {
+            cause: err,
+          })
         : err;
     debugLog('agent:dispatch:error', {
       dispatchId,

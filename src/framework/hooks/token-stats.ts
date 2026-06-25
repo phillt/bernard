@@ -65,7 +65,9 @@ export function usageRecordFromSite(
   site: SiteModelLike,
   siteName: string,
   usage: { promptTokens: number; completionTokens: number } | undefined,
-  providerMetadata?: { anthropic?: { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null } },
+  providerMetadata?: {
+    anthropic?: { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null };
+  },
 ): UsageRecord {
   const a = providerMetadata?.anthropic;
   return {
@@ -131,7 +133,14 @@ function recordStep(
   stats: SpinnerStats,
   info: HookModelInfo,
   usage: { promptTokens: number; completionTokens: number } | undefined,
-  providerMetadata: { anthropic?: { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null } } | undefined,
+  providerMetadata:
+    | {
+        anthropic?: {
+          cacheCreationInputTokens?: number | null;
+          cacheReadInputTokens?: number | null;
+        };
+      }
+    | undefined,
 ): void {
   // A step that reports no usage payload isn't a billable model call we can
   // attribute — skip it rather than minting a zero-token ledger row that would

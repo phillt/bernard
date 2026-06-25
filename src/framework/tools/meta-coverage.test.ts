@@ -169,7 +169,7 @@ describe('tool meta coverage', () => {
     const tools = createTools(
       { shellTimeout: 10_000, confirmDangerous: async () => false },
       // Cast: the mocked MemoryStore satisfies the structural shape used here.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       new (await import('../../memory.js')).MemoryStore() as any,
     );
 
@@ -185,10 +185,10 @@ describe('tool meta coverage', () => {
     const { augmentTools } = await import('../../tools/augment.js');
     const tools = createTools(
       { shellTimeout: 10_000, confirmDangerous: async () => false },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       new (await import('../../memory.js')).MemoryStore() as any,
     );
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const augmented = augmentTools(tools, fakeProfileStore as any);
 
     const { missing } = checkMetaCoverage(augmented);
@@ -206,7 +206,6 @@ describe('tool meta coverage', () => {
     const ctx = {
       stores: { memory },
       config: { shellTimeout: 10_000, maxSteps: 20 },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
     const input = {
       job: { id: 'j1', name: 'test', prompt: 'noop', enabled: true },
@@ -217,7 +216,6 @@ describe('tool meta coverage', () => {
       log: () => {},
       serverNames: [],
       mcpTools: {},
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any;
     const tools = cronDefinition.tools(ctx, input);
 

@@ -10,7 +10,12 @@ import { makeRepairHook } from '../../tool-call-repair.js';
 import { augmentTools } from '../../tools/augment.js';
 import type { AgentContext } from '../context.js';
 import { getOutputSink } from '../hooks/output-sink.js';
-import { tokenStatsHook, tokenTotalsHook, bucketForTier, type HookModelInfo } from '../hooks/token-stats.js';
+import {
+  tokenStatsHook,
+  tokenTotalsHook,
+  bucketForTier,
+  type HookModelInfo,
+} from '../hooks/token-stats.js';
 import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
@@ -289,7 +294,8 @@ export async function runDefinition<TInput, TFormatted>(
     // main agent re-sends a stable prefix every turn, so it's the only site
     // with a guaranteed payoff. No-op for every other provider/definition.
     const promptCacheActive =
-      def.historyMode === 'persistent' && isAnthropicPromptCacheActive(ctx.config, resolved.provider);
+      def.historyMode === 'persistent' &&
+      isAnthropicPromptCacheActive(ctx.config, resolved.provider);
     const cached = promptCacheActive
       ? applyAnthropicPromptCache({ system: sysWithSuffix, messages })
       : { system: sysWithSuffix, messages };

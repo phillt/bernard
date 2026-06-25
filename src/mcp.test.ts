@@ -374,7 +374,10 @@ describe('verifyMCPServer', () => {
     // Mirrors an HTTP server launched as stdio: createMCPClient never resolves.
     mockStdioTransport.mockClear();
     mockCreateMCPClient.mockReturnValue(new Promise(() => {}));
-    const r = await verifyMCPServer({ command: 'npx', args: ['figma-developer-mcp'] }, { timeoutMs: 60 });
+    const r = await verifyMCPServer(
+      { command: 'npx', args: ['figma-developer-mcp'] },
+      { timeoutMs: 60 },
+    );
     expect(r.ok).toBe(false);
     expect(r.timedOut).toBe(true);
     expect(r.error).toMatch(/--stdio|handshake|HTTP/i);

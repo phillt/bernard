@@ -41,7 +41,12 @@ import {
 } from './custom-providers.js';
 import type { SupportedSdk } from './providers/types.js';
 import { printWelcome, printError, printInfo } from './output.js';
-import { resolveBackend, resolveWarmupPlayer, VoiceService, type VoiceBackend } from './voice-service.js';
+import {
+  resolveBackend,
+  resolveWarmupPlayer,
+  VoiceService,
+  type VoiceBackend,
+} from './voice-service.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
@@ -136,7 +141,10 @@ program
     "Override the active built-in provider's endpoint URL for this session (requires --allow-provider-base-url)",
   )
   .option('--voice', 'Enable text-to-speech readback after each assistant turn')
-  .option('--voice-backend <backend>', 'TTS backend: auto | macos-say | spd-say | espeak-ng | espeak | windows-speech')
+  .option(
+    '--voice-backend <backend>',
+    'TTS backend: auto | macos-say | spd-say | espeak-ng | espeak | windows-speech',
+  )
   .option('--voice-rate <n>', 'Speech rate in words per minute', parseInt)
   .action(async (opts) => {
     try {
@@ -601,11 +609,16 @@ program
 
 program
   .command('validate-lineup [id]')
-  .description('Live-probe every model in a lineup (defaults to the active one). Exits non-zero if any model is unreachable.')
+  .description(
+    'Live-probe every model in a lineup (defaults to the active one). Exits non-zero if any model is unreachable.',
+  )
   .action(async (id?: string) => {
     const config = loadConfig();
     const lineups = loadLineups();
-    const target = id && lineups[id] ? lineups[id] : resolveActiveLineup(lineups, config.activeLineupId, config.provider);
+    const target =
+      id && lineups[id]
+        ? lineups[id]
+        : resolveActiveLineup(lineups, config.activeLineupId, config.provider);
     if (id && !lineups[id]) {
       printError(`No lineup with id "${id}". Available: ${Object.keys(lineups).join(', ')}.`);
       process.exit(1);
@@ -614,7 +627,9 @@ program
     const v = await validateLineup(config, target);
     printInfo(formatLineupValidation(v));
     if (!v.ok) {
-      printInfo('\nNote: a reachable model can still be too weak for a real task — a probe only checks access.');
+      printInfo(
+        '\nNote: a reachable model can still be too weak for a real task — a probe only checks access.',
+      );
       process.exit(1);
     }
   });
@@ -1041,7 +1056,7 @@ program
     if (!resolved) {
       printError(
         'No TTS backend found. Install spd-say, espeak-ng, or espeak on Linux; ' +
-        'macOS uses "say" built-in; Windows uses PowerShell.',
+          'macOS uses "say" built-in; Windows uses PowerShell.',
       );
       process.exit(1);
     }

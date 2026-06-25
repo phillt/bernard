@@ -85,8 +85,7 @@ describe('riskFromMeta', () => {
     const m = meta({
       kind: 'dangerous',
       sideEffect: 'local',
-      isWriteAction: (args) =>
-        (args as { command?: string } | undefined)?.command !== 'ls',
+      isWriteAction: (args) => (args as { command?: string } | undefined)?.command !== 'ls',
     });
     expect(riskFromMeta(m, { command: 'ls' })).toBe('low');
     expect(riskFromMeta(m, { command: 'rm -rf /' })).toBe('high');

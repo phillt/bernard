@@ -6,12 +6,10 @@ vi.mock('ai', () => ({
 
 const logCalls: { label: string; data: any }[] = [];
 vi.mock('../../logger.js', async () => {
-  const actual =
-    await vi.importActual<typeof import('../../logger.js')>('../../logger.js');
+  const actual = await vi.importActual<typeof import('../../logger.js')>('../../logger.js');
   return {
     ...actual,
-    isDebugEnabled: () => !!(globalThis as { __debugForRunnerTest?: boolean })
-      .__debugForRunnerTest,
+    isDebugEnabled: () => !!(globalThis as { __debugForRunnerTest?: boolean }).__debugForRunnerTest,
     debugLog: (label: string, data: unknown) => {
       logCalls.push({ label, data });
     },

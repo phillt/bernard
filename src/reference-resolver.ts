@@ -343,7 +343,9 @@ export async function resolveReferences(
       );
       // Count this pre-turn call toward the per-turn ledger (#258). Only on a
       // real call — a cache hit above spent no tokens.
-      onUsage?.(usageRecordFromSite(site, 'reference-resolver', result.usage, result.providerMetadata));
+      onUsage?.(
+        usageRecordFromSite(site, 'reference-resolver', result.usage, result.providerMetadata),
+      );
       if (!result.text) {
         debugLog('reference-resolver:empty-response', null);
         return { status: 'noop' };

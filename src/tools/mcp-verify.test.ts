@@ -61,7 +61,13 @@ describe('mcp_verify tool', () => {
 
   it('threads timeoutMs through to verifyMCPServer', async () => {
     mockGet.mockReturnValue({ command: 'npx' });
-    mockVerify.mockResolvedValue({ ok: true, toolCount: 0, toolNames: [], durationMs: 5, timedOut: false });
+    mockVerify.mockResolvedValue({
+      ok: true,
+      toolCount: 0,
+      toolNames: [],
+      durationMs: 5,
+      timedOut: false,
+    });
     await run({ key: 'x', timeoutMs: 5000 });
     expect(mockVerify).toHaveBeenCalledWith(expect.anything(), { timeoutMs: 5000 });
   });

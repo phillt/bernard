@@ -81,7 +81,8 @@ export const MODEL_ROLES: readonly ModelRole[] = [
   {
     id: 'executor',
     label: 'Task executor',
-    description: 'Sub-agents, specialists & tasks — focused multi-step execution of delegated work.',
+    description:
+      'Sub-agents, specialists & tasks — focused multi-step execution of delegated work.',
     lookFor:
       'A capable all-rounder that follows multi-step instructions and uses tools reliably. Balance cost against how much delegated work you run.',
     defaultTiers: {
@@ -93,7 +94,8 @@ export const MODEL_ROLES: readonly ModelRole[] = [
   {
     id: 'function-caller',
     label: 'Function caller',
-    description: 'Tool-wrapper specialists — natural language → schema-conformant structured calls.',
+    description:
+      'Tool-wrapper specialists — natural language → schema-conformant structured calls.',
     lookFor:
       'A fast model with strong structured-output / JSON adherence. Argument accuracy matters more than deep reasoning here.',
     defaultTiers: {
@@ -117,7 +119,8 @@ export const MODEL_ROLES: readonly ModelRole[] = [
   {
     id: 'classifier',
     label: 'Classifier / router',
-    description: 'Rewriter, reference resolver/lookup, specialist detector — cheap single-shot decisions.',
+    description:
+      'Rewriter, reference resolver/lookup, specialist detector — cheap single-shot decisions.',
     lookFor:
       'The cheapest model that still judges reliably. These are quick single-shot routing calls where latency and price dominate.',
     defaultTiers: {

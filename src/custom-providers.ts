@@ -77,7 +77,7 @@ export function validateProviderName(name: string): string | null {
  * @returns An error message if invalid, or `null` if valid.
  */
 export function validateBaseURL(url: string): string | null {
-  if (!url || !url.trim()) return 'Base URL cannot be empty.';
+  if (!url?.trim()) return 'Base URL cannot be empty.';
   let parsed: URL;
   try {
     parsed = new URL(url);

@@ -284,8 +284,7 @@ function migrateLineupShape(
   if (e.roles && typeof e.roles === 'object') {
     const stored = e.roles as Record<string, unknown>;
     // Anchor for backfilling missing roles: prefer orchestrator, else any valid.
-    const anchorId =
-      ALL_ROLE_IDS.find((r) => isRoleSlots(stored[r])) ?? null;
+    const anchorId = ALL_ROLE_IDS.find((r) => isRoleSlots(stored[r])) ?? null;
     if (!anchorId) return null;
     const anchor = stored[anchorId] as RoleSlots;
     const roles = {} as Record<RoleId, RoleSlots>;
@@ -444,9 +443,7 @@ export function saveLineup(input: SaveLineupInput): Lineup {
     const ladder = input.roles[role];
     for (const tier of LINEUP_TIERS) {
       if (!isLineupSlot(ladder?.[tier])) {
-        throw new Error(
-          `Role "${role}" tier "${tier}" must have non-empty provider and model.`,
-        );
+        throw new Error(`Role "${role}" tier "${tier}" must have non-empty provider and model.`);
       }
     }
   }

@@ -94,7 +94,9 @@ describe('lineup_edit tool', () => {
       {
         action: 'create',
         name: 'My Mix',
-        slots: [{ role: 'orchestrator', tier: 'premium', provider: 'anthropic', model: 'claude-x' }],
+        slots: [
+          { role: 'orchestrator', tier: 'premium', provider: 'anthropic', model: 'claude-x' },
+        ],
       },
       { provider: 'openai', model: 'x' },
     );
@@ -105,7 +107,10 @@ describe('lineup_edit tool', () => {
     const created = all['my-mix'];
     expect(created).toBeDefined();
     // The one specified slot is applied...
-    expect(created.roles.orchestrator.premium).toEqual({ provider: 'anthropic', model: 'claude-x' });
+    expect(created.roles.orchestrator.premium).toEqual({
+      provider: 'anthropic',
+      model: 'claude-x',
+    });
     // ...and the rest are inherited from the active (openai) base, so they're valid.
     expect(created.roles.executor.premium.provider).toBe('openai');
   });
@@ -118,7 +123,11 @@ describe('lineup_edit tool', () => {
     });
     vi.resetModules();
     const { createLineupTool } = await import('./lineup.js');
-    const config = { provider: 'openai', model: 'x', activeLineupId: undefined as string | undefined };
+    const config = {
+      provider: 'openai',
+      model: 'x',
+      activeLineupId: undefined as string | undefined,
+    };
     const t = createLineupTool(config as never);
     const out = await (t.execute as (a: ToolArgs) => Promise<string>)({
       action: 'create',

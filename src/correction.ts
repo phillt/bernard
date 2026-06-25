@@ -304,7 +304,7 @@ function formatCandidatePrompt(candidate: CorrectionCandidate): string {
 export function extractOutcome(text: string): CorrectionOutcome | undefined {
   // The correction-agent returns the WrapperResult shape; its .result field is what we care about.
   const wrapper = parseStructuredOutput(text, WrapperResultSchema);
-  if (wrapper && wrapper.status === 'ok') {
+  if (wrapper?.status === 'ok') {
     const inner = CorrectionOutcomeSchema.safeParse(wrapper.result);
     if (inner.success) return inner.data;
     // Accept a minimal shape too

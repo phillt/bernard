@@ -68,7 +68,10 @@ const input = { planStore: {}, systemPrompt: '' } as unknown as Parameters<
   typeof mainAgentDefinition.tools
 >[1];
 
-function toolNames(coordinatorMode: BernardConfig['coordinatorMode'], strategyId?: 'normal' | 'react') {
+function toolNames(
+  coordinatorMode: BernardConfig['coordinatorMode'],
+  strategyId?: 'normal' | 'react',
+) {
   return Object.keys(mainAgentDefinition.tools(makeCtx(coordinatorMode, strategyId), input));
 }
 

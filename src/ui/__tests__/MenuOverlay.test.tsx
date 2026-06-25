@@ -309,7 +309,6 @@ describe('<MenuOverlay> multi-select (#231)', () => {
     // untyped JS caller that forgot it, so Enter can never strand the overlay.
     const onCancel = vi.fn();
     const harness = render(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       createElement(MenuOverlay, {
         entries: MULTI_ENTRIES,
         multiSelect: true,

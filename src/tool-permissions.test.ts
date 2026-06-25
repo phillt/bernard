@@ -164,7 +164,9 @@ describe('migrateToolPermissions (#261)', () => {
 
 describe('ruleLabel (#261)', () => {
   it('renders tool + specifier, or "(any args)" when absent', () => {
-    expect(ruleLabel({ effect: 'allow', tool: 'shell', specifier: 'git *', _v: 2 })).toBe('shell git *');
+    expect(ruleLabel({ effect: 'allow', tool: 'shell', specifier: 'git *', _v: 2 })).toBe(
+      'shell git *',
+    );
     expect(ruleLabel({ effect: 'deny', tool: 'web_read', _v: 2 })).toBe('web_read (any args)');
   });
 });

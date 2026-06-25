@@ -172,7 +172,10 @@ export function StatusBar({ agent }: StatusBarProps) {
           <Text color={downPulse ? colors.accent : colors.muted} bold={downPulse}>
             {down}↓
           </Text>
-          <Text color={colors.muted}>{cost}{'   '}</Text>
+          <Text color={colors.muted}>
+            {cost}
+            {'   '}
+          </Text>
           {sessionCost ? <Text color={colors.muted}>{sessionCost}</Text> : null}
           <Text color={colors.muted}>ctx {formatTokenCount(stats.latestPromptTokens)} </Text>
           {filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}

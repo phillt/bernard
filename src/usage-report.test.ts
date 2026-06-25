@@ -14,9 +14,13 @@ vi.mock('./providers/catalog.js', () => ({
   },
 }));
 
-const { computeTurnUsageReport, formatUsd, formatTurnCost, formatCostSuffix } = await import('./usage-report.js');
+const { computeTurnUsageReport, formatUsd, formatTurnCost, formatCostSuffix } =
+  await import('./usage-report.js');
 
-function entry(over: Partial<TurnUsageEntry> & Pick<TurnUsageEntry, 'bucket' | 'provider' | 'modelName' | 'site'>): TurnUsageEntry {
+function entry(
+  over: Partial<TurnUsageEntry> &
+    Pick<TurnUsageEntry, 'bucket' | 'provider' | 'modelName' | 'site'>,
+): TurnUsageEntry {
   return {
     promptTokens: 0,
     completionTokens: 0,
@@ -45,18 +49,54 @@ function statsWith(entries: TurnUsageEntry[]): SpinnerStats {
 
 describe('computeTurnUsageReport (#258)', () => {
   it('returns an empty, zero-cost report for null / empty stats', () => {
-    expect(computeTurnUsageReport(null)).toMatchObject({ rows: [], totalCostUsd: null, partial: false });
+    expect(computeTurnUsageReport(null)).toMatchObject({
+      rows: [],
+      totalCostUsd: null,
+      partial: false,
+    });
     expect(computeTurnUsageReport(statsWith([]))).toMatchObject({ rows: [], partial: false });
   });
 
   it('merges sites, orders by tier, computes cost, and flags partial', () => {
     const stats = statsWith([
-      entry({ bucket: 'premium', provider: 'anthropic', modelName: 'claude-opus-4-8', site: 'main', promptTokens: 1000, completionTokens: 100, calls: 2 }),
+      entry({
+        bucket: 'premium',
+        provider: 'anthropic',
+        modelName: 'claude-opus-4-8',
+        site: 'main',
+        promptTokens: 1000,
+        completionTokens: 100,
+        calls: 2,
+      }),
       // Same (bucket, provider, model), different site → folds into the opus row.
-      entry({ bucket: 'premium', provider: 'anthropic', modelName: 'claude-opus-4-8', site: 'compressor', promptTokens: 500, completionTokens: 50, calls: 1 }),
-      entry({ bucket: 'cheap', provider: 'anthropic', modelName: 'claude-haiku-4-5-20251001', site: 'rewriter', promptTokens: 200, completionTokens: 20, calls: 1 }),
+      entry({
+        bucket: 'premium',
+        provider: 'anthropic',
+        modelName: 'claude-opus-4-8',
+        site: 'compressor',
+        promptTokens: 500,
+        completionTokens: 50,
+        calls: 1,
+      }),
+      entry({
+        bucket: 'cheap',
+        provider: 'anthropic',
+        modelName: 'claude-haiku-4-5-20251001',
+        site: 'rewriter',
+        promptTokens: 200,
+        completionTokens: 20,
+        calls: 1,
+      }),
       // Custom provider → no catalog pricing → cost null → partial total.
-      entry({ bucket: 'pinned', provider: 'ollama', modelName: 'llama3.2', site: 'specialist', promptTokens: 300, completionTokens: 30, calls: 1 }),
+      entry({
+        bucket: 'pinned',
+        provider: 'ollama',
+        modelName: 'llama3.2',
+        site: 'specialist',
+        promptTokens: 300,
+        completionTokens: 30,
+        calls: 1,
+      }),
     ]);
 
     const report = computeTurnUsageReport(stats);
@@ -83,7 +123,16 @@ describe('computeTurnUsageReport (#258)', () => {
 
   it('reports totalCostUsd=null when no row is priced', () => {
     const report = computeTurnUsageReport(
-      statsWith([entry({ bucket: 'pinned', provider: 'ollama', modelName: 'llama3.2', site: 'main', promptTokens: 100, completionTokens: 10 })]),
+      statsWith([
+        entry({
+          bucket: 'pinned',
+          provider: 'ollama',
+          modelName: 'llama3.2',
+          site: 'main',
+          promptTokens: 100,
+          completionTokens: 10,
+        }),
+      ]),
     );
     expect(report.totalCostUsd).toBeNull();
     expect(report.partial).toBe(true);
@@ -110,7 +159,14 @@ describe('formatUsd / formatTurnCost', () => {
     expect(formatTurnCost(null)).toBe('');
     expect(formatTurnCost(statsWith([]))).toBe('');
     const stats = statsWith([
-      entry({ bucket: 'premium', provider: 'anthropic', modelName: 'claude-opus-4-8', site: 'main', promptTokens: 1000, completionTokens: 100 }),
+      entry({
+        bucket: 'premium',
+        provider: 'anthropic',
+        modelName: 'claude-opus-4-8',
+        site: 'main',
+        promptTokens: 1000,
+        completionTokens: 100,
+      }),
     ]);
     expect(formatTurnCost(stats)).toMatch(/^ ~\$/);
   });

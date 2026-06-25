@@ -53,7 +53,13 @@ export interface ValidateModelOptions {
 
 /** Pull an HTTP status / errno / message out of a thrown AI SDK (or network) error. */
 function extractError(err: unknown): { httpStatus?: number; errno?: string; message: string } {
-  const e = err as { message?: unknown; statusCode?: unknown; status?: unknown; code?: unknown; errno?: unknown };
+  const e = err as {
+    message?: unknown;
+    statusCode?: unknown;
+    status?: unknown;
+    code?: unknown;
+    errno?: unknown;
+  };
   const message = typeof e?.message === 'string' && e.message ? e.message : String(err);
   let httpStatus: number | undefined;
   if (typeof e?.statusCode === 'number') httpStatus = e.statusCode;
@@ -72,11 +78,13 @@ function extractError(err: unknown): { httpStatus?: number; errno?: string; mess
  * cause ("this model name is wrong / inaccessible") rather than a generic
  * argument error.
  */
-const NOT_FOUND_RE = /does not exist|model_not_found|no such model|not found|unknown model|invalid model|model.*not.*available/i;
+const NOT_FOUND_RE =
+  /does not exist|model_not_found|no such model|not found|unknown model|invalid model|model.*not.*available/i;
 
 function refineCategory(category: ToolErrorType, message: string): ToolErrorType {
   // Never downgrade an auth/quota signal — those are more actionable than not_found.
-  if (category === 'auth' || category === 'rate_limit' || category === 'permission') return category;
+  if (category === 'auth' || category === 'rate_limit' || category === 'permission')
+    return category;
   if (NOT_FOUND_RE.test(message)) return 'not_found';
   return category;
 }
@@ -123,7 +131,14 @@ export async function validateModel(
     const aborted = ctrl.signal.aborted && !opts.abortSignal?.aborted;
     const cls = classifyError({ message, httpStatus, errno });
     const category = aborted ? 'timeout' : refineCategory(cls.category, message);
-    debugLog('model-validate:probe', { provider, model, ok: false, category, httpStatus, latencyMs });
+    debugLog('model-validate:probe', {
+      provider,
+      model,
+      ok: false,
+      category,
+      httpStatus,
+      latencyMs,
+    });
     return { provider, model, ok: false, category, message: message.slice(0, 300), latencyMs };
   } finally {
     clearTimeout(timer);
@@ -152,7 +167,9 @@ export interface LineupValidation {
 }
 
 /** Collapse a lineup's 18 slots into the distinct `(provider, model)` pairs it references. */
-function distinctPairs(lineup: Lineup): Map<string, { provider: string; model: string; slots: LineupSlotRef[] }> {
+function distinctPairs(
+  lineup: Lineup,
+): Map<string, { provider: string; model: string; slots: LineupSlotRef[] }> {
   const map = new Map<string, { provider: string; model: string; slots: LineupSlotRef[] }>();
   for (const role of ALL_ROLE_IDS) {
     for (const tier of LINEUP_TIERS) {
@@ -198,10 +215,14 @@ export async function validateLineup(
   opts: ValidateModelOptions & { concurrency?: number } = {},
 ): Promise<LineupValidation> {
   const pairs = [...distinctPairs(lineup).values()];
-  const probed = await mapWithConcurrency(pairs, opts.concurrency ?? PROBE_CONCURRENCY, async (p) => {
-    const r = await validateModel(config, p.provider, p.model, opts);
-    return { ...r, slots: p.slots } as LineupModelResult;
-  });
+  const probed = await mapWithConcurrency(
+    pairs,
+    opts.concurrency ?? PROBE_CONCURRENCY,
+    async (p) => {
+      const r = await validateModel(config, p.provider, p.model, opts);
+      return { ...r, slots: p.slots } as LineupModelResult;
+    },
+  );
   const failures = probed.filter((r) => !r.ok).length;
   return {
     lineupId: lineup.id,

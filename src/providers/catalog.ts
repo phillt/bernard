@@ -323,7 +323,13 @@ export async function refreshCatalogWithDiff(): Promise<CatalogRefreshDiff> {
     const afterKeys = new Set(refreshed.entries.map(entryKey));
     const added = refreshed.entries.filter((e) => !before.has(entryKey(e)));
     const removed = prev.entries.filter((e) => !afterKeys.has(entryKey(e)));
-    return { added, removed, total: refreshed.entries.length, source: refreshed.source, previousSource };
+    return {
+      added,
+      removed,
+      total: refreshed.entries.length,
+      source: refreshed.source,
+      previousSource,
+    };
   } catch (err) {
     return {
       added: [],

@@ -36,7 +36,11 @@ export function viewerFrameHeight(rows: number): number {
 export function viewerViewport(rows: number, opts: { tabCount?: number } = {}): number {
   const { tabCount = 0 } = opts;
   const hasTabs = tabCount > 0;
-  const bottom = 1 /* position */ + 1 /* rule */ + (hasTabs ? 1 /* tab row */ + 1 /* rule */ : 0) + 1 /* hints */;
+  const bottom =
+    1 /* position */ +
+    1 /* rule */ +
+    (hasTabs ? 1 /* tab row */ + 1 /* rule */ : 0) +
+    1; /* hints */
   return Math.max(1, viewerFrameHeight(rows) - bottom);
 }
 

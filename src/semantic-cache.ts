@@ -50,7 +50,7 @@ export class SemanticResponseCache {
   }
 
   private async embed(text: string): Promise<number[] | null> {
-    if (this.lastEmbed && this.lastEmbed.query === text) return this.lastEmbed.vec;
+    if (this.lastEmbed?.query === text) return this.lastEmbed.vec;
     const provider = await getEmbeddingProvider();
     if (!provider) return null;
     try {

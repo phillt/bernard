@@ -2,12 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const logCalls: { label: string; data: any }[] = [];
 vi.mock('../../logger.js', async () => {
-  const actual =
-    await vi.importActual<typeof import('../../logger.js')>('../../logger.js');
+  const actual = await vi.importActual<typeof import('../../logger.js')>('../../logger.js');
   return {
     ...actual,
-    isDebugEnabled: () =>
-      !!(globalThis as { __debugForFetchTest?: boolean }).__debugForFetchTest,
+    isDebugEnabled: () => !!(globalThis as { __debugForFetchTest?: boolean }).__debugForFetchTest,
     debugLog: (label: string, data: unknown) => {
       logCalls.push({ label, data });
     },

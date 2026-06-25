@@ -39,13 +39,13 @@ describe('normalizeToolText', () => {
   });
 
   it('repairs smart left single quote mojibake', () => {
-    const input = encodeMojibake("it‘s");
-    expect(normalizeToolText(input)).toBe("it‘s");
+    const input = encodeMojibake('it‘s');
+    expect(normalizeToolText(input)).toBe('it‘s');
   });
 
   it('repairs smart right single quote mojibake', () => {
-    const input = encodeMojibake("it’s");
-    expect(normalizeToolText(input)).toBe("it’s");
+    const input = encodeMojibake('it’s');
+    expect(normalizeToolText(input)).toBe('it’s');
   });
 
   it('repairs smart left double quote mojibake', () => {

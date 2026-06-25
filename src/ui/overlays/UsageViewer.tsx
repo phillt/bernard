@@ -77,11 +77,21 @@ function Row({
 }) {
   return (
     <Box>
-      <Text color={labelColor} bold={bold} dimColor={dim}>{cell(cells.label, LABEL_W)}</Text>
-      <Text bold={bold} dimColor={dim}>{cell(cells.calls, NUM_W, 'right')}</Text>
-      <Text bold={bold} dimColor={dim}>{cell(cells.tin, NUM_W, 'right')}</Text>
-      <Text bold={bold} dimColor={dim}>{cell(cells.tout, NUM_W, 'right')}</Text>
-      <Text color={costColor} bold={bold} dimColor={dim}>{cell(cells.cost, NUM_W + 1, 'right')}</Text>
+      <Text color={labelColor} bold={bold} dimColor={dim}>
+        {cell(cells.label, LABEL_W)}
+      </Text>
+      <Text bold={bold} dimColor={dim}>
+        {cell(cells.calls, NUM_W, 'right')}
+      </Text>
+      <Text bold={bold} dimColor={dim}>
+        {cell(cells.tin, NUM_W, 'right')}
+      </Text>
+      <Text bold={bold} dimColor={dim}>
+        {cell(cells.tout, NUM_W, 'right')}
+      </Text>
+      <Text color={costColor} bold={bold} dimColor={dim}>
+        {cell(cells.cost, NUM_W + 1, 'right')}
+      </Text>
     </Box>
   );
 }
@@ -101,7 +111,13 @@ function buildLines(agent: Agent): OverlayLine[] {
 
   lines.push({
     key: 'header',
-    node: <Row cells={{ label: 'TIER / MODEL', calls: 'calls', tin: 'in', tout: 'out', cost: '~cost' }} bold dim />,
+    node: (
+      <Row
+        cells={{ label: 'TIER / MODEL', calls: 'calls', tin: 'in', tout: 'out', cost: '~cost' }}
+        bold
+        dim
+      />
+    ),
   });
 
   for (const row of report.rows) {
@@ -141,12 +157,18 @@ function buildLines(agent: Agent): OverlayLine[] {
   if (report.partial) {
     lines.push({
       key: 'partial-note',
-      node: <Text dimColor>n/a = no catalog pricing (custom provider); total omits those rows.</Text>,
+      node: (
+        <Text dimColor>n/a = no catalog pricing (custom provider); total omits those rows.</Text>
+      ),
     });
   }
   lines.push({
     key: 'estimate-note',
-    node: <Text dimColor>Cost is an estimate; caching, batch, and reasoning-token pricing may differ.</Text>,
+    node: (
+      <Text dimColor>
+        Cost is an estimate; caching, batch, and reasoning-token pricing may differ.
+      </Text>
+    ),
   });
 
   return lines;
@@ -156,7 +178,13 @@ function rowKey(row: UsageReportRow): string {
   return `row-${row.bucket}-${row.provider}-${row.modelName}`;
 }
 
-function UsageRow({ row, colors }: { row: UsageReportRow; colors: ReturnType<typeof getThemeColors> }) {
+function UsageRow({
+  row,
+  colors,
+}: {
+  row: UsageReportRow;
+  colors: ReturnType<typeof getThemeColors>;
+}) {
   const tierColor =
     row.bucket === 'premium'
       ? colors.accent

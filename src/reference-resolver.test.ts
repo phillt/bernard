@@ -24,7 +24,7 @@ vi.mock('./providers/index.js', () => ({
 
 vi.mock('./logger.js', () => ({
   debugLog: vi.fn(),
-  traceLlm: <T,>(_site: string, _model: string, fn: () => Promise<T>) => fn(),
+  traceLlm: <T>(_site: string, _model: string, fn: () => Promise<T>) => fn(),
 }));
 
 const generateTextMock = vi.fn();

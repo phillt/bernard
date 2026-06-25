@@ -14,10 +14,10 @@ describe('formatAskUserAnswers', () => {
   });
 
   it('multi-question answered — joins with newlines using Q→A format when questions provided', () => {
-    const result = formatAskUserAnswers(
-      { answers: ['blue', 'large'] },
-      ['Favourite colour?', 'Size?'],
-    );
+    const result = formatAskUserAnswers({ answers: ['blue', 'large'] }, [
+      'Favourite colour?',
+      'Size?',
+    ]);
     expect(result).toBe('Favourite colour?: blue\nSize?: large');
   });
 
@@ -52,18 +52,16 @@ describe('formatAskUserAnswers', () => {
   });
 
   it('cancelled mid-batch with question labels', () => {
-    const result = formatAskUserAnswers(
-      { cancelled: true, answered: ['red'] },
-      ['Colour?', 'Size?'],
-    );
+    const result = formatAskUserAnswers({ cancelled: true, answered: ['red'] }, [
+      'Colour?',
+      'Size?',
+    ]);
     expect(result).toBe('Colour?: red\n[cancelled]');
   });
 
   it('headless — returns null', () => {
     // AskUserBatchResult does not include unavailable, so cast
-    const result = formatAskUserAnswers(
-      { unavailable: true } as unknown as AskUserBatchResult,
-    );
+    const result = formatAskUserAnswers({ unavailable: true } as unknown as AskUserBatchResult);
     expect(result).toBeNull();
   });
 
@@ -78,10 +76,7 @@ describe('formatAskUserAnswers', () => {
 // ---------------------------------------------------------------------------
 
 /** Builds a minimal CoreToolMessage with an ask_user result. */
-function makeAskUserToolMsg(
-  payload: object,
-  toolCallId = 'call-1',
-): CoreMessage {
+function makeAskUserToolMsg(payload: object, toolCallId = 'call-1'): CoreMessage {
   return {
     role: 'tool',
     content: [
@@ -123,9 +118,7 @@ describe('injectAskUserHistoryMessages', () => {
   });
 
   it('does NOT inject for a headless unavailable result', () => {
-    const history: CoreMessage[] = [
-      makeAskUserToolMsg({ unavailable: true }, 'call-c'),
-    ];
+    const history: CoreMessage[] = [makeAskUserToolMsg({ unavailable: true }, 'call-c')];
     const ids = new Set<string>();
     injectAskUserHistoryMessages(history, 0, ids);
     expect(history).toHaveLength(1);
@@ -153,9 +146,7 @@ describe('injectAskUserHistoryMessages', () => {
   });
 
   it('deduplicates: does not inject twice for the same toolCallId', () => {
-    const history: CoreMessage[] = [
-      makeAskUserToolMsg({ answers: ['yes'] }, 'call-f'),
-    ];
+    const history: CoreMessage[] = [makeAskUserToolMsg({ answers: ['yes'] }, 'call-f')];
     const ids = new Set<string>();
     injectAskUserHistoryMessages(history, 0, ids);
     expect(history).toHaveLength(2);
@@ -192,9 +183,7 @@ describe('injectAskUserHistoryMessages', () => {
     // `start` is stale — points past the end of the shrunken array
     const staleStart = 50;
     const ids = new Set<string>();
-    expect(() =>
-      injectAskUserHistoryMessages(history, staleStart, ids),
-    ).not.toThrow();
+    expect(() => injectAskUserHistoryMessages(history, staleStart, ids)).not.toThrow();
     // With safeStart clamped to 0 (since length is 1), it will scan and inject
     expect(history).toHaveLength(2);
     expect(history[1].content).toBe('after-compression');

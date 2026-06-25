@@ -866,7 +866,9 @@ describe('Agent', () => {
     const secondCall = mockGenerateText.mock.calls[1][0];
     const nudges = secondCall.messages.filter(
       (m: any) =>
-        m.role === 'user' && typeof m.content === 'string' && m.content.includes('no visible answer'),
+        m.role === 'user' &&
+        typeof m.content === 'string' &&
+        m.content.includes('no visible answer'),
     );
     expect(nudges.length).toBe(1);
   });

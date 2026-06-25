@@ -85,9 +85,7 @@ export interface CronJobPermissionPosture {
  * the `confirmMode → ConfirmThreshold` mapping stays in one place.
  */
 export function resolveCronJobPosture(job: CronJob): CronJobPermissionPosture {
-  const toolMode: 'read-only' | 'write' = job.skipPermissions
-    ? 'write'
-    : (job.toolMode ?? 'write');
+  const toolMode: 'read-only' | 'write' = job.skipPermissions ? 'write' : (job.toolMode ?? 'write');
 
   const confirmMode: 'off' | 'auto' | 'strict' = job.skipPermissions
     ? 'off'
