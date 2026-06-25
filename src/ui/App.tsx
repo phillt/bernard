@@ -152,7 +152,13 @@ import { MessageStore } from './message-store.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers } from './ink-handlers.js';
 import { injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
-import { VoiceService, resolveBackend, VOICE_BACKEND_VALUES, type VoiceBackend } from '../voice-service.js';
+import {
+  VoiceService,
+  resolveBackend,
+  resolveWarmupPlayer,
+  VOICE_BACKEND_VALUES,
+  type VoiceBackend,
+} from '../voice-service.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -293,7 +299,8 @@ let _voiceService: VoiceService | null = null;
 function getVoiceService(cfg: import('../config.js').BernardConfig): VoiceService {
   if (!_voiceService) {
     const resolved = resolveBackend(process.platform, cfg.voiceBackend);
-    _voiceService = new VoiceService(resolved);
+    const warmup = { player: resolveWarmupPlayer(process.platform), ms: cfg.voiceWarmupMs };
+    _voiceService = new VoiceService(resolved, warmup);
   }
   return _voiceService;
 }
@@ -1249,6 +1256,7 @@ export function App({
           voiceBackend: config.voiceBackend,
           voiceVoice: config.voiceVoice,
           voiceRate: config.voiceRate,
+          voiceWarmupMs: config.voiceWarmupMs,
         });
 
       const arg = text.slice('/voice'.length).trim();
@@ -1271,6 +1279,9 @@ export function App({
       // `/voice status` — show on/off state and the resolved backend.
       if (arg === 'status') {
         const resolved = resolveBackend(process.platform, config.voiceBackend);
+        // Read the warmup player from the (cached) service so we don't re-probe
+        // PATH with synchronous `which` calls on every status invocation.
+        const warmupPlayer = getVoiceService(config).warmupPlayer;
         showInfo('Voice TTS', [
           { text: `State: ${config.voiceTts ? 'ON' : 'OFF'}`, bold: true },
           { text: `Configured backend: ${config.voiceBackend}` },
@@ -1279,6 +1290,13 @@ export function App({
             dim: !resolved,
           },
           { text: config.voiceRate ? `Rate: ${config.voiceRate} wpm` : 'Rate: backend default', dim: true },
+          {
+            text:
+              config.voiceWarmupMs > 0
+                ? `Sink warmup: ${config.voiceWarmupMs} ms${warmupPlayer ? ` (${warmupPlayer})` : ' (no player — inactive)'}`
+                : 'Sink warmup: off',
+            dim: true,
+          },
         ]);
         return;
       }

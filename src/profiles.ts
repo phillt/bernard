@@ -97,6 +97,8 @@ export interface ProfileSettings {
   voiceVoice?: string;
   /** Optional speech rate in words per minute. */
   voiceRate?: number;
+  /** Ms of silence played to wake a suspended sink before speaking (0 = off). */
+  voiceWarmupMs?: number;
 }
 
 /** A single named profile entry. */

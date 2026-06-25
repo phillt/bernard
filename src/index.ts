@@ -28,6 +28,7 @@ import {
   providerEnvVar,
   normalizeMaxConcurrentAgents,
   getAvailableProviders,
+  DEFAULT_VOICE_WARMUP_MS,
 } from './config.js';
 import { normalizeStoredModelMode } from './model-policy.js';
 import { loadLineups, resolveActiveLineup, resolveActiveLineupWithCorrection } from './lineups.js';
@@ -40,7 +41,7 @@ import {
 } from './custom-providers.js';
 import type { SupportedSdk } from './providers/types.js';
 import { printWelcome, printError, printInfo } from './output.js';
-import { resolveBackend, VoiceService, type VoiceBackend } from './voice-service.js';
+import { resolveBackend, resolveWarmupPlayer, VoiceService, type VoiceBackend } from './voice-service.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
@@ -1026,13 +1027,24 @@ program
     let voiceBackend: VoiceBackend = 'auto';
     let voiceVoice: string | undefined;
     let voiceRate: number | undefined;
+    // Precedence mirrors loadConfig: prefs > env > default.
+    const envWarmupMs = process.env.BERNARD_VOICE_WARMUP_MS
+      ? parseInt(process.env.BERNARD_VOICE_WARMUP_MS, 10)
+      : undefined;
+    let voiceWarmupMs =
+      envWarmupMs !== undefined && Number.isFinite(envWarmupMs) && envWarmupMs >= 0
+        ? envWarmupMs
+        : DEFAULT_VOICE_WARMUP_MS;
     try {
       const prefs = loadPreferences();
       voiceBackend = prefs.voiceBackend ?? 'auto';
       voiceVoice = prefs.voiceVoice;
       voiceRate = prefs.voiceRate;
+      if (typeof prefs.voiceWarmupMs === 'number' && prefs.voiceWarmupMs >= 0) {
+        voiceWarmupMs = prefs.voiceWarmupMs;
+      }
     } catch {
-      // ignore — fall through to defaults
+      // ignore — fall through to env/default
     }
     const resolved = resolveBackend(process.platform, voiceBackend);
     if (!resolved) {
@@ -1044,7 +1056,10 @@ program
     }
     printInfo(`TTS backend: ${resolved.backend} (${resolved.bin})`);
     printInfo(`Speaking: "${message}"`);
-    const svc = new VoiceService(resolved);
+    const svc = new VoiceService(resolved, {
+      player: resolveWarmupPlayer(process.platform),
+      ms: voiceWarmupMs,
+    });
     try {
       await svc.speak(message, { voice: voiceVoice, rate: voiceRate });
       printInfo('Done.');
