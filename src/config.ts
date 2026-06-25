@@ -1111,9 +1111,7 @@ export function loadConfig(overrides?: {
   const voiceTts =
     overrides?.voiceTts ??
     prefs.voiceTts ??
-    (process.env.BERNARD_VOICE_TTS === 'true' || process.env.BERNARD_VOICE_TTS === '1'
-      ? true
-      : DEFAULT_VOICE_TTS);
+    (process.env.BERNARD_VOICE === 'true' || process.env.BERNARD_VOICE === '1');
   const envVoiceBackend = isVoiceBackend(process.env.BERNARD_VOICE_BACKEND)
     ? (process.env.BERNARD_VOICE_BACKEND as VoiceBackend)
     : undefined;

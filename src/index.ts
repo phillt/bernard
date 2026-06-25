@@ -40,7 +40,7 @@ import {
 } from './custom-providers.js';
 import type { SupportedSdk } from './providers/types.js';
 import { printWelcome, printError, printInfo } from './output.js';
-import { resolveBackend, VoiceService } from './voice-service.js';
+import { resolveBackend, VoiceService, type VoiceBackend } from './voice-service.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
@@ -1023,7 +1023,7 @@ program
     const message = text || 'Hello from Bernard.';
     // Load config to pick up persisted voice preferences; skip API key validation
     // by providing a dummy key so the command works without a provider configured.
-    let voiceBackend: import('./voice-service.js').VoiceBackend = 'auto';
+    let voiceBackend: VoiceBackend = 'auto';
     let voiceVoice: string | undefined;
     let voiceRate: number | undefined;
     try {

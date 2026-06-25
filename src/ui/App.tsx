@@ -1254,27 +1254,26 @@ export function App({
       const newVoiceTts = onOffResult.item.value as boolean;
       config.voiceTts = newVoiceTts;
 
-      // Step 2: backend picker
-      const backendEntries: MenuEntry[] = (VOICE_BACKEND_VALUES as readonly string[]).map((b) => ({
-        label: b,
-        active: config.voiceBackend === b,
-        value: b,
-      }));
-      const backendResult = await requestMenu(backendEntries, {
-        title: `Voice backend: ${config.voiceBackend}`,
-      });
-      if (!backendResult.cancelled) {
-        const newBackend = backendResult.item.value as VoiceBackend;
-        config.voiceBackend = newBackend;
-        // Reset the singleton so it re-resolves against the new backend setting.
-        resetVoiceService();
+      // Step 2: backend picker — only relevant when enabling voice
+      if (newVoiceTts) {
+        const backendEntries: MenuEntry[] = (VOICE_BACKEND_VALUES as readonly string[]).map((b) => ({
+          label: b,
+          active: config.voiceBackend === b,
+          value: b,
+        }));
+        const backendResult = await requestMenu(backendEntries, {
+          title: `Voice backend: ${config.voiceBackend}`,
+        });
+        if (!backendResult.cancelled) {
+          const newBackend = backendResult.item.value as VoiceBackend;
+          config.voiceBackend = newBackend;
+          // Reset the singleton so it re-resolves against the new backend setting.
+          resetVoiceService();
+        }
       }
 
-      // Persist
-      savePreferences({
-        provider: config.provider,
-        model: config.model,
-        theme: config.theme,
+      // Persist only the voice fields — saveActiveSettings merges onto the profile.
+      saveActiveSettings({
         voiceTts: config.voiceTts,
         voiceBackend: config.voiceBackend,
         voiceVoice: config.voiceVoice,
@@ -2354,6 +2353,8 @@ export function App({
       /* unknown theme — keep current */
     }
     setToolDetailsVisible(cfg.toolDetails);
+    // Reset the voice singleton so profile-switched voiceBackend takes effect.
+    resetVoiceService();
   }
 
   async function runPreTurnPipeline(
@@ -2564,7 +2565,8 @@ export function App({
       // Voice TTS readback: speak the last assistant response if voiceTts is on.
       if (turnCompleted && config.voiceTts) {
         const history = agent.getHistory();
-        const lastMsg = history.slice().reverse().find((m) => m.role === 'assistant');
+        let lastMsg: (typeof history)[number] | undefined;
+        for (let i = history.length - 1; i >= 0; i--) { if (history[i].role === 'assistant') { lastMsg = history[i]; break; } }
         const ttsText = lastMsg ? extractTextFromContent(lastMsg.content) : '';
         if (ttsText.trim()) {
           void getVoiceService(config)

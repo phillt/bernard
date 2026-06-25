@@ -1,9 +1,8 @@
-import { spawn, ChildProcess } from 'child_process';
-import { execFileSync } from 'child_process';
+import { spawn, execFileSync, type ChildProcess } from 'child_process';
 
 export type VoiceBackend = 'auto' | 'macos-say' | 'spd-say' | 'espeak-ng' | 'espeak' | 'windows-speech';
 
-export const VOICE_BACKEND_VALUES: VoiceBackend[] = [
+export const VOICE_BACKEND_VALUES: readonly VoiceBackend[] = [
   'auto',
   'macos-say',
   'spd-say',
@@ -11,6 +10,15 @@ export const VOICE_BACKEND_VALUES: VoiceBackend[] = [
   'espeak',
   'windows-speech',
 ];
+
+/** Maps each concrete backend to its binary name. */
+const BACKEND_BIN: Record<Exclude<VoiceBackend, 'auto'>, string> = {
+  'macos-say': 'say',
+  'spd-say': 'spd-say',
+  'espeak-ng': 'espeak-ng',
+  'espeak': 'espeak',
+  'windows-speech': 'powershell',
+};
 
 export interface SpeakOptions {
   voice?: string;
@@ -38,14 +46,7 @@ export function resolveBackend(
   });
 
   if (configBackend !== 'auto') {
-    const mapping: Record<Exclude<VoiceBackend, 'auto'>, string> = {
-      'macos-say': 'say',
-      'spd-say': 'spd-say',
-      'espeak-ng': 'espeak-ng',
-      'espeak': 'espeak',
-      'windows-speech': 'powershell',
-    };
-    return { backend: configBackend, bin: mapping[configBackend] };
+    return { backend: configBackend, bin: BACKEND_BIN[configBackend] };
   }
 
   // auto-detect
