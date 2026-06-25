@@ -12,6 +12,9 @@ interface StatusBarProps {
 
 const BAR_WIDTH = 10;
 
+/** Pulse decay duration in ms — short enough to feel snappy, long enough to notice. */
+const PULSE_DECAY_MS = 250;
+
 /** Serialize the fields StatusBar actually renders, for change detection. */
 function snapshotStats(stats: SpinnerStats | null, strategy: string | null): string {
   if (!stats) return `null|${strategy ?? ''}`;
@@ -38,20 +41,76 @@ function snapshotStats(stats: SpinnerStats | null, strategy: string | null): str
  * resolution) that gets louder as it fills: muted while there's >25% headroom,
  * warning between 5%–25%, and the theme's accent color once <5% of the
  * compression budget is left.
+ * Token counter pulse (#246): when `turnPromptTokens` or `turnCompletionTokens`
+ * increases, the corresponding `↑`/`↓` counter briefly brightens to the accent
+ * color for ~250 ms, then decays back to muted. Rapid successive increments
+ * restart the timer (extend the pulse) rather than stacking timeouts.
  */
 export function StatusBar({ agent }: StatusBarProps) {
   const colors = getThemeColors();
   const [, force] = useState(0);
   const lastSnapshotRef = useRef<string>(snapshotStats(agent.spinnerStats, agent.currentStrategy));
+
+  // Per-direction pulse state: true while the accent highlight is active.
+  const [upPulse, setUpPulse] = useState(false);
+  const [downPulse, setDownPulse] = useState(false);
+
+  // Track previous token values so we can detect increases.
+  const prevUpRef = useRef<number>(agent.spinnerStats?.turnPromptTokens ?? 0);
+  const prevDownRef = useRef<number>(agent.spinnerStats?.turnCompletionTokens ?? 0);
+
+  // Pending decay timeout handles — cleared on rapid successive increments and on unmount.
+  const upTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const downTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const id = setInterval(() => {
       const snap = snapshotStats(agent.spinnerStats, agent.currentStrategy);
       if (snap !== lastSnapshotRef.current) {
         lastSnapshotRef.current = snap;
+
+        const currentUp = agent.spinnerStats?.turnPromptTokens ?? 0;
+        const currentDown = agent.spinnerStats?.turnCompletionTokens ?? 0;
+
+        // Pulse the ↑ counter if prompt tokens increased.
+        if (currentUp > prevUpRef.current) {
+          setUpPulse(true);
+          if (upTimeoutRef.current !== null) clearTimeout(upTimeoutRef.current);
+          upTimeoutRef.current = setTimeout(() => {
+            setUpPulse(false);
+            upTimeoutRef.current = null;
+          }, PULSE_DECAY_MS);
+        }
+
+        // Pulse the ↓ counter if completion tokens increased.
+        if (currentDown > prevDownRef.current) {
+          setDownPulse(true);
+          if (downTimeoutRef.current !== null) clearTimeout(downTimeoutRef.current);
+          downTimeoutRef.current = setTimeout(() => {
+            setDownPulse(false);
+            downTimeoutRef.current = null;
+          }, PULSE_DECAY_MS);
+        }
+
+        prevUpRef.current = currentUp;
+        prevDownRef.current = currentDown;
+
         force((n) => n + 1);
       }
     }, 500);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      if (upTimeoutRef.current !== null) {
+        clearTimeout(upTimeoutRef.current);
+        upTimeoutRef.current = null;
+        setUpPulse(false);
+      }
+      if (downTimeoutRef.current !== null) {
+        clearTimeout(downTimeoutRef.current);
+        downTimeoutRef.current = null;
+        setDownPulse(false);
+      }
+    };
   }, [agent]);
 
   const stats: SpinnerStats | null = agent.spinnerStats;
@@ -105,9 +164,15 @@ export function StatusBar({ agent }: StatusBarProps) {
           depicts, so the two can't be confused. */}
       {stats && (
         <>
-          <Text color={colors.muted}>
-            turn {up}↑ {down}↓{cost}{'   '}
+          <Text color={colors.muted}>turn </Text>
+          <Text color={upPulse ? colors.accent : colors.muted} bold={upPulse}>
+            {up}↑
           </Text>
+          <Text color={colors.muted}> </Text>
+          <Text color={downPulse ? colors.accent : colors.muted} bold={downPulse}>
+            {down}↓
+          </Text>
+          <Text color={colors.muted}>{cost}{'   '}</Text>
           {sessionCost ? <Text color={colors.muted}>{sessionCost}</Text> : null}
           <Text color={colors.muted}>ctx {formatTokenCount(stats.latestPromptTokens)} </Text>
           {filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
