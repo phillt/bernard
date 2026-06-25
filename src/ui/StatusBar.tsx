@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { Box, Text } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { formatTokenCount, finiteOr0, type SpinnerStats } from '../output.js';
@@ -15,18 +15,49 @@ const BAR_WIDTH = 10;
 /** Pulse decay duration in ms — short enough to feel snappy, long enough to notice. */
 const PULSE_DECAY_MS = 250;
 
+/** Snapshot of the fields StatusBar renders, for change detection and pulse comparison. */
+interface StatsSnapshot {
+  display: string;
+  up: number;
+  down: number;
+}
+
 /** Serialize the fields StatusBar actually renders, for change detection. */
-function snapshotStats(stats: SpinnerStats | null, strategy: string | null): string {
-  if (!stats) return `null|${strategy ?? ''}`;
-  return [
-    stats.turnPromptTokens,
-    stats.turnCompletionTokens,
-    stats.latestPromptTokens,
-    stats.model,
-    stats.contextWindowOverride ?? '',
-    stats.sessionCostUsd,
-    strategy ?? '',
-  ].join('|');
+function snapshotStats(stats: SpinnerStats | null, strategy: string | null): StatsSnapshot {
+  if (!stats) return { display: `null|${strategy ?? ''}`, up: 0, down: 0 };
+  const up = stats.turnPromptTokens;
+  const down = stats.turnCompletionTokens;
+  return {
+    display: [
+      up,
+      down,
+      stats.latestPromptTokens,
+      stats.model,
+      stats.contextWindowOverride ?? '',
+      stats.sessionCostUsd,
+      strategy ?? '',
+    ].join('|'),
+    up,
+    down,
+  };
+}
+
+/**
+ * Arm (or re-arm) a pulse: set the active flag, clear any pending decay timer,
+ * and schedule a new decay after `decayMs`. Extracted to eliminate the
+ * identical arm/re-arm block that would otherwise appear for each direction.
+ */
+function armPulse(
+  setActive: (v: boolean) => void,
+  timeoutRef: MutableRefObject<ReturnType<typeof setTimeout> | null>,
+  decayMs: number,
+): void {
+  setActive(true);
+  if (timeoutRef.current !== null) clearTimeout(timeoutRef.current);
+  timeoutRef.current = setTimeout(() => {
+    setActive(false);
+    timeoutRef.current = null;
+  }, decayMs);
 }
 
 /**
@@ -49,15 +80,11 @@ function snapshotStats(stats: SpinnerStats | null, strategy: string | null): str
 export function StatusBar({ agent }: StatusBarProps) {
   const colors = getThemeColors();
   const [, force] = useState(0);
-  const lastSnapshotRef = useRef<string>(snapshotStats(agent.spinnerStats, agent.currentStrategy));
+  const lastSnapshotRef = useRef<StatsSnapshot>(snapshotStats(agent.spinnerStats, agent.currentStrategy));
 
   // Per-direction pulse state: true while the accent highlight is active.
   const [upPulse, setUpPulse] = useState(false);
   const [downPulse, setDownPulse] = useState(false);
-
-  // Track previous token values so we can detect increases.
-  const prevUpRef = useRef<number>(agent.spinnerStats?.turnPromptTokens ?? 0);
-  const prevDownRef = useRef<number>(agent.spinnerStats?.turnCompletionTokens ?? 0);
 
   // Pending decay timeout handles — cleared on rapid successive increments and on unmount.
   const upTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -66,50 +93,25 @@ export function StatusBar({ agent }: StatusBarProps) {
   useEffect(() => {
     const id = setInterval(() => {
       const snap = snapshotStats(agent.spinnerStats, agent.currentStrategy);
-      if (snap !== lastSnapshotRef.current) {
+      if (snap.display !== lastSnapshotRef.current.display) {
+        const prev = lastSnapshotRef.current;
         lastSnapshotRef.current = snap;
 
-        const currentUp = agent.spinnerStats?.turnPromptTokens ?? 0;
-        const currentDown = agent.spinnerStats?.turnCompletionTokens ?? 0;
-
         // Pulse the ↑ counter if prompt tokens increased.
-        if (currentUp > prevUpRef.current) {
-          setUpPulse(true);
-          if (upTimeoutRef.current !== null) clearTimeout(upTimeoutRef.current);
-          upTimeoutRef.current = setTimeout(() => {
-            setUpPulse(false);
-            upTimeoutRef.current = null;
-          }, PULSE_DECAY_MS);
-        }
+        if (snap.up > prev.up) armPulse(setUpPulse, upTimeoutRef, PULSE_DECAY_MS);
 
         // Pulse the ↓ counter if completion tokens increased.
-        if (currentDown > prevDownRef.current) {
-          setDownPulse(true);
-          if (downTimeoutRef.current !== null) clearTimeout(downTimeoutRef.current);
-          downTimeoutRef.current = setTimeout(() => {
-            setDownPulse(false);
-            downTimeoutRef.current = null;
-          }, PULSE_DECAY_MS);
-        }
-
-        prevUpRef.current = currentUp;
-        prevDownRef.current = currentDown;
+        if (snap.down > prev.down) armPulse(setDownPulse, downTimeoutRef, PULSE_DECAY_MS);
 
         force((n) => n + 1);
       }
     }, 500);
     return () => {
       clearInterval(id);
-      if (upTimeoutRef.current !== null) {
-        clearTimeout(upTimeoutRef.current);
-        upTimeoutRef.current = null;
-        setUpPulse(false);
-      }
-      if (downTimeoutRef.current !== null) {
-        clearTimeout(downTimeoutRef.current);
-        downTimeoutRef.current = null;
-        setDownPulse(false);
-      }
+      // React 18 batches setState and no-ops on unmounted components;
+      // just cancel the timers so they don't fire after unmount.
+      clearTimeout(upTimeoutRef.current ?? undefined);
+      clearTimeout(downTimeoutRef.current ?? undefined);
     };
   }, [agent]);
 
@@ -166,9 +168,8 @@ export function StatusBar({ agent }: StatusBarProps) {
         <>
           <Text color={colors.muted}>turn </Text>
           <Text color={upPulse ? colors.accent : colors.muted} bold={upPulse}>
-            {up}↑
+            {up}↑{' '}
           </Text>
-          <Text color={colors.muted}> </Text>
           <Text color={downPulse ? colors.accent : colors.muted} bold={downPulse}>
             {down}↓
           </Text>
