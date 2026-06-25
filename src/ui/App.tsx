@@ -1241,7 +1241,62 @@ export function App({
       return;
     }
 
-    if (text === '/voice') {
+    if (text === '/voice' || text.startsWith('/voice ')) {
+      // Persist the current voice fields onto the active profile.
+      const persistVoice = () =>
+        saveActiveSettings({
+          voiceTts: config.voiceTts,
+          voiceBackend: config.voiceBackend,
+          voiceVoice: config.voiceVoice,
+          voiceRate: config.voiceRate,
+        });
+
+      const arg = text.slice('/voice'.length).trim();
+
+      // `/voice test [text]` — speak a phrase immediately, regardless of on/off.
+      if (arg === 'test' || arg.startsWith('test ')) {
+        const phrase = arg.slice('test'.length).trim() || 'Hello from Bernard.';
+        const svc = getVoiceService(config);
+        if (!svc.backend) {
+          flashToast('No TTS backend available on this system.', 'error');
+          return;
+        }
+        void svc.speak(phrase, { voice: config.voiceVoice, rate: config.voiceRate }).catch(() => {
+          // Fail silently — TTS errors must never crash the REPL.
+        });
+        flashToast(`Speaking: "${phrase}"`, 'info');
+        return;
+      }
+
+      // `/voice status` — show on/off state and the resolved backend.
+      if (arg === 'status') {
+        const resolved = resolveBackend(process.platform, config.voiceBackend);
+        showInfo('Voice TTS', [
+          { text: `State: ${config.voiceTts ? 'ON' : 'OFF'}`, bold: true },
+          { text: `Configured backend: ${config.voiceBackend}` },
+          {
+            text: `Resolved backend: ${resolved ? `${resolved.backend} (${resolved.bin})` : 'none available'}`,
+            dim: !resolved,
+          },
+          { text: config.voiceRate ? `Rate: ${config.voiceRate} wpm` : 'Rate: backend default', dim: true },
+        ]);
+        return;
+      }
+
+      // `/voice on` / `/voice off` — direct enable/disable, no menu.
+      if (arg === 'on' || arg === 'off') {
+        config.voiceTts = arg === 'on';
+        // Disabling stops any in-flight speech and tears down the singleton.
+        if (!config.voiceTts) resetVoiceService();
+        persistVoice();
+        flashToast(
+          `Voice TTS ${config.voiceTts ? 'enabled' : 'disabled'} (backend: ${config.voiceBackend}).`,
+          'success',
+        );
+        return;
+      }
+
+      // Bare `/voice` (or any unrecognized argument) — interactive menu.
       // Step 1: on/off toggle
       const onOffEntries: MenuEntry[] = [
         { label: 'On', active: config.voiceTts === true, value: true },
@@ -1267,18 +1322,16 @@ export function App({
         if (!backendResult.cancelled) {
           const newBackend = backendResult.item.value as VoiceBackend;
           config.voiceBackend = newBackend;
-          // Reset the singleton so it re-resolves against the new backend setting.
-          resetVoiceService();
         }
+        // Re-resolve the singleton against the (possibly new) backend setting.
+        resetVoiceService();
+      } else {
+        // Turning off via the menu should also stop any in-flight speech.
+        resetVoiceService();
       }
 
       // Persist only the voice fields — saveActiveSettings merges onto the profile.
-      saveActiveSettings({
-        voiceTts: config.voiceTts,
-        voiceBackend: config.voiceBackend,
-        voiceVoice: config.voiceVoice,
-        voiceRate: config.voiceRate,
-      });
+      persistVoice();
       flashToast(`Voice TTS ${config.voiceTts ? 'enabled' : 'disabled'} (backend: ${config.voiceBackend}).`, 'success');
       return;
     }

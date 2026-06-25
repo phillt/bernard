@@ -1,4 +1,4 @@
-import { spawn, execFileSync, type ChildProcess } from 'child_process';
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 
 export type VoiceBackend = 'auto' | 'macos-say' | 'spd-say' | 'espeak-ng' | 'espeak' | 'windows-speech';
 
@@ -145,6 +145,10 @@ export class VoiceService {
       };
 
       const child = spawn(bin, args, { stdio: 'ignore', detached: false });
+      // Don't let the child's handle keep the event loop alive — the caller
+      // voids this promise, so speech must never block process exit. `stop()`
+      // still holds the reference and can SIGTERM it while it's playing.
+      child.unref();
       this._child = child;
 
       child.on('error', (err) => _advance(err));
