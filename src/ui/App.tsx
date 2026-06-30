@@ -138,6 +138,8 @@ import type {
   ValueResult,
 } from './menu-types.js';
 import { Thread, REWRITE_ICON, type StaticItem } from './Thread.js';
+import { TranscriptViewport } from './TranscriptViewport.js';
+import { useDimensionsCtx } from './DimensionsContext.js';
 import { formatAgentError, type ErrorPanelData } from './error-format.js';
 import { Prompt } from './Prompt.js';
 import type { SlashCommand } from './SlashHints.js';
@@ -196,6 +198,13 @@ interface AppProps {
   sessionToolAllowlist: Set<string>;
   /** Called when the user requests exit (Ctrl-C or `/exit`). */
   onExit: () => Promise<void> | void;
+  /**
+   * Whether the REPL is rendering in the alternate screen buffer (full-screen).
+   * Set by `src/index.ts` (true only on a TTY with `BERNARD_FULLSCREEN` on).
+   * Drives the fixed-height root frame + the in-app scrollable transcript; when
+   * false the layout falls back to the legacy natural-flow column.
+   */
+  fullScreen?: boolean;
   /**
    * Optional alert banner string rendered above the thread until dismissed.
    * Built in `src/index.ts` when `--alert` resumes a session in response to
@@ -387,10 +396,18 @@ export function App({
   alertBanner,
   isFreshInstall,
   startupNotice,
+  fullScreen = false,
 }: AppProps) {
   const { exit } = useApp();
+  const { rows } = useDimensionsCtx();
   const [activeOverlay, setActiveOverlay] = useState<Overlay | null>(null);
   const [busy, setBusy] = useState(false);
+  // Whether the input line is currently empty — drives the transcript's Home/End
+  // jump gating (full-screen). Flipped by `<Prompt onEmptyChange>` only when the
+  // boolean changes, so it doesn't re-render `<App>` on every keystroke.
+  const [promptEmpty, setPromptEmpty] = useState(true);
+  // Mouse-wheel transcript scrolling is on when full-screen and not opted out.
+  const mouseEnabled = fullScreen && config.mouse;
   // Append-only log of finalized turns, rendered through Ink's `<Static>` so
   // each entry becomes terminal scrollback that is never repainted (#232).
   // `<App>` commits to this at turn boundaries; the streaming message and the
@@ -858,17 +875,18 @@ export function App({
       provenanceHistoryStore.clear();
       agent.clearHistory();
       setInterrupted(false);
-      // Reset the append-only log and remount <Thread> (via the epoch bump) so
-      // <Static>'s internal high-water cursor resets to 0 — Static only
-      // appends, so an empty `items` array alone wouldn't un-print the old
-      // transcript. The escape wipes the physical terminal: `\x1b[3J` clears
-      // scrollback, `\x1b[2J` the visible region, `\x1b[H` homes the cursor.
+      // Reset the append-only log and remount <Thread> (via the epoch bump).
+      // In legacy <Static> mode this resets Static's internal high-water cursor
+      // (Static only appends — an empty `items` array alone can't un-print).
+      // In full-screen mode the epoch bump remounts <TranscriptViewport>,
+      // resetting its scroll offset; the dynamic frame repaints empty on its
+      // own, so the physical-wipe escape that legacy mode needed is gone.
       setStaticItems([]);
       committedLenRef.current = 0;
       // clearHistory() reassigns this.history to a fresh []; track the new
       // reference so the next commit doesn't mistake it for a mid-turn replace.
       historyRef.current = agent.getHistory();
-      process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
+      if (!fullScreen) process.stdout.write('\x1b[3J\x1b[2J\x1b[H');
       setStaticEpoch((e) => e + 1);
       flashToast('Conversation history cleared.', 'success');
       return;
@@ -3044,44 +3062,71 @@ export function App({
     return { answers };
   }
 
-  return (
-    <Box flexDirection="column" paddingX={2}>
-      {bannerVisible && alertBanner && (
-        <Box marginTop={1} borderStyle="single" borderColor={colors.warning} paddingX={1}>
-          <Text color={colors.warning}>{alertBanner}</Text>
+  const banner = bannerVisible && alertBanner && (
+    <Box marginTop={1} borderStyle="single" borderColor={colors.warning} paddingX={1}>
+      <Text color={colors.warning}>{alertBanner}</Text>
+    </Box>
+  );
+
+  // Full-screen renders the scrollable <TranscriptViewport>; legacy mode keeps
+  // the <Static>-based <Thread> (terminal scrollback). The epoch key remounts
+  // either one on /clear.
+  const thread = fullScreen ? (
+    <TranscriptViewport
+      key={staticEpoch}
+      items={staticItems}
+      messageStore={messageStore}
+      busy={busy}
+      interrupted={interrupted}
+      streamingToolDetails={config.toolDetails}
+      promptEmpty={promptEmpty || busy}
+      mouseEnabled={mouseEnabled}
+    />
+  ) : (
+    <Thread
+      key={staticEpoch}
+      staticItems={staticItems}
+      messageStore={messageStore}
+      busy={busy}
+      interrupted={interrupted}
+      streamingToolDetails={config.toolDetails}
+    />
+  );
+
+  const chrome = (
+    <>
+      {busy && (
+        <Box marginTop={1}>
+          <Spinner label="thinking…" />
         </Box>
       )}
-      <Thread
-        key={staticEpoch}
-        staticItems={staticItems}
-        messageStore={messageStore}
-        busy={busy}
-        interrupted={interrupted}
-        streamingToolDetails={config.toolDetails}
+      {toast && <Toast message={toast.message} variant={toast.variant} />}
+      <Prompt
+        disabled={busy || activeOverlay !== null}
+        onSubmit={handleSubmit}
+        onSlashActiveChange={setSlashActive}
+        onEmptyChange={setPromptEmpty}
+        history={inputHistory}
+        onRecordInput={recordInput}
+        dynamicCommands={getDynamicCommands}
+        renderAbove={<PlanPanel agent={agent} />}
       />
-      {!viewerActive && (
-        <>
-          {busy && (
-            <Box marginTop={1}>
-              <Spinner label="thinking…" />
-            </Box>
-          )}
-          {toast && <Toast message={toast.message} variant={toast.variant} />}
-          <Prompt
-            disabled={busy || activeOverlay !== null}
-            onSubmit={handleSubmit}
-            onSlashActiveChange={setSlashActive}
-            history={inputHistory}
-            onRecordInput={recordInput}
-            dynamicCommands={getDynamicCommands}
-            renderAbove={<PlanPanel agent={agent} />}
-          />
-          <Box justifyContent="space-between">
-            <HintBar busy={busy} overlayActive={activeOverlay !== null} slashActive={slashActive} />
-            <StatusBar agent={agent} />
-          </Box>
-        </>
-      )}
+      <Box justifyContent="space-between">
+        <HintBar
+          busy={busy}
+          overlayActive={activeOverlay !== null}
+          slashActive={slashActive}
+          scrollable={fullScreen}
+        />
+        <StatusBar agent={agent} />
+      </Box>
+    </>
+  );
+
+  // The overlay layer. In full-screen it REPLACES the thread+chrome (a true
+  // modal frame); in legacy mode it is appended below the chrome as before.
+  const overlays = (
+    <>
       {activeOverlay === 'status' && (
         <StatusViewer
           agent={agent}
@@ -3217,6 +3262,37 @@ export function App({
           }}
         />
       )}
+    </>
+  );
+
+  if (fullScreen) {
+    // Fixed-height frame: banner (if any), then either the modal overlay zone OR
+    // the transcript (flex-grows to fill) with the chrome pinned to the bottom.
+    return (
+      <Box flexDirection="column" paddingX={2} height={rows}>
+        {banner}
+        {activeOverlay !== null ? (
+          <Box flexDirection="column" flexGrow={1}>
+            {overlays}
+          </Box>
+        ) : (
+          <>
+            {thread}
+            {chrome}
+          </>
+        )}
+      </Box>
+    );
+  }
+
+  // Legacy inline rendering: thread always mounted (keeps <Static> scrollback),
+  // chrome hidden only behind a Shift-Tab viewer, overlays appended below.
+  return (
+    <Box flexDirection="column" paddingX={2}>
+      {banner}
+      {thread}
+      {!viewerActive && chrome}
+      {overlays}
     </Box>
   );
 }
@@ -3718,7 +3794,10 @@ async function pickGenerationParamsInk(
         (d.min !== undefined && parsed < d.min) ||
         (d.max !== undefined && parsed > d.max)
       ) {
-        flashToast(`${d.label} must be a ${isFloat ? 'number' : 'whole number'} in ${bounds}.`, 'error');
+        flashToast(
+          `${d.label} must be a ${isFloat ? 'number' : 'whole number'} in ${bounds}.`,
+          'error',
+        );
         continue;
       }
       values[d.id] = parsed;
@@ -3882,12 +3961,24 @@ async function pickLineupSlotInk(
         config.customProviders = loadCustomProviders();
       }
       const params = await pickGenerationParamsInk(
-        provider, model, sdk, paramsFor(model), requestMenu, requestTextInput, flashToast,
+        provider,
+        model,
+        sdk,
+        paramsFor(model),
+        requestMenu,
+        requestTextInput,
+        flashToast,
       );
       return { provider, model, ...(params ? { params } : {}) };
     }
     const params = await pickGenerationParamsInk(
-      provider, picked, sdk, paramsFor(picked), requestMenu, requestTextInput, flashToast,
+      provider,
+      picked,
+      sdk,
+      paramsFor(picked),
+      requestMenu,
+      requestTextInput,
+      flashToast,
     );
     return { provider, model: picked, ...(params ? { params } : {}) };
   }

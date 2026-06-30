@@ -74,6 +74,8 @@ import { debugLog, isDebugEnabled } from './logger.js';
 import { installInstrumentedFetchIfDebug } from './framework/instrumented-fetch.js';
 import { initShellParser } from './permissions/shell-ast.js';
 import { App } from './ui/App.js';
+import { DimensionsProvider } from './ui/DimensionsContext.js';
+import { withFullScreen } from './ui/withFullScreen.js';
 import { getInkHandlers } from './ui/ink-handlers.js';
 import type {
   ToolOptions,
@@ -515,32 +517,49 @@ async function runInkRepl(args: {
     }
   };
 
+  // Enter the alternate screen buffer (full-screen, vim/htop style) before
+  // mounting Ink. `fullScreen` is on by default; `BERNARD_FULLSCREEN=false`
+  // falls back to legacy inline rendering. Mouse-wheel capture is gated by
+  // `config.mouse` (BERNARD_DISABLE_MOUSE). A non-TTY stdout (piped / CI) never
+  // enters full-screen — the escapes would corrupt the captured output.
+  const fullScreenActive = config.fullScreen && Boolean(process.stdout.isTTY);
+  const fullScreen = fullScreenActive ? withFullScreen({ mouse: config.mouse }) : null;
+
   const { waitUntilExit } = render(
-    createElement(App, {
-      agent,
-      config,
-      historyStore,
-      provenanceHistoryStore,
-      stores: {
-        memory: memoryStore,
-        routines: routineStore,
-        specialists: specialistStore,
-        candidates: candidateStore,
-        rag: ragStore,
-        mcp: mcpManager,
-      },
-      sessionToolAllowlist,
-      // Real cleanup runs AFTER waitUntilExit so its printInfo / printError
-      // calls don't write through stdout while the Ink renderer is still
-      // mounted (which would corrupt the live UI).
-      onExit: async () => {},
-      alertBanner,
-      isFreshInstall,
-      startupNotice,
-    }),
+    createElement(
+      DimensionsProvider,
+      null,
+      createElement(App, {
+        agent,
+        config,
+        historyStore,
+        provenanceHistoryStore,
+        stores: {
+          memory: memoryStore,
+          routines: routineStore,
+          specialists: specialistStore,
+          candidates: candidateStore,
+          rag: ragStore,
+          mcp: mcpManager,
+        },
+        sessionToolAllowlist,
+        fullScreen: fullScreenActive,
+        // Real cleanup runs AFTER waitUntilExit so its printInfo / printError
+        // calls don't write through stdout while the Ink renderer is still
+        // mounted (which would corrupt the live UI).
+        onExit: async () => {},
+        alertBanner,
+        isFreshInstall,
+        startupNotice,
+      }),
+    ),
   );
 
   await waitUntilExit();
+  // Leave the alt buffer + disable mouse BEFORE cleanup(): cleanup prints via
+  // printInfo / printError and that output must land on the restored normal
+  // screen, not the about-to-be-discarded alt screen.
+  fullScreen?.teardown();
   await cleanup();
 }
 

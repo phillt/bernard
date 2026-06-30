@@ -5,6 +5,8 @@ interface HintBarProps {
   busy: boolean;
   overlayActive: boolean;
   slashActive: boolean;
+  /** Full-screen mode — surface a transcript scroll hint in the idle row. */
+  scrollable?: boolean;
 }
 
 interface Hint {
@@ -18,9 +20,9 @@ interface Hint {
  * overlay → busy → slash autocomplete → idle. The same physical row holds
  * both bars so the chrome stays a single line.
  */
-export function HintBar({ busy, overlayActive, slashActive }: HintBarProps) {
+export function HintBar({ busy, overlayActive, slashActive, scrollable }: HintBarProps) {
   const colors = getThemeColors();
-  const hints = pickHints({ busy, overlayActive, slashActive });
+  const hints = pickHints({ busy, overlayActive, slashActive, scrollable });
   return (
     <Box>
       {hints.map((hint, idx) => (
@@ -47,8 +49,11 @@ function pickHints(state: HintBarProps): Hint[] {
       { key: '↵', label: 'run' },
     ];
   }
-  return [
+  const idle: Hint[] = [
     { key: '/', label: 'commands' },
     { key: 'shift+tab', label: 'status' },
   ];
+  // In full-screen the transcript scrolls in-app (no native scrollback).
+  if (state.scrollable) idle.push({ key: '⇞⇟', label: 'scroll' });
+  return idle;
 }

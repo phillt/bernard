@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
+import { useDimensionsCtx } from '../DimensionsContext.js';
 import { truncate } from '../../text.js';
 import { MenuRow } from './MenuRow.js';
 
@@ -45,8 +46,7 @@ export function ModelGridOverlay({
   signal,
 }: ModelGridOverlayProps) {
   const colors = getThemeColors();
-  const { stdout } = useStdout();
-  const termWidth = stdout?.columns ?? 80;
+  const { columns: termWidth } = useDimensionsCtx();
 
   const longestItemLen = items.reduce((m, s) => Math.max(m, s.length), 1);
   const columns = computeColumns(termWidth, longestItemLen);

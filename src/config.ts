@@ -195,6 +195,20 @@ export interface BernardConfig {
    * installed or the platform keeps devices awake). Default 400.
    */
   voiceWarmupMs: number;
+  /**
+   * Render the REPL in the terminal's alternate screen buffer (full-screen,
+   * vim/htop style). On by default; set `BERNARD_FULLSCREEN=false` to fall back
+   * to the legacy inline-scrollback rendering (e.g. dumb terminals / CI).
+   * Env-only toggle (not profile-scoped).
+   */
+  fullScreen: boolean;
+  /**
+   * Capture the mouse wheel for in-app transcript scrolling while full-screen.
+   * On by default; set `BERNARD_DISABLE_MOUSE=true` to keep native click-drag
+   * text selection and scroll with the keyboard only. No effect when
+   * `fullScreen` is off. Env-only toggle (not profile-scoped).
+   */
+  mouse: boolean;
 }
 
 const DEFAULT_PROVIDER = 'anthropic';
@@ -988,6 +1002,14 @@ export function loadConfig(overrides?: {
   // Semantic response cache: opt-in, off by default (#269).
   const semanticCache =
     process.env.BERNARD_SEMANTIC_CACHE === 'true' || process.env.BERNARD_SEMANTIC_CACHE === '1';
+  // Full-screen alternate-buffer rendering: on by default. Off only when
+  // explicitly disabled (legacy inline rendering for dumb terminals / CI).
+  const fullScreen = process.env.BERNARD_FULLSCREEN !== 'false';
+  // Mouse-wheel capture for transcript scroll: on by default. Opt out to
+  // preserve native click-drag selection.
+  const mouse = !(
+    process.env.BERNARD_DISABLE_MOUSE === 'true' || process.env.BERNARD_DISABLE_MOUSE === '1'
+  );
   const theme = prefs.theme || 'bernard';
 
   // Tri-state coordinator mode (#167). Precedence: explicit pref >
@@ -1195,6 +1217,8 @@ export function loadConfig(overrides?: {
     voiceVoice,
     voiceRate,
     voiceWarmupMs,
+    fullScreen,
+    mouse,
   };
 
   validateConfig(config);
