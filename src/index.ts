@@ -40,7 +40,7 @@ import {
   removeCustomProvider,
 } from './custom-providers.js';
 import type { SupportedSdk } from './providers/types.js';
-import { printWelcome, printError, printInfo } from './output.js';
+import { printWelcome, buildWelcomeLines, printError, printInfo } from './output.js';
 import {
   resolveBackend,
   resolveWarmupPlayer,
@@ -244,6 +244,14 @@ async function runInkRepl(args: {
   const { config, resume, isFreshInstall, alertBanner } = args;
   let { alertContext } = args;
 
+  // Decided up-front because it changes how the welcome splash is surfaced: in
+  // full-screen the splash can't be printed to the normal screen (the alt
+  // buffer hides it), so it's collected and rendered inside the Ink tree.
+  const fullScreenActive = config.fullScreen && Boolean(process.stdout.isTTY);
+  // Lines rendered at the top of the transcript in full-screen (splash + the
+  // notices that would otherwise be printed pre-render and lost).
+  const startupLines: string[] = [];
+
   // Kick off the tree-sitter bash parser load (#261) in the background so
   // shell permission rules can match compound commands precisely. Best-effort:
   // until it's ready, the engine falls back to the conservative regex path.
@@ -270,17 +278,21 @@ async function runInkRepl(args: {
   const failed = statuses.filter((s) => !s.connected);
   const totalTools = connected.reduce((acc, s) => acc + s.toolCount, 0);
 
-  printWelcome(
-    getAvailableProviders(config),
-    getLocalVersion(),
+  const mcpSummary =
     statuses.length > 0
       ? { connected: connected.length, failed: failed.length, tools: totalTools }
-      : undefined,
-  );
-  // Surface any failed MCP servers explicitly below the splash so users can
-  // see *which* one is broken — the splash itself just reports the count.
-  for (const s of failed) {
-    printError(`  ✗ mcp ${s.name}: ${s.error}`);
+      : undefined;
+  const providers = getAvailableProviders(config);
+  const version = getLocalVersion();
+  const failedMcpLines = failed.map((s) => `✗ mcp ${s.name}: ${s.error}`);
+  if (fullScreenActive) {
+    // Collect for in-tree rendering (the alt buffer hides normal-screen output).
+    startupLines.push(...buildWelcomeLines(providers, version, mcpSummary), ...failedMcpLines);
+  } else {
+    printWelcome(providers, version, mcpSummary);
+    // Surface any failed MCP servers explicitly below the splash so users can
+    // see *which* one is broken — the splash itself just reports the count.
+    for (const s of failed) printError(`  ✗ mcp ${s.name}: ${s.error}`);
   }
 
   const mcpTools = mcpManager.getTools();
@@ -405,9 +417,9 @@ async function runInkRepl(args: {
     config,
   );
   if (contextBlock) {
-    printInfo(
-      `  ${pendingCandidates.length} specialist suggestion(s) pending. Use /candidates to review.`,
-    );
+    const candidateNotice = `${pendingCandidates.length} specialist suggestion(s) pending. Use /candidates to review.`;
+    if (fullScreenActive) startupLines.push(candidateNotice);
+    else printInfo(`  ${candidateNotice}`);
     alertContext = alertContext ? alertContext + '\n\n' + contextBlock : contextBlock;
   }
 
@@ -518,11 +530,9 @@ async function runInkRepl(args: {
   };
 
   // Enter the alternate screen buffer (full-screen, vim/htop style) before
-  // mounting Ink. `fullScreen` is on by default; `BERNARD_FULLSCREEN=false`
-  // falls back to legacy inline rendering. Mouse-wheel capture is gated by
-  // `config.mouse` (BERNARD_DISABLE_MOUSE). A non-TTY stdout (piped / CI) never
-  // enters full-screen — the escapes would corrupt the captured output.
-  const fullScreenActive = config.fullScreen && Boolean(process.stdout.isTTY);
+  // mounting Ink. `fullScreenActive` was decided up-front. Mouse-wheel capture
+  // is gated by `config.mouse` (BERNARD_DISABLE_MOUSE). A non-TTY stdout
+  // (piped / CI) never enters full-screen — the escapes would corrupt output.
   const fullScreen = fullScreenActive ? withFullScreen({ mouse: config.mouse }) : null;
 
   const { waitUntilExit } = render(
@@ -544,6 +554,7 @@ async function runInkRepl(args: {
         },
         sessionToolAllowlist,
         fullScreen: fullScreenActive,
+        welcomeLines: fullScreenActive ? startupLines : undefined,
         // Real cleanup runs AFTER waitUntilExit so its printInfo / printError
         // calls don't write through stdout while the Ink renderer is still
         // mounted (which would corrupt the live UI).

@@ -209,10 +209,29 @@ const MIN_BOX_WIDTH = 64;
 const APP_PADDING_X = 2;
 
 export function printWelcome(providers: string[], version?: string, mcp?: WelcomeMcpSummary): void {
+  const rows = buildWelcomeLines(providers, version, mcp);
+  const margin = ' '.repeat(APP_PADDING_X);
+  console.log();
+  for (const row of rows) console.log(margin + row);
+  console.log();
+}
+
+/**
+ * Build the welcome-splash box as an array of ANSI-styled lines (no surrounding
+ * blank lines, no left margin). `printWelcome` writes these to the normal
+ * screen pre-render; in full-screen mode `src/index.ts` passes them into the
+ * Ink tree instead (the splash must live in the alternate screen buffer, not
+ * the normal screen that the alt buffer hides). The caller supplies the left
+ * margin — in-tree the App's `paddingX` does, on the normal screen the printer.
+ */
+export function buildWelcomeLines(
+  providers: string[],
+  version?: string,
+  mcp?: WelcomeMcpSummary,
+): string[] {
   const accent = getThemeColors().accent;
   const bannerWidth = Math.max(...BERNARD_BANNER.map((l) => l.length));
   const termCols = process.stdout.columns ?? 80;
-  const margin = ' '.repeat(APP_PADDING_X);
   const totalWidth = Math.max(MIN_BOX_WIDTH, termCols - 2 * APP_PADDING_X);
   const inner = totalWidth - 2;
   const pad = 2;
@@ -280,9 +299,7 @@ export function printWelcome(providers: string[], version?: string, mcp?: Welcom
   rows.push(emptyRow);
   rows.push(bottomBorder);
 
-  console.log();
-  for (const row of rows) console.log(margin + row);
-  console.log();
+  return rows;
 }
 
 // Render path is now Ink (StreamingAssistantMessage + ToolCallEvent components

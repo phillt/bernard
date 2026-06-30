@@ -206,6 +206,13 @@ interface AppProps {
    */
   fullScreen?: boolean;
   /**
+   * Pre-built welcome-splash lines (ANSI strings) rendered at the top of the
+   * transcript in full-screen. The splash is normally printed to the normal
+   * screen pre-render, but the alt buffer hides that — so in full-screen
+   * `src/index.ts` passes the lines here to render them inside the Ink tree.
+   */
+  welcomeLines?: string[];
+  /**
    * Optional alert banner string rendered above the thread until dismissed.
    * Built in `src/index.ts` when `--alert` resumes a session in response to
    * a cron alert.
@@ -397,6 +404,7 @@ export function App({
   isFreshInstall,
   startupNotice,
   fullScreen = false,
+  welcomeLines,
 }: AppProps) {
   const { exit } = useApp();
   const { rows } = useDimensionsCtx();
@@ -3071,6 +3079,18 @@ export function App({
   // Full-screen renders the scrollable <TranscriptViewport>; legacy mode keeps
   // the <Static>-based <Thread> (terminal scrollback). The epoch key remounts
   // either one on /clear.
+  // The welcome splash renders as the first (scroll-away) content in the
+  // viewport — the alt buffer has no normal screen to print it on. Built once;
+  // a /clear (staticEpoch bump) remounts the viewport and drops it.
+  const welcomeHeader =
+    welcomeLines && welcomeLines.length > 0 && staticEpoch === 0 ? (
+      <Box flexDirection="column" marginBottom={1}>
+        {welcomeLines.map((line, i) => (
+          <Text key={i}>{line.length === 0 ? ' ' : line}</Text>
+        ))}
+      </Box>
+    ) : undefined;
+
   const thread = fullScreen ? (
     <TranscriptViewport
       key={staticEpoch}
@@ -3081,6 +3101,7 @@ export function App({
       streamingToolDetails={config.toolDetails}
       promptEmpty={promptEmpty || busy}
       mouseEnabled={mouseEnabled}
+      header={welcomeHeader}
     />
   ) : (
     <Thread

@@ -225,6 +225,8 @@ interface HarnessOptions {
   stores?: Partial<AppStores>;
   /** Render in full-screen mode (alt buffer) — wraps App in DimensionsProvider. */
   fullScreen?: boolean;
+  /** Welcome-splash lines rendered in-tree (full-screen). */
+  welcomeLines?: string[];
 }
 
 function renderApp(opts: HarnessOptions = {}) {
@@ -258,6 +260,7 @@ function renderApp(opts: HarnessOptions = {}) {
     onExit,
     alertBanner: opts.alertBanner,
     fullScreen: opts.fullScreen,
+    welcomeLines: opts.welcomeLines,
   });
   // Full-screen reads terminal size via DimensionsProvider, as in production.
   const utils = render(opts.fullScreen ? createElement(DimensionsProvider, null, appEl) : appEl);
@@ -318,6 +321,18 @@ describe('<App> full-screen layout', () => {
     await tick();
     // Prompt chevron renders at the bottom of the fixed frame.
     expect(lastFrame()).toContain('›');
+    unmount();
+  });
+
+  it('renders the welcome splash lines inside the frame (alt buffer hides the normal screen)', async () => {
+    const { lastFrame, unmount } = renderApp({
+      fullScreen: true,
+      welcomeLines: ['── BERNARD ──', 'Version...v9.9.9'],
+    });
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('BERNARD');
+    expect(frame).toContain('v9.9.9');
     unmount();
   });
 

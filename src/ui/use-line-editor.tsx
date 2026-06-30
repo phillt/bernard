@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { Text, type Key } from 'ink';
+import { looksLikeMouseReport } from './mouse.js';
 
 /**
  * Shared single-line editing state for the REPL's text inputs (`Prompt`,
@@ -104,6 +105,10 @@ export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineE
       // Printable input (including multi-char paste): insert at the cursor.
       // `input` is empty for arrow/function keys, so those fall through.
       if (input && !key.escape && !key.tab && !key.return) {
+        // Mouse-wheel/click reports (full-screen) leak through Ink's keypress
+        // parser as `input` like `[<64;36;30M`. Swallow them so they don't get
+        // typed into the buffer (the parser already consumed them).
+        if (looksLikeMouseReport(input)) return true;
         insert(input);
         return true;
       }

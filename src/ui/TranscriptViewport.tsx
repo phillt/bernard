@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Box, Text, measureElement, useInput } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
@@ -27,6 +27,8 @@ interface TranscriptViewportProps {
   promptEmpty?: boolean;
   /** Whether mouse-wheel capture is active (BERNARD_DISABLE_MOUSE off). */
   mouseEnabled?: boolean;
+  /** Optional content rendered above the first turn (e.g. the welcome splash). */
+  header?: ReactNode;
 }
 
 const MemoMessageBlock = memo(MessageBlock);
@@ -52,6 +54,7 @@ export function TranscriptViewport({
   streamingToolDetails = false,
   promptEmpty = false,
   mouseEnabled = false,
+  header,
 }: TranscriptViewportProps) {
   const colors = getThemeColors();
   useDimensionsCtx(); // re-render (and re-measure) on terminal resize
@@ -132,6 +135,7 @@ export function TranscriptViewport({
     <Box flexDirection="column" flexGrow={1}>
       <Box ref={outerRef} flexDirection="column" flexGrow={1} overflow="hidden">
         <Box ref={innerRef} flexDirection="column" marginTop={-effectiveOffset} flexShrink={0}>
+          {header}
           {items.map((item) => (
             <Box key={item.key} flexDirection="column">
               {item.error ? (

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSGRWheel, MOUSE_ENABLE, MOUSE_DISABLE } from '../mouse.js';
+import { parseSGRWheel, looksLikeMouseReport, MOUSE_ENABLE, MOUSE_DISABLE } from '../mouse.js';
 
 describe('parseSGRWheel', () => {
   it('decodes wheel-up (button 64) and wheel-down (button 65)', () => {
@@ -42,5 +42,23 @@ describe('parseSGRWheel', () => {
   it('exports paired enable/disable escape sequences', () => {
     expect(MOUSE_ENABLE).toBe('\x1b[?1000h\x1b[?1006h');
     expect(MOUSE_DISABLE).toBe('\x1b[?1006l\x1b[?1000l');
+  });
+});
+
+describe('looksLikeMouseReport', () => {
+  it('flags SGR mouse reports leaking through Ink (with or without ESC)', () => {
+    // What the line editor would otherwise try to insert as text.
+    expect(looksLikeMouseReport('[<64;36;30M')).toBe(true);
+    expect(looksLikeMouseReport('\x1b[<0;80;32M')).toBe(true);
+    expect(looksLikeMouseReport('[<0;73;24m')).toBe(true);
+    // A chunk packing several reports (the screenshot case).
+    expect(looksLikeMouseReport('[<0;80;32m[<65;35;29M')).toBe(true);
+  });
+
+  it('does not flag ordinary typed input', () => {
+    expect(looksLikeMouseReport('hello world')).toBe(false);
+    expect(looksLikeMouseReport('a[b]c')).toBe(false);
+    expect(looksLikeMouseReport('1;2;3')).toBe(false);
+    expect(looksLikeMouseReport('')).toBe(false);
   });
 });
