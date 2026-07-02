@@ -95,13 +95,13 @@ export function buildMainSystemPrompt(
   if (!REASONING_FAMILIES.has(profile.family)) {
     systemPrompt += '\n\n' + SHARE_REASONING_PROMPT;
   }
-  // Citations policy: append the inline-marker instructions when the
-  // policy engine has decided we require citations for factual claims and
-  // the active model family does not forbid inline annotations. Issue #173.
-  if (
-    ctx.policyDecision?.citations?.requireForFactualClaims &&
-    !REASONING_FAMILIES.has(profile.family)
-  ) {
+  // Citations are ALWAYS on for the main agent — grounding factual claims in
+  // checked sources (rather than guessing) is a core requirement, not a
+  // policy-tunable one, so this deliberately does NOT consult
+  // `policyDecision.citations`. The only carve-out is `REASONING_FAMILIES`
+  // (OpenAI/xAI reasoning models), whose systemSuffix already forbids narrating
+  // inline markers — forcing `[^Sn]` there would conflict with that guidance.
+  if (!REASONING_FAMILIES.has(profile.family)) {
     systemPrompt += '\n\n' + CITATIONS_PROMPT;
   }
   // Evidence-pointer policy: append the `## Evidence Pointers` block when the
