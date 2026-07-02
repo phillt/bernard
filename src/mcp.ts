@@ -413,6 +413,44 @@ export class MCPManager {
     return this.serverStatuses.filter((s) => s.connected).map((s) => s.name);
   }
 
+  /**
+   * Reconciles a fresh {@link verifyMCPServer} probe against the tools actually
+   * wired into THIS running session. A probe spawns the server in isolation, so
+   * it always reports the server's own health — but that says nothing about
+   * whether the running agent can call those tools. A tool is:
+   *   - `live`     — currently routed to this server (callable now),
+   *   - `shadowed` — a *different* server exported the same name and won the
+   *                  last-writer-wins race in {@link connect}, so calls route
+   *                  elsewhere,
+   *   - `missing`  — not in the live tool set at all (the server wasn't
+   *                  connected when the session snapshotted its tools at
+   *                  startup — a restart is needed to pick it up).
+   * This is what turns a misleading "healthy, 23 tools" into an honest "healthy
+   * in isolation but not actually loaded in this session."
+   */
+  getLiveRegistration(
+    name: string,
+    probeToolNames: string[],
+  ): {
+    connected: boolean;
+    error?: string;
+    live: string[];
+    shadowed: { tool: string; owner: string }[];
+    missing: string[];
+  } {
+    const status = this.serverStatuses.find((s) => s.name === name);
+    const live: string[] = [];
+    const shadowed: { tool: string; owner: string }[] = [];
+    const missing: string[] = [];
+    for (const t of probeToolNames) {
+      const owner = this.toolServerMap.get(t);
+      if (owner === name) live.push(t);
+      else if (owner) shadowed.push({ tool: t, owner });
+      else missing.push(t);
+    }
+    return { connected: status?.connected ?? false, error: status?.error, live, shadowed, missing };
+  }
+
   /** Gracefully closes all active MCP client connections. */
   async close(): Promise<void> {
     const closePromises = Array.from(this.clients.values()).map((client) =>
@@ -421,6 +459,20 @@ export class MCPManager {
     await Promise.allSettled(closePromises);
     this.clients.clear();
   }
+}
+
+/**
+ * The process's live MCPManager, registered by the bootstrap (REPL / cron) after
+ * {@link MCPManager.connect}. Diagnostic tools like `mcp_verify` read it to
+ * compare a fresh probe against the tools actually wired into the running
+ * session. Per-process (the REPL and the cron daemon each register their own).
+ */
+let activeMCPManager: MCPManager | null = null;
+export function setActiveMCPManager(manager: MCPManager | null): void {
+  activeMCPManager = manager;
+}
+export function getActiveMCPManager(): MCPManager | null {
+  return activeMCPManager;
 }
 
 /**

@@ -387,3 +387,55 @@ describe('verifyMCPServer', () => {
     expect(transportInstance.close).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('MCPManager.getLiveRegistration', () => {
+  let manager: InstanceType<typeof MCPManager>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager = new MCPManager();
+  });
+
+  it('classifies probe tools as live / shadowed / missing against the running session', async () => {
+    // serverA registers first (shared, onlyA); serverB registers second and its
+    // `shared` overrides A's (last-writer-wins in connect()).
+    const clientA = makeMockClient({
+      shared: makeDynamicTool(vi.fn()),
+      onlyA: makeDynamicTool(vi.fn()),
+    });
+    const clientB = makeMockClient({
+      shared: makeDynamicTool(vi.fn()),
+      onlyB: makeDynamicTool(vi.fn()),
+    });
+    let n = 0;
+    mockCreateMCPClient.mockImplementation(async () => (++n === 1 ? clientA : clientB));
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { serverA: { url: 'http://a' }, serverB: { url: 'http://b' } },
+    });
+    await manager.connect();
+
+    const regA = manager.getLiveRegistration('serverA', ['shared', 'onlyA', 'ghost']);
+    expect(regA.connected).toBe(true);
+    expect(regA.live).toEqual(['onlyA']); // still owned by A
+    expect(regA.shadowed).toEqual([{ tool: 'shared', owner: 'serverB' }]); // taken by B
+    expect(regA.missing).toEqual(['ghost']); // registered by nobody
+
+    const regB = manager.getLiveRegistration('serverB', ['shared', 'onlyB']);
+    expect(regB.live).toEqual(['shared', 'onlyB']);
+    expect(regB.shadowed).toEqual([]);
+    expect(regB.missing).toEqual([]);
+  });
+
+  it('reports connected:false and all-missing for a server that failed to connect', async () => {
+    mockCreateMCPClient.mockRejectedValue(new Error('boom'));
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { down: { url: 'http://d' } },
+    });
+    await manager.connect();
+
+    const reg = manager.getLiveRegistration('down', ['x', 'y']);
+    expect(reg.connected).toBe(false);
+    expect(reg.live).toEqual([]);
+    expect(reg.missing).toEqual(['x', 'y']);
+  });
+});

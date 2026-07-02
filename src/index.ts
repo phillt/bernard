@@ -50,7 +50,7 @@ import {
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
-import { listMCPServers, removeMCPServer, MCPManager } from './mcp.js';
+import { listMCPServers, removeMCPServer, MCPManager, setActiveMCPManager } from './mcp.js';
 import { runFirstTimeSetup } from './setup.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
@@ -274,6 +274,9 @@ async function runInkRepl(args: {
     const message = err instanceof Error ? err.message : String(err);
     printError(`MCP initialization failed: ${message}`);
   }
+  // Register the live manager so `mcp_verify` can reconcile a fresh probe
+  // against the tools actually wired into this session (#healthy-but-not-there).
+  setActiveMCPManager(mcpManager);
 
   const statuses = mcpManager.getServerStatuses();
   const connected = statuses.filter((s) => s.connected);
