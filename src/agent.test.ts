@@ -982,6 +982,50 @@ describe('Agent', () => {
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
   });
 
+  it('injected ragResults bypass ragStore.search and reach the recalled context', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([{ fact: 'SHOULD NOT APPEAR', similarity: 0.9, domain: 'general' }]),
+      addFacts: vi.fn(),
+    };
+
+    const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
+    await agent.processInput('Hello', undefined, undefined, {
+      ragResults: [{ fact: 'The user prefers dark mode', similarity: 0.42, domain: 'general' }],
+    });
+
+    // The injected set is used; the agent's own search is skipped entirely.
+    expect(mockRagStore.search).not.toHaveBeenCalled();
+    const sent = JSON.stringify(mockGenerateText.mock.calls[0][0].messages);
+    expect(sent).toContain('The user prefers dark mode');
+    expect(sent).not.toContain('SHOULD NOT APPEAR');
+  });
+
+  it('injected ragResults still update previousRAGFacts for next-turn stickiness', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    // Second turn does a normal (empty) search; if stickiness tracking from the
+    // injected turn works, the injected fact is remembered as previousRAGFacts.
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([]),
+      addFacts: vi.fn(),
+    };
+
+    const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
+    await agent.processInput('First', undefined, undefined, {
+      ragResults: [{ fact: 'Sticky fact', similarity: 0.5, domain: 'general' }],
+    });
+
+    expect((agent as any).previousRAGFacts).toEqual(new Set(['Sticky fact']));
+  });
+
   it('passes ragStore to compressHistory when compression triggers', async () => {
     const { shouldCompress, compressHistory } = await import('./context.js');
     vi.mocked(shouldCompress).mockReturnValueOnce(true);

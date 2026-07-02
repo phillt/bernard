@@ -86,6 +86,13 @@ export interface BernardConfig {
   /** Whether the model-specific prompt rewriter runs as a pre-turn LLM pass. */
   promptRewriter: boolean;
   /**
+   * Whether the RAG recall filter runs as a pre-turn LLM pass. When on, RAG
+   * retrieval is widened and a cheap-tier LLM selects only the facts relevant
+   * to the current conversation before they reach the main agent's
+   * `<recalled_context>`. Fails open to the legacy narrow search.
+   */
+  recallFilter: boolean;
+  /**
    * Whether the in-process caching layer (#171) is active. Covers deterministic
    * tool results, select LLM subcalls (rewriter, reference-lookup), and the
    * per-turn RAG search cache. Default `true`; opt out via
@@ -392,6 +399,7 @@ export function savePreferences(prefs: {
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
+  recallFilter?: boolean;
   referenceLookup?: boolean;
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
@@ -444,6 +452,7 @@ export function loadPreferences(): {
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
+  recallFilter?: boolean;
   referenceLookup?: boolean;
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
@@ -490,6 +499,7 @@ export function loadPreferences(): {
     autoCreateThreshold:
       typeof parsed.autoCreateThreshold === 'number' ? parsed.autoCreateThreshold : undefined,
     promptRewriter: typeof parsed.promptRewriter === 'boolean' ? parsed.promptRewriter : undefined,
+    recallFilter: typeof parsed.recallFilter === 'boolean' ? parsed.recallFilter : undefined,
     referenceLookup:
       typeof parsed.referenceLookup === 'boolean' ? parsed.referenceLookup : undefined,
     scratchSubjectThreshold:
@@ -1073,6 +1083,14 @@ export function loadConfig(overrides?: {
     prefs.promptRewriter ??
     (rawRewriter === undefined ? true : !(rawRewriter === 'false' || rawRewriter === '0'));
 
+  // RAG recall filter runs by default; users can opt out with BERNARD_RECALL_FILTER=false.
+  const rawRecallFilter = process.env.BERNARD_RECALL_FILTER;
+  const recallFilter =
+    prefs.recallFilter ??
+    (rawRecallFilter === undefined
+      ? true
+      : !(rawRecallFilter === 'false' || rawRecallFilter === '0'));
+
   // Risk-based confirmation mode (#144). Precedence: pref > env > default 'auto'.
   const envConfirmMode = isConfirmMode(process.env.BERNARD_CONFIRM_MODE)
     ? (process.env.BERNARD_CONFIRM_MODE as 'off' | 'auto' | 'strict')
@@ -1195,6 +1213,7 @@ export function loadConfig(overrides?: {
     autoCreateThreshold,
     correctionEnabled,
     promptRewriter,
+    recallFilter,
     confirmMode,
     toolMode,
     maxConcurrentAgents,
@@ -1283,6 +1302,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'autoCreateSpecialists',
   'autoCreateThreshold',
   'promptRewriter',
+  'recallFilter',
   'confirmMode',
   'toolMode',
   'maxConcurrentAgents',

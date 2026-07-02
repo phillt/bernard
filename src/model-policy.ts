@@ -26,6 +26,7 @@ export type ModelSite =
   | 'rewriter'
   | 'reference-resolver'
   | 'reference-lookup'
+  | 'recall-filter'
   | 'compressor'
   | 'specialist-detector';
 
@@ -113,6 +114,7 @@ const ALL_MODEL_SITES: readonly ModelSite[] = [
   'rewriter',
   'reference-resolver',
   'reference-lookup',
+  'recall-filter',
   'compressor',
   'specialist-detector',
 ];
@@ -312,6 +314,7 @@ const TEMPERATURE_ZERO_SITES: ReadonlySet<ModelSite> = new Set([
   'rewriter',
   'reference-resolver',
   'reference-lookup',
+  'recall-filter',
   'specialist-detector',
 ]);
 

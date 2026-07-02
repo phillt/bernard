@@ -61,6 +61,21 @@ export interface RAGSearchResultWithId {
   accessCount: number;
 }
 
+/**
+ * Per-call ranking overrides for {@link RAGStore.searchWithIds}. Lets a caller
+ * widen the retrieval net beyond the store's configured defaults (e.g. the
+ * recall-filter pass casts a wide net, then an LLM prunes it). Any omitted
+ * field falls back to the store's instance-level setting.
+ */
+export interface RAGSearchOverrides {
+  /** Minimum cosine similarity to include a candidate. */
+  threshold?: number;
+  /** Max candidates per domain before merging. */
+  topKPerDomain?: number;
+  /** Max total candidates after merge. */
+  maxResults?: number;
+}
+
 /** Optional configuration overrides for {@link RAGStore}. All fields fall back to sensible defaults. */
 export interface RAGStoreConfig {
   /** Max results per domain before merging (default: 5). */
@@ -206,13 +221,20 @@ export class RAGStore {
    * Score, group by domain (top-k per domain), and cap at maxResults.
    * Shared by search() and searchWithIds().
    */
-  private scoreAndRank(queryEmbedding: number[]): { memory: RAGMemory; similarity: number }[] {
+  private scoreAndRank(
+    queryEmbedding: number[],
+    overrides?: RAGSearchOverrides,
+  ): { memory: RAGMemory; similarity: number }[] {
+    const threshold = overrides?.threshold ?? this.similarityThreshold;
+    const topKPerDomain = overrides?.topKPerDomain ?? this.topKPerDomain;
+    const maxResults = overrides?.maxResults ?? this.maxResults;
+
     const scored = this.memories
       .map((m) => ({
         memory: m,
         similarity: cosineSimilarity(queryEmbedding, m.embedding),
       }))
-      .filter((s) => s.similarity >= this.similarityThreshold)
+      .filter((s) => s.similarity >= threshold)
       .sort((a, b) => b.similarity - a.similarity);
 
     const byDomain = new Map<string, typeof scored>();
@@ -220,14 +242,58 @@ export class RAGStore {
       const d = entry.memory.domain;
       if (!byDomain.has(d)) byDomain.set(d, []);
       const group = byDomain.get(d)!;
-      if (group.length < this.topKPerDomain) {
+      if (group.length < topKPerDomain) {
         group.push(entry);
       }
     }
 
     const merged = Array.from(byDomain.values()).flat();
     merged.sort((a, b) => b.similarity - a.similarity);
-    return merged.slice(0, this.maxResults);
+    return merged.slice(0, maxResults);
+  }
+
+  /**
+   * Bump one memory's access metadata and extend its TTL. Single source of the
+   * "base 7d + log-scaled by access count, capped at half TTL" extension math,
+   * shared by {@link search} and {@link recordAccess}. Mutates `memory` in place;
+   * the caller is responsible for persisting.
+   */
+  private bumpAccess(memory: RAGMemory, now: string, nowMs: number): void {
+    memory.accessCount++;
+    memory.lastAccessed = now;
+
+    // Extend expiresAt: base of 7d + log scaling by access count, capped at half TTL
+    const extensionDays = Math.min(this.ragTtlDays * 0.5, 7 + Math.log2(memory.accessCount + 1) * 3);
+    const newExpiry = nowMs + extensionDays * 86400000;
+    if (!memory.expiresAt || newExpiry > new Date(memory.expiresAt).getTime()) {
+      memory.expiresAt = new Date(newExpiry).toISOString();
+    }
+  }
+
+  /**
+   * Record access for a specific set of memory ids, bumping access counts and
+   * extending TTLs exactly as a {@link search} hit would. Used by the
+   * recall-filter pass, which retrieves candidates read-only via
+   * {@link searchWithIds} and then commits access for only the facts an LLM
+   * deemed relevant — so TTL extension tracks genuinely-useful memories rather
+   * than every topical match. No-op for unknown ids; persists if anything changed.
+   */
+  recordAccess(ids: string[]): void {
+    if (ids.length === 0) return;
+    const wanted = new Set(ids);
+    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    let touched = 0;
+    for (const memory of this.memories) {
+      if (wanted.has(memory.id)) {
+        this.bumpAccess(memory, now, nowMs);
+        touched++;
+      }
+    }
+    if (touched > 0) {
+      debugLog('rag:recordAccess', { requested: ids.length, touched });
+      this.persist();
+    }
   }
 
   /** Embed a query string, returning the embedding vector or null on failure. */
@@ -278,18 +344,7 @@ export class RAGStore {
     const now = new Date().toISOString();
     const nowMs = Date.now();
     for (const { memory } of capped) {
-      memory.accessCount++;
-      memory.lastAccessed = now;
-
-      // Extend expiresAt: base of 7d + log scaling by access count, capped at half TTL
-      const extensionDays = Math.min(
-        this.ragTtlDays * 0.5,
-        7 + Math.log2(memory.accessCount + 1) * 3,
-      );
-      const newExpiry = nowMs + extensionDays * 86400000;
-      if (!memory.expiresAt || newExpiry > new Date(memory.expiresAt).getTime()) {
-        memory.expiresAt = new Date(newExpiry).toISOString();
-      }
+      this.bumpAccess(memory, now, nowMs);
     }
     if (capped.length > 0) {
       this.persist();
@@ -349,14 +404,23 @@ export class RAGStore {
   /**
    * Search for memories relevant to the query, returning rich metadata.
    * Same scoring/grouping/capping as search() but does NOT update access metadata.
+   *
+   * Pass {@link RAGSearchOverrides} to widen (or narrow) the net beyond the
+   * store's configured defaults — the recall-filter pass uses this to retrieve
+   * a broad candidate set that a downstream LLM then prunes. Access metadata is
+   * intentionally left untouched; callers that commit to a subset should call
+   * {@link recordAccess} for exactly the facts they keep.
    */
-  async searchWithIds(query: string): Promise<RAGSearchResultWithId[]> {
+  async searchWithIds(
+    query: string,
+    overrides?: RAGSearchOverrides,
+  ): Promise<RAGSearchResultWithId[]> {
     if (this.memories.length === 0) return [];
 
     const queryEmbedding = await this.embedQuery(query, 'rag:searchWithIds');
     if (!queryEmbedding) return [];
 
-    const capped = this.scoreAndRank(queryEmbedding);
+    const capped = this.scoreAndRank(queryEmbedding, overrides);
 
     return capped.map((s) => ({
       id: s.memory.id,

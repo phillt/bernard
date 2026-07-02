@@ -59,6 +59,7 @@ export interface ProfileSettings {
   autoCreateSpecialists?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
+  recallFilter?: boolean;
   referenceLookup?: boolean;
   scratchSubjectThreshold?: number;
   conciseMode?: boolean;
@@ -214,6 +215,7 @@ const LEGACY_BOOLEAN_KEYS = [
   'toolDetails',
   'autoCreateSpecialists',
   'promptRewriter',
+  'recallFilter',
   'referenceLookup',
   'conciseMode',
 ] as const;

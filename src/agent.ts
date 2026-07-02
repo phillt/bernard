@@ -384,6 +384,7 @@ export class Agent {
     userInput: string,
     images?: ImageAttachment[],
     resolvedReferences?: ResolvedEntry[],
+    options?: { ragResults?: RAGSearchResult[] },
   ): Promise<void> {
     const turnStartedAt = Date.now();
     let turnAborted = false;
@@ -541,10 +542,19 @@ export class Agent {
         );
       }
 
-      // RAG search for relevant memories with sliding-window query
+      // Recalled memory for this turn. `rawResults` comes from one of two
+      // sources: a pre-filtered set injected by the recall-filter pre-turn pass
+      // (`options.ragResults`), or — the legacy path — this agent's own
+      // sliding-window `ragStore.search()`. Either way stickiness, provenance
+      // registration, and `previousRAGFacts` tracking are applied identically,
+      // so citations and turn-over-turn stickiness behave the same.
       let ragResults: RAGSearchResult[] | undefined;
-      if (this.ragStore) {
-        try {
+      try {
+        let rawResults: RAGSearchResult[] | undefined;
+        if (options?.ragResults) {
+          rawResults = options.ragResults;
+          debugLog('agent:rag', { source: 'recall-filter', results: rawResults.length });
+        } else if (this.ragStore) {
           // Build context-enriched query from recent user messages and tool calls
           const recentTexts = extractRecentUserTexts(this.history.slice(0, -1), 2);
           const toolContext = extractRecentToolContext(this.history.slice(0, -1));
@@ -553,8 +563,15 @@ export class Agent {
           });
 
           // Search with enriched query
-          const rawResults = await this.ragStore.search(ragQuery);
+          rawResults = await this.ragStore.search(ragQuery);
 
+          if (rawResults.length > 0) {
+            const logQuery = ragQuery.replace(/^\[tools: [^\]]*]\. ?/, '').slice(0, 100);
+            debugLog('agent:rag', { query: logQuery, results: rawResults.length });
+          }
+        }
+
+        if (rawResults) {
           // Apply stickiness from previous turn
           ragResults = applyStickiness(rawResults, this.previousRAGFacts);
           this.lastRAGResults = ragResults;
@@ -574,14 +591,9 @@ export class Agent {
 
           // Track for next turn
           this.previousRAGFacts = new Set(ragResults.map((r) => r.fact));
-
-          if (ragResults.length > 0) {
-            const logQuery = ragQuery.replace(/^\[tools: [^\]]*]\. ?/, '').slice(0, 100);
-            debugLog('agent:rag', { query: logQuery, results: ragResults.length });
-          }
-        } catch (err) {
-          debugLog('agent:rag:error', err instanceof Error ? err.message : String(err));
         }
+      } catch (err) {
+        debugLog('agent:rag:error', err instanceof Error ? err.message : String(err));
       }
 
       const routineSummaries = this.routineStore.getSummaries();

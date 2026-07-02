@@ -111,6 +111,7 @@ import {
   type ResolvedEntry,
 } from '../reference-resolver.js';
 import { rewritePrompt } from '../prompt-rewriter.js';
+import { recallFilter } from '../recall-filter.js';
 import { loadRewriterHints } from '../memory.js';
 import { stripImagePaths } from '../image.js';
 import { getModelProfile } from '../providers/index.js';
@@ -2029,7 +2030,12 @@ export function App({
     await runAgentTurn(text, inlineImages);
   };
 
-  type BooleanPrefKey = 'autoCreateSpecialists' | 'promptRewriter' | 'toolDetails' | 'conciseMode';
+  type BooleanPrefKey =
+    | 'autoCreateSpecialists'
+    | 'promptRewriter'
+    | 'recallFilter'
+    | 'toolDetails'
+    | 'conciseMode';
 
   async function toggleBooleanPref(
     key: BooleanPrefKey,
@@ -2377,6 +2383,13 @@ export function App({
         'Prompt rewriter: off',
       ),
       toggleRow(
+        'recallFilter',
+        'Recall filter',
+        'Before each turn, widen recalled-memory retrieval and let a cheap model keep only the facts relevant to the conversation, so the agent sees less irrelevant context.',
+        'Recall filter: on',
+        'Recall filter: off',
+      ),
+      toggleRow(
         'toolDetails',
         'Tool details',
         'Show full tool call args and results in the transcript.',
@@ -2464,7 +2477,11 @@ export function App({
   async function runPreTurnPipeline(
     input: string,
     signal: AbortSignal,
-  ): Promise<{ agentInput: string; resolvedEntries: ResolvedEntry[] }> {
+  ): Promise<{
+    agentInput: string;
+    resolvedEntries: ResolvedEntry[];
+    ragResults?: RAGSearchResult[];
+  }> {
     const pipelineStartedAt = Date.now();
     debugLog('pre-turn:start', { inputLen: input.length });
     // Per-turn RAG cache invalidation (#171). Must run before any resolver /
@@ -2537,12 +2554,37 @@ export function App({
     }
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
+    // Recall filter (runs last, on the final agentInput): widen RAG retrieval
+    // and let a cheap LLM keep only the facts relevant to the conversation.
+    // On any `noop` we leave `ragResults` undefined and the agent runs its own
+    // narrow search — i.e. fail-open to legacy behavior.
+    let ragResults: RAGSearchResult[] | undefined;
+    if (config.recallFilter && stores.rag) {
+      try {
+        const result = await recallFilter(
+          agentInput,
+          config,
+          stores.rag,
+          agent.getHistory(),
+          signal,
+          recordPreTurnUsage,
+        );
+        if (result.status === 'filtered') {
+          ragResults = result.facts;
+        }
+      } catch (err: unknown) {
+        debugLog('app:recall-filter', err instanceof Error ? err.message : String(err));
+      }
+    }
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
     debugLog('pre-turn:end', {
       durationMs: Date.now() - pipelineStartedAt,
       rewritten: agentInput !== input,
       refCount: resolvedEntries.length,
+      recallFiltered: ragResults !== undefined,
     });
-    return { agentInput, resolvedEntries };
+    return { agentInput, resolvedEntries, ragResults };
   }
 
   /**
@@ -2636,7 +2678,10 @@ export function App({
       // tokens land in the same ledger as the main loop. `processInput` then
       // won't reset and wipe them.
       agent.beginTurnStats();
-      const { agentInput, resolvedEntries } = await runPreTurnPipeline(input, controller.signal);
+      const { agentInput, resolvedEntries, ragResults } = await runPreTurnPipeline(
+        input,
+        controller.signal,
+      );
       if (controller.signal.aborted) return;
       // `processInput` pushes the user message to `agent.history` synchronously
       // (before its first internal await), so by the time the returned promise
@@ -2646,7 +2691,12 @@ export function App({
       // turn finishes. When the rewriter substituted the text, pass the
       // original so <UserMessage> displays it (the rewrite is an LLM-only
       // detail) rather than the dispatched version.
-      const inflight = agent.processInput(agentInput, images, resolvedEntries);
+      const inflight = agent.processInput(
+        agentInput,
+        images,
+        resolvedEntries,
+        ragResults ? { ragResults } : undefined,
+      );
       commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });
       // Snapshot history length AFTER the user message push (synchronous) so
       // the ask_user scanner below knows where this turn's tool results begin.
@@ -3517,6 +3567,7 @@ function buildDebugReportLines(
   lines.push({ text: `  Coordinator mode: ${config.coordinatorMode}`, dim: true });
   lines.push({ text: `  Tool details: ${config.toolDetails ? 'on' : 'off'}`, dim: true });
   lines.push({ text: `  Prompt rewriter: ${config.promptRewriter ? 'on' : 'off'}`, dim: true });
+  lines.push({ text: `  Recall filter: ${config.recallFilter ? 'on' : 'off'}`, dim: true });
   const debugEnabled = process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
   lines.push({ text: `  Debug mode: ${debugEnabled ? 'on' : 'off'}`, dim: true });
 

@@ -243,6 +243,111 @@ describe('RAGStore', () => {
     });
   });
 
+  describe('searchWithIds overrides (recall-filter widening)', () => {
+    // Threshold 0 includes every fact, so the assertions isolate the per-domain
+    // and total caps from embedding-score noise.
+    it('honors a wider topKPerDomain than the store default', async () => {
+      const store = await createStore();
+      await store.addFacts(
+        [
+          'The user prefers dark mode in their editor',
+          'Deployments run on Kubernetes in us-east-1',
+          'The project uses pnpm as its package manager',
+          'Unit tests are written with Vitest',
+          'The primary database is Postgres 16',
+          'CI is configured through GitHub Actions',
+        ],
+        'test',
+        'general',
+      );
+      const stored = store.listMemories().length;
+
+      const narrow = await store.searchWithIds('x', {
+        threshold: -1,
+        topKPerDomain: 2,
+        maxResults: 24,
+      });
+      const wide = await store.searchWithIds('x', {
+        threshold: -1,
+        topKPerDomain: 8,
+        maxResults: 24,
+      });
+
+      // topK 2 caps the single domain to 2; topK 8 surfaces every stored fact.
+      expect(stored).toBeGreaterThan(2);
+      expect(narrow.length).toBe(2);
+      expect(wide.length).toBe(stored);
+    });
+
+    it('honors a maxResults cap in the overrides', async () => {
+      const store = await createStore();
+      await store.addFacts(
+        [
+          'The user prefers dark mode in their editor',
+          'Deployments run on Kubernetes in us-east-1',
+          'The project uses pnpm as its package manager',
+          'Unit tests are written with Vitest',
+        ],
+        'test',
+        'general',
+      );
+      expect(store.listMemories().length).toBeGreaterThanOrEqual(3);
+
+      const capped = await store.searchWithIds('x', {
+        threshold: -1,
+        topKPerDomain: 8,
+        maxResults: 3,
+      });
+
+      expect(capped.length).toBe(3);
+    });
+
+    it('does not mutate access metadata (read-only)', async () => {
+      const store = await createStore();
+      await store.addFacts(['some fact'], 'test');
+      const before = vi.mocked(fs.writeFileSync).mock.calls.length;
+
+      await store.searchWithIds('some fact', { threshold: -1 });
+
+      expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBe(before);
+    });
+  });
+
+  describe('recordAccess', () => {
+    it('bumps access count and extends TTL for the given ids, then persists', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode'], 'test');
+      const [before] = store.listMemories();
+      const persistsBefore = vi.mocked(fs.writeFileSync).mock.calls.length;
+
+      store.recordAccess([before.id]);
+
+      const [after] = store.listMemories();
+      expect(after.accessCount).toBe(before.accessCount + 1);
+      expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBeGreaterThan(persistsBefore);
+    });
+
+    it('is a no-op for an empty id list', async () => {
+      const store = await createStore();
+      await store.addFacts(['some fact'], 'test');
+      const persistsBefore = vi.mocked(fs.writeFileSync).mock.calls.length;
+
+      store.recordAccess([]);
+
+      expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBe(persistsBefore);
+    });
+
+    it('is a no-op for unknown ids', async () => {
+      const store = await createStore();
+      await store.addFacts(['some fact'], 'test');
+      const persistsBefore = vi.mocked(fs.writeFileSync).mock.calls.length;
+
+      store.recordAccess(['does-not-exist']);
+
+      expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBe(persistsBefore);
+    });
+  });
+
   describe('per-turn search cache (#171)', () => {
     it('does not re-embed the same query within a turn', async () => {
       const store = await createStore();
