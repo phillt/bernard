@@ -61,4 +61,11 @@ describe('looksLikeMouseReport', () => {
     expect(looksLikeMouseReport('1;2;3')).toBe(false);
     expect(looksLikeMouseReport('')).toBe(false);
   });
+
+  it('does not swallow real text that merely contains a report-shaped run', () => {
+    // Anchored match: a paste with surrounding text is legitimate input.
+    expect(looksLikeMouseReport('foo [<64;1;1M bar')).toBe(false);
+    expect(looksLikeMouseReport('[<64;1;1M and then typing')).toBe(false);
+    expect(looksLikeMouseReport('see \x1b[<0;80;32M here')).toBe(false);
+  });
 });

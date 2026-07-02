@@ -20,16 +20,22 @@
  */
 
 /**
- * Matches an SGR mouse report (with or without the leading ESC that Ink may
- * strip). Used to swallow mouse bytes that leak through Ink's keypress parser
- * into text consumers — Ink doesn't understand `\x1b[<…M` and otherwise passes
- * the fragment to `useInput` as `input`, where the line editor would insert it
- * as literal text. No real keystroke looks like this, so the guard is safe even
- * when mouse tracking is off.
+ * Matches input composed *entirely* of one or more back-to-back SGR mouse
+ * reports (each with or without the leading ESC that Ink may strip). Used to
+ * swallow mouse bytes that leak through Ink's keypress parser into text
+ * consumers — Ink doesn't understand `\x1b[<…M` and otherwise passes the
+ * fragment to `useInput` as `input`, where the line editor would insert it as
+ * literal text.
+ *
+ * The match is anchored (`^…+$`) rather than a substring test so that ordinary
+ * text which merely *contains* a report-shaped run (e.g. a paste of
+ * `foo [<64;1;1M bar`) is NOT swallowed — only a chunk that is nothing but
+ * mouse reports is. This still covers the "several reports packed into one
+ * stdin chunk" case via the `+`.
  */
-const MOUSE_REPORT_RE = /\x1b?\[<\d+;\d+;\d+[Mm]/;
+const MOUSE_REPORT_RE = /^(?:\x1b?\[<\d+;\d+;\d+[Mm])+$/;
 
-/** True when `input` contains an SGR mouse report (so it should not be typed). */
+/** True when `input` is composed solely of SGR mouse reports (so it should not be typed). */
 export function looksLikeMouseReport(input: string): boolean {
   return MOUSE_REPORT_RE.test(input);
 }
