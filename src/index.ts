@@ -66,6 +66,7 @@ import { SpecialistStore } from './specialists.js';
 import { CandidateStore } from './specialist-candidates.js';
 import { HistoryStore } from './history.js';
 import { ProvenanceHistoryStore } from './provenance-history.js';
+import { TurnContextStore } from './turn-context.js';
 import { assembleContext } from './framework/context.js';
 import { Agent } from './agent.js';
 import { bootstrapPendingCandidates } from './candidate-bootstrap.js';
@@ -263,6 +264,7 @@ async function runInkRepl(args: {
   const candidateStore = new CandidateStore();
   const historyStore = new HistoryStore();
   const provenanceHistoryStore = new ProvenanceHistoryStore();
+  const turnContextStore = new TurnContextStore();
   const ragStore = config.ragEnabled ? new RAGStore() : undefined;
   const mcpManager = new MCPManager();
 
@@ -439,6 +441,7 @@ async function runInkRepl(args: {
 
   if (resume) {
     agent.setTurnProvenance(provenanceHistoryStore.load());
+    agent.setTurnContext(turnContextStore.load());
   }
 
   let cleanedUp = false;
@@ -518,6 +521,7 @@ async function runInkRepl(args: {
     try {
       historyStore.save(agent.getHistory());
       provenanceHistoryStore.save(agent.getTurnProvenance());
+      turnContextStore.save(agent.getTurnContext());
     } catch (err) {
       debugLog('persist:error', err instanceof Error ? err.message : String(err));
     }
@@ -544,6 +548,7 @@ async function runInkRepl(args: {
         config,
         historyStore,
         provenanceHistoryStore,
+        turnContextStore,
         stores: {
           memory: memoryStore,
           routines: routineStore,

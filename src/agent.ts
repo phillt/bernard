@@ -49,6 +49,7 @@ import { computeTurnUsageReport, priceUsageUsd } from './usage-report.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
+import { type TurnContextRecord, TURN_CONTEXT_MAX } from './turn-context.js';
 import { SemanticResponseCache } from './semantic-cache.js';
 import { isPureQuestion } from './policy/tool-mode.js';
 import type { Step } from './plan-store.js';
@@ -111,6 +112,14 @@ export class Agent {
    * by {@link clearHistory}; loaded on resume via {@link setTurnProvenance}.
    */
   private turnProvenance: TurnProvenance[] = [];
+  /**
+   * Per-turn prompt/context snapshots for the whole current conversation —
+   * powers the Shift+Tab "Prompt & Context" viewer. Cleared by
+   * {@link clearHistory}; loaded on resume via {@link setTurnContext}.
+   */
+  private turnContext: TurnContextRecord[] = [];
+  /** Full system prompt rendered for the most recent turn (for the context viewer). */
+  private lastSystemPrompt = '';
   /**
    * Semantic response cache (#269, Layer 3). Opt-in via `config.semanticCache`.
    * Only consulted/populated for read-only Q&A turns (no tool actions).
@@ -230,6 +239,19 @@ export class Agent {
    */
   setTurnProvenance(records: TurnProvenance[]): void {
     this.turnProvenance = [...records];
+  }
+
+  /**
+   * Returns a snapshot of every completed turn's prompt/context trail for this
+   * conversation. Powers the Shift+Tab "Prompt & Context" viewer.
+   */
+  getTurnContext(): TurnContextRecord[] {
+    return [...this.turnContext];
+  }
+
+  /** Restores per-turn context snapshots when a session is resumed. */
+  setTurnContext(records: TurnContextRecord[]): void {
+    this.turnContext = [...records];
   }
 
   /**
@@ -384,7 +406,7 @@ export class Agent {
     userInput: string,
     images?: ImageAttachment[],
     resolvedReferences?: ResolvedEntry[],
-    options?: { ragResults?: RAGSearchResult[] },
+    options?: { ragResults?: RAGSearchResult[]; originalInput?: string },
   ): Promise<void> {
     const turnStartedAt = Date.now();
     let turnAborted = false;
@@ -551,7 +573,11 @@ export class Agent {
       let ragResults: RAGSearchResult[] | undefined;
       try {
         let rawResults: RAGSearchResult[] | undefined;
-        if (options?.ragResults) {
+        if (options?.ragResults !== undefined) {
+          // Injected by the recall-filter pass. An empty array is meaningful —
+          // the filter's LLM ran and kept nothing — so it must suppress the
+          // agent's own search, not fall through to it (a truthy check would
+          // treat `[]` as "no injection" and re-inject the rejected facts).
           rawResults = options.ragResults;
           debugLog('agent:rag', { source: 'recall-filter', results: rawResults.length });
         } else if (this.ragStore) {
@@ -614,6 +640,8 @@ export class Agent {
       // Pre-render the system prompt once so a single `getModelProfile` call
       // shapes both the preflight estimate and the runDefinition call.
       const systemForEstimate = buildMainSystemPrompt(this.ctx, inputBase, profile);
+      // Snapshot the rendered system prompt for the Shift+Tab context viewer.
+      this.lastSystemPrompt = systemForEstimate;
       const input: MainInput = { ...inputBase, systemPrompt: systemForEstimate };
       const HARD_LIMIT_RATIO = 0.9;
       const contextWindow = getContextWindow(mainModel, this.config.tokenWindow);
@@ -886,8 +914,8 @@ export class Agent {
       // that registered no sources would compress the indices and the
       // viewer would show "Turn 2" for what the user typed as their 5th
       // message. Derived from history so it's also correct on resume.
+      const userTurnCount = this.history.filter((m) => m.role === 'user').length;
       if (this.lastSources.length > 0) {
-        const userTurnCount = this.history.filter((m) => m.role === 'user').length;
         this.turnProvenance.push({
           turnIndex: Math.max(0, userTurnCount - 1),
           userInput: userInput,
@@ -895,6 +923,24 @@ export class Agent {
           citedIds: [...citedIds],
           timestamp: Date.now(),
         });
+      }
+
+      // Parallel snapshot for the Shift+Tab "Prompt & Context" viewer: the
+      // prompt-assembly trail (original vs. rewritten input, resolved refs,
+      // recalled facts) plus the full system prompt. Recorded for every
+      // completed turn (every turn has a system prompt), capped to bound the
+      // on-disk file since system prompts are large.
+      this.turnContext.push({
+        turnIndex: Math.max(0, userTurnCount - 1),
+        timestamp: Date.now(),
+        originalInput: options?.originalInput ?? userInput,
+        rewrittenInput: userInput,
+        resolvedReferences: this.lastResolvedReferences.map((e) => ({ ...e })),
+        recalledFacts: this.lastRAGResults.map((f) => ({ ...f })),
+        systemPrompt: this.lastSystemPrompt,
+      });
+      if (this.turnContext.length > TURN_CONTEXT_MAX) {
+        this.turnContext.splice(0, this.turnContext.length - TURN_CONTEXT_MAX);
       }
 
       // Per-turn qualifier outcome (#167). One structured line that pairs the
@@ -1058,6 +1104,8 @@ export class Agent {
     this.lastSources = [];
     this.lastCitedSources = [];
     this.turnProvenance = [];
+    this.turnContext = [];
+    this.lastSystemPrompt = '';
     this.ctx.verification.clear();
     this.ctx.provenance.clear();
     this.ctx.postWriteChecks.length = 0;

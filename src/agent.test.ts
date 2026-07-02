@@ -1026,6 +1026,28 @@ describe('Agent', () => {
     expect((agent as any).previousRAGFacts).toEqual(new Set(['Sticky fact']));
   });
 
+  it('injected empty ragResults suppress the agent search (filter kept nothing)', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([{ fact: 'SHOULD NOT APPEAR', similarity: 0.9, domain: 'general' }]),
+      addFacts: vi.fn(),
+    };
+
+    const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
+    await agent.processInput('Hello', undefined, undefined, { ragResults: [] });
+
+    // `[]` means the recall filter ran and kept nothing — it must NOT fall
+    // through to the agent's own search, and previousRAGFacts resets to empty.
+    expect(mockRagStore.search).not.toHaveBeenCalled();
+    const sent = JSON.stringify(mockGenerateText.mock.calls[0][0].messages);
+    expect(sent).not.toContain('SHOULD NOT APPEAR');
+    expect((agent as any).previousRAGFacts).toEqual(new Set());
+  });
+
   it('passes ragStore to compressHistory when compression triggers', async () => {
     const { shouldCompress, compressHistory } = await import('./context.js');
     vi.mocked(shouldCompress).mockReturnValueOnce(true);

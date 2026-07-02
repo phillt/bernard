@@ -54,6 +54,7 @@ import type { SupportedSdk } from '../providers/types.js';
 import { THEMES, getThemeKeys, getActiveThemeKey, setTheme, getThemeColors } from '../theme.js';
 import type { HistoryStore } from '../history.js';
 import type { ProvenanceHistoryStore } from '../provenance-history.js';
+import type { TurnContextStore } from '../turn-context.js';
 import type { MemoryStore } from '../memory.js';
 import type { RoutineStore, Routine } from '../routines.js';
 import type { SpecialistStore, Specialist } from '../specialists.js';
@@ -153,6 +154,7 @@ import { ModelGridOverlay } from './overlays/ModelGridOverlay.js';
 import { ConfirmDialog } from './overlays/ConfirmDialog.js';
 import { StatusViewer } from './overlays/StatusViewer.js';
 import { SourcesViewer } from './overlays/SourcesViewer.js';
+import { ContextViewer } from './overlays/ContextViewer.js';
 import { UsageViewer } from './overlays/UsageViewer.js';
 import { HelpOverlay } from './overlays/HelpOverlay.js';
 import { TextInputOverlay } from './overlays/TextInputOverlay.js';
@@ -194,6 +196,7 @@ interface AppProps {
   config: BernardConfig;
   historyStore: HistoryStore;
   provenanceHistoryStore: ProvenanceHistoryStore;
+  turnContextStore: TurnContextStore;
   stores: AppStores;
   /** Per-REPL-session allowlist (#179). Owned by the caller so it survives mount. */
   sessionToolAllowlist: Set<string>;
@@ -238,6 +241,7 @@ interface AppProps {
 type Overlay =
   | 'status'
   | 'sources'
+  | 'context'
   | 'usage'
   | 'menu'
   | 'multi-menu'
@@ -398,6 +402,7 @@ export function App({
   config,
   historyStore,
   provenanceHistoryStore,
+  turnContextStore,
   stores,
   sessionToolAllowlist: _sessionToolAllowlist,
   onExit,
@@ -510,7 +515,10 @@ export function App({
   // the viewer reads as a replacement for the thread, not an addition below it.
   // <Thread> itself stays mounted (unmounting it reprints <Static> scrollback).
   const viewerActive =
-    activeOverlay === 'status' || activeOverlay === 'sources' || activeOverlay === 'usage';
+    activeOverlay === 'status' ||
+    activeOverlay === 'sources' ||
+    activeOverlay === 'context' ||
+    activeOverlay === 'usage';
 
   useInput(
     (_input, key) => {
@@ -882,6 +890,7 @@ export function App({
       }
       historyStore.clear();
       provenanceHistoryStore.clear();
+      turnContextStore.clear();
       agent.clearHistory();
       setInterrupted(false);
       // Reset the append-only log and remount <Thread> (via the epoch bump).
@@ -975,7 +984,7 @@ export function App({
             'success',
           );
         }
-        persistAgentState({ agent, historyStore, provenanceHistoryStore });
+        persistAgentState({ agent, historyStore, provenanceHistoryStore, turnContextStore });
       } catch (err) {
         flashToast(
           `Compaction failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -2691,7 +2700,10 @@ export function App({
       // turn finishes. When the rewriter substituted the text, pass the
       // original so <UserMessage> displays it (the rewrite is an LLM-only
       // detail) rather than the dispatched version.
-      const inflight = agent.processInput(agentInput, images, resolvedEntries, { ragResults });
+      const inflight = agent.processInput(agentInput, images, resolvedEntries, {
+        ragResults,
+        originalInput: input,
+      });
       commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });
       // Snapshot history length AFTER the user message push (synchronous) so
       // the ask_user scanner below knows where this turn's tool results begin.
@@ -2751,7 +2763,7 @@ export function App({
         errorPanel = formatAgentError(err, debug);
       }
     } finally {
-      persistAgentState({ agent, historyStore, provenanceHistoryStore });
+      persistAgentState({ agent, historyStore, provenanceHistoryStore, turnContextStore });
       submittingRef.current = false;
       turnAbortRef.current = null;
       setBusy(false);
@@ -3204,6 +3216,13 @@ export function App({
       )}
       {activeOverlay === 'sources' && (
         <SourcesViewer
+          agent={agent}
+          onClose={() => setActiveOverlay(null)}
+          onCycleTab={() => setActiveOverlay('context')}
+        />
+      )}
+      {activeOverlay === 'context' && (
+        <ContextViewer
           agent={agent}
           onClose={() => setActiveOverlay(null)}
           onCycleTab={() => setActiveOverlay('usage')}

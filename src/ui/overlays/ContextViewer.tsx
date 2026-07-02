@@ -1,0 +1,269 @@
+import { useMemo, useState } from 'react';
+import { Box, Text, useInput } from 'ink';
+import type { Agent } from '../../agent.js';
+import { useDimensionsCtx } from '../DimensionsContext.js';
+import type { TurnContextRecord } from '../../turn-context.js';
+import { getThemeColors } from '../../theme.js';
+import { truncate } from '../../text.js';
+import { getDomain } from '../../domains.js';
+import { ViewerShell, viewerViewport } from './ViewerShell.js';
+import { MenuRow, MENU_MARKER } from './MenuRow.js';
+import { VIEWER_TABS } from './viewer-tabs.js';
+import { navDelta, clamp, clampOffset, listPosition, wrapText } from './viewer-util.js';
+
+interface ContextViewerProps {
+  agent: Agent;
+  onClose?: () => void;
+  onCycleTab?: () => void;
+}
+
+/** Width of the `MenuRow` selection gutter (`> ` / `  `). */
+const GUTTER = MENU_MARKER.length;
+
+/** One labelled section of a turn's prompt-assembly trail. */
+interface Section {
+  label: string;
+  /** Full body text (word-wrapped + scrolled in the right panel). */
+  body: string;
+}
+
+/**
+ * Two-panel "Prompt & Context" history — a sibling of {@link SourcesViewer}.
+ * Level 1 is a scrollable list of turns; Enter/→ drills into a split panel: the
+ * turn's sections on the left (Original input, Rewritten prompt, Resolved
+ * references, Recalled facts, System prompt), the highlighted section's full
+ * text on the right (scrollable when it overflows).
+ *
+ * Shows what the pre-turn pipeline actually fed the agent — the input the user
+ * typed vs. the rewritten prompt the model received, the entities resolved, the
+ * memory facts recalled, and the full system prompt in force that turn.
+ */
+export function ContextViewer({ agent, onClose, onCycleTab }: ContextViewerProps) {
+  const colors = getThemeColors();
+  const { columns: cols, rows } = useDimensionsCtx();
+  const viewport = viewerViewport(rows, { tabCount: VIEWER_TABS.length });
+  const turns = agent.getTurnContext();
+
+  // `null` = turn list; a number = the index into `turns` we've drilled into.
+  const [drillTarget, setDrillTarget] = useState<number | null>(null);
+  const [turnCursor, setTurnCursor] = useState(0);
+  const [turnOffset, setTurnOffset] = useState(0);
+  const [secCursor, setSecCursor] = useState(0);
+  const [secOffset, setSecOffset] = useState(0);
+  // When drilled in: 'list' navigates sections, 'content' scrolls the body.
+  const [focus, setFocus] = useState<'list' | 'content'>('list');
+  const [contentOffset, setContentOffset] = useState(0);
+
+  const atList = drillTarget === null;
+  const drilledTurn = atList ? null : turns[drillTarget];
+  const sections = useMemo(
+    () => (drilledTurn ? buildSections(drilledTurn) : []),
+    [drilledTurn],
+  );
+
+  // --- Split-panel geometry (only meaningful when drilled in) ---
+  const usableCols = Math.max(20, cols - 4); // App wraps the overlay in paddingX={2}.
+  const leftWidth = clamp(Math.floor(usableCols * 0.34), 20, 34);
+  const cardWidth = Math.max(24, usableCols - leftWidth - 2);
+  const innerWidth = Math.max(8, cardWidth - 4); // border (2) + paddingX 1 each side (2).
+  // One row is reserved above the panels for the turn header line.
+  const bodyRows = Math.max(1, viewport - 1);
+  const innerHeight = Math.max(1, bodyRows - 2); // card border top + bottom.
+
+  const selected = sections[secCursor];
+  // Memoized so scrolling the content panel doesn't re-wrap the whole body.
+  const lines = useMemo(
+    () => (selected ? wrapText(selected.body || '(empty)', innerWidth) : []),
+    [selected?.label, selected?.body, innerWidth],
+  );
+  const contentOverflows = lines.length > innerHeight;
+  const previewBudget = contentOverflows ? Math.max(1, innerHeight - 1) : innerHeight;
+  const maxContentOffset = Math.max(0, lines.length - previewBudget);
+  const clampedContentOffset = clamp(contentOffset, 0, maxContentOffset);
+
+  // --- Level 1: turn list navigation ---
+  useInput(
+    (input, key) => {
+      if (turns.length === 0) return;
+      const delta = navDelta(input, key, viewport, turns.length);
+      if (delta !== null) return void moveTurn(delta);
+      if (key.return || key.rightArrow) {
+        setDrillTarget(turnCursor);
+        setSecCursor(0);
+        setSecOffset(0);
+        setFocus('list');
+        setContentOffset(0);
+      }
+    },
+    { isActive: atList },
+  );
+
+  // --- Level 2: split-panel (section list + content scroll) navigation ---
+  useInput(
+    (input, key) => {
+      if (focus === 'content') {
+        if (key.escape || key.leftArrow) {
+          setFocus('list');
+          setContentOffset(0);
+          return;
+        }
+        const delta = navDelta(input, key, previewBudget, lines.length);
+        if (delta !== null) setContentOffset((o) => clamp(o + delta, 0, maxContentOffset));
+        return;
+      }
+      // focus === 'list'
+      if (key.escape || key.leftArrow) {
+        setDrillTarget(null);
+        return;
+      }
+      if (sections.length === 0) return;
+      const delta = navDelta(input, key, bodyRows, sections.length);
+      if (delta !== null) return void moveSec(delta);
+      if ((key.return || key.rightArrow) && contentOverflows) {
+        setFocus('content');
+        setContentOffset(0);
+      }
+    },
+    { isActive: !atList },
+  );
+
+  function moveTurn(delta: number): void {
+    const next = clamp(turnCursor + delta, 0, turns.length - 1);
+    setTurnCursor(next);
+    setTurnOffset((o) => clampOffset(next, o, viewport, turns.length));
+  }
+  function moveSec(delta: number): void {
+    const next = clamp(secCursor + delta, 0, sections.length - 1);
+    setSecCursor(next);
+    setSecOffset((o) => clampOffset(next, o, bodyRows, sections.length));
+    setContentOffset(0); // new section selected → reset its scroll.
+  }
+
+  if (atList) {
+    const position = listPosition(turnOffset, viewport, turns.length);
+    return (
+      <ViewerShell
+        tabs={VIEWER_TABS}
+        activeTab="context"
+        position={position}
+        keyHints="↑/↓ move · ↵ open · ⇧⇥ switch tab · esc close"
+        onClose={onClose}
+        onCycleTab={onCycleTab}
+      >
+        {turns.length === 0 ? (
+          <Text dimColor>No prompt/context recorded yet.</Text>
+        ) : (
+          turns.slice(turnOffset, turnOffset + viewport).map((turn, i) => {
+            const idx = turnOffset + i;
+            const rewritten = turn.rewrittenInput !== turn.originalInput;
+            const trailing = rewritten ? ' (rewritten)' : '';
+            const budget = Math.max(10, usableCols - GUTTER - trailing.length);
+            return (
+              <MenuRow
+                key={`turn-${idx}`}
+                selected={idx === turnCursor}
+                label={truncate(`Turn ${turn.turnIndex + 1} · ${turn.originalInput}`, budget)}
+                trailing={trailing || undefined}
+              />
+            );
+          })
+        )}
+      </ViewerShell>
+    );
+  }
+
+  // Drilled in: `drillTarget` is a valid index, so the turn is non-null.
+  const turn = drilledTurn!;
+  const position =
+    focus === 'content'
+      ? {
+          first: clampedContentOffset + 1,
+          last: Math.min(lines.length, clampedContentOffset + previewBudget),
+          total: lines.length,
+        }
+      : listPosition(secOffset, bodyRows, sections.length);
+  const readHint = contentOverflows ? ' · → read' : '';
+  const keyHints =
+    focus === 'content'
+      ? '↑/↓ scroll · esc/← back to list · ⇧⇥ switch tab'
+      : `↑/↓ move${readHint} · esc/← back · ⇧⇥ switch tab`;
+
+  return (
+    <ViewerShell
+      tabs={VIEWER_TABS}
+      activeTab="context"
+      position={position}
+      keyHints={keyHints}
+      onClose={onClose}
+      onCycleTab={onCycleTab}
+      escClosesViewer={false}
+    >
+      <Text dimColor wrap="truncate-end">
+        Turn {turn.turnIndex + 1} · {turn.originalInput}
+      </Text>
+      <Box flexDirection="row">
+        <Box flexDirection="column" marginRight={2} width={leftWidth}>
+          {sections.slice(secOffset, secOffset + bodyRows).map((sec, i) => {
+            const idx = secOffset + i;
+            const budget = Math.max(6, leftWidth - GUTTER);
+            return (
+              <MenuRow
+                key={sec.label}
+                selected={idx === secCursor && focus === 'list'}
+                label={truncate(sec.label, budget)}
+              />
+            );
+          })}
+        </Box>
+        <Box
+          flexDirection="column"
+          borderStyle="round"
+          borderColor={focus === 'content' ? colors.accent : colors.muted}
+          paddingX={1}
+          width={cardWidth}
+        >
+          {lines.slice(clampedContentOffset, clampedContentOffset + previewBudget).map((line, i) => (
+            <Text key={`p-${i}`}>{line || ' '}</Text>
+          ))}
+          {contentOverflows && (
+            <Text dimColor>
+              ↕ lines {clampedContentOffset + 1}–
+              {Math.min(lines.length, clampedContentOffset + previewBudget)} of {lines.length}
+              {focus === 'list' ? ' (→ to scroll)' : ''}
+            </Text>
+          )}
+        </Box>
+      </Box>
+    </ViewerShell>
+  );
+}
+
+/** Build the labelled sections for one turn's prompt-assembly trail. */
+function buildSections(turn: TurnContextRecord): Section[] {
+  const rewrittenBody =
+    turn.rewrittenInput === turn.originalInput
+      ? '(unchanged — the rewriter left the input as-is)'
+      : turn.rewrittenInput;
+
+  const refsBody =
+    turn.resolvedReferences.length === 0
+      ? '(no references resolved this turn)'
+      : turn.resolvedReferences
+          .map((r) => `"${r.phrase}" → ${r.resolvedTo}   [${r.sourceKey}]`)
+          .join('\n');
+
+  const factsBody =
+    turn.recalledFacts.length === 0
+      ? '(no memory facts recalled this turn)'
+      : turn.recalledFacts
+          .map((f) => `• [${getDomain(f.domain).name}] ${f.fact} (sim ${f.similarity.toFixed(2)})`)
+          .join('\n');
+
+  return [
+    { label: 'Original input', body: turn.originalInput },
+    { label: 'Rewritten prompt', body: rewrittenBody },
+    { label: `Resolved references (${turn.resolvedReferences.length})`, body: refsBody },
+    { label: `Recalled facts (${turn.recalledFacts.length})`, body: factsBody },
+    { label: 'System prompt', body: turn.systemPrompt || '(none)' },
+  ];
+}

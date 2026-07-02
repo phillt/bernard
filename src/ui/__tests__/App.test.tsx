@@ -93,6 +93,7 @@ import type { BernardConfig } from '../../config.js';
 import type { Agent } from '../../agent.js';
 import type { HistoryStore } from '../../history.js';
 import type { ProvenanceHistoryStore } from '../../provenance-history.js';
+import type { TurnContextStore } from '../../turn-context.js';
 import type { MemoryStore } from '../../memory.js';
 import type { RoutineStore } from '../../routines.js';
 import type { SpecialistStore } from '../../specialists.js';
@@ -164,6 +165,7 @@ function makeAgent(
     getLastPolicyDecision: () => null,
     getLastRAGResults: () => [],
     getTurnProvenance: () => [],
+    getTurnContext: () => [],
     getContext: () => ({ provenance: { clear: () => {}, list: () => [] } }),
     getCorrectionStore: () => ({ listPending: () => [] }),
     getPlanSnapshot: () => [],
@@ -247,6 +249,11 @@ function renderApp(opts: HarnessOptions = {}) {
     save: vi.fn(),
     load: () => [],
   } as unknown as ProvenanceHistoryStore;
+  const turnContextStore = {
+    clear: vi.fn(),
+    save: vi.fn(),
+    load: () => [],
+  } as unknown as TurnContextStore;
   const sessionToolAllowlist = new Set<string>();
   const stores = makeStores(opts.stores);
   const config = makeConfig(opts.config);
@@ -255,6 +262,7 @@ function renderApp(opts: HarnessOptions = {}) {
     config,
     historyStore,
     provenanceHistoryStore,
+    turnContextStore,
     stores,
     sessionToolAllowlist,
     onExit,
@@ -270,6 +278,7 @@ function renderApp(opts: HarnessOptions = {}) {
     onExit,
     historyStore,
     provenanceHistoryStore,
+    turnContextStore,
     sessionToolAllowlist,
     stores,
     config,
@@ -406,12 +415,19 @@ describe('<App> Shift-Tab viewer tabs (#211)', () => {
     expect(frame).toContain('> Sources');
     expect(frame).not.toContain('> Agent Status');
 
+    // Shift-Tab again → Prompt & Context tab active.
+    stdin.write(SHIFT_TAB);
+    await tick();
+    frame = lastFrame() ?? '';
+    expect(frame).toContain('> Prompt & Context');
+    expect(frame).not.toContain('> Sources');
+
     // Shift-Tab again → Usage & Cost tab active.
     stdin.write(SHIFT_TAB);
     await tick();
     frame = lastFrame() ?? '';
     expect(frame).toContain('> Usage & Cost');
-    expect(frame).not.toContain('> Sources');
+    expect(frame).not.toContain('> Prompt & Context');
 
     // Shift-Tab once more → wraps back to Status (does not close).
     stdin.write(SHIFT_TAB);
