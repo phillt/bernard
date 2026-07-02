@@ -10,6 +10,7 @@ function makeAgent(history: CoreMessage[], turns: TurnProvenance[]): Agent {
   return {
     getHistory: () => history,
     getTurnProvenance: () => turns,
+    getTurnContext: () => [],
   } as unknown as Agent;
 }
 

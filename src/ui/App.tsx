@@ -54,6 +54,7 @@ import type { SupportedSdk } from '../providers/types.js';
 import { THEMES, getThemeKeys, getActiveThemeKey, setTheme, getThemeColors } from '../theme.js';
 import type { HistoryStore } from '../history.js';
 import type { ProvenanceHistoryStore } from '../provenance-history.js';
+import type { TurnContextStore } from '../turn-context.js';
 import type { MemoryStore } from '../memory.js';
 import type { RoutineStore, Routine } from '../routines.js';
 import type { SpecialistStore, Specialist } from '../specialists.js';
@@ -111,6 +112,7 @@ import {
   type ResolvedEntry,
 } from '../reference-resolver.js';
 import { rewritePrompt } from '../prompt-rewriter.js';
+import { recallFilter } from '../recall-filter.js';
 import { loadRewriterHints } from '../memory.js';
 import { stripImagePaths } from '../image.js';
 import { getModelProfile } from '../providers/index.js';
@@ -152,10 +154,12 @@ import { ModelGridOverlay } from './overlays/ModelGridOverlay.js';
 import { ConfirmDialog } from './overlays/ConfirmDialog.js';
 import { StatusViewer } from './overlays/StatusViewer.js';
 import { SourcesViewer } from './overlays/SourcesViewer.js';
+import { ContextViewer } from './overlays/ContextViewer.js';
 import { UsageViewer } from './overlays/UsageViewer.js';
 import { HelpOverlay } from './overlays/HelpOverlay.js';
 import { TextInputOverlay } from './overlays/TextInputOverlay.js';
 import { InfoOverlay } from './overlays/InfoOverlay.js';
+import { SettingsOverlay, type SettingsTab } from './overlays/SettingsOverlay.js';
 import { Toast, type ToastVariant } from './Toast.js';
 import { persistAgentState } from './save.js';
 import { MessageStore } from './message-store.js';
@@ -193,6 +197,7 @@ interface AppProps {
   config: BernardConfig;
   historyStore: HistoryStore;
   provenanceHistoryStore: ProvenanceHistoryStore;
+  turnContextStore: TurnContextStore;
   stores: AppStores;
   /** Per-REPL-session allowlist (#179). Owned by the caller so it survives mount. */
   sessionToolAllowlist: Set<string>;
@@ -237,6 +242,7 @@ interface AppProps {
 type Overlay =
   | 'status'
   | 'sources'
+  | 'context'
   | 'usage'
   | 'menu'
   | 'multi-menu'
@@ -244,7 +250,8 @@ type Overlay =
   | 'confirm'
   | 'help'
   | 'text-input'
-  | 'info';
+  | 'info'
+  | 'settings';
 
 interface PendingTextInput {
   options: ValuePromptOptions;
@@ -285,6 +292,24 @@ interface PendingGrid {
   items: string[];
   options?: { title?: string; footer?: string; initialIndex?: number; currentItem?: string };
   resolve: (result: { cancelled: true } | { cancelled: false; index: number }) => void;
+}
+
+/**
+ * The tabbed settings screen (`/options` + `/agent-options`). Both tabs' entries
+ * are supplied up front so Shift+Tab cycles between them in-place without a loop
+ * re-entry; the caller (`runSettings`) re-shows on the resolved tab after an
+ * item's action runs so annotations refresh from the mutated config.
+ */
+interface PendingSettings {
+  initialTab: SettingsTab;
+  initialIndex: number;
+  optionsEntries: MenuEntry[];
+  agentEntries: MenuEntry[];
+  resolve: (
+    result:
+      | { cancelled: true }
+      | { cancelled: false; tab: SettingsTab; index: number; item: MenuItem },
+  ) => void;
 }
 
 interface PendingConfirm {
@@ -397,6 +422,7 @@ export function App({
   config,
   historyStore,
   provenanceHistoryStore,
+  turnContextStore,
   stores,
   sessionToolAllowlist: _sessionToolAllowlist,
   onExit,
@@ -446,6 +472,7 @@ export function App({
   const [pendingDialog, setPendingDialog] = useState<PendingDialog | null>(null);
   const [pendingTextInput, setPendingTextInput] = useState<PendingTextInput | null>(null);
   const [pendingInfo, setPendingInfo] = useState<PendingInfo | null>(null);
+  const [pendingSettings, setPendingSettings] = useState<PendingSettings | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [bannerVisible, setBannerVisible] = useState<boolean>(!!alertBanner);
   const [interrupted, setInterrupted] = useState(false);
@@ -509,7 +536,11 @@ export function App({
   // the viewer reads as a replacement for the thread, not an addition below it.
   // <Thread> itself stays mounted (unmounting it reprints <Static> scrollback).
   const viewerActive =
-    activeOverlay === 'status' || activeOverlay === 'sources' || activeOverlay === 'usage';
+    activeOverlay === 'status' ||
+    activeOverlay === 'sources' ||
+    activeOverlay === 'context' ||
+    activeOverlay === 'usage' ||
+    activeOverlay === 'settings';
 
   useInput(
     (_input, key) => {
@@ -881,6 +912,7 @@ export function App({
       }
       historyStore.clear();
       provenanceHistoryStore.clear();
+      turnContextStore.clear();
       agent.clearHistory();
       setInterrupted(false);
       // Reset the append-only log and remount <Thread> (via the epoch bump).
@@ -974,7 +1006,7 @@ export function App({
             'success',
           );
         }
-        persistAgentState({ agent, historyStore, provenanceHistoryStore });
+        persistAgentState({ agent, historyStore, provenanceHistoryStore, turnContextStore });
       } catch (err) {
         flashToast(
           `Compaction failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -1515,7 +1547,7 @@ export function App({
     }
 
     if (text === '/agent-options') {
-      await runAgentOptions();
+      await runSettings('agent-options');
       return;
     }
 
@@ -1636,55 +1668,7 @@ export function App({
     }
 
     if (text === '/options') {
-      const optEntries = Object.entries(OPTIONS_REGISTRY);
-      const menuEntries: MenuEntry[] = [
-        ...optEntries.map(([name, opt]) => {
-          const current = config[opt.configKey];
-          const tag = current === opt.default ? '(default)' : '(custom)';
-          return {
-            label: name,
-            annotation: `= ${current} ${tag}`,
-            description: opt.description,
-          };
-        }),
-        { type: 'section', title: 'Info' },
-        { label: 'Debug report', description: 'Print a diagnostic report for troubleshooting' },
-      ];
-      const optResult = await requestMenu(menuEntries, {
-        title: 'Options',
-        promptLabel: 'Select option',
-      });
-      if (optResult.cancelled) return;
-      if (optResult.index >= optEntries.length) {
-        showInfo('Bernard Diagnostic Report', buildDebugReportLines(config, agent, stores));
-        return;
-      }
-      const [name, opt] = optEntries[optResult.index];
-      const valResult = await requestTextInput({ label: `New value for ${name}` });
-      if (valResult.cancelled) return;
-      const val = parseInt(valResult.raw, 10);
-      const minVal = opt.default === 0 ? 0 : 1;
-      if (Number.isNaN(val) || val < minVal) {
-        flashToast(
-          `Invalid value. Must be ${minVal === 0 ? 'a non-negative integer' : 'a positive integer'}.`,
-          'error',
-        );
-        return;
-      }
-      saveOption(name, val);
-      (config as unknown as Record<string, unknown>)[opt.configKey] = val;
-      if (name === 'token-window') {
-        const mainModel = resolveMainModel(config);
-        const modelWindow = getContextWindow(mainModel);
-        if (val > modelWindow) {
-          flashToast(
-            `Set ${name} = ${val} (warning: exceeds ${mainModel}'s context window ${modelWindow})`,
-            'warning',
-          );
-          return;
-        }
-      }
-      flashToast(`${name} set to ${val}`, 'success');
+      await runSettings('options');
       return;
     }
 
@@ -2029,7 +2013,12 @@ export function App({
     await runAgentTurn(text, inlineImages);
   };
 
-  type BooleanPrefKey = 'autoCreateSpecialists' | 'promptRewriter' | 'toolDetails' | 'conciseMode';
+  type BooleanPrefKey =
+    | 'autoCreateSpecialists'
+    | 'promptRewriter'
+    | 'recallFilter'
+    | 'toolDetails'
+    | 'conciseMode';
 
   async function toggleBooleanPref(
     key: BooleanPrefKey,
@@ -2284,7 +2273,10 @@ export function App({
     }
   }
 
-  async function runAgentOptions(): Promise<void> {
+  /** An entry list paired with the per-item actions (sections excluded). */
+  type SettingsMenu = { entries: MenuEntry[]; actions: Array<() => void | Promise<void>> };
+
+  function buildAgentOptionsMenu(): SettingsMenu {
     type MenuRow =
       | { kind: 'section'; title: string }
       | { kind: 'item'; item: MenuItem; action: () => void | Promise<void> };
@@ -2377,6 +2369,13 @@ export function App({
         'Prompt rewriter: off',
       ),
       toggleRow(
+        'recallFilter',
+        'Recall filter',
+        'Before each turn, widen recalled-memory retrieval and let a cheap model keep only the facts relevant to the conversation, so the agent sees less irrelevant context.',
+        'Recall filter: on',
+        'Recall filter: off',
+      ),
+      toggleRow(
         'toolDetails',
         'Tool details',
         'Show full tool call args and results in the transcript.',
@@ -2439,15 +2438,88 @@ export function App({
       },
     ];
 
-    const topEntries: MenuEntry[] = rows.map((r) =>
-      r.kind === 'section' ? { type: 'section', title: r.title } : r.item,
-    );
-    const itemActions = rows.flatMap((r) => (r.kind === 'item' ? [r.action] : []));
+    return {
+      entries: rows.map((r) =>
+        r.kind === 'section' ? { type: 'section', title: r.title } : r.item,
+      ),
+      actions: rows.flatMap((r) => (r.kind === 'item' ? [r.action] : [])),
+    };
+  }
 
-    const topResult = await requestMenu(topEntries, { title: 'Agent Options' });
-    if (topResult.cancelled) return;
-    const action = itemActions[topResult.index];
-    if (action) await action();
+  /**
+   * The "Options" tab — numeric system options from {@link OPTIONS_REGISTRY} plus
+   * a Debug-report item. Mirrors the former standalone `/options` menu; each
+   * registry item opens a value prompt, validates, and persists via `saveOption`.
+   */
+  function buildOptionsMenu(): SettingsMenu {
+    const optEntries = Object.entries(OPTIONS_REGISTRY);
+    const entries: MenuEntry[] = [
+      ...optEntries.map(([name, opt]) => {
+        const current = config[opt.configKey];
+        const tag = current === opt.default ? '(default)' : '(custom)';
+        return { label: name, annotation: `= ${current} ${tag}`, description: opt.description };
+      }),
+      { type: 'section', title: 'Info' },
+      { label: 'Debug report', description: 'Print a diagnostic report for troubleshooting' },
+    ];
+    const actions: Array<() => void | Promise<void>> = optEntries.map(([name, opt]) => async () => {
+      const valResult = await requestTextInput({ label: `New value for ${name}` });
+      if (valResult.cancelled) return;
+      const val = parseInt(valResult.raw, 10);
+      const minVal = opt.default === 0 ? 0 : 1;
+      if (Number.isNaN(val) || val < minVal) {
+        flashToast(
+          `Invalid value. Must be ${minVal === 0 ? 'a non-negative integer' : 'a positive integer'}.`,
+          'error',
+        );
+        return;
+      }
+      saveOption(name, val);
+      (config as unknown as Record<string, unknown>)[opt.configKey] = val;
+      if (name === 'token-window') {
+        const mainModel = resolveMainModel(config);
+        const modelWindow = getContextWindow(mainModel);
+        if (val > modelWindow) {
+          flashToast(
+            `Set ${name} = ${val} (warning: exceeds ${mainModel}'s context window ${modelWindow})`,
+            'warning',
+          );
+          return;
+        }
+      }
+      flashToast(`${name} set to ${val}`, 'success');
+    });
+    // The trailing "Debug report" item.
+    actions.push(() =>
+      showInfo('Bernard Diagnostic Report', buildDebugReportLines(config, agent, stores)),
+    );
+    return { entries, actions };
+  }
+
+  /**
+   * Drives the tabbed settings screen. Both `/options` and `/agent-options` open
+   * it (on their respective tab); Shift+Tab cycles between them in-place. After
+   * an item's action runs, the loop re-shows on the same tab/cursor with entries
+   * rebuilt from the (possibly mutated) config so annotations stay current.
+   */
+  async function runSettings(initialTab: SettingsTab): Promise<void> {
+    let tab = initialTab;
+    let index = 0;
+    for (;;) {
+      const optionsMenu = buildOptionsMenu();
+      const agentMenu = buildAgentOptionsMenu();
+      const res = await requestSettings({
+        initialTab: tab,
+        initialIndex: index,
+        optionsEntries: optionsMenu.entries,
+        agentEntries: agentMenu.entries,
+      });
+      if (res.cancelled) return;
+      tab = res.tab;
+      index = res.index;
+      const action = (tab === 'options' ? optionsMenu.actions : agentMenu.actions)[res.index];
+      if (action) await action();
+    }
   }
 
   function reapplyRuntimeSettings(cfg: BernardConfig): void {
@@ -2464,7 +2536,11 @@ export function App({
   async function runPreTurnPipeline(
     input: string,
     signal: AbortSignal,
-  ): Promise<{ agentInput: string; resolvedEntries: ResolvedEntry[] }> {
+  ): Promise<{
+    agentInput: string;
+    resolvedEntries: ResolvedEntry[];
+    ragResults?: RAGSearchResult[];
+  }> {
     const pipelineStartedAt = Date.now();
     debugLog('pre-turn:start', { inputLen: input.length });
     // Per-turn RAG cache invalidation (#171). Must run before any resolver /
@@ -2537,12 +2613,37 @@ export function App({
     }
     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
 
+    // Recall filter (runs last, on the final agentInput): widen RAG retrieval
+    // and let a cheap LLM keep only the facts relevant to the conversation.
+    // On any `noop` we leave `ragResults` undefined and the agent runs its own
+    // narrow search — i.e. fail-open to legacy behavior.
+    let ragResults: RAGSearchResult[] | undefined;
+    if (config.recallFilter && stores.rag) {
+      try {
+        const result = await recallFilter(
+          agentInput,
+          config,
+          stores.rag,
+          agent.getHistory(),
+          signal,
+          recordPreTurnUsage,
+        );
+        if (result.status === 'filtered') {
+          ragResults = result.facts;
+        }
+      } catch (err: unknown) {
+        debugLog('app:recall-filter', err instanceof Error ? err.message : String(err));
+      }
+    }
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+
     debugLog('pre-turn:end', {
       durationMs: Date.now() - pipelineStartedAt,
       rewritten: agentInput !== input,
       refCount: resolvedEntries.length,
+      recallFiltered: ragResults !== undefined,
     });
-    return { agentInput, resolvedEntries };
+    return { agentInput, resolvedEntries, ragResults };
   }
 
   /**
@@ -2636,7 +2737,10 @@ export function App({
       // tokens land in the same ledger as the main loop. `processInput` then
       // won't reset and wipe them.
       agent.beginTurnStats();
-      const { agentInput, resolvedEntries } = await runPreTurnPipeline(input, controller.signal);
+      const { agentInput, resolvedEntries, ragResults } = await runPreTurnPipeline(
+        input,
+        controller.signal,
+      );
       if (controller.signal.aborted) return;
       // `processInput` pushes the user message to `agent.history` synchronously
       // (before its first internal await), so by the time the returned promise
@@ -2646,7 +2750,10 @@ export function App({
       // turn finishes. When the rewriter substituted the text, pass the
       // original so <UserMessage> displays it (the rewrite is an LLM-only
       // detail) rather than the dispatched version.
-      const inflight = agent.processInput(agentInput, images, resolvedEntries);
+      const inflight = agent.processInput(agentInput, images, resolvedEntries, {
+        ragResults,
+        originalInput: input,
+      });
       commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });
       // Snapshot history length AFTER the user message push (synchronous) so
       // the ask_user scanner below knows where this turn's tool results begin.
@@ -2706,7 +2813,7 @@ export function App({
         errorPanel = formatAgentError(err, debug);
       }
     } finally {
-      persistAgentState({ agent, historyStore, provenanceHistoryStore });
+      persistAgentState({ agent, historyStore, provenanceHistoryStore, turnContextStore });
       submittingRef.current = false;
       turnAbortRef.current = null;
       setBusy(false);
@@ -2826,6 +2933,22 @@ export function App({
     return new Promise((resolve) => {
       setPendingMenu({ entries, options, resolve });
       setActiveOverlay('menu');
+    });
+  }
+
+  /**
+   * Shows the tabbed settings screen ({@link SettingsOverlay}). Resolves when the
+   * user picks an item (with the active tab + item index) or Esc-cancels; the
+   * driver ({@link runSettings}) loops on the resolved tab.
+   */
+  function requestSettings(
+    pending: Omit<PendingSettings, 'resolve'>,
+  ): Promise<
+    { cancelled: true } | { cancelled: false; tab: SettingsTab; index: number; item: MenuItem }
+  > {
+    return new Promise((resolve) => {
+      setPendingSettings({ ...pending, resolve });
+      setActiveOverlay('settings');
     });
   }
 
@@ -3161,6 +3284,13 @@ export function App({
         <SourcesViewer
           agent={agent}
           onClose={() => setActiveOverlay(null)}
+          onCycleTab={() => setActiveOverlay('context')}
+        />
+      )}
+      {activeOverlay === 'context' && (
+        <ContextViewer
+          agent={agent}
+          onClose={() => setActiveOverlay(null)}
           onCycleTab={() => setActiveOverlay('usage')}
         />
       )}
@@ -3260,6 +3390,24 @@ export function App({
           onResolve={(result) => {
             pendingTextInput.resolve(result);
             setPendingTextInput(null);
+            setActiveOverlay(null);
+          }}
+        />
+      )}
+      {activeOverlay === 'settings' && pendingSettings && (
+        <SettingsOverlay
+          initialTab={pendingSettings.initialTab}
+          initialIndex={pendingSettings.initialIndex}
+          optionsEntries={pendingSettings.optionsEntries}
+          agentEntries={pendingSettings.agentEntries}
+          onSelect={(tab, index, item) => {
+            pendingSettings.resolve({ cancelled: false, tab, index, item });
+            setPendingSettings(null);
+            setActiveOverlay(null);
+          }}
+          onClose={() => {
+            pendingSettings.resolve({ cancelled: true });
+            setPendingSettings(null);
             setActiveOverlay(null);
           }}
         />
@@ -3517,6 +3665,7 @@ function buildDebugReportLines(
   lines.push({ text: `  Coordinator mode: ${config.coordinatorMode}`, dim: true });
   lines.push({ text: `  Tool details: ${config.toolDetails ? 'on' : 'off'}`, dim: true });
   lines.push({ text: `  Prompt rewriter: ${config.promptRewriter ? 'on' : 'off'}`, dim: true });
+  lines.push({ text: `  Recall filter: ${config.recallFilter ? 'on' : 'off'}`, dim: true });
   const debugEnabled = process.env.BERNARD_DEBUG === 'true' || process.env.BERNARD_DEBUG === '1';
   lines.push({ text: `  Debug mode: ${debugEnabled ? 'on' : 'off'}`, dim: true });
 

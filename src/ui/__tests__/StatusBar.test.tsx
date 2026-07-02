@@ -131,11 +131,21 @@ describe('<StatusBar> session cost cell (#258)', () => {
     expect(frame).toContain('session ~$0.42');
   });
 
-  it('omits the session cell at zero cost', () => {
+  it('shows the session cell at $0.00 rather than hiding it at zero cost', () => {
     const frame = stripAnsi(
       render(createElement(StatusBar, { agent: agentWithSessionCost(0) })).lastFrame() ?? '',
     );
-    expect(frame).not.toContain('session');
+    expect(frame).toContain('session ~$0.00');
+  });
+
+  it('joins readout groups with the `·` dot divider (matching the left HintBar)', () => {
+    const frame = stripAnsi(
+      render(createElement(StatusBar, { agent: agentWithSessionCost(0.42) })).lastFrame() ?? '',
+    );
+    expect(frame).toContain('·');
+    // turn · session · ctx — three dividers minimum between the token groups.
+    expect(frame).toContain('turn ');
+    expect(frame).toContain('ctx ');
   });
 });
 

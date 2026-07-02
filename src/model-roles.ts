@@ -184,5 +184,6 @@ export const SITE_ROLE: Record<ModelSite, RoleId> = {
   rewriter: 'classifier',
   'reference-resolver': 'classifier',
   'reference-lookup': 'classifier',
+  'recall-filter': 'classifier',
   'specialist-detector': 'classifier',
 };

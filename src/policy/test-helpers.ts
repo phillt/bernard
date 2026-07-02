@@ -33,6 +33,7 @@ export function makePolicyInput(overrides?: {
     autoCreateThreshold: 0.8,
     correctionEnabled: true,
     promptRewriter: true,
+    recallFilter: true,
     referenceLookup: true,
     referenceLookupTools: [],
     scratchSubjectThreshold: 0.15,

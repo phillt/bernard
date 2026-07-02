@@ -982,6 +982,112 @@ describe('Agent', () => {
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
   });
 
+  it('injected ragResults bypass ragStore.search and reach the recalled context', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi
+        .fn()
+        .mockResolvedValue([{ fact: 'SHOULD NOT APPEAR', similarity: 0.9, domain: 'general' }]),
+      addFacts: vi.fn(),
+    };
+
+    const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
+    await agent.processInput('Hello', undefined, undefined, {
+      ragResults: [{ fact: 'The user prefers dark mode', similarity: 0.42, domain: 'general' }],
+    });
+
+    // The injected set is used; the agent's own search is skipped entirely.
+    expect(mockRagStore.search).not.toHaveBeenCalled();
+    const sent = JSON.stringify(mockGenerateText.mock.calls[0][0].messages);
+    expect(sent).toContain('The user prefers dark mode');
+    expect(sent).not.toContain('SHOULD NOT APPEAR');
+  });
+
+  it('injected ragResults still update previousRAGFacts for next-turn stickiness', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    // Second turn does a normal (empty) search; if stickiness tracking from the
+    // injected turn works, the injected fact is remembered as previousRAGFacts.
+    const mockRagStore = {
+      search: vi.fn().mockResolvedValue([]),
+      addFacts: vi.fn(),
+    };
+
+    const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
+    await agent.processInput('First', undefined, undefined, {
+      ragResults: [{ fact: 'Sticky fact', similarity: 0.5, domain: 'general' }],
+    });
+
+    expect((agent as any).previousRAGFacts).toEqual(new Set(['Sticky fact']));
+  });
+
+  it('injected ragResults skip stickiness re-capping (LLM already selected)', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+    const mockRagStore = { search: vi.fn().mockResolvedValue([]), addFacts: vi.fn() };
+    const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
+
+    await agent.processInput('Hello', undefined, undefined, {
+      ragResults: [{ fact: 'a', similarity: 0.4, domain: 'general' }],
+    });
+
+    // The recall-filter already selected the relevant subset, so the agent must
+    // NOT let stickiness re-narrow it with the default top-5/domain + max-15 caps.
+    expect(mockApplyStickiness).toHaveBeenCalledWith(
+      [{ fact: 'a', similarity: 0.4, domain: 'general' }],
+      expect.any(Set),
+      { topKPerDomain: Infinity, maxResults: Infinity },
+    );
+  });
+
+  it('self-searched ragResults apply stickiness with default caps', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+    const found = [{ fact: 'x', similarity: 0.8, domain: 'general' }];
+    const mockRagStore = { search: vi.fn().mockResolvedValue(found), addFacts: vi.fn() };
+    const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
+
+    await agent.processInput('Hello');
+
+    // No injection → the legacy path calls stickiness with its default caps (no opts arg).
+    expect(mockApplyStickiness).toHaveBeenCalledWith(found, expect.any(Set));
+  });
+
+  it('injected empty ragResults suppress the agent search (filter kept nothing)', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+
+    const mockRagStore = {
+      search: vi
+        .fn()
+        .mockResolvedValue([{ fact: 'SHOULD NOT APPEAR', similarity: 0.9, domain: 'general' }]),
+      addFacts: vi.fn(),
+    };
+
+    const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
+    await agent.processInput('Hello', undefined, undefined, { ragResults: [] });
+
+    // `[]` means the recall filter ran and kept nothing — it must NOT fall
+    // through to the agent's own search, and previousRAGFacts resets to empty.
+    expect(mockRagStore.search).not.toHaveBeenCalled();
+    const sent = JSON.stringify(mockGenerateText.mock.calls[0][0].messages);
+    expect(sent).not.toContain('SHOULD NOT APPEAR');
+    expect((agent as any).previousRAGFacts).toEqual(new Set());
+  });
+
   it('passes ragStore to compressHistory when compression triggers', async () => {
     const { shouldCompress, compressHistory } = await import('./context.js');
     vi.mocked(shouldCompress).mockReturnValueOnce(true);

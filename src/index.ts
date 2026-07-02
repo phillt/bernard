@@ -50,7 +50,7 @@ import {
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
-import { listMCPServers, removeMCPServer, MCPManager } from './mcp.js';
+import { listMCPServers, removeMCPServer, MCPManager, setActiveMCPManager } from './mcp.js';
 import { runFirstTimeSetup } from './setup.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
@@ -66,6 +66,7 @@ import { SpecialistStore } from './specialists.js';
 import { CandidateStore } from './specialist-candidates.js';
 import { HistoryStore } from './history.js';
 import { ProvenanceHistoryStore } from './provenance-history.js';
+import { TurnContextStore } from './turn-context.js';
 import { assembleContext } from './framework/context.js';
 import { Agent } from './agent.js';
 import { bootstrapPendingCandidates } from './candidate-bootstrap.js';
@@ -263,6 +264,7 @@ async function runInkRepl(args: {
   const candidateStore = new CandidateStore();
   const historyStore = new HistoryStore();
   const provenanceHistoryStore = new ProvenanceHistoryStore();
+  const turnContextStore = new TurnContextStore();
   const ragStore = config.ragEnabled ? new RAGStore() : undefined;
   const mcpManager = new MCPManager();
 
@@ -272,6 +274,9 @@ async function runInkRepl(args: {
     const message = err instanceof Error ? err.message : String(err);
     printError(`MCP initialization failed: ${message}`);
   }
+  // Register the live manager so `mcp_verify` can reconcile a fresh probe
+  // against the tools actually wired into this session (#healthy-but-not-there).
+  setActiveMCPManager(mcpManager);
 
   const statuses = mcpManager.getServerStatuses();
   const connected = statuses.filter((s) => s.connected);
@@ -439,6 +444,7 @@ async function runInkRepl(args: {
 
   if (resume) {
     agent.setTurnProvenance(provenanceHistoryStore.load());
+    agent.setTurnContext(turnContextStore.load());
   }
 
   let cleanedUp = false;
@@ -515,11 +521,21 @@ async function runInkRepl(args: {
       }
     }
 
-    try {
-      historyStore.save(agent.getHistory());
-      provenanceHistoryStore.save(agent.getTurnProvenance());
-    } catch (err) {
-      debugLog('persist:error', err instanceof Error ? err.message : String(err));
+    // Independent try/catch per store so a failure saving one (e.g. a disk-full
+    // burst on the first write) doesn't skip the others.
+    for (const [label, save] of [
+      ['history', () => historyStore.save(agent.getHistory())],
+      ['provenance', () => provenanceHistoryStore.save(agent.getTurnProvenance())],
+      ['turn-context', () => turnContextStore.save(agent.getTurnContext())],
+    ] as const) {
+      try {
+        save();
+      } catch (err) {
+        debugLog('persist:error', {
+          store: label,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     try {
@@ -544,6 +560,7 @@ async function runInkRepl(args: {
         config,
         historyStore,
         provenanceHistoryStore,
+        turnContextStore,
         stores: {
           memory: memoryStore,
           routines: routineStore,

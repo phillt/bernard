@@ -112,7 +112,15 @@ export function describeModelParams(
   // the provider would 400 on); this also keeps the two capability checks from
   // diverging on a catalog-miss model the heuristics classify differently.
   if (!reasoning && modelSupportsTemperature(model, provider)) {
-    out.push({ id: 'temperature', label: 'Temperature', kind: 'range', min: 0, max: 2, step: 0.1, default: 0 });
+    out.push({
+      id: 'temperature',
+      label: 'Temperature',
+      kind: 'range',
+      min: 0,
+      max: 2,
+      step: 0.1,
+      default: 0,
+    });
     out.push({ id: 'topP', label: 'Top-p', kind: 'range', min: 0, max: 1, step: 0.05, default: 1 });
   }
 

@@ -49,6 +49,7 @@ import { computeTurnUsageReport, priceUsageUsd } from './usage-report.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
+import { type TurnContextRecord } from './turn-context.js';
 import { SemanticResponseCache } from './semantic-cache.js';
 import { isPureQuestion } from './policy/tool-mode.js';
 import type { Step } from './plan-store.js';
@@ -111,6 +112,12 @@ export class Agent {
    * by {@link clearHistory}; loaded on resume via {@link setTurnProvenance}.
    */
   private turnProvenance: TurnProvenance[] = [];
+  /**
+   * Per-turn prompt/context snapshots for the whole current conversation —
+   * powers the Shift+Tab "Prompt & Context" viewer. Cleared by
+   * {@link clearHistory}; loaded on resume via {@link setTurnContext}.
+   */
+  private turnContext: TurnContextRecord[] = [];
   /**
    * Semantic response cache (#269, Layer 3). Opt-in via `config.semanticCache`.
    * Only consulted/populated for read-only Q&A turns (no tool actions).
@@ -230,6 +237,19 @@ export class Agent {
    */
   setTurnProvenance(records: TurnProvenance[]): void {
     this.turnProvenance = [...records];
+  }
+
+  /**
+   * Returns a snapshot of every completed turn's prompt/context trail for this
+   * conversation. Powers the Shift+Tab "Prompt & Context" viewer.
+   */
+  getTurnContext(): TurnContextRecord[] {
+    return [...this.turnContext];
+  }
+
+  /** Restores per-turn context snapshots when a session is resumed. */
+  setTurnContext(records: TurnContextRecord[]): void {
+    this.turnContext = [...records];
   }
 
   /**
@@ -384,6 +404,7 @@ export class Agent {
     userInput: string,
     images?: ImageAttachment[],
     resolvedReferences?: ResolvedEntry[],
+    options?: { ragResults?: RAGSearchResult[]; originalInput?: string },
   ): Promise<void> {
     const turnStartedAt = Date.now();
     let turnAborted = false;
@@ -459,6 +480,12 @@ export class Agent {
     } else {
       this.history.push({ role: 'user', content: wrappedInput });
     }
+
+    // Snapshot the conversation turn position NOW, before the run — the
+    // maxTokens-continuation and empty-answer-retry loops in `wrapIterate` push
+    // synthetic `role:'user'` messages into history, so counting after the run
+    // would inflate the index for turns that hit those paths (#211 viewers).
+    const userTurnIndex = Math.max(0, this.history.filter((m) => m.role === 'user').length - 1);
 
     this.abortController = new AbortController();
     this.lastStepPromptTokens = 0;
@@ -541,10 +568,23 @@ export class Agent {
         );
       }
 
-      // RAG search for relevant memories with sliding-window query
+      // Recalled memory for this turn. `rawResults` comes from one of two
+      // sources: a pre-filtered set injected by the recall-filter pre-turn pass
+      // (`options.ragResults`), or — the legacy path — this agent's own
+      // sliding-window `ragStore.search()`. Either way stickiness, provenance
+      // registration, and `previousRAGFacts` tracking are applied identically,
+      // so citations and turn-over-turn stickiness behave the same.
       let ragResults: RAGSearchResult[] | undefined;
-      if (this.ragStore) {
-        try {
+      try {
+        let rawResults: RAGSearchResult[] | undefined;
+        if (options?.ragResults !== undefined) {
+          // Injected by the recall-filter pass. An empty array is meaningful —
+          // the filter's LLM ran and kept nothing — so it must suppress the
+          // agent's own search, not fall through to it (a truthy check would
+          // treat `[]` as "no injection" and re-inject the rejected facts).
+          rawResults = options.ragResults;
+          debugLog('agent:rag', { source: 'recall-filter', results: rawResults.length });
+        } else if (this.ragStore) {
           // Build context-enriched query from recent user messages and tool calls
           const recentTexts = extractRecentUserTexts(this.history.slice(0, -1), 2);
           const toolContext = extractRecentToolContext(this.history.slice(0, -1));
@@ -553,10 +593,29 @@ export class Agent {
           });
 
           // Search with enriched query
-          const rawResults = await this.ragStore.search(ragQuery);
+          rawResults = await this.ragStore.search(ragQuery);
 
-          // Apply stickiness from previous turn
-          ragResults = applyStickiness(rawResults, this.previousRAGFacts);
+          if (rawResults.length > 0) {
+            const logQuery = ragQuery.replace(/^\[tools: [^\]]*]\. ?/, '').slice(0, 100);
+            debugLog('agent:rag', { query: logQuery, results: rawResults.length });
+          }
+        }
+
+        if (rawResults !== undefined) {
+          // Apply stickiness from previous turn. On the injected recall-filter
+          // path the LLM already selected the relevant subset (from a set the
+          // filter widened to top-8/domain), so suppress stickiness's default
+          // top-5/domain + max-15 caps — otherwise, once sticky facts exist,
+          // they'd silently re-narrow the curated set and drop facts the filter
+          // kept (and left recordAccess's TTL bumps tracking). Boost + re-sort
+          // still apply; only the hard cap is lifted.
+          ragResults =
+            options?.ragResults !== undefined
+              ? applyStickiness(rawResults, this.previousRAGFacts, {
+                  topKPerDomain: Infinity,
+                  maxResults: Infinity,
+                })
+              : applyStickiness(rawResults, this.previousRAGFacts);
           this.lastRAGResults = ragResults;
 
           // Register each RAG hit as a citeable source. The id is exposed
@@ -574,14 +633,9 @@ export class Agent {
 
           // Track for next turn
           this.previousRAGFacts = new Set(ragResults.map((r) => r.fact));
-
-          if (ragResults.length > 0) {
-            const logQuery = ragQuery.replace(/^\[tools: [^\]]*]\. ?/, '').slice(0, 100);
-            debugLog('agent:rag', { query: logQuery, results: ragResults.length });
-          }
-        } catch (err) {
-          debugLog('agent:rag:error', err instanceof Error ? err.message : String(err));
         }
+      } catch (err) {
+        debugLog('agent:rag:error', err instanceof Error ? err.message : String(err));
       }
 
       const routineSummaries = this.routineStore.getSummaries();
@@ -873,17 +927,30 @@ export class Agent {
       // history), not the index within `turnProvenance` — otherwise turns
       // that registered no sources would compress the indices and the
       // viewer would show "Turn 2" for what the user typed as their 5th
-      // message. Derived from history so it's also correct on resume.
+      // message. `userTurnIndex` was snapshotted before the run so synthetic
+      // continuation messages don't inflate it.
       if (this.lastSources.length > 0) {
-        const userTurnCount = this.history.filter((m) => m.role === 'user').length;
         this.turnProvenance.push({
-          turnIndex: Math.max(0, userTurnCount - 1),
+          turnIndex: userTurnIndex,
           userInput: userInput,
           sources: this.lastSources.map((s) => ({ ...s })),
           citedIds: [...citedIds],
           timestamp: Date.now(),
         });
       }
+
+      // Parallel snapshot for the Shift+Tab "Prompt & Context" viewer: the
+      // prompt-assembly trail (original vs. rewritten input, resolved refs,
+      // recalled facts). Recorded for every completed turn. Intentionally does
+      // NOT capture the system prompt — that's internal infra, not for disk/UI.
+      this.turnContext.push({
+        turnIndex: userTurnIndex,
+        timestamp: Date.now(),
+        originalInput: options?.originalInput ?? userInput,
+        rewrittenInput: userInput,
+        resolvedReferences: this.lastResolvedReferences.map((e) => ({ ...e })),
+        recalledFacts: this.lastRAGResults.map((f) => ({ ...f })),
+      });
 
       // Per-turn qualifier outcome (#167). One structured line that pairs the
       // strategy the policy picked, the reason code, the realized step count,
@@ -1046,6 +1113,7 @@ export class Agent {
     this.lastSources = [];
     this.lastCitedSources = [];
     this.turnProvenance = [];
+    this.turnContext = [];
     this.ctx.verification.clear();
     this.ctx.provenance.clear();
     this.ctx.postWriteChecks.length = 0;

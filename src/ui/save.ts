@@ -1,6 +1,7 @@
 import type { Agent } from '../agent.js';
 import type { HistoryStore } from '../history.js';
 import type { ProvenanceHistoryStore } from '../provenance-history.js';
+import type { TurnContextStore } from '../turn-context.js';
 
 /**
  * Persists the agent's current conversation and per-turn provenance to disk.
@@ -18,8 +19,9 @@ export function persistAgentState(args: {
   agent: Agent;
   historyStore: HistoryStore;
   provenanceHistoryStore: ProvenanceHistoryStore;
+  turnContextStore?: TurnContextStore;
 }): void {
-  const { agent, historyStore, provenanceHistoryStore } = args;
+  const { agent, historyStore, provenanceHistoryStore, turnContextStore } = args;
   try {
     historyStore.save(agent.getHistory());
   } catch (err) {
@@ -29,5 +31,10 @@ export function persistAgentState(args: {
     provenanceHistoryStore.save(agent.getTurnProvenance());
   } catch (err) {
     console.error('Failed to save provenance history:', err);
+  }
+  try {
+    turnContextStore?.save(agent.getTurnContext());
+  } catch (err) {
+    console.error('Failed to save turn context history:', err);
   }
 }

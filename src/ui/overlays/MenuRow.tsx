@@ -25,9 +25,9 @@ interface MenuRowProps {
   /** Fixed cell width for grid layouts (`ModelGridOverlay`). */
   width?: number;
   /**
-   * Dim the label when **not** selected (used by the horizontal tab strip, where
-   * inactive tabs read as muted). Off by default so ordinary menu rows keep the
-   * default foreground when unhighlighted.
+   * Render the label in the theme **muted** color when **not** selected (used by
+   * the horizontal tab strip, where inactive tabs read as muted). Off by default
+   * so ordinary menu rows keep the default foreground when unhighlighted.
    */
   dimUnselected?: boolean;
 }
@@ -44,8 +44,7 @@ export function MenuRow({ selected, label, trailing, width, dimUnselected }: Men
       <Text color={colors.accent}>{selected ? MENU_MARKER : MENU_MARKER_BLANK}</Text>
       <Text
         bold={selected}
-        color={selected ? colors.accent : undefined}
-        dimColor={!selected && dimUnselected}
+        color={selected ? colors.accent : dimUnselected ? colors.muted : undefined}
       >
         {label}
       </Text>

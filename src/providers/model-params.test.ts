@@ -1,9 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  describeModelParams,
-  serializeModelParams,
-  validateModelParams,
-} from './model-params.js';
+import { describeModelParams, serializeModelParams, validateModelParams } from './model-params.js';
 
 // These tests use model names absent from the vendored catalog so the adapter's
 // family heuristics (the catalog-miss fallback) fire deterministically, rather
@@ -109,7 +105,11 @@ describe('serializeModelParams — routing to the two destinations', () => {
   });
 
   it('returns empty objects for undefined values', () => {
-    const { params, providerOptions } = serializeModelParams('openai', 'gpt-4-omni-test', undefined);
+    const { params, providerOptions } = serializeModelParams(
+      'openai',
+      'gpt-4-omni-test',
+      undefined,
+    );
     expect(params).toEqual({});
     expect(providerOptions).toEqual({});
   });
