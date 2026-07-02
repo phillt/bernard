@@ -33,19 +33,20 @@ interface Section {
  * Two-panel "Prompt & Context" history — a sibling of {@link SourcesViewer}.
  * Level 1 is a scrollable list of turns; Enter/→ drills into a split panel: the
  * turn's sections on the left (Original input, Rewritten prompt, Resolved
- * references, Recalled facts, System prompt), the highlighted section's full
- * text on the right (scrollable when it overflows).
+ * references, Recalled facts), the highlighted section's full text on the right
+ * (scrollable when it overflows).
  *
  * Shows what the pre-turn pipeline actually fed the agent — the input the user
- * typed vs. the rewritten prompt the model received, the entities resolved, the
- * memory facts recalled, and the full system prompt in force that turn.
+ * typed vs. the rewritten prompt the model received, the entities resolved, and
+ * the memory facts recalled. Deliberately excludes the system prompt (internal
+ * infra, not for disk/UI).
  */
 export function ContextViewer({ agent, onClose, onCycleTab }: ContextViewerProps) {
   const colors = getThemeColors();
   const { columns: cols, rows } = useDimensionsCtx();
   const viewport = viewerViewport(rows, { tabCount: VIEWER_TABS.length });
   // Immutable during viewer interaction — memoize so cursor/scroll re-renders
-  // don't re-copy the (up to TURN_CONTEXT_MAX) records on every keypress.
+  // don't re-copy the records on every keypress.
   const turns = useMemo(() => agent.getTurnContext(), [agent]);
 
   const [drilled, setDrilled] = useState(false);
@@ -274,6 +275,5 @@ function buildSections(turn: TurnContextRecord): Section[] {
     { label: 'Rewritten prompt', body: rewrittenBody },
     { label: `Resolved references (${refs.length})`, body: refsBody },
     { label: `Recalled facts (${facts.length})`, body: factsBody },
-    { label: 'System prompt', body: turn.systemPrompt || '(none)' },
   ];
 }

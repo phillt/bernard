@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { TurnContextStore, TURN_CONTEXT_MAX } from './turn-context.js';
+import { TurnContextStore } from './turn-context.js';
 import type { TurnContextRecord } from './turn-context.js';
 
 vi.mock('node:fs', () => ({
@@ -20,7 +20,6 @@ function makeRecord(turnIndex: number): TurnContextRecord {
     rewrittenInput: `Q${turnIndex}?`,
     resolvedReferences: [{ phrase: 'her', resolvedTo: 'Mia', sourceKey: 'people/mia' }],
     recalledFacts: [{ fact: 'Mia likes dogs', similarity: 0.42, domain: 'general' }],
-    systemPrompt: 'You are Bernard.',
   };
 }
 
@@ -55,9 +54,9 @@ describe('TurnContextStore', () => {
       // arrays unconditionally — a malformed persisted row must be dropped.
       const records = [
         makeRecord(0),
-        { turnIndex: 'oops', originalInput: 'x', rewrittenInput: 'x', systemPrompt: '', resolvedReferences: [], recalledFacts: [] },
-        { turnIndex: 1, timestamp: 0, originalInput: 'x', rewrittenInput: 'x', systemPrompt: '' }, // no arrays
-        { turnIndex: 2, timestamp: 0, rewrittenInput: 'x', systemPrompt: '', resolvedReferences: [], recalledFacts: [] }, // no originalInput
+        { turnIndex: 'oops', originalInput: 'x', rewrittenInput: 'x', resolvedReferences: [], recalledFacts: [] },
+        { turnIndex: 1, timestamp: 0, originalInput: 'x', rewrittenInput: 'x' }, // no arrays
+        { turnIndex: 2, timestamp: 0, rewrittenInput: 'x', resolvedReferences: [], recalledFacts: [] }, // no originalInput
         makeRecord(3),
         null,
         42,
@@ -77,34 +76,22 @@ describe('TurnContextStore', () => {
   });
 
   describe('save', () => {
-    it('performs atomic write with tmp + rename, compact JSON', () => {
+    it('performs atomic write with tmp + rename', () => {
       const records = [makeRecord(0)];
       store.save(records);
 
       expect(fs.mkdirSync).toHaveBeenCalledWith(expect.stringContaining('bernard'), {
         recursive: true,
       });
-      // Compact (not pretty-printed) — records carry full system prompts.
       expect(fs.writeFileSync).toHaveBeenCalledWith(
         expect.stringContaining('.tmp'),
-        JSON.stringify(records),
+        JSON.stringify(records, null, 2),
         'utf-8',
       );
       expect(fs.renameSync).toHaveBeenCalledWith(
         expect.stringContaining('.tmp'),
         expect.stringContaining('turn-context.json'),
       );
-    });
-
-    it('caps retention at TURN_CONTEXT_MAX, keeping the most recent records', () => {
-      const records = Array.from({ length: TURN_CONTEXT_MAX + 5 }, (_, i) => makeRecord(i));
-      store.save(records);
-
-      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
-      expect(written).toHaveLength(TURN_CONTEXT_MAX);
-      // Oldest 5 dropped off the front; last record is the newest.
-      expect(written[0].turnIndex).toBe(5);
-      expect(written[TURN_CONTEXT_MAX - 1].turnIndex).toBe(TURN_CONTEXT_MAX + 4);
     });
   });
 

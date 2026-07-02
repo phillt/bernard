@@ -15,8 +15,6 @@ function renderViewer(agent: Agent) {
   return render(createElement(DimensionsProvider, null, createElement(ContextViewer, { agent })));
 }
 
-const LONG_PROMPT = 'You are Bernard.\n' + 'system line '.repeat(300);
-
 const TURNS: TurnContextRecord[] = [
   {
     turnIndex: 0,
@@ -25,7 +23,6 @@ const TURNS: TurnContextRecord[] = [
     rewrittenInput: "What is my daughter Mia's birthday?",
     resolvedReferences: [{ phrase: 'her', resolvedTo: 'Mia', sourceKey: 'people/mia' }],
     recalledFacts: [{ fact: 'Mia was born 2018-03-04', similarity: 0.51, domain: 'general' }],
-    systemPrompt: LONG_PROMPT,
   },
   {
     turnIndex: 1,
@@ -34,7 +31,6 @@ const TURNS: TurnContextRecord[] = [
     rewrittenInput: 'thanks',
     resolvedReferences: [],
     recalledFacts: [],
-    systemPrompt: 'You are Bernard.',
   },
 ];
 
@@ -62,7 +58,6 @@ describe('ContextViewer', () => {
     expect(frame).toContain('Rewritten prompt');
     expect(frame).toContain('Resolved references (1)');
     expect(frame).toContain('Recalled facts (1)');
-    expect(frame).toContain('System prompt');
     // Right panel defaults to the first section's body.
     expect(frame).toContain("what's her bday");
   });

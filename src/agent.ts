@@ -118,8 +118,6 @@ export class Agent {
    * {@link clearHistory}; loaded on resume via {@link setTurnContext}.
    */
   private turnContext: TurnContextRecord[] = [];
-  /** Full system prompt rendered for the most recent turn (for the context viewer). */
-  private lastSystemPrompt = '';
   /**
    * Semantic response cache (#269, Layer 3). Opt-in via `config.semanticCache`.
    * Only consulted/populated for read-only Q&A turns (no tool actions).
@@ -658,8 +656,6 @@ export class Agent {
       // Pre-render the system prompt once so a single `getModelProfile` call
       // shapes both the preflight estimate and the runDefinition call.
       const systemForEstimate = buildMainSystemPrompt(this.ctx, inputBase, profile);
-      // Snapshot the rendered system prompt for the Shift+Tab context viewer.
-      this.lastSystemPrompt = systemForEstimate;
       const input: MainInput = { ...inputBase, systemPrompt: systemForEstimate };
       const HARD_LIMIT_RATIO = 0.9;
       const contextWindow = getContextWindow(mainModel, this.config.tokenWindow);
@@ -945,9 +941,8 @@ export class Agent {
 
       // Parallel snapshot for the Shift+Tab "Prompt & Context" viewer: the
       // prompt-assembly trail (original vs. rewritten input, resolved refs,
-      // recalled facts) plus the full system prompt. Recorded for every
-      // completed turn (every turn has a system prompt); the store caps
-      // retention at save time since system prompts are large.
+      // recalled facts). Recorded for every completed turn. Intentionally does
+      // NOT capture the system prompt — that's internal infra, not for disk/UI.
       this.turnContext.push({
         turnIndex: userTurnIndex,
         timestamp: Date.now(),
@@ -955,7 +950,6 @@ export class Agent {
         rewrittenInput: userInput,
         resolvedReferences: this.lastResolvedReferences.map((e) => ({ ...e })),
         recalledFacts: this.lastRAGResults.map((f) => ({ ...f })),
-        systemPrompt: this.lastSystemPrompt,
       });
 
       // Per-turn qualifier outcome (#167). One structured line that pairs the
@@ -1120,7 +1114,6 @@ export class Agent {
     this.lastCitedSources = [];
     this.turnProvenance = [];
     this.turnContext = [];
-    this.lastSystemPrompt = '';
     this.ctx.verification.clear();
     this.ctx.provenance.clear();
     this.ctx.postWriteChecks.length = 0;
