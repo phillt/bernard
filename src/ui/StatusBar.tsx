@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Box, Text } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { formatTokenCount, finiteOr0, type SpinnerStats } from '../output.js';
-import { formatTurnCost, formatCostSuffix } from '../usage-report.js';
+import { formatUsd, computeTurnUsageReport } from '../usage-report.js';
 import { getContextWindow, COMPRESSION_THRESHOLD } from '../context.js';
 import type { Agent } from '../agent.js';
 
@@ -119,11 +119,11 @@ export function StatusBar({ agent }: StatusBarProps) {
 
   const up = stats ? formatTokenCount(stats.turnPromptTokens) : '0';
   const down = stats ? formatTokenCount(stats.turnCompletionTokens) : '0';
-  // Estimated turn cost (#258), e.g. ` ~$0.07`. Empty when no priced tokens yet.
-  const cost = formatTurnCost(stats);
-  // Cumulative session cost across all turns; rendered only once it's > 0.
-  const sessionSuffix = formatCostSuffix(stats?.sessionCostUsd);
-  const sessionCost = sessionSuffix ? `session ${sessionSuffix}   ` : '';
+  // Estimated turn cost (#258) and cumulative session cost. Both always shown —
+  // `formatUsd` renders `$0.00` when nothing is priced yet, so the money cells
+  // never disappear (they'd otherwise pop in/out and shift the bar).
+  const turnCost = stats ? `~${formatUsd(computeTurnUsageReport(stats).totalCostUsd ?? 0)}` : '';
+  const sessionCost = `~${formatUsd(stats?.sessionCostUsd ?? 0)}`;
   const latestPromptTokens = stats ? finiteOr0(stats.latestPromptTokens) : 0;
   const contextWindow = stats ? getContextWindow(stats.model, stats.contextWindowOverride) : 1;
   const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;
@@ -147,46 +147,67 @@ export function StatusBar({ agent }: StatusBarProps) {
   // portion pops.
   const fillColor = freePct > 25 ? colors.muted : freePct > 5 ? colors.warning : colors.accent;
 
-  return (
-    <Box justifyContent="flex-end">
-      {strategy && (
-        <Text color={strategy === 'react' ? colors.accent : colors.muted}>
-          {strategy === 'react' ? '◆ coordinator' : '◇ normal'}
-          {'   '}
+  // Each readout is its own group; groups are joined by the same `  ·  ` dot
+  // divider the left HintBar uses, and every group leads with an accent-colored
+  // label (mirroring the accent keys on the left) so the labels stand out from
+  // the muted values. The token readout + context gauge only render once real
+  // token stats exist — before the first stats flush (strategy set, stats still
+  // null) an all-empty bar would be visual noise. `turn` is the per-turn
+  // odometer (full turn cost — main agent plus any sub-agents / wrappers / PAC
+  // it spawns — reset each turn); `ctx` is the current main-agent input size
+  // (latest step's prompt tokens) — the number the gauge actually depicts.
+  const groups: ReactNode[] = [];
+
+  if (strategy) {
+    groups.push(
+      <Text key="strategy" color={strategy === 'react' ? colors.accent : colors.muted}>
+        {strategy === 'react' ? '◆ coordinator' : '◇ normal'}
+      </Text>,
+    );
+  }
+
+  if (stats) {
+    groups.push(
+      <Text key="turn">
+        <Text color={colors.accent}>turn </Text>
+        <Text color={upPulse ? colors.accent : colors.muted} bold={upPulse}>
+          {up}↑
         </Text>
-      )}
-      {/* The token readout + context gauge only render once real token stats
-          exist — before the first stats flush (strategy set, stats still null)
-          an all-empty bar would be visual noise. `turn` is the per-turn
-          odometer (full turn cost — main agent plus any sub-agents / wrappers /
-          PAC it spawns — reset each turn); `ctx` is the current main-agent input
-          size (latest step's prompt tokens) — the number the gauge actually
-          depicts, so the two can't be confused. */}
-      {stats && (
-        <>
-          <Text color={colors.muted}>turn </Text>
-          <Text color={upPulse ? colors.accent : colors.muted} bold={upPulse}>
-            {up}↑
+        <Text color={colors.muted}> </Text>
+        <Text color={downPulse ? colors.accent : colors.muted} bold={downPulse}>
+          {down}↓
+        </Text>
+        <Text color={colors.muted}> {turnCost}</Text>
+      </Text>,
+      <Text key="session">
+        <Text color={colors.accent}>session </Text>
+        <Text color={colors.muted}>{sessionCost}</Text>
+      </Text>,
+      <Text key="ctx">
+        <Text color={colors.accent}>ctx </Text>
+        <Text color={colors.muted}>{formatTokenCount(stats.latestPromptTokens)} </Text>
+        {filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
+        {halfCount > 0 && <Text color={fillColor}>◐</Text>}
+        {emptyCount > 0 && (
+          <Text color={colors.muted} dimColor>
+            {'○'.repeat(emptyCount)}
           </Text>
-          <Text color={colors.muted}> </Text>
-          <Text color={downPulse ? colors.accent : colors.muted} bold={downPulse}>
-            {down}↓
-          </Text>
-          <Text color={colors.muted}>
-            {cost}
-            {'   '}
-          </Text>
-          {sessionCost ? <Text color={colors.muted}>{sessionCost}</Text> : null}
-          <Text color={colors.muted}>ctx {formatTokenCount(stats.latestPromptTokens)} </Text>
-          {filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
-          {halfCount > 0 && <Text color={fillColor}>◐</Text>}
-          {emptyCount > 0 && (
-            <Text color={colors.muted} dimColor>
-              {'○'.repeat(emptyCount)}
-            </Text>
-          )}
-        </>
-      )}
-    </Box>
-  );
+        )}
+      </Text>,
+    );
+  }
+
+  const withDividers: ReactNode[] = [];
+  groups.forEach((group, i) => {
+    if (i > 0) {
+      withDividers.push(
+        <Text key={`div${i}`} color={colors.muted}>
+          {'  ·  '}
+        </Text>,
+      );
+    }
+    withDividers.push(group);
+  });
+
+  return <Box justifyContent="flex-end">{withDividers}</Box>;
 }
