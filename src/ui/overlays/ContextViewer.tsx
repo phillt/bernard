@@ -3,6 +3,8 @@ import { Box, Text, useInput } from 'ink';
 import type { Agent } from '../../agent.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 import type { TurnContextRecord } from '../../turn-context.js';
+import type { ResolvedEntry } from '../../reference-resolver.js';
+import type { RAGSearchResult } from '../../rag.js';
 import { getThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
 import { getDomain } from '../../domains.js';
@@ -42,10 +44,11 @@ export function ContextViewer({ agent, onClose, onCycleTab }: ContextViewerProps
   const colors = getThemeColors();
   const { columns: cols, rows } = useDimensionsCtx();
   const viewport = viewerViewport(rows, { tabCount: VIEWER_TABS.length });
-  const turns = agent.getTurnContext();
+  // Immutable during viewer interaction — memoize so cursor/scroll re-renders
+  // don't re-copy the (up to TURN_CONTEXT_MAX) records on every keypress.
+  const turns = useMemo(() => agent.getTurnContext(), [agent]);
 
-  // `null` = turn list; a number = the index into `turns` we've drilled into.
-  const [drillTarget, setDrillTarget] = useState<number | null>(null);
+  const [drilled, setDrilled] = useState(false);
   const [turnCursor, setTurnCursor] = useState(0);
   const [turnOffset, setTurnOffset] = useState(0);
   const [secCursor, setSecCursor] = useState(0);
@@ -54,12 +57,12 @@ export function ContextViewer({ agent, onClose, onCycleTab }: ContextViewerProps
   const [focus, setFocus] = useState<'list' | 'content'>('list');
   const [contentOffset, setContentOffset] = useState(0);
 
-  const atList = drillTarget === null;
-  const drilledTurn = atList ? null : turns[drillTarget];
-  const sections = useMemo(
-    () => (drilledTurn ? buildSections(drilledTurn) : []),
-    [drilledTurn],
-  );
+  // The drilled turn is always the one under the cursor. If it's somehow
+  // missing (e.g. the record set shrank), fall back to the list rather than
+  // dereferencing undefined.
+  const drilledTurn = drilled ? turns[turnCursor] : undefined;
+  const atList = drilledTurn === undefined;
+  const sections = useMemo(() => (drilledTurn ? buildSections(drilledTurn) : []), [drilledTurn]);
 
   // --- Split-panel geometry (only meaningful when drilled in) ---
   const usableCols = Math.max(20, cols - 4); // App wraps the overlay in paddingX={2}.
@@ -88,7 +91,7 @@ export function ContextViewer({ agent, onClose, onCycleTab }: ContextViewerProps
       const delta = navDelta(input, key, viewport, turns.length);
       if (delta !== null) return void moveTurn(delta);
       if (key.return || key.rightArrow) {
-        setDrillTarget(turnCursor);
+        setDrilled(true);
         setSecCursor(0);
         setSecOffset(0);
         setFocus('list');
@@ -113,7 +116,7 @@ export function ContextViewer({ agent, onClose, onCycleTab }: ContextViewerProps
       }
       // focus === 'list'
       if (key.escape || key.leftArrow) {
-        setDrillTarget(null);
+        setDrilled(false);
         return;
       }
       if (sections.length === 0) return;
@@ -172,8 +175,8 @@ export function ContextViewer({ agent, onClose, onCycleTab }: ContextViewerProps
     );
   }
 
-  // Drilled in: `drillTarget` is a valid index, so the turn is non-null.
-  const turn = drilledTurn!;
+  // Drilled in: `atList` is false only when `drilledTurn` is defined.
+  const turn = drilledTurn;
   const position =
     focus === 'content'
       ? {
@@ -245,25 +248,32 @@ function buildSections(turn: TurnContextRecord): Section[] {
       ? '(unchanged — the rewriter left the input as-is)'
       : turn.rewrittenInput;
 
+  // Guard the array elements defensively: the arrays come off disk, and a
+  // partial/hand-edited record could carry a null or malformed entry that would
+  // otherwise crash the whole Ink tree on render.
+  const refs = turn.resolvedReferences.filter((r): r is ResolvedEntry => !!r && typeof r === 'object');
+  const facts = turn.recalledFacts.filter((f): f is RAGSearchResult => !!f && typeof f === 'object');
+
   const refsBody =
-    turn.resolvedReferences.length === 0
+    refs.length === 0
       ? '(no references resolved this turn)'
-      : turn.resolvedReferences
-          .map((r) => `"${r.phrase}" → ${r.resolvedTo}   [${r.sourceKey}]`)
-          .join('\n');
+      : refs.map((r) => `"${r.phrase}" → ${r.resolvedTo}   [${r.sourceKey}]`).join('\n');
 
   const factsBody =
-    turn.recalledFacts.length === 0
+    facts.length === 0
       ? '(no memory facts recalled this turn)'
-      : turn.recalledFacts
-          .map((f) => `• [${getDomain(f.domain).name}] ${f.fact} (sim ${f.similarity.toFixed(2)})`)
+      : facts
+          .map(
+            (f) =>
+              `• [${getDomain(f.domain).name}] ${f.fact} (sim ${Number(f.similarity).toFixed(2)})`,
+          )
           .join('\n');
 
   return [
     { label: 'Original input', body: turn.originalInput },
     { label: 'Rewritten prompt', body: rewrittenBody },
-    { label: `Resolved references (${turn.resolvedReferences.length})`, body: refsBody },
-    { label: `Recalled facts (${turn.recalledFacts.length})`, body: factsBody },
+    { label: `Resolved references (${refs.length})`, body: refsBody },
+    { label: `Recalled facts (${facts.length})`, body: factsBody },
     { label: 'System prompt', body: turn.systemPrompt || '(none)' },
   ];
 }

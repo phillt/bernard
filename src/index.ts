@@ -518,12 +518,18 @@ async function runInkRepl(args: {
       }
     }
 
-    try {
-      historyStore.save(agent.getHistory());
-      provenanceHistoryStore.save(agent.getTurnProvenance());
-      turnContextStore.save(agent.getTurnContext());
-    } catch (err) {
-      debugLog('persist:error', err instanceof Error ? err.message : String(err));
+    // Independent try/catch per store so a failure saving one (e.g. a disk-full
+    // burst on the first write) doesn't skip the others.
+    for (const [label, save] of [
+      ['history', () => historyStore.save(agent.getHistory())],
+      ['provenance', () => provenanceHistoryStore.save(agent.getTurnProvenance())],
+      ['turn-context', () => turnContextStore.save(agent.getTurnContext())],
+    ] as const) {
+      try {
+        save();
+      } catch (err) {
+        debugLog('persist:error', { store: label, message: err instanceof Error ? err.message : String(err) });
+      }
     }
 
     try {

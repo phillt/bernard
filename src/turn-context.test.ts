@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { TurnContextStore } from './turn-context.js';
+import { TurnContextStore, TURN_CONTEXT_MAX } from './turn-context.js';
 import type { TurnContextRecord } from './turn-context.js';
 
 vi.mock('node:fs', () => ({
@@ -77,22 +77,34 @@ describe('TurnContextStore', () => {
   });
 
   describe('save', () => {
-    it('performs atomic write with tmp + rename', () => {
+    it('performs atomic write with tmp + rename, compact JSON', () => {
       const records = [makeRecord(0)];
       store.save(records);
 
       expect(fs.mkdirSync).toHaveBeenCalledWith(expect.stringContaining('bernard'), {
         recursive: true,
       });
+      // Compact (not pretty-printed) — records carry full system prompts.
       expect(fs.writeFileSync).toHaveBeenCalledWith(
         expect.stringContaining('.tmp'),
-        JSON.stringify(records, null, 2),
+        JSON.stringify(records),
         'utf-8',
       );
       expect(fs.renameSync).toHaveBeenCalledWith(
         expect.stringContaining('.tmp'),
         expect.stringContaining('turn-context.json'),
       );
+    });
+
+    it('caps retention at TURN_CONTEXT_MAX, keeping the most recent records', () => {
+      const records = Array.from({ length: TURN_CONTEXT_MAX + 5 }, (_, i) => makeRecord(i));
+      store.save(records);
+
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+      expect(written).toHaveLength(TURN_CONTEXT_MAX);
+      // Oldest 5 dropped off the front; last record is the newest.
+      expect(written[0].turnIndex).toBe(5);
+      expect(written[TURN_CONTEXT_MAX - 1].turnIndex).toBe(TURN_CONTEXT_MAX + 4);
     });
   });
 

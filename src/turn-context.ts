@@ -1,7 +1,7 @@
-import * as fs from 'node:fs';
 import type { ResolvedEntry } from './reference-resolver.js';
 import type { RAGSearchResult } from './rag.js';
-import { STATE_DIR, TURN_CONTEXT_FILE } from './paths.js';
+import { TURN_CONTEXT_FILE } from './paths.js';
+import { PerTurnStore } from './per-turn-store.js';
 
 /**
  * Snapshot of everything the pre-turn pipeline fed the main agent for one
@@ -32,51 +32,39 @@ export interface TurnContextRecord {
 /**
  * Cap on retained per-turn context records. System prompts are large (tens of
  * KB each), so — unlike the unbounded provenance history — we keep only the
- * most recent turns to bound the on-disk file. Older turns drop off the front.
+ * most recent turns to bound the on-disk file. Enforced at save time by the
+ * store; the oldest turns drop off the front.
  */
 export const TURN_CONTEXT_MAX = 100;
 
+function isTurnContextRecord(entry: unknown): entry is TurnContextRecord {
+  if (typeof entry !== 'object' || entry === null) return false;
+  const e = entry as Partial<TurnContextRecord>;
+  return (
+    typeof e.turnIndex === 'number' &&
+    typeof e.timestamp === 'number' &&
+    typeof e.originalInput === 'string' &&
+    typeof e.rewrittenInput === 'string' &&
+    typeof e.systemPrompt === 'string' &&
+    Array.isArray(e.resolvedReferences) &&
+    Array.isArray(e.recalledFacts)
+  );
+}
+
 /**
  * Persists the per-turn prompt/context snapshots that power the Shift+Tab
- * "Prompt & Context" viewer. Mirror of {@link ProvenanceHistoryStore}: atomic
- * writes (write-to-temp then rename), tolerant load that drops malformed rows.
+ * "Prompt & Context" viewer. Sibling of {@link ProvenanceHistoryStore}; both
+ * are thin {@link PerTurnStore} instances. Capped at {@link TURN_CONTEXT_MAX}
+ * and stored compact (records carry full system prompts, so pretty-printing
+ * would bloat the file for no benefit — it's never hand-edited).
  */
-export class TurnContextStore {
-  load(): TurnContextRecord[] {
-    try {
-      const data = fs.readFileSync(TURN_CONTEXT_FILE, 'utf-8');
-      const parsed = JSON.parse(data);
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter((entry: unknown): entry is TurnContextRecord => {
-        if (typeof entry !== 'object' || entry === null) return false;
-        const e = entry as Partial<TurnContextRecord>;
-        return (
-          typeof e.turnIndex === 'number' &&
-          typeof e.timestamp === 'number' &&
-          typeof e.originalInput === 'string' &&
-          typeof e.rewrittenInput === 'string' &&
-          typeof e.systemPrompt === 'string' &&
-          Array.isArray(e.resolvedReferences) &&
-          Array.isArray(e.recalledFacts)
-        );
-      });
-    } catch {
-      return [];
-    }
-  }
-
-  save(records: TurnContextRecord[]): void {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    const tmp = TURN_CONTEXT_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(records, null, 2), 'utf-8');
-    fs.renameSync(tmp, TURN_CONTEXT_FILE);
-  }
-
-  clear(): void {
-    try {
-      fs.unlinkSync(TURN_CONTEXT_FILE);
-    } catch {
-      // file may not exist — ignore
-    }
+export class TurnContextStore extends PerTurnStore<TurnContextRecord> {
+  constructor() {
+    super({
+      filePath: TURN_CONTEXT_FILE,
+      validate: isTurnContextRecord,
+      pretty: false,
+      maxRecords: TURN_CONTEXT_MAX,
+    });
   }
 }

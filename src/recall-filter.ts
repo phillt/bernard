@@ -198,6 +198,11 @@ export async function recallFilter(
       return { status: 'noop' };
     }
 
+    // If the user aborted while the model was responding, don't commit any
+    // side effects: this turn's context is discarded by the caller, so bumping
+    // TTL for facts that were never injected would skew the access heuristics.
+    if (abortSignal?.aborted) return { status: 'noop' };
+
     const kept = candidates.filter((_, i) => keep.has(i + 1));
     debugLog('recall-filter:kept', { candidates: candidates.length, kept: kept.length });
 

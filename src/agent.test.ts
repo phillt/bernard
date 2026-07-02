@@ -1026,6 +1026,42 @@ describe('Agent', () => {
     expect((agent as any).previousRAGFacts).toEqual(new Set(['Sticky fact']));
   });
 
+  it('injected ragResults skip stickiness re-capping (LLM already selected)', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+    const mockRagStore = { search: vi.fn().mockResolvedValue([]), addFacts: vi.fn() };
+    const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
+
+    await agent.processInput('Hello', undefined, undefined, {
+      ragResults: [{ fact: 'a', similarity: 0.4, domain: 'general' }],
+    });
+
+    // The recall-filter already selected the relevant subset, so the agent must
+    // NOT let stickiness re-narrow it with the default top-5/domain + max-15 caps.
+    expect(mockApplyStickiness).toHaveBeenCalledWith(
+      [{ fact: 'a', similarity: 0.4, domain: 'general' }],
+      expect.any(Set),
+      { topKPerDomain: Infinity, maxResults: Infinity },
+    );
+  });
+
+  it('self-searched ragResults apply stickiness with default caps', async () => {
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+    const found = [{ fact: 'x', similarity: 0.8, domain: 'general' }];
+    const mockRagStore = { search: vi.fn().mockResolvedValue(found), addFacts: vi.fn() };
+    const agent = makeAgent(makeConfig(), toolOptions, store, { rag: mockRagStore as any });
+
+    await agent.processInput('Hello');
+
+    // No injection → the legacy path calls stickiness with its default caps (no opts arg).
+    expect(mockApplyStickiness).toHaveBeenCalledWith(found, expect.any(Set));
+  });
+
   it('injected empty ragResults suppress the agent search (filter kept nothing)', async () => {
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },

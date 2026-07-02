@@ -49,7 +49,7 @@ import { computeTurnUsageReport, priceUsageUsd } from './usage-report.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
-import { type TurnContextRecord, TURN_CONTEXT_MAX } from './turn-context.js';
+import { type TurnContextRecord } from './turn-context.js';
 import { SemanticResponseCache } from './semantic-cache.js';
 import { isPureQuestion } from './policy/tool-mode.js';
 import type { Step } from './plan-store.js';
@@ -483,6 +483,12 @@ export class Agent {
       this.history.push({ role: 'user', content: wrappedInput });
     }
 
+    // Snapshot the conversation turn position NOW, before the run — the
+    // maxTokens-continuation and empty-answer-retry loops in `wrapIterate` push
+    // synthetic `role:'user'` messages into history, so counting after the run
+    // would inflate the index for turns that hit those paths (#211 viewers).
+    const userTurnIndex = Math.max(0, this.history.filter((m) => m.role === 'user').length - 1);
+
     this.abortController = new AbortController();
     this.lastStepPromptTokens = 0;
     this.lastRAGResults = [];
@@ -598,8 +604,20 @@ export class Agent {
         }
 
         if (rawResults !== undefined) {
-          // Apply stickiness from previous turn
-          ragResults = applyStickiness(rawResults, this.previousRAGFacts);
+          // Apply stickiness from previous turn. On the injected recall-filter
+          // path the LLM already selected the relevant subset (from a set the
+          // filter widened to top-8/domain), so suppress stickiness's default
+          // top-5/domain + max-15 caps — otherwise, once sticky facts exist,
+          // they'd silently re-narrow the curated set and drop facts the filter
+          // kept (and left recordAccess's TTL bumps tracking). Boost + re-sort
+          // still apply; only the hard cap is lifted.
+          ragResults =
+            options?.ragResults !== undefined
+              ? applyStickiness(rawResults, this.previousRAGFacts, {
+                  topKPerDomain: Infinity,
+                  maxResults: Infinity,
+                })
+              : applyStickiness(rawResults, this.previousRAGFacts);
           this.lastRAGResults = ragResults;
 
           // Register each RAG hit as a citeable source. The id is exposed
@@ -913,11 +931,11 @@ export class Agent {
       // history), not the index within `turnProvenance` — otherwise turns
       // that registered no sources would compress the indices and the
       // viewer would show "Turn 2" for what the user typed as their 5th
-      // message. Derived from history so it's also correct on resume.
-      const userTurnCount = this.history.filter((m) => m.role === 'user').length;
+      // message. `userTurnIndex` was snapshotted before the run so synthetic
+      // continuation messages don't inflate it.
       if (this.lastSources.length > 0) {
         this.turnProvenance.push({
-          turnIndex: Math.max(0, userTurnCount - 1),
+          turnIndex: userTurnIndex,
           userInput: userInput,
           sources: this.lastSources.map((s) => ({ ...s })),
           citedIds: [...citedIds],
@@ -928,10 +946,10 @@ export class Agent {
       // Parallel snapshot for the Shift+Tab "Prompt & Context" viewer: the
       // prompt-assembly trail (original vs. rewritten input, resolved refs,
       // recalled facts) plus the full system prompt. Recorded for every
-      // completed turn (every turn has a system prompt), capped to bound the
-      // on-disk file since system prompts are large.
+      // completed turn (every turn has a system prompt); the store caps
+      // retention at save time since system prompts are large.
       this.turnContext.push({
-        turnIndex: Math.max(0, userTurnCount - 1),
+        turnIndex: userTurnIndex,
         timestamp: Date.now(),
         originalInput: options?.originalInput ?? userInput,
         rewrittenInput: userInput,
@@ -939,9 +957,6 @@ export class Agent {
         recalledFacts: this.lastRAGResults.map((f) => ({ ...f })),
         systemPrompt: this.lastSystemPrompt,
       });
-      if (this.turnContext.length > TURN_CONTEXT_MAX) {
-        this.turnContext.splice(0, this.turnContext.length - TURN_CONTEXT_MAX);
-      }
 
       // Per-turn qualifier outcome (#167). One structured line that pairs the
       // strategy the policy picked, the reason code, the realized step count,
