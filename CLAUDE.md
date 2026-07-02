@@ -171,7 +171,7 @@ Bernard follows the [XDG Base Directory Specification](https://specifications.fr
 | **Config** | `~/.config/bernard/`      | `profiles.json`, `preferences.json` (legacy, see below), `keys.json`, `custom-providers.json`, `.env`, `mcp.json`                                                             |
 | **Data**   | `~/.local/share/bernard/` | `memory/*.md`, `rag/`, `routines/*.json`, `specialists/*.json`, `correction-candidates/*.json`, `tool-profiles/*.json`, `cron/jobs.json`, `cron/alerts/`, `cron/notes/*.json` |
 | **Cache**  | `~/.cache/bernard/`       | `models/` (embeddings), `update-check.json`                                                                                                                                   |
-| **State**  | `~/.local/state/bernard/` | `conversation-history.json`, `provenance-history.json`, `turn-context.json`, `logs/*.jsonl`, `cron-daemon.pid`, `cron-daemon.log`                                                                                             |
+| **State**  | `~/.local/state/bernard/` | `conversation-history.json`, `provenance-history.json`, `turn-context.json`, `logs/*.jsonl`, `cron-daemon.pid`, `cron-daemon.log`                                             |
 
 Override with `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME` (must be absolute).
 
