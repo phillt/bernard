@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { MenuRow } from './MenuRow.js';
+import { HintRow, type KeyHint } from '../hints.js';
+import { getThemeColors } from '../../theme.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 
 /** One pre-rendered visual row. `node` MUST occupy exactly one terminal line. */
@@ -55,8 +57,8 @@ interface ViewerShellProps {
    * keeps the row reserved (blank) so the layout height stays stable.
    */
   position: { first: number; last: number; total: number } | null;
-  /** Dim key legend pinned to the very bottom. */
-  keyHints: string;
+  /** Key legend pinned to the very bottom, rendered via the shared {@link HintRow}. */
+  keyHints: readonly KeyHint[];
   /** The (already-windowed) content rows. */
   children: ReactNode;
   onClose?: () => void;
@@ -111,6 +113,7 @@ export function ViewerShell({
   onCycleTab = () => {},
   escClosesViewer = true,
 }: ViewerShellProps) {
+  const colors = getThemeColors();
   const { columns: cols } = useDimensionsCtx();
   // App wraps the overlay in paddingX={2}, so the usable width is cols - 4.
   const rule = '─'.repeat(Math.max(4, cols - 4));
@@ -130,10 +133,10 @@ export function ViewerShell({
       <Box flexDirection="column" flexGrow={1}>
         {children}
       </Box>
-      <Text dimColor>
+      <Text color={colors.muted}>
         {position ? `rows ${position.first}–${position.last} of ${position.total}` : ' '}
       </Text>
-      <Text dimColor>{rule}</Text>
+      <Text color={colors.muted}>{rule}</Text>
       {tabs.length > 0 && (
         <>
           <Box>
@@ -143,10 +146,10 @@ export function ViewerShell({
               </Box>
             ))}
           </Box>
-          <Text dimColor>{rule}</Text>
+          <Text color={colors.muted}>{rule}</Text>
         </>
       )}
-      <Text dimColor>{keyHints}</Text>
+      <HintRow hints={keyHints} />
     </Box>
   );
 }

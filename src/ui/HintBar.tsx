@@ -1,5 +1,5 @@
-import { Box, Text } from 'ink';
-import { getThemeColors } from '../theme.js';
+import { Box } from 'ink';
+import { HintRow, type KeyHint } from './hints.js';
 
 interface HintBarProps {
   busy: boolean;
@@ -9,33 +9,22 @@ interface HintBarProps {
   scrollable?: boolean;
 }
 
-interface Hint {
-  key: string;
-  label: string;
-}
-
 /**
  * Renders contextual keystroke hints in the bottom-left, mirroring StatusBar
  * on the right. Picks the hint set from the most-specific state first:
  * overlay → busy → slash autocomplete → idle. The same physical row holds
- * both bars so the chrome stays a single line.
+ * both bars so the chrome stays a single line. Shares the accent-key/muted-label
+ * rendering with the Shift+Tab viewer legend via {@link HintRow}.
  */
 export function HintBar({ busy, overlayActive, slashActive, scrollable }: HintBarProps) {
-  const colors = getThemeColors();
-  const hints = pickHints({ busy, overlayActive, slashActive, scrollable });
   return (
     <Box>
-      {hints.map((hint, idx) => (
-        <Text key={hint.key} color={colors.muted}>
-          {idx > 0 ? '  ·  ' : ''}
-          <Text color={colors.accent}>{hint.key}</Text> {hint.label}
-        </Text>
-      ))}
+      <HintRow hints={pickHints({ busy, overlayActive, slashActive, scrollable })} />
     </Box>
   );
 }
 
-function pickHints(state: HintBarProps): Hint[] {
+function pickHints(state: HintBarProps): KeyHint[] {
   if (state.overlayActive) {
     return [{ key: 'esc', label: 'close' }];
   }
@@ -49,7 +38,7 @@ function pickHints(state: HintBarProps): Hint[] {
       { key: '↵', label: 'run' },
     ];
   }
-  const idle: Hint[] = [
+  const idle: KeyHint[] = [
     { key: '/', label: 'commands' },
     { key: 'shift+tab', label: 'status' },
   ];

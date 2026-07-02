@@ -71,7 +71,11 @@ export function ScrollableOverlay({
       tabs={tabs}
       activeTab={activeTab}
       position={position}
-      keyHints="↑/↓ scroll · ⇧⇥ switch tab · esc close"
+      keyHints={[
+        { key: '↑/↓', label: 'scroll' },
+        { key: '⇧⇥', label: 'switch tab' },
+        { key: 'esc', label: 'close' },
+      ]}
       onClose={onClose}
       onCycleTab={onCycleTab}
     >

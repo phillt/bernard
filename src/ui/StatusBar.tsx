@@ -3,6 +3,7 @@ import { Box, Text } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { formatTokenCount, finiteOr0, type SpinnerStats } from '../output.js';
 import { formatUsd, computeTurnUsageReport } from '../usage-report.js';
+import { HintDivider, HintEntry } from './hints.js';
 import { getContextWindow, COMPRESSION_THRESHOLD } from '../context.js';
 import type { Agent } from '../agent.js';
 
@@ -167,44 +168,50 @@ export function StatusBar({ agent }: StatusBarProps) {
   }
 
   if (stats) {
+    // Each readout is a shared HintEntry (accent label + muted value), so the
+    // right bar reads with the same grammar as the left HintBar. The values are
+    // composite — the ↑/↓ counters pulse to accent, and the ctx gauge dots keep
+    // their fill color — because nested Text overrides HintEntry's muted default.
     groups.push(
-      <Text key="turn">
-        <Text color={colors.accent}>turn </Text>
-        <Text color={upPulse ? colors.accent : colors.muted} bold={upPulse}>
-          {up}↑
-        </Text>
-        <Text color={colors.muted}> </Text>
-        <Text color={downPulse ? colors.accent : colors.muted} bold={downPulse}>
-          {down}↓
-        </Text>
-        <Text color={colors.muted}> {turnCost}</Text>
-      </Text>,
-      <Text key="session">
-        <Text color={colors.accent}>session </Text>
-        <Text color={colors.muted}>{sessionCost}</Text>
-      </Text>,
-      <Text key="ctx">
-        <Text color={colors.accent}>ctx </Text>
-        <Text color={colors.muted}>{formatTokenCount(stats.latestPromptTokens)} </Text>
-        {filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
-        {halfCount > 0 && <Text color={fillColor}>◐</Text>}
-        {emptyCount > 0 && (
-          <Text color={colors.muted} dimColor>
-            {'○'.repeat(emptyCount)}
-          </Text>
-        )}
-      </Text>,
+      <HintEntry
+        key="turn"
+        hintKey="turn"
+        label={
+          <>
+            <Text color={upPulse ? colors.accent : colors.muted} bold={upPulse}>
+              {up}↑
+            </Text>{' '}
+            <Text color={downPulse ? colors.accent : colors.muted} bold={downPulse}>
+              {down}↓
+            </Text>{' '}
+            {turnCost}
+          </>
+        }
+      />,
+      <HintEntry key="session" hintKey="session" label={sessionCost} />,
+      <HintEntry
+        key="ctx"
+        hintKey="ctx"
+        label={
+          <>
+            {formatTokenCount(stats.latestPromptTokens)}{' '}
+            {filledCount > 0 && <Text color={fillColor}>{'●'.repeat(filledCount)}</Text>}
+            {halfCount > 0 && <Text color={fillColor}>◐</Text>}
+            {emptyCount > 0 && (
+              <Text color={colors.muted} dimColor>
+                {'○'.repeat(emptyCount)}
+              </Text>
+            )}
+          </>
+        }
+      />,
     );
   }
 
   const withDividers: ReactNode[] = [];
   groups.forEach((group, i) => {
     if (i > 0) {
-      withDividers.push(
-        <Text key={`div${i}`} color={colors.muted}>
-          {'  ·  '}
-        </Text>,
-      );
+      withDividers.push(<HintDivider key={`div${i}`} />);
     }
     withDividers.push(group);
   });

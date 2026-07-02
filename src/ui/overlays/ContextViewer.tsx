@@ -9,6 +9,7 @@ import { getThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
 import { getDomain } from '../../domains.js';
 import { ViewerShell, viewerViewport } from './ViewerShell.js';
+import type { KeyHint } from '../hints.js';
 import { MenuRow, MENU_MARKER } from './MenuRow.js';
 import { VIEWER_TABS } from './viewer-tabs.js';
 import { navDelta, clamp, clampOffset, listPosition, wrapText } from './viewer-util.js';
@@ -150,7 +151,12 @@ export function ContextViewer({ agent, onClose, onCycleTab }: ContextViewerProps
         tabs={VIEWER_TABS}
         activeTab="context"
         position={position}
-        keyHints="↑/↓ move · ↵ open · ⇧⇥ switch tab · esc close"
+        keyHints={[
+          { key: '↑/↓', label: 'move' },
+          { key: '↵', label: 'open' },
+          { key: '⇧⇥', label: 'switch tab' },
+          { key: 'esc', label: 'close' },
+        ]}
         onClose={onClose}
         onCycleTab={onCycleTab}
       >
@@ -186,11 +192,19 @@ export function ContextViewer({ agent, onClose, onCycleTab }: ContextViewerProps
           total: lines.length,
         }
       : listPosition(secOffset, bodyRows, sections.length);
-  const readHint = contentOverflows ? ' · → read' : '';
-  const keyHints =
+  const keyHints: KeyHint[] =
     focus === 'content'
-      ? '↑/↓ scroll · esc/← back to list · ⇧⇥ switch tab'
-      : `↑/↓ move${readHint} · esc/← back · ⇧⇥ switch tab`;
+      ? [
+          { key: '↑/↓', label: 'scroll' },
+          { key: 'esc/←', label: 'back to list' },
+          { key: '⇧⇥', label: 'switch tab' },
+        ]
+      : [
+          { key: '↑/↓', label: 'move' },
+          ...(contentOverflows ? [{ key: '→', label: 'read' }] : []),
+          { key: 'esc/←', label: 'back' },
+          { key: '⇧⇥', label: 'switch tab' },
+        ];
 
   return (
     <ViewerShell

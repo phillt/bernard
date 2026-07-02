@@ -6,6 +6,7 @@ import type { SourceItem } from '../../provenance.js';
 import { getThemeColors, type ThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
 import { ViewerShell, viewerViewport } from './ViewerShell.js';
+import type { KeyHint } from '../hints.js';
 import { MenuRow, MENU_MARKER } from './MenuRow.js';
 import { VIEWER_TABS } from './viewer-tabs.js';
 import { navDelta, clamp, clampOffset, listPosition, wrapText } from './viewer-util.js';
@@ -162,7 +163,12 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
         tabs={VIEWER_TABS}
         activeTab="sources"
         position={position}
-        keyHints="↑/↓ move · ↵ open · ⇧⇥ switch tab · esc close"
+        keyHints={[
+          { key: '↑/↓', label: 'move' },
+          { key: '↵', label: 'open' },
+          { key: '⇧⇥', label: 'switch tab' },
+          { key: 'esc', label: 'close' },
+        ]}
         onClose={onClose}
         onCycleTab={onCycleTab}
       >
@@ -198,11 +204,19 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
           total: detail.lines.length,
         }
       : listPosition(srcOffset, bodyRows, sources.length);
-  const readHint = contentOverflows ? ' · → read' : '';
-  const keyHints =
+  const keyHints: KeyHint[] =
     focus === 'content'
-      ? '↑/↓ scroll · esc/← back to list · ⇧⇥ switch tab'
-      : `↑/↓ move${readHint} · esc/← back · ⇧⇥ switch tab`;
+      ? [
+          { key: '↑/↓', label: 'scroll' },
+          { key: 'esc/←', label: 'back to list' },
+          { key: '⇧⇥', label: 'switch tab' },
+        ]
+      : [
+          { key: '↑/↓', label: 'move' },
+          ...(contentOverflows ? [{ key: '→', label: 'read' }] : []),
+          { key: 'esc/←', label: 'back' },
+          { key: '⇧⇥', label: 'switch tab' },
+        ];
 
   return (
     <ViewerShell
