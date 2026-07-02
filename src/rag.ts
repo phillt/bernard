@@ -110,6 +110,14 @@ export class RAGStore {
    * already updated it.
    */
   private turnSearchCache = new Map<string, RAGSearchResult[]>();
+  /**
+   * Per-turn query-embedding cache. Maps the verbatim query string to its
+   * computed vector, so a query embedded once in a turn (e.g. the recall
+   * filter's widened `searchWithIds`) isn't re-embedded when the agent later
+   * falls back to `search()` with the same query. Shares the turn boundary with
+   * {@link turnSearchCache} (cleared together).
+   */
+  private turnEmbeddingCache = new Map<string, number[]>();
 
   constructor(config?: RAGStoreConfig) {
     this.topKPerDomain = config?.topKPerDomain ?? DEFAULT_TOP_K_PER_DOMAIN;
@@ -208,9 +216,9 @@ export class RAGStore {
     if (added > 0) {
       this.prune();
       this.persist();
-      // New facts could change search results — invalidate the per-turn cache
+      // New facts could change search results — invalidate the per-turn caches
       // so subsequent same-turn lookups pick them up (#171).
-      this.turnSearchCache.clear();
+      this.clearTurnCache();
     }
 
     debugLog('rag:addFacts', { added, total: this.memories.length, domain });
@@ -298,11 +306,19 @@ export class RAGStore {
 
   /** Embed a query string, returning the embedding vector or null on failure. */
   private async embedQuery(query: string, logLabel: string): Promise<number[] | null> {
+    const cacheOn = process.env.BERNARD_CACHE_ENABLED !== 'false';
+    if (cacheOn) {
+      const cached = this.turnEmbeddingCache.get(query);
+      if (cached) return cached;
+    }
+
     const provider = await getEmbeddingProvider();
     if (!provider) return null;
 
     try {
-      return Array.from((await provider.embed([query]))[0]);
+      const vector = Array.from((await provider.embed([query]))[0]);
+      if (cacheOn) this.turnEmbeddingCache.set(query, vector);
+      return vector;
     } catch (err) {
       debugLog(
         logLabel,
@@ -360,12 +376,14 @@ export class RAGStore {
   }
 
   /**
-   * Clears the per-turn search cache (#171). Called by the REPL at the start
-   * of each user turn so that any memory added or accessed in the previous
-   * turn is reflected in the next search.
+   * Clears the per-turn caches (#171): both the query→results search cache and
+   * the query→embedding cache. Called by the REPL at the start of each user
+   * turn so that any memory added or accessed in the previous turn is reflected
+   * in the next search, and internally whenever the memory set mutates.
    */
   clearTurnCache(): void {
     this.turnSearchCache.clear();
+    this.turnEmbeddingCache.clear();
   }
 
   /** List all facts as plain text lines. */
@@ -384,7 +402,7 @@ export class RAGStore {
   clear(): void {
     this.memories = [];
     this.persist();
-    this.turnSearchCache.clear();
+    this.clearTurnCache();
   }
 
   /** Total number of stored memories. */
@@ -451,7 +469,7 @@ export class RAGStore {
     this.memories = this.memories.filter((m) => !idSet.has(m.id));
     const deleted = before - this.memories.length;
     if (deleted > 0) {
-      this.turnSearchCache.clear();
+      this.clearTurnCache();
       this.persist();
     }
     return deleted;
@@ -466,7 +484,7 @@ export class RAGStore {
     );
     const expired = before - this.memories.length;
     if (expired > 0) {
-      this.turnSearchCache.clear();
+      this.clearTurnCache();
       debugLog('rag:pruneExpired', { expired });
       this.persist();
     }

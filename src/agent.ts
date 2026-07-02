@@ -571,7 +571,7 @@ export class Agent {
           }
         }
 
-        if (rawResults) {
+        if (rawResults !== undefined) {
           // Apply stickiness from previous turn
           ragResults = applyStickiness(rawResults, this.previousRAGFacts);
           this.lastRAGResults = ragResults;

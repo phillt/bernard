@@ -2691,12 +2691,7 @@ export function App({
       // turn finishes. When the rewriter substituted the text, pass the
       // original so <UserMessage> displays it (the rewrite is an LLM-only
       // detail) rather than the dispatched version.
-      const inflight = agent.processInput(
-        agentInput,
-        images,
-        resolvedEntries,
-        ragResults ? { ragResults } : undefined,
-      );
+      const inflight = agent.processInput(agentInput, images, resolvedEntries, { ragResults });
       commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });
       // Snapshot history length AFTER the user message push (synchronous) so
       // the ask_user scanner below knows where this turn's tool results begin.

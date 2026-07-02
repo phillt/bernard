@@ -373,7 +373,7 @@ export async function resolveReferences(
 
 const MAX_RENDERED_FIELD_CHARS = 200;
 
-function oneLine(value: string, max: number = MAX_RENDERED_FIELD_CHARS): string {
+export function oneLine(value: string, max: number = MAX_RENDERED_FIELD_CHARS): string {
   const flat = value
     .replace(/[\r\n\t]+/g, ' ')
     .replace(/\s+/g, ' ')

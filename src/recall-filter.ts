@@ -5,7 +5,7 @@ import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
-import { buildRecentTurnsBlock } from './reference-resolver.js';
+import { buildRecentTurnsBlock, oneLine } from './reference-resolver.js';
 import { buildRAGQuery, extractRecentUserTexts, extractRecentToolContext } from './rag-query.js';
 import { getDomain } from './domains.js';
 
@@ -66,14 +66,12 @@ where <numbers> are the ids of the candidate facts to keep (e.g. {"keep":[1,3,4]
 
 /** Renders the numbered candidate list the model selects from. */
 function buildCandidateBlock(candidates: RAGSearchResultWithId[]): string {
-  const lines: string[] = ['## Candidate facts'];
-  candidates.forEach((c, i) => {
-    const domain = getDomain(c.domain);
-    const trimmed = c.fact.trim().replace(/\s+/g, ' ');
-    const preview = trimmed.length > MAX_FACT_CHARS ? trimmed.slice(0, MAX_FACT_CHARS) + '…' : trimmed;
-    lines.push(`${i + 1}. [${domain.name}] ${preview}`);
-  });
-  return lines.join('\n');
+  return [
+    '## Candidate facts',
+    ...candidates.map(
+      (c, i) => `${i + 1}. [${getDomain(c.domain).name}] ${oneLine(c.fact, MAX_FACT_CHARS)}`,
+    ),
+  ].join('\n');
 }
 
 /** Parses `{"keep":[...]}` into a set of 1-based indices, or null on malformed input. */

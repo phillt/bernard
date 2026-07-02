@@ -311,6 +311,32 @@ describe('RAGStore', () => {
 
       expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBe(before);
     });
+
+    it('shares the per-turn embedding cache with search() (no re-embed on fallback)', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode for all editors'], 'test');
+
+      const embedSpy = vi.spyOn(mockProvider!, 'embed');
+      // recall-filter widens via searchWithIds; on a noop the agent falls back
+      // to search() with the SAME query string. The second call must reuse the
+      // cached embedding rather than re-embedding.
+      await store.searchWithIds('same query string', { threshold: -1 });
+      await store.search('same query string');
+
+      expect(embedSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-embeds after the turn boundary clears the cache', async () => {
+      const store = await createStore();
+      await store.addFacts(['User prefers dark mode for all editors'], 'test');
+
+      const embedSpy = vi.spyOn(mockProvider!, 'embed');
+      await store.searchWithIds('same query string', { threshold: -1 });
+      store.clearTurnCache();
+      await store.search('same query string');
+
+      expect(embedSpy).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('recordAccess', () => {
