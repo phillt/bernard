@@ -208,7 +208,11 @@ describe('resolveSiteModel — per-slot generation params (#286)', () => {
 
   it('routes a slot reasoningEffort to providerOptions.xai', async () => {
     seedParamsLineup({
-      premium: { provider: 'xai', model: 'grok-4-1-fast-reasoning', params: { reasoningEffort: 'high' } },
+      premium: {
+        provider: 'xai',
+        model: 'grok-4-1-fast-reasoning',
+        params: { reasoningEffort: 'high' },
+      },
       mid: { provider: 'xai', model: 'grok-4-fast-non-reasoning' },
       cheap: { provider: 'xai', model: 'grok-3-mini' },
     });
@@ -216,14 +220,20 @@ describe('resolveSiteModel — per-slot generation params (#286)', () => {
     const config = makeConfig({ activeLineupId: 'paramy', modelMode: 'optimize-performance' });
     const r = resolveSiteModel(config, 'main'); // premium slot
     expect(r.modelName).toBe('grok-4-1-fast-reasoning');
-    expect((r.providerOptions as Record<string, unknown>)?.xai).toEqual({ reasoningEffort: 'high' });
+    expect((r.providerOptions as Record<string, unknown>)?.xai).toEqual({
+      reasoningEffort: 'high',
+    });
   });
 
   it('a slot temperature overrides the per-site baseline', async () => {
     seedParamsLineup({
       premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
       mid: { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
-      cheap: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001', params: { temperature: 0.7 } },
+      cheap: {
+        provider: 'anthropic',
+        model: 'claude-haiku-4-5-20251001',
+        params: { temperature: 0.7 },
+      },
     });
     const { resolveSiteModel } = await loadModule();
     // balanced → rewriter resolves to the cheap slot.
@@ -245,7 +255,9 @@ describe('resolveSiteModel — per-slot generation params (#286)', () => {
       makeConfig({ activeLineupId: 'paramy', modelMode: 'optimize-performance' }),
       'main',
     );
-    expect(r.providerOptions).toEqual({ openai: { strictSchemas: false, reasoningEffort: 'high' } });
+    expect(r.providerOptions).toEqual({
+      openai: { strictSchemas: false, reasoningEffort: 'high' },
+    });
   });
 });
 

@@ -2941,9 +2941,10 @@ export function App({
    * user picks an item (with the active tab + item index) or Esc-cancels; the
    * driver ({@link runSettings}) loops on the resolved tab.
    */
-  function requestSettings(pending: Omit<PendingSettings, 'resolve'>): Promise<
-    | { cancelled: true }
-    | { cancelled: false; tab: SettingsTab; index: number; item: MenuItem }
+  function requestSettings(
+    pending: Omit<PendingSettings, 'resolve'>,
+  ): Promise<
+    { cancelled: true } | { cancelled: false; tab: SettingsTab; index: number; item: MenuItem }
   > {
     return new Promise((resolve) => {
       setPendingSettings({ ...pending, resolve });

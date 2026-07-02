@@ -271,7 +271,10 @@ export class RAGStore {
     memory.lastAccessed = now;
 
     // Extend expiresAt: base of 7d + log scaling by access count, capped at half TTL
-    const extensionDays = Math.min(this.ragTtlDays * 0.5, 7 + Math.log2(memory.accessCount + 1) * 3);
+    const extensionDays = Math.min(
+      this.ragTtlDays * 0.5,
+      7 + Math.log2(memory.accessCount + 1) * 3,
+    );
     const newExpiry = nowMs + extensionDays * 86400000;
     if (!memory.expiresAt || newExpiry > new Date(memory.expiresAt).getTime()) {
       memory.expiresAt = new Date(newExpiry).toISOString();

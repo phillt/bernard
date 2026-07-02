@@ -245,7 +245,16 @@ export function resolveSiteModel(
   const lineup = getActiveLineup();
   const slot = lineup.roles[role][tier];
   if (hasProviderKey(config, slot.provider)) {
-    return buildSiteModel(config, slot.provider, slot.model, 'policy', site, tier, lineup, slot.params);
+    return buildSiteModel(
+      config,
+      slot.provider,
+      slot.model,
+      'policy',
+      site,
+      tier,
+      lineup,
+      slot.params,
+    );
   }
   // Lineup slot points at a provider with no key — fall through to the
   // session-global so the turn doesn't crash. This is the only "silent

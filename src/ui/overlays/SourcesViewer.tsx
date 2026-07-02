@@ -388,5 +388,3 @@ function scalarString(v: unknown): string {
   if (v === null) return 'null';
   return typeof v === 'string' ? v : String(v);
 }
-
-

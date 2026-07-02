@@ -531,7 +531,10 @@ async function runInkRepl(args: {
       try {
         save();
       } catch (err) {
-        debugLog('persist:error', { store: label, message: err instanceof Error ? err.message : String(err) });
+        debugLog('persist:error', {
+          store: label,
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 

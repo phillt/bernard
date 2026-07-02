@@ -50,13 +50,25 @@ describe('TurnContextStore', () => {
     });
 
     it('filters entries missing required fields', () => {
-      // The viewer dereferences originalInput/systemPrompt and maps over the
+      // The viewer dereferences originalInput/rewrittenInput and maps over the
       // arrays unconditionally — a malformed persisted row must be dropped.
       const records = [
         makeRecord(0),
-        { turnIndex: 'oops', originalInput: 'x', rewrittenInput: 'x', resolvedReferences: [], recalledFacts: [] },
+        {
+          turnIndex: 'oops',
+          originalInput: 'x',
+          rewrittenInput: 'x',
+          resolvedReferences: [],
+          recalledFacts: [],
+        },
         { turnIndex: 1, timestamp: 0, originalInput: 'x', rewrittenInput: 'x' }, // no arrays
-        { turnIndex: 2, timestamp: 0, rewrittenInput: 'x', resolvedReferences: [], recalledFacts: [] }, // no originalInput
+        {
+          turnIndex: 2,
+          timestamp: 0,
+          rewrittenInput: 'x',
+          resolvedReferences: [],
+          recalledFacts: [],
+        }, // no originalInput
         makeRecord(3),
         null,
         42,

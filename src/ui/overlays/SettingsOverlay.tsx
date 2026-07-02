@@ -72,7 +72,9 @@ export function SettingsOverlay({
       return;
     }
     if (key.downArrow) {
-      setHighlight((h) => Math.min(items.length - 1, h + 1));
+      // Clamp the lower bound to 0 so a tab with no selectable items (only
+      // section headers) can't drive highlight negative via items.length - 1.
+      setHighlight((h) => Math.max(0, Math.min(items.length - 1, h + 1)));
       return;
     }
     if (/^[1-9]$/.test(input)) {

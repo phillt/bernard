@@ -240,9 +240,11 @@ export function ContextViewer({ agent, onClose, onCycleTab }: ContextViewerProps
           paddingX={1}
           width={cardWidth}
         >
-          {lines.slice(clampedContentOffset, clampedContentOffset + previewBudget).map((line, i) => (
-            <Text key={`p-${i}`}>{line || ' '}</Text>
-          ))}
+          {lines
+            .slice(clampedContentOffset, clampedContentOffset + previewBudget)
+            .map((line, i) => (
+              <Text key={`p-${i}`}>{line || ' '}</Text>
+            ))}
           {contentOverflows && (
             <Text dimColor>
               ↕ lines {clampedContentOffset + 1}–
@@ -266,8 +268,12 @@ function buildSections(turn: TurnContextRecord): Section[] {
   // Guard the array elements defensively: the arrays come off disk, and a
   // partial/hand-edited record could carry a null or malformed entry that would
   // otherwise crash the whole Ink tree on render.
-  const refs = turn.resolvedReferences.filter((r): r is ResolvedEntry => !!r && typeof r === 'object');
-  const facts = turn.recalledFacts.filter((f): f is RAGSearchResult => !!f && typeof f === 'object');
+  const refs = turn.resolvedReferences.filter(
+    (r): r is ResolvedEntry => !!r && typeof r === 'object',
+  );
+  const facts = turn.recalledFacts.filter(
+    (f): f is RAGSearchResult => !!f && typeof f === 'object',
+  );
 
   const refsBody =
     refs.length === 0

@@ -989,7 +989,9 @@ describe('Agent', () => {
     });
 
     const mockRagStore = {
-      search: vi.fn().mockResolvedValue([{ fact: 'SHOULD NOT APPEAR', similarity: 0.9, domain: 'general' }]),
+      search: vi
+        .fn()
+        .mockResolvedValue([{ fact: 'SHOULD NOT APPEAR', similarity: 0.9, domain: 'general' }]),
       addFacts: vi.fn(),
     };
 
@@ -1069,7 +1071,9 @@ describe('Agent', () => {
     });
 
     const mockRagStore = {
-      search: vi.fn().mockResolvedValue([{ fact: 'SHOULD NOT APPEAR', similarity: 0.9, domain: 'general' }]),
+      search: vi
+        .fn()
+        .mockResolvedValue([{ fact: 'SHOULD NOT APPEAR', similarity: 0.9, domain: 'general' }]),
       addFacts: vi.fn(),
     };
 

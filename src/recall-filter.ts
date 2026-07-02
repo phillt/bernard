@@ -137,7 +137,11 @@ export async function recallFilter(
   }
 
   const historyBlock = buildRecentTurnsBlock(history);
-  const userMessage = [`## User request\n${agentInput}`, historyBlock, buildCandidateBlock(candidates)]
+  const userMessage = [
+    `## User request\n${agentInput}`,
+    historyBlock,
+    buildCandidateBlock(candidates),
+  ]
     .filter((s) => s.length > 0)
     .join('\n\n');
 

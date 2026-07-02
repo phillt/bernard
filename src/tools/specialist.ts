@@ -95,7 +95,7 @@ export function createSpecialistTool(
           .record(z.enum(PARAM_IDS), z.union([z.string(), z.number(), z.boolean()]))
           .optional()
           .describe(
-            'Optional generation params for this specialist\'s pinned model (issue #286), keyed by id: ' +
+            "Optional generation params for this specialist's pinned model (issue #286), keyed by id: " +
               '"temperature"/"topP"/"maxOutputTokens" (numbers), "reasoningEffort" (e.g. "low"/"high"), ' +
               '"thinkingBudget" (Anthropic tokens). Capability-gated against the pinned (provider, model) — ' +
               'rejected params are dropped. Requires a provider/model pin. Used with create/update.',

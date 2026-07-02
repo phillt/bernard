@@ -66,7 +66,11 @@ function formatMatrix(l: Lineup): string {
     const slots = l.roles[roleId];
     const cell = (t: LineupTier): string => {
       const s = slots[t];
-      const p = s.params ? ` {${Object.entries(s.params).map(([k, v]) => `${k}=${v}`).join(',')}}` : '';
+      const p = s.params
+        ? ` {${Object.entries(s.params)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(',')}}`
+        : '';
       return `${s.provider}/${s.model}${p}`;
     };
     lines.push(
