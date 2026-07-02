@@ -3,11 +3,21 @@ import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { ENTER, ESC, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT, SHIFT_TAB, tick } from './_keys.js';
 import { SourcesViewer } from '../overlays/SourcesViewer.js';
+import { DimensionsProvider } from '../DimensionsContext.js';
 import type { Agent } from '../../agent.js';
 import type { TurnProvenance } from '../../provenance.js';
 
 function makeAgent(turns: TurnProvenance[]): Agent {
   return { getTurnProvenance: () => turns } as unknown as Agent;
+}
+
+/**
+ * Render `<SourcesViewer>` inside `<DimensionsProvider>` (as in production) so
+ * it reads the test stdout's real width/height through the dimensions context
+ * rather than the 80×24 fallback used when no provider is mounted.
+ */
+function renderViewer(agent: Agent) {
+  return render(createElement(DimensionsProvider, null, createElement(SourcesViewer, { agent })));
 }
 
 // A multi-line excerpt longer than a single wrapped line, to exercise the
@@ -62,7 +72,7 @@ const REGRESSION_TURNS: TurnProvenance[] = [
 
 describe('<SourcesViewer> two-panel browser', () => {
   it('renders empty state when no turns have provenance', () => {
-    const { lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent([]) }));
+    const { lastFrame } = renderViewer(makeAgent([]));
     const frame = lastFrame() ?? '';
     expect(frame).toContain('No citations recorded yet.');
     expect(frame).toContain('esc close');
@@ -213,7 +223,7 @@ describe('<SourcesViewer> two-panel browser', () => {
         timestamp: 0,
       },
     ];
-    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    const { stdin, lastFrame } = renderViewer(makeAgent(turns));
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -242,7 +252,7 @@ describe('<SourcesViewer> two-panel browser', () => {
         timestamp: 0,
       },
     ];
-    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    const { stdin, lastFrame } = renderViewer(makeAgent(turns));
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -273,7 +283,7 @@ describe('<SourcesViewer> two-panel browser', () => {
         timestamp: 0,
       },
     ];
-    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    const { stdin, lastFrame } = renderViewer(makeAgent(turns));
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -303,7 +313,7 @@ describe('<SourcesViewer> two-panel browser', () => {
         timestamp: 0,
       },
     ];
-    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    const { stdin, lastFrame } = renderViewer(makeAgent(turns));
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -330,7 +340,7 @@ describe('<SourcesViewer> two-panel browser', () => {
         timestamp: 0,
       },
     ];
-    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    const { stdin, lastFrame } = renderViewer(makeAgent(turns));
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -371,7 +381,7 @@ describe('<SourcesViewer> two-panel browser', () => {
         timestamp: 0,
       },
     ];
-    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    const { stdin, lastFrame } = renderViewer(makeAgent(turns));
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -394,7 +404,7 @@ describe('<SourcesViewer> two-panel browser', () => {
       citedIds: ['S1'],
       timestamp: 0,
     }));
-    const { stdin, lastFrame } = render(createElement(SourcesViewer, { agent: makeAgent(turns) }));
+    const { stdin, lastFrame } = renderViewer(makeAgent(turns));
     let frame = lastFrame() ?? '';
     expect(frame).toContain('Turn 1 ·');
     expect(frame).not.toContain('Turn 30 ·');

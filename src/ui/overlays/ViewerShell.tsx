@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput } from 'ink';
 import { MenuRow } from './MenuRow.js';
+import { useDimensionsCtx } from '../DimensionsContext.js';
 
 /** One pre-rendered visual row. `node` MUST occupy exactly one terminal line. */
 export interface OverlayLine {
@@ -103,8 +104,7 @@ export function ViewerShell({
   onCycleTab = () => {},
   escClosesViewer = true,
 }: ViewerShellProps) {
-  const { stdout } = useStdout();
-  const cols = stdout?.columns ?? 80;
+  const { columns: cols } = useDimensionsCtx();
   // App wraps the overlay in paddingX={2}, so the usable width is cols - 4.
   const rule = '─'.repeat(Math.max(4, cols - 4));
 

@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Box, useInput, useStdout } from 'ink';
+import { Box, useInput } from 'ink';
 import { ViewerShell, viewerViewport, type OverlayLine, type OverlayTab } from './ViewerShell.js';
+import { useDimensionsCtx } from '../DimensionsContext.js';
 
 export type { OverlayLine, OverlayTab } from './ViewerShell.js';
 
@@ -30,8 +31,7 @@ export function ScrollableOverlay({
   onClose,
   onCycleTab,
 }: ScrollableOverlayProps) {
-  const { stdout } = useStdout();
-  const rows = stdout?.rows ?? 24;
+  const { rows } = useDimensionsCtx();
   const viewport = viewerViewport(rows, { tabCount: tabs.length });
   const maxOffset = Math.max(0, lines.length - viewport);
 

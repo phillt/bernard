@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { Box, Text, useInput, useStdout, type Key } from 'ink';
+import { Box, Text, useInput, type Key } from 'ink';
 import type { Agent } from '../../agent.js';
+import { useDimensionsCtx } from '../DimensionsContext.js';
 import type { SourceItem } from '../../provenance.js';
 import { getThemeColors, type ThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
@@ -41,9 +42,7 @@ const GUTTER = MENU_MARKER.length;
  */
 export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps) {
   const colors = getThemeColors();
-  const { stdout } = useStdout();
-  const cols = stdout?.columns ?? 80;
-  const rows = stdout?.rows ?? 24;
+  const { columns: cols, rows } = useDimensionsCtx();
   const viewport = viewerViewport(rows, { tabCount: VIEWER_TABS.length });
   const turns = agent.getTurnProvenance();
 

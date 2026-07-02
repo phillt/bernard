@@ -15,6 +15,12 @@ interface PromptProps {
    */
   onSlashActiveChange?: (active: boolean) => void;
   /**
+   * Fired only when the buffer's empty/non-empty state flips (not on every
+   * keystroke). Lets the full-screen transcript gate Home/End scroll without
+   * lifting the buffer out of Prompt or re-rendering the parent per character.
+   */
+  onEmptyChange?: (empty: boolean) => void;
+  /**
    * Session input history (oldest → newest) for ↑/↓ recall. Owned by the
    * parent so it survives this component unmounting (e.g. a Shift-Tab viewer).
    * Mutated in place by `onRecordInput`; read live on each keystroke.
@@ -54,6 +60,7 @@ export function Prompt({
   disabled = false,
   onSubmit,
   onSlashActiveChange,
+  onEmptyChange,
   history = [],
   onRecordInput,
   dynamicCommands,
@@ -88,6 +95,11 @@ export function Prompt({
   useEffect(() => {
     onSlashActiveChange?.(slashActive);
   }, [slashActive, onSlashActiveChange]);
+
+  const bufferEmpty = buffer.length === 0;
+  useEffect(() => {
+    onEmptyChange?.(bufferEmpty);
+  }, [bufferEmpty, onEmptyChange]);
 
   useInput(
     (input, key) => {

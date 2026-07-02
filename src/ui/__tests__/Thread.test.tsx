@@ -4,7 +4,9 @@ import { createElement } from 'react';
 import stripAnsi from 'strip-ansi';
 import type { CoreMessage } from 'ai';
 import { Thread, type StaticItem } from '../Thread.js';
+import { TranscriptViewport } from '../TranscriptViewport.js';
 import { MessageStore } from '../message-store.js';
+import { DimensionsProvider } from '../DimensionsContext.js';
 
 /**
  * Build the append-only `staticItems` log <Thread> now renders through
@@ -602,5 +604,52 @@ describe('<Thread>', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('❮');
     expect(frame).not.toContain('💭');
+  });
+});
+
+describe('<TranscriptViewport> (full-screen transcript)', () => {
+  // Wrap in the dimensions provider as production does so the viewport reads the
+  // real terminal size (not the 80×24 no-provider fallback).
+  function renderViewport(props: Parameters<typeof TranscriptViewport>[0]) {
+    return render(
+      createElement(DimensionsProvider, null, createElement(TranscriptViewport, props)),
+    );
+  }
+
+  it('renders finalized turns through the scrollable viewport', () => {
+    const history: CoreMessage[] = [
+      { role: 'user', content: 'hello bernard' },
+      { role: 'assistant', content: 'hi there' },
+    ];
+    const frame = renderViewport({ items: items(history) }).lastFrame() ?? '';
+    expect(frame).toContain('hello bernard');
+    expect(frame).toContain('hi there');
+    expect(frame).toContain('❯');
+    expect(frame).toContain('❮');
+  });
+
+  it('renders the in-flight streaming turn at the bottom of the viewport', () => {
+    const store = new MessageStore();
+    store.append({ kind: 'text-delta', text: 'streaming reply' });
+    const frame = renderViewport({ items: [], messageStore: store, busy: true }).lastFrame() ?? '';
+    expect(frame).toContain('streaming reply');
+  });
+
+  it('renders an error StaticItem as an ErrorPanel in full-screen too', () => {
+    const errorItems: StaticItem[] = [
+      {
+        key: 'e0',
+        toolDetails: false,
+        error: {
+          title: 'Rate limit / quota',
+          category: 'rate_limit',
+          message: 'You exceeded your current quota.',
+          hint: 'wait or switch lineup',
+        },
+      },
+    ];
+    const frame = stripAnsi(renderViewport({ items: errorItems }).lastFrame() ?? '');
+    expect(frame).toContain('Rate limit / quota');
+    expect(frame).toContain('You exceeded your current quota.');
   });
 });

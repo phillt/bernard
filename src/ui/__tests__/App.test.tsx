@@ -86,6 +86,7 @@ process.env.BERNARD_HOME = TMP_HOME;
 
 // ── Imports under test (after mocks + env) ──────────────────────────────
 import { App, type AppStores } from '../App.js';
+import { DimensionsProvider } from '../DimensionsContext.js';
 import { getInkHandlers } from '../ink-handlers.js';
 import type { CoreMessage } from 'ai';
 import type { BernardConfig } from '../../config.js';
@@ -222,6 +223,10 @@ interface HarnessOptions {
   holder?: { current: CoreMessage[] };
   /** Override individual stores (e.g. seed specialists/routines/candidates). */
   stores?: Partial<AppStores>;
+  /** Render in full-screen mode (alt buffer) — wraps App in DimensionsProvider. */
+  fullScreen?: boolean;
+  /** Welcome-splash lines rendered in-tree (full-screen). */
+  welcomeLines?: string[];
 }
 
 function renderApp(opts: HarnessOptions = {}) {
@@ -245,18 +250,20 @@ function renderApp(opts: HarnessOptions = {}) {
   const sessionToolAllowlist = new Set<string>();
   const stores = makeStores(opts.stores);
   const config = makeConfig(opts.config);
-  const utils = render(
-    createElement(App, {
-      agent: makeAgent(agentSpy, opts.history, opts.holder),
-      config,
-      historyStore,
-      provenanceHistoryStore,
-      stores,
-      sessionToolAllowlist,
-      onExit,
-      alertBanner: opts.alertBanner,
-    }),
-  );
+  const appEl = createElement(App, {
+    agent: makeAgent(agentSpy, opts.history, opts.holder),
+    config,
+    historyStore,
+    provenanceHistoryStore,
+    stores,
+    sessionToolAllowlist,
+    onExit,
+    alertBanner: opts.alertBanner,
+    fullScreen: opts.fullScreen,
+    welcomeLines: opts.welcomeLines,
+  });
+  // Full-screen reads terminal size via DimensionsProvider, as in production.
+  const utils = render(opts.fullScreen ? createElement(DimensionsProvider, null, appEl) : appEl);
   return {
     ...utils,
     agentSpy,
@@ -297,6 +304,46 @@ describe('<App> mount & prompt', () => {
     const { lastFrame, unmount } = renderApp({ alertBanner: 'CRON_ALERT — job foo failed' });
     await tick();
     expect(lastFrame()).toContain('CRON_ALERT — job foo failed');
+    unmount();
+  });
+});
+
+describe('<App> full-screen layout', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('mounts the full-screen frame with the prompt, without crashing', async () => {
+    const { lastFrame, unmount } = renderApp({ fullScreen: true });
+    await tick();
+    // Prompt chevron renders at the bottom of the fixed frame.
+    expect(lastFrame()).toContain('›');
+    unmount();
+  });
+
+  it('renders the welcome splash lines inside the frame (alt buffer hides the normal screen)', async () => {
+    const { lastFrame, unmount } = renderApp({
+      fullScreen: true,
+      welcomeLines: ['── BERNARD ──', 'Version...v9.9.9'],
+    });
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('BERNARD');
+    expect(frame).toContain('v9.9.9');
+    unmount();
+  });
+
+  it('replaces the view with the overlay zone when /help opens', async () => {
+    const { stdin, lastFrame, unmount } = renderApp({ fullScreen: true });
+    await tick();
+    await submit(stdin, '/help');
+    const frame = lastFrame() ?? '';
+    // Help overlay content is shown; the prompt chevron is gone (overlay zone
+    // replaces the thread+chrome in full-screen).
+    expect(frame.toLowerCase()).toContain('help');
     unmount();
   });
 });
