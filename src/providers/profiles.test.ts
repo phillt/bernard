@@ -119,8 +119,22 @@ describe('systemSuffix — per family', () => {
     );
   });
 
-  it('leaves non-reasoning xai standard models with no suffix', () => {
-    expect(getModelProfile('xai', 'grok-3').systemSuffix).toBe('');
+  it('includes agentic autonomy guidance for xai standard models', () => {
+    const suffix = getModelProfile('xai', 'grok-3').systemSuffix;
+    expect(suffix).toMatch(/Autonomy/i);
+    expect(suffix).toMatch(/Gather before asking/i);
+    expect(suffix).toMatch(/Recover from failures/i);
+    expect(suffix).toMatch(/Always deliver/i);
+  });
+
+  it('includes the same agentic autonomy guidance for xai reasoning models', () => {
+    const suffix = getModelProfile('xai', 'grok-4-fast-reasoning').systemSuffix;
+    expect(suffix).toMatch(/Autonomy/i);
+    expect(suffix).toMatch(/Gather before asking/i);
+    expect(suffix).toMatch(/Recover from failures/i);
+    expect(suffix).toMatch(/Always deliver/i);
+    // …while still carrying the reasoning-only CoT note.
+    expect(suffix).toMatch(/chain-of-thought/i);
   });
 
   it('default profile has no suffix and passthrough wrap', () => {
