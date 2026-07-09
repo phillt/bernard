@@ -124,7 +124,7 @@ describe('systemSuffix — per family', () => {
     expect(suffix).toMatch(/Autonomy/i);
     expect(suffix).toMatch(/Gather before asking/i);
     expect(suffix).toMatch(/Recover from failures/i);
-    expect(suffix).toMatch(/Always answer/i);
+    expect(suffix).toMatch(/Always deliver/i);
   });
 
   it('includes the same agentic autonomy guidance for xai reasoning models', () => {
@@ -132,7 +132,7 @@ describe('systemSuffix — per family', () => {
     expect(suffix).toMatch(/Autonomy/i);
     expect(suffix).toMatch(/Gather before asking/i);
     expect(suffix).toMatch(/Recover from failures/i);
-    expect(suffix).toMatch(/Always answer/i);
+    expect(suffix).toMatch(/Always deliver/i);
     // …while still carrying the reasoning-only CoT note.
     expect(suffix).toMatch(/chain-of-thought/i);
   });
