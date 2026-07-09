@@ -40,8 +40,25 @@ const OPENAI_STANDARD_SUFFIX = `## Model Notes
 - Tool-calling: if you are unsure about file content or codebase structure, call a tool to read it — do not guess.
 - Planning: plan before each function call and reflect on the outcome of the previous call before the next.`;
 
+// Shared agentic-behavior guidance for xAI Grok models. Unlike OpenAI (which
+// ships an explicit persistence doctrine) xAI publishes none, and Grok defaults
+// to terse output that stops early — pausing to ask the user for data it could
+// fetch itself, and giving up on the first tool failure. These clauses (adapted
+// from OpenAI's GPT-5 persistence guidance and xAI community write-ups) are
+// injected for BOTH Grok families so the behavior does not depend on whether a
+// given model resolves as reasoning vs. standard. Kept terse — Grok follows
+// terse, imperative instructions best.
+const XAI_AGENTIC_NOTES = `- Autonomy: keep working until the request is fully resolved before yielding the turn. When something is ambiguous, choose the most reasonable assumption, act on it, and note the assumption afterward rather than pausing to ask.
+- Gather before asking: obtain information yourself before asking the user for it — read it with a tool, search memory, or use context already provided. Only ask the user when no available tool can supply it and the task genuinely cannot proceed.
+- Recover from failures: if a tool fails, try an alternative tool or approach before giving up. Do not surface a raw tool error as a reason to stop or to hand the work back to the user.
+- Always answer: never end a turn with only internal reasoning — write the final answer to the user as plain text every turn.`;
+
 const XAI_REASONING_SUFFIX = `## Model Notes
-This model reasons internally. Do not narrate chain-of-thought ("think step by step", "explain your reasoning before acting") — state conclusions and take actions directly. Keep instructions terse.`;
+This model reasons internally. Do not narrate chain-of-thought ("think step by step", "explain your reasoning before acting") — state conclusions and take actions directly. Keep instructions terse.
+${XAI_AGENTIC_NOTES}`;
+
+const XAI_STANDARD_SUFFIX = `## Model Notes
+${XAI_AGENTIC_NOTES}`;
 
 const ANTHROPIC_REWRITER_HINT =
   'Use natural prose framed with XML-style tags (<task>, <context>, <constraints>) when the request has distinct parts. Keep the original voice; do not over-structure short conversational requests.';
@@ -99,7 +116,7 @@ const XAI_REASONING_PROFILE: ModelProfile = {
 const XAI_STANDARD_PROFILE: ModelProfile = {
   family: 'xai-grok-standard',
   wrapUserMessage: (msg) => `# Request\n${msg}`,
-  systemSuffix: '',
+  systemSuffix: XAI_STANDARD_SUFFIX,
   rewriterHint: XAI_STANDARD_REWRITER_HINT,
 };
 
