@@ -3,6 +3,7 @@ import { getContextWindow, COMPRESSION_THRESHOLD } from './context.js';
 import { debugLog, isDebugEnabled, getSessionLogPath } from './logger.js';
 import { getThemeColors } from './theme.js';
 import type { ModelTier } from './model-policy.js';
+import type { SessionTelemetry } from './session-telemetry.js';
 
 let toolDetailsVisible = false;
 
@@ -85,6 +86,13 @@ export interface SpinnerStats {
    * per turn by `Agent.finalizeTurnStats()`.
    */
   sessionCostUsd: number;
+  /**
+   * Durable, cross-turn LLM telemetry sink. Lives here (not on `turnLedger`) so
+   * it survives per-turn resets; fed from the single `recordTurnUsage`
+   * convergence point. Optional so headless/test stubs can omit it. Type-only
+   * import keeps `output.ts` runtime-light.
+   */
+  sessionTelemetry?: SessionTelemetry;
 }
 
 /** Token counts can arrive NaN/undefined when a turn errors early; treat those as 0. */

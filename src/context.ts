@@ -172,6 +172,7 @@ export async function extractDomainFacts(
     domainIds.map(async (domainId) => {
       const domain = DOMAIN_REGISTRY[domainId];
 
+      const t0 = Date.now();
       const result = await generateText({
         model: site.model,
         providerOptions: site.providerOptions,
@@ -187,7 +188,11 @@ export async function extractDomainFacts(
       });
 
       // Count this off-loop call toward the per-turn ledger (#258).
-      onUsage?.(usageRecordFromSite(site, 'compressor', result.usage, result.providerMetadata));
+      onUsage?.(
+        usageRecordFromSite(site, 'compressor', result.usage, result.providerMetadata, {
+          latencyMs: Date.now() - t0,
+        }),
+      );
 
       const text = result.text?.trim();
       if (!text) return { domain: domainId, facts: [] };
@@ -283,6 +288,7 @@ export async function compressHistory(
   try {
     // Run summarization and domain-specific fact extraction in parallel
     const summarizerSite = resolveSiteModel(config, 'compressor');
+    const summarizeStartedAt = Date.now();
     const summarizePromise = generateText({
       model: summarizerSite.model,
       providerOptions: summarizerSite.providerOptions,
@@ -302,7 +308,9 @@ export async function compressHistory(
 
     // Count the summarization call toward the per-turn ledger (#258).
     onUsage?.(
-      usageRecordFromSite(summarizerSite, 'compressor', result.usage, result.providerMetadata),
+      usageRecordFromSite(summarizerSite, 'compressor', result.usage, result.providerMetadata, {
+        latencyMs: Date.now() - summarizeStartedAt,
+      }),
     );
 
     // Store extracted facts per domain — await to prevent races on persist()

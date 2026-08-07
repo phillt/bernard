@@ -173,6 +173,7 @@ export async function recallFilter(
       rawText = cached;
     } else {
       if (cacheKey) debugLog('cache:llm:miss', { site: 'recall-filter' });
+      const t0 = Date.now();
       const result = await traceLlm('recall-filter', site.model.modelId, () =>
         generateText({
           model: site.model,
@@ -187,7 +188,11 @@ export async function recallFilter(
           abortSignal,
         }),
       );
-      onUsage?.(usageRecordFromSite(site, 'recall-filter', result.usage, result.providerMetadata));
+      onUsage?.(
+        usageRecordFromSite(site, 'recall-filter', result.usage, result.providerMetadata, {
+          latencyMs: Date.now() - t0,
+        }),
+      );
       if (!result.text) {
         debugLog('recall-filter:noop', { reason: 'empty-response' });
         return { status: 'noop' };

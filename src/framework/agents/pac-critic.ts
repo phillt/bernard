@@ -78,6 +78,7 @@ function buildCriticTools(ctx: import('../context.js').AgentContext): Record<str
 export const pacCriticDefinition: AgentDefinition<PacCriticInput, PacCriticVerdict> = {
   id: 'pac-critic',
   site: 'specialist',
+  telemetrySite: 'pac-critic',
   historyMode: 'ephemeral',
   repairLabel: 'subagent',
   prefix: (input) => `sub:${input.slotId}/critic`,

@@ -3,6 +3,7 @@ import { Box, Text } from 'ink';
 import type { Agent } from '../../agent.js';
 import { formatTokenCount } from '../../output.js';
 import { computeTurnUsageReport, formatUsd, type UsageReportRow } from '../../usage-report.js';
+import type { TelemetryAgg } from '../../session-telemetry.js';
 import { getThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
 import { ScrollableOverlay, type OverlayLine } from './ScrollableOverlay.js';
@@ -106,6 +107,9 @@ function buildLines(agent: Agent): OverlayLine[] {
       key: 'empty',
       node: <Text dimColor>No usage recorded yet — send a message first.</Text>,
     });
+    // The session breakdown can still be non-empty (prior turns), so fall
+    // through to append it rather than returning early.
+    appendSessionLines(lines, agent, colors);
     return lines;
   }
 
@@ -148,8 +152,8 @@ function buildLines(agent: Agent): OverlayLine[] {
       key: 'cache-note',
       node: (
         <Text dimColor>
-          {formatTokenCount(report.totalCacheReadTokens)} prompt-cache reads this turn (billed at a
-          discount; not reflected in the estimate).
+          {formatTokenCount(report.totalCacheReadTokens)} prompt-cache reads this turn (priced at
+          the model's cache-read rate where the catalog provides one).
         </Text>
       ),
     });
@@ -171,7 +175,135 @@ function buildLines(agent: Agent): OverlayLine[] {
     ),
   });
 
+  appendSessionLines(lines, agent, colors);
   return lines;
+}
+
+/** Format a rolled-up agg's cost cell: `~$x`, `n/a` (all unpriced), else `~$0.00`. */
+function aggCost(agg: TelemetryAgg): string {
+  if (agg.costUsd > 0) return `~${formatUsd(agg.costUsd)}`;
+  return agg.hasUnpriced ? 'n/a' : '~$0.00';
+}
+
+function formatDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}m${s % 60}s`;
+}
+
+/**
+ * Cross-turn session breakdown (#session-telemetry) appended below the last-turn
+ * table: session totals, spend by layer + by model, and the costliest calls.
+ * Reads the durable `sessionTelemetry` sink off `spinnerStats` (survives turn
+ * resets). Renders nothing when telemetry is absent or no calls landed yet.
+ */
+function appendSessionLines(
+  lines: OverlayLine[],
+  agent: Agent,
+  colors: ReturnType<typeof getThemeColors>,
+): void {
+  const summary = agent.spinnerStats?.sessionTelemetry?.summary();
+  if (!summary || summary.totals.calls === 0) return;
+
+  lines.push({ key: 'session-spacer', node: <Text> </Text> });
+  lines.push({
+    key: 'session-header',
+    node: (
+      <Text bold color={colors.accent}>
+        SESSION (all turns) · {formatDuration(summary.durationMs)}
+      </Text>
+    ),
+  });
+  lines.push({
+    key: 'session-total',
+    node: (
+      <Row
+        cells={{
+          label: 'TOTAL',
+          calls: String(summary.totals.calls),
+          tin: formatTokenCount(summary.totals.promptTokens),
+          tout: formatTokenCount(summary.totals.completionTokens),
+          cost: aggCost(summary.totals),
+        }}
+        bold
+      />
+    ),
+  });
+
+  pushAggSection(lines, 'by-layer', 'BY LAYER', summary.byLayer, colors);
+  pushAggSection(lines, 'by-model', 'BY MODEL', summary.byModel, colors);
+
+  if (summary.mostExpensiveCalls.length > 0) {
+    lines.push({ key: 'top-spacer', node: <Text> </Text> });
+    lines.push({
+      key: 'top-header',
+      node: (
+        <Text bold dimColor>
+          MOST EXPENSIVE CALLS
+        </Text>
+      ),
+    });
+    summary.mostExpensiveCalls.slice(0, 5).forEach((c, i) => {
+      const cost = c.costUsd == null ? 'n/a' : `~${formatUsd(c.costUsd)}`;
+      const tokens = formatTokenCount(c.promptTokens + c.completionTokens);
+      lines.push({
+        key: `top-${i}`,
+        node: (
+          <Text>
+            <Text color={colors.text}>{cell(`${c.site} · ${c.modelName}`, LABEL_W)}</Text>
+            <Text dimColor>{cell(`${tokens} tok`, NUM_W + 2, 'right')}</Text>
+            <Text color={c.costUsd == null ? colors.muted : colors.text}>
+              {cell(cost, NUM_W + 1, 'right')}
+            </Text>
+          </Text>
+        ),
+      });
+    });
+  }
+}
+
+/** One labeled section of rolled-up aggs (by layer or by model), costliest first. */
+function pushAggSection(
+  lines: OverlayLine[],
+  keyPrefix: string,
+  title: string,
+  map: Map<string, TelemetryAgg>,
+  colors: ReturnType<typeof getThemeColors>,
+): void {
+  const rows = Array.from(map.entries()).sort(
+    (a, b) => b[1].costUsd - a[1].costUsd || b[1].promptTokens - a[1].promptTokens,
+  );
+  if (rows.length === 0) return;
+  lines.push({ key: `${keyPrefix}-spacer`, node: <Text> </Text> });
+  lines.push({
+    key: `${keyPrefix}-header`,
+    node: (
+      <Row
+        cells={{ label: title, calls: 'calls', tin: 'in', tout: 'out', cost: '~cost' }}
+        bold
+        dim
+      />
+    ),
+  });
+  for (const [key, agg] of rows) {
+    lines.push({
+      key: `${keyPrefix}-${key}`,
+      node: (
+        <Row
+          cells={{
+            label: key,
+            calls: String(agg.calls),
+            tin: formatTokenCount(agg.promptTokens),
+            tout: formatTokenCount(agg.completionTokens),
+            cost: aggCost(agg),
+          }}
+          labelColor={colors.text}
+          costColor={agg.costUsd > 0 ? colors.text : colors.muted}
+        />
+      ),
+    });
+  }
 }
 
 function rowKey(row: UsageReportRow): string {

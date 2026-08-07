@@ -80,9 +80,10 @@ describe('refreshCatalogWithDiff', () => {
     const cacheDir = path.join(tmpDir, 'bernard');
     fs.mkdirSync(cacheDir, { recursive: true });
     // fetchedAt=1 → stale → force still re-fetches; source is 'disk' on read.
+    // version:2 matches CACHE_SCHEMA_VERSION so the cache isn't rejected as stale-schema.
     fs.writeFileSync(
       path.join(cacheDir, 'model-catalog.json'),
-      JSON.stringify({ fetchedAt: 1, entries }, null, 2),
+      JSON.stringify({ version: 2, fetchedAt: 1, entries }, null, 2),
     );
   }
 
@@ -143,5 +144,55 @@ describe('refreshCatalogWithDiff', () => {
     const m = await loadModule();
     const diff = await m.refreshCatalogWithDiff();
     expect(diff.previousSource).toBe('vendored');
+  });
+});
+
+describe('disk-cache schema versioning (#269)', () => {
+  let tmpDir: string;
+  let origHome: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-catalog-ver-'));
+    origHome = process.env.BERNARD_HOME;
+    process.env.BERNARD_HOME = tmpDir;
+  });
+  afterEach(() => {
+    if (origHome === undefined) delete process.env.BERNARD_HOME;
+    else process.env.BERNARD_HOME = origHome;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeCache(obj: unknown) {
+    const cacheDir = path.join(tmpDir, 'bernard');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, 'model-catalog.json'), JSON.stringify(obj, null, 2));
+  }
+
+  const fakeEntry = {
+    provider: 'anthropic',
+    model: 'stale-model',
+    displayName: 'stale',
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    tags: [],
+    pricing: { inputPerMTok: 1, outputPerMTok: 1 },
+    released: 0,
+  };
+
+  it('ignores an unversioned (pre-cache-pricing) disk cache and uses vendored', async () => {
+    writeCache({ fetchedAt: Date.now(), entries: [fakeEntry] });
+    const m = await loadModule();
+    const cat = m.loadCatalogSync();
+    // The stale cache is rejected → vendored snapshot is served instead.
+    expect(cat.source).toBe('vendored');
+    expect(cat.entries.some((e: { model: string }) => e.model === 'stale-model')).toBe(false);
+  });
+
+  it('accepts a current-version disk cache', async () => {
+    writeCache({ version: 2, fetchedAt: Date.now(), entries: [fakeEntry] });
+    const m = await loadModule();
+    const cat = m.loadCatalogSync();
+    expect(cat.source).toBe('disk');
+    expect(cat.entries.some((e: { model: string }) => e.model === 'stale-model')).toBe(true);
   });
 });

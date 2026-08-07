@@ -1,6 +1,8 @@
 import type { SpinnerStats, TurnUsageEntry, UsageBucket } from '../../output.js';
 import type { ModelTier } from '../../model-policy.js';
 import type { AgentHook } from './types.js';
+import { getCurrentDispatchId, getCurrentParentDispatchId } from '../dispatch-context.js';
+import { telemetryFromUsageRecord } from '../../session-telemetry.js';
 
 /**
  * Single home for the "a model with no tier is bucketed as `pinned`" rule
@@ -39,6 +41,14 @@ export interface UsageRecord extends HookModelInfo {
   completionTokens: number;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  /** Wall-clock for this call/step, when the site can measure it (#session-telemetry). */
+  latencyMs?: number;
+  /** False on a recorded failed/aborted call. Defaults to true when omitted. */
+  success?: boolean;
+  /** Dispatch id this step ran in (`getCurrentDispatchId`); absent off-loop. */
+  callId?: string;
+  /** Enclosing dispatch id (trace edge); absent at the top level / off-loop. */
+  parentCallId?: string;
 }
 
 /**
@@ -68,6 +78,7 @@ export function usageRecordFromSite(
   providerMetadata?: {
     anthropic?: { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null };
   },
+  extra?: { latencyMs?: number; success?: boolean },
 ): UsageRecord {
   const a = providerMetadata?.anthropic;
   return {
@@ -79,6 +90,8 @@ export function usageRecordFromSite(
     completionTokens: usage?.completionTokens ?? 0,
     cacheReadTokens: a?.cacheReadInputTokens ?? 0,
     cacheWriteTokens: a?.cacheCreationInputTokens ?? 0,
+    latencyMs: extra?.latencyMs,
+    success: extra?.success,
   };
 }
 
@@ -122,6 +135,19 @@ export function recordTurnUsage(stats: SpinnerStats, rec: UsageRecord): void {
   entry.cacheReadTokens += cacheRead;
   entry.cacheWriteTokens += cacheWrite;
   entry.calls += 1;
+
+  // Durable, cross-turn telemetry (#session-telemetry). The turn ledger above is
+  // cleared each turn; this sink survives to power the session breakdown + the
+  // persisted JSONL. `record` is fail-open, but guard here too so a telemetry
+  // bug can never propagate into the model call's hot path.
+  if (stats.sessionTelemetry) {
+    try {
+      const t = stats.sessionTelemetry;
+      t.record(telemetryFromUsageRecord(t.sessionId, t.turn, rec));
+    } catch {
+      // telemetry must never break token accounting
+    }
+  }
 }
 
 /**
@@ -141,6 +167,7 @@ function recordStep(
         };
       }
     | undefined,
+  extra?: { latencyMs?: number; callId?: string; parentCallId?: string },
 ): void {
   // A step that reports no usage payload isn't a billable model call we can
   // attribute — skip it rather than minting a zero-token ledger row that would
@@ -153,6 +180,12 @@ function recordStep(
     completionTokens: usage?.completionTokens ?? 0,
     cacheReadTokens: a?.cacheReadInputTokens ?? 0,
     cacheWriteTokens: a?.cacheCreationInputTokens ?? 0,
+    latencyMs: extra?.latencyMs,
+    callId: extra?.callId,
+    parentCallId: extra?.parentCallId,
+    // A step that finished with a usage payload succeeded; failed dispatches
+    // throw before `onStepFinish` and never reach here.
+    success: true,
   });
 }
 
@@ -170,13 +203,25 @@ function recordStep(
  * odometer/ledger without disturbing the gauge or the compression math (#234).
  */
 export function tokenStatsHook(target: TokenStatsTarget, info: HookModelInfo): AgentHook {
+  // Fresh per-dispatch closure — `lastStepAt` measures inter-step wall time for
+  // the session telemetry latency roll-up (the cleanest signal without TTFT
+  // plumbing). Captured at hook creation ≈ dispatch start.
+  let lastStepAt = Date.now();
   return {
     onStepFinish: ({ usage, providerMetadata }) => {
+      const now = Date.now();
+      const latencyMs = now - lastStepAt;
+      lastStepAt = now;
       if (usage) {
         target.lastStepPromptTokens = usage.promptTokens;
         if (target.spinnerStats) target.spinnerStats.latestPromptTokens = usage.promptTokens;
       }
-      if (target.spinnerStats) recordStep(target.spinnerStats, info, usage, providerMetadata);
+      if (target.spinnerStats)
+        recordStep(target.spinnerStats, info, usage, providerMetadata, {
+          latencyMs,
+          callId: getCurrentDispatchId(),
+          parentCallId: getCurrentParentDispatchId(),
+        });
     },
   };
 }
@@ -191,9 +236,18 @@ export function tokenStatsHook(target: TokenStatsTarget, info: HookModelInfo): A
  * headless dispatches (no stats target) cost nothing (#234).
  */
 export function tokenTotalsHook(target: TokenStatsTarget, info: HookModelInfo): AgentHook {
+  let lastStepAt = Date.now();
   return {
     onStepFinish: ({ usage, providerMetadata }) => {
-      if (target.spinnerStats) recordStep(target.spinnerStats, info, usage, providerMetadata);
+      const now = Date.now();
+      const latencyMs = now - lastStepAt;
+      lastStepAt = now;
+      if (target.spinnerStats)
+        recordStep(target.spinnerStats, info, usage, providerMetadata, {
+          latencyMs,
+          callId: getCurrentDispatchId(),
+          parentCallId: getCurrentParentDispatchId(),
+        });
     },
   };
 }

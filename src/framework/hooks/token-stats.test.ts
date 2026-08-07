@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   tokenStatsHook,
   tokenTotalsHook,
@@ -8,6 +8,8 @@ import {
 } from './token-stats.js';
 import type { SpinnerStats, TurnUsageEntry } from '../../output.js';
 import type { StepFinishPayload } from './types.js';
+import { SessionTelemetry } from '../../session-telemetry.js';
+import { runWithDispatchId } from '../dispatch-context.js';
 
 const MAIN_INFO: HookModelInfo = {
   bucket: 'premium',
@@ -127,5 +129,65 @@ describe('recordTurnUsage ledger (#258)', () => {
     const row = stats.turnLedger.get('pinned|openai|gpt-5.2|specialist')!;
     expect(row.bucket).toBe('pinned');
     expect(row.calls).toBe(1);
+  });
+});
+
+describe('recordTurnUsage → session telemetry sink', () => {
+  it('feeds the durable sink once per call when present', () => {
+    const { spinnerStats: stats } = makeTarget();
+    stats.sessionTelemetry = new SessionTelemetry('sink1', { persist: false });
+    recordTurnUsage(stats, { ...MAIN_INFO, promptTokens: 1000, completionTokens: 100 });
+    recordTurnUsage(stats, {
+      bucket: 'cheap',
+      site: 'rewriter',
+      provider: 'anthropic',
+      modelName: 'claude-haiku-4-5-20251001',
+      promptTokens: 200,
+      completionTokens: 20,
+    });
+    const sum = stats.sessionTelemetry.summary();
+    expect(sum.totals.calls).toBe(2);
+    expect(sum.totals.promptTokens).toBe(1200);
+    expect(sum.byLayer.get('main')!.calls).toBe(1);
+    expect(sum.byLayer.get('rewriter')!.calls).toBe(1);
+  });
+
+  it('is a no-op (backward compatible) when no sink is attached', () => {
+    const { spinnerStats: stats } = makeTarget();
+    expect(stats.sessionTelemetry).toBeUndefined();
+    expect(() =>
+      recordTurnUsage(stats, { ...MAIN_INFO, promptTokens: 1, completionTokens: 1 }),
+    ).not.toThrow();
+  });
+});
+
+describe('per-step latency + dispatch-id stamping', () => {
+  it('measures inter-step wall time and stamps callId/parentCallId from the ALS', async () => {
+    vi.useFakeTimers();
+    try {
+      const target = makeTarget();
+      target.spinnerStats.sessionTelemetry = new SessionTelemetry('lat1', { persist: false });
+
+      await runWithDispatchId('parent', async () => {
+        await runWithDispatchId('child', async () => {
+          vi.setSystemTime(1_000);
+          const hook = tokenTotalsHook(target, { ...MAIN_INFO, site: 'sub' }); // lastStepAt = 1000
+          vi.setSystemTime(1_100);
+          await hook.onStepFinish!(step({ usage: { promptTokens: 10, completionTokens: 2 } }));
+          vi.setSystemTime(1_250);
+          await hook.onStepFinish!(step({ usage: { promptTokens: 5, completionTokens: 1 } }));
+        });
+      });
+
+      const sum = target.spinnerStats.sessionTelemetry.summary();
+      expect(sum.totals.latencyMsTotal).toBe(250); // 100 + 150
+      // Both steps ran in the 'child' dispatch nested under 'parent'.
+      const node = sum.tree.find((n) => n.callId === 'child');
+      expect(node).toBeDefined();
+      expect(node!.parentCallId).toBe('parent');
+      expect(node!.calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

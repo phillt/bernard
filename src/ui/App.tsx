@@ -83,7 +83,11 @@ import { ruleLabel, type PermissionRule, type ToolPermissionEffect } from '../to
 import type { BreadthOption } from '../permissions/breadth.js';
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible } from '../output.js';
-import { recordTurnUsage, type UsageRecorder } from '../framework/hooks/token-stats.js';
+import {
+  recordTurnUsage,
+  usageRecordFromSite,
+  type UsageRecorder,
+} from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
 import {
@@ -124,6 +128,7 @@ import {
   type ParamDescriptor,
 } from '../providers/model-params.js';
 import { debugLog, getSessionId, getSessionLogPath, isDebugEnabled } from '../logger.js';
+import { SessionTelemetry } from '../session-telemetry.js';
 import { acquireSlot, releaseSlot, getMaxConcurrentAgents } from '../tools/agent-pool.js';
 import type {
   AskUserQuestion,
@@ -635,6 +640,11 @@ export function App({
         contextWindowOverride: config.tokenWindow || undefined,
         turnLedger: new Map(),
         sessionCostUsd: 0,
+        // Durable, cross-turn LLM telemetry (#session-telemetry). Shares the
+        // debug logger's session id so telemetry lines correlate with the
+        // session debug JSONL. Persists to its own per-session file (opt-out via
+        // BERNARD_TELEMETRY).
+        sessionTelemetry: new SessionTelemetry(getSessionId()),
       });
     }
   }, [agent, config.model, config.tokenWindow]);
@@ -828,10 +838,17 @@ export function App({
           try {
             const serialized = serializeMessages(history);
             const summarySite = resolveSiteModel(config, 'compressor');
+            // Route these off-loop /clear --save LLM calls (summary, fact
+            // extraction, specialist detection) through the session telemetry
+            // sink so they aren't an accounting hole (#session-telemetry).
+            const recordSaveUsage: UsageRecorder = (rec) => {
+              if (agent.spinnerStats) recordTurnUsage(agent.spinnerStats, rec);
+            };
             // Cap fact extraction at 60 s to prevent a hung LLM call from
             // freezing the REPL. Fails open: timeout → empty domain facts.
             // AbortSignal.timeout auto-cancels without manual teardown.
             const extractSignal = AbortSignal.timeout(60_000);
+            const saveStartedAt = Date.now();
             const [summaryResult, domainFacts, candidateResult] = await Promise.all([
               generateText({
                 model: summarySite.model,
@@ -842,14 +859,24 @@ export function App({
                   { role: 'user', content: `Summarize this conversation:\n\n${serialized}` },
                 ],
               }),
-              extractDomainFacts(serialized, config, undefined, extractSignal),
+              extractDomainFacts(serialized, config, recordSaveUsage, extractSignal),
               detectSpecialistCandidate(
                 serialized,
                 config,
                 stores.specialists.list(),
                 stores.candidates.listPending(),
+                recordSaveUsage,
               ).catch(() => null),
             ]);
+            recordSaveUsage(
+              usageRecordFromSite(
+                summarySite,
+                'compressor',
+                summaryResult.usage,
+                summaryResult.providerMetadata,
+                { latencyMs: Date.now() - saveStartedAt },
+              ),
+            );
             const summary = summaryResult.text?.trim();
             if (summary) {
               const key = `session-summary-${new Date().toISOString().replace(/[:.]/g, '-')}`;

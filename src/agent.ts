@@ -355,6 +355,10 @@ export class Agent {
   beginTurnStats(): void {
     this.turnStatsBegun = true;
     this.resetTurnTokenOdometer();
+    // Advance the durable session-telemetry turn counter so this turn's calls
+    // are grouped under it. The per-turn odometer/ledger reset above does NOT
+    // touch the cross-turn telemetry sink.
+    this.spinnerStats?.sessionTelemetry?.beginTurn();
   }
 
   /**
@@ -1155,6 +1159,7 @@ export class Agent {
               rec.modelName,
               rec.promptTokens,
               rec.completionTokens,
+              { cacheReadTokens: rec.cacheReadTokens, cacheWriteTokens: rec.cacheWriteTokens },
             );
             if (cost != null) compactionCostUsd += cost;
           }

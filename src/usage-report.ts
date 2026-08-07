@@ -47,24 +47,81 @@ const BUCKET_ORDER: Record<UsageBucket, number> = {
   pinned: LINEUP_TIERS.length,
 } as Record<UsageBucket, number>;
 
+/** Disjoint cache-token counts for a call (Anthropic prompt-cache, #269). */
+export interface CacheTokens {
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
+
+/** Per-category USD decomposition of a single call's cost. Sums to `totalCostUsd`. */
+export interface UsageCostBreakdown {
+  inputCostUsd: number;
+  outputCostUsd: number;
+  cacheReadCostUsd: number;
+  cacheWriteCostUsd: number;
+  totalCostUsd: number;
+}
+
 /**
- * Estimated USD cost of a (prompt, completion) token spend on a given model from
- * catalog pricing ($/M tok), or `null` when the model isn't in the catalog
- * (custom provider / unknown). Shared by the per-turn report and one-off pricing
- * (e.g. `/compact` compaction spend).
+ * Deterministic per-category cost decomposition for one call, or `null` when the
+ * model has no catalog pricing (custom / unknown provider — cost stays unknown,
+ * never fabricated).
+ *
+ * **Token semantics (verified against `@ai-sdk/anthropic@1.2.12`):** the AI SDK
+ * maps `promptTokens` from Anthropic's `input_tokens`, which is **disjoint** from
+ * `cache_read_input_tokens` / `cache_creation_input_tokens`. So `prompt` here is
+ * ordinary *uncached* input — it must NOT have cache tokens subtracted from it,
+ * and pricing `prompt` + `cacheRead` + `cacheWrite` counts every token exactly
+ * once (no double charge). This is the only provider whose cache tokens Bernard
+ * currently tracks; providers that fold cached tokens into their prompt count
+ * would need normalization at the accounting boundary before reaching here.
+ *
+ * A model that lacks a cache rate contributes **$0** for that category (preserves
+ * the pre-cache behavior; never invents a price).
+ */
+export function priceUsageBreakdown(
+  provider: string,
+  modelName: string,
+  prompt: number,
+  completion: number,
+  cache?: CacheTokens,
+): UsageCostBreakdown | null {
+  const meta = getModelMeta(provider, modelName);
+  if (!meta) return null;
+  const p = meta.pricing;
+  const cacheRead = cache?.cacheReadTokens ?? 0;
+  const cacheWrite = cache?.cacheWriteTokens ?? 0;
+  const inputCostUsd = (prompt / 1_000_000) * p.inputPerMTok;
+  const outputCostUsd = (completion / 1_000_000) * p.outputPerMTok;
+  const cacheReadCostUsd =
+    p.cacheReadPerMTok != null ? (cacheRead / 1_000_000) * p.cacheReadPerMTok : 0;
+  const cacheWriteCostUsd =
+    p.cacheWritePerMTok != null ? (cacheWrite / 1_000_000) * p.cacheWritePerMTok : 0;
+  return {
+    inputCostUsd,
+    outputCostUsd,
+    cacheReadCostUsd,
+    cacheWriteCostUsd,
+    totalCostUsd: inputCostUsd + outputCostUsd + cacheReadCostUsd + cacheWriteCostUsd,
+  };
+}
+
+/**
+ * Estimated total USD for a call's token spend from catalog pricing ($/M tok),
+ * or `null` when the model isn't in the catalog. Cache-aware (#269): pass the
+ * disjoint `cache` counts to price cache-read (~0.1×) and cache-write (~1.25×)
+ * tokens at their own rates. `prompt` is ordinary uncached input — see
+ * {@link priceUsageBreakdown} for the token semantics. Shared by the per-turn
+ * report, session telemetry, and one-off `/compact` pricing.
  */
 export function priceUsageUsd(
   provider: string,
   modelName: string,
   prompt: number,
   completion: number,
+  cache?: CacheTokens,
 ): number | null {
-  const meta = getModelMeta(provider, modelName);
-  if (!meta) return null;
-  return (
-    (prompt / 1_000_000) * meta.pricing.inputPerMTok +
-    (completion / 1_000_000) * meta.pricing.outputPerMTok
-  );
+  return priceUsageBreakdown(provider, modelName, prompt, completion, cache)?.totalCostUsd ?? null;
 }
 
 export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport {
@@ -114,7 +171,10 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
     .map(({ siteSet, ...row }) => ({
       ...row,
       sites: Array.from(siteSet).sort(),
-      costUsd: priceUsageUsd(row.provider, row.modelName, row.promptTokens, row.completionTokens),
+      costUsd: priceUsageUsd(row.provider, row.modelName, row.promptTokens, row.completionTokens, {
+        cacheReadTokens: row.cacheReadTokens,
+        cacheWriteTokens: row.cacheWriteTokens,
+      }),
     }))
     .sort(
       (a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || b.promptTokens - a.promptTokens,

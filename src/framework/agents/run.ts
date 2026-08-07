@@ -13,9 +13,11 @@ import { getOutputSink } from '../hooks/output-sink.js';
 import {
   tokenStatsHook,
   tokenTotalsHook,
+  recordTurnUsage,
   bucketForTier,
   type HookModelInfo,
 } from '../hooks/token-stats.js';
+import { getCurrentDispatchId, getCurrentParentDispatchId } from '../dispatch-context.js';
 import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
@@ -157,7 +159,9 @@ export async function runDefinition<TInput, TFormatted>(
   // is the cron / headless exemption (the hook is simply not attached).
   const modelInfo: HookModelInfo = {
     bucket: bucketForTier(resolved.tier),
-    site: resolved.site ?? def.site ?? 'main',
+    // `telemetrySite` overrides for ledger/telemetry attribution (e.g. PAC phases
+    // label as pac-planner/actor/critic) without changing the resolution site.
+    site: def.telemetrySite ?? resolved.site ?? def.site ?? 'main',
     provider: resolved.provider,
     modelName: resolved.modelName,
   };
@@ -171,6 +175,7 @@ export async function runDefinition<TInput, TFormatted>(
     : hooks;
   const baseMaxSteps = def.stepBudget(config, input);
   const prepareStep = def.prepareStep?.(ctx, input, baseMaxSteps);
+  const statsTarget = ctx.statsTarget;
   const repair = def.repairLabel
     ? makeRepairHook({
         config,
@@ -178,6 +183,19 @@ export async function runDefinition<TInput, TFormatted>(
         model: resolved.modelName,
         label: def.repairLabel,
         abortSignal: opts.abortSignal,
+        // Bring the repair's (full-context) token spend into telemetry, bucketed
+        // like the dispatch and nested under it via the ALS dispatch ids.
+        tier: resolved.tier,
+        onUsage: statsTarget
+          ? (rec) => {
+              if (statsTarget.spinnerStats)
+                recordTurnUsage(statsTarget.spinnerStats, {
+                  ...rec,
+                  callId: getCurrentDispatchId(),
+                  parentCallId: getCurrentParentDispatchId(),
+                });
+            }
+          : undefined,
       })
     : undefined;
 
