@@ -26,6 +26,8 @@ import {
   getContextWindow,
 } from './context.js';
 import { resolveMainModel } from './model-policy.js';
+import { saveActiveSettings } from './profiles.js';
+import type { AskUserBatchResult } from './tools/types.js';
 import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
@@ -69,7 +71,7 @@ export {
 // ReAct primitives live in ./react.js so tools/* can use them without forming
 // a circular import via agent.ts. Re-exported here because agent.test.ts and
 // other callers import them from './agent.js'.
-import { REACT_COORDINATOR_PROMPT } from './react.js';
+import { REACT_COORDINATOR_PROMPT, REACT_MAX_STEPS_CEILING } from './react.js';
 export {
   REACT_COORDINATOR_PROMPT,
   shouldEnforcePlan,
@@ -847,13 +849,93 @@ export class Agent {
             result = await inner(innerOpts);
           }
 
-          if (result.finishReason === 'tool-calls' && result.steps.length >= maxStepsForCall) {
+          // Step-limit continuation. When the model still wants to call tools
+          // but has spent the whole per-turn step budget, don't silently yield
+          // mid-task (the old path only logged an invisible `printWarning`). In
+          // the interactive REPL, surface a visible prompt offering to continue
+          // with a doubled budget — and let the user persist the larger budget
+          // for the session or their profile, mirroring the "allow once /
+          // session / always" permission ladder. Bounded by
+          // STEP_LIMIT_MAX_EXPANSIONS and REACT_MAX_STEPS_CEILING. Headless runs
+          // (cron: no `askUser`) skip the loop and fall through to the warn+yield
+          // below unchanged.
+          const askUserForSteps = this.ctx.toolOptions?.askUser;
+          const STEP_LIMIT_MAX_EXPANSIONS = 3;
+          let stepBudget = maxStepsForCall;
+          let stepExpansions = 0;
+          while (
+            askUserForSteps &&
+            result.finishReason === 'tool-calls' &&
+            result.steps.length >= stepBudget &&
+            stepBudget < REACT_MAX_STEPS_CEILING &&
+            stepExpansions < STEP_LIMIT_MAX_EXPANSIONS &&
+            !this.abortController?.signal.aborted
+          ) {
+            const nextBudget = Math.min(stepBudget * 2, REACT_MAX_STEPS_CEILING);
+            const CONTINUE_ONCE = `Continue — ${nextBudget} steps for this turn`;
+            const CONTINUE_SESSION = `Continue — use ${nextBudget} steps for the rest of this session`;
+            const CONTINUE_SAVE = `Continue — save ${nextBudget} as my default step budget`;
+            const STOP = `Stop here — I'll pick it up later`;
+
+            let answer: AskUserBatchResult;
+            try {
+              answer = await askUserForSteps(
+                [
+                  {
+                    question: `I've used all ${stepBudget} steps for this turn and there's still work to do. How should I proceed?`,
+                    choices: [CONTINUE_ONCE, CONTINUE_SESSION, CONTINUE_SAVE, STOP],
+                    allowOther: false,
+                  },
+                ],
+                this.abortController?.signal,
+              );
+            } catch {
+              break; // prompt channel failed — fall through to warn+yield.
+            }
+            if (!('answers' in answer)) break; // cancelled (Esc) → treat as stop.
+            const raw = answer.answers[0];
+            const picked = Array.isArray(raw) ? raw[0] : raw;
+            if (!picked || picked === STOP) break;
+
+            if (picked === CONTINUE_SESSION || picked === CONTINUE_SAVE) {
+              this.config.maxSteps = nextBudget; // live session bump (shared config ref).
+            }
+            if (picked === CONTINUE_SAVE) {
+              try {
+                saveActiveSettings({ maxSteps: nextBudget });
+              } catch {
+                /* best-effort persist — the session bump above still applies. */
+              }
+            }
+            debugLog('agent:step-limit-continue', {
+              from: stepBudget,
+              to: nextBudget,
+              scope:
+                picked === CONTINUE_SAVE
+                  ? 'profile'
+                  : picked === CONTINUE_SESSION
+                    ? 'session'
+                    : 'once',
+              expansion: stepExpansions + 1,
+            });
+
+            const partial = truncateToolResults(result.response.messages as CoreMessage[]);
+            this.history.push(...partial);
+            stepBudget = nextBudget;
+            stepExpansions++;
+            if (this.spinnerStats) {
+              startSpinner(() => buildSpinnerMessage(this.spinnerStats!));
+            }
+            result = await inner({ ...innerOpts, maxStepsOverride: nextBudget });
+          }
+
+          if (result.finishReason === 'tool-calls' && result.steps.length >= stepBudget) {
             this.lastStepLimitHit = true;
             this.stepLimitHitCount++;
             const msg =
               this.stepLimitHitCount >= 2
-                ? `Stopped at loop limit of ${maxStepsForCall}. Use /options max-steps to adjust permanently.`
-                : `Stopped at loop limit of ${maxStepsForCall}.`;
+                ? `Stopped at loop limit of ${stepBudget}. Use /options max-steps to adjust permanently.`
+                : `Stopped at loop limit of ${stepBudget}.`;
             printWarning(msg);
           } else {
             this.lastStepLimitHit = false;

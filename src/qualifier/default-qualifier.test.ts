@@ -48,6 +48,23 @@ describe('DefaultQualifier — escalation gates', () => {
     expect(r.reason).toBe('qualifier:multi-step-language');
   });
 
+  it("real-world action escalates via 'qualifier:agentic-action' even when short/conversational", () => {
+    // The exact class of request that previously fell through to
+    // short-and-simple (Normal, 25-step ceiling) and got cut off mid-task: a
+    // brief, conversational outreach/refill ask with no tool keyword.
+    const r = qualify(
+      'can you please reach out to my doctor and let her know I need a refill on my adderall?',
+    );
+    expect(r.strategyId).toBe('react');
+    expect(r.reason).toBe('qualifier:agentic-action');
+  });
+
+  it('multi-step still wins over agentic-action when both are present', () => {
+    const r = qualify('first refill my prescription, then book an appointment');
+    expect(r.strategyId).toBe('react');
+    expect(r.reason).toBe('qualifier:multi-step-language');
+  });
+
   it("tool keyword + Apply/Analyze/Evaluate bloom -> 'qualifier:tool-keyword-and-complexity'", () => {
     const r = qualify('refactor the parser');
     expect(r.strategyId).toBe('react');

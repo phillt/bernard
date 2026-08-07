@@ -903,6 +903,90 @@ describe('Agent', () => {
     expect(mockGenerateText).toHaveBeenCalledTimes(3);
   });
 
+  describe('step-limit continuation', () => {
+    // A `tool-calls` finish at/above the per-turn step budget means the model
+    // still wanted to act but ran out of steps. `steps.length >= maxSteps (25)`
+    // is the trigger.
+    const atLimit = (over: Record<string, unknown> = {}) => ({
+      text: '',
+      finishReason: 'tool-calls' as const,
+      steps: Array.from({ length: 25 }, () => ({})),
+      response: { messages: [{ role: 'assistant', content: 'work in progress' }] },
+      usage: { promptTokens: 100, completionTokens: 40, totalTokens: 140 },
+      ...over,
+    });
+    const done = {
+      text: 'All done.',
+      finishReason: 'stop' as const,
+      steps: [],
+      response: { messages: [{ role: 'assistant', content: 'All done.' }] },
+      usage: { promptTokens: 120, completionTokens: 20, totalTokens: 140 },
+    };
+
+    it('prompts and continues with a doubled budget when the step limit is hit mid-task', async () => {
+      mockGenerateText.mockResolvedValueOnce(atLimit());
+      mockGenerateText.mockResolvedValueOnce(done);
+      // Pick the first choice ("Continue — <N> steps for this turn").
+      const askUser = vi.fn(async (questions: any[]) => ({
+        answers: [questions[0].choices[0]],
+      }));
+      const agent = makeAgent(makeConfig(), { ...toolOptions, askUser }, store);
+      await agent.processInput('do the long browser task');
+      expect(askUser).toHaveBeenCalledTimes(1);
+      // The doubled budget flows to the re-run as a maxSteps override of 50.
+      expect(mockGenerateText).toHaveBeenCalledTimes(2);
+      expect(agent.getStepLimitHit()).toBeNull(); // resolved → not reported as stuck.
+    });
+
+    it('stops without re-running when the user declines to continue', async () => {
+      mockGenerateText.mockResolvedValueOnce(atLimit());
+      // Pick the last choice ("Stop here …").
+      const askUser = vi.fn(async (questions: any[]) => ({
+        answers: [questions[0].choices[questions[0].choices.length - 1]],
+      }));
+      const agent = makeAgent(makeConfig(), { ...toolOptions, askUser }, store);
+      await agent.processInput('do the long browser task');
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(mockGenerateText).toHaveBeenCalledTimes(1);
+      expect(agent.getStepLimitHit()).not.toBeNull(); // surfaced as still-pending.
+    });
+
+    it('raises the live session budget when the user picks the session option', async () => {
+      mockGenerateText.mockResolvedValueOnce(atLimit());
+      mockGenerateText.mockResolvedValueOnce(done);
+      // choices[1] is the "rest of this session" option.
+      const askUser = vi.fn(async (questions: any[]) => ({
+        answers: [questions[0].choices[1]],
+      }));
+      const config = makeConfig();
+      expect(config.maxSteps).toBe(25);
+      const agent = makeAgent(config, { ...toolOptions, askUser }, store);
+      await agent.processInput('do the long browser task');
+      expect(config.maxSteps).toBe(50); // bumped in place on the shared config ref.
+    });
+
+    it('bounds expansions so a task that keeps hitting the limit cannot loop forever', async () => {
+      // Every dispatch keeps hitting the limit; the user keeps continuing.
+      mockGenerateText.mockResolvedValue(atLimit({ steps: Array.from({ length: 999 }, () => ({})) }));
+      const askUser = vi.fn(async (questions: any[]) => ({
+        answers: [questions[0].choices[0]],
+      }));
+      const agent = makeAgent(makeConfig(), { ...toolOptions, askUser }, store);
+      await agent.processInput('an unbounded task');
+      // 25→50→100→150(ceiling): 3 expansions, then the ceiling gate stops it.
+      expect(askUser).toHaveBeenCalledTimes(3);
+      expect(mockGenerateText).toHaveBeenCalledTimes(4); // 1 initial + 3 re-runs.
+    });
+
+    it('does not prompt in headless runs with no askUser channel', async () => {
+      mockGenerateText.mockResolvedValueOnce(atLimit());
+      const agent = makeAgent(makeConfig(), toolOptions, store); // no askUser
+      await agent.processInput('do the long browser task');
+      expect(mockGenerateText).toHaveBeenCalledTimes(1); // yields, warns, no loop.
+      expect(agent.getStepLimitHit()).not.toBeNull();
+    });
+  });
+
   it('clearHistory resets messages and clears scratch', () => {
     store.writeScratch('todo', 'test');
     const agent = makeAgent(makeConfig(), toolOptions, store);

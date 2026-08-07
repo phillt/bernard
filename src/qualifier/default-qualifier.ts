@@ -1,6 +1,7 @@
 import {
   bloomLevel,
   bloomNeedsCoordinator,
+  hasAgenticActionRequest,
   hasMultiStepLanguage,
   hasReasoningRequest,
   hasToolInvocationKeyword,
@@ -26,6 +27,7 @@ export class DefaultQualifier implements Qualifier {
     const tokens = tokenCount(text);
     const toolKw = hasToolInvocationKeyword(text);
     const multiStep = hasMultiStepLanguage(text);
+    const agenticAction = hasAgenticActionRequest(text);
     const questions = subQuestionCount(text);
     const reasoning = hasReasoningRequest(text);
     const bloom = bloomLevel(text);
@@ -35,6 +37,7 @@ export class DefaultQualifier implements Qualifier {
       tokens,
       toolKw,
       multiStep,
+      agenticAction,
       questions,
       reasoning,
       bloom,
@@ -53,6 +56,14 @@ export class DefaultQualifier implements Qualifier {
     // so the strongest / most distinctive signal names the reason.
     if (multiStep) {
       return { strategyId: 'react', reason: 'qualifier:multi-step-language', signals };
+    }
+    // Real-world action on the user's behalf (message a person, book/refill,
+    // submit a form). Inherently sustained tool work — escalate regardless of
+    // length so it gets ReAct's larger step budget + plan enforcement rather
+    // than Normal's tight ceiling. A short, conversational "reach out to my
+    // doctor about a refill" otherwise falls through to short-and-simple.
+    if (agenticAction) {
+      return { strategyId: 'react', reason: 'qualifier:agentic-action', signals };
     }
     if (!isPureShortQuestion && toolKw && (bloomEscalates || tokens > TOKEN_LOW)) {
       // Pure tool-keyword on a short ask ("run ls") doesn't need coordinator;

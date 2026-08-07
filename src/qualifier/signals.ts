@@ -118,6 +118,48 @@ export function hasMultiStepLanguage(text: string): boolean {
 }
 
 /**
+ * Conversational "real-world action" requests — asking Bernard to interact with
+ * an external party or service on the user's behalf: message a person or their
+ * staff, book/cancel an appointment, place/refill an order, fill out or submit a
+ * form, log into a portal. These are inherently *sustained* tool workflows
+ * (usually multi-page browser or MCP interactions) even when phrased briefly
+ * and conversationally ("reach out to my doctor about a refill"), so they slip
+ * past the tool-keyword gate — which only fires on Apply/Analyze/Evaluate
+ * framing or non-trivial length. Detecting them directly lets the qualifier
+ * route them to ReAct, which grants a larger step budget and plan enforcement
+ * instead of single-shot Normal's tight 25-step ceiling.
+ *
+ * Patterns are kept deliberately object-anchored (e.g. "message" must be
+ * followed by a person-ish object) so common non-action phrasings — "what's
+ * the error message", "cancel culture" — don't escalate.
+ */
+const AGENTIC_ACTION_PATTERNS: RegExp[] = [
+  // Outreach / communication to a person or their staff.
+  /\b(?:reach out|get in touch|follow up|check in)\b/i,
+  /\b(?:message|e-?mail|contact|call|text|notify|remind|write to)\s+(?:my|the|her|his|their|our|dr\.?|doctor|him|them|us)\b/i,
+  /\blet\s+(?:him|her|them|my|the)\b[^.?!]{0,30}\bknow\b/i,
+  // Scheduling / appointments / reservations (verb + object).
+  /\b(?:book|schedule|reschedule|cancel|set up|arrange)\b[^.?!]{0,40}\b(?:appointment|meeting|reservation|visit|booking|table|call)\b/i,
+  // Transactions / orders / prescriptions. Bare refill/reorder are strong
+  // enough on their own; "renew" is broader (renew a cert/token in code), so it
+  // requires a personal object ("renew my subscription", not "renew the token").
+  /\b(?:refill|reorder|re-?order)\b/i,
+  /\brenew\s+(?:my|her|his|our|their)\b/i,
+  /\b(?:place|submit|fill (?:out|in)|complete)\b[^.?!]{0,30}\b(?:order|form|request|application|prescription|claim)\b/i,
+  // Portals.
+  /\b(?:log ?in(?:to)?|sign in|sign up)\b/i,
+];
+
+/**
+ * True when the message reads as a real-world action to carry out on the user's
+ * behalf (see {@link AGENTIC_ACTION_PATTERNS}). Escalates to ReAct regardless of
+ * length because these tasks reliably outrun the Normal step budget.
+ */
+export function hasAgenticActionRequest(text: string): boolean {
+  return AGENTIC_ACTION_PATTERNS.some((re) => re.test(text));
+}
+
+/**
  * Question-mark count, excluding URL query-string `?`s. Treated as a cascade
  * signal per FrugalGPT — 2+ trailing-context question marks usually indicate
  * compound complexity (multiple sub-questions in one message). A `?` that is
