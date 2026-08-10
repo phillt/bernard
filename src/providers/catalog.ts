@@ -14,6 +14,21 @@ const FETCH_TIMEOUT_MS = 5000;
 
 export type CatalogSource = 'network' | 'disk' | 'vendored';
 
+/**
+ * Per-million-token prices for a model. `input`/`output` are always present;
+ * the cache rates are optional — `undefined` means the catalog has no cache
+ * price for this model (unknown, must not be fabricated), distinct from a real
+ * `0`. Anthropic prompt-caching (#269) reports cache-read (~0.1× input) and
+ * cache-write (~1.25× input) tokens as **disjoint** from ordinary input tokens,
+ * so each category is priced independently — see `priceUsageBreakdown`.
+ */
+export interface ModelPricing {
+  inputPerMTok: number;
+  outputPerMTok: number;
+  cacheReadPerMTok?: number;
+  cacheWritePerMTok?: number;
+}
+
 export interface ModelCatalogEntry {
   provider: BuiltinProvider;
   /** Model id as accepted by the corresponding @ai-sdk/* provider SDK. */
@@ -22,7 +37,7 @@ export interface ModelCatalogEntry {
   contextWindow: number;
   maxOutputTokens: number;
   tags: string[];
-  pricing: { inputPerMTok: number; outputPerMTok: number };
+  pricing: ModelPricing;
   /** Unix seconds the model was released (for recency tie-breaking). */
   released: number;
 }
@@ -46,7 +61,12 @@ interface RawGatewayModel {
   context_window?: number;
   max_tokens?: number;
   tags?: string[];
-  pricing?: { input?: string | number; output?: string | number };
+  pricing?: {
+    input?: string | number;
+    output?: string | number;
+    input_cache_read?: string | number;
+    input_cache_write?: string | number;
+  };
 }
 
 let memoryCache: CachedCatalog | null = null;
@@ -79,6 +99,10 @@ function parseGatewayEntry(raw: RawGatewayModel): ModelCatalogEntry | null {
   const provider = owner as BuiltinProvider;
   const inputPrice = Number(raw.pricing?.input ?? 0);
   const outputPrice = Number(raw.pricing?.output ?? 0);
+  // Cache rates are optional in the source data — keep `undefined` when absent
+  // (unknown) rather than coercing to 0 (which would price cache tokens as free).
+  const perMTokOrUndefined = (v: string | number | undefined): number | undefined =>
+    v == null ? undefined : Number(v) * 1_000_000;
   return {
     provider,
     model: gatewayIdToModel(provider, rest),
@@ -90,6 +114,8 @@ function parseGatewayEntry(raw: RawGatewayModel): ModelCatalogEntry | null {
     pricing: {
       inputPerMTok: inputPrice * 1_000_000,
       outputPerMTok: outputPrice * 1_000_000,
+      cacheReadPerMTok: perMTokOrUndefined(raw.pricing?.input_cache_read),
+      cacheWritePerMTok: perMTokOrUndefined(raw.pricing?.input_cache_write),
     },
     released: raw.released ?? 0,
   };
@@ -130,10 +156,25 @@ function loadVendored(): CachedCatalog {
   }
 }
 
+/**
+ * Disk-cache schema version. Bump whenever the persisted {@link ModelCatalogEntry}
+ * shape changes so a cache written by an older Bernard is ignored (falls through
+ * to the vendored snapshot + async refresh) rather than silently serving stale
+ * data. v2 added `pricing.cacheReadPerMTok` / `pricing.cacheWritePerMTok` (#269);
+ * an unversioned/older cache lacks them and would price cache tokens at $0.
+ */
+const CACHE_SCHEMA_VERSION = 2;
+
 function loadDiskCache(): CachedCatalog | null {
   try {
     const raw = fs.readFileSync(MODEL_CATALOG_CACHE, 'utf-8');
-    const parsed = JSON.parse(raw) as { fetchedAt: number; entries: ModelCatalogEntry[] };
+    const parsed = JSON.parse(raw) as {
+      version?: number;
+      fetchedAt: number;
+      entries: ModelCatalogEntry[];
+    };
+    // Ignore a cache from an older schema so new pricing fields aren't missing.
+    if (parsed.version !== CACHE_SCHEMA_VERSION) return null;
     if (!Array.isArray(parsed.entries)) return null;
     return { fetchedAt: parsed.fetchedAt ?? 0, source: 'disk', entries: parsed.entries };
   } catch {
@@ -144,7 +185,10 @@ function loadDiskCache(): CachedCatalog | null {
 function saveDiskCache(entries: ModelCatalogEntry[], fetchedAt: number): void {
   try {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
-    fs.writeFileSync(MODEL_CATALOG_CACHE, JSON.stringify({ fetchedAt, entries }, null, 2));
+    fs.writeFileSync(
+      MODEL_CATALOG_CACHE,
+      JSON.stringify({ version: CACHE_SCHEMA_VERSION, fetchedAt, entries }, null, 2),
+    );
   } catch (err) {
     debugLog('catalog:disk:write-error', {
       message: err instanceof Error ? err.message : String(err),

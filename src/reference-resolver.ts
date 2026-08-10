@@ -329,6 +329,7 @@ export async function resolveReferences(
       rawText = cached;
     } else {
       if (cacheKey) debugLog('cache:llm:miss', { site: 'reference-resolver' });
+      const t0 = Date.now();
       const result = await traceLlm('reference-resolver', site.model.modelId, () =>
         generateText({
           model: site.model,
@@ -346,7 +347,9 @@ export async function resolveReferences(
       // Count this pre-turn call toward the per-turn ledger (#258). Only on a
       // real call — a cache hit above spent no tokens.
       onUsage?.(
-        usageRecordFromSite(site, 'reference-resolver', result.usage, result.providerMetadata),
+        usageRecordFromSite(site, 'reference-resolver', result.usage, result.providerMetadata, {
+          latencyMs: Date.now() - t0,
+        }),
       );
       if (!result.text) {
         debugLog('reference-resolver:empty-response', null);

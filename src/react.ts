@@ -100,6 +100,13 @@ export function shouldEnforcePlan(args: {
 export const REACT_MAX_STEPS_CEILING = 150;
 
 /**
+ * Max times the interactive step-limit prompt may double the per-turn budget in
+ * one turn before it stops asking (bounds the continuation loop in
+ * `Agent.processInput`, alongside {@link REACT_MAX_STEPS_CEILING}).
+ */
+export const STEP_LIMIT_MAX_EXPANSIONS = 3;
+
+/**
  * Returns the per-turn step budget for an agent loop. In reactMode the base
  * budget is tripled (deliberation + delegation + synthesis), then clamped to
  * {@link REACT_MAX_STEPS_CEILING} so a high base cannot blow up.

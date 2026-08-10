@@ -26,6 +26,8 @@ import {
   getContextWindow,
 } from './context.js';
 import { resolveMainModel } from './model-policy.js';
+import { saveActiveSettings } from './profiles.js';
+import type { AskUserBatchResult } from './tools/types.js';
 import type { BernardConfig } from './config.js';
 import type { MemoryStore } from './memory.js';
 import type { RAGStore, RAGSearchResult } from './rag.js';
@@ -45,7 +47,8 @@ import { PlanStore } from './plan-store.js';
 import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
 import { recordTurnUsage } from './framework/hooks/token-stats.js';
-import { computeTurnUsageReport, priceUsageUsd } from './usage-report.js';
+import { telemetryFromUsageRecord } from './session-telemetry.js';
+import { computeTurnUsageReport } from './usage-report.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
@@ -69,7 +72,11 @@ export {
 // ReAct primitives live in ./react.js so tools/* can use them without forming
 // a circular import via agent.ts. Re-exported here because agent.test.ts and
 // other callers import them from './agent.js'.
-import { REACT_COORDINATOR_PROMPT } from './react.js';
+import {
+  REACT_COORDINATOR_PROMPT,
+  REACT_MAX_STEPS_CEILING,
+  STEP_LIMIT_MAX_EXPANSIONS,
+} from './react.js';
 export {
   REACT_COORDINATOR_PROMPT,
   shouldEnforcePlan,
@@ -353,6 +360,10 @@ export class Agent {
   beginTurnStats(): void {
     this.turnStatsBegun = true;
     this.resetTurnTokenOdometer();
+    // Advance the durable session-telemetry turn counter so this turn's calls
+    // are grouped under it. The per-turn odometer/ledger reset above does NOT
+    // touch the cross-turn telemetry sink.
+    this.spinnerStats?.sessionTelemetry?.beginTurn();
   }
 
   /**
@@ -847,13 +858,95 @@ export class Agent {
             result = await inner(innerOpts);
           }
 
-          if (result.finishReason === 'tool-calls' && result.steps.length >= maxStepsForCall) {
+          // Step-limit continuation. When the model still wants to call tools
+          // but has spent the whole per-turn step budget, don't silently yield
+          // mid-task (the old path only logged an invisible `printWarning`). In
+          // the interactive REPL, surface a visible prompt offering to continue
+          // with a doubled budget — and let the user persist the larger budget
+          // for the session or their profile, mirroring the "allow once /
+          // session / always" permission ladder. Bounded by
+          // STEP_LIMIT_MAX_EXPANSIONS and REACT_MAX_STEPS_CEILING. Headless runs
+          // (cron: no `askUser`) skip the loop and fall through to the warn+yield
+          // below unchanged.
+          const askUserForSteps = this.ctx.toolOptions?.askUser;
+          let stepBudget = maxStepsForCall;
+          let stepExpansions = 0;
+          while (
+            askUserForSteps &&
+            result.finishReason === 'tool-calls' &&
+            result.steps.length >= stepBudget &&
+            stepBudget < REACT_MAX_STEPS_CEILING &&
+            stepExpansions < STEP_LIMIT_MAX_EXPANSIONS &&
+            !this.abortController?.signal.aborted
+          ) {
+            const nextBudget = Math.min(stepBudget * 2, REACT_MAX_STEPS_CEILING);
+            const CONTINUE_ONCE = `Continue — ${nextBudget} steps for this turn`;
+            const CONTINUE_SESSION = `Continue — use ${nextBudget} steps for the rest of this session`;
+            const CONTINUE_SAVE = `Continue — save ${nextBudget} as my default step budget`;
+            const STOP = `Stop here — I'll pick it up later`;
+
+            let answer: AskUserBatchResult;
+            try {
+              answer = await askUserForSteps(
+                [
+                  {
+                    question: `I've used all ${stepBudget} steps for this turn and there's still work to do. How should I proceed?`,
+                    choices: [CONTINUE_ONCE, CONTINUE_SESSION, CONTINUE_SAVE, STOP],
+                    allowOther: false,
+                  },
+                ],
+                this.abortController?.signal,
+              );
+            } catch {
+              break; // prompt channel failed — fall through to warn+yield.
+            }
+            if (!('answers' in answer)) break; // cancelled (Esc) → treat as stop.
+            const raw = answer.answers[0];
+            const picked = Array.isArray(raw) ? raw[0] : raw;
+            if (!picked || picked === STOP) break;
+
+            // Classify the once/session/profile scope once, then drive every
+            // side effect (live bump, disk persist, telemetry) off it.
+            const scope =
+              picked === CONTINUE_SAVE
+                ? 'profile'
+                : picked === CONTINUE_SESSION
+                  ? 'session'
+                  : 'once';
+            if (scope !== 'once') {
+              this.config.maxSteps = nextBudget; // live session bump (shared config ref).
+            }
+            if (scope === 'profile') {
+              try {
+                saveActiveSettings({ maxSteps: nextBudget });
+              } catch {
+                /* best-effort persist — the session bump above still applies. */
+              }
+            }
+            debugLog('agent:step-limit-continue', {
+              from: stepBudget,
+              to: nextBudget,
+              scope,
+              expansion: stepExpansions + 1,
+            });
+
+            const partial = truncateToolResults(result.response.messages as CoreMessage[]);
+            this.history.push(...partial);
+            stepBudget = nextBudget;
+            stepExpansions++;
+            if (this.spinnerStats) {
+              startSpinner(() => buildSpinnerMessage(this.spinnerStats!));
+            }
+            result = await inner({ ...innerOpts, maxStepsOverride: nextBudget });
+          }
+
+          if (result.finishReason === 'tool-calls' && result.steps.length >= stepBudget) {
             this.lastStepLimitHit = true;
             this.stepLimitHitCount++;
             const msg =
               this.stepLimitHitCount >= 2
-                ? `Stopped at loop limit of ${maxStepsForCall}. Use /options max-steps to adjust permanently.`
-                : `Stopped at loop limit of ${maxStepsForCall}.`;
+                ? `Stopped at loop limit of ${stepBudget}. Use /options max-steps to adjust permanently.`
+                : `Stopped at loop limit of ${stepBudget}.`;
             printWarning(msg);
           } else {
             this.lastStepLimitHit = false;
@@ -1060,25 +1153,30 @@ export class Agent {
     // Manual /compact runs between turns, so its summarizer + domain-extraction
     // LLM spend can't ride a turn's ledger (the next `beginTurnStats()` would
     // clear it). Price it here and fold it straight into the session total so the
-    // footer's "session ~$" doesn't silently undercount (#258).
+    // footer's "session ~$" doesn't silently undercount (#258), AND record it into
+    // the durable session-telemetry sink directly (bypassing the turn ledger) so
+    // it also shows up in the per-layer `bernard usage` breakdown under
+    // `compressor` — otherwise the breakdown would under-attribute vs. the total.
     let compactionCostUsd = 0;
+    const stats = this.spinnerStats;
     const compressed = await compressHistory(
       this.history,
       this.config,
       this.ragStore,
-      this.spinnerStats
+      stats
         ? (rec) => {
-            const cost = priceUsageUsd(
-              rec.provider,
-              rec.modelName,
-              rec.promptTokens,
-              rec.completionTokens,
-            );
-            if (cost != null) compactionCostUsd += cost;
+            // Mint the record once (the single pricing path): read its cost for
+            // the between-turn session-total tally, and record it into the sink
+            // for the per-layer breakdown. Works with no sink attached too
+            // (still tallies the scalar cost; just doesn't record).
+            const sink = stats.sessionTelemetry;
+            const tel = telemetryFromUsageRecord(sink?.sessionId ?? '', sink?.turn ?? 0, rec);
+            if (tel.costUsd != null) compactionCostUsd += tel.costUsd;
+            sink?.record(tel);
           }
         : undefined,
     );
-    if (this.spinnerStats) this.spinnerStats.sessionCostUsd += compactionCostUsd;
+    if (stats) stats.sessionCostUsd += compactionCostUsd;
     const compacted = compressed !== this.history;
     if (compacted) {
       this.history = compressed;

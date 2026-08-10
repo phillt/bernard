@@ -176,6 +176,7 @@ export async function rewritePrompt(
       rawText = cached;
     } else {
       if (cacheKey) debugLog('cache:llm:miss', { site: 'rewriter' });
+      const t0 = Date.now();
       const result = await traceLlm('rewriter', site.model.modelId, () =>
         generateText({
           model: site.model,
@@ -193,7 +194,11 @@ export async function rewritePrompt(
       );
       // Count this pre-turn call toward the per-turn ledger (#258). Cache hits
       // above spent no tokens, so only the real-call branch records.
-      onUsage?.(usageRecordFromSite(site, 'rewriter', result.usage, result.providerMetadata));
+      onUsage?.(
+        usageRecordFromSite(site, 'rewriter', result.usage, result.providerMetadata, {
+          latencyMs: Date.now() - t0,
+        }),
+      );
       if (!result.text) {
         debugLog('prompt-rewriter:empty-response', null);
         return { status: 'noop' };

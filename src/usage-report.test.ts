@@ -1,12 +1,27 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SpinnerStats, TurnUsageEntry } from './output.js';
 
-// Deterministic pricing: opus + haiku priced; everything else (custom providers)
-// returns null so the `partial` / `n/a` paths are exercised.
+// Deterministic pricing: opus (WITH cache rates) + haiku (WITHOUT cache rates)
+// priced; everything else (custom providers) returns null so the `partial` /
+// `n/a` paths and the "missing cache pricing" fallback are exercised.
 vi.mock('./providers/catalog.js', () => ({
   getModelMeta: (provider: string, model: string) => {
-    const table: Record<string, { inputPerMTok: number; outputPerMTok: number }> = {
-      'anthropic|claude-opus-4-8': { inputPerMTok: 15, outputPerMTok: 75 },
+    const table: Record<
+      string,
+      {
+        inputPerMTok: number;
+        outputPerMTok: number;
+        cacheReadPerMTok?: number;
+        cacheWritePerMTok?: number;
+      }
+    > = {
+      'anthropic|claude-opus-4-8': {
+        inputPerMTok: 15,
+        outputPerMTok: 75,
+        cacheReadPerMTok: 1.5,
+        cacheWritePerMTok: 18.75,
+      },
+      // Intentionally no cache rates → exercises the deterministic $0 fallback.
       'anthropic|claude-haiku-4-5-20251001': { inputPerMTok: 1, outputPerMTok: 5 },
     };
     const p = table[`${provider}|${model}`];
@@ -14,8 +29,14 @@ vi.mock('./providers/catalog.js', () => ({
   },
 }));
 
-const { computeTurnUsageReport, formatUsd, formatTurnCost, formatCostSuffix } =
-  await import('./usage-report.js');
+const {
+  computeTurnUsageReport,
+  formatUsd,
+  formatTurnCost,
+  formatCostSuffix,
+  priceUsageUsd,
+  priceUsageBreakdown,
+} = await import('./usage-report.js');
 
 function entry(
   over: Partial<TurnUsageEntry> &
@@ -169,5 +190,107 @@ describe('formatUsd / formatTurnCost', () => {
       }),
     ]);
     expect(formatTurnCost(stats)).toMatch(/^ ~\$/);
+  });
+});
+
+// Rates (per M tok) for anthropic|claude-opus-4-8 in the mock above:
+//   input 15 · output 75 · cache-read 1.5 · cache-write 18.75
+describe('cache-aware pricing (priceUsageBreakdown / priceUsageUsd)', () => {
+  it('no cache: uses ordinary input/output rates only', () => {
+    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 1000, 500)!;
+    expect(b.inputCostUsd).toBeCloseTo((1000 / 1e6) * 15, 12);
+    expect(b.outputCostUsd).toBeCloseTo((500 / 1e6) * 75, 12);
+    expect(b.cacheReadCostUsd).toBe(0);
+    expect(b.cacheWriteCostUsd).toBe(0);
+    expect(b.totalCostUsd).toBeCloseTo((1000 / 1e6) * 15 + (500 / 1e6) * 75, 12);
+  });
+
+  it('partial cache: prices uncached input, cache-read, and output separately', () => {
+    // Anthropic `promptTokens` is uncached input (disjoint from cache), so the
+    // 1000 prompt tokens and 800 cache-read tokens are DIFFERENT tokens.
+    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 1000, 100, {
+      cacheReadTokens: 800,
+    })!;
+    expect(b.inputCostUsd).toBeCloseTo((1000 / 1e6) * 15, 12);
+    expect(b.cacheReadCostUsd).toBeCloseTo((800 / 1e6) * 1.5, 12);
+    expect(b.outputCostUsd).toBeCloseTo((100 / 1e6) * 75, 12);
+    expect(b.totalCostUsd).toBeCloseTo(
+      (1000 / 1e6) * 15 + (800 / 1e6) * 1.5 + (100 / 1e6) * 75,
+      12,
+    );
+  });
+
+  it('no double charge: does NOT subtract cache-read from prompt (Anthropic disjoint)', () => {
+    // Regression guard for the "M is a subset of N" worry. For Anthropic the
+    // cache tokens are NOT a subset of promptTokens — they are disjoint — so the
+    // full 1000 prompt tokens are priced at input rate AND 800 at cache-read
+    // rate (1800 distinct tokens), never 200 or 1800-at-input.
+    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 1000, 0, {
+      cacheReadTokens: 800,
+    })!;
+    expect(b.inputCostUsd).toBeCloseTo((1000 / 1e6) * 15, 12); // full prompt, not (1000-800)
+    expect(b.cacheReadCostUsd).toBeCloseTo((800 / 1e6) * 1.5, 12);
+  });
+
+  it('entire input cached: no ordinary input cost remains', () => {
+    // A turn served entirely from cache: input_tokens (prompt) = 0, cache-read = 1000.
+    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 0, 0, {
+      cacheReadTokens: 1000,
+    })!;
+    expect(b.inputCostUsd).toBe(0);
+    expect(b.cacheReadCostUsd).toBeCloseTo((1000 / 1e6) * 1.5, 12);
+    expect(b.totalCostUsd).toBeCloseTo((1000 / 1e6) * 1.5, 12);
+  });
+
+  it('cache write: priced at the cache-write rate independently', () => {
+    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 0, 0, {
+      cacheWriteTokens: 1000,
+    })!;
+    expect(b.cacheWriteCostUsd).toBeCloseTo((1000 / 1e6) * 18.75, 12);
+    expect(b.totalCostUsd).toBeCloseTo((1000 / 1e6) * 18.75, 12);
+  });
+
+  it('missing cache pricing: cache tokens contribute $0, input/output still priced', () => {
+    // haiku in the mock has NO cache rates → deterministic, backward compatible.
+    const b = priceUsageBreakdown('anthropic', 'claude-haiku-4-5-20251001', 1000, 100, {
+      cacheReadTokens: 5000,
+      cacheWriteTokens: 200,
+    })!;
+    expect(b.cacheReadCostUsd).toBe(0);
+    expect(b.cacheWriteCostUsd).toBe(0);
+    expect(b.totalCostUsd).toBeCloseTo((1000 / 1e6) * 1 + (100 / 1e6) * 5, 12);
+  });
+
+  it('unknown model → null (unknown, never fabricated)', () => {
+    expect(
+      priceUsageBreakdown('ollama', 'llama3.2', 1000, 100, { cacheReadTokens: 50 }),
+    ).toBeNull();
+    expect(priceUsageUsd('ollama', 'llama3.2', 1000, 100)).toBeNull();
+  });
+
+  it('priceUsageUsd equals the breakdown total (single pricing path)', () => {
+    const cache = { cacheReadTokens: 800, cacheWriteTokens: 50 };
+    const total = priceUsageUsd('anthropic', 'claude-opus-4-8', 1000, 100, cache);
+    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 1000, 100, cache)!;
+    expect(total).toBeCloseTo(b.totalCostUsd, 12);
+  });
+
+  it('computeTurnUsageReport folds cache-read cost into the row estimate', () => {
+    const stats = statsWith([
+      entry({
+        bucket: 'premium',
+        provider: 'anthropic',
+        modelName: 'claude-opus-4-8',
+        site: 'main',
+        promptTokens: 1000,
+        completionTokens: 100,
+        cacheReadTokens: 2000,
+        cacheWriteTokens: 100,
+      }),
+    ]);
+    const report = computeTurnUsageReport(stats);
+    const expected =
+      (1000 / 1e6) * 15 + (100 / 1e6) * 75 + (2000 / 1e6) * 1.5 + (100 / 1e6) * 18.75;
+    expect(report.totalCostUsd).toBeCloseTo(expected, 12);
   });
 });

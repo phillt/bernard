@@ -2,6 +2,7 @@ import { generateText } from 'ai';
 import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
+import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 import type { Specialist, SpecialistSummary } from './specialists.js';
 import type { SpecialistCandidate } from './specialist-candidates.js';
@@ -111,6 +112,7 @@ export async function detectSpecialistCandidate(
   config: BernardConfig,
   existingSpecialists: (SpecialistSummary | Specialist)[],
   pendingCandidates: SpecialistCandidate[],
+  onUsage?: UsageRecorder,
 ): Promise<DetectionResult> {
   // Skip trivial conversations
   if (serializedText.length < MIN_CONVERSATION_LENGTH) return null;
@@ -149,6 +151,7 @@ export async function detectSpecialistCandidate(
       rawText = cached;
     } else {
       if (cacheKey) debugLog('cache:llm:miss', { site: 'specialist-detector' });
+      const t0 = Date.now();
       const result = await traceLlm('specialist-detector', site.model.modelId, () =>
         generateText({
           model: site.model,
@@ -160,6 +163,13 @@ export async function detectSpecialistCandidate(
           maxTokens: 2048,
           system: DETECTION_SYSTEM_PROMPT,
           messages: [{ role: 'user', content: userContent }],
+        }),
+      );
+      // Bring this off-loop call into session telemetry (only the real call —
+      // a cache hit above spent no tokens).
+      onUsage?.(
+        usageRecordFromSite(site, 'specialist-detector', result.usage, result.providerMetadata, {
+          latencyMs: Date.now() - t0,
         }),
       );
       rawText = result.text ?? '';

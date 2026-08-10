@@ -13,6 +13,7 @@ import { getOutputSink } from '../hooks/output-sink.js';
 import {
   tokenStatsHook,
   tokenTotalsHook,
+  makeUsageRecorder,
   bucketForTier,
   type HookModelInfo,
 } from '../hooks/token-stats.js';
@@ -157,7 +158,9 @@ export async function runDefinition<TInput, TFormatted>(
   // is the cron / headless exemption (the hook is simply not attached).
   const modelInfo: HookModelInfo = {
     bucket: bucketForTier(resolved.tier),
-    site: resolved.site ?? def.site ?? 'main',
+    // `telemetrySite` overrides for ledger/telemetry attribution (e.g. PAC phases
+    // label as pac-planner/actor/critic) without changing the resolution site.
+    site: def.telemetrySite ?? resolved.site ?? def.site ?? 'main',
     provider: resolved.provider,
     modelName: resolved.modelName,
   };
@@ -171,6 +174,7 @@ export async function runDefinition<TInput, TFormatted>(
     : hooks;
   const baseMaxSteps = def.stepBudget(config, input);
   const prepareStep = def.prepareStep?.(ctx, input, baseMaxSteps);
+  const statsTarget = ctx.statsTarget;
   const repair = def.repairLabel
     ? makeRepairHook({
         config,
@@ -178,6 +182,11 @@ export async function runDefinition<TInput, TFormatted>(
         model: resolved.modelName,
         label: def.repairLabel,
         abortSignal: opts.abortSignal,
+        // Bring the repair's (full-context) token spend into telemetry, bucketed
+        // like the dispatch. It runs inside the dispatch's context, so the trace
+        // ids are captured centrally in `telemetryFromUsageRecord` — no stamping.
+        tier: resolved.tier,
+        onUsage: statsTarget ? makeUsageRecorder(statsTarget) : undefined,
       })
     : undefined;
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bloomLevel,
   bloomNeedsCoordinator,
+  hasAgenticActionRequest,
   hasMultiStepLanguage,
   hasReasoningRequest,
   hasToolInvocationKeyword,
@@ -117,6 +118,61 @@ describe('hasMultiStepLanguage', () => {
     expect(hasMultiStepLanguage('what is 2 plus 2')).toBe(false);
     expect(hasMultiStepLanguage('explain how merge sort works')).toBe(false);
     expect(hasMultiStepLanguage('hello there')).toBe(false);
+  });
+});
+
+describe('hasAgenticActionRequest', () => {
+  it('matches outreach / communication to a person', () => {
+    expect(
+      hasAgenticActionRequest('can you reach out to my doctor about a refill?'),
+    ).toBe(true);
+    expect(hasAgenticActionRequest('message my landlord about the leak')).toBe(true);
+    expect(hasAgenticActionRequest('email the office and let them know I moved')).toBe(true);
+    expect(hasAgenticActionRequest('let her know I need it renewed')).toBe(true);
+  });
+
+  it('matches scheduling / appointment actions', () => {
+    expect(hasAgenticActionRequest('book an appointment with the dentist')).toBe(true);
+    expect(hasAgenticActionRequest('reschedule my meeting for Thursday')).toBe(true);
+    expect(hasAgenticActionRequest('cancel the reservation for tonight')).toBe(true);
+  });
+
+  it('matches transactions / prescriptions / forms / portals', () => {
+    expect(hasAgenticActionRequest('refill my adderall')).toBe(true);
+    expect(hasAgenticActionRequest('reorder the filters')).toBe(true);
+    expect(hasAgenticActionRequest('fill out the intake form')).toBe(true);
+    expect(hasAgenticActionRequest('submit the reimbursement request')).toBe(true);
+    expect(hasAgenticActionRequest('log into the patient portal')).toBe(true);
+  });
+
+  it('captures the real-world doctor-refill request that fell through to Normal', () => {
+    expect(
+      hasAgenticActionRequest(
+        "can you please reach out to my doctor and let her know that I need a refill on my adderall - also, can you clarify the correct procedure?",
+      ),
+    ).toBe(true);
+  });
+
+  it('matches renew only with a personal object', () => {
+    expect(hasAgenticActionRequest('renew my subscription')).toBe(true);
+    // Coding contexts with "renew" but no personal object must not escalate.
+    expect(hasAgenticActionRequest('how do I renew a TLS certificate in code?')).toBe(false);
+  });
+
+  it('matches call only with a personal object, not dev "call the …" phrasings', () => {
+    expect(hasAgenticActionRequest('call my doctor about the results')).toBe(true);
+    expect(hasAgenticActionRequest('can you call her back')).toBe(true);
+    // "call the …" is a developer phrasing, not real-world outreach.
+    expect(hasAgenticActionRequest('call the function with these args')).toBe(false);
+    expect(hasAgenticActionRequest('call the API endpoint and log the response')).toBe(false);
+    expect(hasAgenticActionRequest('call the endpoint')).toBe(false);
+  });
+
+  it('does NOT match non-action uses of the same words', () => {
+    expect(hasAgenticActionRequest("what's the error message on line 4?")).toBe(false);
+    expect(hasAgenticActionRequest('explain cancel culture to me')).toBe(false);
+    expect(hasAgenticActionRequest('summarize this article about online forms')).toBe(false);
+    expect(hasAgenticActionRequest('what is 2 plus 2')).toBe(false);
   });
 });
 

@@ -61,5 +61,10 @@ export const TURN_CONTEXT_FILE = path.join(STATE_DIR, 'turn-context.json');
 export const LOGS_DIR = path.join(STATE_DIR, 'logs');
 export const SESSION_LOGS_DIR = path.join(LOGS_DIR, 'sessions');
 export const TOOL_WRAPPER_LOG = path.join(LOGS_DIR, 'tool-wrappers.jsonl');
+/** Per-session LLM cost/usage telemetry JSONL, one file per session id. */
+export const TELEMETRY_DIR = path.join(LOGS_DIR, 'telemetry');
+export function sessionTelemetryPath(sessionId: string): string {
+  return path.join(TELEMETRY_DIR, `${sessionId}.jsonl`);
+}
 export const CRON_PID_FILE = path.join(STATE_DIR, 'cron-daemon.pid');
 export const CRON_LOG_FILE = path.join(STATE_DIR, 'cron-daemon.log');

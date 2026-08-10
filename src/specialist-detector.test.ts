@@ -67,6 +67,27 @@ describe('detectSpecialistCandidate', () => {
     expect(mockGenerateText).not.toHaveBeenCalled();
   });
 
+  it('reports a usage record for the detection call with site specialist-detector', async () => {
+    mockGenerateText.mockResolvedValueOnce({
+      text: JSON.stringify({ shouldCreate: false, candidate: null }),
+      usage: { promptTokens: 1200, completionTokens: 40 },
+      providerMetadata: { anthropic: { cacheReadInputTokens: 1000, cacheCreationInputTokens: 0 } },
+    });
+    const records: Array<Record<string, unknown>> = [];
+    const longText = 'x'.repeat(600);
+    await detectSpecialistCandidate(longText, makeConfig(), [], [], (rec) =>
+      records.push(rec as unknown as Record<string, unknown>),
+    );
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      site: 'specialist-detector',
+      provider: 'anthropic',
+      promptTokens: 1200,
+      completionTokens: 40,
+      cacheReadTokens: 1000,
+    });
+  });
+
   it('returns null when shouldCreate is false', async () => {
     mockGenerateText.mockResolvedValueOnce({
       text: JSON.stringify({ shouldCreate: false, candidate: null }),

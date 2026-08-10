@@ -8,7 +8,9 @@ import {
 } from 'ai';
 import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import type { BernardConfig } from './config.js';
+import type { ModelTier } from './model-policy.js';
 import { debugLog, traceLlm } from './logger.js';
+import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 
 /** Identifies which generateText site produced the failed tool call. */
 export type RepairLabel = 'main' | 'specialist' | 'subagent' | 'tool-wrapper' | 'cron';
@@ -22,6 +24,17 @@ export interface MakeRepairHookOpts {
   label: RepairLabel;
   /** Optional abort signal forwarded to the repair generateText call. */
   abortSignal?: AbortSignal;
+  /**
+   * Cost tier of the dispatch being repaired, used to bucket the repair call's
+   * tokens in telemetry. Undefined → bucketed `pinned`.
+   */
+  tier?: ModelTier;
+  /**
+   * Records the repair call's usage into the session telemetry sink (#session-
+   * telemetry). A repair re-sends the full message history + tool schemas, so
+   * it's a materially-sized billed call that would otherwise be invisible.
+   */
+  onUsage?: UsageRecorder;
 }
 
 /**
@@ -55,7 +68,7 @@ function looksLikeTruncationError(message: string): boolean {
 export function makeRepairHook<TOOLS extends ToolSet>(
   opts: MakeRepairHookOpts,
 ): ToolCallRepairFunction<TOOLS> {
-  const { config, provider, model, label, abortSignal } = opts;
+  const { config, provider, model, label, abortSignal, tier, onUsage } = opts;
   const resolvedProvider = provider ?? config.provider;
   const resolvedModel = model ?? config.model;
 
@@ -93,6 +106,7 @@ export function makeRepairHook<TOOLS extends ToolSet>(
       const repairMessages: CoreMessage[] = [...messages, recoveryMessage];
 
       const repairModel = getModelForConfig(config, resolvedProvider, resolvedModel);
+      const repairStartedAt = Date.now();
       const result = await traceLlm(`tool-call-repair:${label}`, repairModel.modelId, () =>
         generateText({
           model: repairModel,
@@ -105,6 +119,17 @@ export function makeRepairHook<TOOLS extends ToolSet>(
           messages: repairMessages,
           abortSignal,
         }),
+      );
+      // Record the repair's token spend (a full-context re-send) regardless of
+      // whether it produced a usable call — the tokens were billed either way.
+      onUsage?.(
+        usageRecordFromSite(
+          { tier, provider: resolvedProvider, modelName: resolvedModel },
+          'tool-call-repair',
+          result.usage,
+          result.providerMetadata,
+          { latencyMs: Date.now() - repairStartedAt },
+        ),
       );
 
       const repaired = result.toolCalls?.[0];
