@@ -140,9 +140,11 @@ function composeOnStepFinish(
  */
 export async function runAgent(spec: AgentSpec): Promise<AgentResult> {
   const dispatchId = crypto.randomBytes(4).toString('hex');
-  const debug = isDebugEnabled();
-  const body = () => runAgentInner(spec, dispatchId);
-  return debug ? runWithDispatchId(dispatchId, body) : body();
+  // Always establish the dispatch-id ALS context (not just under debug). It is
+  // near-free and it's what lets the token hooks stamp `callId`/`parentCallId`
+  // onto every telemetry record so the session trace forms a real tree. The
+  // watchdog / step debug logs inside `runAgentInner` stay debug-gated.
+  return runWithDispatchId(dispatchId, () => runAgentInner(spec, dispatchId));
 }
 
 async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<AgentResult> {

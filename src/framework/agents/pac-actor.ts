@@ -47,6 +47,7 @@ export interface PacActorInput {
 export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
   id: 'pac-actor',
   site: 'specialist',
+  telemetrySite: 'pac-actor',
   historyMode: 'ephemeral',
   repairLabel: 'subagent',
   prefix: (input) => `sub:${input.slotId}/act`,

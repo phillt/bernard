@@ -42,6 +42,12 @@ import {
 import type { SupportedSdk } from './providers/types.js';
 import { printWelcome, buildWelcomeLines, printError, printInfo } from './output.js';
 import {
+  listTelemetrySessions,
+  readSessionTelemetry,
+  aggregateRecords,
+  formatSessionUsageLines,
+} from './session-telemetry.js';
+import {
   resolveBackend,
   resolveWarmupPlayer,
   VoiceService,
@@ -651,6 +657,29 @@ program
       printInfo(
         'To add a custom provider: bernard add-provider <name> --sdk <openai|anthropic|xai> --base-url <url> --model <model>',
       );
+    }
+  });
+
+program
+  .command('usage [sessionId]')
+  .description('Show the LLM cost/usage breakdown for a session (defaults to the most recent).')
+  .action((sessionId?: string) => {
+    const sessions = listTelemetrySessions();
+    if (sessions.length === 0) {
+      printInfo(
+        'No telemetry recorded yet. Run a Bernard session first (telemetry is on by default; disable with BERNARD_TELEMETRY=false).',
+      );
+      return;
+    }
+    const id = sessionId ?? sessions[0];
+    const records = readSessionTelemetry(id);
+    if (records.length === 0) {
+      printError(`No telemetry for session "${id}".`);
+      printInfo(`Available sessions: ${sessions.slice(0, 15).join(', ')}`);
+      return;
+    }
+    for (const line of formatSessionUsageLines(aggregateRecords(id, records))) {
+      printInfo(line);
     }
   });
 

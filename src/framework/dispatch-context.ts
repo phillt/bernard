@@ -16,14 +16,37 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 export interface DispatchContext {
   dispatchId: string;
+  /**
+   * The dispatch that spawned this one, if any — captured at entry from the
+   * enclosing context. Powers the hierarchical telemetry trace (a sub-agent /
+   * PAC phase / tool-wrapper dispatch nested inside the main agent's dispatch
+   * carries the parent's id as its tree edge). `undefined` for a top-level
+   * dispatch (the main agent, or an off-loop call with no active dispatch).
+   */
+  parentDispatchId?: string;
 }
 
 const storage = new AsyncLocalStorage<DispatchContext>();
 
 export function runWithDispatchId<T>(dispatchId: string, fn: () => T): T {
-  return storage.run({ dispatchId }, fn);
+  // Capture the enclosing dispatch (if any) as the parent before we swap the
+  // active context to this dispatch. Nested `runAgent` calls (sub-agents,
+  // PAC phases, tool-wrappers) run inside the parent's ALS, so this reads the
+  // parent's id and records the tree edge.
+  const parentDispatchId = storage.getStore()?.dispatchId;
+  return storage.run({ dispatchId, parentDispatchId }, fn);
 }
 
 export function getCurrentDispatchId(): string | undefined {
   return storage.getStore()?.dispatchId;
+}
+
+/**
+ * Both dispatch ids in one `getStore()` read. `dispatchId`/`parentDispatchId` are
+ * `undefined` outside any dispatch (off-loop pre-turn calls) — the correct value,
+ * so telemetry can capture the trace edge centrally without each caller stamping.
+ */
+export function getCurrentDispatchIds(): { dispatchId?: string; parentDispatchId?: string } {
+  const store = storage.getStore();
+  return { dispatchId: store?.dispatchId, parentDispatchId: store?.parentDispatchId };
 }

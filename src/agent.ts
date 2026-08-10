@@ -47,7 +47,8 @@ import { PlanStore } from './plan-store.js';
 import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
 import { recordTurnUsage } from './framework/hooks/token-stats.js';
-import { computeTurnUsageReport, priceUsageUsd } from './usage-report.js';
+import { telemetryFromUsageRecord } from './session-telemetry.js';
+import { computeTurnUsageReport } from './usage-report.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
@@ -355,6 +356,10 @@ export class Agent {
   beginTurnStats(): void {
     this.turnStatsBegun = true;
     this.resetTurnTokenOdometer();
+    // Advance the durable session-telemetry turn counter so this turn's calls
+    // are grouped under it. The per-turn odometer/ledger reset above does NOT
+    // touch the cross-turn telemetry sink.
+    this.spinnerStats?.sessionTelemetry?.beginTurn();
   }
 
   /**
@@ -1142,25 +1147,30 @@ export class Agent {
     // Manual /compact runs between turns, so its summarizer + domain-extraction
     // LLM spend can't ride a turn's ledger (the next `beginTurnStats()` would
     // clear it). Price it here and fold it straight into the session total so the
-    // footer's "session ~$" doesn't silently undercount (#258).
+    // footer's "session ~$" doesn't silently undercount (#258), AND record it into
+    // the durable session-telemetry sink directly (bypassing the turn ledger) so
+    // it also shows up in the per-layer `bernard usage` breakdown under
+    // `compressor` — otherwise the breakdown would under-attribute vs. the total.
     let compactionCostUsd = 0;
+    const stats = this.spinnerStats;
     const compressed = await compressHistory(
       this.history,
       this.config,
       this.ragStore,
-      this.spinnerStats
+      stats
         ? (rec) => {
-            const cost = priceUsageUsd(
-              rec.provider,
-              rec.modelName,
-              rec.promptTokens,
-              rec.completionTokens,
-            );
-            if (cost != null) compactionCostUsd += cost;
+            // Mint the record once (the single pricing path): read its cost for
+            // the between-turn session-total tally, and record it into the sink
+            // for the per-layer breakdown. Works with no sink attached too
+            // (still tallies the scalar cost; just doesn't record).
+            const sink = stats.sessionTelemetry;
+            const tel = telemetryFromUsageRecord(sink?.sessionId ?? '', sink?.turn ?? 0, rec);
+            if (tel.costUsd != null) compactionCostUsd += tel.costUsd;
+            sink?.record(tel);
           }
         : undefined,
     );
-    if (this.spinnerStats) this.spinnerStats.sessionCostUsd += compactionCostUsd;
+    if (stats) stats.sessionCostUsd += compactionCostUsd;
     const compacted = compressed !== this.history;
     if (compacted) {
       this.history = compressed;

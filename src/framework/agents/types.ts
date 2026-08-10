@@ -80,6 +80,14 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
    */
   site?: import('../../model-policy.js').ModelSite;
 
+  /**
+   * Optional finer-grained label for token-ledger / session-telemetry attribution,
+   * decoupled from `site` (which must stay a `ModelSite` for tier resolution).
+   * Lets PAC phases attribute as `pac-planner` / `pac-actor` / `pac-critic` while
+   * still resolving their model at the `specialist` site. Falls back to `site`.
+   */
+  telemetrySite?: string;
+
   /** Whether the caller persists conversation history (main only) or rebuilds it. */
   historyMode: HistoryMode;
 
