@@ -49,6 +49,7 @@ const OPENAI_STANDARD_SUFFIX = `## Model Notes
 // given model resolves as reasoning vs. standard. Kept terse — Grok follows
 // terse, imperative instructions best.
 const XAI_AGENTIC_NOTES = `- Autonomy: keep working until the request is fully resolved before yielding the turn. When something is ambiguous, choose the most reasonable assumption, act on it, and note the assumption afterward rather than pausing to ask.
+- Act, don't announce: if you say you will use a tool or specialist, call it in the same turn. Never end a turn having only described an intended action ("checking X first", "routing this through Y") — perform the action instead of narrating it, then report the result.
 - Gather before asking: obtain information yourself before asking the user for it — read it with a tool, search memory, or use context already provided. Only ask the user when no available tool can supply it and the task genuinely cannot proceed.
 - Recover from failures: if a tool fails, try an alternative tool or approach before giving up. Do not surface a raw tool error as a reason to stop or to hand the work back to the user.
 - Always deliver: never end a turn with only internal reasoning. When the work is complete, write the final answer to the user as plain text. When you need input from the user, request it with the \`ask_user\` tool — not as a plain-text question.`;

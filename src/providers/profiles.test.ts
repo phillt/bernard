@@ -122,6 +122,7 @@ describe('systemSuffix — per family', () => {
   it('includes agentic autonomy guidance for xai standard models', () => {
     const suffix = getModelProfile('xai', 'grok-3').systemSuffix;
     expect(suffix).toMatch(/Autonomy/i);
+    expect(suffix).toMatch(/Act, don't announce/i);
     expect(suffix).toMatch(/Gather before asking/i);
     expect(suffix).toMatch(/Recover from failures/i);
     expect(suffix).toMatch(/Always deliver/i);
@@ -130,6 +131,7 @@ describe('systemSuffix — per family', () => {
   it('includes the same agentic autonomy guidance for xai reasoning models', () => {
     const suffix = getModelProfile('xai', 'grok-4-fast-reasoning').systemSuffix;
     expect(suffix).toMatch(/Autonomy/i);
+    expect(suffix).toMatch(/Act, don't announce/i);
     expect(suffix).toMatch(/Gather before asking/i);
     expect(suffix).toMatch(/Recover from failures/i);
     expect(suffix).toMatch(/Always deliver/i);
