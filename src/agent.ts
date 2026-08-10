@@ -72,7 +72,11 @@ export {
 // ReAct primitives live in ./react.js so tools/* can use them without forming
 // a circular import via agent.ts. Re-exported here because agent.test.ts and
 // other callers import them from './agent.js'.
-import { REACT_COORDINATOR_PROMPT, REACT_MAX_STEPS_CEILING } from './react.js';
+import {
+  REACT_COORDINATOR_PROMPT,
+  REACT_MAX_STEPS_CEILING,
+  STEP_LIMIT_MAX_EXPANSIONS,
+} from './react.js';
 export {
   REACT_COORDINATOR_PROMPT,
   shouldEnforcePlan,
@@ -865,7 +869,6 @@ export class Agent {
           // (cron: no `askUser`) skip the loop and fall through to the warn+yield
           // below unchanged.
           const askUserForSteps = this.ctx.toolOptions?.askUser;
-          const STEP_LIMIT_MAX_EXPANSIONS = 3;
           let stepBudget = maxStepsForCall;
           let stepExpansions = 0;
           while (
@@ -902,10 +905,18 @@ export class Agent {
             const picked = Array.isArray(raw) ? raw[0] : raw;
             if (!picked || picked === STOP) break;
 
-            if (picked === CONTINUE_SESSION || picked === CONTINUE_SAVE) {
+            // Classify the once/session/profile scope once, then drive every
+            // side effect (live bump, disk persist, telemetry) off it.
+            const scope =
+              picked === CONTINUE_SAVE
+                ? 'profile'
+                : picked === CONTINUE_SESSION
+                  ? 'session'
+                  : 'once';
+            if (scope !== 'once') {
               this.config.maxSteps = nextBudget; // live session bump (shared config ref).
             }
-            if (picked === CONTINUE_SAVE) {
+            if (scope === 'profile') {
               try {
                 saveActiveSettings({ maxSteps: nextBudget });
               } catch {
@@ -915,12 +926,7 @@ export class Agent {
             debugLog('agent:step-limit-continue', {
               from: stepBudget,
               to: nextBudget,
-              scope:
-                picked === CONTINUE_SAVE
-                  ? 'profile'
-                  : picked === CONTINUE_SESSION
-                    ? 'session'
-                    : 'once',
+              scope,
               expansion: stepExpansions + 1,
             });
 
