@@ -20,7 +20,7 @@ import type { UsageRecord } from './framework/hooks/token-stats.js';
 import { getCurrentDispatchIds } from './framework/dispatch-context.js';
 import { priceUsageUsd, formatAggCost, formatCallCost } from './usage-report.js';
 import { formatTokenCount, formatElapsed } from './output.js';
-import { appendJsonl, readJsonlTail, rotateJsonlByCount, listFilesByMtime } from './jsonl.js';
+import { appendJsonl, readJsonlTail, listFilesByMtime } from './jsonl.js';
 import { TELEMETRY_DIR, sessionTelemetryPath } from './paths.js';
 
 /**
@@ -108,6 +108,11 @@ export function telemetryEnabled(): boolean {
  * pricing path, and the single place the dispatch-trace ids are captured (from
  * the ambient dispatch context: real ids inside a dispatch, `undefined` for
  * off-loop calls — the correct value). `ts` is stamped at call time.
+ *
+ * **Contract:** call this synchronously in the context that produced `rec` (the
+ * dispatch's async scope, or genuinely off-loop). The trace ids come from ambient
+ * `AsyncLocalStorage`, not the arguments — buffering `rec` and pricing it later,
+ * after the dispatch scope has exited, would silently capture the wrong `callId`.
  */
 export function telemetryFromUsageRecord(
   sessionId: string,
@@ -451,9 +456,4 @@ export function formatSessionUsageLines(summary: TelemetryAggregate): string[] {
     lines.push(...treeLines(summary.tree, 1));
   }
   return lines;
-}
-
-/** Trim a session's telemetry file to the last `keep` records. Best-effort. */
-export function rotateSessionTelemetry(sessionId: string, keep = 5000): void {
-  rotateJsonlByCount(sessionTelemetryPath(sessionId), keep);
 }

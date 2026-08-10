@@ -241,7 +241,8 @@ export function formatAggCost(costUsd: number, hasUnpriced: boolean): string {
 
 /** Cost cell for a single call whose cost may be unknown: `~$x` or `n/a`. */
 export function formatCallCost(costUsd: number | null): string {
-  return costUsd == null ? 'n/a' : `~${formatUsd(costUsd)}`;
+  // A single call's cost is the agg convention with "unknown" == null cost.
+  return formatAggCost(costUsd ?? 0, costUsd == null);
 }
 
 /**

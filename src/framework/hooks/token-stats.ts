@@ -142,6 +142,19 @@ export function recordTurnUsage(stats: SpinnerStats, rec: UsageRecord): void {
 }
 
 /**
+ * A {@link UsageRecorder} bound to a target that owns a `spinnerStats` — folds
+ * each usage observation into that target's live per-turn ledger + session sink
+ * when stats are mounted (no-op otherwise). The one home for the off-loop
+ * recorder wiring, shared by the REPL pre-turn pipeline and the sub-agent
+ * repair path so the presence-guard can't drift.
+ */
+export function makeUsageRecorder(target: { spinnerStats: SpinnerStats | null }): UsageRecorder {
+  return (rec) => {
+    if (target.spinnerStats) recordTurnUsage(target.spinnerStats, rec);
+  };
+}
+
+/**
  * Fold one step's usage + Anthropic prompt-cache counts (#269 — `number | null`,
  * null on a miss → 0) into the per-turn aggregate + ledger. Shared by both hooks
  * so the record shape lives in one place.

@@ -83,11 +83,7 @@ import { ruleLabel, type PermissionRule, type ToolPermissionEffect } from '../to
 import type { BreadthOption } from '../permissions/breadth.js';
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible } from '../output.js';
-import {
-  recordTurnUsage,
-  usageRecordFromSite,
-  type UsageRecorder,
-} from '../framework/hooks/token-stats.js';
+import { makeUsageRecorder, usageRecordFromSite } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
 import {
@@ -422,17 +418,6 @@ function buildChoiceMenu(q: AskUserQuestion): {
  * `src/tools/types.ts:58-100` exactly so Phase D can swap them in without
  * touching tool code.
  */
-/**
- * A {@link UsageRecorder} that folds an off-loop LLM call into the live session
- * telemetry sink when stats are mounted. Shared by the pre-turn pipeline and the
- * `/clear --save` block so the recorder wiring lives in one place.
- */
-function makeSpinnerUsageRecorder(agent: Agent): UsageRecorder {
-  return (rec) => {
-    if (agent.spinnerStats) recordTurnUsage(agent.spinnerStats, rec);
-  };
-}
-
 export function App({
   agent,
   config,
@@ -852,7 +837,7 @@ export function App({
             // Route these off-loop /clear --save LLM calls (summary, fact
             // extraction, specialist detection) through the session telemetry
             // sink so they aren't an accounting hole (#session-telemetry).
-            const recordSaveUsage = makeSpinnerUsageRecorder(agent);
+            const recordSaveUsage = makeUsageRecorder(agent);
             // Cap fact extraction at 60 s to prevent a hung LLM call from
             // freezing the REPL. Fails open: timeout → empty domain facts.
             // AbortSignal.timeout auto-cancels without manual teardown.
@@ -2585,7 +2570,7 @@ export function App({
 
     // Fold pre-turn LLM calls into the per-turn ledger (#258). No-op when the
     // spinner stats aren't wired (headless paths never hit runPreTurnPipeline).
-    const recordPreTurnUsage = makeSpinnerUsageRecorder(agent);
+    const recordPreTurnUsage = makeUsageRecorder(agent);
 
     let resolvedEntries: ResolvedEntry[] = [];
     if (!shouldSkipResolver(input)) {

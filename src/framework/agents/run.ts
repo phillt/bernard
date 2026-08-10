@@ -13,7 +13,7 @@ import { getOutputSink } from '../hooks/output-sink.js';
 import {
   tokenStatsHook,
   tokenTotalsHook,
-  recordTurnUsage,
+  makeUsageRecorder,
   bucketForTier,
   type HookModelInfo,
 } from '../hooks/token-stats.js';
@@ -186,11 +186,7 @@ export async function runDefinition<TInput, TFormatted>(
         // like the dispatch. It runs inside the dispatch's context, so the trace
         // ids are captured centrally in `telemetryFromUsageRecord` — no stamping.
         tier: resolved.tier,
-        onUsage: statsTarget
-          ? (rec) => {
-              if (statsTarget.spinnerStats) recordTurnUsage(statsTarget.spinnerStats, rec);
-            }
-          : undefined,
+        onUsage: statsTarget ? makeUsageRecorder(statsTarget) : undefined,
       })
     : undefined;
 
