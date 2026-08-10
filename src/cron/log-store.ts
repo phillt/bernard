@@ -147,7 +147,12 @@ export class CronLogStore {
     return content.split('\n').filter((line) => line.trim() !== '').length;
   }
 
-  /** Truncates a job's log file to the most recent `keep` entries. */
+  /**
+   * Truncates a job's log file to the most recent `keep` entries. Always
+   * rewrites (does NOT short-circuit when within budget like
+   * {@link rotateJsonlByCount}) because it's triggered by file *size*, not line
+   * count — a 5MB file of few huge entries must still be truncated.
+   */
   rotate(jobId: string, keep: number = DEFAULT_KEEP): void {
     const filePath = this.logPath(jobId);
     if (!fs.existsSync(filePath)) return;

@@ -234,6 +234,15 @@ export class SessionTelemetry {
     if (this.persist) appendJsonl(this.logPath, entry);
   }
 
+  /**
+   * Mint a telemetry record from a {@link UsageRecord} (stamping this session's
+   * id + turn) and record it. The one place that "record a usage observation"
+   * lives, so callers don't re-thread `sessionId`/`turn` back into the builder.
+   */
+  recordUsage(rec: UsageRecord): void {
+    this.record(telemetryFromUsageRecord(this.sessionId, this.turn, rec));
+  }
+
   private fold(e: ModelCallTelemetry): void {
     foldInto(this.totals, e);
     upsert(this.byLayer, e.site, e);

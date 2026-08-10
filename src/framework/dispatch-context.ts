@@ -41,11 +41,6 @@ export function getCurrentDispatchId(): string | undefined {
   return storage.getStore()?.dispatchId;
 }
 
-/** The dispatch that spawned the current one, or `undefined` at the top level. */
-export function getCurrentParentDispatchId(): string | undefined {
-  return storage.getStore()?.parentDispatchId;
-}
-
 /**
  * Both dispatch ids in one `getStore()` read. `dispatchId`/`parentDispatchId` are
  * `undefined` outside any dispatch (off-loop pre-turn calls) — the correct value,

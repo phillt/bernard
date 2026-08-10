@@ -4,7 +4,6 @@ import type { Agent } from '../../agent.js';
 import { formatTokenCount, formatElapsed } from '../../output.js';
 import {
   computeTurnUsageReport,
-  formatUsd,
   formatAggCost,
   formatCallCost,
   type UsageReportRow,
@@ -144,7 +143,7 @@ function buildLines(agent: Agent): OverlayLine[] {
           calls: String(report.totalCalls),
           tin: formatTokenCount(report.totalPromptTokens),
           tout: formatTokenCount(report.totalCompletionTokens),
-          cost: report.totalCostUsd === null ? 'n/a' : `~${formatUsd(report.totalCostUsd)}`,
+          cost: formatCallCost(report.totalCostUsd),
         }}
         bold
       />
@@ -321,7 +320,7 @@ function UsageRow({
         calls: String(row.calls),
         tin: formatTokenCount(row.promptTokens),
         tout: formatTokenCount(row.completionTokens),
-        cost: row.costUsd === null ? 'n/a' : `~${formatUsd(row.costUsd)}`,
+        cost: formatCallCost(row.costUsd),
       }}
       labelColor={tierColor}
       costColor={row.costUsd === null ? colors.muted : colors.text}

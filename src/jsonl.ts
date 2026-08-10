@@ -8,8 +8,10 @@
  * malformed-line, rotation, and race-tolerant-listing semantics can't drift.
  *
  * Every function is **fail-open**: logging/telemetry must never break the caller,
- * so I/O errors are swallowed (reads return `[]`, writes no-op). Callers that
- * need throwing semantics (e.g. cron's size-based rotation) use `fs` directly.
+ * so I/O errors are swallowed (reads return `[]`, writes no-op). Callers with
+ * different semantics use `fs` directly instead — e.g. cron's log store, which
+ * reads newest-first with pagination and rotates by *size* (so it must always
+ * truncate, unlike the count-threshold `rotateJsonlByCount`).
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';

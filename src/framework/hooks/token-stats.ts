@@ -1,7 +1,6 @@
 import type { SpinnerStats, TurnUsageEntry, UsageBucket } from '../../output.js';
 import type { ModelTier } from '../../model-policy.js';
 import type { AgentHook } from './types.js';
-import { telemetryFromUsageRecord } from '../../session-telemetry.js';
 
 /**
  * Single home for the "a model with no tier is bucketed as `pinned`" rule
@@ -133,15 +132,12 @@ export function recordTurnUsage(stats: SpinnerStats, rec: UsageRecord): void {
 
   // Durable, cross-turn telemetry (#session-telemetry). The turn ledger above is
   // cleared each turn; this sink survives to power the session breakdown + the
-  // persisted JSONL. `record` is fail-open, but guard here too so a telemetry
+  // persisted JSONL. `recordUsage` is fail-open, but guard here too so a telemetry
   // bug can never propagate into the model call's hot path.
-  if (stats.sessionTelemetry) {
-    try {
-      const t = stats.sessionTelemetry;
-      t.record(telemetryFromUsageRecord(t.sessionId, t.turn, rec));
-    } catch {
-      // telemetry must never break token accounting
-    }
+  try {
+    stats.sessionTelemetry?.recordUsage(rec);
+  } catch {
+    // telemetry must never break token accounting
   }
 }
 
