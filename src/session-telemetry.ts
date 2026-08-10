@@ -20,7 +20,7 @@ import type { UsageRecord } from './framework/hooks/token-stats.js';
 import { getCurrentDispatchIds } from './framework/dispatch-context.js';
 import { priceUsageUsd, formatAggCost, formatCallCost } from './usage-report.js';
 import { formatTokenCount, formatElapsed } from './output.js';
-import { appendJsonl, readJsonlTail, listFilesByMtime } from './jsonl.js';
+import { appendJsonl, readJsonlTail, listFilesByMtime, pruneFilesByMtime } from './jsonl.js';
 import { TELEMETRY_DIR, sessionTelemetryPath } from './paths.js';
 
 /**
@@ -95,6 +95,14 @@ export interface TelemetryAggregate {
 
 /** How many top calls to retain — matches what the viewer + CLI display. */
 const TOP_CALLS = 5;
+
+/**
+ * Cap on retained per-session telemetry files (mirrors the debug session-log
+ * `MAX_SESSION_FILES`). Without this, one JSONL accumulates per session forever.
+ */
+const MAX_TELEMETRY_FILES = 50;
+/** Prune runs once per process, on the first persisting sink's construction. */
+let telemetryPruned = false;
 
 /** True unless `BERNARD_TELEMETRY` is explicitly `false`/`0`. */
 export function telemetryEnabled(): boolean {
@@ -216,6 +224,12 @@ export class SessionTelemetry {
     this.startedAt = Date.now();
     this.persist = opts?.persist ?? telemetryEnabled();
     this.logPath = opts?.logPath ?? sessionTelemetryPath(sessionId);
+    // Retain only the N most-recent session files (this session's file doesn't
+    // exist yet, so it's never pruned). Once per process, best-effort.
+    if (this.persist && !telemetryPruned) {
+      telemetryPruned = true;
+      pruneFilesByMtime(TELEMETRY_DIR, MAX_TELEMETRY_FILES, '.jsonl');
+    }
   }
 
   /** Current per-session turn counter (0 before the first turn opens). */
@@ -358,7 +372,16 @@ export function aggregateRecords(
   const store = new SessionTelemetry(sessionId, { persist: false });
   // `persist: false` makes `record` a pure in-memory fold (no disk write).
   for (const r of records) store.record(r);
-  return store.summary();
+  const summary = store.summary();
+  // The store's `startedAt` is aggregation time (~now), so for a session
+  // reconstructed from disk the real span must come from the record timestamps,
+  // not `Date.now() - startedAt` (which would render `Duration: 0s`).
+  const times = records.map((r) => Date.parse(r.ts)).filter((t) => Number.isFinite(t));
+  if (times.length > 0) {
+    summary.startedAt = Math.min(...times);
+    summary.durationMs = Math.max(...times) - summary.startedAt;
+  }
+  return summary;
 }
 
 /** One right-padded label + right-aligned columns row for the plain-text report. */

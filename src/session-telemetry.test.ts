@@ -432,6 +432,14 @@ describe('aggregateRecords + formatSessionUsageLines', () => {
     expect(sum.totals.calls).toBe(2);
     expect(sum.totals.costUsd).toBeCloseTo(1.23, 6);
 
+    // Duration comes from the record timestamps (span), not `Date.now() -
+    // startedAt` — a session reconstructed from disk must not render "0s".
+    const early = { ...records[0], ts: '2026-08-07T00:00:00.000Z' };
+    const late = { ...records[1], ts: '2026-08-07T00:05:00.000Z' };
+    const spanned = aggregateRecords('sSpan', [early, late]);
+    expect(spanned.durationMs).toBe(5 * 60 * 1000);
+    expect(spanned.startedAt).toBe(Date.parse('2026-08-07T00:00:00.000Z'));
+
     const lines = formatSessionUsageLines(sum).join('\n');
     expect(lines).toContain('Bernard session: sX');
     expect(lines).toContain('BY LAYER');

@@ -117,3 +117,19 @@ export function listFilesByMtime(dir: string, ext?: string): FileByMtime[] {
     })
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
+
+/**
+ * Delete all but the `keep` most-recent files (by mtime) in `dir`, optionally
+ * filtered by `ext`. Best-effort — a file that vanishes is ignored, and the
+ * whole pass never throws. The shared retention primitive behind both the debug
+ * session-log and per-session telemetry rotation.
+ */
+export function pruneFilesByMtime(dir: string, keep: number, ext?: string): void {
+  for (const f of listFilesByMtime(dir, ext).slice(keep)) {
+    try {
+      fs.unlinkSync(f.path);
+    } catch {
+      // already gone or unreadable — ignore
+    }
+  }
+}

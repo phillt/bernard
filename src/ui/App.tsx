@@ -842,17 +842,34 @@ export function App({
             // freezing the REPL. Fails open: timeout → empty domain facts.
             // AbortSignal.timeout auto-cancels without manual teardown.
             const extractSignal = AbortSignal.timeout(60_000);
-            const saveStartedAt = Date.now();
             const [summaryResult, domainFacts, candidateResult] = await Promise.all([
-              generateText({
-                model: summarySite.model,
-                providerOptions: summarySite.providerOptions,
-                maxTokens: 2048,
-                system: SUMMARIZATION_PROMPT,
-                messages: [
-                  { role: 'user', content: `Summarize this conversation:\n\n${serialized}` },
-                ],
-              }),
+              // Wrap the summarize call so its recorded latency reflects just this
+              // call, not the whole parallel batch's wall time (extract can run to
+              // the 60 s timeout).
+              (async () => {
+                const t0 = Date.now();
+                const result = await generateText({
+                  model: summarySite.model,
+                  providerOptions: summarySite.providerOptions,
+                  maxTokens: 2048,
+                  system: SUMMARIZATION_PROMPT,
+                  messages: [
+                    { role: 'user', content: `Summarize this conversation:\n\n${serialized}` },
+                  ],
+                });
+                recordSaveUsage(
+                  usageRecordFromSite(
+                    summarySite,
+                    'compressor',
+                    result.usage,
+                    result.providerMetadata,
+                    {
+                      latencyMs: Date.now() - t0,
+                    },
+                  ),
+                );
+                return result;
+              })(),
               extractDomainFacts(serialized, config, recordSaveUsage, extractSignal),
               detectSpecialistCandidate(
                 serialized,
@@ -862,15 +879,6 @@ export function App({
                 recordSaveUsage,
               ).catch(() => null),
             ]);
-            recordSaveUsage(
-              usageRecordFromSite(
-                summarySite,
-                'compressor',
-                summaryResult.usage,
-                summaryResult.providerMetadata,
-                { latencyMs: Date.now() - saveStartedAt },
-              ),
-            );
             const summary = summaryResult.text?.trim();
             if (summary) {
               const key = `session-summary-${new Date().toISOString().replace(/[:.]/g, '-')}`;

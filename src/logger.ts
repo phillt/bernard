@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { SESSION_LOGS_DIR } from './paths.js';
-import { listFilesByMtime } from './jsonl.js';
+import { pruneFilesByMtime } from './jsonl.js';
 
 const MAX_SESSION_FILES = 50;
 
@@ -94,11 +94,5 @@ export async function traceLlm<T>(site: string, model: string, fn: () => Promise
 
 /** Keep the N most recent session logs by mtime; delete the rest. */
 function rotateSessionLogs(): void {
-  for (const f of listFilesByMtime(SESSION_LOGS_DIR, '.jsonl').slice(MAX_SESSION_FILES)) {
-    try {
-      fs.unlinkSync(f.path);
-    } catch {
-      // file already gone or unreadable — ignore
-    }
-  }
+  pruneFilesByMtime(SESSION_LOGS_DIR, MAX_SESSION_FILES, '.jsonl');
 }

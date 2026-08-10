@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { appendJsonl, readJsonlTail, rotateJsonlByCount, listFilesByMtime } from './jsonl.js';
+import {
+  appendJsonl,
+  readJsonlTail,
+  rotateJsonlByCount,
+  listFilesByMtime,
+  pruneFilesByMtime,
+} from './jsonl.js';
 
 let dir: string;
 beforeEach(() => {
@@ -76,5 +82,29 @@ describe('listFilesByMtime', () => {
     expect(listed[0].path).toBe(b);
 
     expect(listFilesByMtime(path.join(dir, 'missing'))).toEqual([]);
+  });
+});
+
+describe('pruneFilesByMtime', () => {
+  it('deletes all but the `keep` newest matching files, leaves others, never throws', () => {
+    for (let i = 0; i < 5; i++) {
+      const f = path.join(dir, `s${i}.jsonl`);
+      fs.writeFileSync(f, '');
+      fs.utimesSync(f, new Date(1000 * (i + 1)), new Date(1000 * (i + 1))); // s4 newest
+    }
+    const other = path.join(dir, 'keep.txt');
+    fs.writeFileSync(other, ''); // non-matching extension → untouched
+
+    pruneFilesByMtime(dir, 2, '.jsonl');
+
+    // Only the 2 newest .jsonl survive; the .txt is left alone.
+    expect(
+      listFilesByMtime(dir, '.jsonl')
+        .map((f) => f.name)
+        .sort(),
+    ).toEqual(['s3.jsonl', 's4.jsonl']);
+    expect(fs.existsSync(other)).toBe(true);
+
+    expect(() => pruneFilesByMtime(path.join(dir, 'missing'), 2, '.jsonl')).not.toThrow();
   });
 });
