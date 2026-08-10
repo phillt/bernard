@@ -131,12 +131,18 @@ export function hasMultiStepLanguage(text: string): boolean {
  *
  * Patterns are kept deliberately object-anchored (e.g. "message" must be
  * followed by a person-ish object) so common non-action phrasings — "what's
- * the error message", "cancel culture" — don't escalate.
+ * the error message", "cancel culture" — don't escalate. `call` collides
+ * heavily with developer usage ("call the API/function/endpoint"), so unlike
+ * the other communication verbs it only matches a *personal* object, never the
+ * generic "the".
  */
 const AGENTIC_ACTION_PATTERNS: RegExp[] = [
   // Outreach / communication to a person or their staff.
   /\b(?:reach out|get in touch|follow up|check in)\b/i,
-  /\b(?:message|e-?mail|contact|call|text|notify|remind|write to)\s+(?:my|the|her|his|their|our|dr\.?|doctor|him|them|us)\b/i,
+  /\b(?:message|e-?mail|contact|text|notify|remind|write to)\s+(?:my|the|her|his|their|our|dr\.?|doctor|him|them|us)\b/i,
+  // `call` excludes the generic "the" — "call the function/API/endpoint" is a
+  // dev phrasing, not a real-world outreach action.
+  /\bcall\s+(?:my|her|his|their|our|dr\.?|doctor|him|them|us)\b/i,
   /\blet\s+(?:him|her|them|my|the)\b[^.?!]{0,30}\bknow\b/i,
   // Scheduling / appointments / reservations (verb + object).
   /\b(?:book|schedule|reschedule|cancel|set up|arrange)\b[^.?!]{0,40}\b(?:appointment|meeting|reservation|visit|booking|table|call)\b/i,

@@ -159,6 +159,15 @@ describe('hasAgenticActionRequest', () => {
     expect(hasAgenticActionRequest('how do I renew a TLS certificate in code?')).toBe(false);
   });
 
+  it('matches call only with a personal object, not dev "call the …" phrasings', () => {
+    expect(hasAgenticActionRequest('call my doctor about the results')).toBe(true);
+    expect(hasAgenticActionRequest('can you call her back')).toBe(true);
+    // "call the …" is a developer phrasing, not real-world outreach.
+    expect(hasAgenticActionRequest('call the function with these args')).toBe(false);
+    expect(hasAgenticActionRequest('call the API endpoint and log the response')).toBe(false);
+    expect(hasAgenticActionRequest('call the endpoint')).toBe(false);
+  });
+
   it('does NOT match non-action uses of the same words', () => {
     expect(hasAgenticActionRequest("what's the error message on line 4?")).toBe(false);
     expect(hasAgenticActionRequest('explain cancel culture to me')).toBe(false);

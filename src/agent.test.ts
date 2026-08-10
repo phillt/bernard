@@ -89,6 +89,12 @@ vi.mock('./tools/subagent.js', () => ({
   createSubAgentTool: vi.fn(() => mockSubAgentTool),
 }));
 
+vi.mock('./profiles.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./profiles.js')>()),
+  saveActiveSettings: vi.fn(),
+}));
+const { saveActiveSettings } = await import('./profiles.js');
+
 const mockGenerateText = vi.fn();
 const mockStreamText = vi.fn();
 vi.mock('ai', async (importOriginal) => {
@@ -964,6 +970,22 @@ describe('Agent', () => {
       const agent = makeAgent(config, { ...toolOptions, askUser }, store);
       await agent.processInput('do the long browser task');
       expect(config.maxSteps).toBe(50); // bumped in place on the shared config ref.
+    });
+
+    it('persists the doubled budget to the active profile when the user picks the save option', async () => {
+      mockGenerateText.mockResolvedValueOnce(atLimit());
+      mockGenerateText.mockResolvedValueOnce(done);
+      // choices[2] is the "save … as my default step budget" option.
+      const askUser = vi.fn(async (questions: any[]) => ({
+        answers: [questions[0].choices[2]],
+      }));
+      const config = makeConfig();
+      const agent = makeAgent(config, { ...toolOptions, askUser }, store);
+      await agent.processInput('do the long browser task');
+      // Written to disk with the doubled budget…
+      expect(saveActiveSettings).toHaveBeenCalledWith({ maxSteps: 50 });
+      // …and the live session budget is bumped in place too.
+      expect(config.maxSteps).toBe(50);
     });
 
     it('bounds expansions so a task that keeps hitting the limit cannot loop forever', async () => {
