@@ -17,7 +17,6 @@ import {
   bucketForTier,
   type HookModelInfo,
 } from '../hooks/token-stats.js';
-import { getCurrentDispatchId, getCurrentParentDispatchId } from '../dispatch-context.js';
 import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
@@ -184,16 +183,12 @@ export async function runDefinition<TInput, TFormatted>(
         label: def.repairLabel,
         abortSignal: opts.abortSignal,
         // Bring the repair's (full-context) token spend into telemetry, bucketed
-        // like the dispatch and nested under it via the ALS dispatch ids.
+        // like the dispatch. It runs inside the dispatch's context, so the trace
+        // ids are captured centrally in `telemetryFromUsageRecord` — no stamping.
         tier: resolved.tier,
         onUsage: statsTarget
           ? (rec) => {
-              if (statsTarget.spinnerStats)
-                recordTurnUsage(statsTarget.spinnerStats, {
-                  ...rec,
-                  callId: getCurrentDispatchId(),
-                  parentCallId: getCurrentParentDispatchId(),
-                });
+              if (statsTarget.spinnerStats) recordTurnUsage(statsTarget.spinnerStats, rec);
             }
           : undefined,
       })

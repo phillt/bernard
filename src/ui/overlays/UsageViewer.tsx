@@ -1,9 +1,15 @@
 import { useMemo } from 'react';
 import { Box, Text } from 'ink';
 import type { Agent } from '../../agent.js';
-import { formatTokenCount } from '../../output.js';
-import { computeTurnUsageReport, formatUsd, type UsageReportRow } from '../../usage-report.js';
-import type { TelemetryAgg } from '../../session-telemetry.js';
+import { formatTokenCount, formatElapsed } from '../../output.js';
+import {
+  computeTurnUsageReport,
+  formatUsd,
+  formatAggCost,
+  formatCallCost,
+  type UsageReportRow,
+} from '../../usage-report.js';
+import { sortedAggEntries, type TelemetryAgg } from '../../session-telemetry.js';
 import { getThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
 import { ScrollableOverlay, type OverlayLine } from './ScrollableOverlay.js';
@@ -179,19 +185,6 @@ function buildLines(agent: Agent): OverlayLine[] {
   return lines;
 }
 
-/** Format a rolled-up agg's cost cell: `~$x`, `n/a` (all unpriced), else `~$0.00`. */
-function aggCost(agg: TelemetryAgg): string {
-  if (agg.costUsd > 0) return `~${formatUsd(agg.costUsd)}`;
-  return agg.hasUnpriced ? 'n/a' : '~$0.00';
-}
-
-function formatDuration(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  return `${m}m${s % 60}s`;
-}
-
 /**
  * Cross-turn session breakdown (#session-telemetry) appended below the last-turn
  * table: session totals, spend by layer + by model, and the costliest calls.
@@ -211,7 +204,7 @@ function appendSessionLines(
     key: 'session-header',
     node: (
       <Text bold color={colors.accent}>
-        SESSION (all turns) · {formatDuration(summary.durationMs)}
+        SESSION (all turns) · {formatElapsed(summary.durationMs)}
       </Text>
     ),
   });
@@ -224,7 +217,7 @@ function appendSessionLines(
           calls: String(summary.totals.calls),
           tin: formatTokenCount(summary.totals.promptTokens),
           tout: formatTokenCount(summary.totals.completionTokens),
-          cost: aggCost(summary.totals),
+          cost: formatAggCost(summary.totals.costUsd, summary.totals.hasUnpriced),
         }}
         bold
       />
@@ -244,8 +237,8 @@ function appendSessionLines(
         </Text>
       ),
     });
-    summary.mostExpensiveCalls.slice(0, 5).forEach((c, i) => {
-      const cost = c.costUsd == null ? 'n/a' : `~${formatUsd(c.costUsd)}`;
+    summary.mostExpensiveCalls.forEach((c, i) => {
+      const cost = formatCallCost(c.costUsd);
       const tokens = formatTokenCount(c.promptTokens + c.completionTokens);
       lines.push({
         key: `top-${i}`,
@@ -271,9 +264,7 @@ function pushAggSection(
   map: Map<string, TelemetryAgg>,
   colors: ReturnType<typeof getThemeColors>,
 ): void {
-  const rows = Array.from(map.entries()).sort(
-    (a, b) => b[1].costUsd - a[1].costUsd || b[1].promptTokens - a[1].promptTokens,
-  );
+  const rows = sortedAggEntries(map);
   if (rows.length === 0) return;
   lines.push({ key: `${keyPrefix}-spacer`, node: <Text> </Text> });
   lines.push({
@@ -296,7 +287,7 @@ function pushAggSection(
             calls: String(agg.calls),
             tin: formatTokenCount(agg.promptTokens),
             tout: formatTokenCount(agg.completionTokens),
-            cost: aggCost(agg),
+            cost: formatAggCost(agg.costUsd, agg.hasUnpriced),
           }}
           labelColor={colors.text}
           costColor={agg.costUsd > 0 ? colors.text : colors.muted}

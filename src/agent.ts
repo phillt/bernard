@@ -47,6 +47,7 @@ import { PlanStore } from './plan-store.js';
 import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
 import { recordTurnUsage } from './framework/hooks/token-stats.js';
+import { telemetryFromUsageRecord } from './session-telemetry.js';
 import { computeTurnUsageReport, priceUsageUsd } from './usage-report.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
@@ -1146,13 +1147,17 @@ export class Agent {
     // Manual /compact runs between turns, so its summarizer + domain-extraction
     // LLM spend can't ride a turn's ledger (the next `beginTurnStats()` would
     // clear it). Price it here and fold it straight into the session total so the
-    // footer's "session ~$" doesn't silently undercount (#258).
+    // footer's "session ~$" doesn't silently undercount (#258), AND record it into
+    // the durable session-telemetry sink directly (bypassing the turn ledger) so
+    // it also shows up in the per-layer `bernard usage` breakdown under
+    // `compressor` — otherwise the breakdown would under-attribute vs. the total.
     let compactionCostUsd = 0;
+    const stats = this.spinnerStats;
     const compressed = await compressHistory(
       this.history,
       this.config,
       this.ragStore,
-      this.spinnerStats
+      stats
         ? (rec) => {
             const cost = priceUsageUsd(
               rec.provider,
@@ -1162,10 +1167,12 @@ export class Agent {
               { cacheReadTokens: rec.cacheReadTokens, cacheWriteTokens: rec.cacheWriteTokens },
             );
             if (cost != null) compactionCostUsd += cost;
+            const sink = stats.sessionTelemetry;
+            if (sink) sink.record(telemetryFromUsageRecord(sink.sessionId, sink.turn, rec));
           }
         : undefined,
     );
-    if (this.spinnerStats) this.spinnerStats.sessionCostUsd += compactionCostUsd;
+    if (stats) stats.sessionCostUsd += compactionCostUsd;
     const compacted = compressed !== this.history;
     if (compacted) {
       this.history = compressed;

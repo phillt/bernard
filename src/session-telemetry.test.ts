@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { runWithDispatchId } from './framework/dispatch-context.js';
 
 // Deterministic pricing (mirrors usage-report.test.ts): opus + haiku priced;
 // everything else returns null so the unpriced path is exercised.
@@ -32,7 +33,6 @@ vi.mock('./providers/catalog.js', () => ({
 const {
   SessionTelemetry,
   telemetryFromUsageRecord,
-  roleForSite,
   aggregateRecords,
   formatSessionUsageLines,
   telemetryEnabled,
@@ -47,7 +47,6 @@ function rec(over: Partial<Rec> & Pick<Rec, 'site' | 'provider' | 'modelName'>):
     sessionId: 's1',
     turn: 1,
     bucket: 'premium',
-    role: 'orchestrator',
     promptTokens: 0,
     completionTokens: 0,
     cacheReadTokens: 0,
@@ -62,21 +61,8 @@ function store() {
   return new SessionTelemetry('s1', { persist: false });
 }
 
-describe('roleForSite', () => {
-  it('maps known ModelSites, PAC phases, and falls back to unknown', () => {
-    expect(roleForSite('main')).toBe('orchestrator');
-    expect(roleForSite('rewriter')).toBe('classifier');
-    expect(roleForSite('recall-filter')).toBe('classifier');
-    expect(roleForSite('tool-wrapper')).toBe('function-caller');
-    expect(roleForSite('pac-planner')).toBe('executor');
-    expect(roleForSite('pac-critic')).toBe('executor');
-    expect(roleForSite('cron')).toBe('orchestrator');
-    expect(roleForSite('totally-unknown')).toBe('unknown');
-  });
-});
-
 describe('telemetryFromUsageRecord', () => {
-  it('mints cost via priceUsageUsd (single pricing path) and derives role', () => {
+  it('mints cost via priceUsageUsd (single pricing path)', () => {
     const t = telemetryFromUsageRecord('s1', 3, {
       bucket: 'premium',
       site: 'main',
@@ -86,7 +72,6 @@ describe('telemetryFromUsageRecord', () => {
       completionTokens: 1_000_000,
     });
     expect(t.turn).toBe(3);
-    expect(t.role).toBe('orchestrator');
     expect(t.costUsd).toBe(priceUsageUsd('anthropic', 'claude-opus-4-8', 1_000_000, 1_000_000));
     expect(t.costUsd).toBe(15 + 75);
     expect(t.success).toBe(true);
@@ -120,25 +105,30 @@ describe('telemetryFromUsageRecord', () => {
     expect(t.costUsd).toBeNull();
   });
 
-  it('threads latency/success/callId/parentCallId through', () => {
-    const t = telemetryFromUsageRecord('s1', 1, {
-      bucket: 'mid',
-      site: 'pac-actor',
-      provider: 'anthropic',
-      modelName: 'claude-haiku-4-5-20251001',
-      promptTokens: 10,
-      completionTokens: 5,
+  it('threads latency/success through, and captures callId/parentCallId from the dispatch context', () => {
+    const build = () =>
+      telemetryFromUsageRecord('s1', 1, {
+        bucket: 'mid',
+        site: 'pac-actor',
+        provider: 'anthropic',
+        modelName: 'claude-haiku-4-5-20251001',
+        promptTokens: 10,
+        completionTokens: 5,
+        latencyMs: 1234,
+        success: false,
+      });
+    // Inside a nested dispatch, the trace ids are captured from the ambient ALS.
+    const inside = runWithDispatchId('root', () => runWithDispatchId('child', build));
+    expect(inside).toMatchObject({
       latencyMs: 1234,
       success: false,
       callId: 'child',
       parentCallId: 'root',
     });
-    expect(t).toMatchObject({
-      latencyMs: 1234,
-      success: false,
-      callId: 'child',
-      parentCallId: 'root',
-    });
+    // Off-loop (no active dispatch) → no ids.
+    const outside = build();
+    expect(outside.callId).toBeUndefined();
+    expect(outside.parentCallId).toBeUndefined();
   });
 });
 
@@ -170,7 +160,6 @@ describe('SessionTelemetry aggregation', () => {
     s.record(
       rec({
         site: 'tool-wrapper',
-        role: 'function-caller',
         bucket: 'mid',
         provider: 'anthropic',
         modelName: 'claude-haiku-4-5-20251001',
@@ -196,12 +185,11 @@ describe('SessionTelemetry aggregation', () => {
     expect(sum.byProvider.get('anthropic')!.calls).toBe(3);
   });
 
-  it('collapses sites sharing a role in byRole', () => {
+  it('keeps distinct sites as distinct byLayer rows', () => {
     const s = store();
     s.record(
       rec({
         site: 'rewriter',
-        role: 'classifier',
         bucket: 'cheap',
         provider: 'anthropic',
         modelName: 'claude-haiku-4-5-20251001',
@@ -213,7 +201,6 @@ describe('SessionTelemetry aggregation', () => {
     s.record(
       rec({
         site: 'recall-filter',
-        role: 'classifier',
         bucket: 'cheap',
         provider: 'anthropic',
         modelName: 'claude-haiku-4-5-20251001',
@@ -223,8 +210,10 @@ describe('SessionTelemetry aggregation', () => {
       }),
     );
     const sum = s.summary();
-    expect(sum.byRole.get('classifier')!.calls).toBe(2);
-    expect(sum.byRole.get('classifier')!.promptTokens).toBe(150);
+    expect(sum.byLayer.get('rewriter')!.calls).toBe(1);
+    expect(sum.byLayer.get('recall-filter')!.promptTokens).toBe(50);
+    // But they fold together by model.
+    expect(sum.byModel.get('anthropic|claude-haiku-4-5-20251001')!.calls).toBe(2);
   });
 
   it('excludes null-cost calls from cost total but flags hasUnpriced', () => {
@@ -252,17 +241,6 @@ describe('SessionTelemetry aggregation', () => {
     const sum = s.summary();
     expect(sum.totals.costUsd).toBe(2); // null-cost row contributes 0
     expect(sum.totals.hasUnpriced).toBe(true);
-  });
-
-  it('sums latency into latencyMsTotal', () => {
-    const s = store();
-    s.record(
-      rec({ site: 'main', provider: 'anthropic', modelName: 'claude-opus-4-8', latencyMs: 100 }),
-    );
-    s.record(
-      rec({ site: 'main', provider: 'anthropic', modelName: 'claude-opus-4-8', latencyMs: 250 }),
-    );
-    expect(s.summary().totals.latencyMsTotal).toBe(350);
   });
 });
 
@@ -440,7 +418,6 @@ describe('aggregateRecords + formatSessionUsageLines', () => {
       }),
       rec({
         site: 'pac-actor',
-        role: 'executor',
         bucket: 'mid',
         provider: 'anthropic',
         modelName: 'claude-haiku-4-5-20251001',

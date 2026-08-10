@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { SESSION_LOGS_DIR } from './paths.js';
+import { listFilesByMtime } from './jsonl.js';
 
 const MAX_SESSION_FILES = 50;
 
@@ -93,28 +94,9 @@ export async function traceLlm<T>(site: string, model: string, fn: () => Promise
 
 /** Keep the N most recent session logs by mtime; delete the rest. */
 function rotateSessionLogs(): void {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(SESSION_LOGS_DIR, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  const files = entries
-    .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
-    .map((e) => {
-      const full = path.join(SESSION_LOGS_DIR, e.name);
-      let mtimeMs = 0;
-      try {
-        mtimeMs = fs.statSync(full).mtimeMs;
-      } catch {
-        // file vanished between readdir and stat — skip it
-      }
-      return { full, mtimeMs };
-    })
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
-  for (const f of files.slice(MAX_SESSION_FILES)) {
+  for (const f of listFilesByMtime(SESSION_LOGS_DIR, '.jsonl').slice(MAX_SESSION_FILES)) {
     try {
-      fs.unlinkSync(f.full);
+      fs.unlinkSync(f.path);
     } catch {
       // file already gone or unreadable — ignore
     }

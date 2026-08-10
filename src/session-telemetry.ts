@@ -15,28 +15,24 @@
  * response text, tool args, or results. **Fail-open**: a fold or persist error
  * can never propagate into a model call.
  */
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import type { UsageBucket } from './output.js';
 import type { UsageRecord } from './framework/hooks/token-stats.js';
-import type { ModelSite } from './model-policy.js';
-import type { RoleId } from './model-roles.js';
-import { SITE_ROLE } from './model-roles.js';
-import { priceUsageUsd, formatUsd } from './usage-report.js';
-import { formatTokenCount } from './output.js';
+import { getCurrentDispatchIds } from './framework/dispatch-context.js';
+import { priceUsageUsd, formatAggCost, formatCallCost } from './usage-report.js';
+import { formatTokenCount, formatElapsed } from './output.js';
+import { appendJsonl, readJsonlTail, rotateJsonlByCount, listFilesByMtime } from './jsonl.js';
 import { TELEMETRY_DIR, sessionTelemetryPath } from './paths.js';
-
-/** Role label for a telemetry record. `'unknown'` for sites outside {@link SITE_ROLE}. */
-export type TelemetryRole = RoleId | 'unknown';
 
 /**
  * One normalized model-call telemetry record (≈ one billed AI-SDK step). No
- * prompt/response content — tokens/cost/latency/ids/labels only.
+ * prompt/response content — tokens/cost/latency/ids/labels only. The `site`
+ * label is the layer; role (if ever needed) is derivable from it via
+ * `SITE_ROLE` at analysis time.
  */
 export interface ModelCallTelemetry {
   ts: string;
   sessionId: string;
-  /** The dispatch this step ran in (`getCurrentDispatchId`); absent for off-loop calls. */
+  /** The dispatch this step ran in; absent for off-loop calls (trace root). */
   callId?: string;
   /** The enclosing dispatch (tree edge); absent at the top level / off-loop. */
   parentCallId?: string;
@@ -45,7 +41,6 @@ export interface ModelCallTelemetry {
   bucket: UsageBucket;
   /** Logical layer (`main`, `rewriter`, `pac-planner`, `tool-wrapper`, …). */
   site: string;
-  role: TelemetryRole;
   provider: string;
   modelName: string;
   promptTokens: number;
@@ -58,7 +53,7 @@ export interface ModelCallTelemetry {
   success: boolean;
 }
 
-/** A rolled-up bucket of spend, keyed by layer / role / model / provider. */
+/** A rolled-up bucket of spend, keyed by layer / model / provider. */
 export interface TelemetryAgg {
   promptTokens: number;
   completionTokens: number;
@@ -69,10 +64,9 @@ export interface TelemetryAgg {
   costUsd: number;
   /** True when at least one folded record had no catalog pricing. */
   hasUnpriced: boolean;
-  latencyMsTotal: number;
 }
 
-/** One node of the hierarchical dispatch trace. */
+/** One node of the hierarchical dispatch trace (a rolled-up dispatch). */
 export interface TelemetryTreeNode extends TelemetryAgg {
   /** Dispatch id, or `null` for the off-loop grouping node. */
   callId: string | null;
@@ -91,7 +85,6 @@ export interface TelemetryAggregate {
   durationMs: number;
   totals: TelemetryAgg;
   byLayer: Map<string, TelemetryAgg>;
-  byRole: Map<string, TelemetryAgg>;
   byModel: Map<string, TelemetryAgg>;
   byProvider: Map<string, TelemetryAgg>;
   /** Costliest calls (by cost, then tokens), most-expensive first. */
@@ -100,7 +93,8 @@ export interface TelemetryAggregate {
   tree: TelemetryTreeNode[];
 }
 
-const TOP_CALLS = 8;
+/** How many top calls to retain — matches what the viewer + CLI display. */
+const TOP_CALLS = 5;
 
 /** True unless `BERNARD_TELEMETRY` is explicitly `false`/`0`. */
 export function telemetryEnabled(): boolean {
@@ -108,38 +102,27 @@ export function telemetryEnabled(): boolean {
   return v !== 'false' && v !== '0';
 }
 
-/** Resolve the functional role for a (possibly non-`ModelSite`) telemetry site label. */
-export function roleForSite(site: string): TelemetryRole {
-  if (Object.prototype.hasOwnProperty.call(SITE_ROLE, site)) {
-    return SITE_ROLE[site as ModelSite];
-  }
-  if (site.startsWith('pac-')) return 'executor';
-  if (site === 'sub' || site === 'task') return 'executor';
-  if (site === 'cron') return 'orchestrator';
-  // Repair re-emits a structured tool call for a failed one.
-  if (site === 'tool-call-repair') return 'function-caller';
-  return 'unknown';
-}
-
 /**
  * Build a normalized {@link ModelCallTelemetry} from a {@link UsageRecord} — the
  * single place cost is minted (via {@link priceUsageUsd}) so there's no second
- * pricing path. `ts` is stamped at call time.
+ * pricing path, and the single place the dispatch-trace ids are captured (from
+ * the ambient dispatch context: real ids inside a dispatch, `undefined` for
+ * off-loop calls — the correct value). `ts` is stamped at call time.
  */
 export function telemetryFromUsageRecord(
   sessionId: string,
   turn: number,
   rec: UsageRecord,
 ): ModelCallTelemetry {
+  const { dispatchId, parentDispatchId } = getCurrentDispatchIds();
   return {
     ts: new Date().toISOString(),
     sessionId,
-    callId: rec.callId,
-    parentCallId: rec.parentCallId,
+    callId: dispatchId,
+    parentCallId: parentDispatchId,
     turn,
     bucket: rec.bucket,
     site: rec.site,
-    role: roleForSite(rec.site),
     provider: rec.provider,
     modelName: rec.modelName,
     promptTokens: rec.promptTokens,
@@ -164,7 +147,6 @@ function emptyAgg(): TelemetryAgg {
     calls: 0,
     costUsd: 0,
     hasUnpriced: false,
-    latencyMsTotal: 0,
   };
 }
 
@@ -176,7 +158,6 @@ function foldInto(agg: TelemetryAgg, e: ModelCallTelemetry): void {
   agg.calls += 1;
   if (e.costUsd == null) agg.hasUnpriced = true;
   else agg.costUsd += e.costUsd;
-  agg.latencyMsTotal += e.latencyMs ?? 0;
 }
 
 function upsert(map: Map<string, TelemetryAgg>, key: string, e: ModelCallTelemetry): void {
@@ -196,13 +177,11 @@ function tokenTotal(e: ModelCallTelemetry): number {
   return e.promptTokens + e.completionTokens;
 }
 
-/** Internal accumulating node — same shape as {@link TelemetryTreeNode} sans children. */
-interface NodeAcc extends TelemetryAgg {
-  callId: string | null;
-  parentCallId: string | null;
-  site: string;
-  provider: string;
-  modelName: string;
+/** Aggregate map entries sorted costliest-first (then by prompt tokens). */
+export function sortedAggEntries(map: Map<string, TelemetryAgg>): [string, TelemetryAgg][] {
+  return Array.from(map.entries()).sort(
+    (a, b) => b[1].costUsd - a[1].costUsd || b[1].promptTokens - a[1].promptTokens,
+  );
 }
 
 /**
@@ -216,16 +195,16 @@ export class SessionTelemetry {
   private turnCounter = 0;
   private readonly persist: boolean;
   private readonly logPath: string;
-  private dirReady = false;
 
   private readonly totals = emptyAgg();
   private readonly byLayer = new Map<string, TelemetryAgg>();
-  private readonly byRole = new Map<string, TelemetryAgg>();
   private readonly byModel = new Map<string, TelemetryAgg>();
   private readonly byProvider = new Map<string, TelemetryAgg>();
   private topCalls: ModelCallTelemetry[] = [];
-  // Keyed by callId, or `off:<site>` for off-loop (no-callId) records.
-  private readonly nodes = new Map<string, NodeAcc>();
+  // Per-dispatch accumulator nodes, keyed by callId (or `off:<site>` for
+  // off-loop, no-callId records). `children` stays empty here — the tree edges
+  // are wired on fresh copies in `buildTree` so `summary()` is idempotent.
+  private readonly nodes = new Map<string, TelemetryTreeNode>();
 
   constructor(sessionId: string, opts?: { persist?: boolean; logPath?: string }) {
     this.sessionId = sessionId;
@@ -251,19 +230,13 @@ export class SessionTelemetry {
     } catch {
       // aggregate math must never break a model call
     }
-    if (this.persist) {
-      try {
-        this.append(entry);
-      } catch {
-        // best-effort; swallow
-      }
-    }
+    // `appendJsonl` is itself fail-open (lazy-mkdirs + swallows I/O errors).
+    if (this.persist) appendJsonl(this.logPath, entry);
   }
 
   private fold(e: ModelCallTelemetry): void {
     foldInto(this.totals, e);
     upsert(this.byLayer, e.site, e);
-    upsert(this.byRole, e.role, e);
     upsert(this.byModel, `${e.provider}|${e.modelName}`, e);
     upsert(this.byProvider, e.provider, e);
     this.foldNode(e);
@@ -281,6 +254,7 @@ export class SessionTelemetry {
         site: e.site,
         provider: e.provider,
         modelName: e.modelName,
+        children: [],
       };
       this.nodes.set(key, node);
     }
@@ -293,16 +267,6 @@ export class SessionTelemetry {
     if (this.topCalls.length > TOP_CALLS) this.topCalls.length = TOP_CALLS;
   }
 
-  private append(entry: ModelCallTelemetry): void {
-    if (!this.dirReady) {
-      // Create the log file's own parent (== TELEMETRY_DIR for the default path;
-      // honors a custom `logPath` too). Throws propagate to `record`'s catch.
-      fs.mkdirSync(path.dirname(this.logPath), { recursive: true });
-      this.dirReady = true;
-    }
-    fs.appendFileSync(this.logPath, JSON.stringify(entry) + '\n', 'utf-8');
-  }
-
   /** Pure snapshot for the `/usage` viewer + `bernard usage` CLI. */
   summary(): TelemetryAggregate {
     return {
@@ -311,16 +275,11 @@ export class SessionTelemetry {
       durationMs: Date.now() - this.startedAt,
       totals: { ...this.totals },
       byLayer: cloneAggMap(this.byLayer),
-      byRole: cloneAggMap(this.byRole),
       byModel: cloneAggMap(this.byModel),
       byProvider: cloneAggMap(this.byProvider),
       mostExpensiveCalls: this.topCalls.slice(),
-      tree: this.buildTree(),
+      tree: buildTreeFromNodes(Array.from(this.nodes.values())),
     };
-  }
-
-  private buildTree(): TelemetryTreeNode[] {
-    return buildTreeFromNodes(Array.from(this.nodes.values()));
   }
 }
 
@@ -331,14 +290,15 @@ function cloneAggMap(map: Map<string, TelemetryAgg>): Map<string, TelemetryAgg> 
 }
 
 /**
- * Reconstruct the dispatch tree from flat nodes. A node attaches under its
- * parent when that parent dispatch is itself a node (it always is when the
- * parent produced ≥1 telemetry record — e.g. the main agent's own steps);
+ * Reconstruct the dispatch tree from flat accumulator nodes. A node attaches
+ * under its parent when that parent dispatch is itself a node (it always is when
+ * the parent produced ≥1 telemetry record — e.g. the main agent's own steps);
  * otherwise it becomes a root. Off-loop nodes (`callId: null`) are always roots.
+ * Operates on fresh copies so it never mutates the stored accumulators.
  */
-function buildTreeFromNodes(accs: NodeAcc[]): TelemetryTreeNode[] {
+function buildTreeFromNodes(accs: TelemetryTreeNode[]): TelemetryTreeNode[] {
+  const nodes = accs.map((a) => ({ ...a, children: [] as TelemetryTreeNode[] }));
   const byCall = new Map<string, TelemetryTreeNode>();
-  const nodes: TelemetryTreeNode[] = accs.map((a) => ({ ...a, children: [] }));
   for (const n of nodes) {
     if (n.callId) byCall.set(n.callId, n);
   }
@@ -357,49 +317,14 @@ function buildTreeFromNodes(accs: NodeAcc[]): TelemetryTreeNode[] {
  * throws — returns `[]` on any error / missing file.
  */
 export function readSessionTelemetry(sessionId?: string, limit?: number): ModelCallTelemetry[] {
-  try {
-    const file = sessionId ? sessionTelemetryPath(sessionId) : latestTelemetryFile();
-    if (!file || !fs.existsSync(file)) return [];
-    const lines = fs
-      .readFileSync(file, 'utf-8')
-      .split('\n')
-      .filter((l) => l.trim().length > 0);
-    const tail = limit ? lines.slice(-limit) : lines;
-    const out: ModelCallTelemetry[] = [];
-    for (const line of tail) {
-      try {
-        out.push(JSON.parse(line) as ModelCallTelemetry);
-      } catch {
-        // skip malformed line
-      }
-    }
-    return out;
-  } catch {
-    return [];
-  }
+  const file = sessionId ? sessionTelemetryPath(sessionId) : latestTelemetryFile();
+  if (!file) return [];
+  return readJsonlTail<ModelCallTelemetry>(file, limit);
 }
 
 /** Session ids that have a persisted telemetry file, newest (by mtime) first. */
 export function listTelemetrySessions(): string[] {
-  try {
-    return fs
-      .readdirSync(TELEMETRY_DIR, { withFileTypes: true })
-      .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
-      .map((e) => {
-        const full = `${TELEMETRY_DIR}/${e.name}`;
-        let mtimeMs = 0;
-        try {
-          mtimeMs = fs.statSync(full).mtimeMs;
-        } catch {
-          // vanished between readdir and stat
-        }
-        return { id: e.name.replace(/\.jsonl$/, ''), mtimeMs };
-      })
-      .sort((a, b) => b.mtimeMs - a.mtimeMs)
-      .map((f) => f.id);
-  } catch {
-    return [];
-  }
+  return listFilesByMtime(TELEMETRY_DIR, '.jsonl').map((f) => f.name.replace(/\.jsonl$/, ''));
 }
 
 function latestTelemetryFile(): string | null {
@@ -422,18 +347,6 @@ export function aggregateRecords(
   return store.summary();
 }
 
-function fmtCost(costUsd: number, hasUnpriced: boolean): string {
-  if (costUsd > 0) return `~${formatUsd(costUsd)}`;
-  return hasUnpriced ? 'n/a' : '~$0.00';
-}
-
-function fmtDuration(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  return `${m}m ${s % 60}s`;
-}
-
 /** One right-padded label + right-aligned columns row for the plain-text report. */
 function reportRow(label: string, calls: number, tin: number, tout: number, cost: string): string {
   return (
@@ -446,9 +359,7 @@ function reportRow(label: string, calls: number, tin: number, tout: number, cost
 }
 
 function aggSection(title: string, map: Map<string, TelemetryAgg>): string[] {
-  const rows = Array.from(map.entries()).sort(
-    (a, b) => b[1].costUsd - a[1].costUsd || b[1].promptTokens - a[1].promptTokens,
-  );
+  const rows = sortedAggEntries(map);
   if (rows.length === 0) return [];
   const header =
     'name'.padEnd(30) +
@@ -464,7 +375,7 @@ function aggSection(title: string, map: Map<string, TelemetryAgg>): string[] {
         agg.calls,
         agg.promptTokens,
         agg.completionTokens,
-        fmtCost(agg.costUsd, agg.hasUnpriced),
+        formatAggCost(agg.costUsd, agg.hasUnpriced),
       ),
     );
   }
@@ -476,11 +387,13 @@ function treeLines(nodes: TelemetryTreeNode[], depth: number): string[] {
   for (const n of nodes) {
     const indent = '  '.repeat(depth);
     const id = n.callId ?? 'off-loop';
-    const cost = fmtCost(n.costUsd, n.hasUnpriced);
     out.push(
       `${indent}${n.site} (${id}) · ${n.modelName} · ${n.calls} call(s) · ${formatTokenCount(
         n.promptTokens,
-      )} in / ${formatTokenCount(n.completionTokens)} out · ${cost}`,
+      )} in / ${formatTokenCount(n.completionTokens)} out · ${formatAggCost(
+        n.costUsd,
+        n.hasUnpriced,
+      )}`,
     );
     if (n.children.length > 0) out.push(...treeLines(n.children, depth + 1));
   }
@@ -496,7 +409,7 @@ export function formatSessionUsageLines(summary: TelemetryAggregate): string[] {
   const lines: string[] = [];
   lines.push(`Bernard session: ${summary.sessionId}`);
   lines.push(
-    `Duration: ${fmtDuration(summary.durationMs)}   Calls: ${t.calls}   Cost: ${fmtCost(
+    `Duration: ${formatElapsed(summary.durationMs)}   Calls: ${t.calls}   Cost: ${formatAggCost(
       t.costUsd,
       t.hasUnpriced,
     )}`,
@@ -506,7 +419,7 @@ export function formatSessionUsageLines(summary: TelemetryAggregate): string[] {
   lines.push(`  Input tokens:  ${formatTokenCount(t.promptTokens)}`);
   lines.push(`  Output tokens: ${formatTokenCount(t.completionTokens)}`);
   if (t.cacheReadTokens > 0) lines.push(`  Cached (read): ${formatTokenCount(t.cacheReadTokens)}`);
-  lines.push(`  Cost:          ${fmtCost(t.costUsd, t.hasUnpriced)}`);
+  lines.push(`  Cost:          ${formatAggCost(t.costUsd, t.hasUnpriced)}`);
   if (t.hasUnpriced) lines.push('  (some calls used uncatalogued models; cost omits those)');
 
   lines.push(...aggSection('BY LAYER', summary.byLayer));
@@ -515,12 +428,11 @@ export function formatSessionUsageLines(summary: TelemetryAggregate): string[] {
 
   if (summary.mostExpensiveCalls.length > 0) {
     lines.push('', 'MOST EXPENSIVE CALLS');
-    for (const c of summary.mostExpensiveCalls.slice(0, 5)) {
-      const cost = c.costUsd == null ? 'n/a' : `~${formatUsd(c.costUsd)}`;
+    for (const c of summary.mostExpensiveCalls) {
       lines.push(
         `  ${c.site} · ${c.modelName} · ${formatTokenCount(
           c.promptTokens + c.completionTokens,
-        )} tok · ${cost}`,
+        )} tok · ${formatCallCost(c.costUsd)}`,
       );
     }
   }
@@ -534,18 +446,5 @@ export function formatSessionUsageLines(summary: TelemetryAggregate): string[] {
 
 /** Trim a session's telemetry file to the last `keep` records. Best-effort. */
 export function rotateSessionTelemetry(sessionId: string, keep = 5000): void {
-  try {
-    const file = sessionTelemetryPath(sessionId);
-    if (!fs.existsSync(file)) return;
-    const lines = fs
-      .readFileSync(file, 'utf-8')
-      .split('\n')
-      .filter((l) => l.trim().length > 0);
-    if (lines.length <= keep) return;
-    const tmp = file + '.tmp';
-    fs.writeFileSync(tmp, lines.slice(-keep).join('\n') + '\n', 'utf-8');
-    fs.renameSync(tmp, file);
-  } catch {
-    // best-effort
-  }
+  rotateJsonlByCount(sessionTelemetryPath(sessionId), keep);
 }

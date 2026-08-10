@@ -17,6 +17,7 @@ import type { BernardConfig } from './config.js';
 import { MemoryStore } from './memory.js';
 import { printWarning, printInfo, type SpinnerStats } from './output.js';
 import { computeTurnUsageReport } from './usage-report.js';
+import { SessionTelemetry } from './session-telemetry.js';
 import { getModelProfile } from './providers/index.js';
 import { assembleContext } from './framework/context.js';
 import * as modelPolicy from './model-policy.js';
@@ -967,7 +968,9 @@ describe('Agent', () => {
 
     it('bounds expansions so a task that keeps hitting the limit cannot loop forever', async () => {
       // Every dispatch keeps hitting the limit; the user keeps continuing.
-      mockGenerateText.mockResolvedValue(atLimit({ steps: Array.from({ length: 999 }, () => ({})) }));
+      mockGenerateText.mockResolvedValue(
+        atLimit({ steps: Array.from({ length: 999 }, () => ({})) }),
+      );
       const askUser = vi.fn(async (questions: any[]) => ({
         answers: [questions[0].choices[0]],
       }));
@@ -1616,6 +1619,42 @@ describe('Agent', () => {
       await agent.compactHistory();
 
       expect(agent.getHistory()).toBe(compressedHistory);
+    });
+
+    it('records /compact spend into the session-telemetry breakdown (compressor layer)', async () => {
+      const { compressHistory, estimateHistoryTokens } = await import('./context.js');
+      vi.mocked(estimateHistoryTokens).mockReturnValue(500);
+      // compressHistory feeds a compressor usage record to onUsage, then returns
+      // a new (compacted) history reference.
+      vi.mocked(compressHistory).mockImplementationOnce((async (
+        _h: unknown,
+        _c: unknown,
+        _r: unknown,
+        onUsage?: (rec: unknown) => void,
+      ) => {
+        onUsage?.({
+          bucket: 'cheap',
+          site: 'compressor',
+          provider: 'anthropic',
+          modelName: 'claude-haiku-4-5-20251001',
+          promptTokens: 4000,
+          completionTokens: 200,
+        });
+        return [{ role: 'user' as const, content: 'summary' }];
+      }) as unknown as typeof compressHistory);
+
+      const agent = makeAgent(makeConfig(), toolOptions, store);
+      const telemetry = new SessionTelemetry('compact-test', { persist: false });
+      agent.setSpinnerStats(makeSpinnerStats({ sessionTelemetry: telemetry }));
+
+      await agent.compactHistory();
+
+      // The /compact summarizer spend lands in the durable per-layer breakdown
+      // (not just the scalar session total), attributed to `compressor`.
+      const layer = telemetry.summary().byLayer.get('compressor');
+      expect(layer?.calls).toBe(1);
+      expect(layer?.promptTokens).toBe(4000);
+      expect(layer?.completionTokens).toBe(200);
     });
 
     it('returns compacted: false when compressHistory returns same reference', async () => {

@@ -109,7 +109,7 @@ export function formatTokenCount(n: number): string {
   return k >= 10 ? `${Math.round(k)}k` : `${k.toFixed(1)}k`;
 }
 
-function formatElapsed(ms: number): string {
+export function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   if (totalSeconds < 60) return `${totalSeconds}s`;
   const minutes = Math.floor(totalSeconds / 60);

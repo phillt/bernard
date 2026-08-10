@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { LOGS_DIR } from '../paths.js';
+import { atomicWriteFileSync } from '../fs-utils.js';
 import type { ToolErrorType } from '../framework/tools/types.js';
 import type { Verdict, Check } from '../rubric.js';
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
@@ -156,10 +157,7 @@ export class CronLogStore {
       .split('\n')
       .filter((line) => line.trim() !== '');
 
-    const kept = lines.slice(-keep);
-    const tmp = filePath + '.tmp';
-    fs.writeFileSync(tmp, kept.join('\n') + '\n', 'utf-8');
-    fs.renameSync(tmp, filePath);
+    atomicWriteFileSync(filePath, lines.slice(-keep).join('\n') + '\n');
   }
 
   /** Deletes the entire log file for a job. Returns `false` if no log file existed. */

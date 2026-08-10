@@ -45,3 +45,13 @@ export function getCurrentDispatchId(): string | undefined {
 export function getCurrentParentDispatchId(): string | undefined {
   return storage.getStore()?.parentDispatchId;
 }
+
+/**
+ * Both dispatch ids in one `getStore()` read. `dispatchId`/`parentDispatchId` are
+ * `undefined` outside any dispatch (off-loop pre-turn calls) — the correct value,
+ * so telemetry can capture the trace edge centrally without each caller stamping.
+ */
+export function getCurrentDispatchIds(): { dispatchId?: string; parentDispatchId?: string } {
+  const store = storage.getStore();
+  return { dispatchId: store?.dispatchId, parentDispatchId: store?.parentDispatchId };
+}

@@ -229,6 +229,22 @@ export function formatCostSuffix(n: number | null | undefined): string {
 }
 
 /**
+ * Cost cell for a rolled-up aggregate (session telemetry): `~$x` when priced,
+ * `n/a` when every folded call was unpriced, else `~$0.00`. Single home for the
+ * priced/unpriced convention shared by the `/usage` Session view and the
+ * `bernard usage` CLI so they can't drift.
+ */
+export function formatAggCost(costUsd: number, hasUnpriced: boolean): string {
+  if (costUsd > 0) return `~${formatUsd(costUsd)}`;
+  return hasUnpriced ? 'n/a' : '~$0.00';
+}
+
+/** Cost cell for a single call whose cost may be unknown: `~$x` or `n/a`. */
+export function formatCallCost(costUsd: number | null): string {
+  return costUsd == null ? 'n/a' : `~${formatUsd(costUsd)}`;
+}
+
+/**
  * Compact ` ~$cost` suffix for the StatusBar odometer (#258). Returns `''` when
  * there's no priced cost yet (no tokens, or only unpriced custom-provider models)
  * so the bar stays clean.

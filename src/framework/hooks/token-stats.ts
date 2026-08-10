@@ -1,7 +1,6 @@
 import type { SpinnerStats, TurnUsageEntry, UsageBucket } from '../../output.js';
 import type { ModelTier } from '../../model-policy.js';
 import type { AgentHook } from './types.js';
-import { getCurrentDispatchId, getCurrentParentDispatchId } from '../dispatch-context.js';
 import { telemetryFromUsageRecord } from '../../session-telemetry.js';
 
 /**
@@ -45,10 +44,6 @@ export interface UsageRecord extends HookModelInfo {
   latencyMs?: number;
   /** False on a recorded failed/aborted call. Defaults to true when omitted. */
   success?: boolean;
-  /** Dispatch id this step ran in (`getCurrentDispatchId`); absent off-loop. */
-  callId?: string;
-  /** Enclosing dispatch id (trace edge); absent at the top level / off-loop. */
-  parentCallId?: string;
 }
 
 /**
@@ -167,7 +162,7 @@ function recordStep(
         };
       }
     | undefined,
-  extra?: { latencyMs?: number; callId?: string; parentCallId?: string },
+  latencyMs?: number,
 ): void {
   // A step that reports no usage payload isn't a billable model call we can
   // attribute — skip it rather than minting a zero-token ledger row that would
@@ -180,11 +175,10 @@ function recordStep(
     completionTokens: usage?.completionTokens ?? 0,
     cacheReadTokens: a?.cacheReadInputTokens ?? 0,
     cacheWriteTokens: a?.cacheCreationInputTokens ?? 0,
-    latencyMs: extra?.latencyMs,
-    callId: extra?.callId,
-    parentCallId: extra?.parentCallId,
+    latencyMs,
     // A step that finished with a usage payload succeeded; failed dispatches
-    // throw before `onStepFinish` and never reach here.
+    // throw before `onStepFinish` and never reach here. Dispatch-trace ids are
+    // captured centrally in `telemetryFromUsageRecord` from the ambient context.
     success: true,
   });
 }
@@ -217,11 +211,7 @@ export function tokenStatsHook(target: TokenStatsTarget, info: HookModelInfo): A
         if (target.spinnerStats) target.spinnerStats.latestPromptTokens = usage.promptTokens;
       }
       if (target.spinnerStats)
-        recordStep(target.spinnerStats, info, usage, providerMetadata, {
-          latencyMs,
-          callId: getCurrentDispatchId(),
-          parentCallId: getCurrentParentDispatchId(),
-        });
+        recordStep(target.spinnerStats, info, usage, providerMetadata, latencyMs);
     },
   };
 }
@@ -243,11 +233,7 @@ export function tokenTotalsHook(target: TokenStatsTarget, info: HookModelInfo): 
       const latencyMs = now - lastStepAt;
       lastStepAt = now;
       if (target.spinnerStats)
-        recordStep(target.spinnerStats, info, usage, providerMetadata, {
-          latencyMs,
-          callId: getCurrentDispatchId(),
-          parentCallId: getCurrentParentDispatchId(),
-        });
+        recordStep(target.spinnerStats, info, usage, providerMetadata, latencyMs);
     },
   };
 }

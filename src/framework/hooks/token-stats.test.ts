@@ -180,8 +180,11 @@ describe('per-step latency + dispatch-id stamping', () => {
       });
 
       const sum = target.spinnerStats.sessionTelemetry.summary();
-      expect(sum.totals.latencyMsTotal).toBe(250); // 100 + 150
-      // Both steps ran in the 'child' dispatch nested under 'parent'.
+      // Per-step inter-step wall time recorded onto each call record.
+      expect(sum.mostExpensiveCalls.map((c) => c.latencyMs).sort((a, b) => a! - b!)).toEqual([
+        100, 150,
+      ]);
+      // Both steps ran in the 'child' dispatch (from the ALS) nested under 'parent'.
       const node = sum.tree.find((n) => n.callId === 'child');
       expect(node).toBeDefined();
       expect(node!.parentCallId).toBe('parent');
