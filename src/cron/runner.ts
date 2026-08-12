@@ -136,7 +136,10 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
 
   try {
     await mcpManager.connect();
-    mcpTools = mcpManager.getTools();
+    mcpTools = mcpManager.getTools({
+      mode: config.mcpResultShaping,
+      maxChars: config.mcpResultShapingMaxChars,
+    });
     serverNames = mcpManager.getConnectedServerNames();
     if (serverNames.length > 0) {
       log(`MCP servers connected: ${serverNames.join(', ')}`);

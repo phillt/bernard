@@ -351,6 +351,10 @@ export async function dispatchToolWrapper(
     const { result, formatted: wrapped } = await runDefinition(innerCtx, def, defInput, {
       abortSignal,
       overrides: { provider, model },
+      // Attribute this dispatch's spend to its own per-target site (#299) so it
+      // stops folding into the `main` layer. (Per-server MCP delegation has its
+      // own dispatch in `src/tools/delegate.ts` and labels `mcp:<server>` there.)
+      telemetrySite: `tool-wrapper:${specialistId}`,
     });
 
     printSpecialistEnd(id);

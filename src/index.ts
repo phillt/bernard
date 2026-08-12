@@ -306,8 +306,12 @@ async function runInkRepl(args: {
     for (const s of failed) printError(`  ✗ mcp ${s.name}: ${s.error}`);
   }
 
-  const mcpTools = mcpManager.getTools();
+  const mcpTools = mcpManager.getTools({
+    mode: config.mcpResultShaping,
+    maxChars: config.mcpResultShapingMaxChars,
+  });
   const mcpServerNames = mcpManager.getConnectedServerNames();
+  const mcpServerTools = mcpManager.getServerToolMap();
 
   const sessionToolAllowlist = new Set<string>();
 
@@ -437,7 +441,7 @@ async function runInkRepl(args: {
   const agentCtx = assembleContext({
     config,
     toolOptions,
-    mcp: { tools: mcpTools, serverNames: mcpServerNames },
+    mcp: { tools: mcpTools, serverNames: mcpServerNames, serverTools: mcpServerTools },
     rag: ragStore,
     stores: {
       memory: memoryStore,

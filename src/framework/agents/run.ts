@@ -70,6 +70,15 @@ export interface RunDefinitionOpts {
     onStepMessages?(cumulativeMessages: CoreMessage[]): void;
     onTextDelta?(delta: string): void;
   };
+  /**
+   * Per-dispatch telemetry-site override (#299). Wins over `def.telemetrySite`
+   * and the resolved site so a single caller can label an otherwise-shared
+   * definition — e.g. `tool_wrapper_run` labels each dispatch
+   * `tool-wrapper:<specialistId>` and per-server MCP delegation labels its
+   * helper `mcp:<server>` — instead of every off-main dispatch folding into
+   * the `main` layer in `bernard usage` / the UsageViewer.
+   */
+  telemetrySite?: string;
 }
 
 export interface RunDefinitionResult<TFormatted> {
@@ -158,9 +167,12 @@ export async function runDefinition<TInput, TFormatted>(
   // is the cron / headless exemption (the hook is simply not attached).
   const modelInfo: HookModelInfo = {
     bucket: bucketForTier(resolved.tier),
-    // `telemetrySite` overrides for ledger/telemetry attribution (e.g. PAC phases
-    // label as pac-planner/actor/critic) without changing the resolution site.
-    site: def.telemetrySite ?? resolved.site ?? def.site ?? 'main',
+    // Telemetry `site` precedence, most-specific first (#299): a per-dispatch
+    // `opts.telemetrySite` override (e.g. `tool-wrapper:<id>`, `mcp:<server>`)
+    // wins over a definition's fixed label (PAC phases), then the resolved
+    // model site, then `def.site`, then the `main` layer. Without an override an
+    // off-main dispatch folds into `main` — the gap #299 closes.
+    site: opts.telemetrySite ?? def.telemetrySite ?? resolved.site ?? def.site ?? 'main',
     provider: resolved.provider,
     modelName: resolved.modelName,
   };

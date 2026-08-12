@@ -13,7 +13,13 @@ import { debugLog, traceLlm } from './logger.js';
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 
 /** Identifies which generateText site produced the failed tool call. */
-export type RepairLabel = 'main' | 'specialist' | 'subagent' | 'tool-wrapper' | 'cron';
+export type RepairLabel =
+  | 'main'
+  | 'specialist'
+  | 'subagent'
+  | 'tool-wrapper'
+  | 'mcp-delegate'
+  | 'cron';
 
 export interface MakeRepairHookOpts {
   config: BernardConfig;

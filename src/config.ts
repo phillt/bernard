@@ -20,6 +20,7 @@ import {
   sanitizePermissionRules,
 } from './tool-permissions.js';
 import { FALLBACK_TIERS } from './lineups.js';
+import { DEFAULT_MCP_RESULT_MAX_CHARS } from './mcp-result-shaper.js';
 
 /** Resolved runtime configuration for a Bernard session. */
 export interface BernardConfig {
@@ -108,6 +109,33 @@ export interface BernardConfig {
    * other providers ignore the markers. Env: `BERNARD_PROMPT_CACHE`.
    */
   promptCache: boolean;
+  /**
+   * Per-server MCP delegation (#296). When true (default), the main agent sees
+   * one thin `delegate_<server>` tool per connected MCP server instead of that
+   * server's full tool schemas; a helper sub-agent runs the real calls in an
+   * isolated context and returns a small summary, keeping both the schemas and
+   * the raw results out of the main context. Set false to fall back to exposing
+   * every MCP tool directly on the main agent. Env: `BERNARD_MCP_DELEGATION`.
+   */
+  mcpDelegation: boolean;
+  /**
+   * MCP result shaping (#297): `off` passes raw MCP tool results through
+   * untouched; `cap` (default) bounds an over-budget result with a
+   * structure-aware truncation before it enters an agent's context, so a large
+   * list/body doesn't re-bill on every subsequent step. Env:
+   * `BERNARD_MCP_RESULT_SHAPING`.
+   */
+  mcpResultShaping: 'off' | 'cap';
+  /** Character budget for a capped MCP result. Env: `BERNARD_MCP_RESULT_SHAPING_MAX_CHARS`. */
+  mcpResultShapingMaxChars: number;
+  /**
+   * Provider-aware cost guardrail (#298): on a provider with no prompt-cache
+   * discount (xAI / custom), once per session a turn whose main-agent prefix
+   * exceeds this token count triggers a one-time hint that the prefix is being
+   * re-billed at full price every step. `0` disables the hint. Env:
+   * `BERNARD_COST_GUARDRAIL_TOKENS`.
+   */
+  costGuardrailTokens: number;
   /**
    * Semantic response cache (#269). Opt-in (default false). When true, read-only
    * Q&A turns may be answered from a local embedding-similarity cache of prior
@@ -249,6 +277,9 @@ const DEFAULT_TOOL_MODE: 'read-only' | 'write' = 'read-only';
 const DEFAULT_MODEL_MODE: ModelMode = 'balanced';
 const DEFAULT_SCRATCH_SUBJECT_THRESHOLD = 0.15;
 const DEFAULT_CONCISE_MODE = true;
+/** Token threshold for the no-prompt-cache cost hint (#298). ~60k ≈ the point
+ * where a re-billed prefix on a non-caching provider is materially expensive. */
+const DEFAULT_COST_GUARDRAIL_TOKENS = 60000;
 const DEFAULT_MAX_CONCURRENT_AGENTS = POOL_DEFAULT_MAX;
 const DEFAULT_RESPONSE_STYLE: ResponseStyle = 'default';
 
@@ -1009,6 +1040,16 @@ export function loadConfig(overrides?: {
   const cacheEnabled = process.env.BERNARD_CACHE_ENABLED !== 'false';
   // Provider prompt caching: on by default (#269). Off only when explicitly disabled.
   const promptCache = process.env.BERNARD_PROMPT_CACHE !== 'false';
+  const mcpDelegation = process.env.BERNARD_MCP_DELEGATION !== 'false';
+  const mcpResultShaping: 'off' | 'cap' =
+    process.env.BERNARD_MCP_RESULT_SHAPING === 'off' ? 'off' : 'cap';
+  const mcpResultShapingMaxChars =
+    parseInt(process.env.BERNARD_MCP_RESULT_SHAPING_MAX_CHARS || '', 10) ||
+    DEFAULT_MCP_RESULT_MAX_CHARS;
+  // `>= 0` so `0` (disable) survives, which the terser `|| DEFAULT` idiom can't express.
+  const cgTokens = parseInt(process.env.BERNARD_COST_GUARDRAIL_TOKENS ?? '', 10);
+  const costGuardrailTokens =
+    Number.isFinite(cgTokens) && cgTokens >= 0 ? cgTokens : DEFAULT_COST_GUARDRAIL_TOKENS;
   // Semantic response cache: opt-in, off by default (#269).
   const semanticCache =
     process.env.BERNARD_SEMANTIC_CACHE === 'true' || process.env.BERNARD_SEMANTIC_CACHE === '1';
@@ -1203,6 +1244,10 @@ export function loadConfig(overrides?: {
     ragEnabled,
     cacheEnabled,
     promptCache,
+    mcpDelegation,
+    mcpResultShaping,
+    mcpResultShapingMaxChars,
+    costGuardrailTokens,
     semanticCache,
     theme,
     coordinatorMode,
@@ -1327,8 +1372,10 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
  * so downstream subsystems holding a reference to `config` see the new values.
  *
  * Does not touch API keys, custom providers, the cached `providerBaseUrl`, or
- * env-only flags (`ragEnabled`, `cacheEnabled`, `promptCache`, `semanticCache`,
- * `correctionEnabled`, `referenceLookupTools`) — those are not profile-scoped.
+ * env-only flags (`ragEnabled`, `cacheEnabled`, `promptCache`, `mcpDelegation`,
+ * `mcpResultShaping`, `mcpResultShapingMaxChars`, `costGuardrailTokens`,
+ * `semanticCache`, `correctionEnabled`, `referenceLookupTools`) — those are not
+ * profile-scoped.
  *
  * @throws if the new profile selects a provider with no configured API key.
  */

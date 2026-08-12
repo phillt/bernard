@@ -9,6 +9,7 @@ import { attachMeta } from './framework/tools/adapter.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
 import { normalizeToolResult } from './text.js';
+import { shapeMCPResult, type MCPResultShapingConfig } from './mcp-result-shaper.js';
 
 /** Configuration for an MCP server launched via stdio subprocess. */
 interface MCPStdioConfig {
@@ -348,7 +349,12 @@ export class MCPManager {
    * Each tool's `execute` method is wrapped with automatic reconnect-and-retry:
    * if a call fails, the owning server is reconnected and the call retried once.
    */
-  getTools(): Record<string, any> {
+  getTools(shaping?: MCPResultShapingConfig): Record<string, any> {
+    // Structure-aware result shaping (#297): bound over-budget MCP results
+    // before they enter an agent's context so a large list/body doesn't re-bill
+    // on every subsequent step. `off` (or unset) is a pass-through.
+    const shape = (result: unknown): unknown =>
+      shaping ? shapeMCPResult(result, shaping) : result;
     // Convert dynamic MCP tools to function tools compatible with AI SDK v4.
     // @ai-sdk/mcp@1.x returns tools with type:'dynamic' and inputSchema from
     // @ai-sdk/provider-utils@4.x, but ai@4.x expects type:undefined and
@@ -368,7 +374,7 @@ export class MCPManager {
         execute: async (args: unknown) => {
           try {
             const result = await originalExecute(args);
-            return normalizeToolResult(result);
+            return shape(normalizeToolResult(result));
           } catch (error) {
             if (serverName) {
               printInfo(`MCP tool "${name}" failed, reconnecting to "${serverName}"...`);
@@ -376,7 +382,7 @@ export class MCPManager {
               if (reconnected && this.tools[name]) {
                 const freshTool = this.convertTool(name, this.tools[name]);
                 const retryResult = await freshTool.execute(args);
-                return normalizeToolResult(retryResult);
+                return shape(normalizeToolResult(retryResult));
               }
             }
             throw error;
@@ -411,6 +417,21 @@ export class MCPManager {
   /** Returns the names of all servers that are currently connected. */
   getConnectedServerNames(): string[] {
     return this.serverStatuses.filter((s) => s.connected).map((s) => s.name);
+  }
+
+  /**
+   * Returns a `{ server: [toolName, …] }` map over every connected server (an
+   * inversion of `toolServerMap`) — the per-server view threaded into
+   * `AgentContextMCP.serverTools` at bootstrap so per-server MCP delegation
+   * (#296) can scope each helper sub-agent to that server's real tools while the
+   * main agent carries only one `delegate_<server>` tool.
+   */
+  getServerToolMap(): Record<string, string[]> {
+    const map: Record<string, string[]> = {};
+    for (const [toolName, serverName] of this.toolServerMap.entries()) {
+      (map[serverName] ??= []).push(toolName);
+    }
+    return map;
   }
 
   /**
