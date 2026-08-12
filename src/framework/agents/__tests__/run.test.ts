@@ -103,6 +103,53 @@ beforeEach(() => {
   (buildContextMessage as unknown as ReturnType<typeof vi.fn>).mockReturnValue(null);
 });
 
+describe('runDefinition telemetry site attribution (#299)', () => {
+  it('records off-main steps under the opts.telemetrySite label, not "main"', async () => {
+    const def = fakeDefinition();
+    const ctx = makeCtx();
+    // Attach a stats target so the totals hook is installed. Capture the
+    // HookModelInfo the hook records against by driving one step through it.
+    const recorded: string[] = [];
+    const spinnerStats: any = {
+      startTime: 0,
+      turnPromptTokens: 0,
+      turnCompletionTokens: 0,
+      turnCacheReadTokens: 0,
+      turnCacheWriteTokens: 0,
+      latestPromptTokens: 0,
+      model: 'claude-x',
+      turnLedger: {
+        set(key: string) {
+          recorded.push(key);
+        },
+        get: () => undefined,
+        has: () => false,
+      },
+    };
+    ctx.statsTarget = { lastStepPromptTokens: 0, spinnerStats } as any;
+
+    // Make generateText invoke the onStepFinish hooks it was handed so the
+    // totals hook actually records a step.
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (arg: any) => {
+        await arg.onStepFinish?.({
+          text: '',
+          toolCalls: [],
+          toolResults: [],
+          usage: { promptTokens: 100, completionTokens: 10 },
+        });
+        return { text: 'done', steps: [], response: { messages: [] }, finishReason: 'stop' };
+      },
+    );
+
+    await runDefinition(ctx, def, { text: 'x' }, { telemetrySite: 'mcp:google' });
+
+    // The per-turn ledger key is `${bucket}|${provider}|${model}|${site}`.
+    expect(recorded.some((k) => k.endsWith('|mcp:google'))).toBe(true);
+    expect(recorded.some((k) => k.endsWith('|main'))).toBe(false);
+  });
+});
+
 describe('runDefinition', () => {
   it('builds AgentSpec from definition fields and calls runAgent once for NormalStrategy', async () => {
     const def = fakeDefinition();

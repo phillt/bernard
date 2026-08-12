@@ -83,6 +83,7 @@ import { ruleLabel, type PermissionRule, type ToolPermissionEffect } from '../to
 import type { BreadthOption } from '../permissions/breadth.js';
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible } from '../output.js';
+import { noPromptCacheHint } from '../cost-guardrail.js';
 import { makeUsageRecorder, usageRecordFromSite } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
@@ -507,6 +508,9 @@ export function App({
   // One-shot guard so onExit runs exactly once whether the user types
   // `/exit` (handleSubmit) or the Ink tree unmounts (useEffect cleanup).
   const exitedRef = useRef(false);
+  // Cost guardrail (#298): latches true the first time we warn about a large
+  // prefix re-billed on a non-caching provider, so the hint fires once/session.
+  const noCacheWarnedRef = useRef(false);
   // Synchronous guard against double-Enter: setBusy schedules a re-render but
   // a second submit can land before Prompt sees `disabled={busy}` flip.
   const submittingRef = useRef(false);
@@ -2857,6 +2861,23 @@ export function App({
       // commitNewHistory), matching the duration/timestamp footer.
       const turnCostUsd = agent.finalizeTurnStats();
       commitNewHistory({ timing, costUsd: turnCostUsd });
+      // Provider-aware cost guardrail (#298): once per session, if this turn's
+      // main-agent prefix was large and the active provider has no prompt-cache
+      // discount (xAI / custom), flash a one-time hint that the prefix is being
+      // re-billed at full price every step. Read before beginTurnStats() clears
+      // the odometer next turn; `latestPromptTokens` is the last step's size.
+      if (turnCompleted) {
+        const hint = noPromptCacheHint({
+          provider: config.provider,
+          promptTokens: agent.spinnerStats?.latestPromptTokens ?? 0,
+          thresholdTokens: config.costGuardrailTokens,
+          alreadyWarned: noCacheWarnedRef.current,
+        });
+        if (hint) {
+          noCacheWarnedRef.current = true;
+          flashToast(hint, 'warning');
+        }
+      }
       // Append the error panel after the turn's committed output so it reads
       // as the turn's outcome (in the same batch as the commit above).
       if (errorPanel) {

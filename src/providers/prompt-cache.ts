@@ -37,6 +37,28 @@ export function isAnthropicPromptCacheActive(config: BernardConfig, provider: st
   return config.promptCache && provider === 'anthropic';
 }
 
+/**
+ * Built-in providers that discount repeated input tokens via prompt caching:
+ * `anthropic` (opt-in `cache_control` markers, #269) and `openai` (automatic
+ * server-side prefix caching). xAI has no prompt-cache discount — on grok, the
+ * large stable request prefix (system + tools + rolling history) is re-billed at
+ * full price on *every* step. Custom providers point at arbitrary endpoints
+ * (Ollama, proxies) that don't offer OpenAI's server-side caching, so by name
+ * they correctly resolve to `false`.
+ */
+const PROMPT_CACHE_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'openai']);
+
+/**
+ * Provider-capability check (#298): does `provider` offer any prompt-cache
+ * discount on repeated input tokens? Generalizes {@link isAnthropicPromptCacheActive}
+ * from "are *we* emitting Anthropic markers" to "does this provider cache at all",
+ * so the cost guardrail can warn when an MCP-heavy / long-context turn re-bills
+ * its whole prefix every step with no cache to fall back on.
+ */
+export function providerSupportsPromptCache(provider: string): boolean {
+  return PROMPT_CACHE_PROVIDERS.has(provider);
+}
+
 /** Identify the volatile per-turn context block so we cache the prefix before it. */
 function isContextMessage(m: CoreMessage): boolean {
   return (

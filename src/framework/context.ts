@@ -26,6 +26,14 @@ export interface AgentContextStores {
 export interface AgentContextMCP {
   tools: Record<string, any>;
   serverNames: string[];
+  /**
+   * Per-server tool-name map (`{ server: [toolName, …] }`), populated at
+   * bootstrap from `MCPManager.getServerToolMap()`. Lets per-server delegation
+   * (#296) scope a helper sub-agent to one server's tools without reaching for
+   * the process-global `getActiveMCPManager()`. Absent (`{}`) when no MCP
+   * servers are connected or in test contexts.
+   */
+  serverTools?: Record<string, string[]>;
 }
 
 export interface AgentContext {
@@ -111,6 +119,7 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
     mcp: {
       tools: input.mcp?.tools ?? {},
       serverNames: input.mcp?.serverNames ?? [],
+      serverTools: input.mcp?.serverTools ?? {},
     },
     rag: input.rag,
     toolOptions: input.toolOptions,
