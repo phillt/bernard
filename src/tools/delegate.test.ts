@@ -11,7 +11,21 @@ vi.mock('../framework/tools/adapter.js', () => ({
 }));
 
 vi.mock('../framework/agents/run.js', () => ({
-  runDefinition: vi.fn(async () => ({ result: {}, formatted: 'SUMMARY', resolved: {} })),
+  runDefinition: vi.fn(async () => ({
+    result: {},
+    formatted: 'SUMMARY',
+    resolved: {},
+    stepLimitHit: false,
+  })),
+}));
+
+vi.mock('../framework/pac/run-pac.js', () => ({
+  runPAC: vi.fn(async () => ({
+    formatted: 'PAC_SUMMARY',
+    verdict: 'pass',
+    reason: 'ok',
+    retries: 0,
+  })),
 }));
 
 vi.mock('./agent-pool.js', () => ({
@@ -36,11 +50,12 @@ import {
 } from './delegate.js';
 import { buildDelegateSystemPrompt } from '../framework/agents/mcp-delegate.js';
 import { runDefinition } from '../framework/agents/run.js';
+import { runPAC } from '../framework/pac/run-pac.js';
 import { acquireSlot, releaseSlot } from './agent-pool.js';
 
 function makeCtx(over: Record<string, any> = {}): any {
   return {
-    config: { mcpDelegation: true },
+    config: { mcpDelegation: true, mcpDelegateEscalation: true },
     toolOptions: { askUser: vi.fn() },
     policyDecision: { toolMode: { mode: 'read-only' } },
     mcp: {
@@ -66,6 +81,13 @@ beforeEach(() => {
     result: {},
     formatted: 'SUMMARY',
     resolved: {},
+    stepLimitHit: false,
+  } as any);
+  vi.mocked(runPAC).mockResolvedValue({
+    formatted: 'PAC_SUMMARY',
+    verdict: 'pass',
+    reason: 'ok',
+    retries: 0,
   } as any);
 });
 
@@ -184,5 +206,71 @@ describe('dispatchServerDelegate', () => {
     const out = await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
     expect(out).toContain('boom');
     expect(releaseSlot).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('dispatchServerDelegate self-escalation (#296 Phase 2E)', () => {
+  function stepLimited() {
+    vi.mocked(runDefinition).mockResolvedValue({
+      result: {},
+      formatted: 'PARTIAL',
+      resolved: {},
+      stepLimitHit: true,
+    } as any);
+  }
+
+  it('does NOT escalate when the single loop finished cleanly (stepLimitHit false)', async () => {
+    const out = await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
+    expect(runPAC).not.toHaveBeenCalled();
+    expect(out).toBe('SUMMARY');
+  });
+
+  it('escalates once to runPAC when the single loop hit its step limit', async () => {
+    stepLimited();
+    const out = await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
+    expect(runPAC).toHaveBeenCalledTimes(1);
+    expect(out).toBe('PAC_SUMMARY');
+  });
+
+  it("scopes the escalated PAC actor to the server's childTools (no full MCP bag leak)", async () => {
+    stepLimited();
+    await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
+    const pacInput = vi.mocked(runPAC).mock.calls[0][1] as any;
+    expect(Object.keys(pacInput.childTools).sort()).toEqual([
+      'ask_user',
+      'google__get',
+      'google__list',
+    ]);
+    expect(pacInput.childTools.slack__post).toBeUndefined();
+  });
+
+  it('attributes escalated PAC spend to the same mcp:<server> site and reuses the slot', async () => {
+    stepLimited();
+    await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
+    const pacInput = vi.mocked(runPAC).mock.calls[0][1] as any;
+    const pacOpts = vi.mocked(runPAC).mock.calls[0][2] as any;
+    expect(pacOpts.telemetrySite).toBe('mcp:google');
+    expect(pacInput.slotId).toBe(1);
+    // Same slot reused for the escalation — no second acquire.
+    expect(acquireSlot).toHaveBeenCalledTimes(1);
+    expect(releaseSlot).toHaveBeenCalledTimes(1);
+  });
+
+  it("threads the single loop's partial findings into the PAC context (continue, not restart)", async () => {
+    stepLimited();
+    await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x', context: 'orig' });
+    const pacInput = vi.mocked(runPAC).mock.calls[0][1] as any;
+    expect(pacInput.context).toContain('orig');
+    expect(pacInput.context).toContain('PARTIAL');
+    expect(pacInput.context).toContain('step limit');
+  });
+
+  it('does NOT escalate when mcpDelegateEscalation is disabled', async () => {
+    stepLimited();
+    const ctx = makeCtx();
+    ctx.config.mcpDelegateEscalation = false;
+    const out = await dispatchServerDelegate(ctx, { server: 'google', task: 'x' });
+    expect(runPAC).not.toHaveBeenCalled();
+    expect(out).toBe('PARTIAL');
   });
 });

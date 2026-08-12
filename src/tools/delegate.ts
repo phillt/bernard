@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { AgentContext } from '../framework/context.js';
 import { runDefinition } from '../framework/agents/run.js';
+import { runPAC } from '../framework/pac/run-pac.js';
 import {
   mcpDelegateDefinition,
   buildDelegateSystemPrompt,
@@ -58,7 +59,8 @@ export async function dispatchServerDelegate(
     childTools.ask_user = createAskUserTool(ctx.toolOptions.askUser) as unknown as Tool;
 
     const systemPrompt = buildDelegateSystemPrompt(server, toolNames);
-    const { formatted } = await runDefinition(
+    const telemetrySite = `mcp:${server}`;
+    const { formatted, stepLimitHit } = await runDefinition(
       ctx,
       mcpDelegateDefinition,
       { server, task, context, slotId: slot.id, childTools, systemPrompt },
@@ -66,9 +68,31 @@ export async function dispatchServerDelegate(
         abortSignal,
         // Attribute the helper's spend to its own layer (#299) so the
         // delegation win is measurable in `bernard usage` / the UsageViewer.
-        telemetrySite: `mcp:${server}`,
+        telemetrySite,
       },
     );
+
+    // Self-escalation (#296 Phase 2E; see `BERNARD_MCP_DELEGATE_ESCALATION`).
+    // Only a step-limited single loop escalates — once — to a PAC pass over the
+    // SAME slot + scoped `childTools` (MCP schemas stay contained), carrying the
+    // partial findings forward so it continues rather than restarts.
+    if (stepLimitHit && ctx.config.mcpDelegateEscalation) {
+      const partial = `A single-loop attempt hit its step limit before completing this task. Continue from these partial findings rather than starting over:\n${formatted}`;
+      const escalationContext = context ? `${context}\n\n${partial}` : partial;
+      debugLog('delegate:escalate', { server, task: task.slice(0, 120) });
+      const pac = await runPAC(
+        ctx,
+        { task, context: escalationContext, slotId: slot.id, childTools },
+        { abortSignal, telemetrySite },
+      );
+      debugLog('delegate:escalated', {
+        server,
+        verdict: pac.verdict,
+        retries: pac.retries,
+      });
+      return pac.formatted;
+    }
+
     return formatted;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

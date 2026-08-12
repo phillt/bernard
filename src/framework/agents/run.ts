@@ -86,6 +86,16 @@ export interface RunDefinitionResult<TFormatted> {
   formatted: TFormatted;
   /** Resolved provider/model used for this run (after overrides). */
   resolved: ResolvedModel;
+  /**
+   * Whether the run ended because it exhausted its step budget while still
+   * making tool calls (the final inner iterate ended with
+   * `finishReason === 'tool-calls'` at `steps >= maxSteps`), rather than
+   * finishing cleanly. Mirrors the value handed to strategies via
+   * `strategyCtx.getStepLimitHit`, exposed here so callers can react to an
+   * incomplete run — e.g. per-server MCP delegation self-escalates a
+   * step-limited single-loop helper to the scoped PAC pipeline (#296 Phase 2E).
+   */
+  stepLimitHit: boolean;
 }
 
 /**
@@ -346,7 +356,7 @@ export async function runDefinition<TInput, TFormatted>(
 
   const result = await strategy.run(strategyCtx);
   const formatted = await applyFormat(def, result, input, ctx);
-  return { result, formatted, resolved };
+  return { result, formatted, resolved, stepLimitHit };
 }
 
 function resolveModel<TInput, TFormatted>(

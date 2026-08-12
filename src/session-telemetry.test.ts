@@ -216,6 +216,39 @@ describe('SessionTelemetry aggregation', () => {
     expect(sum.byModel.get('anthropic|claude-haiku-4-5-20251001')!.calls).toBe(2);
   });
 
+  it('surfaces a per-server mcp:<server> delegation site as its own BY LAYER row (#296/#299)', () => {
+    const s = store();
+    s.record(
+      rec({
+        site: 'main',
+        provider: 'anthropic',
+        modelName: 'claude-opus-4-8',
+        promptTokens: 1000,
+        completionTokens: 100,
+        costUsd: 1,
+      }),
+    );
+    s.record(
+      rec({
+        site: 'mcp:google',
+        bucket: 'mid',
+        provider: 'anthropic',
+        modelName: 'claude-haiku-4-5-20251001',
+        promptTokens: 300,
+        completionTokens: 30,
+        costUsd: 0.03,
+      }),
+    );
+    const sum = s.summary();
+    // The delegated helper's spend lands on its own layer, not folded into main.
+    expect(sum.byLayer.get('mcp:google')!.calls).toBe(1);
+    expect(sum.byLayer.get('mcp:google')!.promptTokens).toBe(300);
+    expect(sum.byLayer.get('main')!.promptTokens).toBe(1000);
+    // And it renders in the user-visible BY LAYER report.
+    const lines = formatSessionUsageLines(sum).join('\n');
+    expect(lines).toContain('mcp:google');
+  });
+
   it('excludes null-cost calls from cost total but flags hasUnpriced', () => {
     const s = store();
     s.record(

@@ -1,4 +1,4 @@
-import type { CoreMessage } from 'ai';
+import type { CoreMessage, Tool } from 'ai';
 import { debugLog } from '../../logger.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
@@ -42,6 +42,14 @@ export interface PacActorInput {
   context?: string;
   plan: string;
   slotId: number;
+  /**
+   * Optional caller-scoped tool registry. When set, the Actor runs against
+   * exactly these tools instead of the full `createTools` registry — the same
+   * scoping convention `mcpDelegateDefinition` and the tool-wrapper use. First
+   * consumer: MCP delegation self-escalation (#296 Phase 2E), which passes the
+   * delegated server's tools so MCP schemas stay contained (epic finding #5).
+   */
+  childTools?: Record<string, Tool>;
 }
 
 export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
@@ -60,16 +68,21 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
     return { ragResults: await searchRag(ctx, input.task) };
   },
 
-  tools(ctx) {
-    return createTools(
-      ctx.toolOptions,
-      ctx.stores.memory,
-      ctx.mcp.tools,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      ctx.provenance,
+  tools(ctx, input) {
+    // A caller-scoped registry (e.g. MCP delegation escalation) wins, keeping
+    // MCP schemas contained; the generic sub-agent PAC path is unchanged.
+    return (
+      input.childTools ??
+      createTools(
+        ctx.toolOptions,
+        ctx.stores.memory,
+        ctx.mcp.tools,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        ctx.provenance,
+      )
     );
   },
 

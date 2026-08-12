@@ -21,6 +21,7 @@ function baseConfig(mcpDelegation: boolean): BernardConfig {
     cacheEnabled: true,
     promptCache: true,
     mcpDelegation,
+    mcpDelegateEscalation: true,
     semanticCache: false,
     theme: 'bernard',
     coordinatorMode: 'off',
