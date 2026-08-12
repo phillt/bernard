@@ -1043,9 +1043,14 @@ export function loadConfig(overrides?: {
   const mcpDelegation = process.env.BERNARD_MCP_DELEGATION !== 'false';
   const mcpResultShaping: 'off' | 'cap' =
     process.env.BERNARD_MCP_RESULT_SHAPING === 'off' ? 'off' : 'cap';
+  // `> 0` so a bogus negative/zero budget can't slip through (a negative is
+  // truthy, so the terser `|| DEFAULT` idiom would keep it and blank out every
+  // MCP result). Must be a positive char count or we fall back to the default.
+  const rawShapingMaxChars = parseInt(process.env.BERNARD_MCP_RESULT_SHAPING_MAX_CHARS ?? '', 10);
   const mcpResultShapingMaxChars =
-    parseInt(process.env.BERNARD_MCP_RESULT_SHAPING_MAX_CHARS || '', 10) ||
-    DEFAULT_MCP_RESULT_MAX_CHARS;
+    Number.isFinite(rawShapingMaxChars) && rawShapingMaxChars > 0
+      ? rawShapingMaxChars
+      : DEFAULT_MCP_RESULT_MAX_CHARS;
   // `>= 0` so `0` (disable) survives, which the terser `|| DEFAULT` idiom can't express.
   const cgTokens = parseInt(process.env.BERNARD_COST_GUARDRAIL_TOKENS ?? '', 10);
   const costGuardrailTokens =

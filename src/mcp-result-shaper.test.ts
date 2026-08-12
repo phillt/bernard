@@ -64,6 +64,18 @@ describe('shapeMCPResult', () => {
     expect(JSON.stringify(out).length).toBeLessThanOrEqual(800 + 64);
   });
 
+  it('falls back to a wrapper when a top-level array’s leading element alone exceeds budget', () => {
+    // capArray refuses to drop the first element; a single huge leading item
+    // would otherwise be returned over-budget. The array path must re-check and
+    // fall back to the valid {_truncated, preview} wrapper.
+    const arr = [{ id: 0, body: 'q'.repeat(5000) }, { id: 1 }, { id: 2 }];
+    const out = shapeMCPResult(arr, cap(500)) as any;
+    expect(out._truncated).toBe(true);
+    expect(typeof out.preview).toBe('string');
+    expect(() => JSON.parse(JSON.stringify(out))).not.toThrow();
+    expect(JSON.stringify(out).length).toBeLessThanOrEqual(500 + 64);
+  });
+
   it('leaves primitive results alone', () => {
     expect(shapeMCPResult(42, cap(1))).toBe(42);
     expect(shapeMCPResult(true, cap(1))).toBe(true);

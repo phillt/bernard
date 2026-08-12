@@ -72,9 +72,29 @@ function largestArrayKey(obj: Record<string, unknown>): string | undefined {
   return best;
 }
 
+/**
+ * Last-resort truncation: stringify a value and cap it inside a valid JSON
+ * wrapper so the model always receives parseable JSON with an explicit
+ * truncation flag. Used whenever the structure-aware cap can't get under budget
+ * (e.g. a single leading element that alone exceeds the budget).
+ */
+function truncatedWrapper(result: unknown, maxChars: number): Record<string, unknown> {
+  return {
+    _truncated: true,
+    preview: capSubagentResult(JSON.stringify(result), Math.max(64, maxChars - 40)),
+  };
+}
+
 function shapeOverBudget(result: unknown, maxChars: number): unknown {
   if (typeof result === 'string') return capSubagentResult(result, maxChars);
-  if (Array.isArray(result)) return capArray(result, maxChars);
+  if (Array.isArray(result)) {
+    const capped = capArray(result, maxChars);
+    // `capArray` refuses to drop the first element, so an array whose leading
+    // item alone exceeds the budget comes back over-budget. Re-check and fall
+    // back to the valid wrapper (same guarantee the object path already has).
+    if (serializedSize(capped) <= maxChars) return capped;
+    return truncatedWrapper(result, maxChars);
+  }
   if (isPlainObject(result)) {
     const arrKey = largestArrayKey(result);
     if (arrKey) {
@@ -84,12 +104,7 @@ function shapeOverBudget(result: unknown, maxChars: number): unknown {
       clone[arrKey] = capArray(result[arrKey] as unknown[], Math.max(64, maxChars - restSize));
       if (serializedSize(clone) <= maxChars) return clone;
     }
-    // Fallback: stringify the whole object and cap it inside a valid wrapper so
-    // the model always receives parseable JSON with an explicit truncation flag.
-    return {
-      _truncated: true,
-      preview: capSubagentResult(JSON.stringify(result), Math.max(64, maxChars - 40)),
-    };
+    return truncatedWrapper(result, maxChars);
   }
   // Primitives (number/boolean/null/undefined) are already tiny — leave as-is.
   return result;
