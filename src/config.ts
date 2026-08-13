@@ -119,6 +119,17 @@ export interface BernardConfig {
    */
   mcpDelegation: boolean;
   /**
+   * MCP delegation self-escalation (#296 Phase 2E). When true (default), a
+   * per-server delegation helper that exhausts its single-loop step budget
+   * mid-task escalates ONCE to a server-scoped PAC (Planner → Actor → Critic)
+   * pipeline instead of silently returning a possibly-incomplete summary —
+   * the industry-standard "start cheap, escalate on need" cascade. Trivial
+   * tasks stay a single cheap loop; only a step-limited helper pays for PAC.
+   * Set false to keep the legacy single-loop-only behavior. No effect when
+   * `mcpDelegation` is off. Env: `BERNARD_MCP_DELEGATE_ESCALATION`.
+   */
+  mcpDelegateEscalation: boolean;
+  /**
    * MCP result shaping (#297): `off` passes raw MCP tool results through
    * untouched; `cap` (default) bounds an over-budget result with a
    * structure-aware truncation before it enters an agent's context, so a large
@@ -1041,6 +1052,7 @@ export function loadConfig(overrides?: {
   // Provider prompt caching: on by default (#269). Off only when explicitly disabled.
   const promptCache = process.env.BERNARD_PROMPT_CACHE !== 'false';
   const mcpDelegation = process.env.BERNARD_MCP_DELEGATION !== 'false';
+  const mcpDelegateEscalation = process.env.BERNARD_MCP_DELEGATE_ESCALATION !== 'false';
   const mcpResultShaping: 'off' | 'cap' =
     process.env.BERNARD_MCP_RESULT_SHAPING === 'off' ? 'off' : 'cap';
   // `> 0` so a bogus negative/zero budget can't slip through (a negative is
@@ -1250,6 +1262,7 @@ export function loadConfig(overrides?: {
     cacheEnabled,
     promptCache,
     mcpDelegation,
+    mcpDelegateEscalation,
     mcpResultShaping,
     mcpResultShapingMaxChars,
     costGuardrailTokens,
@@ -1378,7 +1391,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
  *
  * Does not touch API keys, custom providers, the cached `providerBaseUrl`, or
  * env-only flags (`ragEnabled`, `cacheEnabled`, `promptCache`, `mcpDelegation`,
- * `mcpResultShaping`, `mcpResultShapingMaxChars`, `costGuardrailTokens`,
+ * `mcpDelegateEscalation`, `mcpResultShaping`, `mcpResultShapingMaxChars`, `costGuardrailTokens`,
  * `semanticCache`, `correctionEnabled`, `referenceLookupTools`) — those are not
  * profile-scoped.
  *

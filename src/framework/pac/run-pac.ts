@@ -1,3 +1,4 @@
+import type { Tool } from 'ai';
 import { definitions } from '../agents/registry.js';
 import { runDefinition, type RunDefinitionOpts } from '../agents/run.js';
 import type { AgentContext } from '../context.js';
@@ -20,6 +21,12 @@ export interface PacRunInput {
   task: string;
   context?: string;
   slotId: number;
+  /**
+   * Optional caller-scoped tool registry forwarded to the Actor phase. Planner
+   * and Critic are read-only and unaffected. First consumer: MCP delegation
+   * self-escalation (#296 Phase 2E), which passes the delegated server's tools.
+   */
+  childTools?: Record<string, Tool>;
 }
 
 /** Outcome of one PAC pipeline invocation. */
@@ -86,6 +93,7 @@ export async function runPAC(
           context: input.context,
           plan,
           slotId: input.slotId,
+          childTools: input.childTools,
         },
         opts,
       )

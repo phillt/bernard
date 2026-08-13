@@ -166,6 +166,34 @@ describe('runDefinition', () => {
     expect(out.resolved.provider).toBe('anthropic');
   });
 
+  it('reports stepLimitHit=true when the run ends at its step budget still calling tools', async () => {
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      text: 'partial',
+      steps: [1, 2, 3, 4, 5, 6, 7], // == stepBudget (7)
+      response: { messages: [] },
+      finishReason: 'tool-calls',
+    });
+    const out = await runDefinition(makeCtx(), fakeDefinition(), { text: 'x' });
+    expect(out.stepLimitHit).toBe(true);
+  });
+
+  it('reports stepLimitHit=false when the run finishes cleanly', async () => {
+    // Default mock: finishReason 'stop'.
+    const out = await runDefinition(makeCtx(), fakeDefinition(), { text: 'x' });
+    expect(out.stepLimitHit).toBe(false);
+  });
+
+  it('reports stepLimitHit=false when tool-calls end below the step budget', async () => {
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      text: 'partial',
+      steps: [1, 2], // < stepBudget (7)
+      response: { messages: [] },
+      finishReason: 'tool-calls',
+    });
+    const out = await runDefinition(makeCtx(), fakeDefinition(), { text: 'x' });
+    expect(out.stepLimitHit).toBe(false);
+  });
+
   it('uses seedMessages when provided instead of buildUserMessage', async () => {
     const def = fakeDefinition();
     const ctx = makeCtx();

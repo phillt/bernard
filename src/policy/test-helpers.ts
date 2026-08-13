@@ -23,6 +23,7 @@ export function makePolicyInput(overrides?: {
     cacheEnabled: true,
     promptCache: true,
     mcpDelegation: true,
+    mcpDelegateEscalation: true,
     mcpResultShaping: 'cap',
     mcpResultShapingMaxChars: 8000,
     costGuardrailTokens: 60000,

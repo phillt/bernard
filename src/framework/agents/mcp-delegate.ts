@@ -6,9 +6,11 @@ import type { AgentDefinition } from './types.js';
 
 /**
  * Fraction of `config.maxSteps` allocated to a per-server delegation run.
- * Matches the tool-wrapper budget — a delegated helper is a single-loop worker,
- * not a multi-phase PAC pipeline (routing PAC here would make delegation cost
- * *more*, defeating the purpose; see the epic #296 design comments).
+ * Matches the tool-wrapper budget — a delegated helper starts as a single-loop
+ * worker, not a multi-phase PAC pipeline (always routing PAC here would make
+ * delegation cost *more*, defeating the purpose; see the epic #296 design
+ * comments). PAC is entered only on self-escalation when this single loop hits
+ * its step limit — see `dispatchServerDelegate` (#296 Phase 2E).
  */
 export const MCP_DELEGATE_STEP_RATIO = 0.5;
 
