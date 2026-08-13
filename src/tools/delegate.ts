@@ -115,8 +115,17 @@ export function sanitizeServerToolName(server: string): string {
  * helper's own tool calls carry their real risk and are gated individually
  * inside the helper, so gating the delegation entry point too would
  * double-prompt.
+ *
+ * `toolName` is the registry key the tool will be exposed under; it defaults to
+ * `delegate_<sanitized-server>` but callers pass the collision-disambiguated key
+ * (see {@link createDelegateTools}) so `meta.name` stays in lockstep with the
+ * key the model — and the augment/permission layers — actually see.
  */
-export function createDelegateTool(ctx: AgentContext, server: string): Tool {
+export function createDelegateTool(
+  ctx: AgentContext,
+  server: string,
+  toolName: string = `delegate_${sanitizeServerToolName(server)}`,
+): Tool {
   const toolNames = serverToolNames(ctx, server);
   const preview = toolNames.slice(0, 8).join(', ');
   const more = toolNames.length > 8 ? `, +${toolNames.length - 8} more` : '';
@@ -147,7 +156,7 @@ export function createDelegateTool(ctx: AgentContext, server: string): Tool {
         }),
     }),
     {
-      name: `delegate_${sanitizeServerToolName(server)}`,
+      name: toolName,
       kind: 'read',
       deterministic: false,
       sideEffect: 'none',
@@ -174,7 +183,7 @@ export function createDelegateTools(ctx: AgentContext): Record<string, Tool> {
       while (tools[`${key}_${n}`]) n++;
       key = `${key}_${n}`;
     }
-    tools[key] = createDelegateTool(ctx, server);
+    tools[key] = createDelegateTool(ctx, server, key);
   }
   return tools;
 }

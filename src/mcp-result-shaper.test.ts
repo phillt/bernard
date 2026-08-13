@@ -76,6 +76,20 @@ describe('shapeMCPResult', () => {
     expect(JSON.stringify(out).length).toBeLessThanOrEqual(500 + 64);
   });
 
+  it('keeps the wrapper under budget even when the preview is escape-heavy', () => {
+    // A payload dominated by quotes/backslashes: each char is escaped when the
+    // preview string is embedded in the wrapper, roughly doubling its encoded
+    // length. Budgeting the raw preview alone would let the wrapper overshoot;
+    // the shrink loop must re-measure the *encoded* wrapper and stay bounded.
+    const result: Record<string, string> = {};
+    for (let i = 0; i < 500; i++) result[`k${i}`] = '"\\'.repeat(40);
+    const out = shapeMCPResult(result, cap(800)) as any;
+    expect(out._truncated).toBe(true);
+    const serialized = JSON.stringify(out);
+    expect(() => JSON.parse(serialized)).not.toThrow();
+    expect(serialized.length).toBeLessThanOrEqual(800);
+  });
+
   it('leaves primitive results alone', () => {
     expect(shapeMCPResult(42, cap(1))).toBe(42);
     expect(shapeMCPResult(true, cap(1))).toBe(true);

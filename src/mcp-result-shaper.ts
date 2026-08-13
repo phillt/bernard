@@ -77,12 +77,30 @@ function largestArrayKey(obj: Record<string, unknown>): string | undefined {
  * wrapper so the model always receives parseable JSON with an explicit
  * truncation flag. Used whenever the structure-aware cap can't get under budget
  * (e.g. a single leading element that alone exceeds the budget).
+ *
+ * The `preview` is a JSON string embedded as a *string value*, so when the
+ * wrapper is itself serialized its quotes/backslashes get escaped — which can
+ * inflate the raw preview length by up to ~2x. Budgeting the raw preview to
+ * `maxChars - 40` alone therefore lets the encoded wrapper overshoot `maxChars`.
+ * We measure the encoded size and shrink the preview budget until the whole
+ * wrapper fits (bounded halving, floor 64) so the cap contract actually holds.
  */
 function truncatedWrapper(result: unknown, maxChars: number): Record<string, unknown> {
-  return {
-    _truncated: true,
-    preview: capSubagentResult(JSON.stringify(result), Math.max(64, maxChars - 40)),
-  };
+  let raw: string;
+  try {
+    raw = JSON.stringify(result) ?? String(result);
+  } catch {
+    // Non-serializable (e.g. a cycle) — fall back to a plain string form so we
+    // never throw out of the shaping path into the MCP retry/reconnect catch.
+    raw = String(result);
+  }
+  let budget = Math.max(64, maxChars - 40);
+  let wrapper: Record<string, unknown> = { _truncated: true, preview: capSubagentResult(raw, budget) };
+  while (serializedSize(wrapper) > maxChars && budget > 64) {
+    budget = Math.max(64, Math.floor(budget / 2));
+    wrapper = { _truncated: true, preview: capSubagentResult(raw, budget) };
+  }
+  return wrapper;
 }
 
 function shapeOverBudget(result: unknown, maxChars: number): unknown {
