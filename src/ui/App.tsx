@@ -101,9 +101,11 @@ import { resolveSiteModel, resolveMainModel, logSiteModelSnapshot } from '../mod
 import {
   serializeMessages,
   extractDomainFacts,
+  extractText,
   SUMMARIZATION_PROMPT,
   MIN_HISTORY_FOR_FACTS,
 } from '../context.js';
+import { isSessionScaffolding } from '../session-markers.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
 import { promoteCandidate } from '../candidate-bootstrap.js';
 import {
@@ -403,6 +405,40 @@ function buildChoiceMenu(q: AskUserQuestion): {
   };
 }
 
+/** Per-message character cap for the resume replay — long tool-heavy answers are
+ *  truncated for readability, matching the documented behavior in README.md. */
+const RESUME_REPLAY_MAX_CHARS = 2000;
+
+/**
+ * Builds the transcript seed shown after `bernard -r`.
+ *
+ * The Ink cutover dropped the old `printConversationReplay` call and left an
+ * empty stub, so resume restored the model's context but rendered nothing —
+ * indistinguishable from a cold start. This rebuilds the replay against the
+ * `<Static>`/`StaticItem` path so there is no second render path to drift.
+ *
+ * Only real conversation survives: `tool` messages and tool-call parts are the
+ * bulk of a resumed history and are noise in a recap, and the seams Bernard
+ * injects itself (context summaries, truncation notices, the session boundary
+ * pair) would otherwise render as if the user or the model had said them. Keys
+ * are namespaced so they can never collide with the numeric `itemKeyRef`
+ * counter that drives live turns.
+ */
+export function buildResumeSeed(history: CoreMessage[], toolDetails: boolean): StaticItem[] {
+  const items: StaticItem[] = [];
+  for (const message of history) {
+    if (message.role !== 'user' && message.role !== 'assistant') continue;
+    const text = extractText(message)?.trim();
+    if (!text || isSessionScaffolding(text)) continue;
+    items.push({
+      key: `resume-${items.length}`,
+      message: { role: message.role, content: truncate(text, RESUME_REPLAY_MAX_CHARS) },
+      toolDetails,
+    });
+  }
+  return items;
+}
+
 /**
  * Top-level Ink component. Owns the lifecycle of a Bernard REPL session:
  * turn submission, history versioning, overlay queueing, Shift-Tab cycling,
@@ -448,22 +484,39 @@ export function App({
   // each entry becomes terminal scrollback that is never repainted (#232).
   // `<App>` commits to this at turn boundaries; the streaming message and the
   // rest of the UI stay in the dynamic region.
-  const [staticItems, setStaticItems] = useState<StaticItem[]>([]);
+  // History already in the agent at mount — non-empty only when `--resume`
+  // restored a prior session (`src/index.ts` seeds `initialHistory`). Read once:
+  // the transcript seed and both commit cursors below must agree on it, and
+  // three independent reads of a live array is the fragile way to do that.
+  const restoredHistory = useRef(agent.getHistory()).current;
+  // Seeded from the restored history so the user can see what came back; a cold
+  // start yields `[]`. Lazy initializer — runs once, at mount.
+  const [staticItems, setStaticItems] = useState<StaticItem[]>(() =>
+    buildResumeSeed(restoredHistory, config.toolDetails),
+  );
   // Bumped only by /clear to remount <Thread> and reset <Static>'s internal
   // high-water cursor (Static only appends — it cannot un-print, so the reset
   // has to come from a fresh mount). Normal turns never touch this, so they no
   // longer remount the whole transcript the way the old historyVersion key did.
   const [staticEpoch, setStaticEpoch] = useState(0);
   // Number of `agent.getHistory()` messages already committed to `staticItems`.
-  // Each commit appends `history.slice(committedLen)` and advances this.
-  const committedLenRef = useRef(0);
+  // Each commit appends `history.slice(committedLen)` and advances this. On
+  // resume it starts at the restored length: `buildResumeSeed` above already
+  // rendered that history, and leaving the cursor at 0 would make the first
+  // commit re-emit the entire backlog — including every raw tool-result
+  // message — the moment the user types their first line.
+  const committedLenRef = useRef(restoredHistory.length);
   // The history ARRAY reference we last committed against. Normal appends mutate
   // the same array in place (push), so the reference is stable; but
   // `Agent.processInput` REASSIGNS `this.history` to a new, shorter array when
   // automatic context compression / emergency truncation fires mid-turn. When
   // that happens the length cursor above is meaningless for the new array, so
   // we re-anchor against this turn's user message instead of slicing blindly.
-  const historyRef = useRef<CoreMessage[] | null>(null);
+  // Anchored to the restored array on resume so the re-anchor guard in
+  // `commitNewHistory` doesn't mistake the seeded cursor for a first-ever commit.
+  const historyRef = useRef<CoreMessage[] | null>(
+    restoredHistory.length > 0 ? restoredHistory : null,
+  );
   // Monotonic source for `StaticItem.key`. Deliberately NOT the history index:
   // /compact shrinks history, so index-based keys would collide with already
   // emitted items. A counter never repeats.
@@ -640,6 +693,7 @@ export function App({
         contextWindowOverride: config.tokenWindow || undefined,
         turnLedger: new Map(),
         sessionCostUsd: 0,
+        sessionCostPartial: false,
         // Durable, cross-turn LLM telemetry (#session-telemetry). Shares the
         // debug logger's session id so telemetry lines correlate with the
         // session debug JSONL. Persists to its own per-session file (opt-out via

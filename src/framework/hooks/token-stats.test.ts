@@ -31,6 +31,7 @@ function makeTarget(): TokenStatsTarget & { spinnerStats: SpinnerStats } {
       model: 'claude-opus-4-8',
       turnLedger: new Map<string, TurnUsageEntry>(),
       sessionCostUsd: 0,
+      sessionCostPartial: false,
     },
   };
 }
@@ -85,6 +86,68 @@ describe('token-stats cache accumulation (#269)', () => {
     await hook.onStepFinish!(step({ usage: undefined }));
     expect(target.spinnerStats.turnLedger.size).toBe(0);
     expect(target.spinnerStats.turnPromptTokens).toBe(0);
+  });
+});
+
+describe('context-gauge prompt tokens include cached input', () => {
+  it('adds Anthropic cache read + write onto promptTokens', async () => {
+    // `@ai-sdk/anthropic` maps `usage.promptTokens` from `input_tokens`, which
+    // EXCLUDES cache reads/writes. With prompt caching on that leaves the gauge
+    // and the compression trigger measuring only the uncached tail — a ~90%
+    // under-count on a warm prefix.
+    const target = makeTarget();
+    const hook = tokenStatsHook(target, MAIN_INFO);
+    await hook.onStepFinish!(
+      step({
+        usage: { promptTokens: 2000, completionTokens: 50 },
+        providerMetadata: {
+          anthropic: { cacheReadInputTokens: 90_000, cacheCreationInputTokens: 8_000 },
+        },
+      }),
+    );
+    expect(target.lastStepPromptTokens).toBe(100_000);
+    expect(target.spinnerStats.latestPromptTokens).toBe(100_000);
+    // The odometer still bills the uncached tail separately from the cache cells.
+    expect(target.spinnerStats.turnPromptTokens).toBe(2000);
+    expect(target.spinnerStats.turnCacheReadTokens).toBe(90_000);
+  });
+
+  it('leaves promptTokens untouched when no cache metadata is reported', async () => {
+    // xAI / OpenAI report no Anthropic cache block — the gauge must not shift.
+    const target = makeTarget();
+    const hook = tokenStatsHook(target, MAIN_INFO);
+    await hook.onStepFinish!(step({ usage: { promptTokens: 71_127, completionTokens: 159 } }));
+    expect(target.lastStepPromptTokens).toBe(71_127);
+    expect(target.spinnerStats.latestPromptTokens).toBe(71_127);
+  });
+
+  it('treats null cache counts as 0 rather than NaN', async () => {
+    const target = makeTarget();
+    const hook = tokenStatsHook(target, MAIN_INFO);
+    await hook.onStepFinish!(
+      step({
+        usage: { promptTokens: 500, completionTokens: 10 },
+        providerMetadata: {
+          anthropic: { cacheReadInputTokens: null, cacheCreationInputTokens: null },
+        },
+      }),
+    );
+    expect(target.spinnerStats.latestPromptTokens).toBe(500);
+  });
+
+  it('does not move the gauge from a non-main dispatch', async () => {
+    const target = makeTarget();
+    const hook = tokenTotalsHook(target, { ...MAIN_INFO, bucket: 'cheap', site: 'sub' });
+    await hook.onStepFinish!(
+      step({
+        usage: { promptTokens: 900, completionTokens: 5 },
+        providerMetadata: {
+          anthropic: { cacheReadInputTokens: 50_000, cacheCreationInputTokens: 0 },
+        },
+      }),
+    );
+    expect(target.lastStepPromptTokens).toBe(0);
+    expect(target.spinnerStats.latestPromptTokens).toBe(0);
   });
 });
 

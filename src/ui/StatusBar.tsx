@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Box, Text } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { formatTokenCount, finiteOr0, type SpinnerStats } from '../output.js';
-import { formatUsd, computeTurnUsageReport } from '../usage-report.js';
+import { formatAggCost, computeTurnUsageReport } from '../usage-report.js';
 import { HintDivider, HintEntry } from './hints.js';
 import { getContextWindow, COMPRESSION_THRESHOLD } from '../context.js';
 import type { Agent } from '../agent.js';
@@ -26,6 +26,7 @@ function snapshotStats(stats: SpinnerStats | null, strategy: string | null): str
     stats.model,
     stats.contextWindowOverride ?? '',
     stats.sessionCostUsd,
+    stats.sessionCostPartial,
     strategy ?? '',
   ].join('|');
 }
@@ -121,10 +122,16 @@ export function StatusBar({ agent }: StatusBarProps) {
   const up = stats ? formatTokenCount(stats.turnPromptTokens) : '0';
   const down = stats ? formatTokenCount(stats.turnCompletionTokens) : '0';
   // Estimated turn cost (#258) and cumulative session cost. Both always shown —
-  // `formatUsd` renders `$0.00` when nothing is priced yet, so the money cells
-  // never disappear (they'd otherwise pop in/out and shift the bar).
-  const turnCost = stats ? `~${formatUsd(computeTurnUsageReport(stats).totalCostUsd ?? 0)}` : '';
-  const sessionCost = `~${formatUsd(stats?.sessionCostUsd ?? 0)}`;
+  // the cells never disappear (they'd otherwise pop in/out and shift the bar).
+  // Routed through `formatAggCost` (the same convention `/usage` and `bernard
+  // usage` use) so a model the catalog can't price renders `n/a` instead of a
+  // confident `~$0.00`. The old `$0.00` masked an entire provider silently
+  // dropping out of the catalog.
+  const turnReport = stats ? computeTurnUsageReport(stats) : null;
+  const turnCost = turnReport
+    ? formatAggCost(turnReport.totalCostUsd ?? 0, turnReport.partial)
+    : '';
+  const sessionCost = formatAggCost(stats?.sessionCostUsd ?? 0, stats?.sessionCostPartial ?? false);
   const latestPromptTokens = stats ? finiteOr0(stats.latestPromptTokens) : 0;
   const contextWindow = stats ? getContextWindow(stats.model, stats.contextWindowOverride) : 1;
   const thresholdTokens = contextWindow * COMPRESSION_THRESHOLD;

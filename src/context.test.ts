@@ -65,7 +65,10 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
 
 describe('getContextWindow', () => {
   it('returns correct value for known Anthropic model', () => {
-    expect(getContextWindow('claude-sonnet-4-5-20250929')).toBe(200_000);
+    // The dated id normalizes onto the catalog's `claude-sonnet-4-5` entry
+    // (1M). Before id normalization this missed the catalog and fell back to a
+    // stale 200k hard-coded entry — a 5x under-estimate of real headroom.
+    expect(getContextWindow('claude-sonnet-4-5-20250929')).toBe(1_000_000);
   });
 
   it('returns correct value for known OpenAI model', () => {
@@ -82,6 +85,15 @@ describe('getContextWindow', () => {
     expect(getContextWindow('grok-3')).toBe(131_072);
   });
 
+  it('normalizes against the fallback table for catalog-missing models', () => {
+    // `grok-3-mini` is retired from the gateway, so it only exists in
+    // MODEL_CONTEXT_WINDOWS. A dotted spelling must still find it rather than
+    // silently dropping to the 128k default over punctuation.
+    expect(getContextWindow('grok-3-mini')).toBe(131_072);
+    expect(getContextWindow('GROK-3-MINI')).toBe(131_072);
+    expect(getContextWindow('gpt-5-2-chat-latest')).toBe(128_000);
+  });
+
   it('falls back to DEFAULT_CONTEXT_WINDOW for unknown models', () => {
     expect(getContextWindow('unknown-model-xyz')).toBe(DEFAULT_CONTEXT_WINDOW);
     expect(getContextWindow('unknown-model-xyz')).toBe(128_000);
@@ -92,11 +104,11 @@ describe('getContextWindow', () => {
   });
 
   it('ignores override when override is 0', () => {
-    expect(getContextWindow('claude-sonnet-4-5-20250929', 0)).toBe(200_000);
+    expect(getContextWindow('claude-sonnet-4-5-20250929', 0)).toBe(1_000_000);
   });
 
   it('ignores override when override is undefined', () => {
-    expect(getContextWindow('claude-sonnet-4-5-20250929', undefined)).toBe(200_000);
+    expect(getContextWindow('claude-sonnet-4-5-20250929', undefined)).toBe(1_000_000);
   });
 });
 
@@ -107,8 +119,8 @@ describe('shouldCompress', () => {
   });
 
   it('returns true when above threshold', () => {
-    // 200k * 0.75 = 150k, 140k + 15k = 155k > 150k
-    expect(shouldCompress(140_000, 15_000, 'claude-sonnet-4-5-20250929')).toBe(true);
+    // 1M * 0.75 = 750k, 740k + 15k = 755k > 750k
+    expect(shouldCompress(740_000, 15_000, 'claude-sonnet-4-5-20250929')).toBe(true);
   });
 
   it('returns true at exactly the threshold boundary', () => {
@@ -137,8 +149,8 @@ describe('shouldCompress', () => {
   });
 
   it('ignores override of 0 (auto-detect)', () => {
-    // 200k * 0.75 = 150k threshold — same as no override
-    expect(shouldCompress(140_000, 15_000, 'claude-sonnet-4-5-20250929', 0)).toBe(true);
+    // 1M * 0.75 = 750k threshold — same as no override
+    expect(shouldCompress(740_000, 15_000, 'claude-sonnet-4-5-20250929', 0)).toBe(true);
     expect(shouldCompress(50_000, 1_000, 'claude-sonnet-4-5-20250929', 0)).toBe(false);
   });
 });

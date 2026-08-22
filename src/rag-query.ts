@@ -3,6 +3,7 @@ import { extractText } from './context.js';
 import type { RAGSearchResult } from './rag.js';
 import { DEFAULT_TOP_K_PER_DOMAIN, DEFAULT_MAX_RESULTS } from './rag.js';
 import { stripTimestamp } from './tools/datetime.js';
+import { isBoundaryNotice } from './session-markers.js';
 
 /** Number of recent user messages (beyond the current input) to include in the RAG query. */
 export const DEFAULT_WINDOW_SIZE = 2;
@@ -10,13 +11,6 @@ export const DEFAULT_WINDOW_SIZE = 2;
 export const DEFAULT_MAX_QUERY_CHARS = 1000;
 /** Similarity score bonus applied to facts that appeared in the previous turn's results. */
 export const DEFAULT_STICKINESS_BOOST = 0.05;
-
-const BOUNDARY_PREFIXES = [
-  '[Context Summary',
-  '[Previous session ended',
-  '[Earlier conversation was truncated',
-  '[Your previous response was cut off',
-];
 
 /**
  * Strip model-profile wrappers applied by `wrapUserMessage` (XML tag for Claude,
@@ -50,7 +44,7 @@ export function extractRecentUserTexts(
     if (!text) continue;
 
     // Skip system-injected boundary messages
-    if (BOUNDARY_PREFIXES.some((prefix) => text.startsWith(prefix))) continue;
+    if (isBoundaryNotice(text)) continue;
 
     texts.push(stripTimestamp(stripProfileWrapper(text)));
   }

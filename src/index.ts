@@ -93,6 +93,11 @@ import type {
   AskUserBatchResult,
 } from './tools/types.js';
 import type { CoreMessage } from 'ai';
+import {
+  SESSION_BOUNDARY_ACK,
+  SESSION_BOUNDARY_NOTICE,
+  SESSION_BOUNDARY_PREFIX,
+} from './session-markers.js';
 import { fileURLToPath } from 'node:url';
 
 let signalHandlersInstalled = false;
@@ -258,6 +263,15 @@ async function runInkRepl(args: {
   // Lines rendered at the top of the transcript in full-screen (splash + the
   // notices that would otherwise be printed pre-render and lost).
   const startupLines: string[] = [];
+  /**
+   * Startup chatter goes to the Ink splash in full-screen (the alt buffer hides
+   * anything printed pre-render) and to stdout otherwise. Three sites need the
+   * same branch plus the same two-space indent.
+   */
+  const emitStartupNotice = (text: string): void => {
+    if (fullScreenActive) startupLines.push(text);
+    else printInfo(`  ${text}`);
+  };
 
   // Kick off the tree-sitter bash parser load (#261) in the background so
   // shell permission rules can match compound commands precisely. Best-effort:
@@ -402,26 +416,24 @@ async function runInkRepl(args: {
   if (resume) {
     const loaded = historyStore.load();
     if (loaded.length > 0) {
+      // Drop any boundary pair left by an earlier resume before appending a
+      // fresh one, so repeated `-r` doesn't stack markers.
       const filtered = loaded.filter(
         (msg) =>
           !(
             typeof msg.content === 'string' &&
-            (msg.content.startsWith('[Previous session ended') ||
-              msg.content ===
-                "Understood. Starting a new session. I'll only reference prior context if relevant to your current request.")
+            (msg.content.startsWith(SESSION_BOUNDARY_PREFIX) ||
+              msg.content === SESSION_BOUNDARY_ACK)
           ),
       );
-      const boundary: CoreMessage = {
-        role: 'user',
-        content:
-          '[Previous session ended. New session starting. Treat tasks from prior session as completed unless the user explicitly continues them.]',
-      };
-      const boundaryAck: CoreMessage = {
-        role: 'assistant',
-        content:
-          "Understood. Starting a new session. I'll only reference prior context if relevant to your current request.",
-      };
-      initialHistory = [...filtered, boundary, boundaryAck];
+      initialHistory = [
+        ...filtered,
+        { role: 'user', content: SESSION_BOUNDARY_NOTICE },
+        { role: 'assistant', content: SESSION_BOUNDARY_ACK },
+      ];
+      emitStartupNotice(`Restored ${filtered.length} message(s) from the previous session.`);
+    } else {
+      emitStartupNotice('No previous conversation found — starting fresh.');
     }
   }
 
@@ -432,9 +444,9 @@ async function runInkRepl(args: {
     config,
   );
   if (contextBlock) {
-    const candidateNotice = `${pendingCandidates.length} specialist suggestion(s) pending. Use /candidates to review.`;
-    if (fullScreenActive) startupLines.push(candidateNotice);
-    else printInfo(`  ${candidateNotice}`);
+    emitStartupNotice(
+      `${pendingCandidates.length} specialist suggestion(s) pending. Use /candidates to review.`,
+    );
     alertContext = alertContext ? alertContext + '\n\n' + contextBlock : contextBlock;
   }
 

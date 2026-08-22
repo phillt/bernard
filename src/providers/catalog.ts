@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { CACHE_DIR, MODEL_CATALOG_CACHE } from '../paths.js';
 import { debugLog } from '../logger.js';
 import type { BuiltinProvider } from './types.js';
-import { BUILTIN_PROVIDERS } from './types.js';
+import { BUILTIN_PROVIDERS, resolveGatewayOwner } from './types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -95,8 +95,8 @@ function parseGatewayEntry(raw: RawGatewayModel): ModelCatalogEntry | null {
   if (slash < 0) return null;
   const owner = raw.id.slice(0, slash);
   const rest = raw.id.slice(slash + 1);
-  if (!BUILTIN_PROVIDERS.includes(owner as BuiltinProvider)) return null;
-  const provider = owner as BuiltinProvider;
+  const provider = resolveGatewayOwner(owner);
+  if (!provider) return null;
   const inputPrice = Number(raw.pricing?.input ?? 0);
   const outputPrice = Number(raw.pricing?.output ?? 0);
   // Cache rates are optional in the source data — keep `undefined` when absent
@@ -162,8 +162,11 @@ function loadVendored(): CachedCatalog {
  * to the vendored snapshot + async refresh) rather than silently serving stale
  * data. v2 added `pricing.cacheReadPerMTok` / `pricing.cacheWritePerMTok` (#269);
  * an unversioned/older cache lacks them and would price cache tokens at $0.
+ * v3 added the `spacexai` → `xai` owner mapping: a v2 cache was written by a
+ * build that silently dropped every Grok entry, so it must be discarded rather
+ * than served for up to another TTL window.
  */
-const CACHE_SCHEMA_VERSION = 2;
+export const CACHE_SCHEMA_VERSION = 3;
 
 function loadDiskCache(): CachedCatalog | null {
   try {
@@ -229,6 +232,19 @@ async function fetchFromGateway(): Promise<ModelCatalogEntry[]> {
 }
 
 /**
+ * Per-provider entry counts for the `catalog:source` log line. A bare total is
+ * blind to the failure that matters most here: when the gateway renamed xAI's
+ * owner prefix every Grok model was dropped, and the total read the same before
+ * and after. A zero beside a provider you have configured is the signal.
+ */
+function countByProvider(entries: ModelCatalogEntry[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const p of BUILTIN_PROVIDERS) counts[p] = 0;
+  for (const e of entries) counts[e.provider] = (counts[e.provider] ?? 0) + 1;
+  return counts;
+}
+
+/**
  * Synchronous load: reads the disk cache or the vendored snapshot. Never makes
  * a network call. Safe to call at module-init time for consumers that need a
  * catalog immediately (e.g. `PROVIDER_MODELS`).
@@ -238,12 +254,20 @@ export function loadCatalogSync(): CachedCatalog {
   const disk = loadDiskCache();
   if (disk) {
     memoryCache = disk;
-    debugLog('catalog:source', { source: 'disk', entries: disk.entries.length });
+    debugLog('catalog:source', {
+      source: 'disk',
+      entries: disk.entries.length,
+      byProvider: countByProvider(disk.entries),
+    });
     return disk;
   }
   const vendored = loadVendored();
   memoryCache = vendored;
-  debugLog('catalog:source', { source: 'vendored', entries: vendored.entries.length });
+  debugLog('catalog:source', {
+    source: 'vendored',
+    entries: vendored.entries.length,
+    byProvider: countByProvider(vendored.entries),
+  });
   return vendored;
 }
 
@@ -264,7 +288,11 @@ export async function loadCatalog(opts: { force?: boolean } = {}): Promise<Cache
         const fetchedAt = Date.now();
         saveDiskCache(entries, fetchedAt);
         memoryCache = { fetchedAt, source: 'network', entries };
-        debugLog('catalog:source', { source: 'network', entries: entries.length });
+        debugLog('catalog:source', {
+          source: 'network',
+          entries: entries.length,
+          byProvider: countByProvider(entries),
+        });
         return { catalog: memoryCache, error: null };
       } catch (err) {
         debugLog('catalog:refresh-error', {
@@ -297,11 +325,41 @@ export function getCatalogForProvider(provider: BuiltinProvider): ModelCatalogEn
   return cat.entries.filter((e) => e.provider === provider);
 }
 
+/**
+ * Canonical form of a model id for tolerant catalog matching: lowercased, dots
+ * folded to dashes, and a trailing release-date suffix dropped. Gateway ids and
+ * the ids we configure diverge in exactly those three ways — the gateway says
+ * `grok-4.1-fast-reasoning` where our lineup says `grok-4-1-fast-reasoning`, and
+ * `claude-sonnet-4-5` where our lineup says `claude-sonnet-4-5-20250929`. An
+ * exact-match-only lookup silently misses both and degrades to the hard-coded
+ * table (or `null` pricing), so normalize before giving up.
+ */
+export function normalizeModelId(model: string): string {
+  return model
+    .toLowerCase()
+    .replace(/\./g, '-')
+    .replace(/-\d{8}$/, '');
+}
+
+/**
+ * Exact match first, normalized match second — so a literal id always wins over
+ * a punctuation-equivalent one, and the fallback only fires on a true miss.
+ * `provider === undefined` searches every provider.
+ */
+function lookupEntry(model: string, provider?: string): ModelCatalogEntry | null {
+  const { entries } = loadCatalogSync();
+  const inScope = (e: ModelCatalogEntry): boolean =>
+    provider === undefined || e.provider === provider;
+  const exact = entries.find((e) => inScope(e) && e.model === model);
+  if (exact) return exact;
+  const key = normalizeModelId(model);
+  return entries.find((e) => inScope(e) && normalizeModelId(e.model) === key) ?? null;
+}
+
 /** Look up a single (provider, model) pair. Returns null when unknown. */
 export function getModelMeta(provider: string, model: string): ModelCatalogEntry | null {
   if (!BUILTIN_PROVIDERS.includes(provider as BuiltinProvider)) return null;
-  const cat = loadCatalogSync();
-  return cat.entries.find((e) => e.provider === provider && e.model === model) ?? null;
+  return lookupEntry(model, provider);
 }
 
 /**
@@ -310,8 +368,7 @@ export function getModelMeta(provider: string, model: string): ModelCatalogEntry
  * `getContextWindow`).
  */
 export function findModelMetaByName(model: string): ModelCatalogEntry | null {
-  const cat = loadCatalogSync();
-  return cat.entries.find((e) => e.model === model) ?? null;
+  return lookupEntry(model);
 }
 
 /** Catalog age in milliseconds, or `null` when sourced from the vendored fallback. */

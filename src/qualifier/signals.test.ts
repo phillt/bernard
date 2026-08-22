@@ -123,9 +123,7 @@ describe('hasMultiStepLanguage', () => {
 
 describe('hasAgenticActionRequest', () => {
   it('matches outreach / communication to a person', () => {
-    expect(
-      hasAgenticActionRequest('can you reach out to my doctor about a refill?'),
-    ).toBe(true);
+    expect(hasAgenticActionRequest('can you reach out to my doctor about a refill?')).toBe(true);
     expect(hasAgenticActionRequest('message my landlord about the leak')).toBe(true);
     expect(hasAgenticActionRequest('email the office and let them know I moved')).toBe(true);
     expect(hasAgenticActionRequest('let her know I need it renewed')).toBe(true);
@@ -148,7 +146,7 @@ describe('hasAgenticActionRequest', () => {
   it('captures the real-world doctor-refill request that fell through to Normal', () => {
     expect(
       hasAgenticActionRequest(
-        "can you please reach out to my doctor and let her know that I need a refill on my adderall - also, can you clarify the correct procedure?",
+        'can you please reach out to my doctor and let her know that I need a refill on my adderall - also, can you clarify the correct procedure?',
       ),
     ).toBe(true);
   });

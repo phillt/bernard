@@ -3,6 +3,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { CACHE_SCHEMA_VERSION } from './catalog.js';
+
 /**
  * Tests for `refreshCatalogWithDiff` — the startup hook that force-refreshes
  * the model catalog and reports newly-available models (#264 follow-up).
@@ -47,22 +49,30 @@ function stubFetchFail() {
   );
 }
 
-describe('refreshCatalogWithDiff', () => {
-  let tmpDir: string;
+/**
+ * Isolates a describe block's catalog state: a throwaway `BERNARD_HOME` (so the
+ * disk cache lands in a temp dir), plus global-stub cleanup. Returns a getter
+ * for the temp dir since `beforeEach` runs after the describe body.
+ */
+function useTempHome(prefix: string): () => string {
+  let tmpDir = '';
   let origHome: string | undefined;
-
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-catalog-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
     origHome = process.env.BERNARD_HOME;
     process.env.BERNARD_HOME = tmpDir;
   });
-
   afterEach(() => {
     vi.unstubAllGlobals();
     if (origHome === undefined) delete process.env.BERNARD_HOME;
     else process.env.BERNARD_HOME = origHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
+  return () => tmpDir;
+}
+
+describe('refreshCatalogWithDiff', () => {
+  const tmpDirOf = useTempHome('bernard-catalog-');
 
   /** Writes a `disk`-sourced baseline cache so previousSource === 'disk'. */
   function seedDiskCache(models: { provider: string; model: string }[]) {
@@ -77,13 +87,15 @@ describe('refreshCatalogWithDiff', () => {
       released: 0,
     }));
     // BERNARD_HOME isn't flat — CACHE_DIR is `<BERNARD_HOME>/bernard`.
-    const cacheDir = path.join(tmpDir, 'bernard');
+    const cacheDir = path.join(tmpDirOf(), 'bernard');
     fs.mkdirSync(cacheDir, { recursive: true });
     // fetchedAt=1 → stale → force still re-fetches; source is 'disk' on read.
-    // version:2 matches CACHE_SCHEMA_VERSION so the cache isn't rejected as stale-schema.
+    // Written at the live CACHE_SCHEMA_VERSION so the cache isn't rejected as
+    // stale-schema — reading the constant keeps these fixtures from silently
+    // going stale on the next schema bump.
     fs.writeFileSync(
       path.join(cacheDir, 'model-catalog.json'),
-      JSON.stringify({ version: 2, fetchedAt: 1, entries }, null, 2),
+      JSON.stringify({ version: CACHE_SCHEMA_VERSION, fetchedAt: 1, entries }, null, 2),
     );
   }
 
@@ -147,23 +159,91 @@ describe('refreshCatalogWithDiff', () => {
   });
 });
 
-describe('disk-cache schema versioning (#269)', () => {
-  let tmpDir: string;
-  let origHome: string | undefined;
+describe('gateway owner aliasing', () => {
+  useTempHome('bernard-catalog-owner-');
 
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-catalog-ver-'));
-    origHome = process.env.BERNARD_HOME;
-    process.env.BERNARD_HOME = tmpDir;
+  it('maps the spacexai owner prefix onto the xai provider', async () => {
+    // The gateway renamed xAI's owner from `xai` to `spacexai`. Before the
+    // alias every Grok entry was dropped at parse time, which silently cost us
+    // both context windows and pricing for the whole provider.
+    stubFetchOk([{ id: 'spacexai/grok-4.5', type: 'language' }]);
+    const m = await loadModule();
+    const diff = await m.refreshCatalogWithDiff();
+    expect(diff.error).toBeUndefined();
+    expect(m.getModelMeta('xai', 'grok-4.5')).not.toBeNull();
   });
-  afterEach(() => {
-    if (origHome === undefined) delete process.env.BERNARD_HOME;
-    else process.env.BERNARD_HOME = origHome;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+  it('still accepts the legacy xai owner prefix', async () => {
+    // An older vendored snapshot predates the rename — it must keep parsing.
+    stubFetchOk([{ id: 'xai/grok-3-mini', type: 'language' }]);
+    const m = await loadModule();
+    await m.refreshCatalogWithDiff();
+    expect(m.getModelMeta('xai', 'grok-3-mini')).not.toBeNull();
   });
+
+  it('still drops owners that are not ours', async () => {
+    stubFetchOk([{ id: 'mistral/mistral-large', type: 'language' }]);
+    const m = await loadModule();
+    await m.refreshCatalogWithDiff();
+    expect(m.findModelMetaByName('mistral-large')).toBeNull();
+  });
+});
+
+describe('normalizeModelId + tolerant lookup', () => {
+  useTempHome('bernard-catalog-norm-');
+
+  it('folds dots to dashes, lowercases, and strips a date suffix', async () => {
+    const m = await loadModule();
+    expect(m.normalizeModelId('grok-4.1-fast-reasoning')).toBe('grok-4-1-fast-reasoning');
+    expect(m.normalizeModelId('claude-sonnet-4-5-20250929')).toBe('claude-sonnet-4-5');
+    expect(m.normalizeModelId('GPT-5.2')).toBe('gpt-5-2');
+  });
+
+  it('matches a dashed config id against a dotted gateway id', async () => {
+    // Our lineup says `grok-4-1-fast-reasoning`; the gateway says
+    // `grok-4.1-fast-reasoning`. Exact-match-only silently missed this and fell
+    // back to the hard-coded table.
+    stubFetchOk([{ id: 'spacexai/grok-4.1-fast-reasoning', type: 'language' }]);
+    const m = await loadModule();
+    await m.refreshCatalogWithDiff();
+    expect(m.getModelMeta('xai', 'grok-4-1-fast-reasoning')?.model).toBe('grok-4.1-fast-reasoning');
+    expect(m.findModelMetaByName('grok-4-1-fast-reasoning')).not.toBeNull();
+  });
+
+  it('matches a dated config id against the undated gateway id', async () => {
+    stubFetchOk([{ id: 'anthropic/claude-sonnet-4.5', type: 'language' }]);
+    const m = await loadModule();
+    await m.refreshCatalogWithDiff();
+    expect(m.getModelMeta('anthropic', 'claude-sonnet-4-5-20250929')?.model).toBe(
+      'claude-sonnet-4-5',
+    );
+  });
+
+  it('prefers an exact match over a normalized one', async () => {
+    stubFetchOk([
+      { id: 'anthropic/claude-sonnet-4.5', type: 'language' },
+      { id: 'anthropic/claude-sonnet-4-5', type: 'language' },
+    ]);
+    const m = await loadModule();
+    await m.refreshCatalogWithDiff();
+    // Both normalize to the same key; the exact id must win.
+    expect(m.getModelMeta('anthropic', 'claude-sonnet-4-5')?.model).toBe('claude-sonnet-4-5');
+  });
+
+  it('still returns null for a genuinely unknown model', async () => {
+    stubFetchOk([{ id: 'spacexai/grok-4.5', type: 'language' }]);
+    const m = await loadModule();
+    await m.refreshCatalogWithDiff();
+    expect(m.getModelMeta('xai', 'grok-9000')).toBeNull();
+    expect(m.findModelMetaByName('grok-9000')).toBeNull();
+  });
+});
+
+describe('disk-cache schema versioning (#269)', () => {
+  const tmpDirOf = useTempHome('bernard-catalog-ver-');
 
   function writeCache(obj: unknown) {
-    const cacheDir = path.join(tmpDir, 'bernard');
+    const cacheDir = path.join(tmpDirOf(), 'bernard');
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, 'model-catalog.json'), JSON.stringify(obj, null, 2));
   }
@@ -189,7 +269,7 @@ describe('disk-cache schema versioning (#269)', () => {
   });
 
   it('accepts a current-version disk cache', async () => {
-    writeCache({ version: 2, fetchedAt: Date.now(), entries: [fakeEntry] });
+    writeCache({ version: CACHE_SCHEMA_VERSION, fetchedAt: Date.now(), entries: [fakeEntry] });
     const m = await loadModule();
     const cat = m.loadCatalogSync();
     expect(cat.source).toBe('disk');

@@ -1,4 +1,3 @@
-import type { CoreMessage } from 'ai';
 import { getContextWindow, COMPRESSION_THRESHOLD } from './context.js';
 import { debugLog, isDebugEnabled, getSessionLogPath } from './logger.js';
 import { getThemeColors } from './theme.js';
@@ -86,6 +85,15 @@ export interface SpinnerStats {
    * per turn by `Agent.finalizeTurnStats()`.
    */
   sessionCostUsd: number;
+  /**
+   * True once any turn this session folded in a row the catalog could not price
+   * (custom provider, or a built-in model missing from the catalog). Without it
+   * an unpriced session is indistinguishable from a free one — `sessionCostUsd`
+   * stays 0 and the StatusBar renders a confident `$0.00`, which is how a whole
+   * provider dropping out of the catalog went unnoticed. Folded alongside
+   * `sessionCostUsd` in `Agent.finalizeTurnStats()`.
+   */
+  sessionCostPartial: boolean;
   /**
    * Durable, cross-turn LLM telemetry sink. Lives here (not on `turnLedger`) so
    * it survives per-turn resets; fed from the single `recordTurnUsage`
@@ -353,8 +361,6 @@ export function printToolFailure(
   _hint: string,
   _severity: 'low' | 'normal' | 'critical' = 'normal',
 ): void {}
-
-export function printConversationReplay(_messages: CoreMessage[]): void {}
 
 export function printThought(_thought: string, _prefix?: string): void {}
 
