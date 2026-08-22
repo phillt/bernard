@@ -422,6 +422,13 @@ async function runInkRepl(args: {
           "Understood. Starting a new session. I'll only reference prior context if relevant to your current request.",
       };
       initialHistory = [...filtered, boundary, boundaryAck];
+      const restoredNotice = `Restored ${filtered.length} message(s) from the previous session.`;
+      if (fullScreenActive) startupLines.push(restoredNotice);
+      else printInfo(`  ${restoredNotice}`);
+    } else {
+      const freshNotice = 'No previous conversation found — starting fresh.';
+      if (fullScreenActive) startupLines.push(freshNotice);
+      else printInfo(`  ${freshNotice}`);
     }
   }
 
@@ -589,6 +596,7 @@ async function runInkRepl(args: {
         alertBanner,
         isFreshInstall,
         startupNotice,
+        resumed: resume && !!initialHistory,
       }),
     ),
   );

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { CACHE_DIR, MODEL_CATALOG_CACHE } from '../paths.js';
 import { debugLog } from '../logger.js';
 import type { BuiltinProvider } from './types.js';
-import { BUILTIN_PROVIDERS } from './types.js';
+import { BUILTIN_PROVIDERS, resolveGatewayOwner } from './types.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -95,8 +95,8 @@ function parseGatewayEntry(raw: RawGatewayModel): ModelCatalogEntry | null {
   if (slash < 0) return null;
   const owner = raw.id.slice(0, slash);
   const rest = raw.id.slice(slash + 1);
-  if (!BUILTIN_PROVIDERS.includes(owner as BuiltinProvider)) return null;
-  const provider = owner as BuiltinProvider;
+  const provider = resolveGatewayOwner(owner);
+  if (!provider) return null;
   const inputPrice = Number(raw.pricing?.input ?? 0);
   const outputPrice = Number(raw.pricing?.output ?? 0);
   // Cache rates are optional in the source data — keep `undefined` when absent
@@ -162,8 +162,11 @@ function loadVendored(): CachedCatalog {
  * to the vendored snapshot + async refresh) rather than silently serving stale
  * data. v2 added `pricing.cacheReadPerMTok` / `pricing.cacheWritePerMTok` (#269);
  * an unversioned/older cache lacks them and would price cache tokens at $0.
+ * v3 added the `spacexai` → `xai` owner mapping: a v2 cache was written by a
+ * build that silently dropped every Grok entry, so it must be discarded rather
+ * than served for up to another TTL window.
  */
-const CACHE_SCHEMA_VERSION = 2;
+export const CACHE_SCHEMA_VERSION = 3;
 
 function loadDiskCache(): CachedCatalog | null {
   try {
@@ -297,11 +300,33 @@ export function getCatalogForProvider(provider: BuiltinProvider): ModelCatalogEn
   return cat.entries.filter((e) => e.provider === provider);
 }
 
+/**
+ * Canonical form of a model id for tolerant catalog matching: lowercased, dots
+ * folded to dashes, and a trailing release-date suffix dropped. Gateway ids and
+ * the ids we configure diverge in exactly those three ways — the gateway says
+ * `grok-4.1-fast-reasoning` where our lineup says `grok-4-1-fast-reasoning`, and
+ * `claude-sonnet-4-5` where our lineup says `claude-sonnet-4-5-20250929`. An
+ * exact-match-only lookup silently misses both and degrades to the hard-coded
+ * table (or `null` pricing), so normalize before giving up.
+ */
+export function normalizeModelId(model: string): string {
+  return model
+    .toLowerCase()
+    .replace(/\./g, '-')
+    .replace(/-\d{8}$/, '');
+}
+
 /** Look up a single (provider, model) pair. Returns null when unknown. */
 export function getModelMeta(provider: string, model: string): ModelCatalogEntry | null {
   if (!BUILTIN_PROVIDERS.includes(provider as BuiltinProvider)) return null;
   const cat = loadCatalogSync();
-  return cat.entries.find((e) => e.provider === provider && e.model === model) ?? null;
+  const exact = cat.entries.find((e) => e.provider === provider && e.model === model);
+  if (exact) return exact;
+  // Second chance on the normalized id — never overrides an exact hit.
+  const key = normalizeModelId(model);
+  return (
+    cat.entries.find((e) => e.provider === provider && normalizeModelId(e.model) === key) ?? null
+  );
 }
 
 /**
@@ -311,7 +336,10 @@ export function getModelMeta(provider: string, model: string): ModelCatalogEntry
  */
 export function findModelMetaByName(model: string): ModelCatalogEntry | null {
   const cat = loadCatalogSync();
-  return cat.entries.find((e) => e.model === model) ?? null;
+  const exact = cat.entries.find((e) => e.model === model);
+  if (exact) return exact;
+  const key = normalizeModelId(model);
+  return cat.entries.find((e) => normalizeModelId(e.model) === key) ?? null;
 }
 
 /** Catalog age in milliseconds, or `null` when sourced from the vendored fallback. */

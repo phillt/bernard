@@ -138,6 +138,24 @@ describe('<StatusBar> session cost cell (#258)', () => {
     expect(frame).toContain('session ~$0.00');
   });
 
+  it('renders n/a — not $0.00 — once a turn folded in an unpriced model', () => {
+    // A confident `$0.00` is how an entire provider dropping out of the model
+    // catalog stayed invisible: every call priced as null, the total stayed 0,
+    // and the bar reported it as free rather than unknown.
+    const agent = agentWithSessionCost(0);
+    (agent.spinnerStats as { sessionCostPartial: boolean }).sessionCostPartial = true;
+    const frame = stripAnsi(render(createElement(StatusBar, { agent })).lastFrame() ?? '');
+    expect(frame).toContain('session n/a');
+    expect(frame).not.toContain('session ~$0.00');
+  });
+
+  it('still shows a priced total when only some rows were unpriced', () => {
+    const agent = agentWithSessionCost(0.42);
+    (agent.spinnerStats as { sessionCostPartial: boolean }).sessionCostPartial = true;
+    const frame = stripAnsi(render(createElement(StatusBar, { agent })).lastFrame() ?? '');
+    expect(frame).toContain('session ~$0.42');
+  });
+
   it('joins readout groups with the `·` dot divider (matching the left HintBar)', () => {
     const frame = stripAnsi(
       render(createElement(StatusBar, { agent: agentWithSessionCost(0.42) })).lastFrame() ?? '',

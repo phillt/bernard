@@ -12,9 +12,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { resolveGatewayOwner } from '../src/providers/types.js';
+
 const GATEWAY_URL = 'https://ai-gateway.vercel.sh/v1/models';
 const FALLBACK_PATH = path.join('src', 'data', 'model-catalog-fallback.json');
-const BUILTIN = new Set(['anthropic', 'openai', 'xai']);
 
 interface RawModel {
   id: string;
@@ -42,7 +43,10 @@ async function main(): Promise<void> {
     const slash = entry.id.indexOf('/');
     if (slash < 0) return false;
     const owner = entry.id.slice(0, slash);
-    return BUILTIN.has(owner);
+    // Share the runtime's owner resolution so an upstream rename (e.g. the
+    // gateway's `xai` → `spacexai`) can't strip a whole provider from the
+    // vendored snapshot while the parser still accepts it.
+    return resolveGatewayOwner(owner) !== null;
   });
   const snapshot = {
     object: 'list',

@@ -216,8 +216,23 @@ export function tokenStatsHook(target: TokenStatsTarget, info: HookModelInfo): A
       const latencyMs = now - lastStepAt;
       lastStepAt = now;
       if (usage) {
-        target.lastStepPromptTokens = usage.promptTokens;
-        if (target.spinnerStats) target.spinnerStats.latestPromptTokens = usage.promptTokens;
+        // Anthropic's `input_tokens` — which `@ai-sdk/anthropic` maps straight
+        // onto `usage.promptTokens` — EXCLUDES cache reads and cache writes;
+        // those arrive separately in `providerMetadata.anthropic`. With
+        // `BERNARD_PROMPT_CACHE` on by default that means the raw
+        // `promptTokens` is just the uncached tail, so the context gauge and
+        // the compression trigger would both see a few thousand tokens for a
+        // prompt that is actually near the window. Add the cache counts back so
+        // both measure the real prompt size. Providers that don't report cache
+        // metadata contribute 0 and are unaffected.
+        const a = providerMetadata?.anthropic as
+          | { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null }
+          | undefined;
+        const cachedPromptTokens =
+          (a?.cacheReadInputTokens ?? 0) + (a?.cacheCreationInputTokens ?? 0);
+        const effectivePromptTokens = usage.promptTokens + cachedPromptTokens;
+        target.lastStepPromptTokens = effectivePromptTokens;
+        if (target.spinnerStats) target.spinnerStats.latestPromptTokens = effectivePromptTokens;
       }
       if (target.spinnerStats)
         recordStep(target.spinnerStats, info, usage, providerMetadata, latencyMs);

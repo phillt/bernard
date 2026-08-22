@@ -95,7 +95,10 @@ function truncatedWrapper(result: unknown, maxChars: number): Record<string, unk
     raw = String(result);
   }
   let budget = Math.max(64, maxChars - 40);
-  let wrapper: Record<string, unknown> = { _truncated: true, preview: capSubagentResult(raw, budget) };
+  let wrapper: Record<string, unknown> = {
+    _truncated: true,
+    preview: capSubagentResult(raw, budget),
+  };
   while (serializedSize(wrapper) > maxChars && budget > 64) {
     budget = Math.max(64, Math.floor(budget / 2));
     wrapper = { _truncated: true, preview: capSubagentResult(raw, budget) };

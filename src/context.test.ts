@@ -65,7 +65,10 @@ function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
 
 describe('getContextWindow', () => {
   it('returns correct value for known Anthropic model', () => {
-    expect(getContextWindow('claude-sonnet-4-5-20250929')).toBe(200_000);
+    // The dated id normalizes onto the catalog's `claude-sonnet-4-5` entry
+    // (1M). Before id normalization this missed the catalog and fell back to a
+    // stale 200k hard-coded entry — a 5x under-estimate of real headroom.
+    expect(getContextWindow('claude-sonnet-4-5-20250929')).toBe(1_000_000);
   });
 
   it('returns correct value for known OpenAI model', () => {
@@ -92,11 +95,11 @@ describe('getContextWindow', () => {
   });
 
   it('ignores override when override is 0', () => {
-    expect(getContextWindow('claude-sonnet-4-5-20250929', 0)).toBe(200_000);
+    expect(getContextWindow('claude-sonnet-4-5-20250929', 0)).toBe(1_000_000);
   });
 
   it('ignores override when override is undefined', () => {
-    expect(getContextWindow('claude-sonnet-4-5-20250929', undefined)).toBe(200_000);
+    expect(getContextWindow('claude-sonnet-4-5-20250929', undefined)).toBe(1_000_000);
   });
 });
 
@@ -107,8 +110,8 @@ describe('shouldCompress', () => {
   });
 
   it('returns true when above threshold', () => {
-    // 200k * 0.75 = 150k, 140k + 15k = 155k > 150k
-    expect(shouldCompress(140_000, 15_000, 'claude-sonnet-4-5-20250929')).toBe(true);
+    // 1M * 0.75 = 750k, 740k + 15k = 755k > 750k
+    expect(shouldCompress(740_000, 15_000, 'claude-sonnet-4-5-20250929')).toBe(true);
   });
 
   it('returns true at exactly the threshold boundary', () => {
@@ -137,8 +140,8 @@ describe('shouldCompress', () => {
   });
 
   it('ignores override of 0 (auto-detect)', () => {
-    // 200k * 0.75 = 150k threshold — same as no override
-    expect(shouldCompress(140_000, 15_000, 'claude-sonnet-4-5-20250929', 0)).toBe(true);
+    // 1M * 0.75 = 750k threshold — same as no override
+    expect(shouldCompress(740_000, 15_000, 'claude-sonnet-4-5-20250929', 0)).toBe(true);
     expect(shouldCompress(50_000, 1_000, 'claude-sonnet-4-5-20250929', 0)).toBe(false);
   });
 });

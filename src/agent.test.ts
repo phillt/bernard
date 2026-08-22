@@ -2281,4 +2281,43 @@ describe('partial history preserved on abort (Esc)', () => {
     expect(history).toHaveLength(1);
     expect(history[0].role).toBe('user');
   });
+
+  it('carries the aborted turn prompt size into the compression headroom', async () => {
+    // The abort branch returns before the clean-exit path that assigns
+    // `lastPromptTokens`. Left unset, Esc-ing out of large turns grows the
+    // history while the compression trigger stays frozen at the last cleanly
+    // finished turn — so compaction never fires as the context keeps climbing.
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    const internals = agent as unknown as {
+      lastStepPromptTokens: number;
+      lastPromptTokens: number;
+    };
+    mockGenerateText.mockImplementation(async () => {
+      // Completed steps report usage through the token-stats hook before the
+      // interrupt lands.
+      internals.lastStepPromptTokens = 90_000;
+      agent.abort();
+      throw new DOMException('Aborted', 'AbortError');
+    });
+    await agent.processInput('Hello');
+
+    expect(internals.lastPromptTokens).toBe(90_000);
+  });
+
+  it('leaves the compression headroom alone when no step finished before the abort', async () => {
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    const internals = agent as unknown as {
+      lastStepPromptTokens: number;
+      lastPromptTokens: number;
+    };
+    internals.lastPromptTokens = 42_000;
+    mockGenerateText.mockImplementation(async () => {
+      agent.abort();
+      throw new DOMException('Aborted', 'AbortError');
+    });
+    await agent.processInput('Hello');
+
+    // No step reported usage — don't clobber the prior turn's value with 0.
+    expect(internals.lastPromptTokens).toBe(42_000);
+  });
 });

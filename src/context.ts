@@ -8,26 +8,47 @@ import { estimateContentPartTokens } from './image.js';
 import { findModelMetaByName } from './providers/catalog.js';
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 
-/** Model name → context window size in tokens */
+/**
+ * Model name → context window size in tokens.
+ *
+ * OFFLINE FALLBACK ONLY — {@link getContextWindow} consults the live model
+ * catalog first, so this table is consulted just for models the catalog has
+ * never carried, or when no catalog is reachable at all. Keep it conservative
+ * and keep it honest: entries here silently override nothing, but a *stale*
+ * entry for a model the catalog does know is dead weight, and a missing entry
+ * for one it doesn't costs the caller a 4× under-estimate via
+ * {@link DEFAULT_CONTEXT_WINDOW}.
+ */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   // Anthropic
-  'claude-opus-4-6': 200_000,
-  'claude-sonnet-4-5-20250929': 200_000,
+  'claude-opus-4-6': 1_000_000,
+  'claude-opus-4-8': 1_000_000,
+  'claude-sonnet-4-5-20250929': 1_000_000,
+  'claude-sonnet-4-6': 1_000_000,
   'claude-haiku-4-5-20251001': 200_000,
   'claude-opus-4-20250514': 200_000,
-  'claude-sonnet-4-20250514': 200_000,
+  'claude-sonnet-4-20250514': 1_000_000,
   // OpenAI
   'gpt-5.2': 400_000,
+  'gpt-5.4': 1_050_000,
+  'gpt-5.5': 1_000_000,
   'gpt-5.2-chat-latest': 128_000,
   'gpt-4o-mini': 128_000,
   o3: 200_000,
   'o3-mini': 200_000,
-  'gpt-4.1': 1_000_000,
-  'gpt-4.1-mini': 1_000_000,
-  'gpt-4.1-nano': 1_000_000,
+  'gpt-4.1': 1_047_576,
+  'gpt-4.1-mini': 1_047_576,
+  'gpt-4.1-nano': 1_047_576,
   // xAI
-  'grok-4-1-fast-reasoning': 2_000_000,
-  'grok-4-1-fast-non-reasoning': 2_000_000,
+  'grok-4.6': 500_000,
+  'grok-4.5': 500_000,
+  'grok-4.3': 1_000_000,
+  'grok-4.20-reasoning': 2_000_000,
+  'grok-4.20-non-reasoning': 2_000_000,
+  'grok-4.20-multi-agent': 2_000_000,
+  'grok-4-1-fast-reasoning': 1_000_000,
+  'grok-4-1-fast-non-reasoning': 1_000_000,
+  'grok-build-0.1': 256_000,
   'grok-4-fast-reasoning': 2_000_000,
   'grok-4-fast-non-reasoning': 2_000_000,
   'grok-4-0709': 256_000,

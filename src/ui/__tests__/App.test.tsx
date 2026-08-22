@@ -85,7 +85,7 @@ const TMP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-app-test-'));
 process.env.BERNARD_HOME = TMP_HOME;
 
 // ── Imports under test (after mocks + env) ──────────────────────────────
-import { App, type AppStores } from '../App.js';
+import { App, buildResumeSeed, type AppStores } from '../App.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
 import { getInkHandlers } from '../ink-handlers.js';
 import type { CoreMessage } from 'ai';
@@ -1223,5 +1223,85 @@ describe('<App> management menu chains', () => {
     expect(new CronStore().getJob(job.id)?.enabled).toBe(false);
     store.deleteJob(job.id);
     unmount();
+  });
+});
+
+describe('buildResumeSeed (--resume transcript replay)', () => {
+  it('renders user and assistant text so a resumed session is visible', () => {
+    const seed = buildResumeSeed(
+      [
+        { role: 'user', content: 'recover the photos' },
+        { role: 'assistant', content: 'Done — files are in ~/Pictures.' },
+      ],
+      false,
+    );
+    expect(seed.map((i) => i.message?.content)).toEqual([
+      'recover the photos',
+      'Done — files are in ~/Pictures.',
+    ]);
+  });
+
+  it('drops tool messages and text-less assistant turns', () => {
+    // A resumed history is mostly raw tool traffic — 40 of the 92 messages in
+    // the reported session. Replaying it verbatim buries the conversation.
+    const seed = buildResumeSeed(
+      [
+        { role: 'user', content: 'list the files' },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool-call', toolCallId: 't1', toolName: 'shell', args: {} }],
+        },
+        {
+          role: 'tool',
+          content: [{ type: 'tool-result', toolCallId: 't1', toolName: 'shell', result: 'a.txt' }],
+        },
+        { role: 'assistant', content: 'One file: a.txt' },
+      ] as CoreMessage[],
+      false,
+    );
+    expect(seed).toHaveLength(2);
+    expect(seed.map((i) => i.message?.role)).toEqual(['user', 'assistant']);
+  });
+
+  it('hides the injected session-boundary scaffolding', () => {
+    // These two are prompt mechanics `--resume` appends, not conversation.
+    const seed = buildResumeSeed(
+      [
+        { role: 'user', content: 'earlier question' },
+        { role: 'user', content: '[Previous session ended. New session starting. Treat tasks…]' },
+        {
+          role: 'assistant',
+          content:
+            "Understood. Starting a new session. I'll only reference prior context if relevant to your current request.",
+        },
+      ],
+      false,
+    );
+    expect(seed).toHaveLength(1);
+    expect(seed[0].message?.content).toBe('earlier question');
+  });
+
+  it('truncates a long message for readability', () => {
+    const seed = buildResumeSeed([{ role: 'assistant', content: 'x'.repeat(5000) }], false);
+    const text = seed[0].message?.content as string;
+    expect(text.length).toBeLessThan(5000);
+    expect(text).toContain('[truncated for replay]');
+  });
+
+  it('namespaces keys so they cannot collide with live-turn counter keys', () => {
+    // Live turns key items off a numeric counter starting at "0"; a collision
+    // would make Ink drop or duplicate a rendered block.
+    const seed = buildResumeSeed(
+      [
+        { role: 'user', content: 'a' },
+        { role: 'assistant', content: 'b' },
+      ],
+      false,
+    );
+    expect(seed.map((i) => i.key)).toEqual(['resume-0', 'resume-1']);
+  });
+
+  it('returns nothing for an empty history', () => {
+    expect(buildResumeSeed([], false)).toEqual([]);
   });
 });

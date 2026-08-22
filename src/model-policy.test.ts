@@ -196,14 +196,40 @@ describe('resolveSiteModel — per-slot generation params (#286)', () => {
     );
   }
 
-  it('keeps today behavior byte-for-byte when no slot params: rewriter gets temperature 0', async () => {
+  it('re-injects the temperature-0 baseline for a temperature-capable model', async () => {
+    seedParamsLineup({
+      premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
+      mid: { provider: 'anthropic', model: 'claude-3-haiku' },
+      cheap: { provider: 'anthropic', model: 'claude-3-haiku' },
+    });
     const { resolveSiteModel } = await loadModule();
-    // No params anywhere; anthropic haiku supports temperature, so the rewriter
-    // baseline (formerly the temperatureParam spread) re-injects temperature: 0.
-    const r = resolveSiteModel(makeConfig({ modelMode: 'balanced' }), 'rewriter');
+    // No params anywhere; claude-3-haiku is not a reasoning model, so the
+    // rewriter baseline (formerly the temperatureParam spread) re-injects
+    // temperature: 0.
+    const r = resolveSiteModel(
+      makeConfig({ activeLineupId: 'paramy', modelMode: 'balanced' }),
+      'rewriter',
+    );
     expect(r.params).toEqual({ temperature: 0 });
     // Anthropic carries no providerOptions (no OpenAI strictSchemas).
     expect(r.providerOptions).toBeUndefined();
+  });
+
+  it('omits the temperature-0 baseline for a reasoning model, dated id included', async () => {
+    seedParamsLineup({
+      premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
+      mid: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+      cheap: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+    });
+    const { resolveSiteModel } = await loadModule();
+    // The dated id normalizes onto the catalog's reasoning-tagged
+    // `claude-haiku-4-5`, so it answers like the undated form instead of
+    // escaping the temperature gate through a catalog miss (#267).
+    const r = resolveSiteModel(
+      makeConfig({ activeLineupId: 'paramy', modelMode: 'balanced' }),
+      'rewriter',
+    );
+    expect(r.params).toBeUndefined();
   });
 
   it('routes a slot reasoningEffort to providerOptions.xai', async () => {
@@ -228,10 +254,10 @@ describe('resolveSiteModel — per-slot generation params (#286)', () => {
   it('a slot temperature overrides the per-site baseline', async () => {
     seedParamsLineup({
       premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
-      mid: { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
+      mid: { provider: 'anthropic', model: 'claude-3-haiku' },
       cheap: {
         provider: 'anthropic',
-        model: 'claude-haiku-4-5-20251001',
+        model: 'claude-3-haiku',
         params: { temperature: 0.7 },
       },
     });
@@ -242,6 +268,27 @@ describe('resolveSiteModel — per-slot generation params (#286)', () => {
       'rewriter',
     );
     expect(r.params).toEqual({ temperature: 0.7 });
+  });
+
+  it('drops a slot temperature the model rejects (capability gate)', async () => {
+    seedParamsLineup({
+      premium: { provider: 'anthropic', model: 'claude-opus-4-6' },
+      mid: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
+      cheap: {
+        provider: 'anthropic',
+        model: 'claude-haiku-4-5-20251001',
+        params: { temperature: 0.7 },
+      },
+    });
+    const { resolveSiteModel } = await loadModule();
+    // `validateModelParams` gates temperature off reasoning models so the API
+    // never sees a param it rejects. The dated id resolves to the same catalog
+    // entry as the undated one, so both are gated identically.
+    const r = resolveSiteModel(
+      makeConfig({ activeLineupId: 'paramy', modelMode: 'balanced' }),
+      'rewriter',
+    );
+    expect(r.params).toBeUndefined();
   });
 
   it('merges OpenAI strictSchemas with a slot reasoningEffort', async () => {

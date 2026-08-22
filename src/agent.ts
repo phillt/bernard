@@ -378,6 +378,9 @@ export class Agent {
     if (!this.spinnerStats) return undefined;
     const report = computeTurnUsageReport(this.spinnerStats);
     this.spinnerStats.sessionCostUsd += report.totalCostUsd ?? 0;
+    // Sticky: once any turn contained an unpriced row the session total is a
+    // floor, not a total, and the StatusBar must say so rather than show $0.00.
+    if (report.partial) this.spinnerStats.sessionCostPartial = true;
     return report.totalCostUsd ?? undefined;
   }
 
@@ -981,7 +984,10 @@ export class Agent {
 
       // Track token usage for compression decisions — use last step's prompt tokens
       // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)
-      this.lastPromptTokens = this.lastStepPromptTokens ?? result.usage?.promptTokens ?? 0;
+      // `lastStepPromptTokens` is a plain number reset to 0 each turn, so `??`
+      // never reaches the fallback — use a truthiness check so a dispatch whose
+      // steps reported no usage still falls through to the aggregate.
+      this.lastPromptTokens = this.lastStepPromptTokens || (result.usage?.promptTokens ?? 0);
 
       // Populate the semantic response cache (#269, Layer 3) — only for read-only
       // Q&A turns that took NO tool actions, so a future near-duplicate ask can
@@ -1120,6 +1126,16 @@ export class Agent {
         if (partial.length > 0) {
           this.history.push(...partial);
         }
+        // The clean-exit path below assigns `lastPromptTokens`, and this branch
+        // returns before it. Without this, Esc-ing out of large turns grows the
+        // history while the compression trigger stays frozen at the last
+        // cleanly-finished turn's prompt size — so compaction never fires even
+        // as the context keeps climbing. Completed steps already reported their
+        // usage through the token-stats hook, so `lastStepPromptTokens` is the
+        // right value; leave it alone when no step finished before the abort.
+        if (this.lastStepPromptTokens > 0) {
+          this.lastPromptTokens = this.lastStepPromptTokens;
+        }
         return;
       }
 
@@ -1172,6 +1188,9 @@ export class Agent {
             const sink = stats.sessionTelemetry;
             const tel = telemetryFromUsageRecord(sink?.sessionId ?? '', sink?.turn ?? 0, rec);
             if (tel.costUsd != null) compactionCostUsd += tel.costUsd;
+            // Unpriced compaction spend still counts against the session total's
+            // completeness — otherwise it silently vanishes into a clean $0.00.
+            else stats.sessionCostPartial = true;
             sink?.record(tel);
           }
         : undefined,

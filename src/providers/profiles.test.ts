@@ -217,10 +217,13 @@ describe('modelSupportsTemperature', () => {
     expect(modelSupportsTemperature('my-fine-tuned-model', 'custom-provider')).toBe(true);
   });
 
-  it('returns true for versioned Anthropic model IDs not in catalog (fail-open)', () => {
-    // The vendored catalog has claude-haiku-4-5 (without date suffix) but not
-    // claude-haiku-4-5-20251001 — versioned IDs miss the catalog and fail open.
-    expect(modelSupportsTemperature('claude-haiku-4-5-20251001', 'anthropic')).toBe(true);
+  it('resolves a versioned Anthropic model ID onto its undated catalog entry', () => {
+    // The catalog carries `claude-haiku-4-5`; our lineups configure the dated
+    // `claude-haiku-4-5-20251001`. They are the same model, so id normalization
+    // makes the dated form resolve to the same entry (tagged `reasoning`) and
+    // answer identically instead of failing open to a different answer.
+    expect(modelSupportsTemperature('claude-haiku-4-5', 'anthropic')).toBe(false);
+    expect(modelSupportsTemperature('claude-haiku-4-5-20251001', 'anthropic')).toBe(false);
   });
 
   it('does not apply provider-specific patterns without an explicit provider (fail-open for catalog-unknown models)', () => {
