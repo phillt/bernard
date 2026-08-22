@@ -6,6 +6,7 @@ import {
   computeTurnUsageReport,
   formatAggCost,
   formatCallCost,
+  formatTiers,
   type UsageReportRow,
 } from '../../usage-report.js';
 import { sortedAggEntries, type TelemetryAgg } from '../../session-telemetry.js';
@@ -22,8 +23,13 @@ interface UsageViewerProps {
   onCycleTab?: () => void;
 }
 
-// Column widths for the breakdown table. LABEL holds `<tier> <model>`.
-const LABEL_W = 34;
+// Column widths for the breakdown table. LABEL holds the row name (model in the
+// per-turn table, layer/model/provider in the session breakdowns); TIER holds the
+// cost tier(s) that row spans. TIER_W borrows from LABEL_W so the grid keeps its
+// original total width — the longest real labels (`tool-wrapper:web-wrapper`,
+// `xai|grok-4-1-fast-reasoning`) still fit.
+const LABEL_W = 26;
+const TIER_W = 12;
 const NUM_W = 9;
 
 /**
@@ -56,6 +62,8 @@ function cell(value: string, width: number, align: 'left' | 'right' = 'left'): s
 
 interface RowCells {
   label: string;
+  /** Cost tier(s) for the row; `''` where the concept doesn't apply. */
+  tier: string;
   calls: string;
   tin: string;
   tout: string;
@@ -71,12 +79,14 @@ interface RowCells {
 function Row({
   cells,
   labelColor,
+  tierColor,
   costColor,
   bold,
   dim,
 }: {
   cells: RowCells;
   labelColor?: string;
+  tierColor?: string;
   costColor?: string;
   bold?: boolean;
   dim?: boolean;
@@ -85,6 +95,9 @@ function Row({
     <Box>
       <Text color={labelColor} bold={bold} dimColor={dim}>
         {cell(cells.label, LABEL_W)}
+      </Text>
+      <Text color={tierColor} bold={bold} dimColor={dim}>
+        {cell(cells.tier, TIER_W)}
       </Text>
       <Text bold={bold} dimColor={dim}>
         {cell(cells.calls, NUM_W, 'right')}
@@ -122,7 +135,14 @@ function buildLines(agent: Agent): OverlayLine[] {
     key: 'header',
     node: (
       <Row
-        cells={{ label: 'TIER / MODEL', calls: 'calls', tin: 'in', tout: 'out', cost: '~cost' }}
+        cells={{
+          label: 'MODEL',
+          tier: 'tier',
+          calls: 'calls',
+          tin: 'in',
+          tout: 'out',
+          cost: '~cost',
+        }}
         bold
         dim
       />
@@ -140,6 +160,7 @@ function buildLines(agent: Agent): OverlayLine[] {
       <Row
         cells={{
           label: 'TOTAL',
+          tier: '',
           calls: String(report.totalCalls),
           tin: formatTokenCount(report.totalPromptTokens),
           tout: formatTokenCount(report.totalCompletionTokens),
@@ -213,6 +234,8 @@ function appendSessionLines(
       <Row
         cells={{
           label: 'TOTAL',
+          // Spans every tier by construction — the cell would be noise.
+          tier: '',
           calls: String(summary.totals.calls),
           tin: formatTokenCount(summary.totals.promptTokens),
           tout: formatTokenCount(summary.totals.completionTokens),
@@ -270,7 +293,14 @@ function pushAggSection(
     key: `${keyPrefix}-header`,
     node: (
       <Row
-        cells={{ label: title, calls: 'calls', tin: 'in', tout: 'out', cost: '~cost' }}
+        cells={{
+          label: title,
+          tier: 'tier',
+          calls: 'calls',
+          tin: 'in',
+          tout: 'out',
+          cost: '~cost',
+        }}
         bold
         dim
       />
@@ -283,12 +313,14 @@ function pushAggSection(
         <Row
           cells={{
             label: key,
+            tier: formatTiers(agg.tiers),
             calls: String(agg.calls),
             tin: formatTokenCount(agg.promptTokens),
             tout: formatTokenCount(agg.completionTokens),
             cost: formatAggCost(agg.costUsd, agg.hasUnpriced),
           }}
           labelColor={colors.text}
+          tierColor={colors.muted}
           costColor={agg.costUsd > 0 ? colors.text : colors.muted}
         />
       ),
@@ -316,13 +348,15 @@ function UsageRow({
   return (
     <Row
       cells={{
-        label: `${row.bucket.padEnd(7)} ${row.modelName}`,
+        label: row.modelName,
+        tier: row.bucket,
         calls: String(row.calls),
         tin: formatTokenCount(row.promptTokens),
         tout: formatTokenCount(row.completionTokens),
         cost: formatCallCost(row.costUsd),
       }}
-      labelColor={tierColor}
+      labelColor={colors.text}
+      tierColor={tierColor}
       costColor={row.costUsd === null ? colors.muted : colors.text}
     />
   );

@@ -82,7 +82,9 @@ describe('detectSpecialistCandidate', () => {
     expect(records[0]).toMatchObject({
       site: 'specialist-detector',
       provider: 'anthropic',
-      promptTokens: 1200,
+      // Anthropic's `input_tokens` (1200) EXCLUDES the 1000 cache reads, so the
+      // normalized total prompt is 2200 with cache-read as a subset of it.
+      promptTokens: 2200,
       completionTokens: 40,
       cacheReadTokens: 1000,
     });

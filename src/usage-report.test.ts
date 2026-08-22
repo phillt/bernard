@@ -23,6 +23,18 @@ vi.mock('./providers/catalog.js', () => ({
       },
       // Intentionally no cache rates → exercises the deterministic $0 fallback.
       'anthropic|claude-haiku-4-5-20251001': { inputPerMTok: 1, outputPerMTok: 5 },
+      // Real gateway rates, so the reconciliation suite below can be checked
+      // against xAI's actual usage export rather than invented numbers.
+      'xai|grok-4.5': {
+        inputPerMTok: 2,
+        outputPerMTok: 6,
+        cacheReadPerMTok: 0.3,
+      },
+      'xai|grok-4.3': {
+        inputPerMTok: 1.25,
+        outputPerMTok: 2.5,
+        cacheReadPerMTok: 0.2,
+      },
     };
     const p = table[`${provider}|${model}`];
     return p ? ({ pricing: p } as unknown) : null;
@@ -34,6 +46,7 @@ const {
   formatUsd,
   formatTurnCost,
   formatCostSuffix,
+  formatTiers,
   priceUsageUsd,
   priceUsageBreakdown,
 } = await import('./usage-report.js');
@@ -206,9 +219,9 @@ describe('cache-aware pricing (priceUsageBreakdown / priceUsageUsd)', () => {
   });
 
   it('partial cache: prices uncached input, cache-read, and output separately', () => {
-    // Anthropic `promptTokens` is uncached input (disjoint from cache), so the
-    // 1000 prompt tokens and 800 cache-read tokens are DIFFERENT tokens.
-    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 1000, 100, {
+    // `prompt` is the TOTAL (1800), of which 800 were cache reads — so 1000 pay
+    // full rate and 800 pay the cache rate. Every token billed exactly once.
+    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 1800, 100, {
       cacheReadTokens: 800,
     })!;
     expect(b.inputCostUsd).toBeCloseTo((1000 / 1e6) * 15, 12);
@@ -220,21 +233,30 @@ describe('cache-aware pricing (priceUsageBreakdown / priceUsageUsd)', () => {
     );
   });
 
-  it('no double charge: does NOT subtract cache-read from prompt (Anthropic disjoint)', () => {
-    // Regression guard for the "M is a subset of N" worry. For Anthropic the
-    // cache tokens are NOT a subset of promptTokens — they are disjoint — so the
-    // full 1000 prompt tokens are priced at input rate AND 800 at cache-read
-    // rate (1800 distinct tokens), never 200 or 1800-at-input.
+  it('no double charge: cache tokens are a SUBSET of prompt, so they are subtracted', () => {
+    // The counts reaching here are normalized (`normalizeUsage`): `prompt` is the
+    // total and cache counts are subsets. Pricing the full 1000 at input rate AND
+    // 800 at cache rate would bill 1800 tokens for a 1000-token call — the
+    // over-charge that made a measured xAI session read 3x its real cost.
     const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 1000, 0, {
       cacheReadTokens: 800,
     })!;
-    expect(b.inputCostUsd).toBeCloseTo((1000 / 1e6) * 15, 12); // full prompt, not (1000-800)
+    expect(b.inputCostUsd).toBeCloseTo((200 / 1e6) * 15, 12); // 1000 - 800
     expect(b.cacheReadCostUsd).toBeCloseTo((800 / 1e6) * 1.5, 12);
   });
 
+  it('never bills negative when cache counts exceed the prompt total', () => {
+    // Defensive: a malformed payload must clamp to zero, not credit money back.
+    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 100, 0, {
+      cacheReadTokens: 900,
+    })!;
+    expect(b.inputCostUsd).toBe(0);
+    expect(b.totalCostUsd).toBeGreaterThan(0);
+  });
+
   it('entire input cached: no ordinary input cost remains', () => {
-    // A turn served entirely from cache: input_tokens (prompt) = 0, cache-read = 1000.
-    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 0, 0, {
+    // A turn served entirely from cache: total prompt 1000, all of it cache-read.
+    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 1000, 0, {
       cacheReadTokens: 1000,
     })!;
     expect(b.inputCostUsd).toBe(0);
@@ -243,7 +265,7 @@ describe('cache-aware pricing (priceUsageBreakdown / priceUsageUsd)', () => {
   });
 
   it('cache write: priced at the cache-write rate independently', () => {
-    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 0, 0, {
+    const b = priceUsageBreakdown('anthropic', 'claude-opus-4-8', 1000, 0, {
       cacheWriteTokens: 1000,
     })!;
     expect(b.cacheWriteCostUsd).toBeCloseTo((1000 / 1e6) * 18.75, 12);
@@ -252,12 +274,14 @@ describe('cache-aware pricing (priceUsageBreakdown / priceUsageUsd)', () => {
 
   it('missing cache pricing: cache tokens contribute $0, input/output still priced', () => {
     // haiku in the mock has NO cache rates → deterministic, backward compatible.
-    const b = priceUsageBreakdown('anthropic', 'claude-haiku-4-5-20251001', 1000, 100, {
+    const b = priceUsageBreakdown('anthropic', 'claude-haiku-4-5-20251001', 6200, 100, {
       cacheReadTokens: 5000,
       cacheWriteTokens: 200,
     })!;
     expect(b.cacheReadCostUsd).toBe(0);
     expect(b.cacheWriteCostUsd).toBe(0);
+    // 6200 total - 5200 cached = 1000 at full rate; the cached share is free
+    // only because this model has no catalog cache rate to charge.
     expect(b.totalCostUsd).toBeCloseTo((1000 / 1e6) * 1 + (100 / 1e6) * 5, 12);
   });
 
@@ -282,15 +306,84 @@ describe('cache-aware pricing (priceUsageBreakdown / priceUsageUsd)', () => {
         provider: 'anthropic',
         modelName: 'claude-opus-4-8',
         site: 'main',
-        promptTokens: 1000,
+        promptTokens: 3100,
         completionTokens: 100,
         cacheReadTokens: 2000,
         cacheWriteTokens: 100,
       }),
     ]);
     const report = computeTurnUsageReport(stats);
+    // 3100 total - 2000 read - 100 write = 1000 at full input rate.
     const expected =
       (1000 / 1e6) * 15 + (100 / 1e6) * 75 + (2000 / 1e6) * 1.5 + (100 / 1e6) * 18.75;
     expect(report.totalCostUsd).toBeCloseTo(expected, 12);
+  });
+});
+
+describe('formatTiers', () => {
+  it('renders a single tier as-is', () => {
+    expect(formatTiers(['mid'])).toBe('mid');
+  });
+
+  it('joins multiple tiers in spend order, not insertion order', () => {
+    // A layer straddles tiers — `main` runs premium on a turn's first step and
+    // mid on continuations — and the joined form is what makes a lineup whose
+    // premium and mid slots name the SAME model visible in the breakdown.
+    expect(formatTiers(['mid', 'premium'])).toBe('premium+mid');
+    expect(formatTiers(['cheap', 'premium', 'mid'])).toBe('premium+mid+cheap');
+  });
+
+  it('returns empty for no tiers so the column stays blank', () => {
+    expect(formatTiers([])).toBe('');
+  });
+
+  it('dedups via the canonical order', () => {
+    expect(formatTiers(['mid', 'mid'])).toBe('mid');
+  });
+});
+
+describe('reconciles against a real provider bill (xAI, 2026-08-22)', () => {
+  // Ground truth from xAI's own usage export for session 2026-08-22-6f3c1d41:
+  // 1,430,770 tokens billed at $0.916754. Bernard's token accounting already
+  // matched to 0.22%; only the pricing was wrong, because cached tokens were
+  // charged at the full input rate. This pins the fix to measured reality.
+  const GROK_45_IN = 1_315_000;
+  const GROK_45_OUT = 4_300;
+  const GROK_43_IN = 108_000;
+  const GROK_43_OUT = 282;
+  const ACTUAL_USD = 0.916754;
+  // The hit rate implied by solving the catalog rates against the actual bill.
+  const CACHE_HIT = 0.798;
+
+  function priceSession(hitRate: number): number {
+    const rows: Array<[string, number, number]> = [
+      ['grok-4.5', GROK_45_IN, GROK_45_OUT],
+      ['grok-4.3', GROK_43_IN, GROK_43_OUT],
+    ];
+    return rows.reduce(
+      (sum, [model, inTok, outTok]) =>
+        sum +
+        (priceUsageUsd('xai', model, inTok, outTok, {
+          cacheReadTokens: Math.round(inTok * hitRate),
+          cacheWriteTokens: 0,
+        }) ?? 0),
+      0,
+    );
+  }
+
+  it('lands within 1% of the actual bill at the observed cache-hit rate', () => {
+    const estimate = priceSession(CACHE_HIT);
+    expect(Math.abs(estimate - ACTUAL_USD) / ACTUAL_USD).toBeLessThan(0.01);
+  });
+
+  it('reproduces the 3x overstatement when no cache is credited', () => {
+    // What Bernard reported before the fix — the regression this guards.
+    const uncredited = priceSession(0);
+    expect(uncredited / ACTUAL_USD).toBeGreaterThan(2.9);
+  });
+
+  it('is monotonic: crediting more cache never costs more', () => {
+    expect(priceSession(1)).toBeLessThan(priceSession(CACHE_HIT));
+    expect(priceSession(CACHE_HIT)).toBeLessThan(priceSession(0));
   });
 });

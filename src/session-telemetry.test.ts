@@ -83,11 +83,12 @@ describe('telemetryFromUsageRecord', () => {
       site: 'main',
       provider: 'anthropic',
       modelName: 'claude-opus-4-8',
-      promptTokens: 1000, // uncached input (disjoint from cache)
+      promptTokens: 3100, // TOTAL prompt; the cache counts below are subsets
       completionTokens: 100,
       cacheReadTokens: 2000,
       cacheWriteTokens: 100,
     });
+    // 3100 total - 2000 read - 100 write = 1000 at full input rate.
     // 1000*15 + 100*75 + 2000*1.5 + 100*18.75, all /1e6
     const expected = (1000 * 15 + 100 * 75 + 2000 * 1.5 + 100 * 18.75) / 1e6;
     expect(t.costUsd).toBeCloseTo(expected, 12);
@@ -481,5 +482,59 @@ describe('aggregateRecords + formatSessionUsageLines', () => {
     expect(lines).toContain('TRACE');
     // The tree indents the child under its parent.
     expect(lines).toMatch(/main.*\n.*pac-actor/s);
+  });
+});
+
+describe('tier tracking per aggregate row', () => {
+  it('records every tier a layer ran at, not just the first', () => {
+    // `main` is not pinned to one tier: the policy resolves premium on a turn's
+    // first step and mid on continuations. A scalar would report only one.
+    const st = store();
+    st.record(rec({ site: 'main', provider: 'xai', modelName: 'grok-4.5', bucket: 'premium' }));
+    st.record(rec({ site: 'main', provider: 'xai', modelName: 'grok-4.5', bucket: 'mid' }));
+    st.record(rec({ site: 'rewriter', provider: 'xai', modelName: 'grok-4.3', bucket: 'cheap' }));
+
+    const s = st.summary();
+    expect(s.byLayer.get('main')?.tiers).toEqual(['premium', 'mid']);
+    expect(s.byLayer.get('rewriter')?.tiers).toEqual(['cheap']);
+  });
+
+  it('surfaces one model serving two tiers — the tiering is buying nothing', () => {
+    // The xAI lineup binds orchestrator premium AND mid to grok-4.5, so
+    // `balanced` mode never actually downshifts the main agent.
+    const st = store();
+    st.record(rec({ site: 'main', provider: 'xai', modelName: 'grok-4.5', bucket: 'premium' }));
+    st.record(rec({ site: 'main', provider: 'xai', modelName: 'grok-4.5', bucket: 'mid' }));
+
+    expect(st.summary().byModel.get('xai|grok-4.5')?.tiers).toEqual(['premium', 'mid']);
+  });
+
+  it('orders tiers by spend, independent of arrival order', () => {
+    const st = store();
+    st.record(rec({ site: 'main', provider: 'xai', modelName: 'm', bucket: 'cheap' }));
+    st.record(rec({ site: 'main', provider: 'xai', modelName: 'm', bucket: 'premium' }));
+    st.record(rec({ site: 'main', provider: 'xai', modelName: 'm', bucket: 'mid' }));
+
+    expect(st.summary().byLayer.get('main')?.tiers).toEqual(['premium', 'mid', 'cheap']);
+  });
+
+  it('snapshots the tier list by value so later records cannot mutate it', () => {
+    const st = store();
+    st.record(rec({ site: 'main', provider: 'xai', modelName: 'm', bucket: 'premium' }));
+    const before = st.summary().byLayer.get('main')!.tiers;
+    st.record(rec({ site: 'main', provider: 'xai', modelName: 'm', bucket: 'cheap' }));
+    expect(before).toEqual(['premium']);
+  });
+
+  it('renders the tier column in BY LAYER but leaves BY PROVIDER blank', () => {
+    const st = store();
+    st.record(rec({ site: 'main', provider: 'xai', modelName: 'grok-4.5', bucket: 'premium' }));
+    st.record(rec({ site: 'main', provider: 'xai', modelName: 'grok-4.5', bucket: 'mid' }));
+    const text = formatSessionUsageLines(st.summary()).join('\n');
+
+    expect(text).toMatch(/BY LAYER[\s\S]*?main\s+premium\+mid/);
+    // A provider spans every tier by construction — noise, and it overflowed
+    // the column when rendered.
+    expect(text).toMatch(/BY PROVIDER[\s\S]*?xai\s+\d/);
   });
 });

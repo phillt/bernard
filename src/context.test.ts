@@ -85,6 +85,25 @@ describe('getContextWindow', () => {
     expect(getContextWindow('grok-3')).toBe(131_072);
   });
 
+  it('corrects a catalog window that is wrong in the unsafe direction', () => {
+    // The Vercel gateway reports 2M for the grok-4.20 family; SpaceXAI's own
+    // console says 1M. Trusting 2M puts compaction at 1.5M — past the real
+    // ceiling — so the turn dies on a provider error instead of compacting.
+    expect(getContextWindow('grok-4.20-non-reasoning')).toBe(1_000_000);
+    expect(getContextWindow('grok-4.20-reasoning')).toBe(1_000_000);
+    // Dashed spelling resolves the same way.
+    expect(getContextWindow('grok-4-20-multi-agent')).toBe(1_000_000);
+  });
+
+  it('lets an explicit user override beat even a correction', () => {
+    expect(getContextWindow('grok-4.20-non-reasoning', 250_000)).toBe(250_000);
+  });
+
+  it('leaves models without a correction on the catalog value', () => {
+    expect(getContextWindow('grok-4.5')).toBe(500_000);
+    expect(getContextWindow('grok-4.3')).toBe(1_000_000);
+  });
+
   it('normalizes against the fallback table for catalog-missing models', () => {
     // `grok-3-mini` is retired from the gateway, so it only exists in
     // MODEL_CONTEXT_WINDOWS. A dotted spelling must still find it rather than
