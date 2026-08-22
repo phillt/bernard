@@ -5,50 +5,30 @@ import { resolveSiteModel } from './model-policy.js';
 import type { RAGStore } from './rag.js';
 import { DOMAIN_REGISTRY, getDomainIds } from './domains.js';
 import { estimateContentPartTokens } from './image.js';
-import { findModelMetaByName } from './providers/catalog.js';
+import { findModelMetaByName, normalizeModelId } from './providers/catalog.js';
+import {
+  CONTEXT_SUMMARY_ACK,
+  CONTEXT_SUMMARY_PREFIX,
+  TRUNCATION_ACK,
+  TRUNCATION_PREFIX,
+} from './session-markers.js';
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 
 /**
- * Model name → context window size in tokens.
+ * Context windows for models the model catalog does NOT carry — retired gateway
+ * ids that still appear in saved lineups and configs.
  *
- * OFFLINE FALLBACK ONLY — {@link getContextWindow} consults the live model
- * catalog first, so this table is consulted just for models the catalog has
- * never carried, or when no catalog is reachable at all. Keep it conservative
- * and keep it honest: entries here silently override nothing, but a *stale*
- * entry for a model the catalog does know is dead weight, and a missing entry
- * for one it doesn't costs the caller a 4× under-estimate via
- * {@link DEFAULT_CONTEXT_WINDOW}.
+ * Deliberately tiny. {@link getContextWindow} consults the catalog first, and
+ * the catalog always resolves to at least the vendored snapshot
+ * (`src/data/model-catalog-fallback.json`), which ships offline with every
+ * build. So an entry here for anything the snapshot already covers is
+ * unreachable — and worse, it is a hand-maintained copy that `npm run
+ * refresh-catalog` does not update, which is how `claude-sonnet-4-5` came to be
+ * listed at 200k while the catalog said 1M. Add a row ONLY for a model the
+ * gateway has dropped.
  */
 export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-  // Anthropic
-  'claude-opus-4-6': 1_000_000,
-  'claude-opus-4-8': 1_000_000,
-  'claude-sonnet-4-5-20250929': 1_000_000,
-  'claude-sonnet-4-6': 1_000_000,
-  'claude-haiku-4-5-20251001': 200_000,
-  'claude-opus-4-20250514': 200_000,
-  'claude-sonnet-4-20250514': 1_000_000,
-  // OpenAI
-  'gpt-5.2': 400_000,
-  'gpt-5.4': 1_050_000,
-  'gpt-5.5': 1_000_000,
   'gpt-5.2-chat-latest': 128_000,
-  'gpt-4o-mini': 128_000,
-  o3: 200_000,
-  'o3-mini': 200_000,
-  'gpt-4.1': 1_047_576,
-  'gpt-4.1-mini': 1_047_576,
-  'gpt-4.1-nano': 1_047_576,
-  // xAI
-  'grok-4.6': 500_000,
-  'grok-4.5': 500_000,
-  'grok-4.3': 1_000_000,
-  'grok-4.20-reasoning': 2_000_000,
-  'grok-4.20-non-reasoning': 2_000_000,
-  'grok-4.20-multi-agent': 2_000_000,
-  'grok-4-1-fast-reasoning': 1_000_000,
-  'grok-4-1-fast-non-reasoning': 1_000_000,
-  'grok-build-0.1': 256_000,
   'grok-4-fast-reasoning': 2_000_000,
   'grok-4-fast-non-reasoning': 2_000_000,
   'grok-4-0709': 256_000,
@@ -69,7 +49,13 @@ export function getContextWindow(model: string, override?: number): number {
   if (override && override > 0) return override;
   const meta = findModelMetaByName(model);
   if (meta && meta.contextWindow > 0) return meta.contextWindow;
-  return MODEL_CONTEXT_WINDOWS[model] ?? DEFAULT_CONTEXT_WINDOW;
+  // Match the table through the same normalization the catalog lookup uses, so
+  // a dotted/dated id doesn't miss both sources over punctuation alone.
+  const key = normalizeModelId(model);
+  const fallback = Object.entries(MODEL_CONTEXT_WINDOWS).find(
+    ([id]) => normalizeModelId(id) === key,
+  );
+  return fallback?.[1] ?? DEFAULT_CONTEXT_WINDOW;
 }
 
 /**
@@ -356,12 +342,12 @@ export async function compressHistory(
 
     const summaryMessage: CoreMessage = {
       role: 'user',
-      content: `[Context Summary — earlier conversation was compressed. This is background context only. Focus on the messages that follow for the current task.]\n\n${summary}`,
+      content: `${CONTEXT_SUMMARY_PREFIX} — earlier conversation was compressed. This is background context only. Focus on the messages that follow for the current task.]\n\n${summary}`,
     };
 
     const ackMessage: CoreMessage = {
       role: 'assistant',
-      content: "Understood. I have the context from our earlier conversation. Let's continue.",
+      content: CONTEXT_SUMMARY_ACK,
     };
 
     debugLog('context:compress', {
@@ -473,9 +459,9 @@ export function emergencyTruncate(
     return [
       {
         role: 'user',
-        content: `[Earlier conversation was truncated to fit context window. Focus on the most recent messages below.]${taskHint}`,
+        content: `${TRUNCATION_PREFIX} to fit context window. Focus on the most recent messages below.]${taskHint}`,
       },
-      { role: 'assistant', content: 'Understood. Continuing with limited context.' },
+      { role: 'assistant', content: TRUNCATION_ACK },
       ...kept,
     ];
   }
@@ -518,11 +504,11 @@ export function emergencyTruncate(
 
   const notice: CoreMessage = {
     role: 'user',
-    content: `[Earlier conversation was truncated to fit context window. Focus on the most recent messages below.]${taskHint}`,
+    content: `${TRUNCATION_PREFIX} to fit context window. Focus on the most recent messages below.]${taskHint}`,
   };
   const ack: CoreMessage = {
     role: 'assistant',
-    content: 'Understood. Continuing with limited context.',
+    content: TRUNCATION_ACK,
   };
 
   return [notice, ack, ...kept];

@@ -1263,6 +1263,26 @@ describe('buildResumeSeed (--resume transcript replay)', () => {
     expect(seed.map((i) => i.message?.role)).toEqual(['user', 'assistant']);
   });
 
+  it('hides compression and truncation seams, not just the session boundary', () => {
+    // These are injected by compressHistory / emergencyTruncate. Rendering them
+    // as `user` turns makes it look like the user typed them.
+    const seed = buildResumeSeed(
+      [
+        { role: 'user', content: '[Context Summary — earlier conversation was compressed.]' },
+        {
+          role: 'assistant',
+          content: "Understood. I have the context from our earlier conversation. Let's continue.",
+        },
+        { role: 'user', content: '[Earlier conversation was truncated to fit context window.]' },
+        { role: 'assistant', content: 'Understood. Continuing with limited context.' },
+        { role: 'user', content: 'a real question' },
+      ],
+      false,
+    );
+    expect(seed).toHaveLength(1);
+    expect(seed[0].message?.content).toBe('a real question');
+  });
+
   it('hides the injected session-boundary scaffolding', () => {
     // These two are prompt mechanics `--resume` appends, not conversation.
     const seed = buildResumeSeed(
@@ -1285,7 +1305,7 @@ describe('buildResumeSeed (--resume transcript replay)', () => {
     const seed = buildResumeSeed([{ role: 'assistant', content: 'x'.repeat(5000) }], false);
     const text = seed[0].message?.content as string;
     expect(text.length).toBeLessThan(5000);
-    expect(text).toContain('[truncated for replay]');
+    expect(text.endsWith('…')).toBe(true);
   });
 
   it('namespaces keys so they cannot collide with live-turn counter keys', () => {

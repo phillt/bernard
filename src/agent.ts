@@ -49,6 +49,7 @@ import type { AgentContext } from './framework/context.js';
 import { recordTurnUsage } from './framework/hooks/token-stats.js';
 import { telemetryFromUsageRecord } from './session-telemetry.js';
 import { computeTurnUsageReport } from './usage-report.js';
+import { CONTINUATION_PREFIX } from './session-markers.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
 import type { PolicyDecision, PolicyEngine, PolicyResult } from './policy/index.js';
 import { extractCitationMarkers, type SourceItem, type TurnProvenance } from './provenance.js';
@@ -784,8 +785,7 @@ export class Agent {
             this.history.push(...partialMessages);
             this.history.push({
               role: 'user' as const,
-              content:
-                '[Your previous response was cut off. Please continue exactly where you left off.]',
+              content: `${CONTINUATION_PREFIX}. Please continue exactly where you left off.]`,
             });
 
             if (this.spinnerStats) {

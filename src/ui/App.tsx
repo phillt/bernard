@@ -105,6 +105,7 @@ import {
   SUMMARIZATION_PROMPT,
   MIN_HISTORY_FOR_FACTS,
 } from '../context.js';
+import { isSessionScaffolding } from '../session-markers.js';
 import { detectSpecialistCandidate } from '../specialist-detector.js';
 import { promoteCandidate } from '../candidate-bootstrap.js';
 import {
@@ -240,13 +241,6 @@ interface AppProps {
    * LLM history.
    */
   startupNotice?: string;
-  /**
-   * True when `--resume` restored a prior conversation into `agent`. The
-   * transcript is seeded from that history on mount so the user can see what
-   * was restored — without it, `bernard -r` is visually identical to a cold
-   * start even though the model has the full context.
-   */
-  resumed?: boolean;
 }
 
 type Overlay =
@@ -411,16 +405,6 @@ function buildChoiceMenu(q: AskUserQuestion): {
   };
 }
 
-/**
- * Session-boundary scaffolding injected by `--resume` in `src/index.ts`. These
- * are prompt mechanics, not conversation — showing them in the replay just
- * confuses the reader.
- */
-const RESUME_BOUNDARY_PREFIXES = [
-  '[Previous session ended',
-  "Understood. Starting a new session. I'll only reference prior context",
-];
-
 /** Per-message character cap for the resume replay — long tool-heavy answers are
  *  truncated for readability, matching the documented behavior in README.md. */
 const RESUME_REPLAY_MAX_CHARS = 2000;
@@ -433,25 +417,22 @@ const RESUME_REPLAY_MAX_CHARS = 2000;
  * indistinguishable from a cold start. This rebuilds the replay against the
  * `<Static>`/`StaticItem` path so there is no second render path to drift.
  *
- * Only text-bearing user/assistant messages are included: the raw `tool`
- * messages and tool-call parts are the bulk of a resumed history and are noise
- * in a recap. Keys are namespaced so they can never collide with the numeric
- * `itemKeyRef` counter that drives live turns.
+ * Only real conversation survives: `tool` messages and tool-call parts are the
+ * bulk of a resumed history and are noise in a recap, and the seams Bernard
+ * injects itself (context summaries, truncation notices, the session boundary
+ * pair) would otherwise render as if the user or the model had said them. Keys
+ * are namespaced so they can never collide with the numeric `itemKeyRef`
+ * counter that drives live turns.
  */
 export function buildResumeSeed(history: CoreMessage[], toolDetails: boolean): StaticItem[] {
   const items: StaticItem[] = [];
   for (const message of history) {
     if (message.role !== 'user' && message.role !== 'assistant') continue;
     const text = extractText(message)?.trim();
-    if (!text) continue;
-    if (RESUME_BOUNDARY_PREFIXES.some((p) => text.startsWith(p))) continue;
-    const truncated =
-      text.length > RESUME_REPLAY_MAX_CHARS
-        ? `${text.slice(0, RESUME_REPLAY_MAX_CHARS)}\n…[truncated for replay]`
-        : text;
+    if (!text || isSessionScaffolding(text)) continue;
     items.push({
       key: `resume-${items.length}`,
-      message: { role: message.role, content: truncated },
+      message: { role: message.role, content: truncate(text, RESUME_REPLAY_MAX_CHARS) },
       toolDetails,
     });
   }
@@ -486,7 +467,6 @@ export function App({
   alertBanner,
   isFreshInstall,
   startupNotice,
-  resumed = false,
   fullScreen = false,
   welcomeLines,
 }: AppProps) {
@@ -504,10 +484,15 @@ export function App({
   // each entry becomes terminal scrollback that is never repainted (#232).
   // `<App>` commits to this at turn boundaries; the streaming message and the
   // rest of the UI stay in the dynamic region.
-  // Seeded from the restored history on `--resume` so the user can see what came
-  // back; empty on a cold start. Lazy initializer — runs once, at mount.
+  // History already in the agent at mount — non-empty only when `--resume`
+  // restored a prior session (`src/index.ts` seeds `initialHistory`). Read once:
+  // the transcript seed and both commit cursors below must agree on it, and
+  // three independent reads of a live array is the fragile way to do that.
+  const restoredHistory = useRef(agent.getHistory()).current;
+  // Seeded from the restored history so the user can see what came back; a cold
+  // start yields `[]`. Lazy initializer — runs once, at mount.
   const [staticItems, setStaticItems] = useState<StaticItem[]>(() =>
-    resumed ? buildResumeSeed(agent.getHistory(), config.toolDetails) : [],
+    buildResumeSeed(restoredHistory, config.toolDetails),
   );
   // Bumped only by /clear to remount <Thread> and reset <Static>'s internal
   // high-water cursor (Static only appends — it cannot un-print, so the reset
@@ -520,7 +505,7 @@ export function App({
   // rendered that history, and leaving the cursor at 0 would make the first
   // commit re-emit the entire backlog — including every raw tool-result
   // message — the moment the user types their first line.
-  const committedLenRef = useRef(resumed ? agent.getHistory().length : 0);
+  const committedLenRef = useRef(restoredHistory.length);
   // The history ARRAY reference we last committed against. Normal appends mutate
   // the same array in place (push), so the reference is stable; but
   // `Agent.processInput` REASSIGNS `this.history` to a new, shorter array when
@@ -529,7 +514,9 @@ export function App({
   // we re-anchor against this turn's user message instead of slicing blindly.
   // Anchored to the restored array on resume so the re-anchor guard in
   // `commitNewHistory` doesn't mistake the seeded cursor for a first-ever commit.
-  const historyRef = useRef<CoreMessage[] | null>(resumed ? agent.getHistory() : null);
+  const historyRef = useRef<CoreMessage[] | null>(
+    restoredHistory.length > 0 ? restoredHistory : null,
+  );
   // Monotonic source for `StaticItem.key`. Deliberately NOT the history index:
   // /compact shrinks history, so index-based keys would collide with already
   // emitted items. A counter never repeats.

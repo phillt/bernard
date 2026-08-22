@@ -7,14 +7,12 @@ export type BuiltinProvider = (typeof BUILTIN_PROVIDERS)[number];
 
 /**
  * Model-catalog `owned_by` prefixes that name a built-in provider under a
- * different label. The Vercel AI Gateway renamed xAI's owner prefix from `xai`
- * to `spacexai`; without this mapping every Grok entry is dropped at parse time,
- * which silently costs us both context windows and pricing for the whole
- * provider (the model falls back to `DEFAULT_CONTEXT_WINDOW` and prices as
- * `null`). Keyed by gateway owner, valued by our internal provider id — so
- * config, lineups, keys, and SDK wiring keep using `xai` throughout.
+ * different label. Private on purpose: {@link resolveGatewayOwner} is the only
+ * supported way to resolve an owner, and a second exported entry point is
+ * exactly the bypass this table exists to close.
  */
-export const GATEWAY_OWNER_ALIASES: Record<string, BuiltinProvider> = {
+const GATEWAY_OWNER_ALIASES: Record<string, BuiltinProvider> = {
+  // The Vercel AI Gateway renamed xAI's owner prefix from `xai` to `spacexai`.
   spacexai: 'xai',
 };
 
@@ -22,6 +20,11 @@ export const GATEWAY_OWNER_ALIASES: Record<string, BuiltinProvider> = {
  * Resolves a catalog owner prefix to a built-in provider id, or `null` when the
  * owner is not one of ours. Accepts both the canonical name and any alias, so an
  * older vendored snapshot (which still uses `xai/`) keeps parsing.
+ *
+ * Without the alias hop an upstream rename drops every model of that provider at
+ * parse time, which silently costs us both context windows and pricing — the
+ * model falls back to `DEFAULT_CONTEXT_WINDOW` and prices as `null`. Mapping
+ * back to our own id keeps config, lineups, keys, and SDK wiring on `xai`.
  */
 export function resolveGatewayOwner(owner: string): BuiltinProvider | null {
   if (BUILTIN_PROVIDERS.includes(owner as BuiltinProvider)) return owner as BuiltinProvider;

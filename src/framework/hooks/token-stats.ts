@@ -61,6 +61,29 @@ interface SiteModelLike {
 }
 
 /**
+ * Per-step provider metadata carrying Anthropic's prompt-cache counts (#269).
+ * Mirrors `StepFinishPayload['providerMetadata']` in `./types.js`; named here so
+ * the three sites that read cache tokens share one shape instead of
+ * re-declaring it inline.
+ */
+export interface CacheMetadata {
+  anthropic?: { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null };
+}
+
+/**
+ * Cache read/write token counts for a step, `0` when the provider reports none.
+ * Anthropic sends `null` on a cache miss and other providers omit the block
+ * entirely — both mean zero, never "unknown".
+ */
+function cacheTokens(providerMetadata: CacheMetadata | undefined): {
+  read: number;
+  write: number;
+} {
+  const a = providerMetadata?.anthropic;
+  return { read: a?.cacheReadInputTokens ?? 0, write: a?.cacheCreationInputTokens ?? 0 };
+}
+
+/**
  * Build a {@link UsageRecord} from a resolved site model + a `generateText`
  * usage payload (#258). The off-loop recorders (pre-turn pipeline, compressor)
  * share this so the bucket coercion and field mapping live in one place.
@@ -69,12 +92,10 @@ export function usageRecordFromSite(
   site: SiteModelLike,
   siteName: string,
   usage: { promptTokens: number; completionTokens: number } | undefined,
-  providerMetadata?: {
-    anthropic?: { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null };
-  },
+  providerMetadata?: CacheMetadata,
   extra?: { latencyMs?: number; success?: boolean },
 ): UsageRecord {
-  const a = providerMetadata?.anthropic;
+  const cache = cacheTokens(providerMetadata);
   return {
     bucket: bucketForTier(site.tier),
     site: siteName,
@@ -82,8 +103,8 @@ export function usageRecordFromSite(
     modelName: site.modelName,
     promptTokens: usage?.promptTokens ?? 0,
     completionTokens: usage?.completionTokens ?? 0,
-    cacheReadTokens: a?.cacheReadInputTokens ?? 0,
-    cacheWriteTokens: a?.cacheCreationInputTokens ?? 0,
+    cacheReadTokens: cache.read,
+    cacheWriteTokens: cache.write,
     latencyMs: extra?.latencyMs,
     success: extra?.success,
   };
@@ -163,27 +184,20 @@ function recordStep(
   stats: SpinnerStats,
   info: HookModelInfo,
   usage: { promptTokens: number; completionTokens: number } | undefined,
-  providerMetadata:
-    | {
-        anthropic?: {
-          cacheCreationInputTokens?: number | null;
-          cacheReadInputTokens?: number | null;
-        };
-      }
-    | undefined,
+  providerMetadata: CacheMetadata | undefined,
   latencyMs?: number,
 ): void {
   // A step that reports no usage payload isn't a billable model call we can
   // attribute — skip it rather than minting a zero-token ledger row that would
   // inflate the per-model `calls` count (the old guarded odometer did the same).
   if (!usage) return;
-  const a = providerMetadata?.anthropic;
+  const cache = cacheTokens(providerMetadata);
   recordTurnUsage(stats, {
     ...info,
     promptTokens: usage?.promptTokens ?? 0,
     completionTokens: usage?.completionTokens ?? 0,
-    cacheReadTokens: a?.cacheReadInputTokens ?? 0,
-    cacheWriteTokens: a?.cacheCreationInputTokens ?? 0,
+    cacheReadTokens: cache.read,
+    cacheWriteTokens: cache.write,
     latencyMs,
     // A step that finished with a usage payload succeeded; failed dispatches
     // throw before `onStepFinish` and never reach here. Dispatch-trace ids are
@@ -225,12 +239,8 @@ export function tokenStatsHook(target: TokenStatsTarget, info: HookModelInfo): A
         // prompt that is actually near the window. Add the cache counts back so
         // both measure the real prompt size. Providers that don't report cache
         // metadata contribute 0 and are unaffected.
-        const a = providerMetadata?.anthropic as
-          | { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null }
-          | undefined;
-        const cachedPromptTokens =
-          (a?.cacheReadInputTokens ?? 0) + (a?.cacheCreationInputTokens ?? 0);
-        const effectivePromptTokens = usage.promptTokens + cachedPromptTokens;
+        const cache = cacheTokens(providerMetadata);
+        const effectivePromptTokens = usage.promptTokens + cache.read + cache.write;
         target.lastStepPromptTokens = effectivePromptTokens;
         if (target.spinnerStats) target.spinnerStats.latestPromptTokens = effectivePromptTokens;
       }

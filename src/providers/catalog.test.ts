@@ -49,22 +49,30 @@ function stubFetchFail() {
   );
 }
 
-describe('refreshCatalogWithDiff', () => {
-  let tmpDir: string;
+/**
+ * Isolates a describe block's catalog state: a throwaway `BERNARD_HOME` (so the
+ * disk cache lands in a temp dir), plus global-stub cleanup. Returns a getter
+ * for the temp dir since `beforeEach` runs after the describe body.
+ */
+function useTempHome(prefix: string): () => string {
+  let tmpDir = '';
   let origHome: string | undefined;
-
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-catalog-'));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
     origHome = process.env.BERNARD_HOME;
     process.env.BERNARD_HOME = tmpDir;
   });
-
   afterEach(() => {
     vi.unstubAllGlobals();
     if (origHome === undefined) delete process.env.BERNARD_HOME;
     else process.env.BERNARD_HOME = origHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
+  return () => tmpDir;
+}
+
+describe('refreshCatalogWithDiff', () => {
+  const tmpDirOf = useTempHome('bernard-catalog-');
 
   /** Writes a `disk`-sourced baseline cache so previousSource === 'disk'. */
   function seedDiskCache(models: { provider: string; model: string }[]) {
@@ -79,7 +87,7 @@ describe('refreshCatalogWithDiff', () => {
       released: 0,
     }));
     // BERNARD_HOME isn't flat — CACHE_DIR is `<BERNARD_HOME>/bernard`.
-    const cacheDir = path.join(tmpDir, 'bernard');
+    const cacheDir = path.join(tmpDirOf(), 'bernard');
     fs.mkdirSync(cacheDir, { recursive: true });
     // fetchedAt=1 → stale → force still re-fetches; source is 'disk' on read.
     // Written at the live CACHE_SCHEMA_VERSION so the cache isn't rejected as
@@ -152,20 +160,7 @@ describe('refreshCatalogWithDiff', () => {
 });
 
 describe('gateway owner aliasing', () => {
-  let tmpDir: string;
-  let origHome: string | undefined;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-catalog-owner-'));
-    origHome = process.env.BERNARD_HOME;
-    process.env.BERNARD_HOME = tmpDir;
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    if (origHome === undefined) delete process.env.BERNARD_HOME;
-    else process.env.BERNARD_HOME = origHome;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
+  useTempHome('bernard-catalog-owner-');
 
   it('maps the spacexai owner prefix onto the xai provider', async () => {
     // The gateway renamed xAI's owner from `xai` to `spacexai`. Before the
@@ -195,20 +190,7 @@ describe('gateway owner aliasing', () => {
 });
 
 describe('normalizeModelId + tolerant lookup', () => {
-  let tmpDir: string;
-  let origHome: string | undefined;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-catalog-norm-'));
-    origHome = process.env.BERNARD_HOME;
-    process.env.BERNARD_HOME = tmpDir;
-  });
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    if (origHome === undefined) delete process.env.BERNARD_HOME;
-    else process.env.BERNARD_HOME = origHome;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
+  useTempHome('bernard-catalog-norm-');
 
   it('folds dots to dashes, lowercases, and strips a date suffix', async () => {
     const m = await loadModule();
@@ -258,22 +240,10 @@ describe('normalizeModelId + tolerant lookup', () => {
 });
 
 describe('disk-cache schema versioning (#269)', () => {
-  let tmpDir: string;
-  let origHome: string | undefined;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-catalog-ver-'));
-    origHome = process.env.BERNARD_HOME;
-    process.env.BERNARD_HOME = tmpDir;
-  });
-  afterEach(() => {
-    if (origHome === undefined) delete process.env.BERNARD_HOME;
-    else process.env.BERNARD_HOME = origHome;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
+  const tmpDirOf = useTempHome('bernard-catalog-ver-');
 
   function writeCache(obj: unknown) {
-    const cacheDir = path.join(tmpDir, 'bernard');
+    const cacheDir = path.join(tmpDirOf(), 'bernard');
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.writeFileSync(path.join(cacheDir, 'model-catalog.json'), JSON.stringify(obj, null, 2));
   }

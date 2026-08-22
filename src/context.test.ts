@@ -85,6 +85,15 @@ describe('getContextWindow', () => {
     expect(getContextWindow('grok-3')).toBe(131_072);
   });
 
+  it('normalizes against the fallback table for catalog-missing models', () => {
+    // `grok-3-mini` is retired from the gateway, so it only exists in
+    // MODEL_CONTEXT_WINDOWS. A dotted spelling must still find it rather than
+    // silently dropping to the 128k default over punctuation.
+    expect(getContextWindow('grok-3-mini')).toBe(131_072);
+    expect(getContextWindow('GROK-3-MINI')).toBe(131_072);
+    expect(getContextWindow('gpt-5-2-chat-latest')).toBe(128_000);
+  });
+
   it('falls back to DEFAULT_CONTEXT_WINDOW for unknown models', () => {
     expect(getContextWindow('unknown-model-xyz')).toBe(DEFAULT_CONTEXT_WINDOW);
     expect(getContextWindow('unknown-model-xyz')).toBe(128_000);

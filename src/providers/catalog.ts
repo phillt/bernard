@@ -232,6 +232,19 @@ async function fetchFromGateway(): Promise<ModelCatalogEntry[]> {
 }
 
 /**
+ * Per-provider entry counts for the `catalog:source` log line. A bare total is
+ * blind to the failure that matters most here: when the gateway renamed xAI's
+ * owner prefix every Grok model was dropped, and the total read the same before
+ * and after. A zero beside a provider you have configured is the signal.
+ */
+function countByProvider(entries: ModelCatalogEntry[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const p of BUILTIN_PROVIDERS) counts[p] = 0;
+  for (const e of entries) counts[e.provider] = (counts[e.provider] ?? 0) + 1;
+  return counts;
+}
+
+/**
  * Synchronous load: reads the disk cache or the vendored snapshot. Never makes
  * a network call. Safe to call at module-init time for consumers that need a
  * catalog immediately (e.g. `PROVIDER_MODELS`).
@@ -241,12 +254,20 @@ export function loadCatalogSync(): CachedCatalog {
   const disk = loadDiskCache();
   if (disk) {
     memoryCache = disk;
-    debugLog('catalog:source', { source: 'disk', entries: disk.entries.length });
+    debugLog('catalog:source', {
+      source: 'disk',
+      entries: disk.entries.length,
+      byProvider: countByProvider(disk.entries),
+    });
     return disk;
   }
   const vendored = loadVendored();
   memoryCache = vendored;
-  debugLog('catalog:source', { source: 'vendored', entries: vendored.entries.length });
+  debugLog('catalog:source', {
+    source: 'vendored',
+    entries: vendored.entries.length,
+    byProvider: countByProvider(vendored.entries),
+  });
   return vendored;
 }
 
@@ -267,7 +288,11 @@ export async function loadCatalog(opts: { force?: boolean } = {}): Promise<Cache
         const fetchedAt = Date.now();
         saveDiskCache(entries, fetchedAt);
         memoryCache = { fetchedAt, source: 'network', entries };
-        debugLog('catalog:source', { source: 'network', entries: entries.length });
+        debugLog('catalog:source', {
+          source: 'network',
+          entries: entries.length,
+          byProvider: countByProvider(entries),
+        });
         return { catalog: memoryCache, error: null };
       } catch (err) {
         debugLog('catalog:refresh-error', {
@@ -316,17 +341,25 @@ export function normalizeModelId(model: string): string {
     .replace(/-\d{8}$/, '');
 }
 
+/**
+ * Exact match first, normalized match second — so a literal id always wins over
+ * a punctuation-equivalent one, and the fallback only fires on a true miss.
+ * `provider === undefined` searches every provider.
+ */
+function lookupEntry(model: string, provider?: string): ModelCatalogEntry | null {
+  const { entries } = loadCatalogSync();
+  const inScope = (e: ModelCatalogEntry): boolean =>
+    provider === undefined || e.provider === provider;
+  const exact = entries.find((e) => inScope(e) && e.model === model);
+  if (exact) return exact;
+  const key = normalizeModelId(model);
+  return entries.find((e) => inScope(e) && normalizeModelId(e.model) === key) ?? null;
+}
+
 /** Look up a single (provider, model) pair. Returns null when unknown. */
 export function getModelMeta(provider: string, model: string): ModelCatalogEntry | null {
   if (!BUILTIN_PROVIDERS.includes(provider as BuiltinProvider)) return null;
-  const cat = loadCatalogSync();
-  const exact = cat.entries.find((e) => e.provider === provider && e.model === model);
-  if (exact) return exact;
-  // Second chance on the normalized id — never overrides an exact hit.
-  const key = normalizeModelId(model);
-  return (
-    cat.entries.find((e) => e.provider === provider && normalizeModelId(e.model) === key) ?? null
-  );
+  return lookupEntry(model, provider);
 }
 
 /**
@@ -335,11 +368,7 @@ export function getModelMeta(provider: string, model: string): ModelCatalogEntry
  * `getContextWindow`).
  */
 export function findModelMetaByName(model: string): ModelCatalogEntry | null {
-  const cat = loadCatalogSync();
-  const exact = cat.entries.find((e) => e.model === model);
-  if (exact) return exact;
-  const key = normalizeModelId(model);
-  return cat.entries.find((e) => normalizeModelId(e.model) === key) ?? null;
+  return lookupEntry(model);
 }
 
 /** Catalog age in milliseconds, or `null` when sourced from the vendored fallback. */
