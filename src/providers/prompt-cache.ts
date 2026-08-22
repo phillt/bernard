@@ -39,14 +39,22 @@ export function isAnthropicPromptCacheActive(config: BernardConfig, provider: st
 
 /**
  * Built-in providers that discount repeated input tokens via prompt caching:
- * `anthropic` (opt-in `cache_control` markers, #269) and `openai` (automatic
- * server-side prefix caching). xAI has no prompt-cache discount — on grok, the
- * large stable request prefix (system + tools + rolling history) is re-billed at
- * full price on *every* step. Custom providers point at arbitrary endpoints
- * (Ollama, proxies) that don't offer OpenAI's server-side caching, so by name
- * they correctly resolve to `false`.
+ * `anthropic` (opt-in `cache_control` markers, #269), `openai` (automatic
+ * server-side prefix caching), and `xai` (automatic implicit caching).
+ *
+ * xAI was excluded here on the belief that grok re-bills the whole prefix at
+ * full price every step. Measured against xAI's own usage export for session
+ * `2026-08-22-6f3c1d41`, that is false: 1.43M tokens billed $0.9168 where the
+ * no-cache price would have been $2.79, implying ~80% of the prefix was served
+ * from cache at roughly a 6x discount. Every xAI entry in the model catalog
+ * also publishes a `cacheReadPerMTok` rate. Leaving it out made
+ * {@link noPromptCacheHint} tell users to "switch to a caching provider" on
+ * precisely the long-prefix turns that were already mostly cache-served.
+ *
+ * Custom providers point at arbitrary endpoints (Ollama, proxies) with no such
+ * guarantee, so by name they correctly resolve to `false`.
  */
-const PROMPT_CACHE_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'openai']);
+const PROMPT_CACHE_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'openai', 'xai']);
 
 /**
  * Provider-capability check (#298): does `provider` offer any prompt-cache

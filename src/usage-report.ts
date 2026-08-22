@@ -39,13 +39,16 @@ export interface UsageReport {
 }
 
 /**
- * Tier display order, derived from the canonical `LINEUP_TIERS` (premium first)
- * so it can't drift if a tier is renamed/added; `pinned` (off-lineup) trails.
+ * Cost tiers in spend order, most expensive first — derived from the canonical
+ * `LINEUP_TIERS` so it can't drift if a tier is renamed or added; `pinned`
+ * (off-lineup) trails. Fixes the display order of {@link formatTiers}.
  */
-const BUCKET_ORDER: Record<UsageBucket, number> = {
-  ...Object.fromEntries(LINEUP_TIERS.map((tier, i) => [tier, i])),
-  pinned: LINEUP_TIERS.length,
-} as Record<UsageBucket, number>;
+export const TIER_ORDER: readonly UsageBucket[] = [...LINEUP_TIERS, 'pinned'];
+
+/** Rank per tier, for sorting rows. Same order as {@link TIER_ORDER}. */
+const BUCKET_ORDER: Record<UsageBucket, number> = Object.fromEntries(
+  TIER_ORDER.map((tier, i) => [tier, i]),
+) as Record<UsageBucket, number>;
 
 /** Disjoint cache-token counts for a call (Anthropic prompt-cache, #269). */
 export interface CacheTokens {
@@ -75,11 +78,15 @@ export interface UsageCostBreakdown {
  * and every token is billed exactly once at its own rate.
  *
  * Callers MUST pass normalized counts. Adding the cache categories on top of an
- * inclusive `prompt` over-bills the cached share at ~6x its real rate — the bug
- * that made one measured xAI session report $2.79 against an actual $0.92.
+ * inclusive `prompt` over-bills the cached share at ~6x its real rate; the
+ * reconciliation suite in `usage-report.test.ts` pins this against a real bill.
  *
- * A model that lacks a cache rate contributes **$0** for that category (preserves
- * the pre-cache behavior; never invents a price).
+ * A model that lacks a cache rate keeps that category at the **full input rate**
+ * rather than carving it out. Publishing no cache price means offering no
+ * discount, so those tokens really do bill as ordinary input — 10 catalogued
+ * OpenAI models (the `*-pro` tier, `gpt-oss-*`, `gpt-4-turbo`, …) report
+ * `cachedPromptTokens` while publishing no `input_cache_read`, and subtracting
+ * their cached share would silently value it at zero.
  */
 export function priceUsageBreakdown(
   provider: string,
@@ -93,15 +100,17 @@ export function priceUsageBreakdown(
   const p = meta.pricing;
   const cacheRead = cache?.cacheReadTokens ?? 0;
   const cacheWrite = cache?.cacheWriteTokens ?? 0;
-  // Cache counts are subsets of `prompt`; only the remainder pays full rate.
-  // Clamped so malformed input can never produce a negative cost.
-  const fullRateTokens = Math.max(0, prompt - cacheRead - cacheWrite);
+  // Cache counts are subsets of `prompt`, but only carve out the categories the
+  // catalog can actually price — an un-priced category stays in the full-rate
+  // remainder instead of becoming free. Clamped so malformed input can never
+  // produce a negative cost.
+  const discountedRead = p.cacheReadPerMTok != null ? cacheRead : 0;
+  const discountedWrite = p.cacheWritePerMTok != null ? cacheWrite : 0;
+  const fullRateTokens = Math.max(0, prompt - discountedRead - discountedWrite);
   const inputCostUsd = (fullRateTokens / 1_000_000) * p.inputPerMTok;
   const outputCostUsd = (completion / 1_000_000) * p.outputPerMTok;
-  const cacheReadCostUsd =
-    p.cacheReadPerMTok != null ? (cacheRead / 1_000_000) * p.cacheReadPerMTok : 0;
-  const cacheWriteCostUsd =
-    p.cacheWritePerMTok != null ? (cacheWrite / 1_000_000) * p.cacheWritePerMTok : 0;
+  const cacheReadCostUsd = (discountedRead / 1_000_000) * (p.cacheReadPerMTok ?? 0);
+  const cacheWriteCostUsd = (discountedWrite / 1_000_000) * (p.cacheWritePerMTok ?? 0);
   return {
     inputCostUsd,
     outputCostUsd,
@@ -214,20 +223,13 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
 }
 
 /**
- * Cost tiers in spend order, most expensive first. Fixes the display order of
- * {@link formatTiers} so a multi-tier row always reads the same way.
- */
-export const TIER_ORDER: readonly UsageBucket[] = ['premium', 'mid', 'cheap', 'pinned'];
-
-/**
  * Renders the tiers a rolled-up row spans, e.g. `premium` or `premium+mid`.
  * A layer is not pinned to one tier, so a single label would have to lie; the
  * joined form is what reveals a layer straddling tiers (and, when those tiers
  * name the same model, that the tiering is buying nothing).
  */
-export function formatTiers(tiers: readonly UsageBucket[]): string {
-  if (tiers.length === 0) return '';
-  return TIER_ORDER.filter((t) => tiers.includes(t)).join('+');
+export function formatTiers(tiers: ReadonlySet<UsageBucket>): string {
+  return TIER_ORDER.filter((t) => tiers.has(t)).join('+');
 }
 
 /** Format a USD amount with precision scaled to magnitude (e.g. `$0.07`, `$0.0042`, `$1.20`). */

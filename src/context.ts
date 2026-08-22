@@ -25,18 +25,29 @@ import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token
  * wrong in the UNSAFE direction (too large): over-estimating the window makes
  * compaction fire past the real ceiling, so instead of degrading gracefully the
  * turn dies on a provider context-length error.
+ *
+ * That invariant is ENFORCED, not just documented: an override applies only when
+ * it is smaller than the catalog's value. The sibling table below records how a
+ * hand-maintained copy goes stale (`refresh-catalog` does not touch it), and this
+ * one is worse in that respect because it outranks the catalog. Clamping to the
+ * lower value means a stale row can only ever be conservative, and the moment
+ * upstream publishes the correct window the row becomes a harmless no-op instead
+ * of pinning a wrong number forever.
  */
 export const MODEL_CONTEXT_WINDOW_OVERRIDES: Record<string, number> = {
+  // Keys are pre-normalized (see {@link normalizeModelId}: dots folded to
+  // dashes) so the lookup is a plain O(1) index rather than a scan.
+  //
   // The Vercel AI Gateway reports 2M for the grok-4.20 family; the SpaceXAI
   // console reports 1M for every one of them (checked 2026-08-22). Trusting the
   // gateway's 2M puts the compression threshold at 1.5M and `emergencyTruncate`
   // at 1.8M, both above the real limit.
-  'grok-4.20-reasoning': 1_000_000,
-  'grok-4.20-non-reasoning': 1_000_000,
-  'grok-4.20-multi-agent': 1_000_000,
-  'grok-4.20-reasoning-beta': 1_000_000,
-  'grok-4.20-non-reasoning-beta': 1_000_000,
-  'grok-4.20-multi-agent-beta': 1_000_000,
+  'grok-4-20-reasoning': 1_000_000,
+  'grok-4-20-non-reasoning': 1_000_000,
+  'grok-4-20-multi-agent': 1_000_000,
+  'grok-4-20-reasoning-beta': 1_000_000,
+  'grok-4-20-non-reasoning-beta': 1_000_000,
+  'grok-4-20-multi-agent-beta': 1_000_000,
 };
 
 /**
@@ -80,13 +91,14 @@ export const RECENT_TURNS_TO_KEEP = 4;
 export function getContextWindow(model: string, override?: number): number {
   if (override && override > 0) return override;
   const key = normalizeModelId(model);
-  // Corrections beat the catalog: they exist precisely because it is wrong.
-  const corrected = Object.entries(MODEL_CONTEXT_WINDOW_OVERRIDES).find(
-    ([id]) => normalizeModelId(id) === key,
-  );
-  if (corrected) return corrected[1];
+  const corrected = MODEL_CONTEXT_WINDOW_OVERRIDES[key];
   const meta = findModelMetaByName(model);
-  if (meta && meta.contextWindow > 0) return meta.contextWindow;
+  const catalogWindow = meta && meta.contextWindow > 0 ? meta.contextWindow : undefined;
+  // Corrections only ever shrink: see MODEL_CONTEXT_WINDOW_OVERRIDES.
+  if (corrected !== undefined) {
+    return catalogWindow !== undefined ? Math.min(corrected, catalogWindow) : corrected;
+  }
+  if (catalogWindow !== undefined) return catalogWindow;
   // Match the table through the same normalization the catalog lookup uses, so
   // a dotted/dated id doesn't miss both sources over punctuation alone.
   const fallback = Object.entries(MODEL_CONTEXT_WINDOWS).find(

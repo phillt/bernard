@@ -274,26 +274,20 @@ describe('normalizeUsage — cross-provider prompt-token semantics', () => {
     expect(n.cacheWriteTokens).toBe(5_000);
   });
 
-  it('leaves an OpenAI-compatible total alone — cachedPromptTokens is a SUBSET', () => {
-    // Reading only the Anthropic shape here is what billed every cached xAI
-    // token at the full input rate (measured: $2.79 reported vs $0.92 actual).
-    const n = normalizeUsage(usage, { xai: { cachedPromptTokens: 64_000 } });
+  // `cachedPromptTokens` is a SUBSET of an already-inclusive prompt count, and
+  // the namespace is whatever the SDK chose — a built-in name or a custom
+  // provider's own. Reading only the Anthropic shape is what billed every
+  // cached xAI token at the full input rate.
+  it.each([
+    ['xai', 64_000],
+    ['openai', 32_000],
+    ['my-proxy', 1_000],
+  ])('leaves an OpenAI-compatible total alone under the %s namespace', (ns, cached) => {
+    const n = normalizeUsage(usage, { [ns]: { cachedPromptTokens: cached } });
     expect(n.promptTokens).toBe(80_000);
-    expect(n.cacheReadTokens).toBe(64_000);
+    expect(n.cacheReadTokens).toBe(cached);
     // Implicit caching has no write charge.
     expect(n.cacheWriteTokens).toBe(0);
-  });
-
-  it('handles the openai namespace the same way', () => {
-    const n = normalizeUsage(usage, { openai: { cachedPromptTokens: 32_000 } });
-    expect(n.promptTokens).toBe(80_000);
-    expect(n.cacheReadTokens).toBe(32_000);
-  });
-
-  it('finds cachedPromptTokens under a custom provider namespace', () => {
-    // Custom providers wrap a built-in SDK but get their own metadata key.
-    const n = normalizeUsage(usage, { 'my-proxy': { cachedPromptTokens: 1_000 } });
-    expect(n.cacheReadTokens).toBe(1_000);
   });
 
   it('treats null cache counts as a miss, not as unknown', () => {

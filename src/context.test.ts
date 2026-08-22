@@ -95,6 +95,15 @@ describe('getContextWindow', () => {
     expect(getContextWindow('grok-4-20-multi-agent')).toBe(1_000_000);
   });
 
+  it('a correction can only shrink, never enlarge, the catalog value', () => {
+    // Guards the stale-row failure mode: if upstream later publishes a window
+    // SMALLER than a correction, the smaller (safer) number must win, and once
+    // upstream is correct the row becomes a no-op instead of pinning it forever.
+    expect(getContextWindow('grok-4.5')).toBe(500_000); // no correction, catalog wins
+    // grok-4.20 catalog says 2M, correction says 1M -> 1M.
+    expect(getContextWindow('grok-4.20-reasoning')).toBe(1_000_000);
+  });
+
   it('lets an explicit user override beat even a correction', () => {
     expect(getContextWindow('grok-4.20-non-reasoning', 250_000)).toBe(250_000);
   });

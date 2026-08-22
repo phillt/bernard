@@ -25,11 +25,13 @@ interface UsageViewerProps {
 
 // Column widths for the breakdown table. LABEL holds the row name (model in the
 // per-turn table, layer/model/provider in the session breakdowns); TIER holds the
-// cost tier(s) that row spans. TIER_W borrows from LABEL_W so the grid keeps its
-// original total width — the longest real labels (`tool-wrapper:web-wrapper`,
-// `xai|grok-4-1-fast-reasoning`) still fit.
+// cost tier(s) that row spans. TIER_W fits the widest real value,
+// `premium+mid+cheap` (17) — a row spanning every tier is exactly what this
+// column exists to surface, so it must not be the case that truncates. Labels
+// can legitimately exceed LABEL_W (`anthropic|claude-haiku-4-5-20251001` is 35);
+// `cell()` truncates them rather than letting the grid shift.
 const LABEL_W = 26;
-const TIER_W = 12;
+const TIER_W = 18;
 const NUM_W = 9;
 
 /**
@@ -71,9 +73,8 @@ interface RowCells {
 }
 
 /**
- * The single 5-column row renderer for the table — used by the header, every
- * data row, and the total — so column widths and alignment live in exactly one
- * place. `labelColor`/`costColor` tint those two cells; `bold`/`dim` style the
+ * The single row renderer for the table — used by the header, every data row,
+ * and the total — so column widths and alignment live in exactly one place. `labelColor`/`costColor` tint those two cells; `bold`/`dim` style the
  * whole row.
  */
 function Row({

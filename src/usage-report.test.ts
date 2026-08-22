@@ -272,17 +272,35 @@ describe('cache-aware pricing (priceUsageBreakdown / priceUsageUsd)', () => {
     expect(b.totalCostUsd).toBeCloseTo((1000 / 1e6) * 18.75, 12);
   });
 
-  it('missing cache pricing: cache tokens contribute $0, input/output still priced', () => {
-    // haiku in the mock has NO cache rates → deterministic, backward compatible.
+  it('missing cache pricing: cached tokens stay at the FULL input rate, not free', () => {
+    // haiku in the mock has NO cache rates. Publishing no cache price means
+    // offering no discount, so those tokens bill as ordinary input. Carving them
+    // out of the full-rate remainder anyway would value them at zero — a ~5x
+    // under-report for the 10 catalogued OpenAI models in this position
+    // (`*-pro`, `gpt-oss-*`, `gpt-4-turbo`) that all report cachedPromptTokens.
     const b = priceUsageBreakdown('anthropic', 'claude-haiku-4-5-20251001', 6200, 100, {
       cacheReadTokens: 5000,
       cacheWriteTokens: 200,
     })!;
     expect(b.cacheReadCostUsd).toBe(0);
     expect(b.cacheWriteCostUsd).toBe(0);
-    // 6200 total - 5200 cached = 1000 at full rate; the cached share is free
-    // only because this model has no catalog cache rate to charge.
-    expect(b.totalCostUsd).toBeCloseTo((1000 / 1e6) * 1 + (100 / 1e6) * 5, 12);
+    // All 6200 prompt tokens priced at the input rate — none discounted away.
+    expect(b.totalCostUsd).toBeCloseTo((6200 / 1e6) * 1 + (100 / 1e6) * 5, 12);
+  });
+
+  it('subtracts only the cache categories the catalog can price', () => {
+    // opus has a cache-READ rate but the mock gives it a cache-WRITE rate too;
+    // use a model with read-only pricing to pin the asymmetry: grok-4.5 has
+    // cacheReadPerMTok and no cacheWritePerMTok.
+    const b = priceUsageBreakdown('xai', 'grok-4.5', 1000, 0, {
+      cacheReadTokens: 600,
+      cacheWriteTokens: 100,
+    })!;
+    // read (600) is discounted and carved out; write (100) has no rate, so it
+    // stays in the full-rate remainder: 1000 - 600 = 400 at $2/M.
+    expect(b.inputCostUsd).toBeCloseTo((400 / 1e6) * 2, 12);
+    expect(b.cacheReadCostUsd).toBeCloseTo((600 / 1e6) * 0.3, 12);
+    expect(b.cacheWriteCostUsd).toBe(0);
   });
 
   it('unknown model → null (unknown, never fabricated)', () => {
@@ -322,23 +340,20 @@ describe('cache-aware pricing (priceUsageBreakdown / priceUsageUsd)', () => {
 
 describe('formatTiers', () => {
   it('renders a single tier as-is', () => {
-    expect(formatTiers(['mid'])).toBe('mid');
+    expect(formatTiers(new Set(['mid'] as const))).toBe('mid');
   });
 
   it('joins multiple tiers in spend order, not insertion order', () => {
     // A layer straddles tiers — `main` runs premium on a turn's first step and
     // mid on continuations — and the joined form is what makes a lineup whose
     // premium and mid slots name the SAME model visible in the breakdown.
-    expect(formatTiers(['mid', 'premium'])).toBe('premium+mid');
-    expect(formatTiers(['cheap', 'premium', 'mid'])).toBe('premium+mid+cheap');
+    // This is the SINGLE owner of display order; the accumulator stores a Set.
+    expect(formatTiers(new Set(['mid', 'premium'] as const))).toBe('premium+mid');
+    expect(formatTiers(new Set(['cheap', 'premium', 'mid'] as const))).toBe('premium+mid+cheap');
   });
 
   it('returns empty for no tiers so the column stays blank', () => {
-    expect(formatTiers([])).toBe('');
-  });
-
-  it('dedups via the canonical order', () => {
-    expect(formatTiers(['mid', 'mid'])).toBe('mid');
+    expect(formatTiers(new Set())).toBe('');
   });
 });
 
@@ -371,7 +386,11 @@ describe('reconciles against a real provider bill (xAI, 2026-08-22)', () => {
     );
   }
 
-  it('lands within 1% of the actual bill at the observed cache-hit rate', () => {
+  // NOTE: CACHE_HIT is FITTED to this bill, so this is a calibration check, not
+  // an independent verification — it confirms the pricing model can reproduce
+  // the bill, not that the hit rate was 79.8%. The overstatement and monotonicity
+  // assertions below are the ones that would catch a regression.
+  it('can reproduce the actual bill (calibration, fitted hit rate)', () => {
     const estimate = priceSession(CACHE_HIT);
     expect(Math.abs(estimate - ACTUAL_USD) / ACTUAL_USD).toBeLessThan(0.01);
   });

@@ -495,8 +495,8 @@ describe('tier tracking per aggregate row', () => {
     st.record(rec({ site: 'rewriter', provider: 'xai', modelName: 'grok-4.3', bucket: 'cheap' }));
 
     const s = st.summary();
-    expect(s.byLayer.get('main')?.tiers).toEqual(['premium', 'mid']);
-    expect(s.byLayer.get('rewriter')?.tiers).toEqual(['cheap']);
+    expect(s.byLayer.get('main')?.tiers).toEqual(new Set(['premium', 'mid']));
+    expect(s.byLayer.get('rewriter')?.tiers).toEqual(new Set(['cheap']));
   });
 
   it('surfaces one model serving two tiers — the tiering is buying nothing', () => {
@@ -506,24 +506,25 @@ describe('tier tracking per aggregate row', () => {
     st.record(rec({ site: 'main', provider: 'xai', modelName: 'grok-4.5', bucket: 'premium' }));
     st.record(rec({ site: 'main', provider: 'xai', modelName: 'grok-4.5', bucket: 'mid' }));
 
-    expect(st.summary().byModel.get('xai|grok-4.5')?.tiers).toEqual(['premium', 'mid']);
+    expect(st.summary().byModel.get('xai|grok-4.5')?.tiers).toEqual(new Set(['premium', 'mid']));
   });
 
-  it('orders tiers by spend, independent of arrival order', () => {
+  it('collects membership regardless of arrival order (display order is formatTiers)', () => {
     const st = store();
     st.record(rec({ site: 'main', provider: 'xai', modelName: 'm', bucket: 'cheap' }));
     st.record(rec({ site: 'main', provider: 'xai', modelName: 'm', bucket: 'premium' }));
     st.record(rec({ site: 'main', provider: 'xai', modelName: 'm', bucket: 'mid' }));
+    st.record(rec({ site: 'main', provider: 'xai', modelName: 'm', bucket: 'mid' }));
 
-    expect(st.summary().byLayer.get('main')?.tiers).toEqual(['premium', 'mid', 'cheap']);
+    expect(st.summary().byLayer.get('main')?.tiers).toEqual(new Set(['premium', 'mid', 'cheap']));
   });
 
-  it('snapshots the tier list by value so later records cannot mutate it', () => {
+  it('snapshots the tier set by value so later records cannot mutate it', () => {
     const st = store();
     st.record(rec({ site: 'main', provider: 'xai', modelName: 'm', bucket: 'premium' }));
     const before = st.summary().byLayer.get('main')!.tiers;
     st.record(rec({ site: 'main', provider: 'xai', modelName: 'm', bucket: 'cheap' }));
-    expect(before).toEqual(['premium']);
+    expect(before).toEqual(new Set(['premium']));
   });
 
   it('renders the tier column in BY LAYER but leaves BY PROVIDER blank', () => {

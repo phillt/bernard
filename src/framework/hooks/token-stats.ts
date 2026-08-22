@@ -87,9 +87,8 @@ export interface NormalizedUsage {
  *   `prompt_tokens_details.cached_tokens` a subset surfaced as `cachedPromptTokens`.
  *
  * Reading only the Anthropic shape made every cached xAI/OpenAI token bill at the
- * full input rate. Measured against xAI's own usage export for one session: 1.43M
- * tokens actually cost $0.92, while Bernard reported $2.79 — a 3.0x overstatement,
- * because ~80% of the prompt was being served from cache at roughly a 6x discount.
+ * full input rate — a 3x cost overstatement, pinned against a real provider bill
+ * by the reconciliation suite in `src/usage-report.test.ts`.
  *
  * Cache-write is Anthropic-only; implicit caching has no write charge, so it is 0
  * for the OpenAI-compatible shape.
@@ -114,20 +113,19 @@ export function normalizeUsage(
     };
   }
 
-  for (const ns of Object.values(providerMetadata ?? {})) {
-    const cached = ns?.cachedPromptTokens;
-    if (cached == null) continue;
-    return {
-      promptTokens,
-      completionTokens,
-      // Clamped: a subset can never exceed the total it belongs to, and an
-      // over-large value would price negative input if it slipped through.
-      cacheReadTokens: Math.max(0, Math.min(cached, promptTokens)),
-      cacheWriteTokens: 0,
-    };
-  }
-
-  return { promptTokens, completionTokens, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  // Scan namespaces rather than checking known provider names, so a custom
+  // provider (which gets its own metadata key) is handled without config.
+  const cached = Object.values(providerMetadata ?? {}).find(
+    (ns) => ns?.cachedPromptTokens != null,
+  )?.cachedPromptTokens;
+  return {
+    promptTokens,
+    completionTokens,
+    // Clamped: a subset can never exceed the total it belongs to, and an
+    // over-large value would price negative input if it slipped through.
+    cacheReadTokens: Math.max(0, Math.min(cached ?? 0, promptTokens)),
+    cacheWriteTokens: 0,
+  };
 }
 
 /**
@@ -142,16 +140,12 @@ export function usageRecordFromSite(
   providerMetadata?: CacheMetadata,
   extra?: { latencyMs?: number; success?: boolean },
 ): UsageRecord {
-  const n = normalizeUsage(usage, providerMetadata);
   return {
     bucket: bucketForTier(site.tier),
     site: siteName,
     provider: site.provider,
     modelName: site.modelName,
-    promptTokens: n.promptTokens,
-    completionTokens: n.completionTokens,
-    cacheReadTokens: n.cacheReadTokens,
-    cacheWriteTokens: n.cacheWriteTokens,
+    ...normalizeUsage(usage, providerMetadata),
     latencyMs: extra?.latencyMs,
     success: extra?.success,
   };
@@ -230,21 +224,16 @@ export function makeUsageRecorder(target: { spinnerStats: SpinnerStats | null })
 function recordStep(
   stats: SpinnerStats,
   info: HookModelInfo,
-  usage: { promptTokens: number; completionTokens: number } | undefined,
-  providerMetadata: CacheMetadata | undefined,
+  normalized: NormalizedUsage | null,
   latencyMs?: number,
 ): void {
   // A step that reports no usage payload isn't a billable model call we can
   // attribute — skip it rather than minting a zero-token ledger row that would
   // inflate the per-model `calls` count (the old guarded odometer did the same).
-  if (!usage) return;
-  const n = normalizeUsage(usage, providerMetadata);
+  if (!normalized) return;
   recordTurnUsage(stats, {
     ...info,
-    promptTokens: n.promptTokens,
-    completionTokens: n.completionTokens,
-    cacheReadTokens: n.cacheReadTokens,
-    cacheWriteTokens: n.cacheWriteTokens,
+    ...normalized,
     latencyMs,
     // A step that finished with a usage payload succeeded; failed dispatches
     // throw before `onStepFinish` and never reach here. Dispatch-trace ids are
@@ -276,18 +265,18 @@ export function tokenStatsHook(target: TokenStatsTarget, info: HookModelInfo): A
       const now = Date.now();
       const latencyMs = now - lastStepAt;
       lastStepAt = now;
-      if (usage) {
-        // The gauge and the compression trigger want the REAL prompt size, which
-        // is `normalizeUsage`'s total — cached tokens included. Reading
-        // `usage.promptTokens` raw would under-report by the cached share on
-        // Anthropic (whose `input_tokens` excludes cache), collapsing a
-        // near-full window to a few thousand tokens whenever the cache is warm.
-        const { promptTokens } = normalizeUsage(usage, providerMetadata);
-        target.lastStepPromptTokens = promptTokens;
-        if (target.spinnerStats) target.spinnerStats.latestPromptTokens = promptTokens;
+      // Normalize once and feed both consumers, so the gauge and the ledger
+      // cannot disagree about the same step. The gauge wants the REAL prompt
+      // size — cached tokens included — because reading `usage.promptTokens`
+      // raw under-reports by the cached share on Anthropic (whose
+      // `input_tokens` excludes cache), collapsing a near-full window to a few
+      // thousand tokens whenever the cache is warm.
+      const normalized = usage ? normalizeUsage(usage, providerMetadata) : null;
+      if (normalized) {
+        target.lastStepPromptTokens = normalized.promptTokens;
+        if (target.spinnerStats) target.spinnerStats.latestPromptTokens = normalized.promptTokens;
       }
-      if (target.spinnerStats)
-        recordStep(target.spinnerStats, info, usage, providerMetadata, latencyMs);
+      if (target.spinnerStats) recordStep(target.spinnerStats, info, normalized, latencyMs);
     },
   };
 }
@@ -309,7 +298,12 @@ export function tokenTotalsHook(target: TokenStatsTarget, info: HookModelInfo): 
       const latencyMs = now - lastStepAt;
       lastStepAt = now;
       if (target.spinnerStats)
-        recordStep(target.spinnerStats, info, usage, providerMetadata, latencyMs);
+        recordStep(
+          target.spinnerStats,
+          info,
+          usage ? normalizeUsage(usage, providerMetadata) : null,
+          latencyMs,
+        );
     },
   };
 }
