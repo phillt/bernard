@@ -290,10 +290,24 @@ function buildSections(turn: TurnContextRecord): Section[] {
           )
           .join('\n');
 
+  // Injected persistent memory (#307). Optional on disk: records written before
+  // the field existed have none, which reads differently from "none injected".
+  const memKeys = Array.isArray(turn.injectedMemoryKeys)
+    ? turn.injectedMemoryKeys.filter((k): k is string => typeof k === 'string')
+    : null;
+  const memBody =
+    memKeys === null
+      ? '(not recorded for this turn)'
+      : memKeys.length === 0
+        ? '(no persistent memory injected this turn)'
+        : memKeys.map((k) => `• ${k}`).join('\n');
+  const memLabel = memKeys === null ? 'Persistent memory' : `Persistent memory (${memKeys.length})`;
+
   return [
     { label: 'Original input', body: turn.originalInput },
     { label: 'Rewritten prompt', body: rewrittenBody },
     { label: `Resolved references (${refs.length})`, body: refsBody },
     { label: `Recalled facts (${facts.length})`, body: factsBody },
+    { label: memLabel, body: memBody },
   ];
 }

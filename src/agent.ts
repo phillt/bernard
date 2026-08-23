@@ -1049,6 +1049,11 @@ export class Agent {
         rewrittenInput: userInput,
         resolvedReferences: this.lastResolvedReferences.map((e) => ({ ...e })),
         recalledFacts: this.lastRAGResults.map((f) => ({ ...f })),
+        // Read at snapshot rather than threaded out of `buildContextMessage`:
+        // injection is unconditional, so the store's key list IS what went in.
+        // (A write during the turn could drift by one entry — acceptable for a
+        // display record, and it becomes exact once the curator picks the set.)
+        injectedMemoryKeys: this.memoryStore.listMemory(),
       });
 
       // Per-turn qualifier outcome (#167). One structured line that pairs the

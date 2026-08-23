@@ -84,7 +84,7 @@ import type { BreadthOption } from '../permissions/breadth.js';
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible } from '../output.js';
 import { noPromptCacheHint } from '../cost-guardrail.js';
-import { makeUsageRecorder, usageRecordFromSite } from '../framework/hooks/token-stats.js';
+import { makeUsageRecorder } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
 import {
@@ -96,13 +96,12 @@ import {
 } from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
-import { generateText, type CoreMessage } from 'ai';
-import { resolveSiteModel, resolveMainModel, logSiteModelSnapshot } from '../model-policy.js';
+import type { CoreMessage } from 'ai';
+import { resolveMainModel, logSiteModelSnapshot } from '../model-policy.js';
 import {
   serializeMessages,
   extractDomainFacts,
   extractText,
-  SUMMARIZATION_PROMPT,
   MIN_HISTORY_FOR_FACTS,
 } from '../context.js';
 import { isSessionScaffolding } from '../session-markers.js';
@@ -891,7 +890,6 @@ export function App({
           setBusy(true);
           try {
             const serialized = serializeMessages(history);
-            const summarySite = resolveSiteModel(config, 'compressor');
             // Route these off-loop /clear --save LLM calls (summary, fact
             // extraction, specialist detection) through the session telemetry
             // sink so they aren't an accounting hole (#session-telemetry).
@@ -900,34 +898,26 @@ export function App({
             // freezing the REPL. Fails open: timeout → empty domain facts.
             // AbortSignal.timeout auto-cancels without manual teardown.
             const extractSignal = AbortSignal.timeout(60_000);
-            const [summaryResult, domainFacts, candidateResult] = await Promise.all([
-              // Wrap the summarize call so its recorded latency reflects just this
-              // call, not the whole parallel batch's wall time (extract can run to
-              // the 60 s timeout).
-              (async () => {
-                const t0 = Date.now();
-                const result = await generateText({
-                  model: summarySite.model,
-                  providerOptions: summarySite.providerOptions,
-                  maxTokens: 2048,
-                  system: SUMMARIZATION_PROMPT,
-                  messages: [
-                    { role: 'user', content: `Summarize this conversation:\n\n${serialized}` },
-                  ],
-                });
-                recordSaveUsage(
-                  usageRecordFromSite(
-                    summarySite,
-                    'compressor',
-                    result.usage,
-                    result.providerMetadata,
-                    {
-                      latencyMs: Date.now() - t0,
-                    },
-                  ),
-                );
-                return result;
-              })(),
+            // No prose-summary call here (#307). `/clear --save` used to run a
+            // second `generateText` whose only consumer was
+            // `memory.writeMemory('session-summary-…')`, and
+            // `renderPersistentMemory` injects every memory file IN FULL on every
+            // step — so 54 accumulated summaries had grown to ~44k tokens re-sent
+            // per step, with no cap and nothing to remove them.
+            //
+            // The same transcript already reaches long-term storage in a better
+            // shape: `extractDomainFacts` runs every domain in `getDomainIds()`,
+            // including `conversations` — whose extraction prompt is itself a
+            // conversation summarizer — and those atomic facts go to RAG below,
+            // where the 90-day TTL, pruning and the recall filter apply. Dropping
+            // the blob also retires its LLM call, and makes this path symmetric
+            // with the exit path in `src/index.ts`, which already feeds RAG only.
+            //
+            // Do NOT "fix" this by passing a prose summary to `addFacts`: the
+            // embedder (Xenova/all-MiniLM-L6-v2) truncates at 512 tokens with no
+            // guard, so a multi-paragraph summary would be silently cut, and its
+            // mean-pooled vector would rarely clear the retrieval threshold.
+            const [domainFacts, candidateResult] = await Promise.all([
               extractDomainFacts(serialized, config, recordSaveUsage, extractSignal),
               detectSpecialistCandidate(
                 serialized,
@@ -937,12 +927,6 @@ export function App({
                 recordSaveUsage,
               ).catch(() => null),
             ]);
-            const summary = summaryResult.text?.trim();
-            if (summary) {
-              const key = `session-summary-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-              stores.memory.writeMemory(key, summary);
-              flashToast(`Summary saved to memory: ${key}`, 'success');
-            }
             if (stores.rag && domainFacts.length > 0) {
               const results = await Promise.allSettled(
                 domainFacts.map((df) => stores.rag!.addFacts(df.facts, 'clear-save', df.domain)),

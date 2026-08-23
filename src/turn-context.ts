@@ -28,6 +28,17 @@ export interface TurnContextRecord {
   resolvedReferences: ResolvedEntry[];
   /** Memory facts injected into `<recalled_context>` this turn (post-filter, post-stickiness). */
   recalledFacts: RAGSearchResult[];
+  /**
+   * Keys of the `MemoryStore` entries rendered into `<persistent_memory>` this
+   * turn (#307). Optional because records written before this field existed are
+   * still valid on disk.
+   *
+   * Today injection is unconditional, so this is every stored key — which is the
+   * point: it makes the size of that block visible per turn instead of invisible.
+   * When memory starts going through the recall filter this becomes the set the
+   * curator KEPT, and the viewer can show what it dropped.
+   */
+  injectedMemoryKeys?: string[];
 }
 
 function isTurnContextRecord(entry: unknown): entry is TurnContextRecord {

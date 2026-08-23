@@ -586,7 +586,8 @@ describe('<App> /clear --save (#228)', () => {
   beforeEach(() => {
     process.env.BERNARD_HOME = TMP_HOME;
     vi.clearAllMocks();
-    // Return a non-empty summary by default so writeMemory is exercised.
+    // Kept mocked because other modules under test may call it; `/clear --save`
+    // itself no longer runs a summarize call (#307).
     vi.mocked(generateText).mockResolvedValue({ text: 'Test session summary.' } as Awaited<
       ReturnType<typeof generateText>
     >);
@@ -604,23 +605,38 @@ describe('<App> /clear --save (#228)', () => {
     ];
   }
 
-  it('writes a session-summary memory entry and clears history on success', async () => {
+  it('does NOT write a session-summary memory entry, and still clears history', async () => {
+    // #307: the prose summary used to be written to `MemoryStore`, where
+    // `renderPersistentMemory` injects every file IN FULL on every step — 54 of
+    // them had grown to ~44k tokens re-sent per step. The same transcript already
+    // reaches RAG as atomic facts via `extractDomainFacts` (the `conversations`
+    // domain is itself a conversation summarizer), so the blob was a redundant
+    // second copy in a worse shape.
     const history = makeHistory();
     const { stdin, agentSpy, historyStore, stores, unmount } = renderApp({ history });
     await tick();
     await submit(stdin, '/clear --save');
     await tick(80);
 
-    // Summary should have been saved to memory — check the side effect directly
-    // (the toast is overwritten by the subsequent "Conversation history cleared" toast)
-    expect(stores.memory.writeMemory).toHaveBeenCalledWith(
-      expect.stringMatching(/^session-summary-/),
-      'Test session summary.',
-    );
+    expect(stores.memory.writeMemory).not.toHaveBeenCalled();
 
-    // History should still have been cleared after save
+    // Clearing is unaffected.
     expect(agentSpy.clearHistory).toHaveBeenCalled();
     expect(historyStore.clear).toHaveBeenCalled();
+    unmount();
+  });
+
+  it('runs no summarize LLM call — its only consumer was the memory write', async () => {
+    // Retiring the write retires the call. Fact extraction still runs; it reads
+    // the raw transcript, never the summary.
+    const history = makeHistory();
+    const { stdin, unmount } = renderApp({ history });
+    await tick();
+    await submit(stdin, '/clear --save');
+    await tick(80);
+
+    expect(generateText).not.toHaveBeenCalled();
+    expect(mockExtractDomainFacts).toHaveBeenCalled();
     unmount();
   });
 

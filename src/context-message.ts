@@ -8,6 +8,7 @@ import { renderResolvedBlock, RAG_SOURCE_KEY, type ResolvedEntry } from './refer
 import { sanitizeKey } from './memory.js';
 import { getDomain } from './domains.js';
 import type { ProvenanceStore } from './provenance.js';
+import { debugLog } from './logger.js';
 
 /**
  * Inputs for {@link buildContextMessage}. Mirrors the dynamic per-turn data
@@ -85,7 +86,9 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
     { tag: 'recalled_context', render: () => renderRecalledContext(inputs.ragResults) },
     {
       tag: 'persistent_memory',
-      render: () => renderPersistentMemory(inputs.memoryStore),
+      // Renders BEFORE `available_sources` in this list, and the loop below is
+      // ordered, so entries registered here appear in that block this same turn.
+      render: () => renderPersistentMemory(inputs.memoryStore, inputs.provenance),
     },
     {
       tag: 'scratch_notes',
@@ -203,14 +206,45 @@ function renderRecalledContext(ragResults?: RAGSearchResult[]): string | null {
   return blocks.join('\n');
 }
 
-function renderPersistentMemory(memoryStore?: MemoryStore): string | null {
+/**
+ * Preview length for a memory entry registered as a citeable source. Kept short
+ * on purpose: the entry's full text is already in `<persistent_memory>` in the
+ * same message, so the preview only has to identify which entry a `[^Sn]` marker
+ * refers to. `MAX_PREVIEW` (2000) would duplicate nearly every file and cost more
+ * than the memory block itself.
+ */
+const MEMORY_SOURCE_PREVIEW_CHARS = 100;
+
+function renderPersistentMemory(
+  memoryStore?: MemoryStore,
+  provenance?: ProvenanceStore,
+): string | null {
   if (!memoryStore) return null;
   const memories = memoryStore.getAllMemoryContents();
   if (memories.size === 0) return null;
   const blocks: string[] = [];
+  let totalChars = 0;
   for (const [key, content] of memories) {
     blocks.push(`### ${escapeXml(key)}\n${escapeXml(content)}`);
+    totalChars += key.length + content.length;
+    // Register as a citeable source (#307). RAG facts have been citeable since
+    // #211 and tool-read memory since the `memory` tool gained provenance;
+    // INJECTED memory was the gap, so a claim grounded in a stored note had no
+    // `[^Sn]` to point at. This also makes "was an injected fact actually used?"
+    // answerable from `TurnProvenance.citedIds`, with no new store.
+    provenance?.add({
+      kind: 'memory',
+      label: `memory:${key}`,
+      contentPreview: content.slice(0, MEMORY_SOURCE_PREVIEW_CHARS),
+      rawRef: `memory:${key}`,
+    });
   }
+  // Per-key cost, so the size of this block is never again invisible (#307).
+  debugLog('context:persistent-memory', {
+    entries: memories.size,
+    totalChars,
+    keys: Array.from(memories.keys()),
+  });
   return blocks.join('\n\n');
 }
 
