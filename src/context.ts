@@ -15,6 +15,42 @@ import {
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 
 /**
+ * Context windows where the upstream catalog is WRONG, verified against the
+ * provider's own console. Consulted BEFORE the catalog — unlike
+ * {@link MODEL_CONTEXT_WINDOWS}, which is a fallback for models the catalog
+ * simply lacks.
+ *
+ * Keep this near-empty and justify every row, because a stale override is worse
+ * than no override. An entry earns its place only when the catalog's value is
+ * wrong in the UNSAFE direction (too large): over-estimating the window makes
+ * compaction fire past the real ceiling, so instead of degrading gracefully the
+ * turn dies on a provider context-length error.
+ *
+ * That invariant is ENFORCED, not just documented: an override applies only when
+ * it is smaller than the catalog's value. The sibling table below records how a
+ * hand-maintained copy goes stale (`refresh-catalog` does not touch it), and this
+ * one is worse in that respect because it outranks the catalog. Clamping to the
+ * lower value means a stale row can only ever be conservative, and the moment
+ * upstream publishes the correct window the row becomes a harmless no-op instead
+ * of pinning a wrong number forever.
+ */
+export const MODEL_CONTEXT_WINDOW_OVERRIDES: Record<string, number> = {
+  // Keys are pre-normalized (see {@link normalizeModelId}: dots folded to
+  // dashes) so the lookup is a plain O(1) index rather than a scan.
+  //
+  // The Vercel AI Gateway reports 2M for the grok-4.20 family; the SpaceXAI
+  // console reports 1M for every one of them (checked 2026-08-22). Trusting the
+  // gateway's 2M puts the compression threshold at 1.5M and `emergencyTruncate`
+  // at 1.8M, both above the real limit.
+  'grok-4-20-reasoning': 1_000_000,
+  'grok-4-20-non-reasoning': 1_000_000,
+  'grok-4-20-multi-agent': 1_000_000,
+  'grok-4-20-reasoning-beta': 1_000_000,
+  'grok-4-20-non-reasoning-beta': 1_000_000,
+  'grok-4-20-multi-agent-beta': 1_000_000,
+};
+
+/**
  * Context windows for models the model catalog does NOT carry — retired gateway
  * ids that still appear in saved lineups and configs.
  *
@@ -44,14 +80,27 @@ export const COMPRESSION_THRESHOLD = 0.75;
 /** Number of recent user/assistant exchanges preserved verbatim during compression. */
 export const RECENT_TURNS_TO_KEEP = 4;
 
-/** Look up context window for a model, falling back to 128k for unknown models. */
+/**
+ * Look up a model's context window. Resolution order, most to least trusted:
+ * explicit user override -> {@link MODEL_CONTEXT_WINDOW_OVERRIDES} (catalog is
+ * known-wrong) -> the model catalog -> {@link MODEL_CONTEXT_WINDOWS} (catalog
+ * lacks the model) -> {@link DEFAULT_CONTEXT_WINDOW}. Every id-based step
+ * matches through {@link normalizeModelId}, so dotted/dashed/dated spellings of
+ * the same model resolve alike.
+ */
 export function getContextWindow(model: string, override?: number): number {
   if (override && override > 0) return override;
+  const key = normalizeModelId(model);
+  const corrected = MODEL_CONTEXT_WINDOW_OVERRIDES[key];
   const meta = findModelMetaByName(model);
-  if (meta && meta.contextWindow > 0) return meta.contextWindow;
+  const catalogWindow = meta && meta.contextWindow > 0 ? meta.contextWindow : undefined;
+  // Corrections only ever shrink: see MODEL_CONTEXT_WINDOW_OVERRIDES.
+  if (corrected !== undefined) {
+    return catalogWindow !== undefined ? Math.min(corrected, catalogWindow) : corrected;
+  }
+  if (catalogWindow !== undefined) return catalogWindow;
   // Match the table through the same normalization the catalog lookup uses, so
   // a dotted/dated id doesn't miss both sources over punctuation alone.
-  const key = normalizeModelId(model);
   const fallback = Object.entries(MODEL_CONTEXT_WINDOWS).find(
     ([id]) => normalizeModelId(id) === key,
   );

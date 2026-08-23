@@ -11,6 +11,7 @@ import {
 import { debugLog, isDebugEnabled } from '../logger.js';
 import type { AgentHook, StepFinishPayload } from './hooks/types.js';
 import { runWithDispatchId } from './dispatch-context.js';
+import { normalizeUsage } from './hooks/token-stats.js';
 
 const WATCHDOG_INTERVAL_MS = 30_000;
 
@@ -176,18 +177,21 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
       lastStepEndAt = Date.now();
       stepsCompleted += 1;
       if (debug) {
+        const stepCache = normalizeUsage(payload.usage, payload.providerMetadata);
         debugLog('step:end', {
           dispatchId,
           n: stepsCompleted,
           finishReason: payload.finishReason,
           toolCalls: payload.toolCalls.map((c) => c.toolName),
           textChars: payload.text?.length ?? 0,
-          promptTokens: payload.usage?.promptTokens,
-          completionTokens: payload.usage?.completionTokens,
-          // Anthropic prompt-cache counters (#269); null/absent when not caching.
-          cacheReadTokens: payload.providerMetadata?.anthropic?.cacheReadInputTokens ?? undefined,
-          cacheWriteTokens:
-            payload.providerMetadata?.anthropic?.cacheCreationInputTokens ?? undefined,
+          promptTokens: stepCache.promptTokens,
+          completionTokens: stepCache.completionTokens,
+          // Prompt-cache counters (#269), normalized across providers — reading
+          // `providerMetadata.anthropic` directly would log 0 for every
+          // xAI/OpenAI call, i.e. blind in exactly the sessions where cache
+          // accounting is being debugged.
+          cacheReadTokens: stepCache.cacheReadTokens,
+          cacheWriteTokens: stepCache.cacheWriteTokens,
           ttlms: Date.now() - lastStepStartAt,
         });
       }

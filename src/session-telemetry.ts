@@ -18,7 +18,8 @@
 import type { UsageBucket } from './output.js';
 import type { UsageRecord } from './framework/hooks/token-stats.js';
 import { getCurrentDispatchIds } from './framework/dispatch-context.js';
-import { priceUsageUsd, formatAggCost, formatCallCost } from './usage-report.js';
+import { truncate } from './text.js';
+import { priceUsageUsd, formatAggCost, formatCallCost, formatTiers } from './usage-report.js';
 import { formatTokenCount, formatElapsed } from './output.js';
 import { appendJsonl, readJsonlTail, listFilesByMtime, pruneFilesByMtime } from './jsonl.js';
 import { TELEMETRY_DIR, sessionTelemetryPath } from './paths.js';
@@ -64,6 +65,15 @@ export interface TelemetryAgg {
   costUsd: number;
   /** True when at least one folded record had no catalog pricing. */
   hasUnpriced: boolean;
+  /**
+   * Every cost tier folded into this row. A layer is not pinned to one tier —
+   * `main` runs premium on the first step of a turn and mid on continuations —
+   * so this is a set, not a scalar. Surfacing it is what makes "premium and mid
+   * resolve to the same model" visible in the breakdown instead of only in the
+   * per-turn tier table. Unordered on purpose: `formatTiers` is the single owner
+   * of display order.
+   */
+  tiers: Set<UsageBucket>;
 }
 
 /** One node of the hierarchical dispatch trace (a rolled-up dispatch). */
@@ -160,6 +170,7 @@ function emptyAgg(): TelemetryAgg {
     calls: 0,
     costUsd: 0,
     hasUnpriced: false,
+    tiers: new Set(),
   };
 }
 
@@ -171,6 +182,7 @@ function foldInto(agg: TelemetryAgg, e: ModelCallTelemetry): void {
   agg.calls += 1;
   if (e.costUsd == null) agg.hasUnpriced = true;
   else agg.costUsd += e.costUsd;
+  agg.tiers.add(e.bucket);
 }
 
 function upsert(map: Map<string, TelemetryAgg>, key: string, e: ModelCallTelemetry): void {
@@ -301,7 +313,7 @@ export class SessionTelemetry {
       sessionId: this.sessionId,
       startedAt: this.startedAt,
       durationMs: Date.now() - this.startedAt,
-      totals: { ...this.totals },
+      totals: { ...this.totals, tiers: new Set(this.totals.tiers) },
       byLayer: cloneAggMap(this.byLayer),
       byModel: cloneAggMap(this.byModel),
       byProvider: cloneAggMap(this.byProvider),
@@ -313,7 +325,7 @@ export class SessionTelemetry {
 
 function cloneAggMap(map: Map<string, TelemetryAgg>): Map<string, TelemetryAgg> {
   const out = new Map<string, TelemetryAgg>();
-  for (const [k, v] of map) out.set(k, { ...v });
+  for (const [k, v] of map) out.set(k, { ...v, tiers: new Set(v.tiers) });
   return out;
 }
 
@@ -385,9 +397,20 @@ export function aggregateRecords(
 }
 
 /** One right-padded label + right-aligned columns row for the plain-text report. */
-function reportRow(label: string, calls: number, tin: number, tout: number, cost: string): string {
+function reportRow(
+  label: string,
+  tiers: string,
+  calls: number,
+  tin: number,
+  tout: number,
+  cost: string,
+): string {
+  // `truncate` (not bare padEnd): an over-long cell in a fixed-width grid shifts
+  // every column to its right. Real labels overflow — `anthropic|claude-haiku-4-5-20251001`
+  // is 35 chars — and so does `premium+mid+cheap` at 17.
   return (
-    label.padEnd(30) +
+    truncate(label, 25).padEnd(26) +
+    truncate(tiers, 18).padEnd(19) +
     String(calls).padStart(7) +
     formatTokenCount(tin).padStart(10) +
     formatTokenCount(tout).padStart(10) +
@@ -395,11 +418,12 @@ function reportRow(label: string, calls: number, tin: number, tout: number, cost
   );
 }
 
-function aggSection(title: string, map: Map<string, TelemetryAgg>): string[] {
+function aggSection(title: string, map: Map<string, TelemetryAgg>, showTiers = true): string[] {
   const rows = sortedAggEntries(map);
   if (rows.length === 0) return [];
   const header =
-    'name'.padEnd(30) +
+    'name'.padEnd(26) +
+    (showTiers ? 'tier' : '').padEnd(19) +
     'calls'.padStart(7) +
     'in'.padStart(10) +
     'out'.padStart(10) +
@@ -409,6 +433,7 @@ function aggSection(title: string, map: Map<string, TelemetryAgg>): string[] {
     out.push(
       reportRow(
         key,
+        showTiers ? formatTiers(agg.tiers) : '',
         agg.calls,
         agg.promptTokens,
         agg.completionTokens,
@@ -461,7 +486,8 @@ export function formatSessionUsageLines(summary: TelemetryAggregate): string[] {
 
   lines.push(...aggSection('BY LAYER', summary.byLayer));
   lines.push(...aggSection('BY MODEL', summary.byModel));
-  lines.push(...aggSection('BY PROVIDER', summary.byProvider));
+  // A provider spans every tier by construction — the cell would be noise.
+  lines.push(...aggSection('BY PROVIDER', summary.byProvider, false));
 
   if (summary.mostExpensiveCalls.length > 0) {
     lines.push('', 'MOST EXPENSIVE CALLS');

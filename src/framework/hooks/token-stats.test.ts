@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  normalizeUsage,
   tokenStatsHook,
   tokenTotalsHook,
   recordTurnUsage,
@@ -54,7 +55,9 @@ describe('token-stats cache accumulation (#269)', () => {
     );
     expect(target.spinnerStats.turnCacheReadTokens).toBe(1800);
     expect(target.spinnerStats.turnCacheWriteTokens).toBe(200);
-    expect(target.spinnerStats.turnPromptTokens).toBe(2000);
+    // Anthropic's 2000 `input_tokens` EXCLUDE the 2000 cached tokens, so the
+    // normalized total prompt is 4000 with both cache counts as subsets.
+    expect(target.spinnerStats.turnPromptTokens).toBe(4000);
   });
 
   it('treats null cache counts (cache miss) as 0', async () => {
@@ -107,8 +110,9 @@ describe('context-gauge prompt tokens include cached input', () => {
     );
     expect(target.lastStepPromptTokens).toBe(100_000);
     expect(target.spinnerStats.latestPromptTokens).toBe(100_000);
-    // The odometer still bills the uncached tail separately from the cache cells.
-    expect(target.spinnerStats.turnPromptTokens).toBe(2000);
+    // The odometer records the same normalized total, with the cached share
+    // tracked separately so pricing can charge it at the cache rate.
+    expect(target.spinnerStats.turnPromptTokens).toBe(100_000);
     expect(target.spinnerStats.turnCacheReadTokens).toBe(90_000);
   });
 
@@ -255,5 +259,75 @@ describe('per-step latency + dispatch-id stamping', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('normalizeUsage — cross-provider prompt-token semantics', () => {
+  const usage = { promptTokens: 80_000, completionTokens: 200 };
+
+  it('adds Anthropic cache counts, which are DISJOINT from input_tokens', () => {
+    const n = normalizeUsage(usage, {
+      anthropic: { cacheReadInputTokens: 60_000, cacheCreationInputTokens: 5_000 },
+    });
+    expect(n.promptTokens).toBe(145_000);
+    expect(n.cacheReadTokens).toBe(60_000);
+    expect(n.cacheWriteTokens).toBe(5_000);
+  });
+
+  // `cachedPromptTokens` is a SUBSET of an already-inclusive prompt count, and
+  // the namespace is whatever the SDK chose — a built-in name or a custom
+  // provider's own. Reading only the Anthropic shape is what billed every
+  // cached xAI token at the full input rate.
+  it.each([
+    ['xai', 64_000],
+    ['openai', 32_000],
+    ['my-proxy', 1_000],
+  ])('leaves an OpenAI-compatible total alone under the %s namespace', (ns, cached) => {
+    const n = normalizeUsage(usage, { [ns]: { cachedPromptTokens: cached } });
+    expect(n.promptTokens).toBe(80_000);
+    expect(n.cacheReadTokens).toBe(cached);
+    // Implicit caching has no write charge.
+    expect(n.cacheWriteTokens).toBe(0);
+  });
+
+  it('treats null cache counts as a miss, not as unknown', () => {
+    expect(
+      normalizeUsage(usage, {
+        anthropic: { cacheReadInputTokens: null, cacheCreationInputTokens: null },
+      }),
+    ).toMatchObject({ promptTokens: 80_000, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    expect(normalizeUsage(usage, { xai: { cachedPromptTokens: null } })).toMatchObject({
+      promptTokens: 80_000,
+      cacheReadTokens: 0,
+    });
+  });
+
+  it('reports zeros for a missing usage payload', () => {
+    expect(normalizeUsage(undefined, undefined)).toEqual({
+      promptTokens: 0,
+      completionTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    });
+  });
+
+  it('clamps a cached subset that exceeds the total it belongs to', () => {
+    // Guards the pricing subtraction against ever going negative.
+    const n = normalizeUsage(
+      { promptTokens: 100, completionTokens: 0 },
+      {
+        xai: { cachedPromptTokens: 900 },
+      },
+    );
+    expect(n.cacheReadTokens).toBe(100);
+  });
+
+  it('prefers the Anthropic shape when both are somehow present', () => {
+    const n = normalizeUsage(usage, {
+      anthropic: { cacheReadInputTokens: 10_000, cacheCreationInputTokens: 0 },
+      xai: { cachedPromptTokens: 64_000 },
+    });
+    expect(n.promptTokens).toBe(90_000);
+    expect(n.cacheReadTokens).toBe(10_000);
   });
 });

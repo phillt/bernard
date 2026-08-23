@@ -1,6 +1,6 @@
 import type { SpinnerStats, TurnUsageEntry, UsageBucket } from '../../output.js';
 import type { ModelTier } from '../../model-policy.js';
-import type { AgentHook } from './types.js';
+import type { AgentHook, CacheMetadata } from './types.js';
 
 /**
  * Single home for the "a model with no tier is bucketed as `pinned`" rule
@@ -60,27 +60,72 @@ interface SiteModelLike {
   modelName: string;
 }
 
-/**
- * Per-step provider metadata carrying Anthropic's prompt-cache counts (#269).
- * Mirrors `StepFinishPayload['providerMetadata']` in `./types.js`; named here so
- * the three sites that read cache tokens share one shape instead of
- * re-declaring it inline.
- */
-export interface CacheMetadata {
-  anthropic?: { cacheCreationInputTokens?: number | null; cacheReadInputTokens?: number | null };
+/** Token counts for one call, normalized across providers. */
+export interface NormalizedUsage {
+  /**
+   * TOTAL prompt tokens for the call — cached ones INCLUDED. This is the number
+   * that reconciles against a provider's billing dashboard, which is why it is
+   * the normal form rather than the uncached remainder.
+   */
+  promptTokens: number;
+  completionTokens: number;
+  /** Cache-read tokens. A SUBSET of {@link promptTokens}. */
+  cacheReadTokens: number;
+  /** Cache-write tokens. A SUBSET of {@link promptTokens}. */
+  cacheWriteTokens: number;
 }
 
 /**
- * Cache read/write token counts for a step, `0` when the provider reports none.
- * Anthropic sends `null` on a cache miss and other providers omit the block
- * entirely — both mean zero, never "unknown".
+ * Normalizes a step's usage into {@link NormalizedUsage}, hiding a genuine
+ * disagreement between providers about what "prompt tokens" means:
+ *
+ * - **Anthropic** reports `input_tokens` EXCLUDING cache reads/writes, which the
+ *   SDK maps to `usage.promptTokens`. The cache counts arrive separately, so the
+ *   true total is the sum.
+ * - **OpenAI-compatible** (`@ai-sdk/openai`, `@ai-sdk/xai`, and every custom
+ *   provider wrapping them) reports `prompt_tokens` INCLUDING cached tokens, with
+ *   `prompt_tokens_details.cached_tokens` a subset surfaced as `cachedPromptTokens`.
+ *
+ * Reading only the Anthropic shape made every cached xAI/OpenAI token bill at the
+ * full input rate — a 3x cost overstatement, pinned against a real provider bill
+ * by the reconciliation suite in `src/usage-report.test.ts`.
+ *
+ * Cache-write is Anthropic-only; implicit caching has no write charge, so it is 0
+ * for the OpenAI-compatible shape.
  */
-function cacheTokens(providerMetadata: CacheMetadata | undefined): {
-  read: number;
-  write: number;
-} {
-  const a = providerMetadata?.anthropic;
-  return { read: a?.cacheReadInputTokens ?? 0, write: a?.cacheCreationInputTokens ?? 0 };
+export function normalizeUsage(
+  usage: { promptTokens: number; completionTokens: number } | undefined,
+  providerMetadata: CacheMetadata | undefined,
+): NormalizedUsage {
+  const promptTokens = usage?.promptTokens ?? 0;
+  const completionTokens = usage?.completionTokens ?? 0;
+
+  const anthropic = providerMetadata?.anthropic;
+  if (anthropic) {
+    // `null` means "cache miss", not "unknown" — both fold to 0.
+    const cacheReadTokens = anthropic.cacheReadInputTokens ?? 0;
+    const cacheWriteTokens = anthropic.cacheCreationInputTokens ?? 0;
+    return {
+      promptTokens: promptTokens + cacheReadTokens + cacheWriteTokens,
+      completionTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+    };
+  }
+
+  // Scan namespaces rather than checking known provider names, so a custom
+  // provider (which gets its own metadata key) is handled without config.
+  const cached = Object.values(providerMetadata ?? {}).find(
+    (ns) => ns?.cachedPromptTokens != null,
+  )?.cachedPromptTokens;
+  return {
+    promptTokens,
+    completionTokens,
+    // Clamped: a subset can never exceed the total it belongs to, and an
+    // over-large value would price negative input if it slipped through.
+    cacheReadTokens: Math.max(0, Math.min(cached ?? 0, promptTokens)),
+    cacheWriteTokens: 0,
+  };
 }
 
 /**
@@ -95,16 +140,12 @@ export function usageRecordFromSite(
   providerMetadata?: CacheMetadata,
   extra?: { latencyMs?: number; success?: boolean },
 ): UsageRecord {
-  const cache = cacheTokens(providerMetadata);
   return {
     bucket: bucketForTier(site.tier),
     site: siteName,
     provider: site.provider,
     modelName: site.modelName,
-    promptTokens: usage?.promptTokens ?? 0,
-    completionTokens: usage?.completionTokens ?? 0,
-    cacheReadTokens: cache.read,
-    cacheWriteTokens: cache.write,
+    ...normalizeUsage(usage, providerMetadata),
     latencyMs: extra?.latencyMs,
     success: extra?.success,
   };
@@ -183,21 +224,16 @@ export function makeUsageRecorder(target: { spinnerStats: SpinnerStats | null })
 function recordStep(
   stats: SpinnerStats,
   info: HookModelInfo,
-  usage: { promptTokens: number; completionTokens: number } | undefined,
-  providerMetadata: CacheMetadata | undefined,
+  normalized: NormalizedUsage | null,
   latencyMs?: number,
 ): void {
   // A step that reports no usage payload isn't a billable model call we can
   // attribute — skip it rather than minting a zero-token ledger row that would
   // inflate the per-model `calls` count (the old guarded odometer did the same).
-  if (!usage) return;
-  const cache = cacheTokens(providerMetadata);
+  if (!normalized) return;
   recordTurnUsage(stats, {
     ...info,
-    promptTokens: usage?.promptTokens ?? 0,
-    completionTokens: usage?.completionTokens ?? 0,
-    cacheReadTokens: cache.read,
-    cacheWriteTokens: cache.write,
+    ...normalized,
     latencyMs,
     // A step that finished with a usage payload succeeded; failed dispatches
     // throw before `onStepFinish` and never reach here. Dispatch-trace ids are
@@ -229,23 +265,18 @@ export function tokenStatsHook(target: TokenStatsTarget, info: HookModelInfo): A
       const now = Date.now();
       const latencyMs = now - lastStepAt;
       lastStepAt = now;
-      if (usage) {
-        // Anthropic's `input_tokens` — which `@ai-sdk/anthropic` maps straight
-        // onto `usage.promptTokens` — EXCLUDES cache reads and cache writes;
-        // those arrive separately in `providerMetadata.anthropic`. With
-        // `BERNARD_PROMPT_CACHE` on by default that means the raw
-        // `promptTokens` is just the uncached tail, so the context gauge and
-        // the compression trigger would both see a few thousand tokens for a
-        // prompt that is actually near the window. Add the cache counts back so
-        // both measure the real prompt size. Providers that don't report cache
-        // metadata contribute 0 and are unaffected.
-        const cache = cacheTokens(providerMetadata);
-        const effectivePromptTokens = usage.promptTokens + cache.read + cache.write;
-        target.lastStepPromptTokens = effectivePromptTokens;
-        if (target.spinnerStats) target.spinnerStats.latestPromptTokens = effectivePromptTokens;
+      // Normalize once and feed both consumers, so the gauge and the ledger
+      // cannot disagree about the same step. The gauge wants the REAL prompt
+      // size — cached tokens included — because reading `usage.promptTokens`
+      // raw under-reports by the cached share on Anthropic (whose
+      // `input_tokens` excludes cache), collapsing a near-full window to a few
+      // thousand tokens whenever the cache is warm.
+      const normalized = usage ? normalizeUsage(usage, providerMetadata) : null;
+      if (normalized) {
+        target.lastStepPromptTokens = normalized.promptTokens;
+        if (target.spinnerStats) target.spinnerStats.latestPromptTokens = normalized.promptTokens;
       }
-      if (target.spinnerStats)
-        recordStep(target.spinnerStats, info, usage, providerMetadata, latencyMs);
+      if (target.spinnerStats) recordStep(target.spinnerStats, info, normalized, latencyMs);
     },
   };
 }
@@ -267,7 +298,12 @@ export function tokenTotalsHook(target: TokenStatsTarget, info: HookModelInfo): 
       const latencyMs = now - lastStepAt;
       lastStepAt = now;
       if (target.spinnerStats)
-        recordStep(target.spinnerStats, info, usage, providerMetadata, latencyMs);
+        recordStep(
+          target.spinnerStats,
+          info,
+          usage ? normalizeUsage(usage, providerMetadata) : null,
+          latencyMs,
+        );
     },
   };
 }

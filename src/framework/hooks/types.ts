@@ -1,6 +1,29 @@
 import type { CoreMessage } from 'ai';
 
 /**
+ * Per-step provider metadata carrying prompt-cache token counts (#269), keyed by
+ * the AI SDK's provider namespace — `anthropic`, `openai`, `xai`, or a custom
+ * provider's own name, since each SDK writes under its own key. Values are
+ * `number | null`; `null` means "cache miss", not "unknown".
+ *
+ * The two shapes below are NOT interchangeable — they disagree about whether
+ * cached tokens are already counted in `usage.promptTokens`. Normalize with
+ * `normalizeUsage` (`./token-stats.js`) rather than reading these directly.
+ */
+export interface CacheMetadata {
+  [namespace: string]:
+    | {
+        /** Anthropic: cache-write tokens, DISJOINT from `usage.promptTokens`. */
+        cacheCreationInputTokens?: number | null;
+        /** Anthropic: cache-read tokens, DISJOINT from `usage.promptTokens`. */
+        cacheReadInputTokens?: number | null;
+        /** OpenAI-compatible: cache-read tokens, a SUBSET of `usage.promptTokens`. */
+        cachedPromptTokens?: number | null;
+      }
+    | undefined;
+}
+
+/**
  * Payload passed to `onStepFinish` by the AI SDK after each generation step.
  *
  * This is the structural subset our hooks use; the underlying AI-SDK type
@@ -13,16 +36,11 @@ export interface StepFinishPayload {
   usage?: { promptTokens: number; completionTokens: number };
   finishReason?: string;
   /**
-   * Per-step provider metadata. Anthropic reports prompt-cache token counts here
-   * (#269); values are `number | null` (null on a cache miss). Optional because
-   * hooks are also exercised with hand-built payloads in tests.
+   * Per-step provider metadata, keyed by the AI SDK's provider namespace.
+   * Optional because hooks are also exercised with hand-built payloads in tests.
+   * See {@link CacheMetadata} for the per-provider cache-token shapes.
    */
-  providerMetadata?: {
-    anthropic?: {
-      cacheCreationInputTokens?: number | null;
-      cacheReadInputTokens?: number | null;
-    };
-  };
+  providerMetadata?: CacheMetadata;
   /**
    * The AI SDK's `StepResult.response` — `messages` is a CUMULATIVE snapshot
    * of every response message generated so far in this call (verified for

@@ -39,13 +39,16 @@ export interface UsageReport {
 }
 
 /**
- * Tier display order, derived from the canonical `LINEUP_TIERS` (premium first)
- * so it can't drift if a tier is renamed/added; `pinned` (off-lineup) trails.
+ * Cost tiers in spend order, most expensive first — derived from the canonical
+ * `LINEUP_TIERS` so it can't drift if a tier is renamed or added; `pinned`
+ * (off-lineup) trails. Fixes the display order of {@link formatTiers}.
  */
-const BUCKET_ORDER: Record<UsageBucket, number> = {
-  ...Object.fromEntries(LINEUP_TIERS.map((tier, i) => [tier, i])),
-  pinned: LINEUP_TIERS.length,
-} as Record<UsageBucket, number>;
+export const TIER_ORDER: readonly UsageBucket[] = [...LINEUP_TIERS, 'pinned'];
+
+/** Rank per tier, for sorting rows. Same order as {@link TIER_ORDER}. */
+const BUCKET_ORDER: Record<UsageBucket, number> = Object.fromEntries(
+  TIER_ORDER.map((tier, i) => [tier, i]),
+) as Record<UsageBucket, number>;
 
 /** Disjoint cache-token counts for a call (Anthropic prompt-cache, #269). */
 export interface CacheTokens {
@@ -67,17 +70,23 @@ export interface UsageCostBreakdown {
  * model has no catalog pricing (custom / unknown provider — cost stays unknown,
  * never fabricated).
  *
- * **Token semantics (verified against `@ai-sdk/anthropic@1.2.12`):** the AI SDK
- * maps `promptTokens` from Anthropic's `input_tokens`, which is **disjoint** from
- * `cache_read_input_tokens` / `cache_creation_input_tokens`. So `prompt` here is
- * ordinary *uncached* input — it must NOT have cache tokens subtracted from it,
- * and pricing `prompt` + `cacheRead` + `cacheWrite` counts every token exactly
- * once (no double charge). This is the only provider whose cache tokens Bernard
- * currently tracks; providers that fold cached tokens into their prompt count
- * would need normalization at the accounting boundary before reaching here.
+ * **Token semantics:** `prompt` is the TOTAL prompt tokens for the call, with
+ * `cacheRead` / `cacheWrite` as SUBSETS of it — the normal form produced by
+ * `normalizeUsage` (`src/framework/hooks/token-stats.ts`), which reconciles the
+ * providers' disagreement about whether cached tokens are already counted in the
+ * prompt. The full-rate portion is therefore `prompt - cacheRead - cacheWrite`,
+ * and every token is billed exactly once at its own rate.
  *
- * A model that lacks a cache rate contributes **$0** for that category (preserves
- * the pre-cache behavior; never invents a price).
+ * Callers MUST pass normalized counts. Adding the cache categories on top of an
+ * inclusive `prompt` over-bills the cached share at ~6x its real rate; the
+ * reconciliation suite in `usage-report.test.ts` pins this against a real bill.
+ *
+ * A model that lacks a cache rate keeps that category at the **full input rate**
+ * rather than carving it out. Publishing no cache price means offering no
+ * discount, so those tokens really do bill as ordinary input — 10 catalogued
+ * OpenAI models (the `*-pro` tier, `gpt-oss-*`, `gpt-4-turbo`, …) report
+ * `cachedPromptTokens` while publishing no `input_cache_read`, and subtracting
+ * their cached share would silently value it at zero.
  */
 export function priceUsageBreakdown(
   provider: string,
@@ -91,12 +100,17 @@ export function priceUsageBreakdown(
   const p = meta.pricing;
   const cacheRead = cache?.cacheReadTokens ?? 0;
   const cacheWrite = cache?.cacheWriteTokens ?? 0;
-  const inputCostUsd = (prompt / 1_000_000) * p.inputPerMTok;
+  // Cache counts are subsets of `prompt`, but only carve out the categories the
+  // catalog can actually price — an un-priced category stays in the full-rate
+  // remainder instead of becoming free. Clamped so malformed input can never
+  // produce a negative cost.
+  const discountedRead = p.cacheReadPerMTok != null ? cacheRead : 0;
+  const discountedWrite = p.cacheWritePerMTok != null ? cacheWrite : 0;
+  const fullRateTokens = Math.max(0, prompt - discountedRead - discountedWrite);
+  const inputCostUsd = (fullRateTokens / 1_000_000) * p.inputPerMTok;
   const outputCostUsd = (completion / 1_000_000) * p.outputPerMTok;
-  const cacheReadCostUsd =
-    p.cacheReadPerMTok != null ? (cacheRead / 1_000_000) * p.cacheReadPerMTok : 0;
-  const cacheWriteCostUsd =
-    p.cacheWritePerMTok != null ? (cacheWrite / 1_000_000) * p.cacheWritePerMTok : 0;
+  const cacheReadCostUsd = (discountedRead / 1_000_000) * (p.cacheReadPerMTok ?? 0);
+  const cacheWriteCostUsd = (discountedWrite / 1_000_000) * (p.cacheWritePerMTok ?? 0);
   return {
     inputCostUsd,
     outputCostUsd,
@@ -109,8 +123,8 @@ export function priceUsageBreakdown(
 /**
  * Estimated total USD for a call's token spend from catalog pricing ($/M tok),
  * or `null` when the model isn't in the catalog. Cache-aware (#269): pass the
- * disjoint `cache` counts to price cache-read (~0.1×) and cache-write (~1.25×)
- * tokens at their own rates. `prompt` is ordinary uncached input — see
+ * `cache` counts — SUBSETS of `prompt` — to price cache-read (~0.1×) and
+ * cache-write (~1.25×) tokens at their own rates. See
  * {@link priceUsageBreakdown} for the token semantics. Shared by the per-turn
  * report, session telemetry, and one-off `/compact` pricing.
  */
@@ -206,6 +220,16 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
     totalCostUsd: pricedCount > 0 ? costSum : null,
     partial: pricedCount < rows.length,
   };
+}
+
+/**
+ * Renders the tiers a rolled-up row spans, e.g. `premium` or `premium+mid`.
+ * A layer is not pinned to one tier, so a single label would have to lie; the
+ * joined form is what reveals a layer straddling tiers (and, when those tiers
+ * name the same model, that the tiering is buying nothing).
+ */
+export function formatTiers(tiers: ReadonlySet<UsageBucket>): string {
+  return TIER_ORDER.filter((t) => tiers.has(t)).join('+');
 }
 
 /** Format a USD amount with precision scaled to magnitude (e.g. `$0.07`, `$0.0042`, `$1.20`). */
