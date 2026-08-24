@@ -224,12 +224,39 @@ export function primaryShellCommand(command: string): string | null {
 }
 
 /**
+ * Tools whose single name covers operations of very different consequence, so
+ * a grant must name the action too (#253).
+ *
+ * Cron was consolidated from ten tools into one `cron(action)`. Without this,
+ * `cron_list` and `cron_delete` — previously separate keys — would collapse
+ * into one, and "always allow `cron`" granted while listing jobs would silently
+ * authorise deleting them.
+ *
+ * Deliberately limited to the cron trio. `routine` / `specialist` /
+ * `lineup_edit` have the same action shape, but they predate this and users may
+ * hold stored rules keyed on the bare name; re-keying them would silently
+ * invalidate those. Worth doing as its own change, with a migration.
+ */
+export const ACTION_SCOPED_TOOLS: ReadonlySet<string> = new Set([
+  'cron',
+  'cron_logs',
+  'cron_notes',
+]);
+
+/**
  * The profile-permission key for a tool call, or `null` when no stable key
- * exists. `shell` keys per primary command (`shell:ls`); everything else
+ * exists. `shell` keys per primary command (`shell:ls`); action-enum tools in
+ * {@link ACTION_SCOPED_TOOLS} key per action (`cron:delete`); everything else
  * keys by tool name. A `null` key means "always allow" cannot be offered
  * for this call (the once/session options still apply).
  */
 export function permissionKeyFor(toolName: string, args: unknown): string | null {
+  if (ACTION_SCOPED_TOOLS.has(toolName)) {
+    const action = (args as Record<string, unknown> | undefined)?.action;
+    // No readable action → no stable key, so no profile grant is offered.
+    // Fail-closed: the user is asked rather than handed an over-broad option.
+    return typeof action === 'string' && action ? `${toolName}:${action}` : null;
+  }
   if (toolName === 'shell') {
     if (args && typeof args === 'object') {
       const cmd = (args as Record<string, unknown>).command;

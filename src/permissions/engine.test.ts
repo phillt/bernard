@@ -105,6 +105,33 @@ describe('resolveGrant', () => {
     expect(resolveGrant('shell', { command: 'git push' }, rules, false)).toBe('allow');
     expect(resolveGrant('shell', { command: 'npm i' }, rules, false)).toBe('ask');
   });
+  describe('action-scoped rules (#253)', () => {
+    // Cron consolidated 10 tools into one `cron(action)`. An allow granted
+    // while listing jobs must NOT authorise deleting them.
+    it('an action:list allow does not permit a delete', () => {
+      const rules = [rule('allow', 'cron', 'action:list')];
+      expect(resolveGrant('cron', { action: 'list' }, rules, false)).toBe('allow');
+      expect(resolveGrant('cron', { action: 'delete', id: 'x' }, rules, false)).toBe('ask');
+    });
+
+    it('matches the same action regardless of other arguments', () => {
+      const rules = [rule('allow', 'cron', 'action:delete')];
+      expect(resolveGrant('cron', { action: 'delete', id: 'a' }, rules, false)).toBe('allow');
+      expect(resolveGrant('cron', { action: 'delete', id: 'b' }, rules, false)).toBe('allow');
+    });
+
+    it('a deny on one action still beats a broad allow', () => {
+      const rules = [rule('allow', 'cron'), rule('deny', 'cron', 'action:delete')];
+      expect(resolveGrant('cron', { action: 'list' }, rules, false)).toBe('allow');
+      expect(resolveGrant('cron', { action: 'delete' }, rules, false)).toBe('deny');
+    });
+
+    it('asks when the call carries no readable action', () => {
+      const rules = [rule('allow', 'cron', 'action:list')];
+      expect(resolveGrant('cron', {}, rules, false)).toBe('ask');
+    });
+  });
+
   it('no-specifier rule matches any invocation of the tool', () => {
     expect(
       resolveGrant('web_read', { url: 'https://x.com' }, [rule('allow', 'web_read')], false),
