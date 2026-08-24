@@ -4,6 +4,7 @@ import { initShellParser } from '../permissions/shell-ast.js';
 import { assembleContext } from '../framework/context.js';
 import { RAGStore, type RAGSearchResult } from '../rag.js';
 import { debugLog } from '../logger.js';
+import type { AgentContextMCP } from '../framework/context.js';
 import { MCPManager } from '../mcp.js';
 import { CronStore } from './store.js';
 import { CronLogStore, type CronLogStep } from './log-store.js';
@@ -131,16 +132,15 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
   }
 
   const mcpManager = new MCPManager();
-  let mcpTools: Record<string, any> = {};
-  let serverNames: string[] = [];
+  let mcpSnapshot: AgentContextMCP = { tools: {}, serverNames: [], serverTools: {} };
 
   try {
     await mcpManager.connect();
-    mcpTools = mcpManager.getTools({
+    mcpSnapshot = mcpManager.snapshot({
       mode: config.mcpResultShaping,
       maxChars: config.mcpResultShapingMaxChars,
     });
-    serverNames = mcpManager.getConnectedServerNames();
+    const { serverNames } = mcpSnapshot;
     if (serverNames.length > 0) {
       log(`MCP servers connected: ${serverNames.join(', ')}`);
     }
@@ -183,7 +183,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       // decision below sets mode:'read-only', write tool calls are auto-denied.
       // askUser intentionally omitted — no interactive user; the ask_user tool returns {unavailable}.
     },
-    mcp: { tools: mcpTools, serverNames },
+    mcp: mcpSnapshot,
     rag: ragStore,
     // Cron's agent definition only touches ctx.stores.memory (see src/framework/agents/cron.ts).
     // Skip seeding for the two stores cron never uses so the daemon doesn't race the REPL on
@@ -242,8 +242,8 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       store,
       notesStore,
       log,
-      serverNames,
-      mcpTools,
+      serverNames: mcpSnapshot.serverNames,
+      mcpTools: mcpSnapshot.tools,
       ragResults,
     };
     const { formatted: output } = await runDefinition(ctx, def, input);

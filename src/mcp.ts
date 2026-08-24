@@ -10,6 +10,7 @@ import { isReadOnlyMCPSuffix } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
 import { normalizeToolResult } from './text.js';
 import { shapeMCPResult, type MCPResultShapingConfig } from './mcp-result-shaper.js';
+import type { AgentContextMCP } from './framework/context.js';
 
 /** Configuration for an MCP server launched via stdio subprocess. */
 interface MCPStdioConfig {
@@ -432,6 +433,23 @@ export class MCPManager {
       (map[serverName] ??= []).push(toolName);
     }
     return map;
+  }
+
+  /**
+   * The complete {@link AgentContextMCP} for this manager, in one call.
+   *
+   * Exists because assembling it field-by-field is a standing trap: every
+   * origin has to remember all three accessors, and a half-populated literal
+   * type-checks. The cron runner shipped with `tools` + `serverNames` but no
+   * `serverTools`, which silently reduced every `delegate_<server>` to zero
+   * tools (#305). One call makes that unrepresentable.
+   */
+  snapshot(shaping?: MCPResultShapingConfig): AgentContextMCP {
+    return {
+      tools: this.getTools(shaping),
+      serverNames: this.getConnectedServerNames(),
+      serverTools: this.getServerToolMap(),
+    };
   }
 
   /**

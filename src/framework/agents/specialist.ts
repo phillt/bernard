@@ -5,6 +5,7 @@ import { PlanStore } from '../../plan-store.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
+import { mcpToolSurface } from '../../tools/delegate.js';
 import { createPlanTool } from '../../tools/plan.js';
 import { createThinkTool } from '../../tools/think.js';
 import { createEvaluateTool } from '../../tools/evaluate.js';
@@ -81,7 +82,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     const baseTools = createTools(
       ctx.toolOptions,
       ctx.stores.memory,
-      ctx.mcp.tools,
+      mcpToolSurface(ctx),
       undefined,
       ctx.stores.specialists,
       undefined,

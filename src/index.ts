@@ -320,12 +320,11 @@ async function runInkRepl(args: {
     for (const s of failed) printError(`  ✗ mcp ${s.name}: ${s.error}`);
   }
 
-  const mcpTools = mcpManager.getTools({
+  const mcpSnapshot = mcpManager.snapshot({
     mode: config.mcpResultShaping,
     maxChars: config.mcpResultShapingMaxChars,
   });
-  const mcpServerNames = mcpManager.getConnectedServerNames();
-  const mcpServerTools = mcpManager.getServerToolMap();
+  const { tools: mcpTools, serverNames: mcpServerNames, serverTools: mcpServerTools } = mcpSnapshot;
 
   const sessionToolAllowlist = new Set<string>();
 

@@ -2,6 +2,7 @@ import type { CoreMessage, Tool } from 'ai';
 import { debugLog } from '../../logger.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
+import { mcpToolSurface } from '../../tools/delegate.js';
 import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
@@ -76,7 +77,7 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
       createTools(
         ctx.toolOptions,
         ctx.stores.memory,
-        ctx.mcp.tools,
+        mcpToolSurface(ctx),
         undefined,
         undefined,
         undefined,

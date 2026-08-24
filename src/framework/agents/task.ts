@@ -1,9 +1,10 @@
 import { z } from 'zod';
-import type { CoreMessage } from 'ai';
+import type { CoreMessage, Tool } from 'ai';
 import type { BernardConfig } from '../../config.js';
 import { debugLog } from '../../logger.js';
 import { extractJsonBlock } from '../../structured-output.js';
 import { createTools } from '../../tools/index.js';
+import { mcpToolSurface } from '../../tools/delegate.js';
 import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
@@ -125,6 +126,25 @@ export interface TaskInput {
  * No repair hook — task historically ran without one and the strict
  * no-behavior-change contract holds.
  */
+/**
+ * The task agent's tool registry. Shared by `systemPrompt` and `tools` so the
+ * advertised `Available tools: …` list is the handed set BY CONSTRUCTION —
+ * previously they were assembled separately and had already drifted (the
+ * prompt path passed no provenance, so `cite` was handed but never advertised).
+ */
+function taskTools(ctx: AgentContext): Record<string, Tool> {
+  return createTools(
+    ctx.toolOptions,
+    ctx.stores.memory,
+    mcpToolSurface(ctx),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    ctx.provenance,
+  );
+}
+
 export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
   id: 'task',
   site: 'specialist',
@@ -132,11 +152,7 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
   prefix: (input) => `task:${input.slotId}`,
 
   systemPrompt(ctx) {
-    // Pass no provenance for the prompt-key-discovery call — it only
-    // enumerates names. Tools registered for actual use are built below
-    // with `ctx.provenance`.
-    const baseTools = createTools(ctx.toolOptions, ctx.stores.memory, ctx.mcp.tools);
-    const autoContext = `\n\nWorking directory: ${process.cwd()}\nAvailable tools: ${Object.keys(baseTools).join(', ')}`;
+    const autoContext = `\n\nWorking directory: ${process.cwd()}\nAvailable tools: ${Object.keys(taskTools(ctx)).join(', ')}`;
     return TASK_SYSTEM_PROMPT + autoContext;
   },
 
@@ -147,18 +163,7 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
     };
   },
 
-  tools(ctx) {
-    return createTools(
-      ctx.toolOptions,
-      ctx.stores.memory,
-      ctx.mcp.tools,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      ctx.provenance,
-    );
-  },
+  tools: taskTools,
 
   strategy() {
     return new NormalStrategy();

@@ -8,7 +8,7 @@ import {
   mcpDelegateDefinition,
   buildDelegateSystemPrompt,
 } from '../framework/agents/mcp-delegate.js';
-import { acquireSlot, releaseSlot, getMaxConcurrentAgents } from './agent-pool.js';
+import { acquireSlot, releaseSlot } from './agent-pool.js';
 import { createAskUserTool } from './ask-user.js';
 import { debugLog } from '../logger.js';
 
@@ -41,10 +41,14 @@ export async function dispatchServerDelegate(
   args: { server: string; task: string; context?: string; abortSignal?: AbortSignal },
 ): Promise<string> {
   const { server, task, context, abortSignal } = args;
-  const slot = acquireSlot();
-  if (!slot) {
-    return `Could not delegate to "${server}": maximum concurrent agents (${getMaxConcurrentAgents()}) reached. Try again in a moment.`;
-  }
+  // `nested`: this helper runs INSIDE a dispatch that already holds a slot, so
+  // it must not compete for one (#305). Sub-agents carry `delegate_*` tools, and
+  // counting both against one flat cap would starve every helper the moment
+  // parallel sub-agents fill the pool — silently removing MCP access exactly
+  // when fan-out is highest. Nesting is bounded at one level: this helper's
+  // registry can never contain a `delegate_*` tool.
+  // `nested` never returns null, so there is no pool-exhausted branch here.
+  const slot = acquireSlot({ nested: true });
   try {
     const toolNames = serverToolNames(ctx, server);
     const childTools: Record<string, Tool> = {};
@@ -164,6 +168,35 @@ export function createDelegateTool(
       category: `mcp-delegate.${server}`,
     },
   ) as unknown as Tool;
+}
+
+/**
+ * The MCP tool bag a dispatched agent should carry, honoring
+ * `BERNARD_MCP_DELEGATION` (#296, #305).
+ *
+ * Delegation on  → thin `delegate_<server>` tools, one per server.
+ * Delegation off → the raw per-tool schemas.
+ *
+ * Returns ONE bag because the two are mutually exclusive by construction, and
+ * `createTools` spreads its `mcpTools` argument last — so callers pass the
+ * result straight through as that argument and need no second spread. An
+ * earlier two-field shape made every call site splice two values into two
+ * different places, where dropping the second half failed silently.
+ *
+ * Extracted because five definitions need the identical gate — main, sub,
+ * task, specialist and the PAC actor — and a copy that drifts silently
+ * re-introduces the 143-schema prefix this exists to remove.
+ */
+export function mcpToolSurface(ctx: AgentContext): Record<string, Tool> {
+  if (!ctx.config.mcpDelegation) return ctx.mcp.tools;
+  const delegates = createDelegateTools(ctx);
+  // Fail open: a foreign or test context carrying MCP tools but no usable
+  // server map would otherwise get neither delegates nor raw tools — a total
+  // loss of MCP access rather than the intended reduction. Paying the schema
+  // cost beats going dark. Internal origins can no longer reach this state:
+  // `MCPManager.snapshot()` is the single assembler and `serverTools` is
+  // required on `AgentContextMCP`.
+  return Object.keys(delegates).length > 0 ? delegates : ctx.mcp.tools;
 }
 
 /**

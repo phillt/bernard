@@ -4,6 +4,7 @@ import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { makeLastStepTextOnly } from './task.js';
 import { createTools } from '../../tools/index.js';
+import { mcpToolSurface } from '../../tools/delegate.js';
 import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
@@ -68,7 +69,7 @@ export const subAgentDefinition: AgentDefinition<SubAgentInput, string> = {
     return createTools(
       ctx.toolOptions,
       ctx.stores.memory,
-      ctx.mcp.tools,
+      mcpToolSurface(ctx),
       undefined,
       undefined,
       undefined,

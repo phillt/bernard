@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mainAgentDefinition } from '../main.js';
-import type { BernardConfig } from '../../../config.js';
-import type { AgentContext } from '../../context.js';
+import { makeCtx } from './_mcp-delegation-fixture.js';
 
 /**
  * Per-server MCP delegation (#296): with delegation on, the main agent must
@@ -9,71 +8,6 @@ import type { AgentContext } from '../../context.js';
  * that server's raw per-tool schemas. With delegation off, the raw MCP tools
  * are exposed directly and no delegate tool exists.
  */
-function baseConfig(mcpDelegation: boolean): BernardConfig {
-  return {
-    provider: 'anthropic',
-    model: 'claude-test',
-    maxTokens: 4096,
-    shellTimeout: 30000,
-    tokenWindow: 0,
-    maxSteps: 25,
-    ragEnabled: false,
-    cacheEnabled: true,
-    promptCache: true,
-    mcpDelegation,
-    mcpDelegateEscalation: true,
-    semanticCache: false,
-    theme: 'bernard',
-    coordinatorMode: 'off',
-    modelMode: 'off',
-    subagentPac: false,
-    toolDetails: false,
-    autoCreateSpecialists: false,
-    autoCreateThreshold: 0.8,
-    correctionEnabled: false,
-    promptRewriter: false,
-    confirmMode: 'auto',
-    toolMode: 'write',
-    maxConcurrentAgents: 4,
-    responseStyle: 'default',
-    referenceLookup: false,
-    referenceLookupTools: [],
-    scratchSubjectThreshold: 0.15,
-    conciseMode: false,
-    customProviders: {},
-  } as unknown as BernardConfig;
-}
-
-function makeCtx(mcpDelegation: boolean): AgentContext {
-  const noopStore = new Proxy({}, { get: () => () => [] });
-  return {
-    config: baseConfig(mcpDelegation),
-    toolOptions: {},
-    mcp: {
-      tools: {
-        google__gmail_list: { description: 'list gmail' },
-        google__gmail_get: { description: 'get email' },
-        slack__post_message: { description: 'post to slack' },
-      },
-      serverNames: ['google', 'slack'],
-      serverTools: {
-        google: ['google__gmail_list', 'google__gmail_get'],
-        slack: ['slack__post_message'],
-      },
-    },
-    stores: {
-      memory: { clearScratch: () => {} },
-      routines: noopStore,
-      specialists: noopStore,
-      candidates: noopStore,
-      toolProfiles: { list: () => [] },
-    },
-    provenance: undefined,
-    verification: { record: () => {} },
-    policyDecision: undefined,
-  } as unknown as AgentContext;
-}
-
 const input = { planStore: {}, systemPrompt: '' } as unknown as Parameters<
   typeof mainAgentDefinition.tools
 >[1];

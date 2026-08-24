@@ -29,10 +29,32 @@ export function setMaxConcurrentAgents(n: number): number {
 
 /**
  * Attempts to acquire a slot in the shared agent/task concurrency pool.
+ *
+ * `nested: true` bypasses the cap for a helper spawned *inside* a dispatch that
+ * already holds a slot — today only the MCP delegate helper. Without it,
+ * giving sub-agents `delegate_*` tools (#305) starves them: the cap counts
+ * sub-agents and helpers in one flat pool, so N parallel sub-agents at the cap
+ * leave nothing for the helper each one needs, and the delegate call degrades
+ * to an error string — silently losing MCP access exactly when fan-out is
+ * highest. Safe because the parent is already counted and nesting is bounded
+ * at one level: a helper's registry is `{…oneServersTools, ask_user}` and can
+ * never contain a `delegate_*` tool.
+ *
+ * Two consequences of the bypass, both deliberate:
+ * - {@link getActiveCount} may exceed `maxConcurrentAgents`, so a consumer
+ *   treating the active count as `<= cap` is wrong.
+ * - The cap bounds nesting DEPTH, not WIDTH: k parallel delegate calls from
+ *   each of N capped parents put `N + N*k` dispatches in flight.
+ *
+ * The nested overload returns non-null, so callers need no unreachable
+ * pool-exhausted branch.
+ *
  * @returns The assigned agent ID, or `null` if the pool is at capacity.
  */
-export function acquireSlot(): { id: number } | null {
-  if (activeAgentCount >= maxConcurrentAgents) return null;
+export function acquireSlot(opts: { nested: true }): { id: number };
+export function acquireSlot(opts?: { nested?: boolean }): { id: number } | null;
+export function acquireSlot(opts: { nested?: boolean } = {}): { id: number } | null {
+  if (!opts.nested && activeAgentCount >= maxConcurrentAgents) return null;
   activeAgentCount++;
   return { id: nextAgentId++ };
 }

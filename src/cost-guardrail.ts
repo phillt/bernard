@@ -4,11 +4,17 @@ import { formatTokenCount } from './output.js';
 /**
  * Provider-aware cost guardrail (#298).
  *
- * On a provider with no prompt-cache discount (xAI, custom endpoints), the large
- * stable request prefix — system + tool schemas + rolling history — is re-billed
- * at full price on *every* step, whereas a caching provider serves most of it at
- * ~10% after step 1. Nothing surfaces this asymmetry today. This module decides
- * whether a completed turn warrants a one-time, rate-limited hint.
+ * On a provider with no prompt-cache discount, the large stable request prefix —
+ * system + tool schemas + rolling history — is re-billed at full price on *every*
+ * step, whereas a caching provider serves most of it at ~10% after step 1.
+ * Nothing surfaces this asymmetry today. This module decides whether a completed
+ * turn warrants a one-time, rate-limited hint.
+ *
+ * Which providers those are is owned by `providerSupportsPromptCache` — today
+ * custom endpoints only. Do NOT restate the list here: an earlier version named
+ * xAI, which stopped being true when xAI was added to `PROMPT_CACHE_PROVIDERS`
+ * (every xAI catalog entry publishes a `cacheReadPerMTok` rate), leaving a
+ * comment that contradicted the code it introduced.
  */
 
 export interface NoPromptCacheHintInput {
