@@ -115,6 +115,40 @@ export function attachMeta<T extends Tool>(t: T, meta: ToolMeta): T {
 }
 
 /**
+ * Attaches meta for an **action-enum tool** — one tool whose `action` argument
+ * selects among several operations of differing consequence (`cron`,
+ * `cron_logs`, `cron_notes`, and the same shape used by `memory` / `scratch` /
+ * `routine`).
+ *
+ * Such a tool is `kind: 'write'` overall, but its read actions must still pass
+ * the read-only block gate (#179), which is what `isWriteAction` refines. The
+ * predicate is **fail-closed**: an absent or non-string `action` counts as a
+ * write, so a malformed call can never slip past the gate.
+ *
+ * Exists because the alternative is re-deriving that predicate at every such
+ * tool — it was already hand-rolled in three places before #253 consolidated
+ * cron into three more.
+ */
+export function attachActionMeta<T extends Tool>(
+  t: T,
+  opts: { name: string; readActions: ReadonlySet<string> } & Partial<ToolMeta>,
+): T {
+  const { name, readActions, ...overrides } = opts;
+  return attachMeta(t, {
+    name,
+    kind: 'write',
+    deterministic: false,
+    sideEffect: 'local',
+    cacheable: false,
+    isWriteAction: (args: unknown) => {
+      const action = (args as { action?: unknown } | undefined)?.action;
+      return typeof action !== 'string' || !readActions.has(action);
+    },
+    ...overrides,
+  });
+}
+
+/**
  * Re-attaches Bernard meta to a spread copy of a tool. Object spread (e.g.
  * `{ ...tool, execute: wrapped }`) silently drops `__bernardMeta` because the
  * property is non-enumerable; passes that rebuild a tool's `execute` (the

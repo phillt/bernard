@@ -1,20 +1,10 @@
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import { CronNotesStore, MAX_NOTE_LENGTH, type CronNoteEntry } from '../cron/notes-store.js';
 import { CronStore } from '../cron/store.js';
 import { debugLog } from '../logger.js';
-import { attachMeta } from '../framework/tools/adapter.js';
-import type { ToolMeta } from '../framework/tools/types.js';
-
-function withLocalMeta(name: string, kind: ToolMeta['kind'], t: Tool): Tool {
-  return attachMeta(t, {
-    name,
-    kind,
-    deterministic: false,
-    sideEffect: 'local',
-    cacheable: false,
-  });
-}
+import { missing } from './cron.js';
+import { attachActionMeta } from '../framework/tools/adapter.js';
 
 function pluralizeEntries(n: number): string {
   return `${n} ${n === 1 ? 'entry' : 'entries'}`;
@@ -30,120 +20,129 @@ function formatEntryView(e: CronNoteEntry): string {
   return `• ${e.timestamp}${run}\n    ${e.text}`;
 }
 
+/** Note actions that only read. `write` is the sole mutator. */
+export const CRON_NOTES_READ_ACTIONS: ReadonlySet<string> = new Set(['read', 'list', 'view']);
+
+interface CronNotesArgs {
+  action: CronNotesAction;
+  job_id?: string;
+  text?: string;
+}
+
+interface CronNotesDeps {
+  notesStore: CronNotesStore;
+  cronStore: CronStore;
+}
+
+type CronNotesHandler = (deps: CronNotesDeps, args: CronNotesArgs) => Promise<string>;
+
+/** Per-action handlers, exported for direct unit testing (#253). */
+export const CRON_NOTES_ACTIONS = {
+  read: async ({ notesStore }, { job_id }) => {
+    if (!job_id)
+      return 'Error: "read" requires `job_id`. Example: {"action":"read","job_id":"<id>"}';
+    const notes = notesStore.read(job_id);
+    if (notes.entries.length === 0) {
+      return `No notes recorded for job "${job_id}".`;
+    }
+    const lines = notes.entries.map(formatEntryCompact);
+    return `Notes for job "${job_id}" (${pluralizeEntries(notes.entries.length)}):\n${lines.join('\n')}`;
+  },
+
+  write: async ({ notesStore }, { job_id, text }) => {
+    if (!job_id || !text) {
+      return missing(
+        'write',
+        'job_id and text',
+        '{"action":"write","job_id":"<id>","text":"Sent the report"}',
+      );
+    }
+    if (text.length > MAX_NOTE_LENGTH) {
+      return `Error: note text exceeds ${MAX_NOTE_LENGTH} characters (got ${text.length}). Summarize first.`;
+    }
+    const { total } = notesStore.append(job_id, text);
+    return `Appended note to job "${job_id}" (${pluralizeEntries(total)} total).`;
+  },
+
+  list: async ({ notesStore, cronStore }) => {
+    const jobIds = notesStore.listJobIds();
+    if (jobIds.length === 0) {
+      return 'No cron jobs have notes yet.';
+    }
+    const lines = jobIds.map((id) => {
+      const job = cronStore.getJob(id);
+      const label = job ? `${id} (${job.name})` : id;
+      const count = notesStore.read(id).entries.length;
+      return `  ${label}: ${pluralizeEntries(count)}`;
+    });
+    return `Jobs with notes:\n${lines.join('\n')}`;
+  },
+
+  view: async ({ notesStore, cronStore }, { job_id }) => {
+    if (!job_id)
+      return 'Error: "view" requires `job_id`. Example: {"action":"view","job_id":"<id>"}';
+    const notes = notesStore.read(job_id);
+    if (notes.entries.length === 0) {
+      return `No notes recorded for job "${job_id}".`;
+    }
+    const job = cronStore.getJob(job_id);
+    const header = job
+      ? `Notes for "${job.name}" (${job_id}) — ${pluralizeEntries(notes.entries.length)}`
+      : `Notes for job ${job_id} — ${pluralizeEntries(notes.entries.length)}`;
+    const body = notes.entries.map(formatEntryView).join('\n\n');
+    return `${header}\n\n${body}`;
+  },
+} satisfies Record<string, CronNotesHandler>;
+
+export type CronNotesAction = keyof typeof CRON_NOTES_ACTIONS;
+
 /**
- * Creates tools for reading and maintaining persistent per-job cron notes.
- *
- * All tools take a `job_id` parameter. In daemon runs, these globals are
- * overridden by job-scoped closures in {@link ../cron/runner} that auto-tag
- * writes with the current runId; see runner.ts for the self-scoped variants.
+ * Derived from the handler table, not declared beside it — a parallel list can
+ * drift, and a schema accepting an action with no handler dispatches to
+ * `undefined` at call time.
  */
-export function createCronNotesTools() {
-  const notesStore = new CronNotesStore();
-  const cronStore = new CronStore();
+export const CRON_NOTES_ACTION_NAMES = Object.keys(CRON_NOTES_ACTIONS) as [
+  CronNotesAction,
+  ...CronNotesAction[],
+];
+
+/**
+ * Consolidated cron-notes tool (#253) — one action-enum tool replacing
+ * `cron_notes_read` / `_write` / `_list` / `_view`.
+ *
+ * In daemon runs these globals are overridden by job-scoped closures in
+ * {@link ../cron/runner} that auto-tag writes with the current runId; see
+ * `src/cron/scoped-notes-tools.ts` for the self-scoped variants.
+ */
+export function createCronNotesTool() {
+  const deps: CronNotesDeps = { notesStore: new CronNotesStore(), cronStore: new CronStore() };
 
   return {
-    cron_notes_read: withLocalMeta(
-      'cron_notes_read',
-      'read',
+    cron_notes: attachActionMeta(
       tool({
-        description:
-          'Read all persistent notes for a cron job. Returns a human-readable formatted list of note entries including timestamp, optional runId, and text. Notes persist across daemon restarts and record actions prior runs took.',
+        description: `Read and append persistent per-job cron notes. Notes survive daemon restarts and record what prior runs actually did, so a job can avoid repeating work.
+
+Actions: read · write · list · view
+  read  — compact entry list for one job (programmatic use); needs job_id
+  write — append one short factual entry; needs job_id and text
+  list  — every job that has notes, with entry counts
+  view  — the same notes formatted for a human to read; needs job_id`,
         parameters: z.object({
-          job_id: z.string().describe('Job ID to read notes for'),
-        }),
-        execute: async ({ job_id }): Promise<string> => {
-          debugLog('cron_notes_read:execute', { job_id });
-
-          const notes = notesStore.read(job_id);
-          if (notes.entries.length === 0) {
-            return `No notes recorded for job "${job_id}".`;
-          }
-
-          const lines = notes.entries.map(formatEntryCompact);
-          return `Notes for job "${job_id}" (${pluralizeEntries(notes.entries.length)}):\n${lines.join('\n')}`;
-        },
-      }),
-    ),
-
-    cron_notes_write: withLocalMeta(
-      'cron_notes_write',
-      'write',
-      tool({
-        description:
-          'Append a persistent note to a cron job. Use short factual entries recording significant actions (e.g. "Sent email to user@example.com", "Created issue #123"). Notes persist across daemon restarts.',
-        parameters: z.object({
-          job_id: z.string().describe('Job ID to attach the note to'),
+          action: z.enum(CRON_NOTES_ACTION_NAMES).describe('The notes operation to perform'),
+          job_id: z.string().optional().describe('Job ID — required by read/write/view'),
           text: z
             .string()
             .min(1)
             .max(MAX_NOTE_LENGTH)
-            .describe('Short factual description of the action'),
+            .optional()
+            .describe('write: short factual description of the action taken'),
         }),
-        execute: async ({ job_id, text }): Promise<string> => {
-          debugLog('cron_notes_write:execute', { job_id, text });
-
-          if (text.length > MAX_NOTE_LENGTH) {
-            return `Error: note text exceeds ${MAX_NOTE_LENGTH} characters (got ${text.length}). Summarize first.`;
-          }
-
-          const { total } = notesStore.append(job_id, text);
-          return `Appended note to job "${job_id}" (${pluralizeEntries(total)} total).`;
+        execute: async (args): Promise<string> => {
+          debugLog('cron_notes:execute', args);
+          return CRON_NOTES_ACTIONS[args.action](deps, args);
         },
       }),
-    ),
-
-    cron_notes_list: withLocalMeta(
-      'cron_notes_list',
-      'read',
-      tool({
-        description:
-          'List all cron jobs that have persistent notes, with an entry count per job. Use to discover which jobs are tracking state.',
-        parameters: z.object({}),
-        execute: async (): Promise<string> => {
-          debugLog('cron_notes_list:execute', {});
-
-          const jobIds = notesStore.listJobIds();
-          if (jobIds.length === 0) {
-            return 'No cron jobs have notes yet.';
-          }
-
-          const lines = jobIds.map((id) => {
-            const job = cronStore.getJob(id);
-            const label = job ? `${id} (${job.name})` : id;
-            const count = notesStore.read(id).entries.length;
-            return `  ${label}: ${pluralizeEntries(count)}`;
-          });
-
-          return `Jobs with notes:\n${lines.join('\n')}`;
-        },
-      }),
-    ),
-
-    cron_notes_view: withLocalMeta(
-      'cron_notes_view',
-      'read',
-      tool({
-        description:
-          "View a cron job's persistent notes formatted for human reading (one entry per block). Prefer cron_notes_read for programmatic consumption.",
-        parameters: z.object({
-          job_id: z.string().describe('Job ID to view notes for'),
-        }),
-        execute: async ({ job_id }): Promise<string> => {
-          debugLog('cron_notes_view:execute', { job_id });
-
-          const notes = notesStore.read(job_id);
-          if (notes.entries.length === 0) {
-            return `No notes recorded for job "${job_id}".`;
-          }
-
-          const job = cronStore.getJob(job_id);
-          const header = job
-            ? `Notes for "${job.name}" (${job_id}) — ${pluralizeEntries(notes.entries.length)}`
-            : `Notes for job ${job_id} — ${pluralizeEntries(notes.entries.length)}`;
-          const body = notes.entries.map(formatEntryView).join('\n\n');
-          return `${header}\n\n${body}`;
-        },
-      }),
+      { name: 'cron_notes', readActions: CRON_NOTES_READ_ACTIONS },
     ),
   };
 }

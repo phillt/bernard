@@ -10,7 +10,7 @@
 
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { primaryShellCommand } from '../tool-permissions.js';
+import { ACTION_SCOPED_TOOLS, primaryShellCommand } from '../tool-permissions.js';
 import { truncate } from '../text.js';
 import { stableArgsString, FILE_TOOLS, WEB_TOOLS } from './matchers.js';
 
@@ -99,6 +99,28 @@ export function breadthOptionsFor(toolName: string, args: unknown): BreadthOptio
     }
     const dom = `domain:${host}`;
     return [exact, { label: dom, specifier: dom, rulePreview: preview(`${toolName} ${dom}`) }];
+  }
+
+  // Action-enum tools (#253): the meaningful ladder is "this action" → "any
+  // action", not "these exact arguments". `cron{action:'delete',id:'x'}` and
+  // `cron{action:'delete',id:'y'}` are the same decision to a user, and an
+  // exact-args grant would never match the second one.
+  if (ACTION_SCOPED_TOOLS.has(toolName)) {
+    const action = (args as Record<string, unknown> | undefined)?.action;
+    if (typeof action === 'string' && action) {
+      return [
+        {
+          label: `this action (${action})`,
+          specifier: `action:${action}`,
+          rulePreview: preview(`${toolName} ${action}`),
+        },
+        {
+          label: 'any action',
+          specifier: '*',
+          rulePreview: preview(`${toolName} (any action)`),
+        },
+      ];
+    }
   }
 
   // MCP and all other tools: exact args → any args.

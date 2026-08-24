@@ -7,11 +7,49 @@ import {
   type LanguageModel,
   type Tool,
   type ToolCallRepairFunction,
+  zodSchema,
 } from 'ai';
 import { debugLog, isDebugEnabled } from '../logger.js';
 import type { AgentHook, StepFinishPayload } from './hooks/types.js';
 import { runWithDispatchId } from './dispatch-context.js';
 import { normalizeUsage } from './hooks/token-stats.js';
+
+/**
+ * Wire size of a dispatch's tool block, in characters (#253).
+ *
+ * Sums `name + description + JSON Schema` per tool — what a provider actually
+ * receives. Zod parameters are converted with the AI SDK's own `zodSchema()`
+ * (the same path `generateText` takes), so a Zod built-in and a JSON-Schema MCP
+ * tool are measured on the same scale; `JSON.stringify` on a raw Zod object
+ * would under-report built-ins by roughly half and make cross-dispatch
+ * comparisons meaningless — the exact thing this metric exists to enable.
+ *
+ * Debug-only: converting every schema is O(schema size) per dispatch. Never
+ * throws into the dispatch path.
+ */
+function toolBlockBytes(tools: Record<string, Tool> | undefined): number {
+  if (!tools) return 0;
+  let total = 0;
+  for (const [name, t] of Object.entries(tools)) {
+    total += name.length;
+    const def = t as { description?: unknown; parameters?: unknown };
+    if (typeof def.description === 'string') total += def.description.length;
+    try {
+      const p = def.parameters;
+      // MCP tools arrive pre-wrapped by `jsonSchema()` and already expose
+      // `.jsonSchema`; Zod schemas need converting first.
+      const resolved =
+        p && typeof p === 'object' && 'jsonSchema' in p
+          ? (p as { jsonSchema: unknown }).jsonSchema
+          : zodSchema(p as Parameters<typeof zodSchema>[0]).jsonSchema;
+      total += JSON.stringify(resolved ?? {}).length;
+    } catch {
+      // Unconvertible or circular schema — skip this tool's parameters rather
+      // than fail the dispatch. Undercounts; never crashes.
+    }
+  }
+  return total;
+}
 
 const WATCHDOG_INTERVAL_MS = 30_000;
 
@@ -197,13 +235,26 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
       }
     },
   };
-  // Streaming branch already emits per-token / per-tool-call events through
-  // the sink; the per-step boundary event there would be redundant noise.
-  // Only prepend stepObserver when debug is on — otherwise it'd force
-  // `onStepFinish` to be defined on every dispatch even when the caller
-  // passed no hooks, breaking the param-parity contract.
-  const composedHooks: AgentHook[] =
-    debug && !spec.useStreaming ? [stepObserver, ...(spec.hooks ?? [])] : (spec.hooks ?? []);
+  // Attach on BOTH branches (#253). This used to be `debug && !spec.useStreaming`,
+  // reasoning that "the streaming branch already emits per-token / per-tool-call
+  // events through the sink, so a per-step boundary event would be redundant
+  // noise." That holds for *content* — but `StreamEvent` is only
+  // `text-delta | tool-call | tool-result` and carries no usage at all, so the
+  // rule also suppressed every per-step token and cache counter for the one
+  // dispatch that streams: the main agent.
+  //
+  // Cost was still recorded in aggregate (`tokenStatsHook` → spinner, /usage,
+  // telemetry), but nothing showed how a turn's prefix grew step to step, or
+  // whether the prompt cache was being written vs. read. The gap is not
+  // hypothetical: it let a sub-agent's `promptTokens` be read as the main
+  // agent's when sizing #253, because main emitted no step lines to compare to.
+  //
+  // Still `debug`-only — otherwise this would force `onStepFinish` to be defined
+  // on every dispatch even when the caller passed no hooks, breaking the
+  // param-parity contract.
+  const composedHooks: AgentHook[] = debug
+    ? [stepObserver, ...(spec.hooks ?? [])]
+    : (spec.hooks ?? []);
   const onStepFinish = composeOnStepFinish(composedHooks);
 
   debugLog('agent:dispatch:start', {
@@ -213,6 +264,11 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
     systemLen: spec.system?.length ?? 0,
     messagesLen: spec.messages.length,
     toolCount: spec.tools ? Object.keys(spec.tools).length : 0,
+    // Wire size of the tool block, not just its cardinality (#253). Counting
+    // tools alone is actively misleading when sizing prefix cost: the 18
+    // `cron_*` tools are 37% of main's tool COUNT but 28% of its BYTES, and two
+    // single tools (`lineup_edit`, `specialist`) outweigh six cron tools each.
+    toolBytes: debug ? toolBlockBytes(spec.tools) : undefined,
     maxSteps: spec.maxSteps,
   });
 

@@ -1,4 +1,4 @@
-import { tool, type Tool } from 'ai';
+import { tool } from 'ai';
 import { z } from 'zod';
 import cron from 'node-cron';
 import { CronStore } from '../cron/store.js';
@@ -6,18 +6,7 @@ import { CronLogStore } from '../cron/log-store.js';
 import { runJob } from '../cron/runner.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from '../cron/client.js';
 import { debugLog } from '../logger.js';
-import { attachMeta } from '../framework/tools/adapter.js';
-import type { ToolMeta } from '../framework/tools/types.js';
-
-function withCronMeta(name: string, kind: ToolMeta['kind'], t: Tool): Tool {
-  return attachMeta(t, {
-    name,
-    kind,
-    deterministic: false,
-    sideEffect: 'local',
-    cacheable: false,
-  });
-}
+import { attachActionMeta } from '../framework/tools/adapter.js';
 
 function ensureDaemon(): string | null {
   if (!isDaemonRunning()) {
@@ -41,352 +30,297 @@ function stopIfNoEnabledJobs(store: CronStore): string {
 }
 
 /**
- * Creates the full suite of cron job management tools.
- *
- * Includes create, list, get, update, delete, enable, disable, run, status,
- * and bounce (daemon restart). The background daemon is auto-started when
- * jobs are created or enabled, and auto-stopped when no enabled jobs remain.
+ * Cron actions that only read state. Everything else mutates jobs or the
+ * daemon. Drives both the read-only block gate (#179) via `isWriteAction` and
+ * the risk tier used by the confirm gate (#144).
  */
-export function createCronTools() {
-  const store = new CronStore();
-  const logStore = new CronLogStore();
+export const CRON_READ_ACTIONS: ReadonlySet<string> = new Set(['list', 'get', 'status']);
+
+interface CronArgs {
+  action: string;
+  id?: string;
+  name?: string;
+  schedule?: string;
+  prompt?: string;
+}
+
+interface CronDeps {
+  store: CronStore;
+  logStore: CronLogStore;
+}
+
+type CronHandler = (deps: CronDeps, args: CronArgs) => Promise<string>;
+
+/**
+ * Uniform "you left out a required field" message.
+ *
+ * Shared by all three cron tools: consolidation moved required-field checks out
+ * of zod and into the handlers, so this wording is the only thing telling the
+ * model what it left out — it should read identically everywhere.
+ */
+export function missing(action: string, field: string, example: string): string {
+  return `Error: "${action}" requires \`${field}\`. Example: ${example}`;
+}
+
+/**
+ * Per-action handlers for the consolidated `cron` tool (#253).
+ *
+ * Exported so the behaviour can be unit-tested directly, without going through
+ * zod parsing and the AI-SDK tool envelope.
+ *
+ * **Why every field is optional in the schema:** one tool serving ten actions
+ * cannot express "id is required, but only for these six". Each handler
+ * therefore validates its own inputs and returns an actionable message rather
+ * than throwing — the same shape `cron_update` already used for its
+ * "at least one field" check.
+ *
+ * Named `CRON_ACTIONS.list` etc. rather than lifted to module scope on purpose:
+ * `cronList` / `cronRun` / `cronDelete` / `cronBounce` are already exported from
+ * `src/cron/cli.ts` and imported by `src/index.ts`, and duplicating those names
+ * here would be a confusing near-collision.
+ */
+export const CRON_ACTIONS = {
+  create: async ({ store }, { name, schedule, prompt }) => {
+    if (!name || !schedule || !prompt) {
+      return missing(
+        'create',
+        'name, schedule and prompt',
+        '{"action":"create","name":"Nightly","schedule":"0 2 * * *","prompt":"..."}',
+      );
+    }
+    if (!cron.validate(schedule)) {
+      return `Error: Invalid cron expression "${schedule}". Use standard cron format (e.g. "0 * * * *" for hourly, "*/5 * * * *" for every 5 minutes).`;
+    }
+    try {
+      const job = store.createJob(name, schedule, prompt);
+      const daemonErr = ensureDaemon();
+      if (daemonErr) {
+        return `Job "${job.name}" created (${job.id}) but daemon failed to start: ${daemonErr}`;
+      }
+      return `Cron job created:\n  ID: ${job.id}\n  Name: ${job.name}\n  Schedule: ${job.schedule}\n  Daemon: running`;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `Error creating job: ${msg}`;
+    }
+  },
+
+  list: async ({ store }) => {
+    const jobs = store.loadJobs();
+    if (jobs.length === 0) return 'No cron jobs configured.';
+    const lines = jobs.map((j) => {
+      const status = j.enabled ? 'enabled' : 'disabled';
+      const lastRun = j.lastRun
+        ? `last run: ${j.lastRun} (${j.lastRunStatus || 'unknown'})`
+        : 'never run';
+      return `  - ${j.name} [${status}]\n    ID: ${j.id}\n    Schedule: ${j.schedule}\n    ${lastRun}`;
+    });
+    return `Cron jobs (${jobs.length}):\n${lines.join('\n')}`;
+  },
+
+  get: async ({ store }, { id }) => {
+    if (!id) return missing('get', 'id', '{"action":"get","id":"<job-id>"}');
+    const job = store.getJob(id);
+    if (!job) return `Error: No job found with ID "${id}".`;
+    let result = `Job details:\n`;
+    result += `  ID: ${job.id}\n`;
+    result += `  Name: ${job.name}\n`;
+    result += `  Schedule: ${job.schedule}\n`;
+    result += `  Enabled: ${job.enabled}\n`;
+    result += `  Created: ${job.createdAt}\n`;
+    result += `  Prompt: ${job.prompt}`;
+    if (job.lastRun) {
+      result += `\n  Last run: ${job.lastRun}`;
+      result += `\n  Last status: ${job.lastRunStatus || 'unknown'}`;
+      if (job.lastResult) {
+        result += `\n  Last result: ${job.lastResult}`;
+      }
+    }
+    return result;
+  },
+
+  update: async ({ store }, { id, name, schedule, prompt }) => {
+    if (!id) return missing('update', 'id', '{"action":"update","id":"<id>","prompt":"..."}');
+    if (!name && !schedule && !prompt) {
+      const received = Object.entries({ id, name, schedule, prompt })
+        .filter(([, v]) => v !== undefined)
+        .map(([k]) => k)
+        .join(', ');
+      return (
+        'Error: update requires at least one field to change (name, schedule, prompt) as a parameter in this tool call. ' +
+        'Example: {"action":"update","id":"...","prompt":"new prompt text"}. ' +
+        `Received parameters: ${received}.`
+      );
+    }
+    if (schedule && !cron.validate(schedule)) {
+      return `Error: Invalid cron expression "${schedule}". Use standard cron format (e.g. "0 * * * *" for hourly, "*/5 * * * *" for every 5 minutes).`;
+    }
+    const updates: Record<string, string> = {};
+    if (name) updates.name = name;
+    if (schedule) updates.schedule = schedule;
+    if (prompt) updates.prompt = prompt;
+    const job = store.updateJob(id, updates);
+    if (!job) return `Error: No job found with ID "${id}".`;
+    return `Job updated:\n  ID: ${job.id}\n  Name: ${job.name}\n  Schedule: ${job.schedule}\n  Enabled: ${job.enabled}`;
+  },
+
+  delete: async ({ store, logStore }, { id }) => {
+    if (!id) return missing('delete', 'id', '{"action":"delete","id":"<job-id>"}');
+    const deleted = store.deleteJob(id);
+    if (!deleted) return `Error: No job found with ID "${id}".`;
+    logStore.deleteJobLogs(id);
+    const suffix = stopIfNoEnabledJobs(store);
+    if (suffix) return `Job deleted.${suffix}`;
+    return `Job "${id}" deleted.`;
+  },
+
+  enable: async ({ store }, { id }) => {
+    if (!id) return missing('enable', 'id', '{"action":"enable","id":"<job-id>"}');
+    const job = store.updateJob(id, { enabled: true });
+    if (!job) return `Error: No job found with ID "${id}".`;
+    const daemonErr = ensureDaemon();
+    if (daemonErr) return `Job "${job.name}" enabled but daemon failed to start: ${daemonErr}`;
+    return `Job "${job.name}" enabled. Daemon running.`;
+  },
+
+  disable: async ({ store }, { id }) => {
+    if (!id) return missing('disable', 'id', '{"action":"disable","id":"<job-id>"}');
+    const job = store.updateJob(id, { enabled: false });
+    if (!job) return `Error: No job found with ID "${id}".`;
+    const suffix = stopIfNoEnabledJobs(store);
+    if (suffix) return `Job "${job.name}" disabled.${suffix}`;
+    return `Job "${job.name}" disabled.`;
+  },
+
+  run: async ({ store }, { id }) => {
+    if (!id) return missing('run', 'id', '{"action":"run","id":"<job-id>"}');
+    const job = store.getJob(id);
+    if (!job) return `Error: No job found with ID "${id}".`;
+    if (job.lastRunStatus === 'running') {
+      return `Error: Job "${job.name}" is already running. Wait for it to finish before triggering another run.`;
+    }
+    const disabledNote = job.enabled ? '' : '\nNote: this job is currently disabled.\n';
+    const startTime = new Date().toISOString();
+    store.updateJob(id, { lastRun: startTime, lastRunStatus: 'running' });
+    try {
+      const logs: string[] = [];
+      const result = await runJob(job, (msg) => logs.push(msg));
+      store.updateJob(id, {
+        lastRunStatus: result.success ? 'success' : 'error',
+        lastResult: result.output.slice(0, 2000),
+      });
+      const status = result.success ? 'Success' : 'Error';
+      let response = `${disabledNote}Job "${job.name}" — ${status}\n\nOutput:\n${result.output}`;
+      if (logs.length > 0) response += `\n\nLogs:\n${logs.join('\n')}`;
+      return response;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      store.updateJob(id, { lastRunStatus: 'error', lastResult: message.slice(0, 2000) });
+      return `${disabledNote}Job "${job.name}" — Error\n\nThrew: ${message}`;
+    }
+  },
+
+  status: async ({ store }) => {
+    const running = isDaemonRunning();
+    const jobs = store.loadJobs();
+    const enabled = jobs.filter((j) => j.enabled).length;
+    const alerts = store.listAlerts().filter((a) => !a.acknowledged);
+    let result = `Daemon: ${running ? 'running' : 'stopped'}\n`;
+    result += `Jobs: ${jobs.length} total, ${enabled} enabled\n`;
+    result += `Unacknowledged alerts: ${alerts.length}`;
+    if (alerts.length > 0) {
+      result += '\n\nRecent alerts:';
+      for (const alert of alerts.slice(0, 5)) {
+        result += `\n  - [${alert.timestamp}] ${alert.jobName}: ${alert.message}`;
+      }
+    }
+    return result;
+  },
+
+  bounce: async ({ store }) => {
+    const wasRunning = isDaemonRunning();
+    if (wasRunning) {
+      stopDaemon();
+      // Brief delay for process cleanup
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    const enabled = store.loadJobs().filter((j) => j.enabled);
+    if (enabled.length === 0) {
+      return wasRunning
+        ? 'Daemon stopped. No enabled jobs — not restarting.'
+        : 'Daemon was not running. No enabled jobs — nothing to do.';
+    }
+    try {
+      startDaemon();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `Daemon ${wasRunning ? 'stopped but' : 'was not running and'} failed to restart: ${msg}`;
+    }
+    return `Daemon restarted. ${enabled.length} enabled job${enabled.length === 1 ? '' : 's'}.`;
+  },
+} satisfies Record<string, CronHandler>;
+
+export type CronAction = keyof typeof CRON_ACTIONS;
+
+/**
+ * The zod enum's members, derived from the handler table rather than declared
+ * beside it — a parallel list can drift, and a schema that accepts an action
+ * with no handler dispatches to `undefined` at call time.
+ */
+export const CRON_ACTION_NAMES = Object.keys(CRON_ACTIONS) as [CronAction, ...CronAction[]];
+
+/**
+ * The consolidated cron tool (#253) — one action-enum tool replacing ten
+ * `cron_*` tools, matching the shape `routine`, `specialist`, `memory` and
+ * `scratch` already use. Ten schemas cost ~4.5k chars of every request's tool
+ * block; one costs a fraction of that, with no runtime indirection.
+ *
+ * `kind: 'write'` with an `isWriteAction` refinement (the `createMemoryTool`
+ * pattern) so read actions still pass the read-only block gate untouched.
+ */
+export function createCronTool() {
+  const deps: CronDeps = { store: new CronStore(), logStore: new CronLogStore() };
 
   return {
-    cron_create: withCronMeta(
-      'cron_create',
-      'write',
+    cron: attachActionMeta(
       tool({
-        description: 'Create a new scheduled cron job that runs an AI prompt on a schedule.',
+        description: `Manage scheduled cron jobs — background AI prompts that run on a schedule via an independent daemon, whether or not a session is open.
+
+Actions: create · list · get · update · delete · enable · disable · run · status · bounce
+  create   — needs name, schedule, prompt
+  update   — needs id plus at least one of name/schedule/prompt (replaces that field entirely)
+  get/delete/enable/disable/run — need id
+  list/status/bounce — need nothing else
+
+The daemon auto-starts when a job is created or enabled, and auto-stops when no enabled jobs remain. "bounce" restarts it (useful after a code update).`,
         parameters: z.object({
-          name: z.string().describe('Job name'),
+          action: z.enum(CRON_ACTION_NAMES).describe('The cron operation to perform'),
+          id: z
+            .string()
+            .optional()
+            .describe('Job ID — required by get/update/delete/enable/disable/run'),
+          name: z
+            .string()
+            .optional()
+            .describe('Job name — required by create, optional for update'),
           schedule: z
             .string()
+            .optional()
             .describe(
-              'Cron expression (e.g. "0 * * * *" for hourly, "*/5 * * * *" for every 5 min)',
+              'Cron expression, e.g. "0 * * * *" hourly or "*/5 * * * *" every 5 min — required by create, optional for update',
             ),
-          prompt: z.string().describe('The AI prompt to execute on each run'),
-        }),
-        execute: async ({ name, schedule, prompt }): Promise<string> => {
-          debugLog('cron_create:execute', { name, schedule, prompt });
-
-          if (!cron.validate(schedule)) {
-            return `Error: Invalid cron expression "${schedule}". Use standard cron format (e.g. "0 * * * *" for hourly, "*/5 * * * *" for every 5 minutes).`;
-          }
-
-          try {
-            const job = store.createJob(name, schedule, prompt);
-
-            const daemonErr = ensureDaemon();
-            if (daemonErr) {
-              return `Job "${job.name}" created (${job.id}) but daemon failed to start: ${daemonErr}`;
-            }
-
-            return `Cron job created:\n  ID: ${job.id}\n  Name: ${job.name}\n  Schedule: ${job.schedule}\n  Daemon: running`;
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return `Error creating job: ${msg}`;
-          }
-        },
-      }),
-    ),
-
-    cron_list: withCronMeta(
-      'cron_list',
-      'read',
-      tool({
-        description: 'List all cron jobs with their status and last run info.',
-        parameters: z.object({}),
-        execute: async (): Promise<string> => {
-          debugLog('cron_list:execute', {});
-
-          const jobs = store.loadJobs();
-          if (jobs.length === 0) return 'No cron jobs configured.';
-
-          const lines = jobs.map((j) => {
-            const status = j.enabled ? 'enabled' : 'disabled';
-            const lastRun = j.lastRun
-              ? `last run: ${j.lastRun} (${j.lastRunStatus || 'unknown'})`
-              : 'never run';
-            return `  - ${j.name} [${status}]\n    ID: ${j.id}\n    Schedule: ${j.schedule}\n    ${lastRun}`;
-          });
-
-          return `Cron jobs (${jobs.length}):\n${lines.join('\n')}`;
-        },
-      }),
-    ),
-
-    cron_run: withCronMeta(
-      'cron_run',
-      'write',
-      tool({
-        description:
-          "Manually run a cron job immediately. Executes the job's prompt through the AI agent and returns the result.",
-        parameters: z.object({
-          id: z.string().describe('Job ID to run'),
-        }),
-        execute: async ({ id }): Promise<string> => {
-          debugLog('cron_run:execute', { id });
-
-          const job = store.getJob(id);
-          if (!job) return `Error: No job found with ID "${id}".`;
-
-          if (job.lastRunStatus === 'running') {
-            return `Error: Job "${job.name}" is already running. Wait for it to finish before triggering another run.`;
-          }
-
-          const disabledNote = job.enabled ? '' : '\nNote: this job is currently disabled.\n';
-
-          const startTime = new Date().toISOString();
-          store.updateJob(id, {
-            lastRun: startTime,
-            lastRunStatus: 'running',
-          });
-
-          try {
-            const logs: string[] = [];
-            const result = await runJob(job, (msg) => logs.push(msg));
-
-            store.updateJob(id, {
-              lastRunStatus: result.success ? 'success' : 'error',
-              lastResult: result.output.slice(0, 2000),
-            });
-
-            const status = result.success ? 'Success' : 'Error';
-            let response = `${disabledNote}Job "${job.name}" — ${status}\n\nOutput:\n${result.output}`;
-            if (logs.length > 0) {
-              response += `\n\nLogs:\n${logs.join('\n')}`;
-            }
-            return response;
-          } catch (err: unknown) {
-            const message = err instanceof Error ? err.message : String(err);
-            store.updateJob(id, {
-              lastRunStatus: 'error',
-              lastResult: message.slice(0, 2000),
-            });
-            return `${disabledNote}Job "${job.name}" — Error\n\nThrew: ${message}`;
-          }
-        },
-      }),
-    ),
-
-    cron_get: withCronMeta(
-      'cron_get',
-      'read',
-      tool({
-        description: 'Get full details of a cron job including prompt text and last result.',
-        parameters: z.object({
-          id: z.string().describe('Job ID'),
-        }),
-        execute: async ({ id }): Promise<string> => {
-          debugLog('cron_get:execute', { id });
-
-          const job = store.getJob(id);
-          if (!job) return `Error: No job found with ID "${id}".`;
-
-          let result = `Job details:\n`;
-          result += `  ID: ${job.id}\n`;
-          result += `  Name: ${job.name}\n`;
-          result += `  Schedule: ${job.schedule}\n`;
-          result += `  Enabled: ${job.enabled}\n`;
-          result += `  Created: ${job.createdAt}\n`;
-          result += `  Prompt: ${job.prompt}`;
-          if (job.lastRun) {
-            result += `\n  Last run: ${job.lastRun}`;
-            result += `\n  Last status: ${job.lastRunStatus || 'unknown'}`;
-            if (job.lastResult) {
-              result += `\n  Last result: ${job.lastResult}`;
-            }
-          }
-
-          return result;
-        },
-      }),
-    ),
-
-    cron_update: withCronMeta(
-      'cron_update',
-      'write',
-      tool({
-        description: `Update a cron job's name, schedule, or prompt. You MUST include the new values as parameters.
-Examples:
-  Change prompt: { "id": "<id>", "prompt": "new prompt text" }
-  Change schedule: { "id": "<id>", "schedule": "*/30 * * * *" }
-  Change multiple: { "id": "<id>", "name": "New name", "prompt": "new prompt" }`,
-        parameters: z.object({
-          id: z.string().describe('Job ID'),
-          name: z.string().optional().describe('New job name'),
-          schedule: z.string().optional().describe('New cron expression'),
           prompt: z
             .string()
             .optional()
-            .describe('New AI prompt text — replaces the existing prompt entirely'),
+            .describe(
+              'The AI prompt to execute on each run — required by create, optional for update',
+            ),
         }),
-        execute: async ({ id, name, schedule, prompt }): Promise<string> => {
-          debugLog('cron_update:execute', { id, name, schedule, prompt });
-
-          if (!name && !schedule && !prompt) {
-            const received = Object.entries({ id, name, schedule, prompt })
-              .filter(([, v]) => v !== undefined)
-              .map(([k]) => k)
-              .join(', ');
-            return (
-              'Error: update requires at least one field to change (name, schedule, prompt) as a parameter in this tool call. ' +
-              'Example: {"id":"...","prompt":"new prompt text"}. ' +
-              `Received parameters: ${received}.`
-            );
-          }
-
-          if (schedule && !cron.validate(schedule)) {
-            return `Error: Invalid cron expression "${schedule}". Use standard cron format (e.g. "0 * * * *" for hourly, "*/5 * * * *" for every 5 minutes).`;
-          }
-
-          const updates: Record<string, string> = {};
-          if (name) updates.name = name;
-          if (schedule) updates.schedule = schedule;
-          if (prompt) updates.prompt = prompt;
-
-          const job = store.updateJob(id, updates);
-          if (!job) return `Error: No job found with ID "${id}".`;
-
-          return `Job updated:\n  ID: ${job.id}\n  Name: ${job.name}\n  Schedule: ${job.schedule}\n  Enabled: ${job.enabled}`;
+        execute: async (args): Promise<string> => {
+          debugLog('cron:execute', args);
+          return CRON_ACTIONS[args.action as CronAction](deps, args);
         },
       }),
-    ),
-
-    cron_delete: withCronMeta(
-      'cron_delete',
-      'write',
-      tool({
-        description: 'Delete a cron job.',
-        parameters: z.object({
-          id: z.string().describe('Job ID'),
-        }),
-        execute: async ({ id }): Promise<string> => {
-          debugLog('cron_delete:execute', { id });
-
-          const deleted = store.deleteJob(id);
-          if (!deleted) return `Error: No job found with ID "${id}".`;
-
-          logStore.deleteJobLogs(id);
-
-          const suffix = stopIfNoEnabledJobs(store);
-          if (suffix) return `Job deleted.${suffix}`;
-
-          return `Job "${id}" deleted.`;
-        },
-      }),
-    ),
-
-    cron_enable: withCronMeta(
-      'cron_enable',
-      'write',
-      tool({
-        description: 'Enable a disabled cron job.',
-        parameters: z.object({
-          id: z.string().describe('Job ID'),
-        }),
-        execute: async ({ id }): Promise<string> => {
-          debugLog('cron_enable:execute', { id });
-
-          const job = store.updateJob(id, { enabled: true });
-          if (!job) return `Error: No job found with ID "${id}".`;
-
-          const daemonErr = ensureDaemon();
-          if (daemonErr) {
-            return `Job "${job.name}" enabled but daemon failed to start: ${daemonErr}`;
-          }
-
-          return `Job "${job.name}" enabled. Daemon running.`;
-        },
-      }),
-    ),
-
-    cron_disable: withCronMeta(
-      'cron_disable',
-      'write',
-      tool({
-        description: 'Disable an active cron job.',
-        parameters: z.object({
-          id: z.string().describe('Job ID'),
-        }),
-        execute: async ({ id }): Promise<string> => {
-          debugLog('cron_disable:execute', { id });
-
-          const job = store.updateJob(id, { enabled: false });
-          if (!job) return `Error: No job found with ID "${id}".`;
-
-          const suffix = stopIfNoEnabledJobs(store);
-          if (suffix) return `Job "${job.name}" disabled.${suffix}`;
-
-          return `Job "${job.name}" disabled.`;
-        },
-      }),
-    ),
-
-    cron_status: withCronMeta(
-      'cron_status',
-      'read',
-      tool({
-        description: 'Check cron daemon status and job counts.',
-        parameters: z.object({}),
-        execute: async (): Promise<string> => {
-          debugLog('cron_status:execute', {});
-
-          const running = isDaemonRunning();
-          const jobs = store.loadJobs();
-          const enabled = jobs.filter((j) => j.enabled).length;
-          const alerts = store.listAlerts().filter((a) => !a.acknowledged);
-
-          let result = `Daemon: ${running ? 'running' : 'stopped'}\n`;
-          result += `Jobs: ${jobs.length} total, ${enabled} enabled\n`;
-          result += `Unacknowledged alerts: ${alerts.length}`;
-
-          if (alerts.length > 0) {
-            result += '\n\nRecent alerts:';
-            for (const alert of alerts.slice(0, 5)) {
-              result += `\n  - [${alert.timestamp}] ${alert.jobName}: ${alert.message}`;
-            }
-          }
-
-          return result;
-        },
-      }),
-    ),
-
-    cron_bounce: withCronMeta(
-      'cron_bounce',
-      'write',
-      tool({
-        description:
-          'Restart the cron daemon. Useful after code updates or if the daemon is misbehaving.',
-        parameters: z.object({}),
-        execute: async (): Promise<string> => {
-          debugLog('cron_bounce:execute', {});
-
-          const wasRunning = isDaemonRunning();
-          if (wasRunning) {
-            stopDaemon();
-            // Brief delay for process cleanup
-            await new Promise((resolve) => setTimeout(resolve, 500));
-          }
-
-          const enabled = store.loadJobs().filter((j) => j.enabled);
-          if (enabled.length === 0) {
-            return wasRunning
-              ? 'Daemon stopped. No enabled jobs — not restarting.'
-              : 'Daemon was not running. No enabled jobs — nothing to do.';
-          }
-
-          try {
-            startDaemon();
-          } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : String(err);
-            return `Daemon ${wasRunning ? 'stopped but' : 'was not running and'} failed to restart: ${msg}`;
-          }
-
-          return `Daemon restarted. ${enabled.length} enabled job${enabled.length === 1 ? '' : 's'}.`;
-        },
-      }),
+      { name: 'cron', readActions: CRON_READ_ACTIONS },
     ),
   };
 }

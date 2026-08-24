@@ -326,6 +326,11 @@ export async function dispatchToolWrapper(
 
   try {
     const innerCtx = depsToCtx(deps);
+    // Deliberately the FULL surface, not `{ surface: 'worker' }` (#253).
+    // Wrapper specialists are scoped by `targetTools`, and three bundled ones
+    // target tools the worker surface removes: `mcp-manager` needs
+    // `mcp_config` / `mcp_add_url` / `mcp_verify`, and `correction-agent` /
+    // `specialist-creator` need `specialist`. Narrowing here would break them.
     const baseTools = createTools(
       options,
       memoryStore,

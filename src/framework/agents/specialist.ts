@@ -88,6 +88,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
       undefined,
       undefined,
       ctx.provenance,
+      { surface: 'worker' }, // #253 — see WORKER_EXCLUDED_TOOLS
     );
     const specialistTools: Record<string, Tool> = {
       ...baseTools,

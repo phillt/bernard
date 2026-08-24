@@ -29,43 +29,56 @@ vi.mock('../cron/client.js', () => ({
   stopDaemon: vi.fn().mockReturnValue(true),
 }));
 
-import { createCronTools } from './cron.js';
+import { createCronTool } from './cron.js';
 
+/**
+ * Cron tools were consolidated from 18 single-purpose tools into 3 action-enum
+ * tools (#253). These tests are a deliberate like-for-like migration — same
+ * setup, same assertions — so behaviour drift surfaces as a failure rather than
+ * being edited away. `call('create')` stands in for `tools.cron_create.execute!`.
+ */
 describe('cron tools', () => {
-  let tools: ReturnType<typeof createCronTools>;
+  let tools: ReturnType<typeof createCronTool>;
+
+  const call =
+    (action: string) =>
+    (args: any = {}) =>
+      (tools.cron as any).execute({ action, ...args }, {} as any);
 
   beforeEach(() => {
     vi.clearAllMocks();
-    tools = createCronTools();
+    tools = createCronTool();
   });
 
-  describe('cron_update parameter schema', () => {
+  describe('parameter schema', () => {
+    // One schema now serves every action, so each field is optional and
+    // per-action requirements are enforced in the handler instead (#253).
+    // These parse-level tests still matter: they guard against a field being
+    // dropped or mangled on the way through zod — the long-prompt case below
+    // is the one that caught real truncation before.
+    const parse = (input: Record<string, unknown>) => (tools.cron as any).parameters.parse(input);
+
     it('should parse update with prompt through Zod schema', () => {
-      const input = {
-        id: 'test-id-123',
-        prompt: 'New prompt text here',
-      };
-      const parsed = tools.cron_update.parameters.parse(input);
+      const parsed = parse({ action: 'update', id: 'test-id-123', prompt: 'New prompt text here' });
       expect(parsed.id).toBe('test-id-123');
       expect(parsed.prompt).toBe('New prompt text here');
     });
 
     it('should parse update with all fields through Zod schema', () => {
-      const input = {
+      const parsed = parse({
+        action: 'update',
         id: 'test-id-123',
         name: 'New name',
         schedule: '0 8 * * *',
         prompt: 'New prompt',
-      };
-      const parsed = tools.cron_update.parameters.parse(input);
+      });
       expect(parsed.name).toBe('New name');
       expect(parsed.schedule).toBe('0 8 * * *');
       expect(parsed.prompt).toBe('New prompt');
     });
 
     it('should parse update with only id (no optional fields)', () => {
-      const input = { id: 'test-id-123' };
-      const parsed = tools.cron_update.parameters.parse(input);
+      const parsed = parse({ action: 'update', id: 'test-id-123' });
       expect(parsed.prompt).toBeUndefined();
       expect(parsed.name).toBeUndefined();
       expect(parsed.schedule).toBeUndefined();
@@ -80,31 +93,51 @@ describe('cron tools', () => {
 
 If anything urgent needs Phil's attention, use the notify tool to alert him.`;
 
-      const input = { id: 'test-id', prompt: longPrompt };
-      const parsed = tools.cron_update.parameters.parse(input);
+      const parsed = parse({ action: 'update', id: 'test-id', prompt: longPrompt });
       expect(parsed.prompt).toBe(longPrompt);
     });
-  });
 
-  describe('cron_create parameter schema', () => {
-    it('should require all three parameters', () => {
-      const input = { name: 'Test', schedule: '0 * * * *', prompt: 'Do stuff' };
-      const parsed = tools.cron_create.parameters.parse(input);
+    it('should parse create with all three parameters', () => {
+      const parsed = parse({
+        action: 'create',
+        name: 'Test',
+        schedule: '0 * * * *',
+        prompt: 'Do stuff',
+      });
       expect(parsed.name).toBe('Test');
       expect(parsed.schedule).toBe('0 * * * *');
       expect(parsed.prompt).toBe('Do stuff');
     });
 
-    it('should reject missing prompt', () => {
-      expect(() => {
-        tools.cron_create.parameters.parse({ name: 'Test', schedule: '0 * * * *' });
-      }).toThrow();
+    it('rejects an unknown action at the schema level', () => {
+      expect(() => parse({ action: 'nope' })).toThrow();
     });
+  });
+
+  describe('per-action required fields', () => {
+    // Consolidation moved these checks from zod to the handlers: a shared
+    // schema cannot say "id is required, but only for six of ten actions".
+    // The handler must therefore answer with actionable guidance rather than
+    // throwing, which is what these pin.
+    it('create reports the fields it needs instead of throwing', async () => {
+      const result = await call('create')({ name: 'Test', schedule: '0 * * * *' });
+      expect(result).toContain('requires');
+      expect(result).toContain('prompt');
+    });
+
+    it.each(['get', 'delete', 'enable', 'disable', 'run', 'update'])(
+      '%s reports that it needs an id',
+      async (action) => {
+        const result = await call(action)({});
+        expect(result).toContain('requires');
+        expect(result).toContain('id');
+      },
+    );
   });
 
   describe('cron_update execute', () => {
     it('should return error when no fields provided (only id)', async () => {
-      const result = await tools.cron_update.execute!({ id: 'test-id-123' }, {} as any);
+      const result = await call('update')({ id: 'test-id-123' });
 
       expect(result).toContain('Error: update requires at least one field to change');
       expect(result).toContain('Received parameters:');
@@ -126,10 +159,7 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       };
       mockStore.updateJob.mockReturnValue(updatedJob);
 
-      const result = await tools.cron_update.execute!(
-        { id: 'test-id-123', prompt: 'Updated prompt' },
-        {} as any,
-      );
+      const result = await call('update')({ id: 'test-id-123', prompt: 'Updated prompt' });
 
       expect(result).toContain('Job updated');
       expect(result).not.toContain('Error');
@@ -147,10 +177,7 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       };
       mockStore.updateJob.mockReturnValue(updatedJob);
 
-      const result = await tools.cron_update.execute!(
-        { id: 'test-id-123', name: 'New Name' },
-        {} as any,
-      );
+      const result = await call('update')({ id: 'test-id-123', name: 'New Name' });
 
       expect(result).toContain('Job updated');
       expect(mockStore.updateJob).toHaveBeenCalledWith('test-id-123', { name: 'New Name' });
@@ -167,20 +194,14 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       };
       mockStore.updateJob.mockReturnValue(updatedJob);
 
-      const result = await tools.cron_update.execute!(
-        { id: 'test-id-123', schedule: '0 8 * * *' },
-        {} as any,
-      );
+      const result = await call('update')({ id: 'test-id-123', schedule: '0 8 * * *' });
 
       expect(result).toContain('Job updated');
       expect(mockStore.updateJob).toHaveBeenCalledWith('test-id-123', { schedule: '0 8 * * *' });
     });
 
     it('should return error for invalid schedule on update', async () => {
-      const result = await tools.cron_update.execute!(
-        { id: 'test-id-123', schedule: 'not-a-cron' },
-        {} as any,
-      );
+      const result = await call('update')({ id: 'test-id-123', schedule: 'not-a-cron' });
 
       expect(result).toContain('Error: Invalid cron expression');
     });
@@ -188,22 +209,19 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
     it('should return error if job ID not found', async () => {
       mockStore.updateJob.mockReturnValue(undefined);
 
-      const result = await tools.cron_update.execute!(
-        { id: 'nonexistent-id', prompt: 'New prompt' },
-        {} as any,
-      );
+      const result = await call('update')({ id: 'nonexistent-id', prompt: 'New prompt' });
 
       expect(result).toContain('Error: No job found');
     });
 
     it('should report received parameters dynamically in error', async () => {
-      const result = await tools.cron_update.execute!({ id: 'test-id-123' }, {} as any);
+      const result = await call('update')({ id: 'test-id-123' });
 
       expect(result).toMatch(/Received parameters:.*id/);
     });
 
     it('should treat empty string prompt as missing', async () => {
-      const result = await tools.cron_update.execute!({ id: 'test-id-123', prompt: '' }, {} as any);
+      const result = await call('update')({ id: 'test-id-123', prompt: '' });
 
       expect(result).toContain('Error: update requires at least one field to change');
     });
@@ -213,7 +231,7 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
     it('should return error when job not found', async () => {
       mockStore.getJob.mockReturnValue(undefined);
 
-      const result = await tools.cron_run.execute!({ id: 'nonexistent' }, {} as any);
+      const result = await call('run')({ id: 'nonexistent' });
 
       expect(result).toContain('Error: No job found');
     });
@@ -230,7 +248,7 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       mockStore.getJob.mockReturnValue(job);
       mockRunJob.mockResolvedValue({ success: true, output: 'Task completed' });
 
-      const result = await tools.cron_run.execute!({ id: 'test-id' }, {} as any);
+      const result = await call('run')({ id: 'test-id' });
 
       expect(result).toContain('Test Job');
       expect(result).toContain('Success');
@@ -262,7 +280,7 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       mockStore.getJob.mockReturnValue(job);
       mockRunJob.mockRejectedValue(new Error('config load failed'));
 
-      const result = await tools.cron_run.execute!({ id: 'test-id' }, {} as any);
+      const result = await call('run')({ id: 'test-id' });
 
       expect(result).toContain('Throwing Job');
       expect(result).toContain('Error');
@@ -288,7 +306,7 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       mockStore.getJob.mockReturnValue(job);
       mockRunJob.mockResolvedValue({ success: true, output: 'Done' });
 
-      const result = await tools.cron_run.execute!({ id: 'test-id' }, {} as any);
+      const result = await call('run')({ id: 'test-id' });
 
       expect(result).toContain('currently disabled');
       expect(result).toContain('Success');
@@ -306,7 +324,7 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       };
       mockStore.getJob.mockReturnValue(job);
 
-      const result = await tools.cron_run.execute!({ id: 'test-id' }, {} as any);
+      const result = await call('run')({ id: 'test-id' });
 
       expect(result).toContain('already running');
       expect(mockRunJob).not.toHaveBeenCalled();
@@ -325,7 +343,7 @@ If anything urgent needs Phil's attention, use the notify tool to alert him.`;
       mockStore.getJob.mockReturnValue(job);
       mockRunJob.mockResolvedValue({ success: false, output: 'Error: API down' });
 
-      const result = await tools.cron_run.execute!({ id: 'test-id' }, {} as any);
+      const result = await call('run')({ id: 'test-id' });
 
       expect(result).toContain('Failing Job');
       expect(result).toContain('Error');

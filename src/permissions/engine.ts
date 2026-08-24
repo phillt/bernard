@@ -43,6 +43,14 @@ function ruleMatchesNonShell(rule: PermissionRule, toolName: string, args: unkno
     const u = (args as Record<string, unknown> | undefined)?.url;
     return typeof u === 'string' && matchDomainSpecifier(rule.specifier, u);
   }
+  // Action-enum tools (#253): an `action:delete` rule must cover only that
+  // action, so a grant made while listing cron jobs never authorises deleting
+  // one. Checked before the generic MCP fallback, which would otherwise treat
+  // the specifier as an arbitrary arg match.
+  if (rule.specifier.startsWith('action:')) {
+    const action = (args as Record<string, unknown> | undefined)?.action;
+    return typeof action === 'string' && `action:${action}` === rule.specifier;
+  }
   return matchMCPSpecifier(rule.specifier, args);
 }
 
