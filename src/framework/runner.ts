@@ -54,6 +54,13 @@ function toolBlockBytes(tools: Record<string, Tool> | undefined): number {
 const WATCHDOG_INTERVAL_MS = 30_000;
 
 /**
+ * Retries per completion call (#302). The AI SDK's default is 2; combined with
+ * the per-attempt first-byte guard that would let a single stalled connection
+ * burn three full budgets before giving up.
+ */
+const DEFAULT_MAX_RETRIES = 1;
+
+/**
  * Builds a promise that rejects with the canonical AbortError when the signal
  * fires (immediately if it already has). A no-op rejection handler is attached
  * at construction so the promise can never surface as an unhandled rejection —
@@ -380,6 +387,12 @@ async function runNonStreaming(
     onStepFinish,
     // Per-slot params last so a slot-set temperature/topP/maxTokens overrides
     // the defaults above (issue #286).
+    // Bound retries of a stalled request (#302). The AI SDK defaults to 2
+    // retries, and the stall guard is per-attempt, so the default would let one
+    // dead connection cost 3 x the first-byte budget. One retry still covers a
+    // genuinely transient blip — which is what retries are for — while halving
+    // the worst case. Before `...spec.params` so a slot can still override it.
+    maxRetries: DEFAULT_MAX_RETRIES,
     ...spec.params,
   });
   const abortSignal = spec.abortSignal;
@@ -417,6 +430,12 @@ async function runStreaming(
     experimental_repairToolCall: spec.repair,
     onStepFinish,
     // Per-slot params last so they override the defaults above (issue #286).
+    // Bound retries of a stalled request (#302). The AI SDK defaults to 2
+    // retries, and the stall guard is per-attempt, so the default would let one
+    // dead connection cost 3 x the first-byte budget. One retry still covers a
+    // genuinely transient blip — which is what retries are for — while halving
+    // the worst case. Before `...spec.params` so a slot can still override it.
+    maxRetries: DEFAULT_MAX_RETRIES,
     ...spec.params,
   });
   // Defensive: race every await against the parent abort signal. The AI SDK
