@@ -1,6 +1,8 @@
 import type { BernardConfig } from '../../../config.js';
 import { makePolicyInput } from '../../../policy/test-helpers.js';
 import type { AgentContext } from '../../context.js';
+import { resolveToolSurface } from '../tool-surface.js';
+import type { AgentDefinition } from '../types.js';
 
 /**
  * Shared fixture for the per-server MCP delegation assertions (#296, #305).
@@ -60,4 +62,17 @@ export function makeCtx(
     policyDecision: undefined,
     ...overrides,
   } as unknown as AgentContext;
+}
+
+/**
+ * Calls a definition's `tools()` the way `runDefinition` does — through the
+ * centrally-resolved surface (#315) rather than a hand-built one, so these
+ * assertions exercise the real resolution rather than a test-local copy of it.
+ */
+export function toolsOf(
+  def: AgentDefinition<any, any>,
+  ctx: AgentContext,
+  input: unknown,
+): Promise<Record<string, unknown>> | Record<string, unknown> {
+  return def.tools(ctx, input, resolveToolSurface(ctx, def));
 }

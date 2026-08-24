@@ -4,8 +4,8 @@ import type { BernardConfig } from '../../config.js';
 import { debugLog } from '../../logger.js';
 import { extractJsonBlock } from '../../structured-output.js';
 import { createTools } from '../../tools/index.js';
-import { mcpToolSurface } from '../../tools/delegate.js';
 import type { AgentContext } from '../context.js';
+import type { ResolvedToolSurface } from './tool-surface.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
 import type { AgentDefinition } from './types.js';
@@ -132,17 +132,17 @@ export interface TaskInput {
  * previously they were assembled separately and had already drifted (the
  * prompt path passed no provenance, so `cite` was handed but never advertised).
  */
-function taskTools(ctx: AgentContext): Record<string, Tool> {
+function taskTools(ctx: AgentContext, surface: ResolvedToolSurface): Record<string, Tool> {
   return createTools(
     ctx.toolOptions,
     ctx.stores.memory,
-    mcpToolSurface(ctx),
+    surface.mcpTools,
     undefined,
     undefined,
     undefined,
     undefined,
     ctx.provenance,
-    { surface: 'worker' }, // #253 — see WORKER_EXCLUDED_TOOLS
+    surface,
   );
 }
 
@@ -152,8 +152,8 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
   historyMode: 'ephemeral',
   prefix: (input) => `task:${input.slotId}`,
 
-  systemPrompt(ctx) {
-    const autoContext = `\n\nWorking directory: ${process.cwd()}\nAvailable tools: ${Object.keys(taskTools(ctx)).join(', ')}`;
+  systemPrompt(ctx, _input, surface) {
+    const autoContext = `\n\nWorking directory: ${process.cwd()}\nAvailable tools: ${Object.keys(taskTools(ctx, surface)).join(', ')}`;
     return TASK_SYSTEM_PROMPT + autoContext;
   },
 
@@ -164,7 +164,7 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
     };
   },
 
-  tools: taskTools,
+  tools: (ctx, _input, surface) => taskTools(ctx, surface),
 
   strategy() {
     return new NormalStrategy();

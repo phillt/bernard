@@ -50,6 +50,14 @@ export interface ToolWrapperInput {
 export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperResult> = {
   id: 'tool-wrapper',
   historyMode: 'ephemeral',
+  // The sole opt-out of the ephemeral → `'worker'` derivation (#322). Wrapper
+  // specialists are scoped by `specialist.targetTools`, and three bundled ones
+  // target tools the worker surface removes: `mcp-manager` needs `mcp_config` /
+  // `mcp_add_url` / `mcp_verify`, and `correction-agent` / `specialist-creator`
+  // need `specialist`. `dispatchToolWrapper` assembles `input.childTools` from
+  // the full registry for that reason; this declares the same fact where a
+  // reader of the definition can see it.
+  toolSurface: 'full',
   repairLabel: 'tool-wrapper',
   prefix: (input) => `wrap:${input.slotId}`,
 

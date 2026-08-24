@@ -4,7 +4,6 @@ import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { makeLastStepTextOnly } from './task.js';
 import { createTools } from '../../tools/index.js';
-import { mcpToolSurface } from '../../tools/delegate.js';
 import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
@@ -65,17 +64,17 @@ export const subAgentDefinition: AgentDefinition<SubAgentInput, string> = {
     return { ragResults: await searchRag(ctx, input.task) };
   },
 
-  tools(ctx) {
+  tools(ctx, _input, surface) {
     return createTools(
       ctx.toolOptions,
       ctx.stores.memory,
-      mcpToolSurface(ctx),
+      surface.mcpTools,
       undefined,
       undefined,
       undefined,
       undefined,
       ctx.provenance,
-      { surface: 'worker' }, // #253 — see WORKER_EXCLUDED_TOOLS
+      surface,
     );
   },
 

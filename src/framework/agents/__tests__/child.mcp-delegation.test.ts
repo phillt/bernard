@@ -4,7 +4,8 @@ import { taskDefinition } from '../task.js';
 import { specialistDefinition } from '../specialist.js';
 import { pacActorDefinition } from '../pac-actor.js';
 import { mcpDelegateDefinition } from '../mcp-delegate.js';
-import { makeCtx, DELEGATE_TOOLS, RAW_MCP_TOOLS } from './_mcp-delegation-fixture.js';
+import { makeCtx, toolsOf, DELEGATE_TOOLS, RAW_MCP_TOOLS } from './_mcp-delegation-fixture.js';
+import { resolveToolSurface } from '../tool-surface.js';
 import type { AgentContext } from '../../context.js';
 
 /**
@@ -21,10 +22,10 @@ const DEFINITIONS: ReadonlyArray<{
   name: string;
   tools: (ctx: AgentContext) => Promise<Record<string, unknown>>;
 }> = [
-  { name: 'sub', tools: async (ctx) => subAgentDefinition.tools!(ctx, anyInput) },
-  { name: 'task', tools: async (ctx) => taskDefinition.tools!(ctx, anyInput) },
-  { name: 'specialist', tools: async (ctx) => specialistDefinition.tools!(ctx, specialistInput) },
-  { name: 'pac-actor', tools: async (ctx) => pacActorDefinition.tools!(ctx, anyInput) },
+  { name: 'sub', tools: async (ctx) => toolsOf(subAgentDefinition, ctx, anyInput) },
+  { name: 'task', tools: async (ctx) => toolsOf(taskDefinition, ctx, anyInput) },
+  { name: 'specialist', tools: async (ctx) => toolsOf(specialistDefinition, ctx, specialistInput) },
+  { name: 'pac-actor', tools: async (ctx) => toolsOf(pacActorDefinition, ctx, anyInput) },
 ];
 
 describe.each(DEFINITIONS)('$name agent MCP delegation tool assembly (#305)', ({ tools }) => {
@@ -46,7 +47,7 @@ describe('delegation edge cases (#305)', () => {
     // How MCP delegation escalation scopes an actor to one server; if the
     // delegation gate overrode it, the escalated run would regain the full bag.
     const childTools = { google__gmail_list: {}, ask_user: {} };
-    const names = Object.keys(pacActorDefinition.tools!(makeCtx(true), { childTools } as never));
+    const names = Object.keys(toolsOf(pacActorDefinition, makeCtx(true), { childTools }));
     expect(names.sort()).toEqual(['ask_user', 'google__gmail_list']);
   });
 
@@ -55,7 +56,7 @@ describe('delegation edge cases (#305)', () => {
     // `ask_user`. Because that registry can never contain a `delegate_*` tool,
     // a helper cannot spawn another helper — no runtime depth guard needed.
     const childTools = { google__gmail_list: {}, google__gmail_get: {}, ask_user: {} };
-    const names = Object.keys(mcpDelegateDefinition.tools!(makeCtx(true), { childTools } as never));
+    const names = Object.keys(toolsOf(mcpDelegateDefinition, makeCtx(true), { childTools }));
     expect(names.filter((n) => n.startsWith('delegate_'))).toEqual([]);
   });
 
@@ -66,11 +67,11 @@ describe('delegation edge cases (#305)', () => {
     // prompt path passed no provenance, so `cite` was handed but unadvertised.
     const ctx = makeCtx(true);
     const advertised = /Available tools: (.*)/.exec(
-      await taskDefinition.systemPrompt(ctx, anyInput),
+      await taskDefinition.systemPrompt(ctx, anyInput, resolveToolSurface(ctx, taskDefinition)),
     )?.[1];
     expect(advertised).toBeDefined();
     expect(advertised!.split(', ').sort()).toEqual(
-      Object.keys(taskDefinition.tools!(ctx, anyInput)).sort(),
+      Object.keys(toolsOf(taskDefinition, ctx, anyInput)).sort(),
     );
   });
 
@@ -80,7 +81,7 @@ describe('delegation edge cases (#305)', () => {
     const ctx = makeCtx(true, {
       mcp: { tools: { google__gmail_list: {} }, serverNames: [], serverTools: {} },
     });
-    const names = Object.keys(subAgentDefinition.tools!(ctx, anyInput));
+    const names = Object.keys(toolsOf(subAgentDefinition, ctx, anyInput));
     expect(names).toContain('google__gmail_list');
     expect(names.filter((n) => n.startsWith('delegate_'))).toEqual([]);
   });

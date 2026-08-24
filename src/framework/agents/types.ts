@@ -16,6 +16,36 @@ import type { ExecutionStrategy } from '../strategies/types.js';
 export type HistoryMode = 'persistent' | 'ephemeral';
 
 /**
+ * The tool surface a dispatch is entitled to, resolved ONCE per dispatch by
+ * `runDefinition` and handed to `def.systemPrompt` / `def.tools`.
+ *
+ * Two cross-cutting facts used to be re-decided by every definition that
+ * built a registry (#315, #322):
+ *
+ *  - `mcpTools` — per-server delegation (#296/#305). Five definitions each
+ *    independently remembered to call {@link mcpToolSurface}; a copy that
+ *    drifted silently re-introduced the 143-schema prefix the delegation
+ *    exists to remove, and `cron` was a sixth that never participated at all
+ *    because it took MCP from its own input instead.
+ *  - `surface` — the worker tool scoping (#253). `{ surface: 'worker' }` was
+ *    hand-passed at four call sites with an expensive default, so forgetting
+ *    was silent and cost ~3.7k tokens plus a live routine store on a worker.
+ *
+ * Resolving both here inverts the failure mode: a definition that ignores the
+ * parameter gets the cheap, contained surface rather than the expensive one.
+ */
+export interface ResolvedToolSurface {
+  /** Which built-in registry `createTools` should assemble. */
+  surface: 'full' | 'worker';
+  /**
+   * The MCP bag to hand `createTools` — thin `delegate_<server>` tools when
+   * delegation is on, the raw schemas otherwise. Mutually exclusive by
+   * construction; never merge these with `ctx.mcp.tools`.
+   */
+  mcpTools: Record<string, Tool>;
+}
+
+/**
  * Per-call provider/model overrides. Dispatch tools may surface these as
  * optional Zod fields (`provider`, `model`) and pass them through to
  * {@link runDefinition}; persistent-history callers may also pass them when
@@ -91,11 +121,48 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
   /** Whether the caller persists conversation history (main only) or rebuilds it. */
   historyMode: HistoryMode;
 
-  /** Fully composed system prompt for this run. May be async (memory/RAG reads). */
-  systemPrompt(ctx: AgentContext, input: TInput): Promise<string> | string;
+  /**
+   * Which built-in tool registry this definition is entitled to (#253, #322).
+   * Omit it: the default derives from `historyMode` — an ephemeral dispatch
+   * gets `'worker'` (Bernard's own configuration and scheduling controls
+   * dropped, see `WORKER_EXCLUDED_TOOLS`), a persistent one gets `'full'`.
+   *
+   * Declare it only to opt OUT of that derivation, and say why. `tool-wrapper`
+   * is the sole definition that does: its `childTools` are scoped by
+   * `specialist.targetTools`, and three bundled wrappers target tools the
+   * worker surface removes (`mcp-manager` → `mcp_config` / `mcp_add_url` /
+   * `mcp_verify`; `correction-agent` and `specialist-creator` → `specialist`).
+   *
+   * Resolved once per dispatch by `runDefinition` via `resolveToolSurface` and
+   * handed to `systemPrompt` / `tools` — definitions never re-derive it.
+   */
+  toolSurface?: 'full' | 'worker';
 
-  /** Tool subset exposed to the model, as the AI-SDK `Record<name, Tool>` runAgent expects. */
-  tools(ctx: AgentContext, input: TInput): Promise<Record<string, Tool>> | Record<string, Tool>;
+  /**
+   * Fully composed system prompt for this run. May be async (memory/RAG reads).
+   *
+   * Receives the same {@link ResolvedToolSurface} as `tools` so a definition
+   * that advertises its tool list in prose (`task`) names the set it will
+   * actually be handed, rather than assembling a second registry that can
+   * drift from it.
+   */
+  systemPrompt(
+    ctx: AgentContext,
+    input: TInput,
+    surface: ResolvedToolSurface,
+  ): Promise<string> | string;
+
+  /**
+   * Tool subset exposed to the model, as the AI-SDK `Record<name, Tool>`
+   * runAgent expects. `surface` carries the two cross-cutting decisions
+   * `runDefinition` owns — the built-in registry scope and the MCP bag — so
+   * pass it straight through to `createTools` rather than re-deciding either.
+   */
+  tools(
+    ctx: AgentContext,
+    input: TInput,
+    surface: ResolvedToolSurface,
+  ): Promise<Record<string, Tool>> | Record<string, Tool>;
 
   /** Strategy selector. Built per-call so e.g. ReAct can be opt-in by definition. */
   strategy(ctx: AgentContext, input: TInput): ExecutionStrategy;

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mainAgentDefinition } from '../main.js';
 import { makeCtx } from './_mcp-delegation-fixture.js';
+import { resolveToolSurface } from '../tool-surface.js';
 
 /**
  * Per-server MCP delegation (#296): with delegation on, the main agent must
@@ -13,7 +14,10 @@ const input = { planStore: {}, systemPrompt: '' } as unknown as Parameters<
 >[1];
 
 function toolNames(mcpDelegation: boolean): string[] {
-  return Object.keys(mainAgentDefinition.tools(makeCtx(mcpDelegation), input));
+  const ctx = makeCtx(mcpDelegation);
+  return Object.keys(
+    mainAgentDefinition.tools(ctx, input, resolveToolSurface(ctx, mainAgentDefinition)),
+  );
 }
 
 describe('main agent MCP delegation tool assembly (#296)', () => {

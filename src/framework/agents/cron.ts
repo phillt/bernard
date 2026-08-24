@@ -82,7 +82,6 @@ export interface CronInput {
   notesStore: CronNotesStore;
   log: (msg: string) => void;
   serverNames: string[];
-  mcpTools: Record<string, Tool>;
   ragResults?: RAGSearchResult[];
   /**
    * Mutable slot populated inside `tools()` so `hooks()` (which the framework
@@ -118,8 +117,15 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     };
   },
 
-  tools(ctx, input) {
-    const { job, store, notesStore, runId, log, mcpTools } = input;
+  tools(ctx, input, surface) {
+    const { job, store, notesStore, runId, log } = input;
+    // MCP comes from the centrally-resolved surface (#315), not from
+    // `input.mcpTools` as it used to. That field was the sixth definition-level
+    // copy of the MCP decision — and the one that never participated in
+    // per-server delegation (#296/#305), so an MCP-heavy cron job re-billed
+    // every server's full schema set on every step. Taking it from `surface`
+    // closes that gap by construction: there is no longer a second path.
+    const mcpTools = surface.mcpTools;
     const memoryStore = ctx.stores.memory;
     const config = ctx.config;
 

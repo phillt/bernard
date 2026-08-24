@@ -3,6 +3,7 @@ import { mainAgentDefinition } from '../main.js';
 import type { BernardConfig } from '../../../config.js';
 import type { AgentContext } from '../../context.js';
 import type { PolicyDecision } from '../../../policy/types.js';
+import { resolveToolSurface } from '../tool-surface.js';
 
 /**
  * `plan` is decoupled from the ReAct enforcement loop: it's available in EVERY
@@ -72,7 +73,10 @@ function toolNames(
   coordinatorMode: BernardConfig['coordinatorMode'],
   strategyId?: 'normal' | 'react',
 ) {
-  return Object.keys(mainAgentDefinition.tools(makeCtx(coordinatorMode, strategyId), input));
+  const ctx = makeCtx(coordinatorMode, strategyId);
+  return Object.keys(
+    mainAgentDefinition.tools(ctx, input, resolveToolSurface(ctx, mainAgentDefinition)),
+  );
 }
 
 describe('main agent plan/evaluate tool gating', () => {

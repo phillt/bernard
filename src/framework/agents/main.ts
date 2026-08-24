@@ -13,7 +13,6 @@ import { createThinkTool } from '../../tools/think.js';
 import { createAskUserTool } from '../../tools/ask-user.js';
 import { createEvaluateTool } from '../../tools/evaluate.js';
 import { applyShimRouting } from '../../tools/wrap-with-specialist.js';
-import { mcpToolSurface } from '../../tools/delegate.js';
 import { toolToAISDK } from '../tools/adapter.js';
 import { buildToolProfilesPrompt } from '../../tool-profiles.js';
 import { getModelProfile } from '../../providers/index.js';
@@ -215,23 +214,29 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     return buildMainContextInputs(ctx, input);
   },
 
-  tools(ctx, input): Record<string, Tool> {
-    // Per-server MCP delegation (#296): when on, the main agent carries ONE
-    // thin `delegate_<server>` tool per connected server instead of every MCP
-    // tool's schema. The real schemas live only inside each helper sub-agent's
-    // scoped registry (assembled in `src/tools/delegate.ts`), so they never
-    // re-bill in the main prefix every step. When off, MCP tools are exposed
-    // directly as before. The delegate set is session-stable (servers fix at
-    // startup), preserving the byte-stable tool block the prompt cache needs.
+  tools(ctx, input, surface): Record<string, Tool> {
+    // `surface.mcpTools` is per-server MCP delegation (#296): when on, the main
+    // agent carries ONE thin `delegate_<server>` tool per connected server
+    // instead of every MCP tool's schema. The real schemas live only inside
+    // each helper sub-agent's scoped registry (assembled in
+    // `src/tools/delegate.ts`), so they never re-bill in the main prefix every
+    // step. When off, MCP tools are exposed directly as before. Either way the
+    // set is session-stable (servers fix at startup), preserving the
+    // byte-stable tool block the prompt cache needs.
+    //
+    // `surface.surface` is `'full'` here by derivation — main is the only
+    // `historyMode: 'persistent'` definition — so the config/scheduling tools
+    // the worker surface drops (#253) stay present.
     const baseTools = createTools(
       ctx.toolOptions,
       ctx.stores.memory,
-      mcpToolSurface(ctx),
+      surface.mcpTools,
       ctx.stores.routines,
       ctx.stores.specialists,
       ctx.stores.candidates,
       ctx.config,
       ctx.provenance,
+      surface,
     );
     // `evaluate` is the verification half of the ReAct think→act→evaluate loop.
     // It is gated on whether ReAct is POSSIBLE this SESSION (`isReactPossible`,

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mainAgentDefinition } from '../main.js';
 import { makeCtx } from './_mcp-delegation-fixture.js';
 import type { AgentContext } from '../../context.js';
+import { resolveToolSurface } from '../tool-surface.js';
 
 /**
  * The main agent's tool block must be BYTE-IDENTICAL across turns (#253, #269).
@@ -21,10 +22,13 @@ import type { AgentContext } from '../../context.js';
  * make it session-stable (config-derived), not to relax the assertion.
  */
 function toolBlock(ctx: AgentContext): string {
-  const tools = mainAgentDefinition.tools(ctx, {
-    planStore: {},
-    systemPrompt: '',
-  } as unknown as Parameters<typeof mainAgentDefinition.tools>[1]);
+  const tools = mainAgentDefinition.tools(
+    ctx,
+    { planStore: {}, systemPrompt: '' } as unknown as Parameters<
+      typeof mainAgentDefinition.tools
+    >[1],
+    resolveToolSurface(ctx, mainAgentDefinition),
+  );
   // Names + descriptions are what actually go on the wire and what a cache
   // breakpoint hashes over. Sorted so a key-order change alone isn't flagged.
   return JSON.stringify(
@@ -50,11 +54,15 @@ describe('main agent tool block is stable across turns (#253)', () => {
   });
 
   it('carries no cron_* schemas — they consolidate into one `cron` tool', () => {
+    const ctx = makeCtx(true);
     const names = Object.keys(
-      mainAgentDefinition.tools(makeCtx(true), {
-        planStore: {},
-        systemPrompt: '',
-      } as unknown as Parameters<typeof mainAgentDefinition.tools>[1]),
+      mainAgentDefinition.tools(
+        ctx,
+        { planStore: {}, systemPrompt: '' } as unknown as Parameters<
+          typeof mainAgentDefinition.tools
+        >[1],
+        resolveToolSurface(ctx, mainAgentDefinition),
+      ),
     );
     expect(names).toContain('cron');
     expect(names).toContain('cron_logs');
