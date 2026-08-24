@@ -95,21 +95,24 @@ describe('ContextViewer', () => {
 });
 
 describe('ContextViewer — injected persistent memory (#307)', () => {
-  function drill(turns: TurnContextRecord[]) {
-    return renderViewer(makeAgent(turns));
-  }
-
-  it('lists the memory keys injected that turn', async () => {
-    const { stdin, lastFrame } = drill(TURNS);
+  /**
+   * Drill into turn 1 and jump to the last section. `G` (see `navDelta` in
+   * viewer-util) means "last", so this does not encode how many sections exist —
+   * a hardcoded hop count would break these tests whenever one is added, in a way
+   * that looks like a memory bug.
+   */
+  async function memorySection(turns: TurnContextRecord[]): Promise<string> {
+    const { stdin, lastFrame } = renderViewer(makeAgent(turns));
     await tick();
     stdin.write(ENTER);
     await tick();
-    // Navigate to the last section (Persistent memory).
-    for (let i = 0; i < 4; i++) {
-      stdin.write(ARROW_DOWN);
-      await tick();
-    }
-    const frame = lastFrame() ?? '';
+    stdin.write('G');
+    await tick();
+    return lastFrame() ?? '';
+  }
+
+  it('lists the memory keys injected that turn', async () => {
+    const frame = await memorySection(TURNS);
     expect(frame).toContain('people/mia');
     expect(frame).toContain('response-length-preference');
   });
@@ -117,16 +120,7 @@ describe('ContextViewer — injected persistent memory (#307)', () => {
   it('distinguishes "none injected" from "not recorded"', async () => {
     // A record written before the field existed must not read as "nothing was
     // injected" — that would misreport history as cheaper than it was.
-    const legacy: TurnContextRecord[] = [{ ...TURNS[0], injectedMemoryKeys: undefined }];
-    const { stdin, lastFrame } = drill(legacy);
-    await tick();
-    stdin.write(ENTER);
-    await tick();
-    for (let i = 0; i < 4; i++) {
-      stdin.write(ARROW_DOWN);
-      await tick();
-    }
-    const frame = lastFrame() ?? '';
+    const frame = await memorySection([{ ...TURNS[0], injectedMemoryKeys: undefined }]);
     expect(frame).toContain('not recorded');
     // And the label carries no count, since there is no number to report.
     expect(frame).not.toContain('Persistent memory (');

@@ -290,24 +290,26 @@ function buildSections(turn: TurnContextRecord): Section[] {
           )
           .join('\n');
 
-  // Injected persistent memory (#307). Optional on disk: records written before
-  // the field existed have none, which reads differently from "none injected".
-  const memKeys = Array.isArray(turn.injectedMemoryKeys)
-    ? turn.injectedMemoryKeys.filter((k): k is string => typeof k === 'string')
-    : null;
-  const memBody =
-    memKeys === null
-      ? '(not recorded for this turn)'
-      : memKeys.length === 0
-        ? '(no persistent memory injected this turn)'
-        : memKeys.map((k) => `• ${k}`).join('\n');
-  const memLabel = memKeys === null ? 'Persistent memory' : `Persistent memory (${memKeys.length})`;
+  // Injected persistent memory (#307). `undefined` (record predates the field)
+  // must not read as "nothing was injected" — branching once on that keeps the
+  // count-present-iff-recorded invariant structural rather than coincidental.
+  const memKeys = turn.injectedMemoryKeys;
+  const memSection: Section =
+    memKeys === undefined
+      ? { label: 'Persistent memory', body: '(not recorded for this turn)' }
+      : {
+          label: `Persistent memory (${memKeys.length})`,
+          body:
+            memKeys.length === 0
+              ? '(no persistent memory injected this turn)'
+              : memKeys.map((k) => `• ${k}`).join('\n'),
+        };
 
   return [
     { label: 'Original input', body: turn.originalInput },
     { label: 'Rewritten prompt', body: rewrittenBody },
     { label: `Resolved references (${refs.length})`, body: refsBody },
     { label: `Recalled facts (${facts.length})`, body: factsBody },
-    { label: memLabel, body: memBody },
+    memSection,
   ];
 }

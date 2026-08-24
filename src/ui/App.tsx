@@ -890,30 +890,18 @@ export function App({
           setBusy(true);
           try {
             const serialized = serializeMessages(history);
-            // Route these off-loop /clear --save LLM calls (summary, fact
-            // extraction, specialist detection) through the session telemetry
-            // sink so they aren't an accounting hole (#session-telemetry).
+            // Route these off-loop /clear --save LLM calls (fact extraction,
+            // specialist detection) through the session telemetry sink so they
+            // aren't an accounting hole (#session-telemetry).
             const recordSaveUsage = makeUsageRecorder(agent);
             // Cap fact extraction at 60 s to prevent a hung LLM call from
             // freezing the REPL. Fails open: timeout → empty domain facts.
             // AbortSignal.timeout auto-cancels without manual teardown.
             const extractSignal = AbortSignal.timeout(60_000);
-            // No prose-summary call here (#307). `/clear --save` used to run a
-            // second `generateText` whose only consumer was
-            // `memory.writeMemory('session-summary-…')`, and
-            // `renderPersistentMemory` injects every memory file IN FULL on every
-            // step — so 54 accumulated summaries had grown to ~44k tokens re-sent
-            // per step, with no cap and nothing to remove them.
+            // No prose summary here (#307): `extractDomainFacts` already routes
+            // this transcript to RAG, including the `conversations` domain.
             //
-            // The same transcript already reaches long-term storage in a better
-            // shape: `extractDomainFacts` runs every domain in `getDomainIds()`,
-            // including `conversations` — whose extraction prompt is itself a
-            // conversation summarizer — and those atomic facts go to RAG below,
-            // where the 90-day TTL, pruning and the recall filter apply. Dropping
-            // the blob also retires its LLM call, and makes this path symmetric
-            // with the exit path in `src/index.ts`, which already feeds RAG only.
-            //
-            // Do NOT "fix" this by passing a prose summary to `addFacts`: the
+            // Do NOT "fix" that by passing a prose summary to `addFacts`: the
             // embedder (Xenova/all-MiniLM-L6-v2) truncates at 512 tokens with no
             // guard, so a multi-paragraph summary would be silently cut, and its
             // mean-pooled vector would rarely clear the retrieval threshold.

@@ -29,14 +29,8 @@ export interface TurnContextRecord {
   /** Memory facts injected into `<recalled_context>` this turn (post-filter, post-stickiness). */
   recalledFacts: RAGSearchResult[];
   /**
-   * Keys of the `MemoryStore` entries rendered into `<persistent_memory>` this
-   * turn (#307). Optional because records written before this field existed are
-   * still valid on disk.
-   *
-   * Today injection is unconditional, so this is every stored key — which is the
-   * point: it makes the size of that block visible per turn instead of invisible.
-   * When memory starts going through the recall filter this becomes the set the
-   * curator KEPT, and the viewer can show what it dropped.
+   * Keys rendered into `<persistent_memory>` this turn (#307). Optional: records
+   * predating the field have none, which reads differently from "none injected".
    */
   injectedMemoryKeys?: string[];
 }
@@ -50,7 +44,9 @@ function isTurnContextRecord(entry: unknown): entry is TurnContextRecord {
     typeof e.originalInput === 'string' &&
     typeof e.rewrittenInput === 'string' &&
     Array.isArray(e.resolvedReferences) &&
-    Array.isArray(e.recalledFacts)
+    Array.isArray(e.recalledFacts) &&
+    // Optional: absent on records written before the field existed.
+    (e.injectedMemoryKeys === undefined || Array.isArray(e.injectedMemoryKeys))
   );
 }
 

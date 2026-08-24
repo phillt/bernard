@@ -586,11 +586,6 @@ describe('<App> /clear --save (#228)', () => {
   beforeEach(() => {
     process.env.BERNARD_HOME = TMP_HOME;
     vi.clearAllMocks();
-    // Kept mocked because other modules under test may call it; `/clear --save`
-    // itself no longer runs a summarize call (#307).
-    vi.mocked(generateText).mockResolvedValue({ text: 'Test session summary.' } as Awaited<
-      ReturnType<typeof generateText>
-    >);
     // Return no domain facts by default (can override per test).
     mockExtractDomainFacts.mockResolvedValue([]);
   });
