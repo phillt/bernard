@@ -4,7 +4,7 @@ import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { makeLastStepTextOnly } from './task.js';
 import { createTools } from '../../tools/index.js';
-import { delegatedMcpSurface } from '../../tools/delegate.js';
+import { mcpToolSurface } from '../../tools/delegate.js';
 import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
@@ -66,23 +66,16 @@ export const subAgentDefinition: AgentDefinition<SubAgentInput, string> = {
   },
 
   tools(ctx) {
-    // MCP delegation (#305): carry thin `delegate_<server>` tools instead of
-    // every server's schemas, exactly as the main agent does. Sub-agents were
-    // measured at 143 tools while using 3-8 of them, all from a single server.
-    const { delegateTools, mcpTools } = delegatedMcpSurface(ctx);
-    return {
-      ...createTools(
-        ctx.toolOptions,
-        ctx.stores.memory,
-        mcpTools,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        ctx.provenance,
-      ),
-      ...delegateTools,
-    };
+    return createTools(
+      ctx.toolOptions,
+      ctx.stores.memory,
+      mcpToolSurface(ctx),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ctx.provenance,
+    );
   },
 
   strategy() {

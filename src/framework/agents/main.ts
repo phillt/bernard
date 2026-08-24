@@ -13,7 +13,7 @@ import { createThinkTool } from '../../tools/think.js';
 import { createAskUserTool } from '../../tools/ask-user.js';
 import { createEvaluateTool } from '../../tools/evaluate.js';
 import { applyShimRouting } from '../../tools/wrap-with-specialist.js';
-import { delegatedMcpSurface } from '../../tools/delegate.js';
+import { mcpToolSurface } from '../../tools/delegate.js';
 import { ctxToToolWrapperDeps } from '../../tools/tool-wrapper-run.js';
 import { toolToAISDK } from '../tools/adapter.js';
 import { buildToolProfilesPrompt } from '../../tool-profiles.js';
@@ -224,11 +224,10 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     // re-bill in the main prefix every step. When off, MCP tools are exposed
     // directly as before. The delegate set is session-stable (servers fix at
     // startup), preserving the byte-stable tool block the prompt cache needs.
-    const { delegateTools, mcpTools } = delegatedMcpSurface(ctx);
     const baseTools = createTools(
       ctx.toolOptions,
       ctx.stores.memory,
-      mcpTools,
+      mcpToolSurface(ctx),
       ctx.stores.routines,
       ctx.stores.specialists,
       ctx.stores.candidates,
@@ -252,7 +251,6 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     const reactToolsAvailable = isReactPossible(ctx.config);
     const tools: Record<string, Tool> = {
       ...baseTools,
-      ...delegateTools,
       agent: createSubAgentTool(ctx),
       task: toolToAISDK(createTaskTool(ctx)),
       specialist_run: createSpecialistRunTool(ctx),

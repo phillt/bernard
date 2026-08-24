@@ -29,6 +29,16 @@ const mockMcpManager = vi.hoisted(() => ({
   connect: vi.fn(),
   getTools: vi.fn().mockReturnValue({}),
   getConnectedServerNames: vi.fn().mockReturnValue([]),
+  getServerToolMap: vi.fn().mockReturnValue({}),
+  // Mirrors the real `snapshot()`, which composes the three accessors — so a
+  // test that steers one of them still steers the context cron actually gets.
+  snapshot: vi.fn(function (this: any) {
+    return {
+      tools: this.getTools(),
+      serverNames: this.getConnectedServerNames(),
+      serverTools: this.getServerToolMap(),
+    };
+  }),
   close: vi.fn(),
 }));
 

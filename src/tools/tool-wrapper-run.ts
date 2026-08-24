@@ -196,7 +196,7 @@ export function depsToCtx(deps: ToolWrapperDeps): AgentContext {
     mcp: {
       tools: deps.mcpTools ?? {},
       serverNames: deps.mcpServerNames ?? [],
-      serverTools: deps.mcpServerTools,
+      serverTools: deps.mcpServerTools ?? {},
     },
     rag: deps.ragStore,
     toolOptions: deps.options,

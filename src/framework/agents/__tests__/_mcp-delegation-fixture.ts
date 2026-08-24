@@ -1,4 +1,5 @@
 import type { BernardConfig } from '../../../config.js';
+import { makePolicyInput } from '../../../policy/test-helpers.js';
 import type { AgentContext } from '../../context.js';
 
 /**
@@ -12,38 +13,9 @@ import type { AgentContext } from '../../context.js';
  * would let one drift without any test noticing.
  */
 export function baseConfig(mcpDelegation: boolean): BernardConfig {
-  return {
-    provider: 'anthropic',
-    model: 'claude-test',
-    maxTokens: 4096,
-    shellTimeout: 30000,
-    tokenWindow: 0,
-    maxSteps: 25,
-    ragEnabled: false,
-    cacheEnabled: true,
-    promptCache: true,
-    mcpDelegation,
-    mcpDelegateEscalation: true,
-    semanticCache: false,
-    theme: 'bernard',
-    coordinatorMode: 'off',
-    modelMode: 'off',
-    subagentPac: false,
-    toolDetails: false,
-    autoCreateSpecialists: false,
-    autoCreateThreshold: 0.8,
-    correctionEnabled: false,
-    promptRewriter: false,
-    confirmMode: 'auto',
-    toolMode: 'write',
-    maxConcurrentAgents: 4,
-    responseStyle: 'default',
-    referenceLookup: false,
-    referenceLookupTools: [],
-    scratchSubjectThreshold: 0.15,
-    conciseMode: false,
-    customProviders: {},
-  } as unknown as BernardConfig;
+  // Reuses the repo's one cast-free `BernardConfig` builder so new config
+  // fields surface as compile errors here instead of silently defaulting.
+  return makePolicyInput({ config: { mcpDelegation, coordinatorMode: 'off' } }).config;
 }
 
 /** The raw MCP tool names the fixture's servers export. */

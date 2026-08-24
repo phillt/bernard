@@ -2,7 +2,7 @@ import type { CoreMessage, Tool } from 'ai';
 import { debugLog } from '../../logger.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
-import { delegatedMcpSurface } from '../../tools/delegate.js';
+import { mcpToolSurface } from '../../tools/delegate.js';
 import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
@@ -72,24 +72,19 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
   tools(ctx, input) {
     // A caller-scoped registry (e.g. MCP delegation escalation) wins, keeping
     // MCP schemas contained; the generic sub-agent PAC path is unchanged.
-    if (input.childTools) return input.childTools;
-    // MCP delegation (#305): carry thin `delegate_<server>` tools instead of
-    // every server's schemas, exactly as the main agent does. Sub-agents were
-    // measured at 143 tools while using 3-8 of them, all from a single server.
-    const { delegateTools, mcpTools } = delegatedMcpSurface(ctx);
-    return {
-      ...createTools(
+    return (
+      input.childTools ??
+      createTools(
         ctx.toolOptions,
         ctx.stores.memory,
-        mcpTools,
+        mcpToolSurface(ctx),
         undefined,
         undefined,
         undefined,
         undefined,
         ctx.provenance,
-      ),
-      ...delegateTools,
-    };
+      )
+    );
   },
 
   strategy() {

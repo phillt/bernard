@@ -60,15 +60,18 @@ describe('delegation edge cases (#305)', () => {
   });
 
   it("task's prompt advertises exactly the tools it hands the agent", async () => {
-    // `task.systemPrompt` builds a throwaway registry purely to interpolate
-    // `Available tools: …`. Assembled separately from `tools()`, it would
-    // advertise 143 tools the agent no longer has.
+    // `systemPrompt` and `tools` share one `taskTools(ctx)`, so this holds by
+    // construction. Asserting set EQUALITY (not just the delegate/raw names)
+    // is what catches the drift the two-registry version actually had: the
+    // prompt path passed no provenance, so `cite` was handed but unadvertised.
     const ctx = makeCtx(true);
-    const prompt = await taskDefinition.systemPrompt(ctx, anyInput);
-    const advertised = /Available tools: (.*)/.exec(prompt)?.[1].split(', ');
+    const advertised = /Available tools: (.*)/.exec(
+      await taskDefinition.systemPrompt(ctx, anyInput),
+    )?.[1];
     expect(advertised).toBeDefined();
-    for (const name of DELEGATE_TOOLS) expect(advertised).toContain(name);
-    for (const raw of RAW_MCP_TOOLS) expect(advertised).not.toContain(raw);
+    expect(advertised!.split(', ').sort()).toEqual(
+      Object.keys(taskDefinition.tools!(ctx, anyInput)).sort(),
+    );
   });
 
   it('falls open to the raw bag when a context carries MCP tools but no server map', async () => {

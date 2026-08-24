@@ -193,12 +193,15 @@ describe('dispatchServerDelegate', () => {
     expect(releaseSlot).toHaveBeenCalledTimes(1);
   });
 
-  it('returns a friendly message and never dispatches when the pool is exhausted', async () => {
-    vi.mocked(acquireSlot).mockReturnValue(null);
-    const out = await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
-    expect(out).toContain('maximum concurrent agents');
-    expect(runDefinition).not.toHaveBeenCalled();
-    expect(releaseSlot).not.toHaveBeenCalled();
+  it('acquires its slot as nested, so a full pool cannot starve it (#305)', async () => {
+    // Replaces a test that mocked `acquireSlot` to null and asserted a
+    // pool-exhausted message. That state is now unreachable: this helper runs
+    // inside a dispatch that already holds a slot, and sub-agents carry
+    // `delegate_*` tools — competing for the flat cap would silently strip MCP
+    // from every sub-agent the moment fan-out filled the pool. The invariant
+    // worth pinning is the `nested` flag, not the dead branch.
+    await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
+    expect(acquireSlot).toHaveBeenCalledWith({ nested: true });
   });
 
   it('catches a dispatch throw, releases the slot, and returns an error string', async () => {
