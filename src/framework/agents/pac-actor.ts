@@ -83,6 +83,11 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
         undefined,
         undefined,
         ctx.provenance,
+        // Worker surface (#253): a dispatched worker carries out one delegated
+        // task; it does not reconfigure Bernard. Drops cron/lineup/specialist/
+        // routine/mcp-config — ~4.6k tokens per dispatch, billed at full rate
+        // because ephemeral dispatches are never prompt-cache-marked.
+        { surface: 'worker' },
       )
     );
   },
