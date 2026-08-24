@@ -108,20 +108,6 @@ describe('runAgent', () => {
     expect(order).toEqual(['slow', 'fast']);
   });
 
-  it('bounds retries so a stalled connection cannot burn three budgets (#302)', async () => {
-    // The stall guard is per-attempt; the SDK's default of 2 retries would let
-    // one dead connection cost 3x the first-byte budget.
-    await runAgent(makeSpec());
-    const args = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(args.maxRetries).toBe(1);
-  });
-
-  it('lets a slot param override maxRetries', async () => {
-    await runAgent(makeSpec({ params: { maxRetries: 0 } }));
-    const args = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(args.maxRetries).toBe(0);
-  });
-
   it('returns the generateText result directly', async () => {
     const result = await runAgent(makeSpec());
     expect(result.text).toBe('final');

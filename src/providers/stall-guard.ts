@@ -29,9 +29,9 @@ const STALL_MARKER = 'timed out';
 /**
  * The configured first-byte budget, from `BERNARD_PROVIDER_STALL_TIMEOUT_MS`.
  *
- * Env-only, not profile-scoped: this is a process-level transport property, and
- * the clients it configures are built once at module load — a mid-session
- * profile switch could not re-apply it anyway.
+ * Env-only, not profile-scoped: this is a process-level transport property.
+ * Read per request rather than at module load, so a value in `.env` (parsed
+ * later, by `loadConfig`) is honored.
  *
  * Mirrors `parseDispatchTimeoutMs` in `framework/runner.ts`: unparseable or
  * `<= 0` disables the guard rather than falling back to the default, so
@@ -39,15 +39,9 @@ const STALL_MARKER = 'timed out';
  */
 export function resolveStallTimeoutMs(): number {
   const raw = process.env.BERNARD_PROVIDER_STALL_TIMEOUT_MS;
-  if (raw === undefined || raw === '') return DEFAULT_STALL_TIMEOUT_MS;
+  if (!raw) return DEFAULT_STALL_TIMEOUT_MS;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.floor(n);
-}
-
-/** True when `err` is the abort a caller's own signal produced, not ours. */
-function isAbortError(err: unknown): boolean {
-  return err instanceof Error && err.name === 'AbortError';
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 /**
@@ -70,45 +64,59 @@ function isAbortError(err: unknown): boolean {
  * A caller-supplied `signal` still wins: if it fires first the underlying
  * `AbortError` propagates untouched, so Esc keeps looking like Esc.
  *
- * @param timeoutMs Budget in ms. `0` or negative disables the guard entirely
- *   (returns the underlying fetch unwrapped).
- * @param baseFetch Injectable for tests; defaults to the global `fetch`.
+ * @param getTimeoutMs Budget resolver, called per request. Returning `0` or a
+ *   negative value passes the request straight through unguarded.
+ * @param baseFetch Injectable for tests; otherwise the live `globalThis.fetch`
+ *   is read per request (see the note in the body).
  */
 export function stallGuardedFetch(
-  timeoutMs: number = DEFAULT_STALL_TIMEOUT_MS,
-  baseFetch: typeof fetch = globalThis.fetch,
+  getTimeoutMs: () => number = resolveStallTimeoutMs,
+  baseFetch?: typeof fetch,
 ): typeof fetch {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return baseFetch;
-
   return async function stallGuarded(input, init) {
-    const controller = new AbortController();
+    // Both of these resolve PER REQUEST, never at module load. That is not
+    // fussiness — capturing either one at construction broke something real:
+    //
+    //  - `globalThis.fetch`: this module is evaluated during ESM import, but
+    //    `installInstrumentedFetchIfDebug()` patches the global later, from
+    //    inside a Commander action. Capturing early pinned the pre-patch fetch
+    //    and silently killed `http:request:start` / `http:response:headers` /
+    //    `http:response:end` for every provider call — the exact events
+    //    CLAUDE.md names for telling a network hang from a stream that never
+    //    closed. Resolving late also gives the right layering: the debug patch
+    //    observes, this wrapper enforces policy, stacked in that order.
+    //  - the budget: `dotenv.config()` runs inside `loadConfig()`, later still,
+    //    so a value in `~/.config/bernard/.env` had no effect and only a real
+    //    shell export worked. Every other knob here reads lazily.
+    const fetchImpl = baseFetch ?? globalThis.fetch;
+    const timeoutMs = getTimeoutMs();
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return fetchImpl(input, init);
+
     const caller = init?.signal ?? undefined;
-
-    const onCallerAbort = () => controller.abort();
-    if (caller) {
-      if (caller.aborted) controller.abort();
-      else caller.addEventListener('abort', onCallerAbort, { once: true });
-    }
-
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, timeoutMs);
-    // Never hold the event loop open on this timer's account — mirrors the
-    // dispatch watchdog in `framework/runner.ts`.
-    timer.unref?.();
+    // `AbortSignal.timeout` aborts with a `TimeoutError`, distinct from the
+    // `AbortError` a caller's own signal produces — so the runtime does the
+    // "was this mine or theirs?" discrimination that would otherwise need a
+    // mutable flag and a three-way condition. `any` also handles an
+    // already-aborted caller, and neither signal holds the event loop open.
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = caller ? AbortSignal.any([caller, timeout]) : timeout;
 
     try {
       // Only the header await is guarded. Once this resolves the response
-      // exists and the body is the caller's problem.
-      return await baseFetch(input, { ...init, signal: controller.signal });
+      // exists and the body streams untimed — a reasoning model generating for
+      // minutes must not be killed. The body stays bound to `signal`, so a
+      // later caller abort still tears the socket down.
+      return await fetchImpl(input, { ...init, signal });
     } catch (err) {
-      // Ours, not theirs: our controller fired and the caller's signal did not.
-      // Same discrimination `model-validate.ts` uses for its probe timeout.
-      if (timedOut && !caller?.aborted && isAbortError(err)) {
+      if (timeout.aborted && !caller?.aborted) {
         const seconds = Math.round(timeoutMs / 1000);
         debugLog('provider:stall', { timeoutMs, url: safeTarget(input) });
+        // Deliberately a plain `Error`, which buys two things. The REPL renders
+        // nothing for an `AbortError` (it means "the user pressed Esc"), so a
+        // bare abort would silently swallow the turn. And the AI SDK only
+        // retries a `TypeError('fetch failed')` wrapped as a retryable
+        // `APICallError` — so this error is never retried, which is what
+        // actually bounds a dead connection at ONE budget rather than three.
         throw new Error(
           `Provider ${STALL_MARKER} — no response headers within ${seconds}s. ` +
             `The connection was accepted but never answered. ` +
@@ -117,9 +125,6 @@ export function stallGuardedFetch(
         );
       }
       throw err;
-    } finally {
-      clearTimeout(timer);
-      if (caller) caller.removeEventListener('abort', onCallerAbort);
     }
   };
 }
@@ -132,8 +137,7 @@ export function stallGuardedFetch(
  */
 function safeTarget(input: RequestInfo | URL): string | undefined {
   try {
-    const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
-    const u = new URL(raw);
+    const u = new URL(input instanceof Request ? input.url : input);
     return `${u.host}${u.pathname}`;
   } catch {
     return undefined;

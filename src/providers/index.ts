@@ -5,7 +5,7 @@ import type { LanguageModel } from 'ai';
 import type { SupportedSdk } from './types.js';
 import type { BernardConfig } from '../config.js';
 import { getProviderApiKey } from '../config.js';
-import { stallGuardedFetch, resolveStallTimeoutMs } from './stall-guard.js';
+import { stallGuardedFetch } from './stall-guard.js';
 
 export { getModelProfile } from './profiles.js';
 export type { ModelProfile } from './profiles.js';
@@ -14,10 +14,11 @@ export type { SupportedSdk } from './types.js';
 /**
  * Time-to-first-byte guard applied to every LLM completion (#302).
  *
- * Built once for the process and shared by every client, so the memoized
- * custom-factory cache key stays valid.
+ * Built once and shared by every client — safe because the wrapper resolves
+ * both its budget and the underlying `fetch` per request, so nothing is frozen
+ * at module load and the memoized custom-factory cache key stays valid.
  */
-const guardedFetch = stallGuardedFetch(resolveStallTimeoutMs());
+const guardedFetch = stallGuardedFetch();
 
 // Built-in clients are constructed HERE rather than using each SDK's exported
 // default instance, because only the factory form accepts a `fetch`. Key
