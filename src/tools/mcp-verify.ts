@@ -111,6 +111,7 @@ export function createMCPVerifyTool() {
       // A read-only diagnostic probe: it spawns the *user's own configured*
       // server briefly and only lists tools (no tool is invoked).
       name: 'mcp_verify',
+      audience: 'main',
       kind: 'read',
       deterministic: false,
       sideEffect: 'local',

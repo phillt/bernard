@@ -29,6 +29,7 @@ export function createMemoryTool(
   return {
     meta: {
       name: 'memory',
+      audience: 'any',
       kind: 'write',
       deterministic: false,
       sideEffect: 'local',
@@ -104,6 +105,7 @@ export function createScratchTool(
   return {
     meta: {
       name: 'scratch',
+      audience: 'any',
       kind: 'write',
       deterministic: false,
       sideEffect: 'local',

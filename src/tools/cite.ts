@@ -45,6 +45,7 @@ export function createCiteTool(provenance: ProvenanceStore) {
     }),
     {
       name: 'cite',
+      audience: 'any',
       kind: 'read',
       deterministic: true,
       sideEffect: 'none',

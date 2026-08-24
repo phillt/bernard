@@ -85,6 +85,7 @@ export function createRoutineTool(routineStore?: RoutineStore) {
     }),
     {
       name: 'routine',
+      audience: 'main',
       kind: 'write',
       deterministic: false,
       sideEffect: 'local',

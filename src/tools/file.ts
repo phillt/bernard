@@ -282,6 +282,7 @@ export function createFileTools(provenance?: ProvenanceStore) {
       }),
       {
         name: 'file_read_lines',
+        audience: 'any',
         kind: 'read',
         deterministic: false,
         sideEffect: 'local',
@@ -495,6 +496,7 @@ export function createFileTools(provenance?: ProvenanceStore) {
       }),
       {
         name: 'file_edit_lines',
+        audience: 'any',
         kind: 'write',
         deterministic: false,
         sideEffect: 'local',

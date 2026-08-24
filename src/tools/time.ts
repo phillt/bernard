@@ -63,6 +63,7 @@ export function createTimeTools() {
       }),
       {
         name: 'time_range',
+        audience: 'any',
         kind: 'read',
         deterministic: true,
         sideEffect: 'none',
@@ -94,6 +95,7 @@ export function createTimeTools() {
       }),
       {
         name: 'time_range_total',
+        audience: 'any',
         kind: 'read',
         deterministic: true,
         sideEffect: 'none',

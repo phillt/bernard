@@ -140,6 +140,15 @@ export function attachActionMeta<T extends Tool>(
     deterministic: false,
     sideEffect: 'local',
     cacheable: false,
+    // The discriminator is declared once, here, for every tool built this way
+    // — the same field `isWriteAction` below refines on. Permission keys and
+    // the breadth ladder read it off the meta rather than off a name list they
+    // could disagree with (#322).
+    actionArg: 'action',
+    // Every tool built this way today is a cron control — a main-agent
+    // concern. Overridable via `opts` if a non-scheduling action-enum tool
+    // ever uses this constructor.
+    audience: 'main',
     isWriteAction: (args: unknown) => {
       const action = (args as { action?: unknown } | undefined)?.action;
       return typeof action !== 'string' || !readActions.has(action);

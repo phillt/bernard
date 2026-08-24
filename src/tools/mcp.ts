@@ -129,6 +129,7 @@ export function createMCPConfigTool() {
     }),
     {
       name: 'mcp_config',
+      audience: 'main',
       kind: 'write',
       deterministic: false,
       sideEffect: 'local',

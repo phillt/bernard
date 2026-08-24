@@ -303,6 +303,7 @@ export function createLineupTool(config?: BernardConfig) {
     }),
     {
       name: 'lineup_edit',
+      audience: 'main',
       kind: 'write',
       deterministic: false,
       sideEffect: 'local',

@@ -345,6 +345,7 @@ export function createSpecialistTool(
     }),
     {
       name: 'specialist',
+      audience: 'main',
       kind: 'write',
       deterministic: false,
       sideEffect: 'local',

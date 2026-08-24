@@ -3,6 +3,7 @@ import { CRON_ACTIONS, CRON_ACTION_NAMES, CRON_READ_ACTIONS, createCronTool } fr
 import { CRON_LOGS_ACTIONS, CRON_LOGS_ACTION_NAMES } from './cron-logs.js';
 import { CRON_NOTES_ACTIONS, CRON_NOTES_ACTION_NAMES } from './cron-notes.js';
 import { createTools, WORKER_EXCLUDED_TOOLS } from './index.js';
+import { readToolMeta } from '../framework/tools/adapter.js';
 import { permissionKeyFor } from '../tool-permissions.js';
 
 const memoryStub = {
@@ -62,24 +63,28 @@ describe('cron consolidation (#253)', () => {
 
   describe('permission keys stay per-action (#253)', () => {
     // Ten tools became one, so a name-keyed grant would let "always allow
-    // cron" — granted while listing — authorise deletion.
+    // cron" — granted while listing — authorise deletion. The per-action key
+    // is minted from the tool's own `meta.actionArg` (#322), so these pass the
+    // real meta rather than relying on a name list kept elsewhere.
+    const cronMeta = readToolMeta(createCronTool().cron);
+
     it('does not collapse list and delete into one grant', () => {
-      expect(permissionKeyFor('cron', { action: 'list' })).toBe('cron:list');
-      expect(permissionKeyFor('cron', { action: 'delete', id: 'x' })).toBe('cron:delete');
-      expect(permissionKeyFor('cron', { action: 'list' })).not.toBe(
-        permissionKeyFor('cron', { action: 'delete' }),
+      expect(permissionKeyFor('cron', { action: 'list' }, cronMeta)).toBe('cron:list');
+      expect(permissionKeyFor('cron', { action: 'delete', id: 'x' }, cronMeta)).toBe('cron:delete');
+      expect(permissionKeyFor('cron', { action: 'list' }, cronMeta)).not.toBe(
+        permissionKeyFor('cron', { action: 'delete' }, cronMeta),
       );
     });
 
     it('keys the same action identically regardless of other args', () => {
-      expect(permissionKeyFor('cron', { action: 'delete', id: 'a' })).toBe(
-        permissionKeyFor('cron', { action: 'delete', id: 'b' }),
+      expect(permissionKeyFor('cron', { action: 'delete', id: 'a' }, cronMeta)).toBe(
+        permissionKeyFor('cron', { action: 'delete', id: 'b' }, cronMeta),
       );
     });
 
     it('offers no profile grant when the action is unreadable', () => {
-      expect(permissionKeyFor('cron', {})).toBeNull();
-      expect(permissionKeyFor('cron', { action: 7 })).toBeNull();
+      expect(permissionKeyFor('cron', {}, cronMeta)).toBeNull();
+      expect(permissionKeyFor('cron', { action: 7 }, cronMeta)).toBeNull();
     });
 
     it('leaves non-action tools keyed by name', () => {
@@ -133,6 +138,54 @@ describe('cron consolidation (#253)', () => {
       expect(full).toContain('cron');
       expect(full).toContain('lineup_edit');
       expect(full.length).toBeGreaterThan(names('worker').length);
+    });
+
+    /**
+     * #322: `WORKER_EXCLUDED_TOOLS` could only fail by omission, undetectably —
+     * add a seventh config tool and it silently ships to every worker, because
+     * no test can know it should have been listed. `ToolMeta.audience` moves
+     * the fact onto the tool, `meta-coverage.test.ts` requires it, and this
+     * pins that the two never disagree.
+     */
+    it('the tools a worker drops are exactly the ones declaring audience: main', () => {
+      const tools = createTools(
+        {} as never,
+        memoryStub,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      );
+      const declaredMain = Object.entries(tools)
+        .filter(([, t]) => readToolMeta(t)?.audience === 'main')
+        .map(([n]) => n)
+        .sort();
+      const worker = new Set(names('worker'));
+      const actuallyDropped = Object.keys(tools)
+        .filter((n) => !worker.has(n))
+        .sort();
+      expect(declaredMain).toEqual(actuallyDropped);
+      // Non-empty, so a registry that dropped nothing can't pass vacuously.
+      expect(declaredMain.length).toBeGreaterThan(0);
+    });
+
+    it('every worker-carried tool declares audience: any', () => {
+      const tools = createTools(
+        {} as never,
+        memoryStub,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { surface: 'worker' },
+      );
+      for (const [name, t] of Object.entries(tools)) {
+        expect(readToolMeta(t)?.audience, name).toBe('any');
+      }
     });
   });
 });

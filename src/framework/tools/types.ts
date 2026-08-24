@@ -32,6 +32,29 @@ export type ToolRisk = 'low' | 'medium' | 'high';
 export interface ToolMeta {
   name: string;
   kind: 'read' | 'write' | 'dangerous' | 'inert';
+  /**
+   * Who this tool is FOR (#253, #322) — an ownership question, not a
+   * write-ness one:
+   *
+   *  - `'main'` — Bernard's own configuration and scheduling controls (cron
+   *    jobs, model lineups, specialist definitions, saved routines, MCP server
+   *    config). They mutate durable user state that belongs to the main agent
+   *    and the REPL. A dispatched worker exists to carry out one delegated
+   *    task, not to reconfigure the assistant while doing it, so
+   *    `createTools({ surface: 'worker' })` does not construct these.
+   *  - `'any'` — everything else, including writes a worker legitimately needs
+   *    (`shell`, `file_edit_lines`).
+   *
+   * Declared per tool rather than derived from `kind`/`sideEffect` because the
+   * distinction is "who owns this decision", and declared HERE rather than
+   * only in `WORKER_EXCLUDED_TOOLS` because a name list can only fail by
+   * omission, undetectably: add a seventh config tool tomorrow and it silently
+   * ships to every worker. `meta-coverage.test.ts` requires this field on every
+   * tool `createTools()` returns, so the omission is a red CI run instead of a
+   * per-dispatch token leak; `worker-surface.test.ts` pins that the declarations
+   * and the registry agree.
+   */
+  audience?: 'main' | 'any';
   category?: string;
   /** Same args always produce the same result. Required for caching. */
   deterministic?: boolean;
@@ -63,6 +86,25 @@ export interface ToolMeta {
    * tools keep the static `kind`-based behavior.
    */
   isWriteAction?: (args: unknown) => boolean;
+  /**
+   * Name of the argument this tool dispatches on, for tools whose single name
+   * covers operations of very different consequence (#253, #322). When set,
+   * profile permission grants key per action (`cron:delete`) and the breadth
+   * ladder offers "this action" / "any action" instead of exact-args — so an
+   * "always allow" granted while listing jobs cannot authorise deleting them.
+   *
+   * Declared here rather than in a name list kept elsewhere: the discriminator
+   * is a tool-local fact, it is the same one {@link isWriteAction} already
+   * refines on, and a separate list can disagree with the tool it describes.
+   * `attachActionMeta` sets it, so any action-enum tool built that way is
+   * covered by construction.
+   *
+   * `routine` / `specialist` / `lineup_edit` have the same action shape but
+   * deliberately do NOT declare it: users may hold stored rules keyed on the
+   * bare name, and re-keying them would silently invalidate those. That needs
+   * its own change, with a migration.
+   */
+  actionArg?: string;
   /**
    * Optional post-write schema/state check (issue #145). Runs after the tool
    * returns `status: 'ok'` and contributes a structured `Check` to the turn's

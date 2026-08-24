@@ -151,6 +151,7 @@ export function createWebReadTool(provenance?: ProvenanceStore) {
     }),
     {
       name: 'web_read',
+      audience: 'any',
       kind: 'read',
       deterministic: false,
       sideEffect: 'network',
