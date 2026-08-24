@@ -142,7 +142,7 @@ export async function runDefinition<TInput, TFormatted>(
     // Evidence-pointer registration (#141). Shared by reference into
     // sub-agent / tool-wrapper contexts so a `shell` call inside a wrapper
     // surfaces in the parent's Shift+Tab overlay alongside main-agent calls.
-    // Default-closed: cron and bare depsToCtx callers run without a
+    // Default-closed: cron and other hand-assembled contexts run without a
     // policyDecision, so silently enabling evidence there would populate the
     // shared store with entries the model running that context was never
     // told to cite (cron + sub-agents/wrappers do not inject EVIDENCE_PROMPT).

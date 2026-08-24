@@ -303,7 +303,7 @@ export function augmentTools(
   const provenance = opts.provenance;
   // Default closed: registration only runs when the policy engine explicitly
   // opts in. The previous `?? true` fallback silently enabled evidence in
-  // contexts that never consult the policy (cron, bare depsToCtx callers),
+  // contexts that never consult the policy (cron, hand-assembled contexts),
   // populating the shared store with entries the model was never told about.
   const evidenceEnabled = provenance ? opts.evidenceEnabled === true : false;
   const postWriteChecks = opts.postWriteChecks;

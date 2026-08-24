@@ -14,7 +14,6 @@ import { createAskUserTool } from '../../tools/ask-user.js';
 import { createEvaluateTool } from '../../tools/evaluate.js';
 import { applyShimRouting } from '../../tools/wrap-with-specialist.js';
 import { mcpToolSurface } from '../../tools/delegate.js';
-import { ctxToToolWrapperDeps } from '../../tools/tool-wrapper-run.js';
 import { toolToAISDK } from '../tools/adapter.js';
 import { buildToolProfilesPrompt } from '../../tool-profiles.js';
 import { getModelProfile } from '../../providers/index.js';
@@ -272,7 +271,7 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     // `augmentTools` (profile-recording + confirmation gate) is applied
     // centrally in `runDefinition`. We only need to return the shimmed tools
     // — main is the only agent that applies the wrap-with-specialist shim.
-    return applyShimRouting(tools, ctxToToolWrapperDeps(ctx));
+    return applyShimRouting(tools, ctx);
   },
 
   strategy(ctx) {
