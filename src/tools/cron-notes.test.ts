@@ -24,7 +24,7 @@ vi.mock('../cron/store.js', () => ({
   CronStore: vi.fn(() => mockCronStore),
 }));
 
-import { createCronNotesTools } from './cron-notes.js';
+import { createCronNotesTool } from './cron-notes.js';
 
 function makeEntry(overrides: Partial<CronNoteEntry> = {}): CronNoteEntry {
   return {
@@ -34,22 +34,32 @@ function makeEntry(overrides: Partial<CronNoteEntry> = {}): CronNoteEntry {
   };
 }
 
+/**
+ * Cron tools were consolidated from 18 single-purpose tools into 3 action-enum
+ * tools (#253). These tests are deliberately kept as a like-for-like migration
+ * — same setup, same assertions — so that any behaviour drift during the
+ * refactor surfaces as a failure rather than being edited away. `call('read')`
+ * stands in for what used to be `tools.cron_notes_read.execute!`.
+ */
 describe('cron notes tools', () => {
-  let tools: ReturnType<typeof createCronNotesTools>;
+  let tools: ReturnType<typeof createCronNotesTool>;
+
+  const call = (action: string) => (args: any) =>
+    (tools.cron_notes as any).execute({ action, ...args }, {} as any);
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockNotesStore.read.mockReturnValue({ jobId: 'job-1', entries: [] });
     mockNotesStore.listJobIds.mockReturnValue([]);
     mockCronStore.getJob.mockReturnValue(undefined);
-    tools = createCronNotesTools();
+    tools = createCronNotesTool();
   });
 
   describe('cron_notes_read', () => {
     it('returns message when no notes exist', async () => {
       mockNotesStore.read.mockReturnValue({ jobId: 'job-1', entries: [] });
 
-      const result = await tools.cron_notes_read.execute!({ job_id: 'job-1' }, {} as any);
+      const result = await call('read')({ job_id: 'job-1' });
 
       expect(result).toContain('No notes recorded');
       expect(result).toContain('job-1');
@@ -61,7 +71,7 @@ describe('cron notes tools', () => {
         entries: [makeEntry({ text: 'created issue #42' })],
       });
 
-      const result = await tools.cron_notes_read.execute!({ job_id: 'job-1' }, {} as any);
+      const result = await call('read')({ job_id: 'job-1' });
 
       expect(result).toContain('1 entry');
       expect(result).toContain('2025-01-01T00:00:00.000Z');
@@ -74,7 +84,7 @@ describe('cron notes tools', () => {
         entries: [makeEntry({ runId: 'abcdef12-3456-7890' })],
       });
 
-      const result = await tools.cron_notes_read.execute!({ job_id: 'job-1' }, {} as any);
+      const result = await call('read')({ job_id: 'job-1' });
 
       expect(result).toContain('run:abcdef12');
       expect(result).not.toContain('abcdef12-3456-7890');
@@ -85,7 +95,7 @@ describe('cron notes tools', () => {
     it('appends note and returns confirmation with the total from append', async () => {
       mockNotesStore.append.mockReturnValue({ entry: makeEntry(), total: 2 });
 
-      const result = await tools.cron_notes_write.execute!(
+      const result = await call('write')(
         { job_id: 'job-1', text: 'sent weekly summary' },
         {} as any,
       );
@@ -99,10 +109,7 @@ describe('cron notes tools', () => {
     it('rejects text exceeding 1000 characters', async () => {
       const longText = 'x'.repeat(1001);
 
-      const result = await tools.cron_notes_write.execute!(
-        { job_id: 'job-1', text: longText },
-        {} as any,
-      );
+      const result = await call('write')({ job_id: 'job-1', text: longText }, {} as any);
 
       expect(result).toContain('Error:');
       expect(result).toContain('1000');
@@ -114,7 +121,7 @@ describe('cron notes tools', () => {
       mockNotesStore.append.mockReturnValue({ entry: makeEntry(), total: 1 });
       const text = 'x'.repeat(1000);
 
-      const result = await tools.cron_notes_write.execute!({ job_id: 'job-1', text }, {} as any);
+      const result = await call('write')({ job_id: 'job-1', text });
 
       expect(mockNotesStore.append).toHaveBeenCalledWith('job-1', text);
       expect(result).toContain('Appended note');
@@ -125,7 +132,7 @@ describe('cron notes tools', () => {
     it('returns message when no jobs have notes', async () => {
       mockNotesStore.listJobIds.mockReturnValue([]);
 
-      const result = await tools.cron_notes_list.execute!({}, {} as any);
+      const result = await call('list')({});
 
       expect(result).toContain('No cron jobs have notes');
     });
@@ -136,7 +143,7 @@ describe('cron notes tools', () => {
         .mockReturnValueOnce({ jobId: 'job-a', entries: [makeEntry(), makeEntry()] })
         .mockReturnValueOnce({ jobId: 'job-b', entries: [makeEntry()] });
 
-      const result = await tools.cron_notes_list.execute!({}, {} as any);
+      const result = await call('list')({});
 
       expect(result).toContain('job-a');
       expect(result).toContain('2 entries');
@@ -149,7 +156,7 @@ describe('cron notes tools', () => {
       mockNotesStore.read.mockReturnValue({ jobId: 'job-a', entries: [makeEntry()] });
       mockCronStore.getJob.mockReturnValue({ id: 'job-a', name: 'Daily summary' });
 
-      const result = await tools.cron_notes_list.execute!({}, {} as any);
+      const result = await call('list')({});
 
       expect(result).toContain('job-a (Daily summary)');
     });
@@ -159,7 +166,7 @@ describe('cron notes tools', () => {
     it('returns message when no notes exist', async () => {
       mockNotesStore.read.mockReturnValue({ jobId: 'job-1', entries: [] });
 
-      const result = await tools.cron_notes_view.execute!({ job_id: 'job-1' }, {} as any);
+      const result = await call('view')({ job_id: 'job-1' });
 
       expect(result).toContain('No notes recorded');
     });
@@ -173,7 +180,7 @@ describe('cron notes tools', () => {
         ],
       });
 
-      const result = await tools.cron_notes_view.execute!({ job_id: 'job-1' }, {} as any);
+      const result = await call('view')({ job_id: 'job-1' });
 
       expect(result).toContain('2 entries');
       expect(result).toContain('first entry');
@@ -190,7 +197,7 @@ describe('cron notes tools', () => {
       });
       mockCronStore.getJob.mockReturnValue({ id: 'job-1', name: 'Daily summary' });
 
-      const result = await tools.cron_notes_view.execute!({ job_id: 'job-1' }, {} as any);
+      const result = await call('view')({ job_id: 'job-1' });
 
       expect(result).toContain('Daily summary');
       expect(result).toContain('job-1');
