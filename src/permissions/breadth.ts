@@ -10,10 +10,9 @@
 
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { primaryShellCommand } from '../tool-permissions.js';
+import { ACTION_SCOPED_TOOLS, primaryShellCommand } from '../tool-permissions.js';
 import { truncate } from '../text.js';
 import { stableArgsString, FILE_TOOLS, WEB_TOOLS } from './matchers.js';
-import { ACTION_SCOPED_TOOLS } from '../tool-permissions.js';
 
 export interface BreadthOption {
   /** Short label shown in the breadth selector. */

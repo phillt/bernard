@@ -37,17 +37,24 @@ export type { ToolOptions } from './types.js';
  * reconfigure the assistant while doing it.
  *
  * Removing them is a cost win and a containment win:
- *  - Cost: 24 tools / ~18k chars (~4.6k tokens) per dispatch. Ephemeral
+ *  - Cost: the worker surface is 11 tools / ~6.4k chars against a full 20 /
+ *    ~21.2k — about 14.8k chars (~3.7k tokens) skipped per dispatch. Ephemeral
  *    dispatches are never prompt-cache-marked (`run.ts`: `promptCacheActive`
  *    requires `historyMode === 'persistent'`, and only the main agent is), so
  *    unlike the main agent's block this is billed at full rate every time.
+ *    (Measured after the cron consolidation that shrank the full surface; a
+ *    sub-agent's end-to-end drop across both changes is ~24.1k -> 6.4k chars.)
  *  - Containment: `createRoutineTool(undefined)` falls back to
- *    `new RoutineStore()`, so a worker handed no store today still gets a live
- *    one pointed at the user's real routines directory.
+ *    `new RoutineStore()`, so a worker handed no store would otherwise get a
+ *    live one pointed at the user's real routines directory.
  *
  * Deliberately a name list rather than a `kind`/`sideEffect` predicate: the
  * distinction here is "who owns this decision", not "is this a write". `shell`
  * and `file_edit_lines` are writes a worker legitimately needs.
+ *
+ * The registry below skips CONSTRUCTING these on a worker rather than deleting
+ * them afterwards, so this list is the declared contract and the assertion
+ * source for `cron-consolidation.test.ts` — which pins that the two agree.
  */
 export const WORKER_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
   'routine',
@@ -101,30 +108,39 @@ export function createTools(
     shell: toolToAISDK(createShellTool(options)),
     memory: toolToAISDK(createMemoryTool(memoryStore, provenance)),
     scratch: toolToAISDK(createScratchTool(memoryStore, provenance)),
-    routine: createRoutineTool(routineStore),
-    lineup_edit: createLineupTool(config),
-    specialist: createSpecialistTool(specialistStore, candidateStore, config),
     datetime: createDateTimeTool(),
+    // Not constructed at all on a worker, rather than built and deleted: these
+    // constructors touch disk. `createRoutineTool(undefined)` falls back to
+    // `new RoutineStore()` (mkdirSync on the user's real routines dir) and
+    // `createSpecialistTool(undefined, …)` runs the bundled-specialist seed
+    // check — on a dispatch that was deliberately handed no stores.
+    ...(worker
+      ? {}
+      : {
+          routine: createRoutineTool(routineStore),
+          lineup_edit: createLineupTool(config),
+          specialist: createSpecialistTool(specialistStore, candidateStore, config),
+        }),
     // Scheduling is a main-agent concern; the cron *definition* builds its own
     // registry for headless runs and is unaffected by this.
     ...(worker ? {} : createCronTool()),
     ...(worker ? {} : createCronLogTool()),
     ...(worker ? {} : createCronNotesTool()),
     ...createTimeTools(),
-    mcp_config: createMCPConfigTool(),
-    mcp_add_url: createMCPAddUrlTool(),
-    mcp_verify: createMCPVerifyTool(),
+    ...(worker
+      ? {}
+      : {
+          mcp_config: createMCPConfigTool(),
+          mcp_add_url: createMCPAddUrlTool(),
+          mcp_verify: createMCPVerifyTool(),
+        }),
     web_read: createWebReadTool(provenance),
     web_search: createWebSearchTool(provenance),
     wait: createWaitTool(),
     ...createFileTools(provenance),
     ...(provenance ? { cite: createCiteTool(provenance) } : {}),
   };
-  // Strip BEFORE merging MCP: the exclusion list names Bernard's own built-ins,
-  // and an MCP server that happens to export a colliding name should still win
-  // the merge rather than be silently dropped by a rule aimed elsewhere.
-  if (worker) {
-    for (const name of WORKER_EXCLUDED_TOOLS) delete registry[name];
-  }
+  // MCP merges last, so a server exporting a colliding name still wins — the
+  // exclusions above are about Bernard's own built-ins, not about MCP.
   return { ...registry, ...mcpTools };
 }

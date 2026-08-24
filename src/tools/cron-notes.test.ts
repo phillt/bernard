@@ -109,7 +109,7 @@ describe('cron notes tools', () => {
     it('rejects text exceeding 1000 characters', async () => {
       const longText = 'x'.repeat(1001);
 
-      const result = await call('write')({ job_id: 'job-1', text: longText }, {} as any);
+      const result = await call('write')({ job_id: 'job-1', text: longText });
 
       expect(result).toContain('Error:');
       expect(result).toContain('1000');

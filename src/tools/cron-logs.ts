@@ -3,13 +3,11 @@ import { z } from 'zod';
 import { CronLogStore } from '../cron/log-store.js';
 import { CronNotesStore } from '../cron/notes-store.js';
 import { debugLog } from '../logger.js';
-import { attachMeta } from '../framework/tools/adapter.js';
+import { missing } from './cron.js';
+import { attachActionMeta } from '../framework/tools/adapter.js';
 
 /** Log actions that only read. `cleanup` is the sole mutator. */
 export const CRON_LOGS_READ_ACTIONS: ReadonlySet<string> = new Set(['list', 'get', 'summary']);
-
-export const CRON_LOGS_ACTION_NAMES = ['list', 'get', 'summary', 'cleanup'] as const;
-export type CronLogsAction = (typeof CRON_LOGS_ACTION_NAMES)[number];
 
 interface CronLogsArgs {
   action: CronLogsAction;
@@ -34,7 +32,7 @@ interface CronLogsDeps {
 type CronLogsHandler = (deps: CronLogsDeps, args: CronLogsArgs) => Promise<string>;
 
 /** Per-action handlers, exported for direct unit testing (#253). */
-export const CRON_LOGS_ACTIONS: Record<CronLogsAction, CronLogsHandler> = {
+export const CRON_LOGS_ACTIONS = {
   list: async ({ logStore }, { job_id, limit = 10, offset = 0 }) => {
     const entries = logStore.getEntries(job_id, limit, offset);
     if (entries.length === 0) {
@@ -55,7 +53,11 @@ export const CRON_LOGS_ACTIONS: Record<CronLogsAction, CronLogsHandler> = {
 
   get: async ({ logStore, notesStore }, { job_id, run_id }) => {
     if (!run_id) {
-      return 'Error: "get" requires `run_id` (from a list action). Example: {"action":"get","job_id":"<id>","run_id":"<run>"}';
+      return missing(
+        'get',
+        'run_id (from a list action)',
+        '{"action":"get","job_id":"<id>","run_id":"<run>"}',
+      );
     }
     const entry = logStore.getEntry(job_id, run_id);
     if (!entry) return `No log entry found for job "${job_id}", run "${run_id}".`;
@@ -126,7 +128,11 @@ export const CRON_LOGS_ACTIONS: Record<CronLogsAction, CronLogsHandler> = {
 
   cleanup: async ({ logStore }, { job_id, mode, keep = 500 }) => {
     if (!mode) {
-      return 'Error: "cleanup" requires `mode` ("rotate" keeps recent entries, "delete" removes all). Example: {"action":"cleanup","job_id":"<id>","mode":"rotate","keep":500}';
+      return missing(
+        'cleanup',
+        'mode ("rotate" keeps recent entries, "delete" removes all)',
+        '{"action":"cleanup","job_id":"<id>","mode":"rotate","keep":500}',
+      );
     }
     if (mode === 'delete') {
       const deleted = logStore.deleteJobLogs(job_id);
@@ -142,7 +148,19 @@ export const CRON_LOGS_ACTIONS: Record<CronLogsAction, CronLogsHandler> = {
 
     return `Rotated logs for job "${job_id}": ${countBefore} → ${countAfter} entries (kept last ${keep}).`;
   },
-};
+} satisfies Record<string, CronLogsHandler>;
+
+export type CronLogsAction = keyof typeof CRON_LOGS_ACTIONS;
+
+/**
+ * Derived from the handler table, not declared beside it — a parallel list can
+ * drift, and a schema accepting an action with no handler dispatches to
+ * `undefined` at call time.
+ */
+export const CRON_LOGS_ACTION_NAMES = Object.keys(CRON_LOGS_ACTIONS) as [
+  CronLogsAction,
+  ...CronLogsAction[],
+];
 
 /**
  * Consolidated cron-log tool (#253) — one action-enum tool replacing
@@ -152,7 +170,7 @@ export function createCronLogTool() {
   const deps: CronLogsDeps = { logStore: new CronLogStore(), notesStore: new CronNotesStore() };
 
   return {
-    cron_logs: attachMeta(
+    cron_logs: attachActionMeta(
       tool({
         description: `Inspect and manage cron job execution logs.
 
@@ -188,17 +206,7 @@ Actions: list · get · summary · cleanup
           return CRON_LOGS_ACTIONS[args.action](deps, args);
         },
       }),
-      {
-        name: 'cron_logs',
-        kind: 'write',
-        deterministic: false,
-        sideEffect: 'local',
-        cacheable: false,
-        isWriteAction: (args: unknown) => {
-          const a = (args as { action?: unknown } | undefined)?.action;
-          return typeof a !== 'string' || !CRON_LOGS_READ_ACTIONS.has(a);
-        },
-      },
+      { name: 'cron_logs', readActions: CRON_LOGS_READ_ACTIONS },
     ),
   };
 }

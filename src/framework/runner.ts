@@ -42,7 +42,7 @@ function toolBlockBytes(tools: Record<string, Tool> | undefined): number {
         p && typeof p === 'object' && 'jsonSchema' in p
           ? (p as { jsonSchema: unknown }).jsonSchema
           : zodSchema(p as Parameters<typeof zodSchema>[0]).jsonSchema;
-      total += JSON.stringify(resolved ?? {})?.length ?? 0;
+      total += JSON.stringify(resolved ?? {}).length;
     } catch {
       // Unconvertible or circular schema — skip this tool's parameters rather
       // than fail the dispatch. Undercounts; never crashes.

@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { CronNotesStore, MAX_NOTE_LENGTH, type CronNoteEntry } from '../cron/notes-store.js';
 import { CronStore } from '../cron/store.js';
 import { debugLog } from '../logger.js';
-import { attachMeta } from '../framework/tools/adapter.js';
+import { missing } from './cron.js';
+import { attachActionMeta } from '../framework/tools/adapter.js';
 
 function pluralizeEntries(n: number): string {
   return `${n} ${n === 1 ? 'entry' : 'entries'}`;
@@ -22,9 +23,6 @@ function formatEntryView(e: CronNoteEntry): string {
 /** Note actions that only read. `write` is the sole mutator. */
 export const CRON_NOTES_READ_ACTIONS: ReadonlySet<string> = new Set(['read', 'list', 'view']);
 
-export const CRON_NOTES_ACTION_NAMES = ['read', 'write', 'list', 'view'] as const;
-export type CronNotesAction = (typeof CRON_NOTES_ACTION_NAMES)[number];
-
 interface CronNotesArgs {
   action: CronNotesAction;
   job_id?: string;
@@ -39,7 +37,7 @@ interface CronNotesDeps {
 type CronNotesHandler = (deps: CronNotesDeps, args: CronNotesArgs) => Promise<string>;
 
 /** Per-action handlers, exported for direct unit testing (#253). */
-export const CRON_NOTES_ACTIONS: Record<CronNotesAction, CronNotesHandler> = {
+export const CRON_NOTES_ACTIONS = {
   read: async ({ notesStore }, { job_id }) => {
     if (!job_id)
       return 'Error: "read" requires `job_id`. Example: {"action":"read","job_id":"<id>"}';
@@ -53,7 +51,11 @@ export const CRON_NOTES_ACTIONS: Record<CronNotesAction, CronNotesHandler> = {
 
   write: async ({ notesStore }, { job_id, text }) => {
     if (!job_id || !text) {
-      return 'Error: "write" requires `job_id` and `text`. Example: {"action":"write","job_id":"<id>","text":"Sent the report"}';
+      return missing(
+        'write',
+        'job_id and text',
+        '{"action":"write","job_id":"<id>","text":"Sent the report"}',
+      );
     }
     if (text.length > MAX_NOTE_LENGTH) {
       return `Error: note text exceeds ${MAX_NOTE_LENGTH} characters (got ${text.length}). Summarize first.`;
@@ -90,7 +92,19 @@ export const CRON_NOTES_ACTIONS: Record<CronNotesAction, CronNotesHandler> = {
     const body = notes.entries.map(formatEntryView).join('\n\n');
     return `${header}\n\n${body}`;
   },
-};
+} satisfies Record<string, CronNotesHandler>;
+
+export type CronNotesAction = keyof typeof CRON_NOTES_ACTIONS;
+
+/**
+ * Derived from the handler table, not declared beside it — a parallel list can
+ * drift, and a schema accepting an action with no handler dispatches to
+ * `undefined` at call time.
+ */
+export const CRON_NOTES_ACTION_NAMES = Object.keys(CRON_NOTES_ACTIONS) as [
+  CronNotesAction,
+  ...CronNotesAction[],
+];
 
 /**
  * Consolidated cron-notes tool (#253) — one action-enum tool replacing
@@ -104,7 +118,7 @@ export function createCronNotesTool() {
   const deps: CronNotesDeps = { notesStore: new CronNotesStore(), cronStore: new CronStore() };
 
   return {
-    cron_notes: attachMeta(
+    cron_notes: attachActionMeta(
       tool({
         description: `Read and append persistent per-job cron notes. Notes survive daemon restarts and record what prior runs actually did, so a job can avoid repeating work.
 
@@ -128,17 +142,7 @@ Actions: read · write · list · view
           return CRON_NOTES_ACTIONS[args.action](deps, args);
         },
       }),
-      {
-        name: 'cron_notes',
-        kind: 'write',
-        deterministic: false,
-        sideEffect: 'local',
-        cacheable: false,
-        isWriteAction: (args: unknown) => {
-          const a = (args as { action?: unknown } | undefined)?.action;
-          return typeof a !== 'string' || !CRON_NOTES_READ_ACTIONS.has(a);
-        },
-      },
+      { name: 'cron_notes', readActions: CRON_NOTES_READ_ACTIONS },
     ),
   };
 }

@@ -6,7 +6,7 @@ import { CronLogStore } from '../cron/log-store.js';
 import { runJob } from '../cron/runner.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from '../cron/client.js';
 import { debugLog } from '../logger.js';
-import { attachMeta } from '../framework/tools/adapter.js';
+import { attachActionMeta } from '../framework/tools/adapter.js';
 
 function ensureDaemon(): string | null {
   if (!isDaemonRunning()) {
@@ -36,24 +36,8 @@ function stopIfNoEnabledJobs(store: CronStore): string {
  */
 export const CRON_READ_ACTIONS: ReadonlySet<string> = new Set(['list', 'get', 'status']);
 
-/** Every action the consolidated `cron` tool accepts. */
-export const CRON_ACTION_NAMES = [
-  'create',
-  'list',
-  'get',
-  'update',
-  'delete',
-  'enable',
-  'disable',
-  'run',
-  'status',
-  'bounce',
-] as const;
-
-export type CronAction = (typeof CRON_ACTION_NAMES)[number];
-
 interface CronArgs {
-  action: CronAction;
+  action: string;
   id?: string;
   name?: string;
   schedule?: string;
@@ -67,8 +51,14 @@ interface CronDeps {
 
 type CronHandler = (deps: CronDeps, args: CronArgs) => Promise<string>;
 
-/** Uniform "you left out a required field" message. */
-function missing(action: string, field: string, example: string): string {
+/**
+ * Uniform "you left out a required field" message.
+ *
+ * Shared by all three cron tools: consolidation moved required-field checks out
+ * of zod and into the handlers, so this wording is the only thing telling the
+ * model what it left out — it should read identically everywhere.
+ */
+export function missing(action: string, field: string, example: string): string {
   return `Error: "${action}" requires \`${field}\`. Example: ${example}`;
 }
 
@@ -89,7 +79,7 @@ function missing(action: string, field: string, example: string): string {
  * `src/cron/cli.ts` and imported by `src/index.ts`, and duplicating those names
  * here would be a confusing near-collision.
  */
-export const CRON_ACTIONS: Record<CronAction, CronHandler> = {
+export const CRON_ACTIONS = {
   create: async ({ store }, { name, schedule, prompt }) => {
     if (!name || !schedule || !prompt) {
       return missing(
@@ -267,7 +257,16 @@ export const CRON_ACTIONS: Record<CronAction, CronHandler> = {
     }
     return `Daemon restarted. ${enabled.length} enabled job${enabled.length === 1 ? '' : 's'}.`;
   },
-};
+} satisfies Record<string, CronHandler>;
+
+export type CronAction = keyof typeof CRON_ACTIONS;
+
+/**
+ * The zod enum's members, derived from the handler table rather than declared
+ * beside it — a parallel list can drift, and a schema that accepts an action
+ * with no handler dispatches to `undefined` at call time.
+ */
+export const CRON_ACTION_NAMES = Object.keys(CRON_ACTIONS) as [CronAction, ...CronAction[]];
 
 /**
  * The consolidated cron tool (#253) — one action-enum tool replacing ten
@@ -282,7 +281,7 @@ export function createCronTool() {
   const deps: CronDeps = { store: new CronStore(), logStore: new CronLogStore() };
 
   return {
-    cron: attachMeta(
+    cron: attachActionMeta(
       tool({
         description: `Manage scheduled cron jobs — background AI prompts that run on a schedule via an independent daemon, whether or not a session is open.
 
@@ -318,22 +317,10 @@ The daemon auto-starts when a job is created or enabled, and auto-stops when no 
         }),
         execute: async (args): Promise<string> => {
           debugLog('cron:execute', args);
-          return CRON_ACTIONS[args.action](deps, args);
+          return CRON_ACTIONS[args.action as CronAction](deps, args);
         },
       }),
-      {
-        name: 'cron',
-        kind: 'write',
-        deterministic: false,
-        sideEffect: 'local',
-        cacheable: false,
-        // Read actions must not trip the read-only gate just because the tool as
-        // a whole can write — same refinement `createMemoryTool` uses.
-        isWriteAction: (args: unknown) => {
-          const a = (args as { action?: unknown } | undefined)?.action;
-          return typeof a !== 'string' || !CRON_READ_ACTIONS.has(a);
-        },
-      },
+      { name: 'cron', readActions: CRON_READ_ACTIONS },
     ),
   };
 }

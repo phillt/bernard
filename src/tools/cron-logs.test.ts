@@ -75,7 +75,7 @@ describe('cron log tools', () => {
       mockLogStore.getEntryCount.mockReturnValue(0);
       mockLogStore.getEntries.mockReturnValue([]);
 
-      const result = await call('list')({ job_id: 'job-1', limit: 10, offset: 0 }, {} as any);
+      const result = await call('list')({ job_id: 'job-1', limit: 10, offset: 0 });
 
       expect(result).toContain('No execution logs found');
     });
@@ -85,7 +85,7 @@ describe('cron log tools', () => {
       mockLogStore.getEntryCount.mockReturnValue(1);
       mockLogStore.getEntries.mockReturnValue([entry]);
 
-      const result = await call('list')({ job_id: 'job-1', limit: 10, offset: 0 }, {} as any);
+      const result = await call('list')({ job_id: 'job-1', limit: 10, offset: 0 });
 
       expect(result).toContain('[OK]');
       expect(result).toContain('1000ms');
@@ -99,7 +99,7 @@ describe('cron log tools', () => {
       mockLogStore.getEntryCount.mockReturnValue(1);
       mockLogStore.getEntries.mockReturnValue([entry]);
 
-      const result = await call('list')({ job_id: 'job-1', limit: 10, offset: 0 }, {} as any);
+      const result = await call('list')({ job_id: 'job-1', limit: 10, offset: 0 });
 
       expect(result).toContain('[ERR]');
     });
@@ -108,7 +108,7 @@ describe('cron log tools', () => {
       mockLogStore.getEntryCount.mockReturnValue(5);
       mockLogStore.getEntries.mockReturnValue([]);
 
-      const result = await call('list')({ job_id: 'job-1', limit: 10, offset: 10 }, {} as any);
+      const result = await call('list')({ job_id: 'job-1', limit: 10, offset: 10 });
 
       expect(result).toContain('No more entries');
       expect(result).toContain('total: 5');
@@ -119,7 +119,7 @@ describe('cron log tools', () => {
     it('returns message when entry not found', async () => {
       mockLogStore.getEntry.mockReturnValue(undefined);
 
-      const result = await call('get')({ job_id: 'job-1', run_id: 'nope' }, {} as any);
+      const result = await call('get')({ job_id: 'job-1', run_id: 'nope' });
 
       expect(result).toContain('No log entry found');
     });
@@ -128,7 +128,7 @@ describe('cron log tools', () => {
       const entry = makeEntry();
       mockLogStore.getEntry.mockReturnValue(entry);
 
-      const result = await call('get')({ job_id: 'job-1', run_id: 'run-1' }, {} as any);
+      const result = await call('get')({ job_id: 'job-1', run_id: 'run-1' });
 
       expect(result).toContain('Run: run-1');
       expect(result).toContain('Status: success');
@@ -142,7 +142,7 @@ describe('cron log tools', () => {
       const entry = makeEntry({ success: false, error: 'API timeout' });
       mockLogStore.getEntry.mockReturnValue(entry);
 
-      const result = await call('get')({ job_id: 'job-1', run_id: 'run-1' }, {} as any);
+      const result = await call('get')({ job_id: 'job-1', run_id: 'run-1' });
 
       expect(result).toContain('Status: error');
       expect(result).toContain('Error: API timeout');
@@ -156,7 +156,7 @@ describe('cron log tools', () => {
         { timestamp: '2025-01-01T00:00:00.600Z', text: 'created issue #42', runId: 'run-1' },
       ]);
 
-      const result = await call('get')({ job_id: 'job-1', run_id: 'run-1' }, {} as any);
+      const result = await call('get')({ job_id: 'job-1', run_id: 'run-1' });
 
       expect(mockNotesStore.entriesForRun).toHaveBeenCalledWith('job-1', 'run-1');
       expect(result).toContain('## Notes written during this run');
@@ -169,7 +169,7 @@ describe('cron log tools', () => {
       mockLogStore.getEntry.mockReturnValue(entry);
       mockNotesStore.entriesForRun.mockReturnValue([]);
 
-      const result = await call('get')({ job_id: 'job-1', run_id: 'run-1' }, {} as any);
+      const result = await call('get')({ job_id: 'job-1', run_id: 'run-1' });
 
       expect(result).not.toContain('Notes written during this run');
     });
@@ -191,7 +191,7 @@ describe('cron log tools', () => {
       });
       mockLogStore.getEntry.mockReturnValue(entry);
 
-      const result = await call('get')({ job_id: 'job-1', run_id: 'run-1' }, {} as any);
+      const result = await call('get')({ job_id: 'job-1', run_id: 'run-1' });
 
       expect(result).toContain('(truncated)');
       // The full 1000 chars should NOT appear
