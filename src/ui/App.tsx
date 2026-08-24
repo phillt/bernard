@@ -84,7 +84,7 @@ import type { BreadthOption } from '../permissions/breadth.js';
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible } from '../output.js';
 import { noPromptCacheHint } from '../cost-guardrail.js';
-import { makeUsageRecorder, usageRecordFromSite } from '../framework/hooks/token-stats.js';
+import { makeUsageRecorder } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
 import {
@@ -96,13 +96,12 @@ import {
 } from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
-import { generateText, type CoreMessage } from 'ai';
-import { resolveSiteModel, resolveMainModel, logSiteModelSnapshot } from '../model-policy.js';
+import type { CoreMessage } from 'ai';
+import { resolveMainModel, logSiteModelSnapshot } from '../model-policy.js';
 import {
   serializeMessages,
   extractDomainFacts,
   extractText,
-  SUMMARIZATION_PROMPT,
   MIN_HISTORY_FOR_FACTS,
 } from '../context.js';
 import { isSessionScaffolding } from '../session-markers.js';
@@ -891,43 +890,22 @@ export function App({
           setBusy(true);
           try {
             const serialized = serializeMessages(history);
-            const summarySite = resolveSiteModel(config, 'compressor');
-            // Route these off-loop /clear --save LLM calls (summary, fact
-            // extraction, specialist detection) through the session telemetry
-            // sink so they aren't an accounting hole (#session-telemetry).
+            // Route these off-loop /clear --save LLM calls (fact extraction,
+            // specialist detection) through the session telemetry sink so they
+            // aren't an accounting hole (#session-telemetry).
             const recordSaveUsage = makeUsageRecorder(agent);
             // Cap fact extraction at 60 s to prevent a hung LLM call from
             // freezing the REPL. Fails open: timeout → empty domain facts.
             // AbortSignal.timeout auto-cancels without manual teardown.
             const extractSignal = AbortSignal.timeout(60_000);
-            const [summaryResult, domainFacts, candidateResult] = await Promise.all([
-              // Wrap the summarize call so its recorded latency reflects just this
-              // call, not the whole parallel batch's wall time (extract can run to
-              // the 60 s timeout).
-              (async () => {
-                const t0 = Date.now();
-                const result = await generateText({
-                  model: summarySite.model,
-                  providerOptions: summarySite.providerOptions,
-                  maxTokens: 2048,
-                  system: SUMMARIZATION_PROMPT,
-                  messages: [
-                    { role: 'user', content: `Summarize this conversation:\n\n${serialized}` },
-                  ],
-                });
-                recordSaveUsage(
-                  usageRecordFromSite(
-                    summarySite,
-                    'compressor',
-                    result.usage,
-                    result.providerMetadata,
-                    {
-                      latencyMs: Date.now() - t0,
-                    },
-                  ),
-                );
-                return result;
-              })(),
+            // No prose summary here (#307): `extractDomainFacts` already routes
+            // this transcript to RAG, including the `conversations` domain.
+            //
+            // Do NOT "fix" that by passing a prose summary to `addFacts`: the
+            // embedder (Xenova/all-MiniLM-L6-v2) truncates at 512 tokens with no
+            // guard, so a multi-paragraph summary would be silently cut, and its
+            // mean-pooled vector would rarely clear the retrieval threshold.
+            const [domainFacts, candidateResult] = await Promise.all([
               extractDomainFacts(serialized, config, recordSaveUsage, extractSignal),
               detectSpecialistCandidate(
                 serialized,
@@ -937,12 +915,6 @@ export function App({
                 recordSaveUsage,
               ).catch(() => null),
             ]);
-            const summary = summaryResult.text?.trim();
-            if (summary) {
-              const key = `session-summary-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-              stores.memory.writeMemory(key, summary);
-              flashToast(`Summary saved to memory: ${key}`, 'success');
-            }
             if (stores.rag && domainFacts.length > 0) {
               const results = await Promise.allSettled(
                 domainFacts.map((df) => stores.rag!.addFacts(df.facts, 'clear-save', df.domain)),

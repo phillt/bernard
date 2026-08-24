@@ -290,10 +290,26 @@ function buildSections(turn: TurnContextRecord): Section[] {
           )
           .join('\n');
 
+  // Injected persistent memory (#307). `undefined` (record predates the field)
+  // must not read as "nothing was injected" — branching once on that keeps the
+  // count-present-iff-recorded invariant structural rather than coincidental.
+  const memKeys = turn.injectedMemoryKeys;
+  const memSection: Section =
+    memKeys === undefined
+      ? { label: 'Persistent memory', body: '(not recorded for this turn)' }
+      : {
+          label: `Persistent memory (${memKeys.length})`,
+          body:
+            memKeys.length === 0
+              ? '(no persistent memory injected this turn)'
+              : memKeys.map((k) => `• ${k}`).join('\n'),
+        };
+
   return [
     { label: 'Original input', body: turn.originalInput },
     { label: 'Rewritten prompt', body: rewrittenBody },
     { label: `Resolved references (${refs.length})`, body: refsBody },
     { label: `Recalled facts (${facts.length})`, body: factsBody },
+    memSection,
   ];
 }

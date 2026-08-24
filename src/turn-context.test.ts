@@ -85,6 +85,38 @@ describe('TurnContextStore', () => {
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(records));
       expect(store.load()).toEqual(records);
     });
+
+    it('keeps records written before injectedMemoryKeys existed (#307)', () => {
+      // The field is optional precisely so already-persisted history survives an
+      // upgrade. Rejecting these would silently empty the viewer's turn list.
+      const legacy = makeRecord(0);
+      expect(legacy.injectedMemoryKeys).toBeUndefined();
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify([legacy]));
+      expect(store.load()).toEqual([legacy]);
+    });
+
+    it('round-trips injectedMemoryKeys when present (#307)', () => {
+      const withKeys: TurnContextRecord = {
+        ...makeRecord(0),
+        injectedMemoryKeys: ['people/mia', 'response-length-preference'],
+      };
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify([withKeys]));
+      expect(store.load()).toEqual([withKeys]);
+    });
+
+    it('drops a record whose injectedMemoryKeys is present but not an array (#307)', () => {
+      // `undefined` means "not recorded" and is valid; a non-array is corruption.
+      // The viewer reads `.length` and maps over it, so it must never get one.
+      const records = [
+        makeRecord(0),
+        { ...makeRecord(1), injectedMemoryKeys: 'people/mia' },
+        { ...makeRecord(2), injectedMemoryKeys: {} },
+      ];
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(records));
+      const result = store.load();
+      expect(result).toHaveLength(1);
+      expect(result[0].turnIndex).toBe(0);
+    });
   });
 
   describe('save', () => {

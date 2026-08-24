@@ -8,6 +8,7 @@ import { renderResolvedBlock, RAG_SOURCE_KEY, type ResolvedEntry } from './refer
 import { sanitizeKey } from './memory.js';
 import { getDomain } from './domains.js';
 import type { ProvenanceStore } from './provenance.js';
+import { debugLog } from './logger.js';
 
 /**
  * Inputs for {@link buildContextMessage}. Mirrors the dynamic per-turn data
@@ -83,10 +84,7 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
       render: () => renderSpecialistMatches(inputs.specialistMatches),
     },
     { tag: 'recalled_context', render: () => renderRecalledContext(inputs.ragResults) },
-    {
-      tag: 'persistent_memory',
-      render: () => renderPersistentMemory(inputs.memoryStore),
-    },
+    { tag: 'persistent_memory', render: () => renderPersistentMemory(inputs.memoryStore) },
     {
       tag: 'scratch_notes',
       render: () => renderScratchNotes(inputs.memoryStore, inputs.includeScratch ?? true),
@@ -105,6 +103,17 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
       sections.push({ tag, body });
     }
   }
+
+  // Per-section rendered size (#307). Logged here rather than inside any one
+  // renderer so no section can grow silently: `<persistent_memory>` reached ~44k
+  // tokens unnoticed because nothing ever measured it, and `scratch_notes`,
+  // `recalled_context` and `available_sources` are all unbounded the same way.
+  // Measures the FINAL body, so escaping and headings are included — summing raw
+  // key/content lengths under-reports the real block.
+  debugLog(
+    'context:section-sizes',
+    Object.fromEntries(sections.map((s) => [s.tag, s.body.length])),
+  );
 
   if (sections.length === 0) return null;
 

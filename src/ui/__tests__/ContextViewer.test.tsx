@@ -23,6 +23,7 @@ const TURNS: TurnContextRecord[] = [
     rewrittenInput: "What is my daughter Mia's birthday?",
     resolvedReferences: [{ phrase: 'her', resolvedTo: 'Mia', sourceKey: 'people/mia' }],
     recalledFacts: [{ fact: 'Mia was born 2018-03-04', similarity: 0.51, domain: 'general' }],
+    injectedMemoryKeys: ['people/mia', 'response-length-preference'],
   },
   {
     turnIndex: 1,
@@ -31,6 +32,7 @@ const TURNS: TurnContextRecord[] = [
     rewrittenInput: 'thanks',
     resolvedReferences: [],
     recalledFacts: [],
+    injectedMemoryKeys: [],
   },
 ];
 
@@ -58,6 +60,7 @@ describe('ContextViewer', () => {
     expect(frame).toContain('Rewritten prompt');
     expect(frame).toContain('Resolved references (1)');
     expect(frame).toContain('Recalled facts (1)');
+    expect(frame).toContain('Persistent memory (2)');
     // Right panel defaults to the first section's body.
     expect(frame).toContain("what's her bday");
   });
@@ -88,5 +91,38 @@ describe('ContextViewer', () => {
     // Back at the list: the section labels are gone, turn rows are back.
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Turn 2 · thanks');
+  });
+});
+
+describe('ContextViewer — injected persistent memory (#307)', () => {
+  /**
+   * Drill into turn 1 and jump to the last section. `G` (see `navDelta` in
+   * viewer-util) means "last", so this does not encode how many sections exist —
+   * a hardcoded hop count would break these tests whenever one is added, in a way
+   * that looks like a memory bug.
+   */
+  async function memorySection(turns: TurnContextRecord[]): Promise<string> {
+    const { stdin, lastFrame } = renderViewer(makeAgent(turns));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    stdin.write('G');
+    await tick();
+    return lastFrame() ?? '';
+  }
+
+  it('lists the memory keys injected that turn', async () => {
+    const frame = await memorySection(TURNS);
+    expect(frame).toContain('people/mia');
+    expect(frame).toContain('response-length-preference');
+  });
+
+  it('distinguishes "none injected" from "not recorded"', async () => {
+    // A record written before the field existed must not read as "nothing was
+    // injected" — that would misreport history as cheaper than it was.
+    const frame = await memorySection([{ ...TURNS[0], injectedMemoryKeys: undefined }]);
+    expect(frame).toContain('not recorded');
+    // And the label carries no count, since there is no number to report.
+    expect(frame).not.toContain('Persistent memory (');
   });
 });

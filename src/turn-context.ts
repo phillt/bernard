@@ -28,6 +28,11 @@ export interface TurnContextRecord {
   resolvedReferences: ResolvedEntry[];
   /** Memory facts injected into `<recalled_context>` this turn (post-filter, post-stickiness). */
   recalledFacts: RAGSearchResult[];
+  /**
+   * Keys rendered into `<persistent_memory>` this turn (#307). Optional: records
+   * predating the field have none, which reads differently from "none injected".
+   */
+  injectedMemoryKeys?: string[];
 }
 
 function isTurnContextRecord(entry: unknown): entry is TurnContextRecord {
@@ -39,7 +44,9 @@ function isTurnContextRecord(entry: unknown): entry is TurnContextRecord {
     typeof e.originalInput === 'string' &&
     typeof e.rewrittenInput === 'string' &&
     Array.isArray(e.resolvedReferences) &&
-    Array.isArray(e.recalledFacts)
+    Array.isArray(e.recalledFacts) &&
+    // Optional: absent on records written before the field existed.
+    (e.injectedMemoryKeys === undefined || Array.isArray(e.injectedMemoryKeys))
   );
 }
 
