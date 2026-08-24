@@ -1,14 +1,36 @@
-import { anthropic, createAnthropic } from '@ai-sdk/anthropic';
-import { openai, createOpenAI } from '@ai-sdk/openai';
-import { xai, createXai } from '@ai-sdk/xai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createXai } from '@ai-sdk/xai';
 import type { LanguageModel } from 'ai';
 import type { SupportedSdk } from './types.js';
 import type { BernardConfig } from '../config.js';
 import { getProviderApiKey } from '../config.js';
+import { stallGuardedFetch } from './stall-guard.js';
 
 export { getModelProfile } from './profiles.js';
 export type { ModelProfile } from './profiles.js';
 export type { SupportedSdk } from './types.js';
+
+/**
+ * Time-to-first-byte guard applied to every LLM completion (#302).
+ *
+ * Built once and shared by every client — safe because the wrapper resolves
+ * both its budget and the underlying `fetch` per request, so nothing is frozen
+ * at module load and the memoized custom-factory cache key stays valid.
+ */
+const guardedFetch = stallGuardedFetch();
+
+// Built-in clients are constructed HERE rather than using each SDK's exported
+// default instance, because only the factory form accepts a `fetch`. Key
+// resolution is unchanged: `createX()` reads the same env var the default
+// instance does.
+//
+// `compatibility: 'strict'` is not incidental — it is what `@ai-sdk/openai`'s
+// own default `openai` export passes, and dropping it would silently change
+// request shaping. Anthropic and xAI construct their defaults with no options.
+const anthropic = createAnthropic({ fetch: guardedFetch });
+const openai = createOpenAI({ compatibility: 'strict', fetch: guardedFetch });
+const xai = createXai({ fetch: guardedFetch });
 
 /** Custom-provider params for `getModel()` — set when the active provider is user-defined. */
 export interface CustomProviderInvocation {
@@ -30,7 +52,9 @@ function getCustomFactory(custom: CustomProviderInvocation): CustomFactory {
   const cacheKey = `${custom.sdk}|${custom.baseURL}|${custom.apiKey}`;
   const cached = customFactoryCache.get(cacheKey);
   if (cached) return cached;
-  const opts = { baseURL: custom.baseURL, apiKey: custom.apiKey };
+  // Custom providers get the same guard — a self-hosted endpoint is at least
+  // as likely to stall as a vendor one.
+  const opts = { baseURL: custom.baseURL, apiKey: custom.apiKey, fetch: guardedFetch };
   const factory =
     custom.sdk === 'openai'
       ? createOpenAI(opts)
