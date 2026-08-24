@@ -48,6 +48,32 @@ describe('agent-pool', () => {
     expect(getActiveCount()).toBe(0);
   });
 
+  it('lets a nested helper through a full pool (#305)', () => {
+    // Sub-agents carry `delegate_*` tools, so a sub-agent holds a slot AND needs
+    // a helper. Counting both against one flat cap starves every helper the
+    // moment parallel sub-agents fill the pool — the delegate call degrades to
+    // an error string and the sub-agent silently loses MCP access.
+    setMaxConcurrentAgents(2);
+    expect(acquireSlot()).not.toBeNull();
+    expect(acquireSlot()).not.toBeNull();
+    expect(acquireSlot()).toBeNull(); // pool full for ordinary dispatches
+
+    const helper = acquireSlot({ nested: true });
+    expect(helper).not.toBeNull();
+    // Still counted, so release stays symmetric and getActiveCount is truthful.
+    expect(getActiveCount()).toBe(3);
+    releaseSlot();
+    expect(getActiveCount()).toBe(2);
+  });
+
+  it('still hands nested helpers distinct ids', () => {
+    setMaxConcurrentAgents(1);
+    const a = acquireSlot();
+    const b = acquireSlot({ nested: true });
+    const c = acquireSlot({ nested: true });
+    expect(new Set([a?.id, b?.id, c?.id]).size).toBe(3);
+  });
+
   it('resets state completely', () => {
     acquireSlot();
     acquireSlot();

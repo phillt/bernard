@@ -41,7 +41,13 @@ export async function dispatchServerDelegate(
   args: { server: string; task: string; context?: string; abortSignal?: AbortSignal },
 ): Promise<string> {
   const { server, task, context, abortSignal } = args;
-  const slot = acquireSlot();
+  // `nested`: this helper runs INSIDE a dispatch that already holds a slot, so
+  // it must not compete for one (#305). Sub-agents carry `delegate_*` tools, and
+  // counting both against one flat cap would starve every helper the moment
+  // parallel sub-agents fill the pool — silently removing MCP access exactly
+  // when fan-out is highest. Nesting is bounded at one level: this helper's
+  // registry can never contain a `delegate_*` tool.
+  const slot = acquireSlot({ nested: true });
   if (!slot) {
     return `Could not delegate to "${server}": maximum concurrent agents (${getMaxConcurrentAgents()}) reached. Try again in a moment.`;
   }
@@ -164,6 +170,34 @@ export function createDelegateTool(
       category: `mcp-delegate.${server}`,
     },
   ) as unknown as Tool;
+}
+
+/**
+ * The MCP surface a dispatched agent should carry, honoring
+ * `BERNARD_MCP_DELEGATION` (#296, #305).
+ *
+ * Delegation on  → thin `delegate_<server>` tools, and NO raw MCP tools.
+ * Delegation off → no delegate tools, and the raw bag.
+ *
+ * Callers spread `mcpTools` into `createTools` and `delegateTools` over the
+ * result. Extracted because five definitions need the identical gate — main,
+ * sub, task, specialist and the PAC actor — and a copy that drifts silently
+ * re-introduces the 143-schema prefix this exists to remove.
+ */
+export function delegatedMcpSurface(ctx: AgentContext): {
+  delegateTools: Record<string, Tool>;
+  mcpTools: Record<string, Tool>;
+} {
+  if (!ctx.config.mcpDelegation) return { delegateTools: {}, mcpTools: ctx.mcp.tools };
+  const delegateTools = createDelegateTools(ctx);
+  // Fail open: a context carrying MCP tools but no usable server map (a
+  // caller that dropped `serverNames`/`serverTools`) would otherwise get
+  // neither delegates nor raw tools — a total loss of MCP access rather than
+  // the intended reduction. Prefer paying the schema cost over going dark.
+  if (Object.keys(delegateTools).length === 0 && Object.keys(ctx.mcp.tools).length > 0) {
+    return { delegateTools: {}, mcpTools: ctx.mcp.tools };
+  }
+  return { delegateTools, mcpTools: {} };
 }
 
 /**

@@ -27,12 +27,35 @@ export function setMaxConcurrentAgents(n: number): number {
   return maxConcurrentAgents;
 }
 
+/** Options for {@link acquireSlot}. */
+export interface AcquireSlotOptions {
+  /**
+   * Bypass the cap for a helper spawned *inside* a dispatch that already holds a
+   * slot — today only the MCP delegate helper (`src/tools/delegate.ts`).
+   *
+   * Without this, giving sub-agents `delegate_*` tools (#305) starves them: the
+   * cap counts sub-agents and helpers in one flat pool, so N parallel
+   * sub-agents at the cap leave nothing for the helper each needs, `acquireSlot`
+   * returns `null`, and the delegate call degrades to an error string — the
+   * sub-agent silently loses MCP access exactly when fan-out is highest.
+   *
+   * Safe because the parent dispatch is already counted, the helper is
+   * short-lived and scoped to one server, and nesting is bounded at one level:
+   * a helper's registry is `{…oneServersTools, ask_user}` and can never contain
+   * a `delegate_*` tool, so it cannot spawn a helper of its own.
+   *
+   * Still increments `activeAgentCount`, so `releaseSlot()` stays symmetric and
+   * {@link getActiveCount} reflects real in-flight work.
+   */
+  nested?: boolean;
+}
+
 /**
  * Attempts to acquire a slot in the shared agent/task concurrency pool.
  * @returns The assigned agent ID, or `null` if the pool is at capacity.
  */
-export function acquireSlot(): { id: number } | null {
-  if (activeAgentCount >= maxConcurrentAgents) return null;
+export function acquireSlot(opts: AcquireSlotOptions = {}): { id: number } | null {
+  if (!opts.nested && activeAgentCount >= maxConcurrentAgents) return null;
   activeAgentCount++;
   return { id: nextAgentId++ };
 }

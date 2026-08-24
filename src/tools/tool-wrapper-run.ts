@@ -107,6 +107,15 @@ export interface ToolWrapperDeps {
   specialistStore: SpecialistStore;
   correctionStore: CorrectionCandidateStore;
   mcpTools?: Record<string, any>;
+  /**
+   * Connected MCP server names + their tool-name map, mirrored from
+   * `AgentContextMCP`. Required for per-server delegation (#296, #305): an
+   * agent dispatched from inside a wrapper assembles `delegate_<server>` tools
+   * from these, and dropping them leaves it with neither delegates nor raw MCP
+   * tools — a total loss of MCP access rather than the intended reduction.
+   */
+  mcpServerNames?: string[];
+  mcpServerTools?: Record<string, string[]>;
   ragStore?: RAGStore;
   routineStore?: RoutineStore;
   candidateStore?: CandidateStoreReader;
@@ -157,6 +166,8 @@ export function ctxToToolWrapperDeps(ctx: AgentContext): ToolWrapperDeps {
     specialistStore: ctx.stores.specialists,
     correctionStore: ctx.stores.correction,
     mcpTools: ctx.mcp.tools,
+    mcpServerNames: ctx.mcp.serverNames,
+    mcpServerTools: ctx.mcp.serverTools,
     ragStore: ctx.rag,
     routineStore: ctx.stores.routines,
     candidateStore: ctx.stores.candidates,
@@ -182,7 +193,11 @@ export function depsToCtx(deps: ToolWrapperDeps): AgentContext {
       correction: deps.correctionStore,
       toolProfiles: deps.toolProfileStore ?? new ToolProfileStore(),
     },
-    mcp: { tools: deps.mcpTools ?? {}, serverNames: [] },
+    mcp: {
+      tools: deps.mcpTools ?? {},
+      serverNames: deps.mcpServerNames ?? [],
+      serverTools: deps.mcpServerTools,
+    },
     rag: deps.ragStore,
     toolOptions: deps.options,
     provenance: deps.provenance ?? new ProvenanceStore(),

@@ -5,6 +5,7 @@ import { PlanStore } from '../../plan-store.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
+import { delegatedMcpSurface } from '../../tools/delegate.js';
 import { createPlanTool } from '../../tools/plan.js';
 import { createThinkTool } from '../../tools/think.js';
 import { createEvaluateTool } from '../../tools/evaluate.js';
@@ -78,10 +79,14 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
   },
 
   async tools(ctx, input) {
+    // MCP delegation (#305): carry thin `delegate_<server>` tools instead of
+    // every server's schemas, exactly as the main agent does. Sub-agents were
+    // measured at 143 tools while using 3-8 of them, all from a single server.
+    const { delegateTools, mcpTools } = delegatedMcpSurface(ctx);
     const baseTools = createTools(
       ctx.toolOptions,
       ctx.stores.memory,
-      ctx.mcp.tools,
+      mcpTools,
       undefined,
       ctx.stores.specialists,
       undefined,
@@ -90,6 +95,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     );
     const specialistTools: Record<string, Tool> = {
       ...baseTools,
+      ...delegateTools,
       plan: createPlanTool(input.planStore),
       think: createThinkTool(),
       ...(ctx.config.coordinatorMode === 'on'

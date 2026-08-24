@@ -133,6 +133,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
   const mcpManager = new MCPManager();
   let mcpTools: Record<string, any> = {};
   let serverNames: string[] = [];
+  let serverTools: Record<string, string[]> = {};
 
   try {
     await mcpManager.connect();
@@ -141,6 +142,9 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       maxChars: config.mcpResultShapingMaxChars,
     });
     serverNames = mcpManager.getConnectedServerNames();
+    // Needed by per-server delegation (#296, #305): `serverNames` without the
+    // tool map makes every `delegate_<server>` resolve to zero tools.
+    serverTools = mcpManager.getServerToolMap();
     if (serverNames.length > 0) {
       log(`MCP servers connected: ${serverNames.join(', ')}`);
     }
@@ -183,7 +187,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       // decision below sets mode:'read-only', write tool calls are auto-denied.
       // askUser intentionally omitted — no interactive user; the ask_user tool returns {unavailable}.
     },
-    mcp: { tools: mcpTools, serverNames },
+    mcp: { tools: mcpTools, serverNames, serverTools },
     rag: ragStore,
     // Cron's agent definition only touches ctx.stores.memory (see src/framework/agents/cron.ts).
     // Skip seeding for the two stores cron never uses so the daemon doesn't race the REPL on

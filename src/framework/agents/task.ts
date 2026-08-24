@@ -4,6 +4,7 @@ import type { BernardConfig } from '../../config.js';
 import { debugLog } from '../../logger.js';
 import { extractJsonBlock } from '../../structured-output.js';
 import { createTools } from '../../tools/index.js';
+import { delegatedMcpSurface } from '../../tools/delegate.js';
 import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
@@ -135,7 +136,13 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
     // Pass no provenance for the prompt-key-discovery call — it only
     // enumerates names. Tools registered for actual use are built below
     // with `ctx.provenance`.
-    const baseTools = createTools(ctx.toolOptions, ctx.stores.memory, ctx.mcp.tools);
+    // Must use the same surface as `tools()` below, or the prompt advertises
+    // tools the agent does not have (#305).
+    const { delegateTools, mcpTools } = delegatedMcpSurface(ctx);
+    const baseTools = {
+      ...createTools(ctx.toolOptions, ctx.stores.memory, mcpTools),
+      ...delegateTools,
+    };
     const autoContext = `\n\nWorking directory: ${process.cwd()}\nAvailable tools: ${Object.keys(baseTools).join(', ')}`;
     return TASK_SYSTEM_PROMPT + autoContext;
   },
@@ -148,16 +155,23 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
   },
 
   tools(ctx) {
-    return createTools(
-      ctx.toolOptions,
-      ctx.stores.memory,
-      ctx.mcp.tools,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      ctx.provenance,
-    );
+    // MCP delegation (#305): carry thin `delegate_<server>` tools instead of
+    // every server's schemas, exactly as the main agent does. Sub-agents were
+    // measured at 143 tools while using 3-8 of them, all from a single server.
+    const { delegateTools, mcpTools } = delegatedMcpSurface(ctx);
+    return {
+      ...createTools(
+        ctx.toolOptions,
+        ctx.stores.memory,
+        mcpTools,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        ctx.provenance,
+      ),
+      ...delegateTools,
+    };
   },
 
   strategy() {
