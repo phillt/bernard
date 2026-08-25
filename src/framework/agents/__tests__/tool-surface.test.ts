@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { ProvenanceStore } from '../../../provenance.js';
 import { definitions, registerBuiltinDefinitions } from '../index.js';
 import { mcpDelegateDefinition } from '../mcp-delegate.js';
 import { mainAgentDefinition } from '../main.js';
@@ -145,5 +146,68 @@ describe('cron participates in MCP delegation (#315)', () => {
     const names = Object.keys(await toolsOf(cronDefinition, makeCtx(false), cronInput));
     expect(names).toContain('google__gmail_list');
     expect(names.filter((n) => n.startsWith('delegate_'))).toEqual([]);
+  });
+
+  it('takes its built-ins from the resolved worker surface, not a hand-rolled list (#333)', async () => {
+    // Cron was the only definition that received a resolved surface and used
+    // just the MCP half of it. The built-in half was written out by hand, which
+    // is how it ended up without these for no recorded reason.
+    const names = Object.keys(await toolsOf(cronDefinition, makeCtx(true), cronInput));
+    for (const t of [
+      'shell',
+      'memory',
+      'scratch',
+      'datetime',
+      'wait',
+      'web_read',
+      'web_search',
+      'file_read_lines',
+    ]) {
+      expect(names).toContain(t);
+    }
+    // Withheld deliberately: a default cron job denies write-shaped `shell`
+    // (dangerous → high risk) but would pass `file_edit_lines` (write/local →
+    // medium) unprompted, so folding it in would hand every existing job an
+    // unbounded filesystem write through the one door that isn't gated.
+    expect(names).not.toContain('file_edit_lines');
+    // `cite` is provenance-gated in `createTools`, and this fixture carries no
+    // store — so its absence here IS the gate working. Cron passes
+    // `ctx.provenance` now (it previously passed none to anything), so in a real
+    // run, where `assembleContext` always supplies one, cron gets `cite` and its
+    // web reads register as citable sources like every other dispatch.
+    expect(names).not.toContain('cite');
+    const withProvenance = Object.keys(
+      await toolsOf(
+        cronDefinition,
+        makeCtx(true, { provenance: new ProvenanceStore() }),
+        cronInput,
+      ),
+    );
+    expect(withProvenance).toContain('cite');
+    // Still worker-scoped: main-only tools must not leak into an unattended job.
+    for (const t of ['routine', 'lineup_edit', 'specialist', 'cron', 'mcp_config']) {
+      expect(names).not.toContain(t);
+    }
+    // And it keeps its own four.
+    for (const t of ['notify', 'cron_self_disable', 'cron_notes_read', 'cron_notes_write']) {
+      expect(names).toContain(t);
+    }
+  });
+
+  it('advertises exactly the tools it was handed (#333)', async () => {
+    // The prompt used to carry a hand-maintained bullet list ~180 lines from the
+    // registry it described. It happened to be in sync; the step budget in the
+    // same prompt did not — it claimed "20 steps" against `config.maxSteps`.
+    // Deriving both from what `runDefinition` actually hands over makes drift
+    // impossible rather than merely unlikely.
+    const ctx = makeCtx(true);
+    const handed = await toolsOf(cronDefinition, ctx, cronInput);
+    const prompt = await cronDefinition.systemPrompt(ctx, cronInput as never, handed as never);
+
+    const advertised = /## Available Tools\n(.*)/.exec(prompt)?.[1];
+    expect(advertised).toBeDefined();
+    expect(advertised!.split(', ')).toEqual(Object.keys(handed).sort());
+    expect(prompt).toContain(`${ctx.config.maxSteps} steps`);
+    expect(prompt).not.toContain('(20 steps)');
   });
 });

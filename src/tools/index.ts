@@ -129,8 +129,10 @@ export function createTools(
         specialist: createSpecialistTool(specialistStore, candidateStore, config),
       }),
     },
-    // Scheduling is a main-agent concern; the cron *definition* builds its own
-    // registry for headless runs and is unaffected by this.
+    // Scheduling is a main-agent concern: a cron job manages its own run via
+    // `cron_self_disable`, not by editing the schedule. The cron definition now
+    // takes its built-ins from this registry under the worker surface (#333),
+    // so these three are the tools it deliberately does NOT get.
     { audience: 'main', make: () => createCronTool() },
     { audience: 'main', make: () => createCronLogTool() },
     { audience: 'main', make: () => createCronNotesTool() },

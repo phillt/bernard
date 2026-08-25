@@ -1,12 +1,8 @@
 import { tool, type CoreMessage, type Tool } from 'ai';
 import { z } from 'zod';
-import { createShellTool } from '../../tools/shell.js';
-import { createMemoryTool, createScratchTool } from '../../tools/memory.js';
-import { createDateTimeTool, formatCurrentDateTime } from '../../tools/datetime.js';
-import { createWebReadTool } from '../../tools/web.js';
-import { createWaitTool } from '../../tools/wait.js';
-import { createTimeTools } from '../../tools/time.js';
-import { toolToAISDK, attachMeta } from '../tools/adapter.js';
+import { createTools } from '../../tools/index.js';
+import { formatCurrentDateTime } from '../../tools/datetime.js';
+import { attachMeta } from '../tools/adapter.js';
 import { CronStore } from '../../cron/store.js';
 import { type CronLogStep } from '../../cron/log-store.js';
 import { CronNotesStore } from '../../cron/notes-store.js';
@@ -19,7 +15,7 @@ import { cronStepRecorderHook } from '../hooks/cron-step-recorder.js';
 import { NormalStrategy } from '../strategies/normal.js';
 import type { AgentDefinition, ResolvedModel } from './types.js';
 
-export const DAEMON_SYSTEM_PROMPT = `You are Bernard, running as a background cron job in daemon mode. There is no interactive user present — you execute autonomously and have a limited step budget (20 steps), so work efficiently.
+export const DAEMON_SYSTEM_PROMPT = `You are Bernard, running as a background cron job in daemon mode. There is no interactive user present — you execute autonomously and have a limited step budget, so work efficiently.
 
 ## Structured Approach
 For multi-step tasks, use the **scratch** tool to stay organized:
@@ -28,17 +24,12 @@ For multi-step tasks, use the **scratch** tool to stay organized:
 3. Every few steps, re-read your scratch plan to make sure you haven't drifted off track.
 This keeps you focused and prevents wasted steps on long-running jobs.
 
-## Available Tools
-- **shell** — Run shell commands. IMPORTANT: Dangerous commands (rm -rf, sudo, etc.) are automatically denied in daemon mode. There is no user to confirm them, so stick to safe, read-oriented commands.
-- **memory** — Read/write persistent memory files that survive across runs. Use for storing findings that should persist.
-- **scratch** — Ephemeral key-value notes that exist only for this run. Use for step tracking, intermediate results, and plan notes.
-- **datetime** — Get the current date, time, and timezone information.
-- **web_read** — Fetch and read web pages or API endpoints. Useful for monitoring URLs, checking service health, or fetching data.
-- **wait** — Pause execution for a specified duration (up to 5 minutes). Use when you need to wait for a process to complete or a service to come up.
-- **time_range / time_range_total** — Calculate durations between military/24-hour times.
-- **notify** — Send a desktop notification to alert the user. Clicking the notification opens a terminal with the alert context. Only use when you find something that genuinely requires user attention.
-- **cron_self_disable** — Disable this cron job so it won't run again. Use when a one-time task is complete.
-- You may also have access to **MCP tools** (email, calendar, etc.) depending on configuration.
+## Tool Notes
+Your exact tool list is given below. These few behave differently when no user is present:
+- **shell** — Dangerous commands (rm -rf, sudo, etc.) are automatically denied in daemon mode. There is no user to confirm them, so stick to safe, read-oriented commands.
+- **memory** — Persistent across runs. **scratch** — this run only.
+- **notify** — Sends a desktop notification. Clicking it opens a terminal with the alert context. Only for findings that genuinely require user attention.
+- **cron_self_disable** — Disables this job so it won't run again. Use when a one-time task is complete.
 
 ## Persistent Notes
 You have \`cron_notes_read\` and \`cron_notes_write\`, both scoped to this job.
@@ -104,10 +95,25 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
   historyMode: 'ephemeral',
   repairLabel: 'cron',
 
-  systemPrompt() {
+  systemPrompt(ctx, _input, tools) {
     // Memory/RAG/scratch/MCP names move to `contextMessages` (issue #172) —
     // only static daemon guidance + the date/time stay in the SYSTEM prompt.
-    return `${DAEMON_SYSTEM_PROMPT}\n\nCurrent date and time: ${formatCurrentDateTime()}`;
+    //
+    // The tool list and the step budget are DERIVED, not written out (#333).
+    // Both used to be prose: the list happened to be in sync but sat ~180 lines
+    // from the registry it described, and the budget said "20 steps" while the
+    // real value is `config.maxSteps` — already wrong for anyone who changed
+    // it. `runDefinition` hands `systemPrompt` the registry `tools()` just
+    // returned, so this cannot drift.
+    const names = Object.keys(tools ?? {})
+      .sort()
+      .join(', ');
+    return [
+      DAEMON_SYSTEM_PROMPT,
+      `## Available Tools\n${names}`,
+      `Your step budget for this run is ${ctx.config.maxSteps} steps.`,
+      `Current date and time: ${formatCurrentDateTime()}`,
+    ].join('\n\n');
   },
 
   contextInputs(_ctx, input) {
@@ -126,8 +132,6 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     // every server's full schema set on every step. Taking it from `surface`
     // closes that gap by construction: there is no longer a second path.
     const mcpTools = surface.mcpTools;
-    const memoryStore = ctx.stores.memory;
-    const config = ctx.config;
 
     const notifyTool = attachMeta(
       tool({
@@ -188,29 +192,56 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
       },
     );
 
-    const shellTool = createShellTool({
-      shellTimeout: config.shellTimeout,
-      // Delegate to ctx.toolOptions.confirmDangerous which is set per-job in
-      // runner.ts (#260). For all cron jobs this resolves to `async () => false`
-      // (dangerous shell always denied headlessly), but routing through context
-      // keeps the definition consistent with the runner's authoritative posture.
-      // Fall back to the safe default when toolOptions is absent (e.g. in
-      // unit tests that construct a minimal ctx without toolOptions).
-      confirmDangerous: ctx.toolOptions?.confirmDangerous ?? (async () => false),
-    });
+    // Built-in tools come from the shared registry, scoped by the surface
+    // `runDefinition` already resolved for us (#333). Cron was the only
+    // definition that received a resolved surface and then used just the MCP
+    // half of it, hand-rolling its built-ins — which is how it ended up without
+    // `web_search`, `file_read_lines` or `cite` for no recorded reason, and
+    // with a prose tool list that could drift from what it was handed.
+    //
+    // `ctx.provenance` is passed where it previously was not, so cron's web
+    // reads and memory lookups register as citable sources like every other
+    // dispatch — closing a second silent divergence.
+    const baseTools = createTools(
+      // Carries the per-job `confirmDangerous` the runner installs (#260) —
+      // `async () => false` for every cron job, so dangerous shell stays denied.
+      ctx.toolOptions,
+      ctx.stores.memory,
+      mcpTools,
+      undefined,
+      undefined,
+      undefined,
+      // `config` only feeds `lineup_edit` / `specialist`, both main-audience, so
+      // it is dead under the worker surface — matching the four sibling call
+      // sites (`sub`, `task`, `specialist`, `pac-actor`) that pass undefined.
+      undefined,
+      ctx.provenance,
+      surface,
+    );
+
+    // `file_edit_lines` is withheld, and the reason is a gate asymmetry rather
+    // than a judgement about unattended writes.
+    //
+    // A default cron job runs at `toolMode: 'write'`, `confirmThreshold:
+    // 'high'`. `shell` is `kind: 'dangerous'` → high risk → its write-shaped
+    // invocations are DENIED headlessly (only `isReadOnlyShellInvocation`
+    // commands get through). `file_edit_lines` is `kind: 'write'` +
+    // `sideEffect: 'local'` → medium → it would pass unprompted. So handing it
+    // over would give every existing job an unbounded filesystem write it
+    // provably does not have today, through the one door that isn't gated —
+    // the opposite of "shell already grants strictly more".
+    //
+    // The asymmetry itself (arbitrary local file write classified below a shell
+    // write) is the real defect, but raising `file_edit_lines` to high changes
+    // interactive behaviour for every user and needs its own decision.
+    const { file_edit_lines: _withheld, ...safeBaseTools } = baseTools;
 
     const registry: Record<string, Tool> = {
-      shell: toolToAISDK(shellTool),
-      memory: toolToAISDK(createMemoryTool(memoryStore)),
-      scratch: toolToAISDK(createScratchTool(memoryStore)),
-      datetime: createDateTimeTool(),
-      web_read: createWebReadTool(),
-      wait: createWaitTool(),
-      ...createTimeTools(),
+      ...safeBaseTools,
+      // Cron-only tools, spread last so they win any name collision.
       notify: notifyTool,
       cron_self_disable: selfDisableTool,
       ...createScopedCronNotesTools(notesStore, job.id, runId),
-      ...mcpTools,
     };
     input.toolRegistry = registry;
     return registry;

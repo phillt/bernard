@@ -6,6 +6,7 @@ import type { SpecialistSummary } from './specialists.js';
 import type { SpecialistMatch } from './specialist-matcher.js';
 import { renderResolvedBlock, RAG_SOURCE_KEY, type ResolvedEntry } from './reference-resolver.js';
 import { sanitizeKey } from './memory.js';
+import { plural } from './text.js';
 import { getDomain } from './domains.js';
 import type { ProvenanceStore } from './provenance.js';
 import { debugLog } from './logger.js';
@@ -212,13 +213,62 @@ function renderRecalledContext(ragResults?: RAGSearchResult[]): string | null {
   return blocks.join('\n');
 }
 
+/**
+ * Character budget for the whole `<persistent_memory>` section (#307).
+ *
+ * Memory is injected in full on every turn, and it sits *after* the prompt-cache
+ * breakpoint, so it is re-billed per step rather than per turn. It reached
+ * **182,585 bytes / ~45,646 tokens** on one machine before anyone noticed —
+ * 96% of it `session-summary-*` blobs written by `/clear --save`. That writer is
+ * gone and the section now measures ~6,900 chars, but nothing *bounds* it:
+ * `memory write` is model-driven and unbounded, so the same growth can recur
+ * through a different writer.
+ *
+ * 24,000 chars ≈ 6k tokens — roughly 3.5x today's size, so it is slack for
+ * normal growth and a wall against another 45k surprise.
+ *
+ * Overridable via `BERNARD_MAX_PERSISTENT_MEMORY_CHARS`, read once at module
+ * load the way `SUBAGENT_RESULT_MAX_CHARS` reads its own env var. This module
+ * is deliberately a pure function of `ContextMessageInputs` — taking a config
+ * dependency is what would make the byte-stable-prefix reasoning intractable —
+ * so the knob goes through `process.env`, not `BernardConfig`. It is a knob at
+ * all because memory is the most *user-curated* content in the prompt: a large
+ * hand-written set should not hit a wall the user cannot raise.
+ */
+export const MAX_PERSISTENT_MEMORY_CHARS = (() => {
+  const raw = Number(process.env.BERNARD_MAX_PERSISTENT_MEMORY_CHARS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 24_000;
+})();
+
 function renderPersistentMemory(memoryStore?: MemoryStore): string | null {
   if (!memoryStore) return null;
   const memories = memoryStore.getAllMemoryContents();
   if (memories.size === 0) return null;
   const blocks: string[] = [];
+  let used = 0;
   for (const [key, content] of memories) {
-    blocks.push(`### ${escapeXml(key)}\n${escapeXml(content)}`);
+    const block = `### ${escapeXml(key)}\n${escapeXml(content)}`;
+    // Whole entries only. Truncating mid-entry would hand the model a fact that
+    // stops mid-sentence, which is worse than not having it — it reads as
+    // authoritative and is wrong.
+    if (used + block.length > MAX_PERSISTENT_MEMORY_CHARS) continue;
+    blocks.push(block);
+    used += block.length;
+  }
+  const dropped = memories.size - blocks.length;
+  if (dropped > 0) {
+    debugLog('context:memory-capped', {
+      dropped,
+      kept: blocks.length,
+      usedChars: used,
+      capChars: MAX_PERSISTENT_MEMORY_CHARS,
+    });
+    // Visible to the model, so a gap it can act on (by calling `memory` to read
+    // a specific key) is never silent.
+    blocks.push(
+      `### (truncated)\n${dropped} further memory ${plural(dropped, 'entry was', 'entries were')} ` +
+        `omitted to stay within the context budget. Use the \`memory\` tool to read a specific key.`,
+    );
   }
   return blocks.join('\n\n');
 }
