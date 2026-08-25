@@ -219,8 +219,8 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
       surface,
     );
 
-    // `file_edit_lines` is withheld, and the reason is a gate asymmetry rather
-    // than a judgement about unattended writes.
+    // `file_edit_lines` and `file_write` are withheld, and the reason is a gate
+    // asymmetry rather than a judgement about unattended writes.
     //
     // A default cron job runs at `toolMode: 'write'`, `confirmThreshold:
     // 'high'`. `shell` is `kind: 'dangerous'` → high risk → its write-shaped
@@ -232,9 +232,15 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     // the opposite of "shell already grants strictly more".
     //
     // The asymmetry itself (arbitrary local file write classified below a shell
-    // write) is the real defect, but raising `file_edit_lines` to high changes
-    // interactive behaviour for every user and needs its own decision.
-    const { file_edit_lines: _withheld, ...safeBaseTools } = baseTools;
+    // write) is the real defect, but raising these to high changes interactive
+    // behaviour for every user and needs its own decision — #338, likely
+    // superseded by path-scoped writes (#340), which would let a job write
+    // inside its own workspace and nowhere else.
+    //
+    // `file_write` (#342) is withheld for the same reason and more strongly: it
+    // can CREATE files, where `file_edit_lines` errors on a path that does not
+    // already exist.
+    const { file_edit_lines: _noEdit, file_write: _noWrite, ...safeBaseTools } = baseTools;
 
     const registry: Record<string, Tool> = {
       ...safeBaseTools,

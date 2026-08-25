@@ -289,6 +289,123 @@ export function createFileTools(provenance?: ProvenanceStore) {
       },
     ),
 
+    file_write: attachMeta(
+      tool({
+        description:
+          'Write a complete file in one call, creating it if needed and replacing it if it exists. Use this to author scripts, reports, JSON payloads, or any file content — instead of embedding the payload in a shell heredoc, which is fragile and can be truncated. Use file_edit_lines to modify an existing file in place.',
+        parameters: z.object({
+          // MUST be named `path`: the permission engine routes FILE_TOOLS
+          // through `matchPathSpecifier(rule.specifier, args.path)`, so any
+          // other name silently loses path-scoped grants and the breadth
+          // ladder (exact file -> dir/** -> parent/**).
+          path: z.string().describe('File path to write (relative or absolute)'),
+          content: z.string().describe('Complete file content. Replaces the file if it exists.'),
+          create_dirs: z
+            .boolean()
+            .optional()
+            .describe('Create missing parent directories (default: false)'),
+        }),
+        execute: async ({
+          path: filePath,
+          content,
+          create_dirs = false,
+        }): Promise<
+          | { path: string; bytes: number; new_hash: string; created: boolean; total_lines: number }
+          | { error: string }
+        > => {
+          try {
+            const absPath = path.resolve(filePath);
+
+            let created = true;
+            try {
+              const stat = fs.statSync(absPath);
+              created = false;
+              if (stat.isDirectory()) {
+                return { error: `Path is a directory, not a file: ${absPath}` };
+              }
+            } catch (err: unknown) {
+              const code = (err as NodeJS.ErrnoException)?.code;
+              if (code !== 'ENOENT') {
+                const msg = err instanceof Error ? err.message : String(err);
+                return { error: `Cannot access ${absPath}: ${msg}` };
+              }
+            }
+
+            const bytes = Buffer.byteLength(content, 'utf-8');
+            if (bytes > MAX_FILE_SIZE) {
+              return { error: `Content too large (${bytes} bytes, max ${MAX_FILE_SIZE})` };
+            }
+
+            const parent = path.dirname(absPath);
+            if (!fs.existsSync(parent)) {
+              if (!create_dirs) {
+                return {
+                  error: `Parent directory does not exist: ${parent} (pass create_dirs: true to create it)`,
+                };
+              }
+              try {
+                fs.mkdirSync(parent, { recursive: true });
+              } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                return { error: `Cannot create directory ${parent}: ${msg}` };
+              }
+            }
+
+            // Same tmp+rename as file_edit_lines: a crash mid-write must never
+            // leave a half-written file where a whole one used to be.
+            const tmpPath = `${absPath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+            try {
+              fs.writeFileSync(tmpPath, content, 'utf-8');
+              fs.renameSync(tmpPath, absPath);
+            } catch (writeErr: unknown) {
+              try {
+                fs.unlinkSync(tmpPath);
+              } catch {
+                // Best-effort cleanup
+              }
+              const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
+              return { error: `Write failed: ${msg}` };
+            }
+
+            return {
+              path: absPath,
+              bytes,
+              new_hash: hashContent(content),
+              created,
+              total_lines: content === '' ? 0 : splitLines(content).length,
+            };
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { error: msg };
+          }
+        },
+      }),
+      {
+        name: 'file_write',
+        kind: 'write',
+        deterministic: false,
+        sideEffect: 'local',
+        cacheable: false,
+        // Same post-write rubric check as file_edit_lines (#145): re-read and
+        // confirm the hash matches what the tool just declared.
+        verifyOutput: (_args, result) => {
+          if (!result || typeof result !== 'object') return null;
+          const r = result as Record<string, unknown>;
+          const p = typeof r.path === 'string' ? r.path : null;
+          const expected = typeof r.new_hash === 'string' ? r.new_hash : null;
+          if (!p || !expected) return null;
+          try {
+            const actual = hashContent(fs.readFileSync(p, 'utf-8'));
+            return actual === expected
+              ? { status: 'pass' as const }
+              : { status: 'warn' as const, detail: `hash drifted after write: ${p}` };
+          } catch {
+            return { status: 'fail' as const, detail: `file missing after write: ${p}` };
+          }
+        },
+      },
+    ),
+
     file_edit_lines: attachMeta(
       tool({
         description:
