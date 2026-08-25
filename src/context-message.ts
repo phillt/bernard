@@ -212,13 +212,54 @@ function renderRecalledContext(ragResults?: RAGSearchResult[]): string | null {
   return blocks.join('\n');
 }
 
+/**
+ * Character budget for the whole `<persistent_memory>` section (#307).
+ *
+ * Memory is injected in full on every turn, and it sits *after* the prompt-cache
+ * breakpoint, so it is re-billed per step rather than per turn. It reached
+ * **182,585 bytes / ~45,646 tokens** on one machine before anyone noticed —
+ * 96% of it `session-summary-*` blobs written by `/clear --save`. That writer is
+ * gone and the section now measures ~6,900 chars, but nothing *bounds* it:
+ * `memory write` is model-driven and unbounded, so the same growth can recur
+ * through a different writer.
+ *
+ * 24,000 chars ≈ 6k tokens — roughly 3.5x today's size, so it is slack for
+ * normal growth and a wall against another 45k surprise.
+ */
+export const MAX_PERSISTENT_MEMORY_CHARS = 24_000;
+
 function renderPersistentMemory(memoryStore?: MemoryStore): string | null {
   if (!memoryStore) return null;
   const memories = memoryStore.getAllMemoryContents();
   if (memories.size === 0) return null;
   const blocks: string[] = [];
+  let used = 0;
+  let dropped = 0;
   for (const [key, content] of memories) {
-    blocks.push(`### ${escapeXml(key)}\n${escapeXml(content)}`);
+    const block = `### ${escapeXml(key)}\n${escapeXml(content)}`;
+    // Whole entries only. Truncating mid-entry would hand the model a fact that
+    // stops mid-sentence, which is worse than not having it — it reads as
+    // authoritative and is wrong.
+    if (used + block.length > MAX_PERSISTENT_MEMORY_CHARS) {
+      dropped++;
+      continue;
+    }
+    blocks.push(block);
+    used += block.length;
+  }
+  if (dropped > 0) {
+    debugLog('context:memory-capped', {
+      dropped,
+      kept: blocks.length,
+      usedChars: used,
+      capChars: MAX_PERSISTENT_MEMORY_CHARS,
+    });
+    // Visible to the model, so a gap it can act on (by calling `memory` to read
+    // a specific key) is never silent.
+    blocks.push(
+      `### (truncated)\n${dropped} further memory ${dropped === 1 ? 'entry was' : 'entries were'} ` +
+        `omitted to stay within the context budget. Use the \`memory\` tool to read a specific key.`,
+    );
   }
   return blocks.join('\n\n');
 }
