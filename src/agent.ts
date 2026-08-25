@@ -144,6 +144,21 @@ export class Agent {
   private partialStepMessages: CoreMessage[] = [];
   private partialText: string = '';
   private lastPromptTokens: number = 0;
+  /**
+   * Wire size of the main agent's tool block, in characters (#323).
+   *
+   * Measured once, on the first dispatch of the session, and reused: the main
+   * tool set is session-stable — the same invariant `BERNARD_PROMPT_CACHE`
+   * depends on and `main.tool-block-stability.test.ts` pins — so re-measuring
+   * per turn would pay an O(schema-size) conversion for an unchanging number.
+   *
+   * `undefined` until that first dispatch returns — deliberately a distinct
+   * sentinel from `0`, so a definition that genuinely carries no tools is not
+   * re-measured on every turn. Treated as `0` by consumers, which is correct
+   * rather than merely tolerable: they are all context-overflow paths, and a
+   * session with no dispatches yet has no history to overflow with.
+   */
+  private mainToolBytes: number | undefined;
   // Public so tokenStatsHook (an external module) can mutate these in place
   // after each agent step. See src/framework/hooks/token-stats.ts.
   lastStepPromptTokens: number = 0;
@@ -574,6 +589,7 @@ export class Agent {
         )
       ) {
         printInfo('Compressing conversation context...');
+        const beforeCompress = this.history;
         this.history = await compressHistory(
           this.history,
           this.config,
@@ -581,6 +597,15 @@ export class Agent {
           // Count compression's off-loop LLM calls toward the per-turn ledger (#258).
           this.spinnerStats ? (rec) => recordTurnUsage(this.spinnerStats!, rec) : undefined,
         );
+        // Re-baseline the compression trigger (#310). `lastPromptTokens` is the
+        // real prompt size of the LAST call, so after a successful compaction it
+        // describes a history that no longer exists — and `shouldCompress` would
+        // keep firing off the stale number, paying for a compaction per turn
+        // that reclaims progressively less. `compactHistory` (the manual
+        // `/compact` path) has always done this; the automatic path did not.
+        if (this.history !== beforeCompress) {
+          this.lastPromptTokens = estimateHistoryTokens(this.history);
+        }
       }
 
       // Recalled memory for this turn. `rawResults` comes from one of two
@@ -691,8 +716,12 @@ export class Agent {
         systemForEstimate.length +
         contextMsgChars +
         (reactActiveForEstimate ? REACT_COORDINATOR_PROMPT.length + 2 : 0);
+      // The tool block is part of the request but not part of the history, and
+      // was omitted from this estimate entirely before #323 — ~5.3k tokens on
+      // the main agent, unaccounted for.
       const estimatedTokens =
-        estimateHistoryTokens(this.history) + Math.ceil(effectiveSystemPromptChars / 4);
+        estimateHistoryTokens(this.history) +
+        Math.ceil((effectiveSystemPromptChars + (this.mainToolBytes ?? 0)) / 4);
       const hardLimit = contextWindow * HARD_LIMIT_RATIO;
       // `emergencyTruncate` deducts the length of its `systemPromptStr` arg
       // from the available budget. Pass a string that includes both the
@@ -709,6 +738,7 @@ export class Agent {
           hardLimit,
           systemPlusContextForBudget,
           userInput,
+          this.mainToolBytes ?? 0,
         );
         preflightTruncated = true;
       }
@@ -760,6 +790,7 @@ export class Agent {
                 contextWindow * retryRatio,
                 baseSystemPlusContext,
                 userInput,
+                this.mainToolBytes ?? 0,
               );
               result = await inner(innerOpts);
             } else {
@@ -959,6 +990,8 @@ export class Agent {
         };
 
       const runOut = await runDefinition(this.ctx, mainAgentDefinition, input, {
+        // Session-stable, so measure on the first dispatch only (#323).
+        measureToolBytes: this.mainToolBytes === undefined,
         abortSignal: this.abortController!.signal,
         seedMessages: () => this.history,
         planStore: this.planStore,
@@ -981,6 +1014,7 @@ export class Agent {
         },
       });
       const result = runOut.result;
+      if (runOut.toolBytes !== undefined) this.mainToolBytes = runOut.toolBytes;
 
       // Track token usage for compression decisions — use last step's prompt tokens
       // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { CoreMessage } from 'ai';
+import { z } from 'zod';
 import {
   getContextWindow,
   shouldCompress,
@@ -11,6 +12,7 @@ import {
   truncateToolResults,
   estimateHistoryTokens,
   emergencyTruncate,
+  toolBlockBytes,
   isTokenOverflowError,
   MODEL_CONTEXT_WINDOWS,
   DEFAULT_CONTEXT_WINDOW,
@@ -432,6 +434,15 @@ describe('extractFacts', () => {
   });
 });
 
+/**
+ * Filler that puts a fixture's compressible region above
+ * `MIN_COMPRESSION_RECLAIM_TOKENS` (#310). Without it these histories are a few
+ * dozen tokens and compaction correctly declines to pay two LLM calls to
+ * reclaim them — so the tests would pass vacuously, asserting "returned the
+ * original" for the wrong reason.
+ */
+const BULK = 'x'.repeat(2_000);
+
 describe('compressHistory', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -443,12 +454,14 @@ describe('compressHistory', () => {
     });
 
     const history: CoreMessage[] = [
-      { role: 'user', content: 'old1' },
-      { role: 'assistant', content: 'old-resp1' },
-      { role: 'user', content: 'old2' },
-      { role: 'assistant', content: 'old-resp2' },
-      { role: 'user', content: 'old3' },
-      { role: 'assistant', content: 'old-resp3' },
+      // Padded so the compressible region clears the reclaim floor; the recent
+      // turns stay verbatim so the identity assertions below remain exact.
+      { role: 'user', content: `old1 ${BULK}` },
+      { role: 'assistant', content: `old-resp1 ${BULK}` },
+      { role: 'user', content: `old2 ${BULK}` },
+      { role: 'assistant', content: `old-resp2 ${BULK}` },
+      { role: 'user', content: `old3 ${BULK}` },
+      { role: 'assistant', content: `old-resp3 ${BULK}` },
       // These 4 recent turns should be kept
       { role: 'user', content: 'recent1' },
       { role: 'assistant', content: 'recent-resp1' },
@@ -493,8 +506,8 @@ describe('compressHistory', () => {
     const history: CoreMessage[] = [];
     // Create enough history to trigger compression
     for (let i = 0; i < 6; i++) {
-      history.push({ role: 'user', content: `msg${i}` });
-      history.push({ role: 'assistant', content: `resp${i}` });
+      history.push({ role: 'user', content: `msg${i} ${BULK}` });
+      history.push({ role: 'assistant', content: `resp${i} ${BULK}` });
     }
 
     const result = await compressHistory(history, makeConfig());
@@ -506,12 +519,59 @@ describe('compressHistory', () => {
 
     const history: CoreMessage[] = [];
     for (let i = 0; i < 6; i++) {
+      history.push({ role: 'user', content: `msg${i} ${BULK}` });
+      history.push({ role: 'assistant', content: `resp${i} ${BULK}` });
+    }
+
+    const result = await compressHistory(history, makeConfig());
+    expect(result).toEqual(history);
+  });
+
+  it('skips a compaction whose region is too small to be worth two LLM calls (#310)', async () => {
+    mockGenerateText.mockResolvedValue({ text: '- summary' });
+    // Six tiny turns: `countRecentMessages` finds a compressible region, but it
+    // is worth a few dozen tokens. The observed failure this guards is a run
+    // that compressed 8 messages, kept 54, and reclaimed ~10% of a 101k history
+    // for the price of a summarizer call plus per-domain fact extraction.
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 6; i++) {
       history.push({ role: 'user', content: `msg${i}` });
       history.push({ role: 'assistant', content: `resp${i}` });
     }
 
     const result = await compressHistory(history, makeConfig());
-    expect(result).toEqual(history);
+    expect(result).toBe(history);
+    expect(mockGenerateText).not.toHaveBeenCalled();
+  });
+
+  it('does not consult the RAG store either when it skips', async () => {
+    // Fact extraction is the *second* LLM call a skipped run would pay for.
+    mockGenerateText.mockResolvedValue({ text: '- summary' });
+    const mockRagStore = { addFacts: vi.fn().mockResolvedValue(1) } as unknown as RAGStore;
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      history.push({ role: 'user', content: `msg${i}` });
+      history.push({ role: 'assistant', content: `resp${i}` });
+    }
+
+    await compressHistory(history, makeConfig(), mockRagStore);
+    expect(mockRagStore.addFacts).not.toHaveBeenCalled();
+  });
+
+  it('still compacts once the region clears the floor', async () => {
+    mockGenerateText.mockResolvedValue({ text: '- summary' });
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 6; i++) {
+      history.push({ role: 'user', content: `msg${i} ${BULK}` });
+      history.push({ role: 'assistant', content: `resp${i} ${BULK}` });
+    }
+
+    const result = await compressHistory(history, makeConfig());
+    expect(result).not.toBe(history);
+    expect(result[0].content).toContain('[Context Summary');
+    // And it actually shrinks — the property the old message-count logging
+    // could not see.
+    expect(estimateHistoryTokens(result)).toBeLessThan(estimateHistoryTokens(history));
   });
 
   it('stores facts with domain tags when ragStore is provided', async () => {
@@ -539,8 +599,8 @@ describe('compressHistory', () => {
 
     const history: CoreMessage[] = [];
     for (let i = 0; i < 6; i++) {
-      history.push({ role: 'user', content: `msg${i}` });
-      history.push({ role: 'assistant', content: `resp${i}` });
+      history.push({ role: 'user', content: `msg${i} ${BULK}` });
+      history.push({ role: 'assistant', content: `resp${i} ${BULK}` });
     }
 
     const result = await compressHistory(history, makeConfig(), mockRagStore);
@@ -573,8 +633,8 @@ describe('compressHistory', () => {
 
     const history: CoreMessage[] = [];
     for (let i = 0; i < 6; i++) {
-      history.push({ role: 'user', content: `msg${i}` });
-      history.push({ role: 'assistant', content: `resp${i}` });
+      history.push({ role: 'user', content: `msg${i} ${BULK}` });
+      history.push({ role: 'assistant', content: `resp${i} ${BULK}` });
     }
 
     const result = await compressHistory(history, makeConfig());
@@ -698,6 +758,65 @@ describe('estimateHistoryTokens', () => {
   });
 });
 
+describe('toolBlockBytes', () => {
+  it('sums name + description + JSON Schema for a Zod-parameter tool', () => {
+    const bytes = toolBlockBytes({
+      ab: { description: 'cd', parameters: z.object({ q: z.string() }) },
+    } as never);
+    // name (2) + description (2) + the converted JSON Schema, which must be a
+    // real schema rather than `JSON.stringify` of a Zod object.
+    expect(bytes).toBeGreaterThan(4);
+    expect(bytes).toBeGreaterThan(20);
+  });
+
+  it('reads a pre-wrapped MCP schema straight off `.jsonSchema`', () => {
+    const jsonSchema = { type: 'object', properties: { a: { type: 'string' } } };
+    const bytes = toolBlockBytes({
+      t: { description: '', parameters: { jsonSchema } },
+    } as never);
+    expect(bytes).toBe(1 + JSON.stringify(jsonSchema).length);
+  });
+
+  it('measures Zod and pre-wrapped MCP tools on the same scale', () => {
+    // The whole point of converting rather than stringifying: a built-in and an
+    // MCP tool with the same shape must weigh about the same, or cross-dispatch
+    // comparisons are meaningless.
+    const zodTool = toolBlockBytes({ t: { parameters: z.object({ a: z.string() }) } } as never);
+    const mcpTool = toolBlockBytes({
+      t: {
+        parameters: {
+          jsonSchema: {
+            type: 'object',
+            properties: { a: { type: 'string' } },
+            required: ['a'],
+            additionalProperties: false,
+            $schema: 'http://json-schema.org/draft-07/schema#',
+          },
+        },
+      },
+    } as never);
+    expect(Math.abs(zodTool - mcpTool)).toBeLessThan(20);
+  });
+
+  it('undercounts rather than throwing on an unconvertible schema', () => {
+    const exploding = {
+      get jsonSchema() {
+        throw new Error('circular');
+      },
+    };
+    expect(() =>
+      toolBlockBytes({ ok: { description: 'x' }, bad: { parameters: exploding } } as never),
+    ).not.toThrow();
+    // The good tool still contributes; the bad one contributes only its name.
+    expect(toolBlockBytes({ bad: { parameters: exploding } } as never)).toBe(3);
+  });
+
+  it('returns 0 for no tools', () => {
+    expect(toolBlockBytes(undefined)).toBe(0);
+    expect(toolBlockBytes({})).toBe(0);
+  });
+});
+
 describe('emergencyTruncate', () => {
   it('drops oldest messages until under budget', () => {
     const history: CoreMessage[] = [];
@@ -711,6 +830,44 @@ describe('emergencyTruncate', () => {
     // Should have truncation notice
     expect(result[0].content).toContain('truncated to fit context window');
     expect(result[1].content).toContain('Understood');
+  });
+
+  it('charges the tool block to the budget, keeping fewer messages (#323)', () => {
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      history.push({ role: 'user', content: `message ${i} ${'x'.repeat(1000)}` });
+      history.push({ role: 'assistant', content: `response ${i} ${'y'.repeat(1000)}` });
+    }
+    const withoutTools = emergencyTruncate(history, 5000, 'system prompt');
+    // ~21k chars is the real main-agent tool block — ~5.3k tokens that the
+    // budget silently ignored before this change, on the one path that runs
+    // *because* a token limit was already exceeded.
+    const withTools = emergencyTruncate(history, 5000, 'system prompt', undefined, 21_000);
+    expect(withTools.length).toBeLessThan(withoutTools.length);
+  });
+
+  it('defaults to charging nothing, so callers with no tool block are unaffected', () => {
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 20; i++) {
+      history.push({ role: 'user', content: `message ${i} ${'x'.repeat(1000)}` });
+      history.push({ role: 'assistant', content: `response ${i} ${'y'.repeat(1000)}` });
+    }
+    const omitted = emergencyTruncate(history, 5000, 'system prompt', 'task');
+    const explicitZero = emergencyTruncate(history, 5000, 'system prompt', 'task', 0);
+    expect(explicitZero).toEqual(omitted);
+  });
+
+  it('still keeps the floor of 6 messages when tools alone blow the budget', () => {
+    const history: CoreMessage[] = [];
+    for (let i = 0; i < 10; i++) {
+      history.push({ role: 'user', content: `msg ${i}` });
+      history.push({ role: 'assistant', content: `resp ${i}` });
+    }
+    // Tool block exceeds the whole budget → historyBudget <= 0. The floor has
+    // to hold, or an over-budget tool block would leave the model with nothing.
+    const result = emergencyTruncate(history, 100, 'system', undefined, 500_000);
+    expect(result.length).toBeGreaterThanOrEqual(8);
+    expect(result[result.length - 1].content).toContain('resp 9');
   });
 
   it('preserves at least 6 messages', () => {

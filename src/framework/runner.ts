@@ -7,49 +7,16 @@ import {
   type LanguageModel,
   type Tool,
   type ToolCallRepairFunction,
-  zodSchema,
 } from 'ai';
 import { debugLog, isDebugEnabled } from '../logger.js';
+// `toolBlockBytes` lives in `context.ts` (#323): that module owns "how big is
+// what we're about to send", and the tool block is a real budget input there —
+// not just a log line. The runner stays a caller, keeping the O(schema-size)
+// conversion behind its own debug gate.
+import { toolBlockBytes } from '../context.js';
 import type { AgentHook, StepFinishPayload } from './hooks/types.js';
 import { runWithDispatchId } from './dispatch-context.js';
 import { normalizeUsage } from './hooks/token-stats.js';
-
-/**
- * Wire size of a dispatch's tool block, in characters (#253).
- *
- * Sums `name + description + JSON Schema` per tool — what a provider actually
- * receives. Zod parameters are converted with the AI SDK's own `zodSchema()`
- * (the same path `generateText` takes), so a Zod built-in and a JSON-Schema MCP
- * tool are measured on the same scale; `JSON.stringify` on a raw Zod object
- * would under-report built-ins by roughly half and make cross-dispatch
- * comparisons meaningless — the exact thing this metric exists to enable.
- *
- * Debug-only: converting every schema is O(schema size) per dispatch. Never
- * throws into the dispatch path.
- */
-function toolBlockBytes(tools: Record<string, Tool> | undefined): number {
-  if (!tools) return 0;
-  let total = 0;
-  for (const [name, t] of Object.entries(tools)) {
-    total += name.length;
-    const def = t as { description?: unknown; parameters?: unknown };
-    if (typeof def.description === 'string') total += def.description.length;
-    try {
-      const p = def.parameters;
-      // MCP tools arrive pre-wrapped by `jsonSchema()` and already expose
-      // `.jsonSchema`; Zod schemas need converting first.
-      const resolved =
-        p && typeof p === 'object' && 'jsonSchema' in p
-          ? (p as { jsonSchema: unknown }).jsonSchema
-          : zodSchema(p as Parameters<typeof zodSchema>[0]).jsonSchema;
-      total += JSON.stringify(resolved ?? {}).length;
-    } catch {
-      // Unconvertible or circular schema — skip this tool's parameters rather
-      // than fail the dispatch. Undercounts; never crashes.
-    }
-  }
-  return total;
-}
 
 const WATCHDOG_INTERVAL_MS = 30_000;
 

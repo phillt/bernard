@@ -7,6 +7,7 @@ import {
 } from '../../providers/prompt-cache.js';
 import { detectToolError } from '../../tool-profiles.js';
 import { makeRepairHook } from '../../tool-call-repair.js';
+import { toolBlockBytes } from '../../context.js';
 import { augmentTools } from '../../tools/augment.js';
 import type { AgentContext } from '../context.js';
 import { getOutputSink } from '../hooks/output-sink.js';
@@ -80,6 +81,18 @@ export interface RunDefinitionOpts {
    * the `main` layer in `bernard usage` / the UsageViewer.
    */
   telemetrySite?: string;
+  /**
+   * Measure the assembled tool block and return its wire size as
+   * {@link RunDefinitionResult.toolBytes} (#323).
+   *
+   * Opt-in because the measurement converts every schema — O(schema size) — and
+   * only one caller needs it: the main agent, whose context budget has to
+   * account for the tool block it will send alongside the history. Its tool set
+   * is session-stable (the invariant the prompt cache already relies on), so
+   * the caller asks once per session and caches, rather than paying per
+   * dispatch.
+   */
+  measureToolBytes?: boolean;
 }
 
 export interface RunDefinitionResult<TFormatted> {
@@ -97,6 +110,11 @@ export interface RunDefinitionResult<TFormatted> {
    * step-limited single-loop helper to the scoped PAC pipeline (#296 Phase 2E).
    */
   stepLimitHit: boolean;
+  /**
+   * Wire size of this dispatch's tool block in characters, present only when
+   * `opts.measureToolBytes` was set. See {@link toolBlockBytes}.
+   */
+  toolBytes?: number;
 }
 
 /**
@@ -135,6 +153,10 @@ export async function runDefinition<TInput, TFormatted>(
   // `Available tools: …` and used to build its own second registry to do it,
   // which had already drifted from the handed set.
   const system = await Promise.resolve(def.systemPrompt(ctx, input, rawTools));
+  // Measured on `rawTools` rather than the augmented set: augmentation wraps
+  // `execute` and leaves name/description/parameters — everything that goes on
+  // the wire — untouched.
+  const toolBytes = opts.measureToolBytes ? toolBlockBytes(rawTools) : undefined;
   // Central confirmation-gate install (#144). Every agent runs through this
   // path, so applying the gate here (instead of inside each definition's
   // `tools()`) means sub-agent / PAC / specialist / cron tool calls all
@@ -369,7 +391,7 @@ export async function runDefinition<TInput, TFormatted>(
 
   const result = await strategy.run(strategyCtx);
   const formatted = await applyFormat(def, result, input, ctx);
-  return { result, formatted, resolved, stepLimitHit };
+  return { result, formatted, resolved, stepLimitHit, toolBytes };
 }
 
 function resolveModel<TInput, TFormatted>(

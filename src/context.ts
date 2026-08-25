@@ -1,4 +1,4 @@
-import { generateText, type CoreMessage } from 'ai';
+import { generateText, zodSchema, type CoreMessage, type Tool } from 'ai';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
@@ -79,6 +79,13 @@ export const DEFAULT_CONTEXT_WINDOW = 128_000;
 export const COMPRESSION_THRESHOLD = 0.75;
 /** Number of recent user/assistant exchanges preserved verbatim during compression. */
 export const RECENT_TURNS_TO_KEEP = 4;
+/**
+ * Minimum estimated tokens in the compressible region for a compaction to be
+ * worth its two LLM calls (#310). Below this the summary that replaces the
+ * region is a meaningful fraction of the region itself, so the run costs money
+ * and latency to recover approximately nothing.
+ */
+export const MIN_COMPRESSION_RECLAIM_TOKENS = 2_000;
 
 /**
  * Look up a model's context window. Resolution order, most to least trusted:
@@ -335,6 +342,28 @@ export async function compressHistory(
 
   const oldMessages = history.slice(0, splitIndex);
   const recentMessages = history.slice(splitIndex);
+
+  // Don't pay for a compaction that cannot recover much (#310).
+  //
+  // `countRecentMessages` splits on *user turns*, and a tool-heavy turn can be
+  // dozens of messages carrying several near-`MAX_TOOL_RESULT_CHARS` results —
+  // so "everything older than the last 4 turns" is routinely a small slice of
+  // the weight. One observed run compressed 8 messages while keeping 54.
+  // Summarizing that costs two LLM calls (summarizer + per-domain fact
+  // extraction) and replaces the region with a summary of its own, so below the
+  // floor the net recovery approaches zero — or goes negative.
+  const compressibleTokens = estimateHistoryTokens(oldMessages);
+  if (compressibleTokens < MIN_COMPRESSION_RECLAIM_TOKENS) {
+    debugLog('context:compress:skipped', {
+      reason: 'below-reclaim-floor',
+      oldMessageCount: oldMessages.length,
+      recentMessageCount: recentMessages.length,
+      compressibleTokens,
+      floorTokens: MIN_COMPRESSION_RECLAIM_TOKENS,
+    });
+    return history;
+  }
+
   const serialized = serializeMessages(oldMessages);
 
   if (!serialized.trim()) {
@@ -399,14 +428,27 @@ export async function compressHistory(
       content: CONTEXT_SUMMARY_ACK,
     };
 
+    const compressed = [summaryMessage, ackMessage, ...recentMessages];
+    // Report what the run actually recovered (#310). Message counts alone were
+    // blind to the thing that matters: a run can compress 8 messages, keep 54,
+    // and reclaim ~10% of a 101k-token history for the price of two LLM calls,
+    // and nothing said so. The manual `/compact` path has always computed this;
+    // the automatic path computed none of it.
+    const tokensBefore = estimateHistoryTokens(history);
+    const tokensAfter = estimateHistoryTokens(compressed);
     debugLog('context:compress', {
       oldMessageCount: oldMessages.length,
       recentMessageCount: recentMessages.length,
       summaryLength: summary.length,
       domainFactsCount: domainFacts.reduce((sum, df) => sum + df.facts.length, 0),
+      tokensBefore,
+      tokensAfter,
+      reclaimed: tokensBefore - tokensAfter,
+      reclaimedPct:
+        tokensBefore > 0 ? Math.round(((tokensBefore - tokensAfter) / tokensBefore) * 100) : 0,
     });
 
-    return [summaryMessage, ackMessage, ...recentMessages];
+    return compressed;
   } catch (err) {
     debugLog('context:compress:error', err instanceof Error ? err.message : String(err));
     return history;
@@ -485,17 +527,77 @@ export function estimateHistoryTokens(history: CoreMessage[]): number {
 }
 
 /**
+ * Wire size of a dispatch's tool block, in characters (#253).
+ *
+ * Sums `name + description + JSON Schema` per tool — what a provider actually
+ * receives. Zod parameters are converted with the AI SDK's own `zodSchema()`
+ * (the same path `generateText` takes), so a Zod built-in and a JSON-Schema MCP
+ * tool are measured on the same scale; `JSON.stringify` on a raw Zod object
+ * would under-report built-ins by roughly half and make cross-dispatch
+ * comparisons meaningless — the exact thing this metric exists to enable.
+ *
+ * Lives here, beside {@link estimateHistoryTokens} and {@link emergencyTruncate},
+ * because this module owns "how big is what we are about to send" — and the
+ * tool block was the missing half of that question (#323). It previously sat
+ * private and debug-gated in `framework/runner.ts`, where it could never be
+ * anything but a log line, while `emergencyTruncate` budgeted as though tools
+ * cost nothing.
+ *
+ * Converting every schema is O(schema size), so the CALLER decides when to pay:
+ * the runner calls it only under `BERNARD_DEBUG`, and the agent calls it once
+ * per session (the main tool block is session-stable — the invariant the
+ * prompt cache already depends on). Never throws into the dispatch path.
+ */
+export function toolBlockBytes(tools: Record<string, Tool> | undefined): number {
+  if (!tools) return 0;
+  let total = 0;
+  for (const [name, t] of Object.entries(tools)) {
+    total += name.length;
+    const def = t as { description?: unknown; parameters?: unknown };
+    if (typeof def.description === 'string') total += def.description.length;
+    try {
+      const p = def.parameters;
+      // MCP tools arrive pre-wrapped by `jsonSchema()` and already expose
+      // `.jsonSchema`; Zod schemas need converting first.
+      const resolved =
+        p && typeof p === 'object' && 'jsonSchema' in p
+          ? (p as { jsonSchema: unknown }).jsonSchema
+          : zodSchema(p as Parameters<typeof zodSchema>[0]).jsonSchema;
+      total += JSON.stringify(resolved ?? {}).length;
+    } catch {
+      // Unconvertible or circular schema — skip this tool's parameters rather
+      // than fail the dispatch. Undercounts; never crashes.
+    }
+  }
+  return total;
+}
+
+/**
  * Progressively drop oldest messages until estimated tokens fit within budget.
  * Always keeps at least the last 6 messages so the model has some context.
  * Prepends a synthetic truncation notice.
+ *
+ * `toolBlockChars` is the wire size of the tool block that will be sent
+ * alongside this history (see {@link toolBlockBytes}). Charging it matters
+ * precisely here: on the main agent it is ~21k chars / ~5.3k tokens, and this
+ * is the one path that runs *because* a token budget was already exceeded, so
+ * an estimate that silently omits a fixed 5k-token cost can truncate to a
+ * payload that still does not fit. Defaults to `0`, which reproduces the
+ * pre-#323 behaviour for callers that genuinely have no tool block.
  */
 export function emergencyTruncate(
   history: CoreMessage[],
   tokenBudget: number,
   systemPrompt: string,
   currentUserMessage?: string,
+  toolBlockChars = 0,
 ): CoreMessage[] {
-  const systemTokens = Math.ceil(systemPrompt.length / 4);
+  // Both terms are character counts of the same non-history prefix, so they
+  // share one divisor. (Note the prefix uses 4 chars/token while history uses
+  // 3.6 — a pre-existing asymmetry, left alone here: changing it would move
+  // every truncation threshold at once, which is not this change.)
+  const prefixChars = systemPrompt.length + Math.max(0, toolBlockChars);
+  const systemTokens = Math.ceil(prefixChars / 4);
   const historyBudget = tokenBudget - systemTokens;
 
   const taskHint = currentUserMessage
