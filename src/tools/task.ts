@@ -13,6 +13,7 @@ import {
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { withSlot, getMaxConcurrentAgents } from './agent-pool.js';
+import { isDispatchCancellation } from '../error-taxonomy.js';
 
 // Re-export helpers + types that other modules (repl.ts, sub.ts, tests) already
 // import from this path. The implementations live in `framework/agents/task.ts`.
@@ -174,6 +175,8 @@ export function createTaskTool(ctx: AgentContext): BernardTool<TaskArgs, TaskPay
             printTaskEnd(serializeTaskForModel(envelope));
             return envelope;
           } catch (e: unknown) {
+            // A cancelled dispatch unwinds; a failed one is a tool result (#327).
+            if (isDispatchCancellation(e)) throw e;
             const message = e instanceof Error ? e.message : String(e);
             const errEnvelope = err<TaskPayload>({ type: 'exec_failed', message });
             printTaskEnd(serializeTaskForModel(errEnvelope));

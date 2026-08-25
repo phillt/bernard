@@ -13,8 +13,23 @@ import { toolBlockBytes } from '../tool-bytes.js';
 import type { AgentHook, StepFinishPayload } from './hooks/types.js';
 import { runWithDispatchId } from './dispatch-context.js';
 import { normalizeUsage } from './hooks/token-stats.js';
+import { DISPATCH_ABORT_NAME } from '../error-taxonomy.js';
 
 const WATCHDOG_INTERVAL_MS = 30_000;
+
+/**
+ * Default mid-stream stall budget (#325). `BERNARD_PROVIDER_STALL_TIMEOUT_MS`
+ * (#302) bounds the wait for the FIRST byte; once headers arrive the body
+ * streams with nothing watching it, leaving undici's 300 s `bodyTimeout` as the
+ * only backstop — five minutes of a dead turn, unattended.
+ *
+ * Deliberately above the 90 s first-byte budget. An agent loop runs every step
+ * inside one `streamText` call, so the HTTP round trip that opens step N+1
+ * happens *inside* the stream with no parts flowing. That gap is already the
+ * first-byte guard's job; if this budget were lower we would race it and
+ * misreport a slow-but-live request as a stall.
+ */
+const STREAM_STALL_TIMEOUT_MS = 120_000;
 
 /**
  * Builds a promise that rejects with the canonical AbortError when the signal
@@ -44,6 +59,44 @@ function parseDispatchTimeoutMs(): number | null {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.floor(n);
+}
+
+/**
+ * Tick period for the watchdog. The stall guard can only fire on a tick, so a
+ * fixed 30 s period would detect a 120 s stall somewhere in 120–150 s — fine —
+ * but would detect a user-configured 5 s budget no sooner than 30 s, silently
+ * ignoring the setting. Track the smaller of the two, floored so a very small
+ * budget can't turn into a busy timer.
+ */
+function watchdogIntervalMs(stallMs: number | null): number {
+  if (stallMs === null) return WATCHDOG_INTERVAL_MS;
+  return Math.max(100, Math.min(WATCHDOG_INTERVAL_MS, stallMs));
+}
+
+/**
+ * Mid-stream stall budget (#325). Unlike {@link parseDispatchTimeoutMs} this is
+ * opt-OUT: absent means the default applies, `0` (or a non-numeric value)
+ * disables the guard. Read per call rather than at module load, matching the
+ * first-byte guard — `.env` is parsed by `loadConfig` after this module is
+ * imported, so a captured value would silently ignore the user's setting.
+ */
+function parseStreamStallTimeoutMs(): number | null {
+  const raw = process.env.BERNARD_STREAM_STALL_TIMEOUT_MS;
+  if (raw === undefined || raw === '') return STREAM_STALL_TIMEOUT_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
+}
+
+/**
+ * Liveness callback handed to the streaming branch (#325). Internal to this
+ * module — deliberately NOT part of {@link AgentSpec}, because it is not a
+ * caller-supplied hook: `runAgentInner` owns both the clock and the watchdog
+ * that reads it, and a caller passing its own would be able to hold the guard
+ * open. The part `type` is passed so the guard can pause across tool execution.
+ */
+interface StreamProgress {
+  onPart: (type: string) => void;
 }
 
 /**
@@ -235,49 +288,126 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
     maxSteps: spec.maxSteps,
   });
 
-  // Watchdog — debug-only so prod never registers the interval. Cleared in
-  // the finally block whether the dispatch ends, errors, or aborts.
-  const watchdog = debug
-    ? setInterval(() => {
-        debugLog('agent:dispatch:stuck', {
-          dispatchId,
-          model: modelId,
-          ms: Date.now() - dispatchStartedAt,
-          sinceLastStepMs: Date.now() - lastStepEndAt,
-          stepsCompleted,
-        });
-      }, WATCHDOG_INTERVAL_MS)
-    : null;
-  watchdog?.unref?.();
+  // Mid-stream progress clock (#325). `lastStepEndAt` cannot serve as one: it
+  // moves only at step boundaries, so it climbs monotonically while tokens are
+  // pouring in and aborting on it would kill healthy long steps — the false
+  // positive #302's acceptance criteria forbid. `runStreaming` stamps this on
+  // every part it pulls off `fullStream`, which is the only point in the
+  // process that knows a byte arrived.
+  //
+  // `inFlightTools` gates the guard because a silent stream is not the same as
+  // a dead one: `fullStream` emits `tool-call` when the model finishes emitting
+  // the call, then nothing until `tool-result`. A `task` / `subagent` /  MCP
+  // call legitimately occupies minutes of that silence. We pause the clock for
+  // the span instead of raising the budget past it, so the guard keeps its
+  // teeth for the case it exists for. If a tool-result never arrives the count
+  // never returns to zero and the guard stays disabled for the rest of the
+  // dispatch — fail-open, which is the right direction: losing the guard costs
+  // us a slow failure, a false abort costs the user completed work.
+  let lastProgressAt = dispatchStartedAt;
+  let inFlightTools = 0;
+  const progress: StreamProgress = {
+    onPart: (type) => {
+      lastProgressAt = Date.now();
+      if (type === 'tool-call') inFlightTools += 1;
+      else if (type === 'tool-result' && inFlightTools > 0) inFlightTools -= 1;
+    },
+  };
+
+  // The stall guard only applies to the streaming branch. `generateText` is one
+  // opaque await with no per-byte signal, so `lastProgressAt` would never move
+  // and every non-streaming dispatch would be killed at the budget. That branch
+  // stays covered by the first-byte guard plus step boundaries; the asymmetry is
+  // real and stating it beats pretending the fix is symmetric.
+  const stallMs = spec.useStreaming ? parseStreamStallTimeoutMs() : null;
 
   // Optional per-dispatch timeout. Chains a fresh AbortController off the
-  // caller's signal so we don't leak a timer past dispatch completion.
+  // caller's signal so we don't leak a timer past dispatch completion. The
+  // stall guard needs the same chained controller, so build it when either is
+  // active.
   const timeoutMs = parseDispatchTimeoutMs();
   let timeoutHandle: NodeJS.Timeout | null = null;
-  let timedOut = false;
+  // One variable, not a flag per reason: the catch used to re-derive the choice
+  // with a branch per source, and stall unconditionally won even when the
+  // dispatch timer had fired first. `??=` reports whichever actually caused the
+  // abort, and a third reason needs no new arm.
+  let selfAbortMessage: string | null = null;
   let effectiveSignal = spec.abortSignal;
-  if (timeoutMs !== null) {
+  let abortChained: (() => void) | null = null;
+  if (timeoutMs !== null || stallMs !== null) {
     const ac = new AbortController();
     if (spec.abortSignal) {
       if (spec.abortSignal.aborted) ac.abort();
       else spec.abortSignal.addEventListener('abort', () => ac.abort(), { once: true });
     }
+    abortChained = () => ac.abort();
+    effectiveSignal = ac.signal;
+  }
+  if (timeoutMs !== null) {
     timeoutHandle = setTimeout(() => {
       debugLog('agent:dispatch:timeout', {
         dispatchId,
         model: modelId,
         ms: timeoutMs,
       });
-      timedOut = true;
-      ac.abort();
+      selfAbortMessage ??= `Dispatch timed out after ${timeoutMs} ms (BERNARD_DISPATCH_TIMEOUT_MS)`;
+      abortChained?.();
     }, timeoutMs);
     timeoutHandle.unref?.();
-    effectiveSignal = ac.signal;
   }
+
+  // Watchdog. No longer debug-gated: with `stallMs` it is the thing that ends a
+  // dead stream, and gating it on debug would mean the guard protects only
+  // sessions someone already suspected. Still `unref()`ed, so it cannot hold
+  // the event loop open, and it does nothing but compare two numbers. Cleared
+  // in the finally block whether the dispatch ends, errors, or aborts.
+  //
+  // SCOPE, precisely: `useStreaming` is `sink !== null` (`agents/run.ts`), and
+  // the sink is registered only by `<App>`. `streaming: true` is declared on
+  // exactly one definition, `main`. So this guard covers the main agent in a
+  // mounted Ink REPL and NOTHING else — not cron, sub-agents, tool wrappers,
+  // PAC phases, or delegate helpers, all of which are non-streaming and get
+  // `stallMs === null`. That is the opposite of where an unattended hang
+  // hurts most, and it is a property of the layer, not an oversight: a
+  // per-part clock can only exist where parts exist. Covering the rest means
+  // moving body-inactivity detection down to `providers/stall-guard.ts`,
+  // which already wraps every client's `fetch` for the first-byte case —
+  // filed as a follow-up.
+  const watchdog =
+    debug || stallMs !== null
+      ? setInterval(() => {
+          const now = Date.now();
+          const sinceProgress = now - lastProgressAt;
+          if (debug) {
+            debugLog('agent:dispatch:stuck', {
+              dispatchId,
+              model: modelId,
+              ms: now - dispatchStartedAt,
+              sinceLastStepMs: now - lastStepEndAt,
+              sinceLastProgressMs: sinceProgress,
+              inFlightTools,
+              stepsCompleted,
+            });
+          }
+          if (stallMs !== null && inFlightTools === 0 && sinceProgress >= stallMs) {
+            debugLog('agent:dispatch:stalled', {
+              dispatchId,
+              model: modelId,
+              sinceLastProgressMs: sinceProgress,
+              stepsCompleted,
+            });
+            selfAbortMessage ??=
+              `Provider stream timed out — no data received for ${sinceProgress} ms ` +
+              `(BERNARD_STREAM_STALL_TIMEOUT_MS)`;
+            abortChained?.();
+          }
+        }, watchdogIntervalMs(stallMs))
+      : null;
+  watchdog?.unref?.();
 
   try {
     const result = spec.useStreaming
-      ? await runStreaming({ ...spec, abortSignal: effectiveSignal }, onStepFinish)
+      ? await runStreaming({ ...spec, abortSignal: effectiveSignal }, onStepFinish, progress)
       : await runNonStreaming(
           { ...spec, abortSignal: effectiveSignal, prepareStep: wrappedPrepareStep },
           onStepFinish,
@@ -293,17 +423,25 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
     });
     return result;
   } catch (err) {
-    // A timeout abort fires the *chained* controller, not the caller's
+    // A timeout or stall abort fires the *chained* controller, not the caller's
     // signal, so the agent's catch can't tell it apart from a generic abort
     // (`this.abortController.signal.aborted` stays false) and would render a
-    // bare "Agent error: Aborted". Re-shape it into a self-describing error
-    // here, where the timeout context still exists.
-    const wrapped =
-      timedOut && err instanceof Error && err.name === 'AbortError' && !spec.abortSignal?.aborted
-        ? new Error(`Dispatch timed out after ${timeoutMs} ms (BERNARD_DISPATCH_TIMEOUT_MS)`, {
-            cause: err,
-          })
-        : err;
+    // bare "Agent error: Aborted" — i.e. nothing, since the REPL treats aborts
+    // as "user pressed Esc". Re-shape into a self-describing error here, where
+    // the context still exists. The message says "timed out" so
+    // `error-taxonomy.ts` categorises it as `timeout` without new vocabulary;
+    // the NAME is what marks it as ours, since a provider's own network
+    // timeout says the same thing and is a retryable work failure.
+    const ourAbort =
+      err instanceof Error && err.name === 'AbortError' && !spec.abortSignal?.aborted;
+    let wrapped: unknown = err;
+    if (ourAbort && selfAbortMessage) {
+      const self = new Error(selfAbortMessage, { cause: err });
+      // Names it as ours so `isDispatchCancellation` can tell this from a
+      // provider's (retryable) network timeout without reading the message.
+      self.name = DISPATCH_ABORT_NAME;
+      wrapped = self;
+    }
     debugLog('agent:dispatch:error', {
       dispatchId,
       model: modelId,
@@ -362,6 +500,7 @@ async function runNonStreaming(
 async function runStreaming(
   spec: AgentSpec,
   onStepFinish: ((payload: StepFinishPayload) => Promise<void>) | undefined,
+  progress?: StreamProgress,
 ): Promise<AgentResult> {
   // `streamText` accepts a subset of `generateText` settings — no
   // `experimental_prepareStep`. The main agent (the only `streaming: true`
@@ -405,6 +544,11 @@ async function runStreaming(
     while (true) {
       const next = await raceAbort(iter.next());
       if (next.done) break;
+      // The stall guard's only progress signal (#325). Stamped before any
+      // per-part branching so it covers every part type — including ones this
+      // switch ignores (`reasoning`, `step-start`, …), which are still proof
+      // the connection is alive.
+      progress?.onPart((next.value as { type?: string }).type ?? '');
       // The AI SDK narrows `tool-call` / `tool-result` parts on the `TOOLS`
       // generic; since we type-erase tools to `Record<string, Tool>` for the
       // shared runner, those branches collapse to `never`. Cast through

@@ -12,6 +12,7 @@ import {
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { withSlot, getMaxConcurrentAgents } from './agent-pool.js';
+import { isDispatchCancellation } from '../error-taxonomy.js';
 
 /**
  * Creates the specialist execution tool for running tasks through a saved
@@ -101,6 +102,8 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
             return formatted;
           } catch (err: unknown) {
             printSpecialistEnd(id);
+            // A cancelled dispatch unwinds; a failed one is a tool result (#327).
+            if (isDispatchCancellation(err)) throw err;
             const message = err instanceof Error ? err.message : String(err);
             return `Specialist error: ${message}`;
           }

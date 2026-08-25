@@ -10,6 +10,7 @@ import { withUncappedSlot } from './agent-pool.js';
 import { createAskUserTool } from './ask-user.js';
 import { serverToolNames } from './delegate.js';
 import { debugLog } from '../logger.js';
+import { isDispatchCancellation } from '../error-taxonomy.js';
 
 /**
  * The invocation half of per-server MCP delegation (#296), split from
@@ -89,6 +90,8 @@ export async function dispatchServerDelegate(
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       debugLog('delegate:error', { server, message });
+      // A cancelled dispatch unwinds; a failed one is a tool result (#327).
+      if (isDispatchCancellation(err)) throw err;
       return `Delegation to "${server}" failed: ${message}`;
     }
   });
