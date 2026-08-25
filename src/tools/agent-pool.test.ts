@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  acquireSlot,
-  releaseSlot,
+  withSlot,
+  withUncappedSlot,
   getActiveCount,
   getMaxConcurrentAgents,
   setMaxConcurrentAgents,
@@ -10,78 +10,147 @@ import {
   MAX_CONCURRENT_AGENTS_LIMIT,
 } from './agent-pool.js';
 
+/** Holds a slot until `release()` is called — lets a test fill the pool. */
+function hold(): { released: Promise<unknown>; release: () => void } {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const released = withSlot(
+    async (slot) => {
+      await gate;
+      return slot;
+    },
+    () => null,
+  );
+  return { released, release };
+}
+
+/** `withSlot` with a sentinel fallback, for asserting acquired-vs-not. */
+const EXHAUSTED = Symbol('exhausted');
+function tryAcquire<T>(fn: (slot: { id: number }) => Promise<T>) {
+  return withSlot(fn, () => EXHAUSTED as unknown as T);
+}
+
 describe('agent-pool', () => {
   beforeEach(() => {
     _resetPool();
   });
 
-  it('acquires slots with incrementing IDs', () => {
-    const a = acquireSlot();
-    const b = acquireSlot();
-    expect(a).toEqual({ id: 1 });
-    expect(b).toEqual({ id: 2 });
+  it('hands each concurrent run an incrementing id', async () => {
+    const a = hold();
+    const b = hold();
     expect(getActiveCount()).toBe(2);
+    a.release();
+    b.release();
+    expect(await a.released).toEqual({ id: 1 });
+    expect(await b.released).toEqual({ id: 2 });
   });
 
-  it('returns null when at capacity', () => {
+  it('calls onExhausted at capacity, and never runs the body', async () => {
     const cap = getMaxConcurrentAgents();
-    for (let i = 0; i < cap; i++) {
-      expect(acquireSlot()).not.toBeNull();
-    }
-    expect(acquireSlot()).toBeNull();
+    const held = Array.from({ length: cap }, () => hold());
     expect(getActiveCount()).toBe(cap);
+
+    let ran = false;
+    const out = await withSlot(
+      async () => {
+        ran = true;
+        return 'x';
+      },
+      () => 'full',
+    );
+    expect(out).toBe('full');
+    expect(ran).toBe(false);
+
+    held.forEach((h) => h.release());
+    await Promise.all(held.map((h) => h.released));
   });
 
-  it('releases slots and allows re-acquisition', () => {
+  it('releases on the way out, allowing re-acquisition', async () => {
     const cap = getMaxConcurrentAgents();
-    for (let i = 0; i < cap; i++) {
-      acquireSlot();
-    }
-    expect(acquireSlot()).toBeNull();
-    releaseSlot();
+    const held = Array.from({ length: cap }, () => hold());
+    expect(await tryAcquire(async () => 1)).toBe(EXHAUSTED);
+
+    held[0].release();
+    await held[0].released;
     expect(getActiveCount()).toBe(cap - 1);
-    expect(acquireSlot()).not.toBeNull();
+    expect(await tryAcquire(async () => 1)).toBe(1);
+
+    held.slice(1).forEach((h) => h.release());
+    await Promise.all(held.slice(1).map((h) => h.released));
   });
 
-  it('does not go below zero on extra release', () => {
-    releaseSlot();
+  it('releases even when the body throws', async () => {
+    await expect(
+      withSlot(
+        async () => {
+          throw new Error('boom');
+        },
+        () => null,
+      ),
+    ).rejects.toThrow('boom');
     expect(getActiveCount()).toBe(0);
   });
 
-  it('lets a nested helper through a full pool (#305)', () => {
+  it('withUncappedSlot runs even with no slot held and a full pool (#305)', async () => {
+    // The main agent holds NO pool slot, so a `delegate_*` call it issues is not
+    // ALS-nested. Routing that through the capped path would let parallel
+    // sub-agents starve main's own MCP access.
+    setMaxConcurrentAgents(1);
+    const held = hold();
+    expect(await tryAcquire(async () => 'capped')).toBe(EXHAUSTED);
+    expect(await withUncappedSlot(async (slot) => slot.id)).toBe(2);
+    held.release();
+    await held.released;
+    expect(getActiveCount()).toBe(0);
+  });
+
+  it('lets a nested helper through a full pool (#305)', async () => {
     // Sub-agents carry `delegate_*` tools, so a sub-agent holds a slot AND needs
     // a helper. Counting both against one flat cap starves every helper the
     // moment parallel sub-agents fill the pool — the delegate call degrades to
     // an error string and the sub-agent silently loses MCP access.
-    setMaxConcurrentAgents(2);
-    expect(acquireSlot()).not.toBeNull();
-    expect(acquireSlot()).not.toBeNull();
-    expect(acquireSlot()).toBeNull(); // pool full for ordinary dispatches
-
-    const helper = acquireSlot({ nested: true });
-    expect(helper).not.toBeNull();
-    // Still counted, so release stays symmetric and getActiveCount is truthful.
-    expect(getActiveCount()).toBe(3);
-    releaseSlot();
-    expect(getActiveCount()).toBe(2);
-  });
-
-  it('still hands nested helpers distinct ids', () => {
     setMaxConcurrentAgents(1);
-    const a = acquireSlot();
-    const b = acquireSlot({ nested: true });
-    const c = acquireSlot({ nested: true });
-    expect(new Set([a?.id, b?.id, c?.id]).size).toBe(3);
+    const outcome = await tryAcquire(async () => {
+      // Pool is now full for ordinary dispatches...
+      expect(getActiveCount()).toBe(1);
+      // ...but a helper spawned from inside this slot goes through, because
+      // #317 infers nesting from the ALS rather than a flag the caller passes.
+      return tryAcquire(async (slot) => {
+        // Still counted, so release stays symmetric and getActiveCount is truthful.
+        expect(getActiveCount()).toBe(2);
+        return slot.id;
+      });
+    });
+    expect(outcome).toBe(2);
+    expect(getActiveCount()).toBe(0);
   });
 
-  it('resets state completely', () => {
-    acquireSlot();
-    acquireSlot();
+  it('does NOT leak the nested bypass to a sibling of a slot-holder', async () => {
+    // The invariant that makes the ALS the right mechanism and
+    // `getCurrentDispatchId()` the wrong one: every tool executes inside its
+    // parent's dispatch context, so keying on that would exempt every ordinary
+    // acquire. Only code running INSIDE a slot may nest — a caller that merely
+    // ran alongside one must still be capped.
+    setMaxConcurrentAgents(1);
+    const holder = hold();
+    expect(getActiveCount()).toBe(1);
+
+    expect(await tryAcquire(async () => 'should not run')).toBe(EXHAUSTED);
+
+    holder.release();
+    await holder.released;
+  });
+
+  it('resets state completely', async () => {
+    const a = hold();
+    const b = hold();
+    a.release();
+    b.release();
+    await Promise.all([a.released, b.released]);
     _resetPool();
     expect(getActiveCount()).toBe(0);
     expect(getMaxConcurrentAgents()).toBe(DEFAULT_MAX_CONCURRENT_AGENTS);
-    const slot = acquireSlot();
-    expect(slot).toEqual({ id: 1 });
+    expect(await tryAcquire(async (slot) => slot.id)).toBe(1);
   });
 });
 
@@ -127,19 +196,21 @@ describe('agent-pool concurrency configuration', () => {
     expect(getMaxConcurrentAgents()).toBe(8);
   });
 
-  it('acquireSlot honors the updated cap', () => {
+  it('withSlot honors the updated cap', async () => {
     setMaxConcurrentAgents(2);
-    expect(acquireSlot()).not.toBeNull();
-    expect(acquireSlot()).not.toBeNull();
-    expect(acquireSlot()).toBeNull();
+    const held = [hold(), hold()];
+    expect(await tryAcquire(async () => 1)).toBe(EXHAUSTED);
+    held.forEach((h) => h.release());
+    await Promise.all(held.map((h) => h.released));
   });
 
-  it('raising the cap opens new slots immediately', () => {
+  it('raising the cap opens new slots immediately', async () => {
     setMaxConcurrentAgents(2);
-    acquireSlot();
-    acquireSlot();
-    expect(acquireSlot()).toBeNull();
+    const held = [hold(), hold()];
+    expect(await tryAcquire(async () => 1)).toBe(EXHAUSTED);
     setMaxConcurrentAgents(3);
-    expect(acquireSlot()).not.toBeNull();
+    expect(await tryAcquire(async () => 1)).toBe(1);
+    held.forEach((h) => h.release());
+    await Promise.all(held.map((h) => h.released));
   });
 });

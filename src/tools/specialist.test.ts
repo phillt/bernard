@@ -700,11 +700,42 @@ describe('createSpecialistTool', () => {
           description: 'Wraps shell tool',
           systemPrompt: 'You are a shell wrapper.',
           kind: 'tool-wrapper',
+          // Required since #331 — a wrapper that names no tools is handed none.
+          targetTools: ['shell'],
         },
         {} as any,
       );
       expect(result).toContain('created');
       expect(result).toContain('shell-wrapper');
+    });
+
+    it('rejects a tool-wrapper created with no targetTools', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'unscoped-wrapper',
+          name: 'Unscoped',
+          description: 'Names no tools',
+          systemPrompt: 'You are unscoped.',
+          kind: 'tool-wrapper',
+        },
+        {} as any,
+      );
+      expect(result).toContain('must declare targetTools');
+    });
+
+    it('leaves persona alone — it never reaches buildChildTools', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'a-persona',
+          name: 'Persona',
+          description: 'No tools named, and that is fine',
+          systemPrompt: 'You are a persona.',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
     });
 
     it('creates specialist with kind meta', async () => {
@@ -716,6 +747,7 @@ describe('createSpecialistTool', () => {
           description: 'Operates on other specialists',
           systemPrompt: 'You are a meta specialist.',
           kind: 'meta',
+          targetTools: ['specialist'],
         },
         {} as any,
       );
@@ -802,10 +834,37 @@ describe('createSpecialistTool', () => {
       vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(baseSpecialist));
 
       const result = await tool.execute(
-        { action: 'update', id: 'shell-wrapper', kind: 'tool-wrapper' },
+        // Promotion must supply the scope in the same call — `baseSpecialist`
+        // carries no targetTools, and a wrapper naming none is inert (#331).
+        { action: 'update', id: 'shell-wrapper', kind: 'tool-wrapper', targetTools: ['shell'] },
         {} as any,
       );
       expect(result).toContain('updated');
+    });
+
+    it('rejects promotion to tool-wrapper when the merged record names no tools', () => {
+      // The #331 combination: a persona promoted to a wrapper without also
+      // supplying targetTools would be created happily and then do nothing,
+      // because `buildChildTools` now hands it an empty registry.
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({ ...baseSpecialist, kind: 'persona', targetTools: undefined }),
+      );
+
+      return expect(
+        tool.execute({ action: 'update', id: 'shell-wrapper', kind: 'tool-wrapper' }, {} as any),
+      ).resolves.toContain('must declare targetTools');
+    });
+
+    it('rejects clearing targetTools on an existing wrapper', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({ ...baseSpecialist, kind: 'tool-wrapper', targetTools: ['shell'] }),
+      );
+
+      return expect(
+        tool.execute({ action: 'update', id: 'shell-wrapper', targetTools: [] }, {} as any),
+      ).resolves.toContain('must declare targetTools');
     });
 
     it('updates targetTools field', async () => {

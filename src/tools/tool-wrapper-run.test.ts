@@ -48,8 +48,8 @@ vi.mock('./agent-pool.js', async (importOriginal) => {
   const actual = (await importOriginal()) as any;
   return {
     ...actual,
-    acquireSlot: vi.fn(() => ({ id: 1 })),
-    releaseSlot: vi.fn(),
+    // `withSlot` owns acquire+release since #317; the mock runs the body.
+    withSlot: vi.fn((fn: (slot: { id: number }) => Promise<unknown>) => fn({ id: 1 })),
     getMaxConcurrentAgents: vi.fn(() => 3),
   };
 });
@@ -133,7 +133,7 @@ function makeCtx(
 }
 
 const { generateText } = await import('ai');
-const { acquireSlot, releaseSlot } = await import('./agent-pool.js');
+const { withSlot } = await import('./agent-pool.js');
 const { resolveProviderAndModel } = await import('../config.js');
 const { appendReasoningLog } = await import('../reasoning-log.js');
 const { wrapWrapperResult } = await import('../structured-output.js');
@@ -311,14 +311,17 @@ describe('buildChildTools', () => {
     web_search: { description: 'web search tool' },
   };
 
-  it('returns full registry when targetTools is undefined', () => {
+  // #331: the default used to be the ENTIRE registry, which — because the
+  // wrapper registry is built from the raw MCP bag — meant an unscoped
+  // specialist carried every connected server's full schema set.
+  it('returns no tools when targetTools is undefined', () => {
     const specialist = makeToolWrapperSpecialist({ targetTools: undefined });
-    expect(buildChildTools(specialist as any, fullRegistry)).toBe(fullRegistry);
+    expect(buildChildTools(specialist as any, fullRegistry)).toEqual({});
   });
 
-  it('returns full registry when targetTools is an empty array', () => {
+  it('returns no tools when targetTools is an empty array', () => {
     const specialist = makeToolWrapperSpecialist({ targetTools: [] });
-    expect(buildChildTools(specialist as any, fullRegistry)).toBe(fullRegistry);
+    expect(buildChildTools(specialist as any, fullRegistry)).toEqual({});
   });
 
   it('returns only the matching tools when targetTools has valid names', () => {
@@ -581,7 +584,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     correctionStore = createMockCorrectionStore();
 
     // Restore sensible defaults after clearAllMocks.
-    vi.mocked(acquireSlot).mockReturnValue({ id: 1 });
+    vi.mocked(withSlot).mockImplementation((fn) => fn({ id: 1 }));
     vi.mocked(resolveProviderAndModel).mockReturnValue({
       ok: true,
       provider: 'anthropic',
@@ -672,7 +675,8 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
 
   it('returns pool_exhausted error when no slot is available', async () => {
     specialistStore.get.mockReturnValue(makeToolWrapperSpecialist());
-    vi.mocked(acquireSlot).mockReturnValue(null);
+    // Pool full: `withSlot` runs the caller's exhaustion thunk instead of the body.
+    vi.mocked(withSlot).mockImplementation((_fn, onExhausted) => Promise.resolve(onExhausted()));
 
     const toolDef = createToolWrapperRunTool(
       makeCtx(config, options, memoryStore, specialistStore, correctionStore),
@@ -798,7 +802,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
 
   // ── Runtime error catch ──────────────────────────────────────────────────────
 
-  it('returns runtime_error and still calls releaseSlot when generateText throws', async () => {
+  it('returns runtime_error when generateText throws', async () => {
     specialistStore.get.mockReturnValue(makeToolWrapperSpecialist());
     vi.mocked(generateText).mockRejectedValue(new Error('network timeout'));
 
@@ -814,9 +818,6 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     expect(parsed.status).toBe('error');
     expect(parsed.error).toBe('runtime_error');
     expect(parsed.result).toContain('network timeout');
-
-    // finally block must fire even on throw
-    expect(vi.mocked(releaseSlot)).toHaveBeenCalledTimes(1);
   });
 
   it('logs the runtime error to the reasoning log', async () => {
@@ -837,9 +838,9 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     expect(logEntry.error).toBe('runtime_error');
   });
 
-  // ── releaseSlot always called ─────────────────────────────────────────────────
+  // ── the slot lifecycle is owned by withSlot (#317) ───────────────────────────
 
-  it('calls releaseSlot on success (finally block)', async () => {
+  it('runs the dispatch through exactly one slot on success', async () => {
     specialistStore.get.mockReturnValue(makeToolWrapperSpecialist());
     vi.mocked(generateText).mockResolvedValue({
       text: '{"status":"ok","result":"done"}',
@@ -851,10 +852,10 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     );
     await toolDef.execute({ specialistId: 'shell-wrapper', input: 'list' }, DEFAULT_EXEC_OPTIONS);
 
-    expect(vi.mocked(releaseSlot)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(withSlot)).toHaveBeenCalledTimes(1);
   });
 
-  it('calls releaseSlot exactly once whether the run succeeds or throws', async () => {
+  it('takes exactly one slot per run whether it succeeds or throws', async () => {
     specialistStore.get.mockReturnValue(makeToolWrapperSpecialist());
 
     // Run 1 – success
@@ -877,6 +878,8 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
       DEFAULT_EXEC_OPTIONS,
     );
 
-    expect(vi.mocked(releaseSlot)).toHaveBeenCalledTimes(2);
+    // Release is `withSlot`'s `finally` now, so acquire/release can no longer
+    // drift — what is left worth pinning is that each run takes exactly one.
+    expect(vi.mocked(withSlot)).toHaveBeenCalledTimes(2);
   });
 });
