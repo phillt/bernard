@@ -21,6 +21,7 @@ import {
   compressHistory,
   truncateToolResults,
   estimateHistoryTokens,
+  estimatePrefixTokens,
   emergencyTruncate,
   isTokenOverflowError,
   getContextWindow,
@@ -152,11 +153,12 @@ export class Agent {
    * depends on and `main.tool-block-stability.test.ts` pins — so re-measuring
    * per turn would pay an O(schema-size) conversion for an unchanging number.
    *
-   * `undefined` until that first dispatch returns — deliberately a distinct
-   * sentinel from `0`, so a definition that genuinely carries no tools is not
-   * re-measured on every turn. Treated as `0` by consumers, which is correct
-   * rather than merely tolerable: they are all context-overflow paths, and a
-   * session with no dispatches yet has no history to overflow with.
+   * `undefined` until that first dispatch returns, which is correct rather than
+   * merely tolerable for a fresh session: there is no history to overflow with
+   * yet. It IS a real gap on a *resumed* session, whose turn 1 carries a full
+   * loaded history but still budgets the tool block at 0 — fixing that means
+   * measuring at tool assembly rather than off a dispatch result, which is the
+   * deeper restructure noted on #323.
    */
   private mainToolBytes: number | undefined;
   // Public so tokenStatsHook (an external module) can mutate these in place
@@ -588,7 +590,6 @@ export class Agent {
           this.config.tokenWindow,
         )
       ) {
-        printInfo('Compressing conversation context...');
         const beforeCompress = this.history;
         this.history = await compressHistory(
           this.history,
@@ -596,6 +597,11 @@ export class Agent {
           this.ragStore,
           // Count compression's off-loop LLM calls toward the per-turn ledger (#258).
           this.spinnerStats ? (rec) => recordTurnUsage(this.spinnerStats!, rec) : undefined,
+          // Announce only once compaction commits to the work. `shouldCompress`
+          // stays true after a run the reclaim floor skipped (nothing changed,
+          // so nothing re-baselines), so printing before the call would show
+          // this every turn for a compaction that never happens.
+          () => printInfo('Compressing conversation context...'),
         );
         // Re-baseline the compression trigger (#310). `lastPromptTokens` is the
         // real prompt size of the LAST call, so after a successful compaction it
@@ -712,34 +718,24 @@ export class Agent {
       // and `'auto'` turns the Qualifier escalated. Mirror the same gate here
       // so the preflight budget stays accurate.
       const reactActiveForEstimate = isReactEffective(this.config, policyResult.decision);
-      const effectiveSystemPromptChars =
+      // Everything sent alongside the history: SYSTEM prompt, the per-turn
+      // context message (moved out of SYSTEM by #172), the coordinator prompt
+      // when React is effective, and the tool block (~5.3k tokens on the main
+      // agent, omitted from this estimate entirely before #323). One number,
+      // used by both the "are we over?" test and the truncation that follows,
+      // so they cannot disagree about the budget.
+      const prefixChars =
         systemForEstimate.length +
         contextMsgChars +
-        (reactActiveForEstimate ? REACT_COORDINATOR_PROMPT.length + 2 : 0);
-      // The tool block is part of the request but not part of the history, and
-      // was omitted from this estimate entirely before #323 — ~5.3k tokens on
-      // the main agent, unaccounted for.
+        (reactActiveForEstimate ? REACT_COORDINATOR_PROMPT.length + 2 : 0) +
+        (this.mainToolBytes ?? 0);
       const estimatedTokens =
-        estimateHistoryTokens(this.history) +
-        Math.ceil((effectiveSystemPromptChars + (this.mainToolBytes ?? 0)) / 4);
+        estimateHistoryTokens(this.history) + estimatePrefixTokens(prefixChars);
       const hardLimit = contextWindow * HARD_LIMIT_RATIO;
-      // `emergencyTruncate` deducts the length of its `systemPromptStr` arg
-      // from the available budget. Pass a string that includes both the
-      // SYSTEM prompt AND the per-turn context message, otherwise post-#172
-      // truncation under-counts by the context-message size and the resulting
-      // history can still exceed the wire-payload limit.
-      const systemPlusContextForBudget =
-        systemForEstimate + (contextMsgChars > 0 ? '\n'.repeat(contextMsgChars) : '');
       let preflightTruncated = false;
       if (estimatedTokens > hardLimit) {
         printInfo('Context approaching limit, emergency truncating...');
-        this.history = emergencyTruncate(
-          this.history,
-          hardLimit,
-          systemPlusContextForBudget,
-          userInput,
-          this.mainToolBytes ?? 0,
-        );
+        this.history = emergencyTruncate(this.history, hardLimit, prefixChars, userInput);
         preflightTruncated = true;
       }
 
@@ -768,29 +764,27 @@ export class Agent {
               printInfo('Context too large, truncating and retrying...');
               // Build the effective base system prompt the same way the inner
               // iterate would: `systemForEstimate` + optional strategy suffix.
-              // Also include the per-turn context-message size so the retry
-              // budget matches the actual wire payload (issue #172 follow-up).
-              const baseSystem = iterOpts.systemSuffix
-                ? `${systemForEstimate}\n\n${iterOpts.systemSuffix}`
-                : systemForEstimate;
+              const baseSystemChars =
+                systemForEstimate.length +
+                (iterOpts.systemSuffix ? iterOpts.systemSuffix.length + 2 : 0);
               // Recompute context-message size from the live stores instead of
               // reusing the preflight value. A tool may have written a memory
               // or scratch entry between preflight and this retry; reusing
               // `contextMsgChars` would under-count and leave the retry payload
               // over the wire limit.
               const retryContextMsgs = buildMainContextMessages(this.ctx, inputBase);
-              const retryContextMsgChars = retryContextMsgs.reduce(
-                (n, m) => n + (typeof m.content === 'string' ? m.content.length : 0),
-                0,
-              );
-              const baseSystemPlusContext =
-                baseSystem + (retryContextMsgChars > 0 ? '\n'.repeat(retryContextMsgChars) : '');
+              const retryPrefixChars =
+                baseSystemChars +
+                retryContextMsgs.reduce(
+                  (n, m) => n + (typeof m.content === 'string' ? m.content.length : 0),
+                  0,
+                ) +
+                (this.mainToolBytes ?? 0);
               this.history = emergencyTruncate(
                 this.history,
                 contextWindow * retryRatio,
-                baseSystemPlusContext,
+                retryPrefixChars,
                 userInput,
-                this.mainToolBytes ?? 0,
               );
               result = await inner(innerOpts);
             } else {
@@ -990,8 +984,6 @@ export class Agent {
         };
 
       const runOut = await runDefinition(this.ctx, mainAgentDefinition, input, {
-        // Session-stable, so measure on the first dispatch only (#323).
-        measureToolBytes: this.mainToolBytes === undefined,
         abortSignal: this.abortController!.signal,
         seedMessages: () => this.history,
         planStore: this.planStore,
@@ -1014,7 +1006,8 @@ export class Agent {
         },
       });
       const result = runOut.result;
-      if (runOut.toolBytes !== undefined) this.mainToolBytes = runOut.toolBytes;
+      // Session-stable, so pay the measurement on the first dispatch only.
+      this.mainToolBytes ??= runOut.toolBytes();
 
       // Track token usage for compression decisions — use last step's prompt tokens
       // (result.usage.promptTokens is the aggregate across ALL steps, not the last step)

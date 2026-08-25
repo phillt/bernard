@@ -65,9 +65,7 @@ vi.mock('./context.js', () => ({
   truncateToolResults: vi.fn((messages: any) => messages),
   estimateHistoryTokens: vi.fn(() => 1000),
   emergencyTruncate: vi.fn((history: any) => history),
-  // Imported by `framework/agents/run.ts` since #323 — the tool block is a
-  // budget input, not just a debug log line.
-  toolBlockBytes: vi.fn(() => 0),
+  estimatePrefixTokens: vi.fn((chars: number) => Math.ceil(chars / 4)),
   isTokenOverflowError: vi.fn(() => false),
   getContextWindow: vi.fn(() => 200_000),
   extractText: vi.fn((msg: any) => {
@@ -80,6 +78,12 @@ const mockExtractRecentUserTexts = vi.fn((): string[] => []);
 const mockExtractRecentToolContext = vi.fn((): string => '');
 const mockBuildRAGQuery = vi.fn((input: string) => input);
 const mockApplyStickiness = vi.fn((results: any) => results);
+// `toolBlockBytes` lives in a leaf module so the framework runner needn't
+// import the whole context layer (#323).
+vi.mock('./tool-bytes.js', () => ({
+  toolBlockBytes: vi.fn(() => 0),
+}));
+
 vi.mock('./rag-query.js', () => ({
   extractRecentUserTexts: (...args: any[]) => mockExtractRecentUserTexts(...args),
   extractRecentToolContext: (...args: any[]) => mockExtractRecentToolContext(...args),
@@ -706,7 +710,7 @@ describe('Agent', () => {
     // The main tool set is session-stable (the invariant the prompt cache
     // relies on), and measuring converts every schema — so paying per turn
     // would buy an unchanging number at O(schema size) each time.
-    const { toolBlockBytes } = await import('./context.js');
+    const { toolBlockBytes } = await import('./tool-bytes.js');
     (toolBlockBytes as unknown as ReturnType<typeof vi.fn>).mockClear();
     mockGenerateText.mockResolvedValue({
       response: { messages: [{ role: 'assistant', content: 'Hi!' }] },

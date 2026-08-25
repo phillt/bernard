@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { CoreMessage } from 'ai';
 import { z } from 'zod';
+import { toolBlockBytes } from './tool-bytes.js';
 import {
   getContextWindow,
   shouldCompress,
@@ -12,7 +13,6 @@ import {
   truncateToolResults,
   estimateHistoryTokens,
   emergencyTruncate,
-  toolBlockBytes,
   isTokenOverflowError,
   MODEL_CONTEXT_WINDOWS,
   DEFAULT_CONTEXT_WINDOW,
@@ -35,6 +35,9 @@ vi.mock('./providers/index.js', () => ({
 
 vi.mock('./logger.js', () => ({
   debugLog: vi.fn(),
+  // `compressHistory` gates its reclaim accounting on this (#310). Left ON so
+  // the debug-only branch is exercised rather than skipped in every test.
+  isDebugEnabled: vi.fn(() => true),
 }));
 
 const mockGenerateText = vi.fn();
@@ -818,6 +821,14 @@ describe('toolBlockBytes', () => {
 });
 
 describe('emergencyTruncate', () => {
+  /**
+   * Stand-in prefix size. Since #323 the parameter is a character COUNT of
+   * everything sent alongside the history (system prompt + context message +
+   * tool block), not a string the function measures — so these tests name a
+   * size rather than pretending to pass a prompt.
+   */
+  const SYSTEM_CHARS = 13;
+
   it('drops oldest messages until under budget', () => {
     const history: CoreMessage[] = [];
     for (let i = 0; i < 20; i++) {
@@ -825,7 +836,7 @@ describe('emergencyTruncate', () => {
       history.push({ role: 'assistant', content: `response ${i} ${'y'.repeat(1000)}` });
     }
     // Small budget that can't fit everything
-    const result = emergencyTruncate(history, 5000, 'system prompt');
+    const result = emergencyTruncate(history, 5000, SYSTEM_CHARS);
     expect(result.length).toBeLessThan(history.length);
     // Should have truncation notice
     expect(result[0].content).toContain('truncated to fit context window');
@@ -838,23 +849,12 @@ describe('emergencyTruncate', () => {
       history.push({ role: 'user', content: `message ${i} ${'x'.repeat(1000)}` });
       history.push({ role: 'assistant', content: `response ${i} ${'y'.repeat(1000)}` });
     }
-    const withoutTools = emergencyTruncate(history, 5000, 'system prompt');
+    const withoutTools = emergencyTruncate(history, 5000, SYSTEM_CHARS);
     // ~21k chars is the real main-agent tool block — ~5.3k tokens that the
     // budget silently ignored before this change, on the one path that runs
     // *because* a token limit was already exceeded.
-    const withTools = emergencyTruncate(history, 5000, 'system prompt', undefined, 21_000);
+    const withTools = emergencyTruncate(history, 5000, SYSTEM_CHARS + 21_000);
     expect(withTools.length).toBeLessThan(withoutTools.length);
-  });
-
-  it('defaults to charging nothing, so callers with no tool block are unaffected', () => {
-    const history: CoreMessage[] = [];
-    for (let i = 0; i < 20; i++) {
-      history.push({ role: 'user', content: `message ${i} ${'x'.repeat(1000)}` });
-      history.push({ role: 'assistant', content: `response ${i} ${'y'.repeat(1000)}` });
-    }
-    const omitted = emergencyTruncate(history, 5000, 'system prompt', 'task');
-    const explicitZero = emergencyTruncate(history, 5000, 'system prompt', 'task', 0);
-    expect(explicitZero).toEqual(omitted);
   });
 
   it('still keeps the floor of 6 messages when tools alone blow the budget', () => {
@@ -865,7 +865,7 @@ describe('emergencyTruncate', () => {
     }
     // Tool block exceeds the whole budget → historyBudget <= 0. The floor has
     // to hold, or an over-budget tool block would leave the model with nothing.
-    const result = emergencyTruncate(history, 100, 'system', undefined, 500_000);
+    const result = emergencyTruncate(history, 100, SYSTEM_CHARS + 500_000);
     expect(result.length).toBeGreaterThanOrEqual(8);
     expect(result[result.length - 1].content).toContain('resp 9');
   });
@@ -877,7 +877,7 @@ describe('emergencyTruncate', () => {
       history.push({ role: 'assistant', content: `resp ${i} ${'y'.repeat(5000)}` });
     }
     // Very small budget
-    const result = emergencyTruncate(history, 100, 'system');
+    const result = emergencyTruncate(history, 100, SYSTEM_CHARS);
     // notice + ack + at least 6 original messages
     expect(result.length).toBeGreaterThanOrEqual(8);
     // Last two messages from original should be present
@@ -891,7 +891,7 @@ describe('emergencyTruncate', () => {
       history.push({ role: 'user', content: `msg ${i} ${'x'.repeat(1000)}` });
       history.push({ role: 'assistant', content: `resp ${i}` });
     }
-    const result = emergencyTruncate(history, 2000, 'system');
+    const result = emergencyTruncate(history, 2000, SYSTEM_CHARS);
     expect(result[0].role).toBe('user');
     expect(result[0].content).toContain('truncated to fit context window');
     expect(result[1].role).toBe('assistant');
@@ -903,7 +903,7 @@ describe('emergencyTruncate', () => {
       { role: 'user', content: 'hi' },
       { role: 'assistant', content: 'hello' },
     ];
-    const result = emergencyTruncate(history, 100_000, 'system');
+    const result = emergencyTruncate(history, 100_000, SYSTEM_CHARS);
     expect(result).toEqual(history);
   });
 
@@ -928,7 +928,7 @@ describe('emergencyTruncate', () => {
     ];
 
     // Budget that can't fit everything but can fit the last few messages
-    const result = emergencyTruncate(history, 3000, 'system prompt');
+    const result = emergencyTruncate(history, 3000, SYSTEM_CHARS);
 
     // Filter out the synthetic notice/ack pair
     const keptOriginal = result.filter(
@@ -952,7 +952,7 @@ describe('emergencyTruncate', () => {
       history.push({ role: 'user', content: `msg ${i} ${'x'.repeat(1000)}` });
       history.push({ role: 'assistant', content: `resp ${i}` });
     }
-    const result = emergencyTruncate(history, 2000, 'system', 'please fix the login bug');
+    const result = emergencyTruncate(history, 2000, SYSTEM_CHARS, 'please fix the login bug');
     expect(result[0].content).toContain('please fix the login bug');
   });
 
@@ -962,7 +962,7 @@ describe('emergencyTruncate', () => {
       history.push({ role: 'user', content: `msg ${i} ${'x'.repeat(1000)}` });
       history.push({ role: 'assistant', content: `resp ${i}` });
     }
-    const result = emergencyTruncate(history, 2000, 'system');
+    const result = emergencyTruncate(history, 2000, SYSTEM_CHARS);
     expect(result[0].content).not.toContain('most recent request');
   });
 
@@ -987,7 +987,7 @@ describe('emergencyTruncate', () => {
     ];
 
     // Tiny budget forces min-keep (last 2 messages)
-    const result = emergencyTruncate(history, 100, 'system');
+    const result = emergencyTruncate(history, 100, SYSTEM_CHARS);
     // Should include at least the truncation notice pair + kept messages
     expect(result.length).toBeGreaterThanOrEqual(4);
     // The first kept original message should be a user, found by backward scan

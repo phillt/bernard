@@ -9,11 +9,7 @@ import {
   type ToolCallRepairFunction,
 } from 'ai';
 import { debugLog, isDebugEnabled } from '../logger.js';
-// `toolBlockBytes` lives in `context.ts` (#323): that module owns "how big is
-// what we're about to send", and the tool block is a real budget input there —
-// not just a log line. The runner stays a caller, keeping the O(schema-size)
-// conversion behind its own debug gate.
-import { toolBlockBytes } from '../context.js';
+import { toolBlockBytes } from '../tool-bytes.js';
 import type { AgentHook, StepFinishPayload } from './hooks/types.js';
 import { runWithDispatchId } from './dispatch-context.js';
 import { normalizeUsage } from './hooks/token-stats.js';
