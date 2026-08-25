@@ -13,6 +13,7 @@ import { toolBlockBytes } from '../tool-bytes.js';
 import type { AgentHook, StepFinishPayload } from './hooks/types.js';
 import { runWithDispatchId } from './dispatch-context.js';
 import { normalizeUsage } from './hooks/token-stats.js';
+import { DISPATCH_ABORT_NAME } from '../error-taxonomy.js';
 
 const WATCHDOG_INTERVAL_MS = 30_000;
 
@@ -326,8 +327,11 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
   // active.
   const timeoutMs = parseDispatchTimeoutMs();
   let timeoutHandle: NodeJS.Timeout | null = null;
-  let timedOut = false;
-  let stalledMs: number | null = null;
+  // One variable, not a flag per reason: the catch used to re-derive the choice
+  // with a branch per source, and stall unconditionally won even when the
+  // dispatch timer had fired first. `??=` reports whichever actually caused the
+  // abort, and a third reason needs no new arm.
+  let selfAbortMessage: string | null = null;
   let effectiveSignal = spec.abortSignal;
   let abortChained: (() => void) | null = null;
   if (timeoutMs !== null || stallMs !== null) {
@@ -346,7 +350,7 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
         model: modelId,
         ms: timeoutMs,
       });
-      timedOut = true;
+      selfAbortMessage ??= `Dispatch timed out after ${timeoutMs} ms (BERNARD_DISPATCH_TIMEOUT_MS)`;
       abortChained?.();
     }, timeoutMs);
     timeoutHandle.unref?.();
@@ -354,10 +358,21 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
 
   // Watchdog. No longer debug-gated: with `stallMs` it is the thing that ends a
   // dead stream, and gating it on debug would mean the guard protects only
-  // sessions someone already suspected — never the unattended cron run at 3am
-  // that needs it most. Still `unref()`ed, so it cannot hold the event loop
-  // open, and it does nothing but compare two numbers. Cleared in the finally
-  // block whether the dispatch ends, errors, or aborts.
+  // sessions someone already suspected. Still `unref()`ed, so it cannot hold
+  // the event loop open, and it does nothing but compare two numbers. Cleared
+  // in the finally block whether the dispatch ends, errors, or aborts.
+  //
+  // SCOPE, precisely: `useStreaming` is `sink !== null` (`agents/run.ts`), and
+  // the sink is registered only by `<App>`. `streaming: true` is declared on
+  // exactly one definition, `main`. So this guard covers the main agent in a
+  // mounted Ink REPL and NOTHING else — not cron, sub-agents, tool wrappers,
+  // PAC phases, or delegate helpers, all of which are non-streaming and get
+  // `stallMs === null`. That is the opposite of where an unattended hang
+  // hurts most, and it is a property of the layer, not an oversight: a
+  // per-part clock can only exist where parts exist. Covering the rest means
+  // moving body-inactivity detection down to `providers/stall-guard.ts`,
+  // which already wraps every client's `fetch` for the first-byte case —
+  // filed as a follow-up.
   const watchdog =
     debug || stallMs !== null
       ? setInterval(() => {
@@ -381,7 +396,9 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
               sinceLastProgressMs: sinceProgress,
               stepsCompleted,
             });
-            stalledMs = sinceProgress;
+            selfAbortMessage ??=
+              `Provider stream timed out — no data received for ${sinceProgress} ms ` +
+              `(BERNARD_STREAM_STALL_TIMEOUT_MS)`;
             abortChained?.();
           }
         }, watchdogIntervalMs(stallMs))
@@ -411,24 +428,19 @@ async function runAgentInner(spec: AgentSpec, dispatchId: string): Promise<Agent
     // (`this.abortController.signal.aborted` stays false) and would render a
     // bare "Agent error: Aborted" — i.e. nothing, since the REPL treats aborts
     // as "user pressed Esc". Re-shape into a self-describing error here, where
-    // the context still exists. Both messages say "timed out" so
-    // `error-taxonomy.ts` classifies them as `timeout` without new vocabulary.
+    // the context still exists. The message says "timed out" so
+    // `error-taxonomy.ts` categorises it as `timeout` without new vocabulary;
+    // the NAME is what marks it as ours, since a provider's own network
+    // timeout says the same thing and is a retryable work failure.
     const ourAbort =
       err instanceof Error && err.name === 'AbortError' && !spec.abortSignal?.aborted;
-    let wrapped = err;
-    if (ourAbort && stalledMs !== null) {
-      wrapped = new Error(
-        `Provider stream timed out — no data received for ${stalledMs} ms ` +
-          `(BERNARD_STREAM_STALL_TIMEOUT_MS)`,
-        { cause: err },
-      );
-    } else if (ourAbort && timedOut) {
-      wrapped = new Error(
-        `Dispatch timed out after ${timeoutMs} ms (BERNARD_DISPATCH_TIMEOUT_MS)`,
-        {
-          cause: err,
-        },
-      );
+    let wrapped: unknown = err;
+    if (ourAbort && selfAbortMessage) {
+      const self = new Error(selfAbortMessage, { cause: err });
+      // Names it as ours so `isDispatchCancellation` can tell this from a
+      // provider's (retryable) network timeout without reading the message.
+      self.name = DISPATCH_ABORT_NAME;
+      wrapped = self;
     }
     debugLog('agent:dispatch:error', {
       dispatchId,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyError, isDispatchCancellation } from './error-taxonomy.js';
+import { classifyError, isDispatchCancellation, DISPATCH_ABORT_NAME } from './error-taxonomy.js';
 
 describe('classifyError', () => {
   describe('HTTP status mapping', () => {
@@ -198,13 +198,20 @@ describe('isDispatchCancellation', () => {
     expect(isDispatchCancellation(err)).toBe(true);
   });
 
-  it('recognizes the runner’s own stall and timeout errors', () => {
-    expect(
-      isDispatchCancellation(
-        new Error('Provider stream timed out — no data received for 120000 ms'),
-      ),
-    ).toBe(true);
-    expect(isDispatchCancellation(new Error('Dispatch timed out after 60000 ms'))).toBe(true);
+  it('recognizes an abort the runner fired itself, by name', () => {
+    const own = new Error('Provider stream timed out — no data received for 120000 ms');
+    own.name = DISPATCH_ABORT_NAME;
+    expect(isDispatchCancellation(own)).toBe(true);
+  });
+
+  it('does NOT treat a provider timeout as a cancellation', () => {
+    // The taxonomy marks `timeout` as retryable — a provider network blip is
+    // exactly the failure a model should be told about and work around, not a
+    // reason to unwind the whole turn. Keying on the message conflated the two,
+    // since our own messages also say "timed out".
+    const providerTimeout = new Error('network timeout');
+    expect(classifyError({ message: providerTimeout.message }).category).toBe('timeout');
+    expect(isDispatchCancellation(providerTimeout)).toBe(false);
   });
 
   it('sees through the AI SDK wrapping a re-thrown tool error (#327)', () => {
@@ -218,6 +225,15 @@ describe('isDispatchCancellation', () => {
     wrapped.name = 'AI_ToolExecutionError';
     expect(classifyError({ message: wrapped.message }).category).toBe('unknown');
     expect(isDispatchCancellation(wrapped)).toBe(true);
+
+    // Same for one the runner fired itself.
+    const ownCause = new Error('Dispatch timed out after 60000 ms');
+    ownCause.name = DISPATCH_ABORT_NAME;
+    const wrappedOwn = new Error('Error executing tool agent: Dispatch timed out', {
+      cause: ownCause,
+    });
+    wrappedOwn.name = 'AI_ToolExecutionError';
+    expect(isDispatchCancellation(wrappedOwn)).toBe(true);
   });
 
   it('terminates on a cyclic cause chain', () => {

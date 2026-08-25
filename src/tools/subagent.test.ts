@@ -196,10 +196,10 @@ describe('subagent tool', () => {
     expect(getActiveCount()).toBe(0);
   });
 
-  it('re-throws a dispatch timeout — the parent has no better move than we made', async () => {
-    mockGenerateText.mockRejectedValue(
-      new Error('Provider stream timed out — no data received for 120000 ms'),
-    );
+  it('re-throws an abort the runner fired itself', async () => {
+    const own = new Error('Provider stream timed out — no data received for 120000 ms');
+    own.name = 'DispatchAbortError';
+    mockGenerateText.mockRejectedValue(own);
     const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
     await expect(
       agentTool.execute!(

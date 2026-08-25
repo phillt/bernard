@@ -227,33 +227,47 @@ function isShellContext(toolName?: string): boolean {
 }
 
 /**
+ * `Error.name` the runner stamps on an abort it fired itself — the mid-stream
+ * stall guard (#325) and `BERNARD_DISPATCH_TIMEOUT_MS`.
+ *
+ * A distinct name is required because the two obvious alternatives each fail.
+ * It cannot be `AbortError`: the REPL renders nothing for those, treating them
+ * as "user pressed Esc", so the turn would vanish silently (#302's lesson).
+ * And it cannot be recognised from the message: our messages say "timed out"
+ * so `classifyError` categorises them for free, but so does a provider's
+ * network timeout — and the taxonomy itself marks `timeout` as
+ * `retryable: true`, i.e. exactly the kind of failure a model SHOULD see and
+ * work around. Keying on the message conflated the two and unwound whole turns
+ * over a transient network blip.
+ */
+export const DISPATCH_ABORT_NAME = 'DispatchAbortError';
+
+/**
  * Does this error mean the dispatch was *cancelled*, rather than that the work
  * *failed*? (#327)
  *
- * The three child-dispatch tool boundaries — `subagent`, `specialist-run`,
- * `delegate-dispatch` — catch everything and return the message as a string.
- * That is right for a genuine work failure: a failed MCP call IS a legitimate
- * tool result the model should see and react to, and stringifying it preserves
- * the useful behaviour where a model recovers from a failed sub-task on its
- * own. It is wrong for a cancellation, which reaches the parent as a
- * successful tool result the model reads as data and loops on — most visibly
- * turning a user's Esc into `Sub-agent error: Aborted` while the parent keeps
- * running until its own signal trips.
+ * The five child-dispatch tool boundaries — `subagent`, `specialist-run`,
+ * `delegate-dispatch`, `task`, `tool-wrapper-run` — catch everything and
+ * return the message as a string. That is right for a genuine work failure: a
+ * failed MCP call IS a legitimate tool result the model should see and react
+ * to, and stringifying it preserves the useful behaviour where a model
+ * recovers from a failed sub-task on its own. It is wrong for a cancellation,
+ * which reaches the parent as a *successful* tool result the model reads as
+ * data and loops on — most visibly turning a user's Esc into
+ * `Sub-agent error: Aborted` while the parent keeps running until its own
+ * signal trips.
  *
- * Two shapes qualify, and both mean "something outside the work stopped it":
+ * Two names qualify, and both mean "something outside the work stopped it":
+ * a real `AbortError` (the user's signal, or a provider-side cancellation),
+ * and {@link DISPATCH_ABORT_NAME} (an abort the runner itself fired). Note
+ * `classifyError` cannot answer even the first — a `DOMException` named
+ * `AbortError` carries the message `"Aborted"`, which matches neither
+ * `\bcancelled\b` nor `aborted by user`, so it classifies as `unknown`.
  *
- * - **An `AbortError`.** Either the user's signal or a provider-side
- *   cancellation. `classifyError` cannot answer this — a `DOMException` named
- *   `AbortError` carries the message `"Aborted"`, which matches neither
- *   `\bcancelled\b` nor `aborted by user`, so it classifies as `unknown`.
- * - **A `timeout`.** At *this* boundary a timeout is always the runner or the
- *   provider giving up (the dispatch stall guard, `BERNARD_DISPATCH_TIMEOUT_MS`,
- *   or the first-byte guard) — never a tool-level one like `shellTimeout`,
- *   which is caught inside the tool and returned as a formatted result rather
- *   than thrown. Handing these back as a string is what makes a stalled child
- *   satisfy "the parent is unblocked" only in the weak sense: the parent has no
- *   better decision available than the one we already made, and retrying a
- *   provider that just went dark is strictly worse than unwinding.
+ * Deliberately NOT "any timeout". At this boundary our own timeouts are
+ * covered by the name; a *provider's* timeout is a retryable work failure
+ * (`RETRYABLE` includes `timeout`) that the model should be told about rather
+ * than have the turn unwound over.
  */
 export function isDispatchCancellation(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -262,23 +276,16 @@ export function isDispatchCancellation(err: unknown): boolean {
   // is wrapped in `ToolExecutionError` (`name: 'AI_ToolExecutionError'`,
   // message `Error executing tool <name>: <cause message>`) — on the
   // non-streaming path directly, on the streaming path via an `error` part
-  // that `runStreaming` re-throws.
-  //
-  // Reachable today as main → `agent` → `delegate_<server>`: sub-agents carry
-  // delegate tools, so a delegate helper's dispatch runs inside a sub-agent's.
-  // A *timeout* survives the wrap for free, since the cause's message is
-  // interpolated into the wrapper's and still matches. An `AbortError` does
-  // not: the wrapper's name is its own, and the cause's message is the bare
-  // `"Aborted"`, which matches neither `\bcancelled\b` nor `aborted by user`
-  // and so classifies as `unknown`. Without the walk a user's Esc stops
-  // propagating after exactly one level — #327's bug, one frame up.
+  // that `runStreaming` re-throws. Reachable today as main → `agent` →
+  // `delegate_<server>`, since sub-agents carry delegate tools; without the
+  // walk a cancellation stops propagating after exactly one level.
   //
   // Bounded rather than `while (cause)`: an error chain is attacker-adjacent
   // input (providers and MCP servers build these) and a cycle would hang the
   // catch handler. Eight is far past any real nesting here.
   for (let e: Error | undefined = err, depth = 0; e && depth < 8; depth++) {
-    if (e.name === 'AbortError') return true;
+    if (e.name === 'AbortError' || e.name === DISPATCH_ABORT_NAME) return true;
     e = e.cause instanceof Error ? e.cause : undefined;
   }
-  return classifyError({ message: err.message }).category === 'timeout';
+  return false;
 }
