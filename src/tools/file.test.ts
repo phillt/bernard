@@ -249,6 +249,126 @@ describe('file_read_lines', () => {
 
 // ── file_edit_lines tool ────────────────────────────────────────────
 
+describe('file_write', () => {
+  let tools: ReturnType<typeof createFileTools>;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    tools = createFileTools();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-file-write-test-'));
+  });
+
+  afterEach(async () => {
+    const fs = await import('node:fs');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  async function readTestFile(name: string): Promise<string> {
+    const fs = await import('node:fs');
+    return fs.readFileSync(path.join(tmpDir, name), 'utf-8');
+  }
+
+  it('creates a new file and reports created: true', async () => {
+    const target = path.join(tmpDir, 'new.txt');
+    const result = (await tools.file_write.execute!(
+      { path: target, content: 'hello\nworld\n' },
+      {} as any,
+    )) as any;
+    expect(result).not.toHaveProperty('error');
+    expect(result.created).toBe(true);
+    expect(result.path).toBe(target);
+    expect(result.bytes).toBe(12);
+    expect(await readTestFile('new.txt')).toBe('hello\nworld\n');
+  });
+
+  it('replaces an existing file and reports created: false', async () => {
+    const fs = await import('node:fs');
+    const target = path.join(tmpDir, 'existing.txt');
+    fs.writeFileSync(target, 'old content');
+    const result = (await tools.file_write.execute!(
+      { path: target, content: 'new content' },
+      {} as any,
+    )) as any;
+    expect(result.created).toBe(false);
+    expect(await readTestFile('existing.txt')).toBe('new content');
+  });
+
+  it('authors a multi-KB payload in one call', async () => {
+    // The reason the tool exists (#342): the agent previously had to degrade to
+    // shell heredocs and chunked line-edits, which produced duplicate closing
+    // tags it then had to repair.
+    const big = '<section>x</section>\n'.repeat(500);
+    const target = path.join(tmpDir, 'report.html');
+    const result = (await tools.file_write.execute!(
+      { path: target, content: big },
+      {} as any,
+    )) as any;
+    expect(result).not.toHaveProperty('error');
+    expect(await readTestFile('report.html')).toBe(big);
+  });
+
+  it('refuses a missing parent directory unless create_dirs is set', async () => {
+    const target = path.join(tmpDir, 'nested', 'deep', 'f.txt');
+    const refused = (await tools.file_write.execute!(
+      { path: target, content: 'x' },
+      {} as any,
+    )) as any;
+    expect(refused.error).toContain('Parent directory does not exist');
+    expect(refused.error).toContain('create_dirs');
+
+    const created = (await tools.file_write.execute!(
+      { path: target, content: 'x', create_dirs: true },
+      {} as any,
+    )) as any;
+    expect(created).not.toHaveProperty('error');
+    expect(created.created).toBe(true);
+  });
+
+  it('refuses to write over a directory', async () => {
+    const fs = await import('node:fs');
+    const target = path.join(tmpDir, 'adir');
+    fs.mkdirSync(target);
+    const result = (await tools.file_write.execute!(
+      { path: target, content: 'x' },
+      {} as any,
+    )) as any;
+    expect(result.error).toContain('is a directory');
+  });
+
+  it('writes empty content without error', async () => {
+    const target = path.join(tmpDir, 'empty.txt');
+    const result = (await tools.file_write.execute!(
+      { path: target, content: '' },
+      {} as any,
+    )) as any;
+    expect(result).not.toHaveProperty('error');
+    expect(result.bytes).toBe(0);
+    expect(result.total_lines).toBe(0);
+    expect(await readTestFile('empty.txt')).toBe('');
+  });
+
+  it('leaves no .tmp files behind', async () => {
+    const fs = await import('node:fs');
+    await tools.file_write.execute!({ path: path.join(tmpDir, 'a.txt'), content: 'a' }, {} as any);
+    expect(fs.readdirSync(tmpDir).filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
+  });
+
+  it('round-trips with file_edit_lines for chunked authoring', async () => {
+    // file_edit_lines errors on a nonexistent path, so it cannot bootstrap a
+    // file on its own — which is why chunked authoring needed file_write.
+    const target = path.join(tmpDir, 'chunked.txt');
+    await tools.file_write.execute!({ path: target, content: 'part one\n' }, {} as any);
+    const appended = (await tools.file_edit_lines.execute!(
+      { path: target, edits: [{ action: 'append', content: 'part two' }] },
+      {} as any,
+    )) as any;
+    expect(appended).not.toHaveProperty('error');
+    expect(await readTestFile('chunked.txt')).toContain('part two');
+  });
+});
+
 describe('file_edit_lines', () => {
   let tools: ReturnType<typeof createFileTools>;
   let tmpDir: string;

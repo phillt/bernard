@@ -166,10 +166,12 @@ describe('cron participates in MCP delegation (#315)', () => {
       expect(names).toContain(t);
     }
     // Withheld deliberately: a default cron job denies write-shaped `shell`
-    // (dangerous → high risk) but would pass `file_edit_lines` (write/local →
-    // medium) unprompted, so folding it in would hand every existing job an
-    // unbounded filesystem write through the one door that isn't gated.
+    // (dangerous → high risk) but would pass these (write/local → medium)
+    // unprompted, so folding them in would hand every existing job an unbounded
+    // filesystem write through the one door that isn't gated. `file_write`
+    // (#342) is the stronger case — it can create files, not just edit them.
     expect(names).not.toContain('file_edit_lines');
+    expect(names).not.toContain('file_write');
     // `cite` is provenance-gated in `createTools`, and this fixture carries no
     // store — so its absence here IS the gate working. Cron passes
     // `ctx.provenance` now (it previously passed none to anything), so in a real
