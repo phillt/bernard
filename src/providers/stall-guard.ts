@@ -1,4 +1,5 @@
 import { debugLog } from '../logger.js';
+import { countProviderRequest } from './request-counter.js';
 
 /**
  * Default time-to-first-byte budget for an LLM completion, in milliseconds.
@@ -89,6 +90,10 @@ export function stallGuardedFetch(
     //    so a value in `~/.config/bernard/.env` had no effect and only a real
     //    shell export worked. Every other knob here reads lazily.
     const fetchImpl = baseFetch ?? globalThis.fetch;
+    // Before the off-switch below: this wrapper is the only always-installed
+    // layer under the SDK's retry loop, so disabling the stall guard must not
+    // also disable request accounting (#308).
+    countProviderRequest();
     const timeoutMs = getTimeoutMs();
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return fetchImpl(input, init);
 

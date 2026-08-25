@@ -312,6 +312,23 @@ function lineupProviders(lineup: Lineup): string[] {
 }
 
 /**
+ * Providers this session actually depends on: the configured default plus every
+ * provider bound to a slot of the active lineup.
+ *
+ * Lives here rather than at the call site because "which providers is this
+ * session using" is a model-policy question — this module already owns per-site
+ * provider resolution and lineup loading. The UI asks; it does not decide.
+ *
+ * Known gap: a specialist with a persisted `provider` pin can pull in a provider
+ * outside the lineup (see the off-lineup pin guard below), and reading the
+ * specialist store from here would mean taking a store handle. So a catalog wipe
+ * of a provider used *only* by such a pin is still silent (#306).
+ */
+export function providersInUse(config: BernardConfig): string[] {
+  return [...new Set([config.provider, ...lineupProviders(loadActiveLineup(config))])];
+}
+
+/**
  * Sites that historically forced `temperature: 0` via the ad-hoc
  * `temperatureParam(...)` spread (now retired). To keep "absent slot params =
  * today's behavior, byte-for-byte" (issue #286 acceptance criterion), we

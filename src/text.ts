@@ -11,6 +11,29 @@ export function truncate(s: string, max: number): string {
 }
 
 /**
+ * `n === 1 ? one : many`. Trivial, but it was being written inline in 14+
+ * renderers with three different spellings, and two more copies landed in a
+ * single changeset before this existed. Same rationale as {@link truncate}:
+ * one spelling beats fourteen drifting ones.
+ */
+export function plural(n: number, one: string, many: string): string {
+  return n === 1 ? one : many;
+}
+
+/**
+ * `a, b, c +N more` — a bounded preview of a list that could be long.
+ *
+ * The third private copy of this idea prompted the move here; the other two
+ * (`sampleNames` in `tools/mcp-verify.ts`, the inline pair in `tools/delegate.ts`)
+ * predate it and each render a different format. New callers should use this.
+ */
+export function nameList(names: string[], limit = 3): string {
+  const head = names.slice(0, limit).join(', ');
+  const rest = names.length - limit;
+  return rest > 0 ? `${head} +${rest} more` : head;
+}
+
+/**
  * Conservative range of C1 control characters (U+0080–U+009F).
  * These are invisible bytes that appear in strings incorrectly decoded as
  * Latin-1 (ISO-8859-1) when the content was actually UTF-8.  They never

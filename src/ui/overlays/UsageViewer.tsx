@@ -10,6 +10,7 @@ import {
   type UsageReportRow,
 } from '../../usage-report.js';
 import { sortedAggEntries, type TelemetryAgg } from '../../session-telemetry.js';
+import { getProviderRequestCount } from '../../providers/request-counter.js';
 import { getThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
 import { ScrollableOverlay, type OverlayLine } from './ScrollableOverlay.js';
@@ -246,6 +247,24 @@ function appendSessionLines(
       />
     ),
   });
+
+  // Provider requests vs recorded calls (#308). The provider bills per request;
+  // Bernard accounts per recorded call. When those diverge the difference is
+  // real spend that no per-layer row below can explain — SDK retries, or calls
+  // that failed before producing a usage payload. Shown only when it exceeds
+  // the recorded count, so a healthy session stays uncluttered.
+  const attempts = getProviderRequestCount();
+  if (attempts > summary.totals.calls) {
+    lines.push({
+      key: 'session-requests',
+      node: (
+        <Text color={colors.muted}>
+          {`  ${attempts} provider requests for ${summary.totals.calls} recorded calls — ` +
+            `${attempts - summary.totals.calls} billed but unaccounted (retries / failed calls)`}
+        </Text>
+      ),
+    });
+  }
 
   pushAggSection(lines, 'by-layer', 'BY LAYER', summary.byLayer, colors);
   pushAggSection(lines, 'by-model', 'BY MODEL', summary.byModel, colors);

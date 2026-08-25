@@ -44,7 +44,6 @@ vi.mock('./providers/catalog.js', () => ({
 const {
   computeTurnUsageReport,
   formatUsd,
-  formatTurnCost,
   formatCostSuffix,
   formatTiers,
   priceUsageUsd,
@@ -173,7 +172,7 @@ describe('computeTurnUsageReport (#258)', () => {
   });
 });
 
-describe('formatUsd / formatTurnCost', () => {
+describe('formatUsd / formatCostSuffix', () => {
   it('scales precision to magnitude', () => {
     expect(formatUsd(1.5)).toBe('$1.50');
     expect(formatUsd(0.07)).toBe('$0.070');
@@ -187,22 +186,6 @@ describe('formatUsd / formatTurnCost', () => {
     expect(formatCostSuffix(undefined)).toBe('');
     expect(formatCostSuffix(0)).toBe('');
     expect(formatCostSuffix(-1)).toBe('');
-  });
-
-  it('returns a ` ~$` suffix only when there is priced cost', () => {
-    expect(formatTurnCost(null)).toBe('');
-    expect(formatTurnCost(statsWith([]))).toBe('');
-    const stats = statsWith([
-      entry({
-        bucket: 'premium',
-        provider: 'anthropic',
-        modelName: 'claude-opus-4-8',
-        site: 'main',
-        promptTokens: 1000,
-        completionTokens: 100,
-      }),
-    ]);
-    expect(formatTurnCost(stats)).toMatch(/^ ~\$/);
   });
 });
 

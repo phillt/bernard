@@ -9,7 +9,7 @@
  * cross-turn sink off that single convergence point so the whole session's spend
  * survives turn resets, is broken down by layer/model/provider, and is persisted
  * to a per-session JSONL for later inspection — without duplicating pricing
- * (reuses {@link priceUsageUsd}) or the site/layer vocabulary.
+ * (reuses {@link priceUsageForRecord}) or the site/layer vocabulary.
  *
  * **Privacy**: records carry only numbers, ids, and labels — never prompt or
  * response text, tool args, or results. **Fail-open**: a fold or persist error
@@ -19,10 +19,11 @@ import type { UsageBucket } from './output.js';
 import type { UsageRecord } from './framework/hooks/token-stats.js';
 import { getCurrentDispatchIds } from './framework/dispatch-context.js';
 import { truncate } from './text.js';
-import { priceUsageUsd, formatAggCost, formatCallCost, formatTiers } from './usage-report.js';
+import { priceUsageForRecord, formatAggCost, formatCallCost, formatTiers } from './usage-report.js';
 import { formatTokenCount, formatElapsed } from './output.js';
 import { appendJsonl, readJsonlTail, listFilesByMtime, pruneFilesByMtime } from './jsonl.js';
 import { TELEMETRY_DIR, sessionTelemetryPath } from './paths.js';
+import { plural } from './text.js';
 
 /**
  * One normalized model-call telemetry record (≈ one billed AI-SDK step). No
@@ -50,9 +51,33 @@ export interface ModelCallTelemetry {
   cacheWriteTokens: number;
   /** Estimated USD (catalog pricing), or `null` when the model is uncatalogued. */
   costUsd: number | null;
+  /**
+   * Which pricing generation minted `costUsd`. Absent on records written before
+   * {@link PRICING_VERSION} existed — those predate the cache-token fix and can
+   * overstate cost by up to ~3x, which is *not* recoverable from the record
+   * (they carry `cacheReadTokens: 0` because the field was never read). Reports
+   * label such sessions rather than presenting the figure as authoritative
+   * (#309).
+   */
+  pricingVersion?: number;
   latencyMs?: number;
   success: boolean;
 }
+
+/**
+ * Pricing-generation stamp for newly minted records.
+ *
+ * v2 = cache-aware pricing: cached input is billed at the provider's cache-read
+ * rate instead of the full input rate. Records without this field were minted
+ * by a build that charged cached input at full price *and* recorded
+ * `cacheReadTokens: 0`, so their overstatement cannot be undone after the fact.
+ * Bump this whenever a change makes previously-minted costs wrong.
+ *
+ * Stamped per record rather than once per file: `readSessionTelemetry` uses
+ * `readJsonlTail(file, limit)`, and a tail read never sees a header — so a
+ * file-level stamp would be invisible to the only reader there is.
+ */
+export const PRICING_VERSION = 2;
 
 /** A rolled-up bucket of spend, keyed by layer / model / provider. */
 export interface TelemetryAgg {
@@ -101,6 +126,17 @@ export interface TelemetryAggregate {
   mostExpensiveCalls: ModelCallTelemetry[];
   /** Root nodes of the dispatch trace tree. */
   tree: TelemetryTreeNode[];
+  /**
+   * Records whose `costUsd` was `null` on disk and was recovered at read time
+   * from the current catalog (#309). Always 0 for a live session.
+   */
+  repricedCalls: number;
+  /**
+   * Records minted before {@link PRICING_VERSION} — their stored cost may
+   * overstate actual spend and cannot be corrected from what was recorded.
+   * Always 0 for a live session.
+   */
+  legacyPricedCalls: number;
 }
 
 /** How many top calls to retain — matches what the viewer + CLI display. */
@@ -122,7 +158,7 @@ export function telemetryEnabled(): boolean {
 
 /**
  * Build a normalized {@link ModelCallTelemetry} from a {@link UsageRecord} — the
- * single place cost is minted (via {@link priceUsageUsd}) so there's no second
+ * single place cost is minted (via {@link priceUsageForRecord}) so there's no second
  * pricing path, and the single place the dispatch-trace ids are captured (from
  * the ambient dispatch context: real ids inside a dispatch, `undefined` for
  * off-loop calls — the correct value). `ts` is stamped at call time.
@@ -152,10 +188,8 @@ export function telemetryFromUsageRecord(
     completionTokens: rec.completionTokens,
     cacheReadTokens: rec.cacheReadTokens ?? 0,
     cacheWriteTokens: rec.cacheWriteTokens ?? 0,
-    costUsd: priceUsageUsd(rec.provider, rec.modelName, rec.promptTokens, rec.completionTokens, {
-      cacheReadTokens: rec.cacheReadTokens,
-      cacheWriteTokens: rec.cacheWriteTokens,
-    }),
+    costUsd: priceUsageForRecord(rec),
+    pricingVersion: PRICING_VERSION,
     latencyMs: rec.latencyMs,
     success: rec.success ?? true,
   };
@@ -307,6 +341,20 @@ export class SessionTelemetry {
     if (this.topCalls.length > TOP_CALLS) this.topCalls.length = TOP_CALLS;
   }
 
+  /**
+   * O(1) reads of the running totals, for callers that need one number and not
+   * a snapshot. {@link summary} clones three maps and rebuilds the dispatch
+   * tree, so reaching through it for a scalar is quadratic in session length.
+   */
+  get calls(): number {
+    return this.totals.calls;
+  }
+
+  /** Whether any folded call was unpriced — see `SpinnerStats.sessionCostPartial`. */
+  get hasUnpriced(): boolean {
+    return this.totals.hasUnpriced;
+  }
+
   /** Pure snapshot for the `/usage` viewer + `bernard usage` CLI. */
   summary(): TelemetryAggregate {
     return {
@@ -319,6 +367,11 @@ export class SessionTelemetry {
       byProvider: cloneAggMap(this.byProvider),
       mostExpensiveCalls: this.topCalls.slice(),
       tree: buildTreeFromNodes(Array.from(this.nodes.values())),
+      // A live session prices every call once, at mint time — there is nothing
+      // to recover and no older generation in play. `aggregateRecords` fills
+      // these in for a session replayed from disk.
+      repricedCalls: 0,
+      legacyPricedCalls: 0,
     };
   }
 }
@@ -373,18 +426,86 @@ function latestTelemetryFile(): string | null {
 }
 
 /**
+ * Recover the cost of a record that was stored unpriced (#309).
+ *
+ * Cost is minted once, at record time, from the catalog as it stood that day —
+ * so a model missing from the catalog freezes as `costUsd: null` and renders
+ * `n/a` forever, even after the catalog is fixed. That is exactly what happened
+ * when the gateway's owner rename dropped every xAI model: 311 records across
+ * two sessions, ~$7 of real spend, reported as `$0`.
+ *
+ * **Fills nulls only, never overwrites.** Re-pricing runs today's catalog
+ * against yesterday's call, so blanket re-pricing would silently rewrite
+ * history whenever a vendor changes prices. A stored number is the price as it
+ * was believed at the time and is left alone; `null` carries no information, so
+ * replacing it can only improve on `n/a`.
+ *
+ * Returns the record unchanged when it is already priced or still uncatalogued
+ * (e.g. a custom provider — `getModelMeta` returns `null` for anything outside
+ * `BUILTIN_PROVIDERS`, so those stay unpriced by construction).
+ */
+function repriceIfUnpriced(
+  rec: ModelCallTelemetry,
+  priceOf: (rec: ModelCallTelemetry) => number | null,
+): ModelCallTelemetry {
+  if (rec.costUsd != null) return rec;
+  const costUsd = priceOf(rec);
+  // Deliberately does NOT stamp `pricingVersion`. Today's pricing logic ran,
+  // but over token counts captured before cache accounting existed — a record
+  // written by such a build carries `cacheReadTokens: 0` whether or not any
+  // input was actually served from cache, so the recovered figure inherits the
+  // same overstatement as a stored one. Leaving the field absent keeps that
+  // visible instead of laundering it into a confident number.
+  return costUsd == null ? rec : { ...rec, costUsd };
+}
+
+/**
  * Fold a flat list of records into a full aggregate (same shape as
  * {@link SessionTelemetry.summary}). Used by the CLI to summarize a persisted
  * session without a live store.
+ *
+ * Records are re-priced on read (see {@link repriceIfUnpriced}) rather than
+ * rewritten on disk: the JSONL stays an append-only log of what was believed at
+ * the time, and a later catalog fix improves every report without a migration.
  */
 export function aggregateRecords(
   sessionId: string,
   records: ModelCallTelemetry[],
 ): TelemetryAggregate {
   const store = new SessionTelemetry(sessionId, { persist: false });
+  // Remember which models the catalog cannot price, keyed on (provider, model)
+  // — the token counts differ per record, so the *price* is not cacheable, but
+  // the catalog lookup behind it is. `getModelMeta` scans the catalog, and a
+  // miss scans it a second time normalizing every id. That miss path is exactly
+  // the case this function exists for: a session where every record is unpriced
+  // because the provider is still absent. A session has 3-6 distinct models
+  // against hundreds of records, so one lookup per model replaces one per row.
+  const unpriceable = new Set<string>();
+  const priceOf = (rec: ModelCallTelemetry): number | null => {
+    const key = `${rec.provider}|${rec.modelName}`;
+    if (unpriceable.has(key)) return null;
+    const cost = priceUsageForRecord(rec);
+    if (cost === null) unpriceable.add(key);
+    return cost;
+  };
+  let repricedCalls = 0;
+  let legacyPricedCalls = 0;
   // `persist: false` makes `record` a pure in-memory fold (no disk write).
-  for (const r of records) store.record(r);
+  for (const r of records) {
+    const priced = repriceIfUnpriced(r, priceOf);
+    if (priced !== r) repricedCalls++;
+    // Keyed on the record as stored (`r`), not the re-priced copy: what makes a
+    // figure suspect is the generation that captured its *token counts*, and
+    // re-pricing cannot recover a cached-input split that was never recorded.
+    // So a recovered cost from a pre-v2 record is still potentially overstated.
+    if (priced.costUsd != null && (r.pricingVersion ?? 0) < PRICING_VERSION) {
+      legacyPricedCalls++;
+    }
+    store.record(priced);
+  }
   const summary = store.summary();
+  summary.repricedCalls = repricedCalls;
+  summary.legacyPricedCalls = legacyPricedCalls;
   // The store's `startedAt` is aggregation time (~now), so for a session
   // reconstructed from disk the real span must come from the record timestamps,
   // not `Date.now() - startedAt` (which would render `Duration: 0s`).
@@ -483,6 +604,19 @@ export function formatSessionUsageLines(summary: TelemetryAggregate): string[] {
   if (t.cacheReadTokens > 0) lines.push(`  Cached (read): ${formatTokenCount(t.cacheReadTokens)}`);
   lines.push(`  Cost:          ${formatAggCost(t.costUsd, t.hasUnpriced)}`);
   if (t.hasUnpriced) lines.push('  (some calls used uncatalogued models; cost omits those)');
+  if (summary.repricedCalls > 0) {
+    lines.push(
+      `  (${summary.repricedCalls} ${plural(summary.repricedCalls, 'call was', 'calls were')} ` +
+        `stored unpriced and re-priced from the current catalog)`,
+    );
+  }
+  if (summary.legacyPricedCalls > 0) {
+    lines.push(
+      `  (${summary.legacyPricedCalls} ${plural(summary.legacyPricedCalls, 'call predates', 'calls predate')} ` +
+        `cache-aware token capture, so cost may be overstated — cached input is recorded as 0 ` +
+        `and is billed here at the full input rate)`,
+    );
+  }
 
   lines.push(...aggSection('BY LAYER', summary.byLayer));
   lines.push(...aggSection('BY MODEL', summary.byModel));

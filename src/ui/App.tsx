@@ -23,6 +23,7 @@ import {
   getCatalogSource,
   refreshCatalogWithDiff,
 } from '../providers/catalog.js';
+import { catalogRefreshNotice } from '../catalog-notice.js';
 import { getLocalVersion } from '../update.js';
 import { CONFIG_DIR, DATA_DIR, CACHE_DIR, STATE_DIR } from '../paths.js';
 import * as os from 'node:os';
@@ -97,7 +98,7 @@ import {
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
 import type { CoreMessage } from 'ai';
-import { resolveMainModel, logSiteModelSnapshot } from '../model-policy.js';
+import { resolveMainModel, logSiteModelSnapshot, providersInUse } from '../model-policy.js';
 import {
   serializeMessages,
   extractDomainFacts,
@@ -763,13 +764,17 @@ export function App({
     })();
   }, [isFreshInstall]);
 
-  // Startup model-catalog refresh (#264 follow-up). Every launch force-fetches
-  // the live gateway catalog in the background and toasts when new models
-  // appeared since the last run. Non-blocking and fail-silent — an offline
-  // gateway just leaves the cached/vendored catalog in place. We skip the
-  // notification when there was no real prior baseline (`previousSource ===
-  // 'vendored'`) so a fresh install doesn't announce the entire bundled
-  // snapshot as "new".
+  // Startup model-catalog refresh (#264 follow-up, extended by #306). Every
+  // launch force-fetches the live gateway catalog in the background and reports
+  // what changed. Non-blocking and fail-silent — an offline gateway just leaves
+  // the cached/vendored catalog in place.
+  //
+  // The decision of *what* is worth saying lives in `catalogRefreshNotice`
+  // (pure, unit-tested); this hook only surfaces it. Removals used to be
+  // discarded here, which is how a whole provider vanishing produced no signal
+  // at all (#306). A wiped provider goes into the transcript rather than a
+  // toast: toasts are cleared by the next submit, and "your cost and context
+  // numbers are now wrong" must outlive a keystroke.
   const catalogRefreshRanRef = useRef(false);
   useEffect(() => {
     if (catalogRefreshRanRef.current) return;
@@ -777,16 +782,20 @@ export function App({
     void (async () => {
       try {
         const diff = await refreshCatalogWithDiff();
-        if (diff.error || diff.previousSource === 'vendored' || diff.added.length === 0) return;
-        const names = diff.added
-          .slice(0, 3)
-          .map((e) => `${e.provider}/${e.model}`)
-          .join(', ');
-        const more = diff.added.length > 3 ? ` +${diff.added.length - 3} more` : '';
-        flashToast(
-          `${diff.added.length} new model${diff.added.length === 1 ? '' : 's'} available: ${names}${more}. Browse with /models or bind one via /lineup.`,
-          'success',
-        );
+        const notice = catalogRefreshNotice(diff, { providersInUse: providersInUse(config) });
+        switch (notice.kind) {
+          case 'provider-wiped':
+            pushAssistantNotice(notice.message);
+            break;
+          case 'removed':
+            flashToast(notice.message, 'warning');
+            break;
+          case 'added':
+            flashToast(notice.message, 'success');
+            break;
+          case 'none':
+            break;
+        }
       } catch {
         // Never block or crash startup over a catalog refresh.
       }

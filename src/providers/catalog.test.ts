@@ -127,6 +127,35 @@ describe('refreshCatalogWithDiff', () => {
     expect(diff.removed.map((e) => e.model)).toEqual(['grok-legacy']);
   });
 
+  it('reports per-provider counts, so a provider that lost everything reads as 0', async () => {
+    // The #306 incident shape: the gateway renames xAI's owner prefix, every
+    // Grok entry drops out, and the bare total gives no hint which provider
+    // went dark. `byProvider` is what makes that detectable.
+    seedDiskCache([
+      { provider: 'xai', model: 'grok-3-mini' },
+      { provider: 'xai', model: 'grok-4-fast' },
+      { provider: 'openai', model: 'gpt-4.1' },
+    ]);
+    stubFetchOk([{ id: 'openai/gpt-4.1', type: 'language' }]);
+    const m = await loadModule();
+    const diff = await m.refreshCatalogWithDiff();
+    expect(diff.removed.map((e) => e.model).sort()).toEqual(['grok-3-mini', 'grok-4-fast']);
+    expect(diff.byProvider.xai).toBe(0);
+    expect(diff.byProvider.openai).toBe(1);
+    // Every built-in provider is present, so an absent key never masks a zero.
+    expect(diff.byProvider.anthropic).toBe(0);
+  });
+
+  it('reports byProvider on the error path too, from the pre-refresh catalog', async () => {
+    seedDiskCache([{ provider: 'xai', model: 'grok-3-mini' }]);
+    stubFetchFail();
+    const m = await loadModule();
+    const diff = await m.refreshCatalogWithDiff();
+    expect(diff.error).toBeDefined();
+    // A failed fetch must not look like "xai went to zero".
+    expect(diff.byProvider.xai).toBe(1);
+  });
+
   it('returns an empty diff with no error when nothing changed', async () => {
     seedDiskCache([{ provider: 'openai', model: 'gpt-4.1' }]);
     stubFetchOk([{ id: 'openai/gpt-4.1', type: 'language' }]);

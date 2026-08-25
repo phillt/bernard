@@ -138,6 +138,36 @@ export function priceUsageUsd(
   return priceUsageBreakdown(provider, modelName, prompt, completion, cache)?.totalCostUsd ?? null;
 }
 
+/**
+ * Anything carrying the five fields pricing needs. Deliberately structural
+ * rather than a named record type, so the per-turn report row, a
+ * `ModelCallTelemetry`, and a raw `UsageRecord` all satisfy it without importing
+ * each other.
+ */
+export interface PriceableUsage {
+  provider: string;
+  modelName: string;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
+
+/**
+ * {@link priceUsageUsd} for a record-shaped value.
+ *
+ * The five-argument-plus-options call was written out at three sites (the
+ * per-turn report, telemetry minting, and re-pricing on read) and had already
+ * drifted cosmetically between them. One spelling means adding a priced token
+ * category is one edit, not a search.
+ */
+export function priceUsageForRecord(rec: PriceableUsage): number | null {
+  return priceUsageUsd(rec.provider, rec.modelName, rec.promptTokens, rec.completionTokens, {
+    cacheReadTokens: rec.cacheReadTokens,
+    cacheWriteTokens: rec.cacheWriteTokens,
+  });
+}
+
 export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport {
   const empty: UsageReport = {
     rows: [],
@@ -185,10 +215,7 @@ export function computeTurnUsageReport(stats: SpinnerStats | null): UsageReport 
     .map(({ siteSet, ...row }) => ({
       ...row,
       sites: Array.from(siteSet).sort(),
-      costUsd: priceUsageUsd(row.provider, row.modelName, row.promptTokens, row.completionTokens, {
-        cacheReadTokens: row.cacheReadTokens,
-        cacheWriteTokens: row.cacheWriteTokens,
-      }),
+      costUsd: priceUsageForRecord(row),
     }))
     .sort(
       (a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || b.promptTokens - a.promptTokens,
@@ -267,14 +294,4 @@ export function formatAggCost(costUsd: number, hasUnpriced: boolean): string {
 export function formatCallCost(costUsd: number | null): string {
   // A single call's cost is the agg convention with "unknown" == null cost.
   return formatAggCost(costUsd ?? 0, costUsd == null);
-}
-
-/**
- * Compact ` ~$cost` suffix for the StatusBar odometer (#258). Returns `''` when
- * there's no priced cost yet (no tokens, or only unpriced custom-provider models)
- * so the bar stays clean.
- */
-export function formatTurnCost(stats: SpinnerStats | null): string {
-  const cost = formatCostSuffix(computeTurnUsageReport(stats).totalCostUsd);
-  return cost ? ` ${cost}` : '';
 }
