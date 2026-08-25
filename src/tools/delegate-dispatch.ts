@@ -6,7 +6,7 @@ import {
   mcpDelegateDefinition,
   buildDelegateSystemPrompt,
 } from '../framework/agents/mcp-delegate.js';
-import { withSlot } from './agent-pool.js';
+import { withUncappedSlot } from './agent-pool.js';
 import { createAskUserTool } from './ask-user.js';
 import { serverToolNames } from './delegate.js';
 import { debugLog } from '../logger.js';
@@ -31,11 +31,12 @@ export async function dispatchServerDelegate(
   args: { server: string; task: string; context?: string; abortSignal?: AbortSignal },
 ): Promise<string> {
   const { server, task, context, abortSignal } = args;
-  // This helper runs INSIDE a dispatch that already holds a slot, so it must
-  // not compete for one (#305). `withSlot` detects that from its own ALS, so
-  // there is no longer a `nested: true` flag to remember (#317) — and no
-  // pool-exhausted branch, because a nested acquire cannot fail.
-  const outcome = await withSlot(async (slot) => {
+  // Never blocks on the cap (#305). The ALS in `withSlot` would cover a helper
+  // spawned by a sub-agent — which holds a slot — but NOT a `delegate_*` call
+  // from the main agent, which holds none. Routing that through the capped path
+  // would let four parallel sub-agents starve main's own MCP access, which is
+  // the failure #305 fixed.
+  return withUncappedSlot(async (slot) => {
     try {
       const toolNames = serverToolNames(ctx, server);
       const childTools: Record<string, Tool> = {};
@@ -91,8 +92,4 @@ export async function dispatchServerDelegate(
       return `Delegation to "${server}" failed: ${message}`;
     }
   });
-  // Unreachable: a nested acquire always succeeds. Kept as a total function
-  // rather than a non-null assertion so a future change to `withSlot` surfaces
-  // here instead of throwing at runtime.
-  return outcome.acquired ? outcome.value : `Delegation to "${server}" failed: pool exhausted.`;
 }

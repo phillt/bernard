@@ -43,55 +43,74 @@ export function setMaxConcurrentAgents(n: number): number {
  */
 const slotHeld = new AsyncLocalStorage<true>();
 
-/** Outcome of {@link withSlot}: either the pool was full, or `fn` ran. */
-export type SlotOutcome<T> = { acquired: false } | { acquired: true; value: T };
-
-/**
- * Runs `fn` holding a slot in the shared agent/task concurrency pool, releasing
- * it on every exit path.
- *
- * Owning acquire *and* release is the point (#317): all five call sites used to
- * pair them by hand, and `releaseSlot` takes no argument, so a missed or
- * doubled release silently skews the count rather than throwing.
- *
- * **Nesting is automatic.** An acquire from inside a slot-holder is free,
- * because the enclosing dispatch is already counted. That was previously an
- * opt-in `nested: true` flag which only the MCP delegate helper passed —
- * correct for the one path that tripped over it, and a trap for every future
- * nested acquirer, since the flag's absence is silently the wrong answer. A
- * tool-wrapper holding a slot can reach `agent` / `task` / `specialist_run`,
- * so more such paths already exist.
- *
- * Why nesting must be free at all: the cap counts parents and helpers in one
- * flat pool, so N parallel sub-agents at the cap leave nothing for the helper
- * each one needs, and the delegate call degrades to an error string — silently
- * losing MCP access exactly when fan-out is highest (#305).
- *
- * Two consequences, both deliberate and unchanged:
- * - {@link getActiveCount} may exceed `maxConcurrentAgents` (nested slots are
- *   still counted, so release stays symmetric), so a consumer treating the
- *   active count as `<= cap` is wrong.
- * - The cap bounds nesting DEPTH, not WIDTH: k parallel delegate calls from
- *   each of N capped parents put `N + N*k` dispatches in flight.
- *
- * Returns a discriminated result rather than throwing, because the five call
- * sites report exhaustion in four different shapes (a bare string, an `err()`
- * envelope, a `pool_exhausted` code, and one that cannot happen) and their
- * exact wording is asserted by tests.
- */
-export async function withSlot<T>(
-  fn: (slot: { id: number }) => Promise<T>,
-): Promise<SlotOutcome<T>> {
-  const nested = slotHeld.getStore() === true;
-  if (!nested && activeAgentCount >= maxConcurrentAgents) return { acquired: false };
+/** Runs `fn` holding a slot; the shared body of the two public entry points. */
+async function runHoldingSlot<T>(fn: (slot: { id: number }) => Promise<T>): Promise<T> {
   activeAgentCount++;
   const slot = { id: nextAgentId++ };
   try {
-    const value = await slotHeld.run(true, () => fn(slot));
-    return { acquired: true, value };
+    return await slotHeld.run(true, () => fn(slot));
   } finally {
     if (activeAgentCount > 0) activeAgentCount--;
   }
+}
+
+/**
+ * Runs `fn` holding a slot in the shared agent/task concurrency pool, releasing
+ * it on every exit path. Calls `onExhausted` instead when the pool is full.
+ *
+ * Owning acquire *and* release is the point (#317): six call sites used to pair
+ * them by hand, and `releaseSlot` takes no argument, so a missed or doubled
+ * release skewed the count silently rather than throwing.
+ *
+ * **Nesting is automatic.** An acquire from inside a slot-holder is free,
+ * because the enclosing dispatch is already counted — tracked by {@link slotHeld}
+ * rather than an opt-in flag the caller had to remember, whose absence was
+ * silently the wrong answer. That matters beyond the one path it was added for:
+ * a tool-wrapper holding a slot can reach `agent` / `task` / `specialist_run`,
+ * so more nested acquirers already exist.
+ *
+ * `onExhausted` is a thunk rather than a discriminated return because the call
+ * sites report exhaustion in four genuinely different shapes — a bare string, an
+ * `err()` envelope, a `pool_exhausted` `WrapperResult`, a toast — each dictated
+ * by its tool's own return contract, with wording tests assert verbatim. They
+ * already converge where it matters: `error-taxonomy.ts` classifies every one of
+ * them as `pool_exhausted`.
+ *
+ * Two consequences, both deliberate:
+ * - {@link getActiveCount} may exceed `maxConcurrentAgents` (nested slots are
+ *   still counted, so release stays symmetric), so a consumer treating the
+ *   active count as `<= cap` is wrong. The overshoot is no longer bounded at
+ *   +1: the exempt set grew from one declared path to every dispatch below a
+ *   slot-holder, at any depth.
+ * - The cap bounds nesting DEPTH, not WIDTH: k parallel delegate calls from
+ *   each of N capped parents put `N + N*k` dispatches in flight.
+ */
+export async function withSlot<T>(
+  fn: (slot: { id: number }) => Promise<T>,
+  onExhausted: () => T,
+): Promise<T> {
+  const nested = slotHeld.getStore() === true;
+  if (!nested && activeAgentCount >= maxConcurrentAgents) return onExhausted();
+  return runHoldingSlot(fn);
+}
+
+/**
+ * Runs `fn` holding a slot, never blocking on the cap.
+ *
+ * For work that must not be starved even when its caller holds no slot of its
+ * own — today only the per-server MCP delegate helper (#305). {@link withSlot}'s
+ * ALS covers a helper spawned by a *sub-agent*, which does hold one; it does not
+ * cover a `delegate_*` call issued by the **main agent**, which holds no pool
+ * slot at all. Routing that through the capped path would let four parallel
+ * sub-agents starve main's own MCP access — the exact failure #305 fixed, and a
+ * regression #317 would otherwise have introduced while removing the old
+ * unconditional `nested: true` bypass.
+ *
+ * Losing MCP is worse than exceeding the cap, which is the whole argument; the
+ * slot is still counted, so release stays symmetric.
+ */
+export async function withUncappedSlot<T>(fn: (slot: { id: number }) => Promise<T>): Promise<T> {
+  return runHoldingSlot(fn);
 }
 
 /**

@@ -29,12 +29,9 @@ vi.mock('../framework/pac/run-pac.js', () => ({
 }));
 
 vi.mock('./agent-pool.js', () => ({
-  // `withSlot` owns acquire+release since #317, so the mock stands in for the
-  // whole lifecycle: run the body, report it acquired.
-  withSlot: vi.fn(async (fn: (slot: { id: number }) => Promise<unknown>) => ({
-    acquired: true as const,
-    value: await fn({ id: 1 }),
-  })),
+  // Delegation runs uncapped (#305): it must not be starved even when its
+  // caller holds no slot. The mock just runs the body.
+  withUncappedSlot: vi.fn((fn: (slot: { id: number }) => Promise<unknown>) => fn({ id: 1 })),
   getMaxConcurrentAgents: vi.fn(() => 4),
 }));
 
@@ -51,7 +48,7 @@ import { dispatchServerDelegate } from './delegate-dispatch.js';
 import { buildDelegateSystemPrompt } from '../framework/agents/mcp-delegate.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { runPAC } from '../framework/pac/run-pac.js';
-import { withSlot } from './agent-pool.js';
+import { withUncappedSlot } from './agent-pool.js';
 
 function makeCtx(over: Record<string, any> = {}): any {
   return {
@@ -76,10 +73,6 @@ function makeCtx(over: Record<string, any> = {}): any {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(withSlot).mockImplementation(async (fn) => ({
-    acquired: true as const,
-    value: await fn({ id: 1 }),
-  }));
   vi.mocked(runDefinition).mockResolvedValue({
     result: {},
     formatted: 'SUMMARY',
@@ -190,32 +183,20 @@ describe('dispatchServerDelegate', () => {
     expect(input.childTools.slack__post).toBeUndefined();
   });
 
-  it('returns the capped formatted summary through exactly one slot', async () => {
+  it('returns the capped formatted summary, uncapped by the pool (#305)', async () => {
+    // Uncapped because the main agent holds no slot of its own: routing its
+    // `delegate_*` calls through the capped path would let parallel sub-agents
+    // starve main's MCP access. The cap behaviour itself is covered unmocked in
+    // `agent-pool.test.ts`.
     const out = await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
     expect(out).toBe('SUMMARY');
-    expect(withSlot).toHaveBeenCalledTimes(1);
+    expect(withUncappedSlot).toHaveBeenCalledTimes(1);
   });
 
-  it('runs inside a slot, so a full pool cannot starve it (#305, #317)', async () => {
-    // Replaces a test that mocked `acquireSlot` to null and asserted a
-    // pool-exhausted message. That state is unreachable: this helper runs
-    // inside a dispatch that already holds a slot, and sub-agents carry
-    // `delegate_*` tools — competing for the flat cap would silently strip MCP
-    // from every sub-agent the moment fan-out filled the pool. Since #317 the
-    // bypass is inferred from `withSlot`'s own ALS rather than a `nested` flag
-    // this call site had to remember, so what is worth pinning is that the work
-    // runs through `withSlot` at all.
-    await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
-    expect(withSlot).toHaveBeenCalledTimes(1);
-  });
-
-  it('catches a dispatch throw inside the slot and returns an error string', async () => {
+  it('catches a dispatch throw and returns an error string', async () => {
     vi.mocked(runDefinition).mockRejectedValueOnce(new Error('boom'));
     const out = await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
     expect(out).toContain('boom');
-    // The throw is handled INSIDE the callback, so the slot still resolves
-    // normally — `withSlot`'s finally is what guarantees the release.
-    expect(withSlot).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -262,7 +243,7 @@ describe('dispatchServerDelegate self-escalation (#296 Phase 2E)', () => {
     expect(pacOpts.telemetrySite).toBe('mcp:google');
     expect(pacInput.slotId).toBe(1);
     // Same slot reused for the escalation — no second acquire.
-    expect(withSlot).toHaveBeenCalledTimes(1);
+    expect(withUncappedSlot).toHaveBeenCalledTimes(1);
   });
 
   it("threads the single loop's partial findings into the PAC context (continue, not restart)", async () => {

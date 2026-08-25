@@ -61,48 +61,48 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
         return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom)}`;
       }
 
-      const outcome = await withSlot(async (slot) => {
-        const id = slot.id;
-        printSubAgentStart(id, task);
+      return withSlot(
+        async (slot) => {
+          const id = slot.id;
+          printSubAgentStart(id, task);
 
-        try {
-          const runOpts = {
-            abortSignal: execOptions.abortSignal,
-            // Forward only the user-supplied provider/model so resolveSiteModel
-            // can fall through to the modelMode tier table when neither is set.
-            overrides: { provider, model },
-          };
-          let formatted: string;
-          if (ctx.config.subagentPac) {
-            // `runPAC` owns the final cap (and reserves space for the FAIL
-            // footer); re-capping here would risk truncating that footer away.
-            const pacResult = await runPAC(ctx, { task, context, slotId: id }, runOpts);
-            formatted = pacResult.formatted;
-            // Snapshot the verdict for the Agent Status overlay (#140). Last
-            // write wins across nested / parallel sub-agents — fine, this is a
-            // user-facing peek, not a log.
-            ctx.verification.setLast({
-              verdict: pacResult.verdict,
-              reason: pacResult.reason,
-              source: task.slice(0, 80),
-            });
-          } else {
-            const def = definitions.get<SubAgentInput, string>('sub');
-            const result = await runDefinition(ctx, def, { task, context, slotId: id }, runOpts);
-            formatted = result.formatted;
+          try {
+            const runOpts = {
+              abortSignal: execOptions.abortSignal,
+              // Forward only the user-supplied provider/model so resolveSiteModel
+              // can fall through to the modelMode tier table when neither is set.
+              overrides: { provider, model },
+            };
+            let formatted: string;
+            if (ctx.config.subagentPac) {
+              // `runPAC` owns the final cap (and reserves space for the FAIL
+              // footer); re-capping here would risk truncating that footer away.
+              const pacResult = await runPAC(ctx, { task, context, slotId: id }, runOpts);
+              formatted = pacResult.formatted;
+              // Snapshot the verdict for the Agent Status overlay (#140). Last
+              // write wins across nested / parallel sub-agents — fine, this is a
+              // user-facing peek, not a log.
+              ctx.verification.setLast({
+                verdict: pacResult.verdict,
+                reason: pacResult.reason,
+                source: task.slice(0, 80),
+              });
+            } else {
+              const def = definitions.get<SubAgentInput, string>('sub');
+              const result = await runDefinition(ctx, def, { task, context, slotId: id }, runOpts);
+              formatted = result.formatted;
+            }
+            printSubAgentEnd(id);
+            return formatted;
+          } catch (err: unknown) {
+            printSubAgentEnd(id);
+            const message = err instanceof Error ? err.message : String(err);
+            return `Sub-agent error: ${message}`;
           }
-          printSubAgentEnd(id);
-          return formatted;
-        } catch (err: unknown) {
-          printSubAgentEnd(id);
-          const message = err instanceof Error ? err.message : String(err);
-          return `Sub-agent error: ${message}`;
-        }
-      });
-      if (!outcome.acquired) {
-        return `Error: Maximum concurrent sub-agents (${getMaxConcurrentAgents()}) reached. Wait for existing sub-agents to finish.`;
-      }
-      return outcome.value;
+        },
+        () =>
+          `Error: Maximum concurrent sub-agents (${getMaxConcurrentAgents()}) reached. Wait for existing sub-agents to finish.`,
+      );
     },
   });
 }

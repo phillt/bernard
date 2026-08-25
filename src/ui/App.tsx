@@ -2944,55 +2944,57 @@ export function App({
   }
 
   async function runTaskInk(description: string, context?: string): Promise<void> {
-    const outcome = await withSlot(async (slot) => {
-      setInterrupted(false);
-      setBusy(true);
-      const ctx = agent.getContext();
-      ctx.provenance.clear();
-      try {
-        const input: TaskInput = context
-          ? { task: description, context, slotId: slot.id }
-          : { task: description, slotId: slot.id };
-        // Tasks dispatch OUTSIDE the normal turn loop, so `ctx.policyDecision` is
-        // undefined here (it's only set during `processInput`). Without it the
-        // augment gate defaults `confirmThreshold` to 'high' and ignores the
-        // user's skipPermissions / confirmMode / toolMode — re-prompting on
-        // dangerous shell even in unrestricted mode. Resolve the same per-turn
-        // decision a chat turn would, feeding the policy engine the exact user
-        // message the model sees (`buildUserMessage` adds the `Task:`/`Context:`
-        // framing) so the decision can't diverge from the real dispatch.
-        const taskMessage = taskDefinition.buildUserMessage(input).content;
-        const policyInput = typeof taskMessage === 'string' ? taskMessage : description;
-        const taskCtx = { ...ctx, policyDecision: agent.resolvePolicyDecisionFor(policyInput) };
-        const { result, formatted } = await runDefinition(taskCtx, taskDefinition, input);
-        if (result.finishReason === 'length') {
-          const recommended = Math.ceil((config.maxTokens * 2) / 1024) * 1024;
-          flashToast(
-            `Task response truncated (hit ${config.maxTokens} tokens). Consider /options max-tokens ${recommended}`,
-            'warning',
-          );
-        }
-        const outputStr =
-          typeof formatted.output === 'string'
-            ? formatted.output
-            : JSON.stringify(formatted.output, null, 2);
-        const lines: PendingInfo['lines'] = outputStr.split('\n').map((l) => ({ text: l }));
-        if (formatted.details) {
-          lines.push({ text: '' });
-          for (const l of String(formatted.details).split('\n')) {
-            lines.push({ text: l, dim: true });
+    await withSlot(
+      async (slot) => {
+        setInterrupted(false);
+        setBusy(true);
+        const ctx = agent.getContext();
+        ctx.provenance.clear();
+        try {
+          const input: TaskInput = context
+            ? { task: description, context, slotId: slot.id }
+            : { task: description, slotId: slot.id };
+          // Tasks dispatch OUTSIDE the normal turn loop, so `ctx.policyDecision` is
+          // undefined here (it's only set during `processInput`). Without it the
+          // augment gate defaults `confirmThreshold` to 'high' and ignores the
+          // user's skipPermissions / confirmMode / toolMode — re-prompting on
+          // dangerous shell even in unrestricted mode. Resolve the same per-turn
+          // decision a chat turn would, feeding the policy engine the exact user
+          // message the model sees (`buildUserMessage` adds the `Task:`/`Context:`
+          // framing) so the decision can't diverge from the real dispatch.
+          const taskMessage = taskDefinition.buildUserMessage(input).content;
+          const policyInput = typeof taskMessage === 'string' ? taskMessage : description;
+          const taskCtx = { ...ctx, policyDecision: agent.resolvePolicyDecisionFor(policyInput) };
+          const { result, formatted } = await runDefinition(taskCtx, taskDefinition, input);
+          if (result.finishReason === 'length') {
+            const recommended = Math.ceil((config.maxTokens * 2) / 1024) * 1024;
+            flashToast(
+              `Task response truncated (hit ${config.maxTokens} tokens). Consider /options max-tokens ${recommended}`,
+              'warning',
+            );
           }
+          const outputStr =
+            typeof formatted.output === 'string'
+              ? formatted.output
+              : JSON.stringify(formatted.output, null, 2);
+          const lines: PendingInfo['lines'] = outputStr.split('\n').map((l) => ({ text: l }));
+          if (formatted.details) {
+            lines.push({ text: '' });
+            for (const l of String(formatted.details).split('\n')) {
+              lines.push({ text: l, dim: true });
+            }
+          }
+          showInfo(`Task: ${description.slice(0, 60)}${description.length > 60 ? '…' : ''}`, lines);
+        } catch (err) {
+          flashToast(err instanceof Error ? err.message : String(err), 'error');
+        } finally {
+          setBusy(false);
         }
-        showInfo(`Task: ${description.slice(0, 60)}${description.length > 60 ? '…' : ''}`, lines);
-      } catch (err) {
-        flashToast(err instanceof Error ? err.message : String(err), 'error');
-      } finally {
-        setBusy(false);
-      }
-    });
-    if (!outcome.acquired) {
-      flashToast(`Maximum concurrent agents (${getMaxConcurrentAgents()}) reached.`, 'error');
-    }
+      },
+      () => {
+        flashToast(`Maximum concurrent agents (${getMaxConcurrentAgents()}) reached.`, 'error');
+      },
+    );
   }
 
   // Overlay-request helpers — built locally and bridged to the pre-mount

@@ -48,11 +48,8 @@ vi.mock('./agent-pool.js', async (importOriginal) => {
   const actual = (await importOriginal()) as any;
   return {
     ...actual,
-    // `withSlot` owns acquire+release since #317.
-    withSlot: vi.fn(async (fn: (slot: { id: number }) => Promise<unknown>) => ({
-      acquired: true as const,
-      value: await fn({ id: 1 }),
-    })),
+    // `withSlot` owns acquire+release since #317; the mock runs the body.
+    withSlot: vi.fn((fn: (slot: { id: number }) => Promise<unknown>) => fn({ id: 1 })),
     getMaxConcurrentAgents: vi.fn(() => 3),
   };
 });
@@ -587,10 +584,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     correctionStore = createMockCorrectionStore();
 
     // Restore sensible defaults after clearAllMocks.
-    vi.mocked(withSlot).mockImplementation(async (fn) => ({
-      acquired: true as const,
-      value: await fn({ id: 1 }),
-    }));
+    vi.mocked(withSlot).mockImplementation((fn) => fn({ id: 1 }));
     vi.mocked(resolveProviderAndModel).mockReturnValue({
       ok: true,
       provider: 'anthropic',
@@ -681,7 +675,8 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
 
   it('returns pool_exhausted error when no slot is available', async () => {
     specialistStore.get.mockReturnValue(makeToolWrapperSpecialist());
-    vi.mocked(withSlot).mockResolvedValue({ acquired: false });
+    // Pool full: `withSlot` runs the caller's exhaustion thunk instead of the body.
+    vi.mocked(withSlot).mockImplementation((_fn, onExhausted) => Promise.resolve(onExhausted()));
 
     const toolDef = createToolWrapperRunTool(
       makeCtx(config, options, memoryStore, specialistStore, correctionStore),
@@ -807,7 +802,7 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
 
   // ── Runtime error catch ──────────────────────────────────────────────────────
 
-  it('returns runtime_error when generateText throws, inside its slot', async () => {
+  it('returns runtime_error when generateText throws', async () => {
     specialistStore.get.mockReturnValue(makeToolWrapperSpecialist());
     vi.mocked(generateText).mockRejectedValue(new Error('network timeout'));
 
@@ -823,9 +818,6 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     expect(parsed.status).toBe('error');
     expect(parsed.error).toBe('runtime_error');
     expect(parsed.result).toContain('network timeout');
-
-    // finally block must fire even on throw
-    expect(vi.mocked(withSlot)).toHaveBeenCalledTimes(1);
   });
 
   it('logs the runtime error to the reasoning log', async () => {
@@ -886,8 +878,8 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
       DEFAULT_EXEC_OPTIONS,
     );
 
-    // Release is `withSlot`'s `finally` now, so the property under test is that
-    // each run takes exactly one slot — the pairing can no longer drift.
+    // Release is `withSlot`'s `finally` now, so acquire/release can no longer
+    // drift — what is left worth pinning is that each run takes exactly one.
     expect(vi.mocked(withSlot)).toHaveBeenCalledTimes(2);
   });
 });

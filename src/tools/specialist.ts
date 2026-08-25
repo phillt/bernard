@@ -42,24 +42,11 @@ function protectedOrThrow(err: unknown): string {
 }
 
 /**
- * Creates the specialist management tool for saving and retrieving reusable expert profiles.
- *
- * Specialists are persistent personas with custom system prompts and behavioral guidelines
- * that shape how a sub-agent approaches work. Unlike routines (procedures), specialists
- * define *how* to work rather than *what* steps to follow.
- */
-/**
- * Guards the invariant #331 turned from "silently expensive" into "silently
- * inert": a `tool-wrapper` or `meta` specialist exists to front specific tools,
- * and `buildChildTools` now hands one with no `targetTools` an EMPTY registry
- * rather than the whole thing. That is the right default — carrying every
- * connected MCP server's schema set was the leak — but it means such a record
- * would be created happily and then do nothing.
- *
- * So reject it at the boundary where it is created. Nothing validated this
- * before, which is precisely why the permissive default had to exist.
- * `persona` is unaffected: it never reaches `buildChildTools` (dispatch rejects
- * it in favour of `specialist_run`) and is scoped by the worker surface.
+ * A `tool-wrapper` / `meta` specialist that names no `targetTools` is now inert
+ * rather than over-broad — `buildChildTools` hands it an empty registry (#331) —
+ * so reject it where it is created. Nothing validated this before, which is
+ * exactly why the permissive default had to exist. `persona` is unaffected: it
+ * never reaches `buildChildTools`.
  *
  * Returns an error string, or `null` when the combination is fine.
  */
@@ -76,6 +63,13 @@ function targetToolsScopeError(
   );
 }
 
+/**
+ * Creates the specialist management tool for saving and retrieving reusable expert profiles.
+ *
+ * Specialists are persistent personas with custom system prompts and behavioral guidelines
+ * that shape how a sub-agent approaches work. Unlike routines (procedures), specialists
+ * define *how* to work rather than *what* steps to follow.
+ */
 export function createSpecialistTool(
   specialistStore?: SpecialistStore,
   candidateStore?: CandidateStoreReader,
@@ -315,6 +309,9 @@ export function createSpecialistTool(
             // Model is not validated against PROVIDER_MODELS: the catalog can
             // lag day-0 model releases, and the underlying SDK already
             // rejects unknown ids.
+            // Read once: both the params branch and the targetTools scope guard
+            // need the stored record.
+            const existingRecord = store.get(id);
             const updates: SpecialistUpdates = {};
             if (name !== undefined) updates.name = name;
             if (description !== undefined) updates.description = description;
@@ -328,9 +325,8 @@ export function createSpecialistTool(
               // object is an explicit "clear". A non-empty `params` with no pin
               // is rejected rather than silently dropped — params need a
               // provider+model to bind to.
-              const existing = store.get(id);
-              const effProvider = blankToUndefined(provider) ?? existing?.provider;
-              const effModel = blankToUndefined(model) ?? existing?.model;
+              const effProvider = blankToUndefined(provider) ?? existingRecord?.provider;
+              const effModel = blankToUndefined(model) ?? existingRecord?.model;
               if (Object.keys(params).length > 0 && (!effProvider || !effModel)) {
                 return 'Error: params require a provider and model pin. Set provider+model on this specialist before adding params.';
               }
@@ -343,10 +339,9 @@ export function createSpecialistTool(
             // `tool-wrapper` without also supplying `targetTools` is exactly the
             // combination that would produce an inert specialist.
             if (kind !== undefined || targetTools !== undefined) {
-              const current = store.get(id);
               const updateScopeError = targetToolsScopeError(
-                kind ?? current?.kind,
-                targetTools ?? current?.targetTools,
+                kind ?? existingRecord?.kind,
+                targetTools ?? existingRecord?.targetTools,
               );
               if (updateScopeError) return updateScopeError;
             }
