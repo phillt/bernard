@@ -1,5 +1,5 @@
 import { generateText, type CoreMessage } from 'ai';
-import { debugLog } from './logger.js';
+import { debugLog, isDebugEnabled } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import type { RAGStore } from './rag.js';
@@ -79,6 +79,13 @@ export const DEFAULT_CONTEXT_WINDOW = 128_000;
 export const COMPRESSION_THRESHOLD = 0.75;
 /** Number of recent user/assistant exchanges preserved verbatim during compression. */
 export const RECENT_TURNS_TO_KEEP = 4;
+/**
+ * Minimum estimated tokens in the compressible region for a compaction to be
+ * worth its two LLM calls (#310). Below this the summary that replaces the
+ * region is a meaningful fraction of the region itself, so the run costs money
+ * and latency to recover approximately nothing.
+ */
+export const MIN_COMPRESSION_RECLAIM_TOKENS = 2_000;
 
 /**
  * Look up a model's context window. Resolution order, most to least trusted:
@@ -325,6 +332,7 @@ export async function compressHistory(
   config: BernardConfig,
   ragStore?: RAGStore,
   onUsage?: UsageRecorder,
+  onStart?: () => void,
 ): Promise<CoreMessage[]> {
   const splitIndex = countRecentMessages(history, RECENT_TURNS_TO_KEEP);
 
@@ -335,11 +343,40 @@ export async function compressHistory(
 
   const oldMessages = history.slice(0, splitIndex);
   const recentMessages = history.slice(splitIndex);
+
+  // Don't pay for a compaction that cannot recover much (#310).
+  //
+  // `countRecentMessages` splits on *user turns*, and a tool-heavy turn can be
+  // dozens of messages carrying several near-`MAX_TOOL_RESULT_CHARS` results —
+  // so "everything older than the last 4 turns" is routinely a small slice of
+  // the weight. One observed run compressed 8 messages while keeping 54.
+  // Summarizing that costs two LLM calls (summarizer + per-domain fact
+  // extraction) and replaces the region with a summary of its own, so below the
+  // floor the net recovery approaches zero — or goes negative.
+  const compressibleTokens = estimateHistoryTokens(oldMessages);
+  if (compressibleTokens < MIN_COMPRESSION_RECLAIM_TOKENS) {
+    debugLog('context:compress:skipped', {
+      reason: 'below-reclaim-floor',
+      oldMessageCount: oldMessages.length,
+      recentMessageCount: recentMessages.length,
+      compressibleTokens,
+      floorTokens: MIN_COMPRESSION_RECLAIM_TOKENS,
+    });
+    return history;
+  }
+
   const serialized = serializeMessages(oldMessages);
 
   if (!serialized.trim()) {
     return history;
   }
+
+  // Everything above is a decision; everything below spends money. `onStart`
+  // lets the caller show progress only once work is actually committed to —
+  // without it the REPL printed "Compressing conversation context..." on every
+  // turn once the history plateaued, since a skipped run leaves the trigger
+  // unchanged and it re-fires next turn.
+  onStart?.();
 
   try {
     // Run summarization and domain-specific fact extraction in parallel
@@ -399,12 +436,34 @@ export async function compressHistory(
       content: CONTEXT_SUMMARY_ACK,
     };
 
-    debugLog('context:compress', {
-      oldMessageCount: oldMessages.length,
-      recentMessageCount: recentMessages.length,
-      summaryLength: summary.length,
-      domainFactsCount: domainFacts.reduce((sum, df) => sum + df.facts.length, 0),
-    });
+    // Report what the run actually recovered (#310). Message counts alone were
+    // blind to the thing that matters: a run can compress 8 messages, keep 54,
+    // and reclaim ~10% of a 101k-token history for the price of two LLM calls,
+    // and nothing said so.
+    //
+    // Derived from `compressibleTokens` rather than re-walking: the summary
+    // replaces exactly `oldMessages`, so `reclaimed` is what that region cost
+    // minus what replaced it. Two `estimateHistoryTokens(...)` passes over the
+    // full history would otherwise run unconditionally to build an argument
+    // `debugLog` discards whenever BERNARD_DEBUG is off — and the estimator
+    // `JSON.stringify`s every non-string content part.
+    if (isDebugEnabled()) {
+      const summaryTokens = estimateHistoryTokens([summaryMessage, ackMessage]);
+      const tokensBefore = compressibleTokens + estimateHistoryTokens(recentMessages);
+      debugLog('context:compress', {
+        oldMessageCount: oldMessages.length,
+        recentMessageCount: recentMessages.length,
+        summaryLength: summary.length,
+        domainFactsCount: domainFacts.reduce((sum, df) => sum + df.facts.length, 0),
+        tokensBefore,
+        tokensAfter: tokensBefore - compressibleTokens + summaryTokens,
+        reclaimed: compressibleTokens - summaryTokens,
+        reclaimedPct:
+          tokensBefore > 0
+            ? Math.round(((compressibleTokens - summaryTokens) / tokensBefore) * 100)
+            : 0,
+      });
+    }
 
     return [summaryMessage, ackMessage, ...recentMessages];
   } catch (err) {
@@ -485,25 +544,50 @@ export function estimateHistoryTokens(history: CoreMessage[]): number {
 }
 
 /**
+ * Characters of non-history request prefix → tokens.
+ *
+ * The prefix is everything sent alongside the history: SYSTEM prompt, per-turn
+ * context message, and the tool block. Exported so the caller's "are we over
+ * budget?" test and {@link emergencyTruncate}'s "what fits?" answer cannot
+ * disagree about the divisor — they previously each spelled out `/ 4`.
+ *
+ * Note this is 4 chars/token while {@link estimateHistoryTokens} uses 3.6. That
+ * asymmetry predates #323 and is left alone deliberately: changing it would
+ * move every truncation threshold at once.
+ */
+export function estimatePrefixTokens(chars: number): number {
+  return Math.ceil(chars / 4);
+}
+
+/**
  * Progressively drop oldest messages until estimated tokens fit within budget.
  * Always keeps at least the last 6 messages so the model has some context.
  * Prepends a synthetic truncation notice.
+ *
+ * `prefixChars` is the total size of everything that will be sent alongside
+ * this history — SYSTEM prompt + per-turn context message + tool block. It is
+ * one number rather than one argument per contributor because the caller is the
+ * only party that knows the full list, and the previous shape encouraged
+ * smuggling: this took a `systemPrompt` string it used only for `.length`, so
+ * `agent.ts` padded it with `'\n'.repeat(contextMsgChars)` to get the context
+ * message counted, and #323 was about to add a third channel for the tool block
+ * (~21k chars / ~5.3k tokens on the main agent — omitted entirely, on the one
+ * path that runs *because* a budget was already exceeded).
  */
 export function emergencyTruncate(
   history: CoreMessage[],
   tokenBudget: number,
-  systemPrompt: string,
+  prefixChars: number,
   currentUserMessage?: string,
 ): CoreMessage[] {
-  const systemTokens = Math.ceil(systemPrompt.length / 4);
-  const historyBudget = tokenBudget - systemTokens;
+  const historyBudget = tokenBudget - estimatePrefixTokens(prefixChars);
 
   const taskHint = currentUserMessage
     ? `\n\nThe user's most recent request was: ${currentUserMessage.slice(0, 500)}`
     : '';
 
   if (historyBudget <= 0) {
-    // System prompt alone exceeds budget — keep last 6 messages anyway
+    // Prefix alone exceeds budget — keep last 6 messages anyway
     const kept = history.slice(-6);
     return [
       {

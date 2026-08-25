@@ -7,6 +7,7 @@ import {
 } from '../../providers/prompt-cache.js';
 import { detectToolError } from '../../tool-profiles.js';
 import { makeRepairHook } from '../../tool-call-repair.js';
+import { toolBlockBytes } from '../../tool-bytes.js';
 import { augmentTools } from '../../tools/augment.js';
 import type { AgentContext } from '../context.js';
 import { getOutputSink } from '../hooks/output-sink.js';
@@ -97,6 +98,17 @@ export interface RunDefinitionResult<TFormatted> {
    * step-limited single-loop helper to the scoped PAC pipeline (#296 Phase 2E).
    */
   stepLimitHit: boolean;
+  /**
+   * Wire size of this dispatch's tool block in characters (#323).
+   *
+   * A lazy accessor, not a value: the measurement converts every schema
+   * (O(schema size)) and only one caller — the main agent, budgeting the
+   * context it is about to send — ever asks. An eagerly-computed field would
+   * charge every dispatch for a number almost none of them read, and an opt-in
+   * flag would put the cheap-but-wrong answer in the default position, which is
+   * the shape #315/#322 exist to remove. Memoized, so repeated calls are free.
+   */
+  toolBytes: () => number;
 }
 
 /**
@@ -135,6 +147,11 @@ export async function runDefinition<TInput, TFormatted>(
   // `Available tools: …` and used to build its own second registry to do it,
   // which had already drifted from the handed set.
   const system = await Promise.resolve(def.systemPrompt(ctx, input, rawTools));
+  // Measured on `rawTools` rather than the augmented set: augmentation wraps
+  // `execute` and leaves name/description/parameters — everything that goes on
+  // the wire — untouched.
+  let measuredToolBytes: number | undefined;
+  const toolBytes = (): number => (measuredToolBytes ??= toolBlockBytes(rawTools));
   // Central confirmation-gate install (#144). Every agent runs through this
   // path, so applying the gate here (instead of inside each definition's
   // `tools()`) means sub-agent / PAC / specialist / cron tool calls all
@@ -369,7 +386,7 @@ export async function runDefinition<TInput, TFormatted>(
 
   const result = await strategy.run(strategyCtx);
   const formatted = await applyFormat(def, result, input, ctx);
-  return { result, formatted, resolved, stepLimitHit };
+  return { result, formatted, resolved, stepLimitHit, toolBytes };
 }
 
 function resolveModel<TInput, TFormatted>(

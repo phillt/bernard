@@ -65,6 +65,7 @@ vi.mock('./context.js', () => ({
   truncateToolResults: vi.fn((messages: any) => messages),
   estimateHistoryTokens: vi.fn(() => 1000),
   emergencyTruncate: vi.fn((history: any) => history),
+  estimatePrefixTokens: vi.fn((chars: number) => Math.ceil(chars / 4)),
   isTokenOverflowError: vi.fn(() => false),
   getContextWindow: vi.fn(() => 200_000),
   extractText: vi.fn((msg: any) => {
@@ -77,6 +78,12 @@ const mockExtractRecentUserTexts = vi.fn((): string[] => []);
 const mockExtractRecentToolContext = vi.fn((): string => '');
 const mockBuildRAGQuery = vi.fn((input: string) => input);
 const mockApplyStickiness = vi.fn((results: any) => results);
+// `toolBlockBytes` lives in a leaf module so the framework runner needn't
+// import the whole context layer (#323).
+vi.mock('./tool-bytes.js', () => ({
+  toolBlockBytes: vi.fn(() => 0),
+}));
+
 vi.mock('./rag-query.js', () => ({
   extractRecentUserTexts: (...args: any[]) => mockExtractRecentUserTexts(...args),
   extractRecentToolContext: (...args: any[]) => mockExtractRecentToolContext(...args),
@@ -697,6 +704,23 @@ describe('Agent', () => {
     const agent = makeAgent(makeConfig(), toolOptions, store);
     await agent.processInput('Hello');
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
+  });
+
+  it('measures the tool block once per session, not per turn (#323)', async () => {
+    // The main tool set is session-stable (the invariant the prompt cache
+    // relies on), and measuring converts every schema — so paying per turn
+    // would buy an unchanging number at O(schema size) each time.
+    const { toolBlockBytes } = await import('./tool-bytes.js');
+    (toolBlockBytes as unknown as ReturnType<typeof vi.fn>).mockClear();
+    mockGenerateText.mockResolvedValue({
+      response: { messages: [{ role: 'assistant', content: 'Hi!' }] },
+      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
+    });
+    const agent = makeAgent(makeConfig(), toolOptions, store);
+    await agent.processInput('Hello');
+    await agent.processInput('Again');
+    expect(mockGenerateText).toHaveBeenCalledTimes(2);
+    expect(toolBlockBytes).toHaveBeenCalledTimes(1);
   });
 
   it('processInput passes timestamped user message in history', async () => {
