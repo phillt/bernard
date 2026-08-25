@@ -1,6 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
+import type { VerifyOutcome } from '../framework/tools/types.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
@@ -161,12 +162,72 @@ function splitLines(content: string): string[] {
   return lines;
 }
 
+/**
+ * Writes `content` to `absPath` via a uniquely-named temp file and a rename,
+ * so a crash mid-write never leaves a half-written file where a whole one was.
+ *
+ * Returns an error message, or `null` on success.
+ *
+ * Not `fs-utils.ts`' `atomicWriteFileSync`: that uses a fixed `.tmp` suffix
+ * (two concurrent writers to one path would collide) and leaves the temp file
+ * behind when the rename fails.
+ */
+function atomicWrite(absPath: string, content: string): string | null {
+  const tmpPath = `${absPath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, content, 'utf-8');
+    fs.renameSync(tmpPath, absPath);
+    return null;
+  } catch (err: unknown) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      // Best-effort cleanup
+    }
+    return `Write failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+/**
+ * Post-write rubric check (#145) shared by both write tools: re-read the file
+ * the result names and confirm its hash matches what the tool declared.
+ *
+ * Shared rather than copied because the copy drifted on first use — it returned
+ * `detail`, which `VerifyOutcome` does not declare, so `augment.ts` read
+ * `outcome.evidence` and every warn/fail surfaced with no explanation.
+ */
+function verifyDeclaredHash(result: unknown): VerifyOutcome | null {
+  if (!result || typeof result !== 'object') return null;
+  const r = result as Record<string, unknown>;
+  const p = typeof r.path === 'string' ? r.path : null;
+  const expected = typeof r.new_hash === 'string' ? r.new_hash : null;
+  if (!p || !expected) return null;
+  try {
+    const actual = hashContent(fs.readFileSync(p, 'utf-8'));
+    return actual === expected
+      ? { status: 'pass', evidence: `hash matches (${actual.slice(0, 8)})` }
+      : {
+          status: 'warn',
+          evidence: `hash drift: declared ${expected.slice(0, 8)}, actual ${actual.slice(0, 8)}`,
+        };
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    return {
+      status: 'fail',
+      evidence:
+        code === 'ENOENT'
+          ? `file missing after write: ${p}`
+          : `cannot re-read after write: ${p} (${err instanceof Error ? err.message : String(err)})`,
+    };
+  }
+}
+
 /** Detect line ending style from content. */
 function detectLineEnding(content: string): string {
   return content.includes('\r\n') ? '\r\n' : '\n';
 }
 
-/** Creates file_read_lines and file_edit_lines tools. */
+/** Creates the `file_read_lines`, `file_write` and `file_edit_lines` tools. */
 export function createFileTools(provenance?: ProvenanceStore) {
   return {
     file_read_lines: attachMeta(
@@ -289,6 +350,14 @@ export function createFileTools(provenance?: ProvenanceStore) {
       },
     ),
 
+    // Deliberately NOT in `DEFAULT_SHIM_ROUTING` (`wrap-with-specialist.ts`),
+    // unlike `file_edit_lines`. Routing a write through `file-wrapper` would
+    // pass the entire payload through a second model on its way to disk — the
+    // extra hop costs a dispatch per write and re-introduces exactly the
+    // truncation this tool exists to avoid. Reads and edits are small and
+    // benefit from the wrapper's OS-aware examples; whole-file authoring does
+    // not. (`formatWrappedResult` still maps its error shape, for a specialist
+    // that names `file_write` in its own `targetTools`.)
     file_write: attachMeta(
       tool({
         description:
@@ -316,63 +385,41 @@ export function createFileTools(provenance?: ProvenanceStore) {
           try {
             const absPath = path.resolve(filePath);
 
-            let created = true;
-            try {
-              const stat = fs.statSync(absPath);
-              created = false;
-              if (stat.isDirectory()) {
-                return { error: `Path is a directory, not a file: ${absPath}` };
-              }
-            } catch (err: unknown) {
-              const code = (err as NodeJS.ErrnoException)?.code;
-              if (code !== 'ENOENT') {
-                const msg = err instanceof Error ? err.message : String(err);
-                return { error: `Cannot access ${absPath}: ${msg}` };
-              }
+            // `throwIfNoEntry: false` gives "does it exist?" and "what is it?"
+            // in one syscall — a missing file is the expected case here, not an
+            // error, unlike the read/edit tools.
+            const stat = fs.statSync(absPath, { throwIfNoEntry: false });
+            if (stat?.isDirectory()) {
+              return { error: `Path is a directory, not a file: ${absPath}` };
             }
+            const created = stat === undefined;
 
             const bytes = Buffer.byteLength(content, 'utf-8');
             if (bytes > MAX_FILE_SIZE) {
               return { error: `Content too large (${bytes} bytes, max ${MAX_FILE_SIZE})` };
             }
 
+            // Only worth checking when the target is new — if `statSync` found
+            // the file, its parent exists by construction.
             const parent = path.dirname(absPath);
-            if (!fs.existsSync(parent)) {
+            if (created && !fs.existsSync(parent)) {
               if (!create_dirs) {
                 return {
                   error: `Parent directory does not exist: ${parent} (pass create_dirs: true to create it)`,
                 };
               }
-              try {
-                fs.mkdirSync(parent, { recursive: true });
-              } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : String(err);
-                return { error: `Cannot create directory ${parent}: ${msg}` };
-              }
+              fs.mkdirSync(parent, { recursive: true });
             }
 
-            // Same tmp+rename as file_edit_lines: a crash mid-write must never
-            // leave a half-written file where a whole one used to be.
-            const tmpPath = `${absPath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
-            try {
-              fs.writeFileSync(tmpPath, content, 'utf-8');
-              fs.renameSync(tmpPath, absPath);
-            } catch (writeErr: unknown) {
-              try {
-                fs.unlinkSync(tmpPath);
-              } catch {
-                // Best-effort cleanup
-              }
-              const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
-              return { error: `Write failed: ${msg}` };
-            }
+            const writeError = atomicWrite(absPath, content);
+            if (writeError) return { error: writeError };
 
             return {
               path: absPath,
               bytes,
               new_hash: hashContent(content),
               created,
-              total_lines: content === '' ? 0 : splitLines(content).length,
+              total_lines: splitLines(content).length,
             };
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -386,23 +433,7 @@ export function createFileTools(provenance?: ProvenanceStore) {
         deterministic: false,
         sideEffect: 'local',
         cacheable: false,
-        // Same post-write rubric check as file_edit_lines (#145): re-read and
-        // confirm the hash matches what the tool just declared.
-        verifyOutput: (_args, result) => {
-          if (!result || typeof result !== 'object') return null;
-          const r = result as Record<string, unknown>;
-          const p = typeof r.path === 'string' ? r.path : null;
-          const expected = typeof r.new_hash === 'string' ? r.new_hash : null;
-          if (!p || !expected) return null;
-          try {
-            const actual = hashContent(fs.readFileSync(p, 'utf-8'));
-            return actual === expected
-              ? { status: 'pass' as const }
-              : { status: 'warn' as const, detail: `hash drifted after write: ${p}` };
-          } catch {
-            return { status: 'fail' as const, detail: `file missing after write: ${p}` };
-          }
-        },
+        verifyOutput: (_args, result) => verifyDeclaredHash(result),
       },
     ),
 

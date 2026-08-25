@@ -1,6 +1,7 @@
 import { tool, type CoreMessage, type Tool } from 'ai';
 import { z } from 'zod';
 import { createTools } from '../../tools/index.js';
+import { FILE_TOOLS } from '../../permissions/matchers.js';
 import { formatCurrentDateTime } from '../../tools/datetime.js';
 import { attachMeta } from '../tools/adapter.js';
 import { CronStore } from '../../cron/store.js';
@@ -219,28 +220,24 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
       surface,
     );
 
-    // `file_edit_lines` and `file_write` are withheld, and the reason is a gate
-    // asymmetry rather than a judgement about unattended writes.
+    // Withhold the write-capable file tools, for a gate asymmetry rather than a
+    // judgement about unattended writes: a default job runs `toolMode: 'write'`
+    // / `confirmThreshold: 'high'`, where `shell` (`kind: 'dangerous'` → high)
+    // has its write-shaped invocations DENIED headlessly, while a file tool
+    // (`kind: 'write'` + `sideEffect: 'local'` → medium) would pass unprompted.
+    // Handing them over gives every existing job an unbounded filesystem write
+    // through the one door that isn't gated. The asymmetry is the real defect
+    // (#338), likely superseded by path-scoped writes (#340).
     //
-    // A default cron job runs at `toolMode: 'write'`, `confirmThreshold:
-    // 'high'`. `shell` is `kind: 'dangerous'` → high risk → its write-shaped
-    // invocations are DENIED headlessly (only `isReadOnlyShellInvocation`
-    // commands get through). `file_edit_lines` is `kind: 'write'` +
-    // `sideEffect: 'local'` → medium → it would pass unprompted. So handing it
-    // over would give every existing job an unbounded filesystem write it
-    // provably does not have today, through the one door that isn't gated —
-    // the opposite of "shell already grants strictly more".
-    //
-    // The asymmetry itself (arbitrary local file write classified below a shell
-    // write) is the real defect, but raising these to high changes interactive
-    // behaviour for every user and needs its own decision — #338, likely
-    // superseded by path-scoped writes (#340), which would let a job write
-    // inside its own workspace and nowhere else.
-    //
-    // `file_write` (#342) is withheld for the same reason and more strongly: it
-    // can CREATE files, where `file_edit_lines` errors on a path that does not
-    // already exist.
-    const { file_edit_lines: _noEdit, file_write: _noWrite, ...safeBaseTools } = baseTools;
+    // Derived from `FILE_TOOLS` — the set the permission engine already routes
+    // through `matchPathSpecifier(specifier, args.path)` — rather than a second
+    // hand-maintained name list that could disagree with it. A fourth
+    // path-scoped write tool is withheld automatically; reads are kept.
+    const safeBaseTools = Object.fromEntries(
+      Object.entries(baseTools).filter(
+        ([name]) => !FILE_TOOLS.has(name) || name === 'file_read_lines',
+      ),
+    );
 
     const registry: Record<string, Tool> = {
       ...safeBaseTools,
