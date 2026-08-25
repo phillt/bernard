@@ -302,17 +302,30 @@ function isProviderInLineup(provider: string, lineup: Lineup): boolean {
   return false;
 }
 
-/**
- * Unique provider names referenced anywhere in the lineup. Used for debug
- * logging and, since #306, to decide whether a provider that vanished from the
- * model catalog is one this session actually depends on.
- */
-export function lineupProviders(lineup: Lineup): string[] {
+/** Unique provider names referenced anywhere in the lineup (debug logging). */
+function lineupProviders(lineup: Lineup): string[] {
   const out = new Set<string>();
   for (const ladder of Object.values(lineup.roles)) {
     for (const slot of Object.values(ladder)) out.add(slot.provider);
   }
   return [...out];
+}
+
+/**
+ * Providers this session actually depends on: the configured default plus every
+ * provider bound to a slot of the active lineup.
+ *
+ * Lives here rather than at the call site because "which providers is this
+ * session using" is a model-policy question — this module already owns per-site
+ * provider resolution and lineup loading. The UI asks; it does not decide.
+ *
+ * Known gap: a specialist with a persisted `provider` pin can pull in a provider
+ * outside the lineup (see the off-lineup pin guard below), and reading the
+ * specialist store from here would mean taking a store handle. So a catalog wipe
+ * of a provider used *only* by such a pin is still silent (#306).
+ */
+export function providersInUse(config: BernardConfig): string[] {
+  return [...new Set([config.provider, ...lineupProviders(loadActiveLineup(config))])];
 }
 
 /**

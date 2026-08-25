@@ -384,7 +384,7 @@ export function getCatalogSource(): CatalogSource {
 }
 
 /** Stable identity for a catalog entry — `provider/model`. */
-function entryKey(e: ModelCatalogEntry): string {
+export function entryKey(e: ModelCatalogEntry): string {
   return `${e.provider}/${e.model}`;
 }
 

@@ -36,20 +36,14 @@
 
 let attempts = 0;
 
-/**
- * Record one outbound provider request. Called from the stall-guard fetch
- * wrapper, which is injected into every built-in and custom client and wraps
- * every completion — including when the stall guard itself is disabled.
- */
+/** Record one outbound provider request. */
 export function countProviderRequest(): void {
   attempts++;
 }
 
 /**
- * Requests issued to model providers so far this process.
- *
- * Compare against the session's telemetry record count: a material excess is
- * retry (or failed-call) spend that the per-call accounting cannot see.
+ * Requests issued to model providers so far this process. A material excess
+ * over the session's telemetry record count is retry (or failed-call) spend.
  */
 export function getProviderRequestCount(): number {
   return attempts;

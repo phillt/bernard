@@ -90,11 +90,9 @@ export function stallGuardedFetch(
     //    so a value in `~/.config/bernard/.env` had no effect and only a real
     //    shell export worked. Every other knob here reads lazily.
     const fetchImpl = baseFetch ?? globalThis.fetch;
-    // Counted here, before the guard's own off-switch, because this wrapper is
-    // the only always-installed layer that sees every provider request —
-    // including SDK-level retries, which is the whole point (#308). Counting
-    // after the `timeoutMs <= 0` early return would silently stop counting for
-    // anyone who disabled the stall guard.
+    // Before the off-switch below: this wrapper is the only always-installed
+    // layer under the SDK's retry loop, so disabling the stall guard must not
+    // also disable request accounting (#308).
     countProviderRequest();
     const timeoutMs = getTimeoutMs();
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return fetchImpl(input, init);

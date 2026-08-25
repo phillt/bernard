@@ -98,7 +98,7 @@ import {
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
 import type { CoreMessage } from 'ai';
-import { resolveMainModel, logSiteModelSnapshot, lineupProviders } from '../model-policy.js';
+import { resolveMainModel, logSiteModelSnapshot, providersInUse } from '../model-policy.js';
 import {
   serializeMessages,
   extractDomainFacts,
@@ -782,10 +782,7 @@ export function App({
     void (async () => {
       try {
         const diff = await refreshCatalogWithDiff();
-        const lineup = resolveActiveLineup(loadLineups(), config.activeLineupId, config.provider);
-        const notice = catalogRefreshNotice(diff, {
-          providersInUse: [config.provider, ...lineupProviders(lineup)],
-        });
+        const notice = catalogRefreshNotice(diff, { providersInUse: providersInUse(config) });
         switch (notice.kind) {
           case 'provider-wiped':
             pushAssistantNotice(notice.message);

@@ -63,7 +63,6 @@ describe('catalogRefreshNotice', () => {
       { providersInUse: ['xai', 'anthropic'] },
     );
     expect(n.kind).toBe('provider-wiped');
-    expect(n.wipedProviders).toEqual(['xai']);
     expect(n.message).toContain('xai');
   });
 
@@ -76,7 +75,6 @@ describe('catalogRefreshNotice', () => {
       { providersInUse: ['anthropic'] },
     );
     expect(n.kind).toBe('removed');
-    expect(n.wipedProviders).toEqual([]);
   });
 
   it('does not escalate for a provider that was already at zero and lost nothing', () => {

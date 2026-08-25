@@ -1,4 +1,5 @@
-import type { CatalogRefreshDiff } from './providers/catalog.js';
+import { entryKey, type CatalogRefreshDiff } from './providers/catalog.js';
+import { nameList, plural } from './text.js';
 
 /**
  * Startup catalog-refresh notice (#306).
@@ -36,8 +37,6 @@ export interface CatalogNotice {
   kind: CatalogNoticeKind;
   /** User-facing text. Empty string when `kind === 'none'`. */
   message: string;
-  /** Providers that lost every entry — populated only for `provider-wiped`. */
-  wipedProviders: string[];
 }
 
 export interface CatalogNoticeOptions {
@@ -49,18 +48,7 @@ export interface CatalogNoticeOptions {
   providersInUse: string[];
 }
 
-const NONE: CatalogNotice = { kind: 'none', message: '', wipedProviders: [] };
-
-/** `a, b, c +N more` — keeps a long list from swallowing the line. */
-function nameList(names: string[], limit = 3): string {
-  const head = names.slice(0, limit).join(', ');
-  const rest = names.length - limit;
-  return rest > 0 ? `${head} +${rest} more` : head;
-}
-
-function plural(n: number, one: string, many: string): string {
-  return n === 1 ? one : many;
-}
+const NONE: CatalogNotice = { kind: 'none', message: '' };
 
 /**
  * Decide what (if anything) to tell the user about a catalog refresh.
@@ -93,7 +81,6 @@ export function catalogRefreshNotice(
   if (wipedProviders.length > 0) {
     return {
       kind: 'provider-wiped',
-      wipedProviders,
       message:
         `Model catalog: ${nameList(wipedProviders)} lost every entry in this refresh ` +
         `(${diff.removed.length} ${plural(diff.removed.length, 'model', 'models')} removed). ` +
@@ -106,20 +93,18 @@ export function catalogRefreshNotice(
   if (diff.removed.length > 0) {
     return {
       kind: 'removed',
-      wipedProviders: [],
       message:
         `${diff.removed.length} ${plural(diff.removed.length, 'model', 'models')} removed from the ` +
-        `catalog: ${nameList(diff.removed.map((e) => `${e.provider}/${e.model}`))}.`,
+        `catalog: ${nameList(diff.removed.map(entryKey))}.`,
     };
   }
 
   if (diff.added.length > 0) {
     return {
       kind: 'added',
-      wipedProviders: [],
       message:
         `${diff.added.length} new ${plural(diff.added.length, 'model', 'models')} available: ` +
-        `${nameList(diff.added.map((e) => `${e.provider}/${e.model}`))}. ` +
+        `${nameList(diff.added.map(entryKey))}. ` +
         `Browse with /models or bind one via /lineup.`,
     };
   }

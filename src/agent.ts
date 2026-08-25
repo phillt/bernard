@@ -382,9 +382,7 @@ export class Agent {
     this.spinnerStats.sessionCostUsd += report.totalCostUsd ?? 0;
     // Sticky: once any turn contained an unpriced row the session total is a
     // floor, not a total, and the StatusBar must say so rather than show $0.00.
-    // Tracks the same fact as `SessionTelemetry.totals.hasUnpriced`; see the
-    // `sessionCostPartial` docblock in `output.ts` for why the render path
-    // cannot read it from there (#311).
+    // One of two writers; rationale on `SpinnerStats.sessionCostPartial` (#311).
     if (report.partial) this.spinnerStats.sessionCostPartial = true;
     return report.totalCostUsd ?? undefined;
   }
@@ -1081,11 +1079,10 @@ export class Agent {
         // Provider request accounting (#308). Attempts are counted at the fetch
         // wrapper, records at `onStepFinish` — so a persistent excess is spend
         // that per-call accounting cannot see (SDK retries, or calls that failed
-        // before producing a usage payload). Inside the debug gate because
-        // `summary()` builds the whole dispatch tree.
+        // before producing a usage payload).
         debugLog('provider:requests', {
           attempts: getProviderRequestCount(),
-          records: this.spinnerStats.sessionTelemetry?.summary().totals.calls ?? 0,
+          records: this.spinnerStats.sessionTelemetry?.calls ?? 0,
         });
         const report = computeTurnUsageReport(this.spinnerStats);
         debugLog('turn-stats', {
@@ -1208,8 +1205,7 @@ export class Agent {
             if (tel.costUsd != null) compactionCostUsd += tel.costUsd;
             // Unpriced compaction spend still counts against the session total's
             // completeness — otherwise it silently vanishes into a clean $0.00.
-            // Second of the two writers of this flag; see `output.ts` for why it
-            // is kept separate from `SessionTelemetry.totals.hasUnpriced` (#311).
+            // Second of two writers; rationale on `SpinnerStats.sessionCostPartial`.
             else stats.sessionCostPartial = true;
             sink?.record(tel);
           }
