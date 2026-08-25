@@ -14,7 +14,7 @@ import type { AgentContext } from '../framework/context.js';
 import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
-import { classifyError } from '../error-taxonomy.js';
+import { classifyError, isDispatchCancellation } from '../error-taxonomy.js';
 import {
   definitions,
   registerBuiltinDefinitions,
@@ -337,6 +337,8 @@ export async function dispatchToolWrapper(
         return wrapped;
       } catch (err: unknown) {
         printSpecialistEnd(id);
+        // A cancelled dispatch unwinds; a failed one is a tool result (#327).
+        if (isDispatchCancellation(err)) throw err;
         const message = err instanceof Error ? err.message : String(err);
         appendReasoningLog({
           ts: new Date().toISOString(),

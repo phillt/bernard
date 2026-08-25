@@ -9,6 +9,7 @@ import { registerBuiltinDefinitions } from '../framework/agents/index.js';
 import type { SubAgentInput } from '../framework/agents/sub.js';
 import { runPAC } from '../framework/pac/run-pac.js';
 import { withSlot, _resetPool, getMaxConcurrentAgents } from './agent-pool.js';
+import { isDispatchCancellation } from '../error-taxonomy.js';
 
 /**
  * Resets the shared concurrency pool state.
@@ -96,6 +97,8 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
             return formatted;
           } catch (err: unknown) {
             printSubAgentEnd(id);
+            // A cancelled dispatch unwinds; a failed one is a tool result (#327).
+            if (isDispatchCancellation(err)) throw err;
             const message = err instanceof Error ? err.message : String(err);
             return `Sub-agent error: ${message}`;
           }

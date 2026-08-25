@@ -51,6 +51,7 @@ vi.mock('ai', async (importOriginal) => {
 });
 
 import { createSubAgentTool, _resetSubAgentState } from './subagent.js';
+import { getActiveCount } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 import { assembleContext } from '../framework/context.js';
 
@@ -177,6 +178,35 @@ describe('subagent tool', () => {
     );
     expect(result).toContain('Sub-agent error:');
     expect(result).toContain('API rate limit');
+  });
+
+  it('re-throws a cancellation instead of handing it back as a result (#327)', async () => {
+    // A user's Esc used to arrive at the parent as `Sub-agent error: Aborted`
+    // — a *successful* tool result the model reads as data and keeps looping
+    // on, until its own signal happens to trip.
+    mockGenerateText.mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
+    await expect(
+      agentTool.execute!(
+        { task: 'test' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    // The unwind must not strand the pool slot it was holding.
+    expect(getActiveCount()).toBe(0);
+  });
+
+  it('re-throws an abort the runner fired itself', async () => {
+    const own = new Error('Provider stream timed out — no data received for 120000 ms');
+    own.name = 'DispatchAbortError';
+    mockGenerateText.mockRejectedValue(own);
+    const agentTool = createSubAgentTool(makeCtx(makeConfig(), toolOptions, memoryStore));
+    await expect(
+      agentTool.execute!(
+        { task: 'test' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      ),
+    ).rejects.toThrow(/timed out/);
   });
 
   it('returns error string when concurrent limit exceeded', async () => {

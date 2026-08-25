@@ -198,6 +198,16 @@ describe('dispatchServerDelegate', () => {
     const out = await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
     expect(out).toContain('boom');
   });
+
+  it('re-throws a cancellation rather than returning it as a summary (#327)', async () => {
+    // A returned string is a *successful* tool result. Right for a failed MCP
+    // call the model can react to; wrong for "the dispatch was cancelled",
+    // which the parent then reads as data and loops on.
+    vi.mocked(runDefinition).mockRejectedValueOnce(new DOMException('Aborted', 'AbortError'));
+    await expect(
+      dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+  });
 });
 
 describe('dispatchServerDelegate self-escalation (#296 Phase 2E)', () => {

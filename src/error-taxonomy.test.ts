@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyError } from './error-taxonomy.js';
+import { classifyError, isDispatchCancellation, DISPATCH_ABORT_NAME } from './error-taxonomy.js';
 
 describe('classifyError', () => {
   describe('HTTP status mapping', () => {
@@ -185,5 +185,73 @@ describe('classifyError', () => {
       expect(cls.playbook.user).toBeTruthy();
       expect(cls.playbook.model).toBeTruthy();
     });
+  });
+});
+
+describe('isDispatchCancellation', () => {
+  it('recognizes an AbortError, which classifyError cannot', () => {
+    // A DOMException named AbortError carries the message "Aborted", which
+    // matches neither `\bcancelled\b` nor `aborted by user` — so the category
+    // route alone would call a user's Esc `unknown` and stringify it.
+    const err = new DOMException('Aborted', 'AbortError');
+    expect(classifyError({ message: err.message }).category).toBe('unknown');
+    expect(isDispatchCancellation(err)).toBe(true);
+  });
+
+  it('recognizes an abort the runner fired itself, by name', () => {
+    const own = new Error('Provider stream timed out — no data received for 120000 ms');
+    own.name = DISPATCH_ABORT_NAME;
+    expect(isDispatchCancellation(own)).toBe(true);
+  });
+
+  it('does NOT treat a provider timeout as a cancellation', () => {
+    // The taxonomy marks `timeout` as retryable — a provider network blip is
+    // exactly the failure a model should be told about and work around, not a
+    // reason to unwind the whole turn. Keying on the message conflated the two,
+    // since our own messages also say "timed out".
+    const providerTimeout = new Error('network timeout');
+    expect(classifyError({ message: providerTimeout.message }).category).toBe('timeout');
+    expect(isDispatchCancellation(providerTimeout)).toBe(false);
+  });
+
+  it('sees through the AI SDK wrapping a re-thrown tool error (#327)', () => {
+    // A throw out of `tool.execute` comes back as ToolExecutionError. Reachable
+    // as main → `agent` → `delegate_<server>`, since sub-agents carry delegate
+    // tools. A timeout survives for free (its message is interpolated into the
+    // wrapper's); an AbortError does not, so the predicate walks `cause`.
+    const wrapped = new Error('Error executing tool delegate_google: Aborted', {
+      cause: new DOMException('Aborted', 'AbortError'),
+    });
+    wrapped.name = 'AI_ToolExecutionError';
+    expect(classifyError({ message: wrapped.message }).category).toBe('unknown');
+    expect(isDispatchCancellation(wrapped)).toBe(true);
+
+    // Same for one the runner fired itself.
+    const ownCause = new Error('Dispatch timed out after 60000 ms');
+    ownCause.name = DISPATCH_ABORT_NAME;
+    const wrappedOwn = new Error('Error executing tool agent: Dispatch timed out', {
+      cause: ownCause,
+    });
+    wrappedOwn.name = 'AI_ToolExecutionError';
+    expect(isDispatchCancellation(wrappedOwn)).toBe(true);
+  });
+
+  it('terminates on a cyclic cause chain', () => {
+    // Error chains come from providers and MCP servers; a cycle must not hang
+    // the catch handler that consults this.
+    const a = new Error('a');
+    const b = new Error('b', { cause: a });
+    (a as { cause?: unknown }).cause = b;
+    expect(isDispatchCancellation(a)).toBe(false);
+  });
+
+  it('leaves genuine work failures alone', () => {
+    // These stay returned strings: a failed MCP call IS a tool result the
+    // model should see and can recover from on its own.
+    expect(isDispatchCancellation(new Error('HTTP 404 Not Found'))).toBe(false);
+    expect(isDispatchCancellation(new Error('API rate limit'))).toBe(false);
+    expect(isDispatchCancellation(new Error('command not found: jq'))).toBe(false);
+    expect(isDispatchCancellation('not an error')).toBe(false);
+    expect(isDispatchCancellation(undefined)).toBe(false);
   });
 });
