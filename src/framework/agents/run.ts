@@ -20,6 +20,7 @@ import {
 import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
+import { resolveToolSurface } from './tool-surface.js';
 import type { AgentDefinition, HistoryMode, ModelOverrides, ResolvedModel } from './types.js';
 
 export interface RunDefinitionOpts {
@@ -120,8 +121,20 @@ export async function runDefinition<TInput, TFormatted>(
   const { config } = ctx;
   const resolved = resolveModel(def, ctx, input, opts.overrides);
 
-  const system = await Promise.resolve(def.systemPrompt(ctx, input));
-  const rawTools = await Promise.resolve(def.tools(ctx, input));
+  // Central tool-surface resolution (#315, #322). The built-in registry scope
+  // (#253) and the MCP bag (#296/#305) are cross-cutting decisions about what
+  // a dispatch is entitled to — the same class of concern as the confirm gate
+  // installed below, and resolved in the same place for the same reason. Five
+  // definitions used to call `mcpToolSurface(ctx)` themselves and four passed
+  // `{ surface: 'worker' }` by hand; both defaulted to the expensive option, so
+  // a missed call site failed silently and expensively. Deciding here makes the
+  // definitions consumers of the answer rather than five copies of the rule.
+  const surface = resolveToolSurface(ctx, def);
+  const rawTools = await Promise.resolve(def.tools(ctx, input, surface));
+  // Tools first, then the prompt that describes them: `task` interpolates
+  // `Available tools: …` and used to build its own second registry to do it,
+  // which had already drifted from the handed set.
+  const system = await Promise.resolve(def.systemPrompt(ctx, input, rawTools));
   // Central confirmation-gate install (#144). Every agent runs through this
   // path, so applying the gate here (instead of inside each definition's
   // `tools()`) means sub-agent / PAC / specialist / cron tool calls all
@@ -142,7 +155,7 @@ export async function runDefinition<TInput, TFormatted>(
     // Evidence-pointer registration (#141). Shared by reference into
     // sub-agent / tool-wrapper contexts so a `shell` call inside a wrapper
     // surfaces in the parent's Shift+Tab overlay alongside main-agent calls.
-    // Default-closed: cron and bare depsToCtx callers run without a
+    // Default-closed: cron and other hand-assembled contexts run without a
     // policyDecision, so silently enabling evidence there would populate the
     // shared store with entries the model running that context was never
     // told to cite (cron + sub-agents/wrappers do not inject EVIDENCE_PROMPT).

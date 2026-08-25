@@ -1,4 +1,5 @@
-import { dispatchToolWrapper, type ToolWrapperDeps } from './tool-wrapper-run.js';
+import { dispatchToolWrapper } from './tool-wrapper-run.js';
+import type { AgentContext } from '../framework/context.js';
 import { debugLog } from '../logger.js';
 import { preserveMeta } from '../framework/tools/adapter.js';
 import { classifyError } from '../error-taxonomy.js';
@@ -81,7 +82,7 @@ export function wrapToolWithSpecialist<TArgs>(
   baseTool: any,
   toolName: string,
   specialistId: string,
-  deps: ToolWrapperDeps,
+  ctx: AgentContext,
 ): any {
   const baseExecute = baseTool.execute;
   if (typeof baseExecute !== 'function') {
@@ -91,7 +92,7 @@ export function wrapToolWithSpecialist<TArgs>(
   const shim = {
     ...baseTool,
     execute: async (args: TArgs, execOptions: any): Promise<unknown> => {
-      const specialist = deps.specialistStore.get(specialistId);
+      const specialist = ctx.stores.specialists.get(specialistId);
       if (!specialist) {
         return baseExecute(args, execOptions);
       }
@@ -109,7 +110,7 @@ export function wrapToolWithSpecialist<TArgs>(
             abortSignal: execOptions?.abortSignal,
             runLabel: `[shim] ${toolName} → ${specialist.name}`,
           },
-          deps,
+          ctx,
         );
         if (wrapped.status === 'error') {
           // Use the same fallback for display that the classifier consumes, so
@@ -167,13 +168,13 @@ export const DEFAULT_SHIM_ROUTING: Record<string, string> = {
  */
 export function applyShimRouting(
   tools: Record<string, any>,
-  deps: ToolWrapperDeps,
+  ctx: AgentContext,
   routing: Record<string, string> = DEFAULT_SHIM_ROUTING,
 ): Record<string, any> {
   const out: Record<string, any> = { ...tools };
   for (const [toolName, specialistId] of Object.entries(routing)) {
     if (!out[toolName]) continue;
-    out[toolName] = wrapToolWithSpecialist(out[toolName], toolName, specialistId, deps);
+    out[toolName] = wrapToolWithSpecialist(out[toolName], toolName, specialistId, ctx);
   }
   return out;
 }

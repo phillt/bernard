@@ -2,7 +2,6 @@ import type { CoreMessage, Tool } from 'ai';
 import { debugLog } from '../../logger.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
-import { mcpToolSurface } from '../../tools/delegate.js';
 import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
@@ -69,21 +68,24 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
     return { ragResults: await searchRag(ctx, input.task) };
   },
 
-  tools(ctx, input) {
+  tools(ctx, input, surface) {
     // A caller-scoped registry (e.g. MCP delegation escalation) wins, keeping
     // MCP schemas contained; the generic sub-agent PAC path is unchanged.
+    // Note this deliberately bypasses `surface` entirely: for the escalation
+    // path `childTools` IS one server's raw MCP tools, and re-resolving would
+    // hand it delegates for every server instead.
     return (
       input.childTools ??
       createTools(
         ctx.toolOptions,
         ctx.stores.memory,
-        mcpToolSurface(ctx),
+        surface.mcpTools,
         undefined,
         undefined,
         undefined,
         undefined,
         ctx.provenance,
-        { surface: 'worker' }, // #253 — see WORKER_EXCLUDED_TOOLS
+        surface,
       )
     );
   },

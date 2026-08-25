@@ -5,7 +5,6 @@ import { PlanStore } from '../../plan-store.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
-import { mcpToolSurface } from '../../tools/delegate.js';
 import { createPlanTool } from '../../tools/plan.js';
 import { createThinkTool } from '../../tools/think.js';
 import { createEvaluateTool } from '../../tools/evaluate.js';
@@ -78,17 +77,17 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     return { ragResults: await searchRagForSpecialist(ctx, input) };
   },
 
-  async tools(ctx, input) {
+  async tools(ctx, input, surface) {
     const baseTools = createTools(
       ctx.toolOptions,
       ctx.stores.memory,
-      mcpToolSurface(ctx),
+      surface.mcpTools,
       undefined,
       ctx.stores.specialists,
       undefined,
       undefined,
       ctx.provenance,
-      { surface: 'worker' }, // #253 — see WORKER_EXCLUDED_TOOLS
+      surface,
     );
     const specialistTools: Record<string, Tool> = {
       ...baseTools,

@@ -64,6 +64,31 @@ export interface ToolMeta {
    */
   isWriteAction?: (args: unknown) => boolean;
   /**
+   * True when this tool dispatches on an `action` argument covering operations
+   * of very different consequence (#253, #322). Profile permission grants then
+   * key per action (`cron:delete`) and the breadth ladder offers "this action" /
+   * "any action" instead of exact-args — so an "always allow" granted while
+   * listing jobs cannot authorise deleting them.
+   *
+   * Declared here rather than in a name list kept elsewhere: the discriminator
+   * is a tool-local fact, it is the same one {@link isWriteAction} already
+   * refines on, and a separate list can disagree with the tool it describes.
+   * `attachActionMeta` sets it, so any action-enum tool built that way is
+   * covered by construction.
+   *
+   * Deliberately a flag rather than a configurable field NAME: the persisted
+   * rule specifier format is literally `action:<value>` (minted in
+   * `permissions/breadth.ts`, matched in `permissions/engine.ts`), so a tool
+   * dispatching on some other field would mint grants the engine could never
+   * match. The field name is fixed by the on-disk format.
+   *
+   * `routine` / `specialist` / `lineup_edit` have the same action shape but
+   * deliberately do NOT declare it: users may hold stored rules keyed on the
+   * bare name, and re-keying them would silently invalidate those. That needs
+   * its own change, with a migration.
+   */
+  actionScoped?: boolean;
+  /**
    * Optional post-write schema/state check (issue #145). Runs after the tool
    * returns `status: 'ok'` and contributes a structured `Check` to the turn's
    * rubric. Used for "did we mutate external state, and did we confirm it

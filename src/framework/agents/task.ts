@@ -1,10 +1,9 @@
 import { z } from 'zod';
-import type { CoreMessage, Tool } from 'ai';
+import type { CoreMessage } from 'ai';
 import type { BernardConfig } from '../../config.js';
 import { debugLog } from '../../logger.js';
 import { extractJsonBlock } from '../../structured-output.js';
 import { createTools } from '../../tools/index.js';
-import { mcpToolSurface } from '../../tools/delegate.js';
 import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
@@ -126,25 +125,6 @@ export interface TaskInput {
  * No repair hook — task historically ran without one and the strict
  * no-behavior-change contract holds.
  */
-/**
- * The task agent's tool registry. Shared by `systemPrompt` and `tools` so the
- * advertised `Available tools: …` list is the handed set BY CONSTRUCTION —
- * previously they were assembled separately and had already drifted (the
- * prompt path passed no provenance, so `cite` was handed but never advertised).
- */
-function taskTools(ctx: AgentContext): Record<string, Tool> {
-  return createTools(
-    ctx.toolOptions,
-    ctx.stores.memory,
-    mcpToolSurface(ctx),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    ctx.provenance,
-    { surface: 'worker' }, // #253 — see WORKER_EXCLUDED_TOOLS
-  );
-}
 
 export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
   id: 'task',
@@ -152,8 +132,10 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
   historyMode: 'ephemeral',
   prefix: (input) => `task:${input.slotId}`,
 
-  systemPrompt(ctx) {
-    const autoContext = `\n\nWorking directory: ${process.cwd()}\nAvailable tools: ${Object.keys(taskTools(ctx)).join(', ')}`;
+  // `tools` is the registry `runDefinition` just built from this definition's
+  // own `tools()`, so the advertised list is the handed set by construction.
+  systemPrompt(_ctx, _input, tools) {
+    const autoContext = `\n\nWorking directory: ${process.cwd()}\nAvailable tools: ${Object.keys(tools).join(', ')}`;
     return TASK_SYSTEM_PROMPT + autoContext;
   },
 
@@ -164,7 +146,19 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
     };
   },
 
-  tools: taskTools,
+  tools(ctx, _input, surface) {
+    return createTools(
+      ctx.toolOptions,
+      ctx.stores.memory,
+      surface.mcpTools,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ctx.provenance,
+      surface,
+    );
+  },
 
   strategy() {
     return new NormalStrategy();

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mainAgentDefinition } from '../main.js';
 import { makeCtx } from './_mcp-delegation-fixture.js';
 import type { AgentContext } from '../../context.js';
+import { toolsOf } from './_mcp-delegation-fixture.js';
 
 /**
  * The main agent's tool block must be BYTE-IDENTICAL across turns (#253, #269).
@@ -20,11 +21,8 @@ import type { AgentContext } from '../../context.js';
  * If this fails, something turn-scoped leaked into tool assembly. The fix is to
  * make it session-stable (config-derived), not to relax the assertion.
  */
-function toolBlock(ctx: AgentContext): string {
-  const tools = mainAgentDefinition.tools(ctx, {
-    planStore: {},
-    systemPrompt: '',
-  } as unknown as Parameters<typeof mainAgentDefinition.tools>[1]);
+async function toolBlock(ctx: AgentContext): Promise<string> {
+  const tools = await toolsOf(mainAgentDefinition, ctx, { planStore: {}, systemPrompt: '' });
   // Names + descriptions are what actually go on the wire and what a cache
   // breakpoint hashes over. Sorted so a key-order change alone isn't flagged.
   return JSON.stringify(
@@ -35,26 +33,23 @@ function toolBlock(ctx: AgentContext): string {
 }
 
 describe('main agent tool block is stable across turns (#253)', () => {
-  it('does not vary with the per-turn policy decision', () => {
+  it('does not vary with the per-turn policy decision', async () => {
     const react = makeCtx(true, {
       policyDecision: { strategyId: 'react', toolMode: { mode: 'write' } },
     } as Partial<AgentContext>);
     const normal = makeCtx(true, {
       policyDecision: { strategyId: 'normal', toolMode: { mode: 'read-only' } },
     } as Partial<AgentContext>);
-    expect(toolBlock(react)).toBe(toolBlock(normal));
+    expect(await toolBlock(react)).toBe(await toolBlock(normal));
   });
 
-  it('does not vary between two identically-configured turns', () => {
-    expect(toolBlock(makeCtx(true))).toBe(toolBlock(makeCtx(true)));
+  it('does not vary between two identically-configured turns', async () => {
+    expect(await toolBlock(makeCtx(true))).toBe(await toolBlock(makeCtx(true)));
   });
 
-  it('carries no cron_* schemas — they consolidate into one `cron` tool', () => {
+  it('carries no cron_* schemas — they consolidate into one `cron` tool', async () => {
     const names = Object.keys(
-      mainAgentDefinition.tools(makeCtx(true), {
-        planStore: {},
-        systemPrompt: '',
-      } as unknown as Parameters<typeof mainAgentDefinition.tools>[1]),
+      await toolsOf(mainAgentDefinition, makeCtx(true), { planStore: {}, systemPrompt: '' }),
     );
     expect(names).toContain('cron');
     expect(names).toContain('cron_logs');

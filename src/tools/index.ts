@@ -28,48 +28,53 @@ import type { ProvenanceStore } from '../provenance.js';
 export type { ToolOptions } from './types.js';
 
 /**
- * Tools a `worker` surface omits (#253): Bernard's own configuration and
- * scheduling controls.
+ * Who a tool is FOR (#253, #322) — an ownership question, not a write-ness one.
  *
- * These mutate durable user state that belongs to the main agent and the REPL —
- * cron jobs, model lineups, specialist definitions, saved routines, MCP server
- * config. A dispatched worker exists to carry out one delegated task, not to
- * reconfigure the assistant while doing it.
- *
- * Removing them is a cost win and a containment win:
- *  - Cost: the worker surface is 11 tools / ~6.4k chars against a full 20 /
- *    ~21.2k — about 14.8k chars (~3.7k tokens) skipped per dispatch. Ephemeral
- *    dispatches are never prompt-cache-marked (`run.ts`: `promptCacheActive`
- *    requires `historyMode === 'persistent'`, and only the main agent is), so
- *    unlike the main agent's block this is billed at full rate every time.
- *    (Measured after the cron consolidation that shrank the full surface; a
- *    sub-agent's end-to-end drop across both changes is ~24.1k -> 6.4k chars.)
- *  - Containment: `createRoutineTool(undefined)` falls back to
- *    `new RoutineStore()`, so a worker handed no store would otherwise get a
- *    live one pointed at the user's real routines directory.
- *
- * Deliberately a name list rather than a `kind`/`sideEffect` predicate: the
- * distinction here is "who owns this decision", not "is this a write". `shell`
- * and `file_edit_lines` are writes a worker legitimately needs.
- *
- * The registry below skips CONSTRUCTING these on a worker rather than deleting
- * them afterwards, so this list is the declared contract and the assertion
- * source for `cron-consolidation.test.ts` — which pins that the two agree.
+ *  - `'main'` — Bernard's own configuration and scheduling controls (cron jobs,
+ *    model lineups, specialist definitions, saved routines, MCP server config).
+ *    They mutate durable user state that belongs to the main agent and the
+ *    REPL. A dispatched worker exists to carry out one delegated task, not to
+ *    reconfigure the assistant while doing it.
+ *  - `'any'` — everything else, including writes a worker legitimately needs.
+ *    `shell` and `file_edit_lines` are `'any'`: the field encodes ownership,
+ *    not write-ness, which is why it is declared rather than derived from
+ *    `kind`/`sideEffect`.
  */
-export const WORKER_EXCLUDED_TOOLS: ReadonlySet<string> = new Set([
-  'routine',
-  'lineup_edit',
-  'specialist',
-  'mcp_config',
-  'mcp_add_url',
-  'mcp_verify',
-]);
+export type ToolAudience = 'main' | 'any';
+
+/**
+ * One audience-homogeneous group of built-ins, constructed lazily.
+ *
+ * The laziness is load-bearing, not a style choice: these constructors touch
+ * disk. `createRoutineTool(undefined)` falls back to `new RoutineStore()`
+ * (mkdirSync on the user's real routines directory) and
+ * `createSpecialistTool(undefined, …)` runs the bundled-specialist seed check —
+ * on a dispatch that was deliberately handed no stores. A filtered-out thunk is
+ * never invoked, so a worker never constructs them.
+ *
+ * That deferral is also what lets `audience` be the single source of truth.
+ * Meta can't answer "may a worker have this?" because meta lives on a
+ * constructed tool, and constructing is the thing we must avoid — so the
+ * declaration has to sit beside the constructor. `audience` is REQUIRED on
+ * every group, which makes omission a compile error rather than a silent
+ * ~3.7k-token-per-dispatch leak. (An earlier form kept a `WORKER_EXCLUDED_TOOLS`
+ * name list next to hand-written `worker ? {} : …` branches; the list drove
+ * nothing, so "who owns this tool" was stated in three places and pinned by
+ * tests. One table, checked by the compiler, replaces all three.)
+ */
+interface ToolGroup {
+  audience: ToolAudience;
+  make: () => Record<string, any>;
+}
 
 /** Which built-in surface a dispatch receives. */
 export interface CreateToolsOptions {
   /**
    * `'full'` (default) — every built-in, for the main agent.
-   * `'worker'` — drops {@link WORKER_EXCLUDED_TOOLS} and the `cron_*` family.
+   * `'worker'` — only groups declaring `audience: 'any'`.
+   *
+   * Resolved centrally by `runDefinition` (#315) rather than passed by hand at
+   * each dispatch site; see `framework/agents/tool-surface.ts`.
    */
   surface?: 'full' | 'worker';
 }
@@ -99,47 +104,62 @@ export function createTools(
   // Pure function of its arguments: no ctx, no policy, no per-turn state. The
   // main agent's tool block must stay byte-identical across turns for the
   // prompt cache to hit, so this must never vary with anything turn-scoped.
-  const worker = opts?.surface === 'worker';
-  const registry: Record<string, any> = {
-    // Migrated to BernardTool (Phase B). `toolToAISDK` preserves model-facing
-    // bytes via each tool's `serializeForModel`; the source BernardTool is
-    // attached via `__bernardSource` so `augmentTools` can detect errors
-    // deterministically from the envelope.
-    shell: toolToAISDK(createShellTool(options)),
-    memory: toolToAISDK(createMemoryTool(memoryStore, provenance)),
-    scratch: toolToAISDK(createScratchTool(memoryStore, provenance)),
-    datetime: createDateTimeTool(),
-    // Not constructed at all on a worker, rather than built and deleted: these
-    // constructors touch disk. `createRoutineTool(undefined)` falls back to
-    // `new RoutineStore()` (mkdirSync on the user's real routines dir) and
-    // `createSpecialistTool(undefined, …)` runs the bundled-specialist seed
-    // check — on a dispatch that was deliberately handed no stores.
-    ...(worker
-      ? {}
-      : {
-          routine: createRoutineTool(routineStore),
-          lineup_edit: createLineupTool(config),
-          specialist: createSpecialistTool(specialistStore, candidateStore, config),
-        }),
+  //
+  // Group ORDER is the wire order of the tool block (later spreads win on a
+  // name collision), so it must stay stable for the same reason.
+  const groups: ToolGroup[] = [
+    {
+      audience: 'any',
+      // Migrated to BernardTool (Phase B). `toolToAISDK` preserves model-facing
+      // bytes via each tool's `serializeForModel`; the source BernardTool is
+      // attached via `__bernardSource` so `augmentTools` can detect errors
+      // deterministically from the envelope.
+      make: () => ({
+        shell: toolToAISDK(createShellTool(options)),
+        memory: toolToAISDK(createMemoryTool(memoryStore, provenance)),
+        scratch: toolToAISDK(createScratchTool(memoryStore, provenance)),
+        datetime: createDateTimeTool(),
+      }),
+    },
+    {
+      audience: 'main',
+      make: () => ({
+        routine: createRoutineTool(routineStore),
+        lineup_edit: createLineupTool(config),
+        specialist: createSpecialistTool(specialistStore, candidateStore, config),
+      }),
+    },
     // Scheduling is a main-agent concern; the cron *definition* builds its own
     // registry for headless runs and is unaffected by this.
-    ...(worker ? {} : createCronTool()),
-    ...(worker ? {} : createCronLogTool()),
-    ...(worker ? {} : createCronNotesTool()),
-    ...createTimeTools(),
-    ...(worker
-      ? {}
-      : {
-          mcp_config: createMCPConfigTool(),
-          mcp_add_url: createMCPAddUrlTool(),
-          mcp_verify: createMCPVerifyTool(),
-        }),
-    web_read: createWebReadTool(provenance),
-    web_search: createWebSearchTool(provenance),
-    wait: createWaitTool(),
-    ...createFileTools(provenance),
-    ...(provenance ? { cite: createCiteTool(provenance) } : {}),
-  };
+    { audience: 'main', make: () => createCronTool() },
+    { audience: 'main', make: () => createCronLogTool() },
+    { audience: 'main', make: () => createCronNotesTool() },
+    { audience: 'any', make: () => createTimeTools() },
+    {
+      audience: 'main',
+      make: () => ({
+        mcp_config: createMCPConfigTool(),
+        mcp_add_url: createMCPAddUrlTool(),
+        mcp_verify: createMCPVerifyTool(),
+      }),
+    },
+    {
+      audience: 'any',
+      make: () => ({
+        web_read: createWebReadTool(provenance),
+        web_search: createWebSearchTool(provenance),
+        wait: createWaitTool(),
+      }),
+    },
+    { audience: 'any', make: () => createFileTools(provenance) },
+    { audience: 'any', make: () => (provenance ? { cite: createCiteTool(provenance) } : {}) },
+  ];
+  const worker = opts?.surface === 'worker';
+  const registry: Record<string, any> = {};
+  for (const group of groups) {
+    if (worker && group.audience === 'main') continue; // never constructed — see ToolGroup
+    Object.assign(registry, group.make());
+  }
   // MCP merges last, so a server exporting a colliding name still wins — the
   // exclusions above are about Bernard's own built-ins, not about MCP.
   return { ...registry, ...mcpTools };

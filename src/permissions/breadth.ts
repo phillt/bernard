@@ -10,7 +10,7 @@
 
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { ACTION_SCOPED_TOOLS, primaryShellCommand } from '../tool-permissions.js';
+import { actionOf, primaryShellCommand } from '../tool-permissions.js';
 import { truncate } from '../text.js';
 import { stableArgsString, FILE_TOOLS, WEB_TOOLS } from './matchers.js';
 
@@ -44,8 +44,33 @@ function within(dir: string): boolean {
  * should be offered (complex/unparseable shell, missing args). Callers must
  * also suppress this for dangerous shell (handled at the augment layer).
  */
-export function breadthOptionsFor(toolName: string, args: unknown): BreadthOption[] {
+export function breadthOptionsFor(
+  toolName: string,
+  args: unknown,
+  meta?: { actionScoped?: boolean } | null,
+): BreadthOption[] {
   const a = args as Record<string, unknown> | undefined;
+
+  // Action-enum tools (#253, #322): the meaningful ladder is "this action" →
+  // "any action", not "these exact arguments". `cron{action:'delete',id:'x'}`
+  // and `cron{action:'delete',id:'y'}` are the same decision to a user, and an
+  // exact-args grant would never match the second one. Checked first so a tool
+  // that declares a discriminator never falls through to the exact-args rung.
+  const action = actionOf(args, meta);
+  if (action) {
+    return [
+      {
+        label: `this action (${action})`,
+        specifier: `action:${action}`,
+        rulePreview: preview(`${toolName} ${action}`),
+      },
+      {
+        label: 'any action',
+        specifier: '*',
+        rulePreview: preview(`${toolName} (any action)`),
+      },
+    ];
+  }
 
   if (toolName === 'shell') {
     const cmd = typeof a?.command === 'string' ? (a.command as string).trim() : '';
@@ -99,28 +124,6 @@ export function breadthOptionsFor(toolName: string, args: unknown): BreadthOptio
     }
     const dom = `domain:${host}`;
     return [exact, { label: dom, specifier: dom, rulePreview: preview(`${toolName} ${dom}`) }];
-  }
-
-  // Action-enum tools (#253): the meaningful ladder is "this action" → "any
-  // action", not "these exact arguments". `cron{action:'delete',id:'x'}` and
-  // `cron{action:'delete',id:'y'}` are the same decision to a user, and an
-  // exact-args grant would never match the second one.
-  if (ACTION_SCOPED_TOOLS.has(toolName)) {
-    const action = (args as Record<string, unknown> | undefined)?.action;
-    if (typeof action === 'string' && action) {
-      return [
-        {
-          label: `this action (${action})`,
-          specifier: `action:${action}`,
-          rulePreview: preview(`${toolName} ${action}`),
-        },
-        {
-          label: 'any action',
-          specifier: '*',
-          rulePreview: preview(`${toolName} (any action)`),
-        },
-      ];
-    }
   }
 
   // MCP and all other tools: exact args → any args.

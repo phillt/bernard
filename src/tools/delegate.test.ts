@@ -42,12 +42,8 @@ vi.mock('../logger.js', () => ({
   debugLog: vi.fn(),
 }));
 
-import {
-  createDelegateTool,
-  createDelegateTools,
-  dispatchServerDelegate,
-  sanitizeServerToolName,
-} from './delegate.js';
+import { createDelegateTool, createDelegateTools, sanitizeServerToolName } from './delegate.js';
+import { dispatchServerDelegate } from './delegate-dispatch.js';
 import { buildDelegateSystemPrompt } from '../framework/agents/mcp-delegate.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { runPAC } from '../framework/pac/run-pac.js';

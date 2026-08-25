@@ -206,6 +206,9 @@ describe('tool meta coverage', () => {
     const ctx = {
       stores: { memory },
       config: { shellTimeout: 10_000, maxSteps: 20 },
+      // Cron now takes MCP from the centrally-resolved surface (#315) rather
+      // than its own input, so the context needs a (empty) MCP snapshot.
+      mcp: { tools: {}, serverNames: [], serverTools: {} },
     } as any;
     const input = {
       job: { id: 'j1', name: 'test', prompt: 'noop', enabled: true },
@@ -215,9 +218,9 @@ describe('tool meta coverage', () => {
       notesStore,
       log: () => {},
       serverNames: [],
-      mcpTools: {},
     } as any;
-    const tools = cronDefinition.tools(ctx, input);
+    const { resolveToolSurface } = await import('../agents/tool-surface.js');
+    const tools = cronDefinition.tools(ctx, input, resolveToolSurface(ctx, cronDefinition));
 
     const { missing, incomplete } = checkMetaCoverage(tools);
     expect(missing, `Cron tools missing __bernardMeta: ${missing.join(', ')}`).toEqual([]);

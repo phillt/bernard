@@ -32,17 +32,23 @@ function makeBaseTool(executeImpl: (...args: any[]) => any) {
   };
 }
 
-function makeDeps(overrides: Record<string, any> = {}) {
+/**
+ * Minimal `AgentContext` stand-in (#316). The shim reads only
+ * `ctx.stores.specialists`; everything else is forwarded verbatim to the
+ * mocked `dispatchToolWrapper`, so an inert shape suffices.
+ */
+function makeCtx(overrides: Record<string, any> = {}) {
   return {
     config: {} as any,
-    options: {} as any,
-    memoryStore: {} as any,
-    specialistStore: {
-      get: vi.fn(),
-    } as any,
-    correctionStore: { enqueue: vi.fn() } as any,
+    toolOptions: {} as any,
+    stores: {
+      memory: {} as any,
+      specialists: { get: vi.fn() },
+      correction: { enqueue: vi.fn() },
+    },
+    mcp: { tools: {}, serverNames: [], serverTools: {} },
     ...overrides,
-  };
+  } as any;
 }
 
 // ── buildShimInput ────────────────────────────────────────────────────────────
@@ -148,17 +154,17 @@ describe('wrapToolWithSpecialist', () => {
 
   it('returns the base tool unchanged when execute is missing', () => {
     const noExec = { description: 'no exec' } as any;
-    const deps = makeDeps();
-    const wrapped = wrapToolWithSpecialist(noExec, 'shell', 'shell-wrapper', deps);
+    const ctx = makeCtx();
+    const wrapped = wrapToolWithSpecialist(noExec, 'shell', 'shell-wrapper', ctx);
     expect(wrapped).toBe(noExec);
   });
 
   it('falls through to baseExecute when the specialist is missing', async () => {
     const base = makeBaseTool(async () => 'raw output');
-    const deps = makeDeps();
-    deps.specialistStore.get.mockReturnValue(undefined);
+    const ctx = makeCtx();
+    ctx.stores.specialists.get.mockReturnValue(undefined);
 
-    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', deps);
+    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', ctx);
     const result = await wrapped.execute({ command: 'ls' }, { abortSignal: undefined });
 
     expect(result).toBe('raw output');
@@ -168,10 +174,10 @@ describe('wrapToolWithSpecialist', () => {
 
   it('falls through to baseExecute when the specialist has wrong kind', async () => {
     const base = makeBaseTool(async () => 'raw output');
-    const deps = makeDeps();
-    deps.specialistStore.get.mockReturnValue({ name: 'persona', kind: 'persona' });
+    const ctx = makeCtx();
+    ctx.stores.specialists.get.mockReturnValue({ name: 'persona', kind: 'persona' });
 
-    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', deps);
+    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', ctx);
     const result = await wrapped.execute({ command: 'ls' }, { abortSignal: undefined });
 
     expect(result).toBe('raw output');
@@ -180,15 +186,15 @@ describe('wrapToolWithSpecialist', () => {
 
   it('dispatches to the wrapper specialist when present, returning only result on ok', async () => {
     const base = makeBaseTool(async () => 'should not run');
-    const deps = makeDeps();
-    deps.specialistStore.get.mockReturnValue({ name: 'Shell Wrapper', kind: 'tool-wrapper' });
+    const ctx = makeCtx();
+    ctx.stores.specialists.get.mockReturnValue({ name: 'Shell Wrapper', kind: 'tool-wrapper' });
     vi.mocked(dispatchToolWrapper).mockResolvedValue({
       status: 'ok',
       result: 'wrapper output',
       reasoning: ['this should be stripped'],
     });
 
-    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', deps);
+    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', ctx);
     const result = await wrapped.execute({ command: 'ls' }, { abortSignal: undefined });
 
     expect(result).toBe('wrapper output');
@@ -204,8 +210,8 @@ describe('wrapToolWithSpecialist', () => {
 
   it('maps wrapper errors to the native shell error shape without exposing reasoning', async () => {
     const base = makeBaseTool(async () => 'should not run');
-    const deps = makeDeps();
-    deps.specialistStore.get.mockReturnValue({ name: 'Shell Wrapper', kind: 'tool-wrapper' });
+    const ctx = makeCtx();
+    ctx.stores.specialists.get.mockReturnValue({ name: 'Shell Wrapper', kind: 'tool-wrapper' });
     vi.mocked(dispatchToolWrapper).mockResolvedValue({
       status: 'error',
       result: 'permission denied',
@@ -213,7 +219,7 @@ describe('wrapToolWithSpecialist', () => {
       reasoning: ['should not leak'],
     });
 
-    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', deps);
+    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', ctx);
     const result = await wrapped.execute(
       { command: 'cat /etc/shadow' },
       { abortSignal: undefined },
@@ -232,14 +238,14 @@ describe('wrapToolWithSpecialist', () => {
 
   it('preserves a structured shell success result so detectToolError sees native shape', async () => {
     const base = makeBaseTool(async () => 'should not run');
-    const deps = makeDeps();
-    deps.specialistStore.get.mockReturnValue({ name: 'Shell Wrapper', kind: 'tool-wrapper' });
+    const ctx = makeCtx();
+    ctx.stores.specialists.get.mockReturnValue({ name: 'Shell Wrapper', kind: 'tool-wrapper' });
     vi.mocked(dispatchToolWrapper).mockResolvedValue({
       status: 'ok',
       result: { output: 'file1\nfile2', is_error: false },
     });
 
-    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', deps);
+    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', ctx);
     const result = await wrapped.execute({ command: 'ls' }, { abortSignal: undefined });
 
     expect(result).toEqual({ output: 'file1\nfile2', is_error: false });
@@ -247,11 +253,11 @@ describe('wrapToolWithSpecialist', () => {
 
   it('falls back to baseExecute when dispatch itself throws', async () => {
     const base = makeBaseTool(async () => 'raw fallback');
-    const deps = makeDeps();
-    deps.specialistStore.get.mockReturnValue({ name: 'Shell Wrapper', kind: 'tool-wrapper' });
+    const ctx = makeCtx();
+    ctx.stores.specialists.get.mockReturnValue({ name: 'Shell Wrapper', kind: 'tool-wrapper' });
     vi.mocked(dispatchToolWrapper).mockRejectedValue(new Error('dispatch crashed'));
 
-    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', deps);
+    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', ctx);
     const result = await wrapped.execute({ command: 'ls' }, { abortSignal: undefined });
 
     expect(result).toBe('raw fallback');
@@ -260,15 +266,15 @@ describe('wrapToolWithSpecialist', () => {
 
   it('forwards abortSignal from execOptions to dispatchToolWrapper', async () => {
     const base = makeBaseTool(async () => 'unused');
-    const deps = makeDeps();
-    deps.specialistStore.get.mockReturnValue({ name: 'Shell Wrapper', kind: 'tool-wrapper' });
+    const ctx = makeCtx();
+    ctx.stores.specialists.get.mockReturnValue({ name: 'Shell Wrapper', kind: 'tool-wrapper' });
     vi.mocked(dispatchToolWrapper).mockResolvedValue({
       status: 'ok',
       result: 'ok',
     });
 
     const ac = new AbortController();
-    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', deps);
+    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', ctx);
     await wrapped.execute({ command: 'ls' }, { abortSignal: ac.signal });
 
     const call = vi.mocked(dispatchToolWrapper).mock.calls[0][0];
@@ -281,8 +287,8 @@ describe('wrapToolWithSpecialist', () => {
       parameters: { foo: 'bar' },
       execute: vi.fn(),
     } as any;
-    const deps = makeDeps();
-    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', deps);
+    const ctx = makeCtx();
+    const wrapped = wrapToolWithSpecialist(base, 'shell', 'shell-wrapper', ctx);
     expect(wrapped.description).toBe('Run a shell command');
     expect(wrapped.parameters).toEqual({ foo: 'bar' });
   });
@@ -300,10 +306,10 @@ describe('applyShimRouting', () => {
     const web = makeBaseTool(async () => 'web ran');
     const tools = { shell, web_read: web };
 
-    const deps = makeDeps();
-    deps.specialistStore.get.mockReturnValue(undefined);
+    const ctx = makeCtx();
+    ctx.stores.specialists.get.mockReturnValue(undefined);
 
-    const out = applyShimRouting(tools, deps, { shell: 'shell-wrapper', missing: 'never' });
+    const out = applyShimRouting(tools, ctx, { shell: 'shell-wrapper', missing: 'never' });
     expect(out.shell).not.toBe(shell);
     expect(out.web_read).toBe(web);
     expect((out as any).missing).toBeUndefined();
@@ -316,8 +322,8 @@ describe('applyShimRouting', () => {
     const web_read = makeBaseTool(async () => 'web');
     const tools = { shell, file_read_lines, file_edit_lines, web_read };
 
-    const deps = makeDeps();
-    const out = applyShimRouting(tools, deps);
+    const ctx = makeCtx();
+    const out = applyShimRouting(tools, ctx);
 
     // All four DEFAULT_SHIM_ROUTING tools should have been wrapped (new ref).
     for (const name of Object.keys(DEFAULT_SHIM_ROUTING)) {
@@ -328,8 +334,8 @@ describe('applyShimRouting', () => {
   it('returns a new object — does not mutate the input', () => {
     const shell = makeBaseTool(async () => 'shell');
     const tools = { shell };
-    const deps = makeDeps();
-    const out = applyShimRouting(tools, deps, { shell: 'shell-wrapper' });
+    const ctx = makeCtx();
+    const out = applyShimRouting(tools, ctx, { shell: 'shell-wrapper' });
     expect(out).not.toBe(tools);
     expect(tools.shell).toBe(shell);
   });

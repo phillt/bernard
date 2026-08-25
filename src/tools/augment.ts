@@ -303,7 +303,7 @@ export function augmentTools(
   const provenance = opts.provenance;
   // Default closed: registration only runs when the policy engine explicitly
   // opts in. The previous `?? true` fallback silently enabled evidence in
-  // contexts that never consult the policy (cron, bare depsToCtx callers),
+  // contexts that never consult the policy (cron, hand-assembled contexts),
   // populating the shared store with entries the model was never told about.
   const evidenceEnabled = provenance ? opts.evidenceEnabled === true : false;
   const postWriteChecks = opts.postWriteChecks;
@@ -399,9 +399,10 @@ export function augmentTools(
     toolName: string,
     args: unknown,
     isDangerousShell: boolean,
+    meta: ToolMeta | undefined,
   ): BreadthOption[] | undefined => {
     if (isDangerousShell) return undefined;
-    const ladder = breadthOptionsFor(toolName, args);
+    const ladder = breadthOptionsFor(toolName, args, meta);
     return ladder.length ? ladder : undefined;
   };
 
@@ -425,7 +426,7 @@ export function augmentTools(
     if (!shouldBlockInReadOnly(meta, args)) return true;
     if (sessionToolAllowlist.has(toolName)) return true;
     const dangerousShell = isDangerousShellCall(toolName, args);
-    const permissionKey = permissionKeyFor(toolName, args);
+    const permissionKey = permissionKeyFor(toolName, args, meta);
     const grant = resolveProfileGrant(toolName, args, 'block', dangerousShell);
     if (grant === 'allow') return true;
     if (grant === 'deny') return false;
@@ -438,7 +439,7 @@ export function augmentTools(
       args,
       reason: buildConfirmReason(toolName, args),
       permissionKey,
-      breadthOptions: computeBreadthOptions(toolName, args, dangerousShell),
+      breadthOptions: computeBreadthOptions(toolName, args, dangerousShell, meta),
     };
     const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
     let outcome: BlockOutcome;
@@ -475,7 +476,7 @@ export function augmentTools(
     const risk = riskFromMeta(meta, args);
     if (!shouldConfirm(risk, confirmThreshold)) return true;
     const dangerousShell = isDangerousShellCall(toolName, args);
-    const permissionKey = permissionKeyFor(toolName, args);
+    const permissionKey = permissionKeyFor(toolName, args, meta);
     const grant = resolveProfileGrant(toolName, args, 'confirm', dangerousShell);
     if (grant === 'allow') return true;
     if (grant === 'deny') return false;
@@ -485,7 +486,7 @@ export function augmentTools(
       risk,
       reason: buildConfirmReason(toolName, args),
       permissionKey,
-      breadthOptions: computeBreadthOptions(toolName, args, dangerousShell),
+      breadthOptions: computeBreadthOptions(toolName, args, dangerousShell, meta),
     };
     const signal = (execOptions as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
     try {

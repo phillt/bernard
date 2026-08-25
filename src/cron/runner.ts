@@ -243,7 +243,6 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       notesStore,
       log,
       serverNames: mcpSnapshot.serverNames,
-      mcpTools: mcpSnapshot.tools,
       ragResults,
     };
     const { formatted: output } = await runDefinition(ctx, def, input);

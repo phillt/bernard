@@ -1,6 +1,7 @@
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
-import { createTools, type ToolOptions } from './index.js';
+import { createTools } from './index.js';
+import { resolveProviderAndModel } from '../config.js';
 import { createSubAgentTool } from './subagent.js';
 import { createTaskTool } from './task.js';
 import { toolToAISDK, attachMeta, readToolMeta } from '../framework/tools/adapter.js';
@@ -9,21 +10,7 @@ import { createSpecialistRunTool } from './specialist-run.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
 import { acquireSlot, releaseSlot, getMaxConcurrentAgents } from './agent-pool.js';
-import { type BernardConfig, resolveProviderAndModel } from '../config.js';
-import type { MemoryStore } from '../memory.js';
-import type { RAGStore } from '../rag.js';
-import { RoutineStore } from '../routines.js';
-import type { SpecialistStore } from '../specialists.js';
-import { CandidateStore, type CandidateStoreReader } from '../specialist-candidates.js';
-import type { CorrectionCandidateStore } from '../correction-candidates.js';
-import { ToolProfileStore } from '../tool-profiles.js';
 import type { AgentContext } from '../framework/context.js';
-import type { TokenStatsTarget } from '../framework/hooks/token-stats.js';
-import type { PolicyDecision } from '../policy/types.js';
-import { ProvenanceStore } from '../provenance.js';
-import { VerificationStore } from '../agent-status.js';
-import { VerificationTracker } from '../verification-tracker.js';
-import type { Check } from '../rubric.js';
 import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
@@ -99,119 +86,6 @@ export function captureToolCalls(
   return out;
 }
 
-/** Dependencies that change per-process but never per-call. Passed once. */
-export interface ToolWrapperDeps {
-  config: BernardConfig;
-  options: ToolOptions;
-  memoryStore: MemoryStore;
-  specialistStore: SpecialistStore;
-  correctionStore: CorrectionCandidateStore;
-  mcpTools?: Record<string, any>;
-  /**
-   * Connected MCP server names + their tool-name map, mirrored from
-   * `AgentContextMCP`. Required for per-server delegation (#296, #305): an
-   * agent dispatched from inside a wrapper assembles `delegate_<server>` tools
-   * from these, and dropping them leaves it with neither delegates nor raw MCP
-   * tools — a total loss of MCP access rather than the intended reduction.
-   */
-  mcpServerNames?: string[];
-  mcpServerTools?: Record<string, string[]>;
-  ragStore?: RAGStore;
-  routineStore?: RoutineStore;
-  candidateStore?: CandidateStoreReader;
-  toolProfileStore?: ToolProfileStore;
-  /**
-   * Parent turn's ProvenanceStore. Forwarded so retrieval inside a
-   * tool-wrapper specialist (e.g. a `web_read` invoked by `web-wrapper`)
-   * shows up in the parent agent's Shift+Tab sources viewer. Issue #173.
-   */
-  provenance?: ProvenanceStore;
-  /**
-   * Parent turn's VerificationStore. Forwarded so a PAC run dispatched from
-   * inside a tool-wrapper still updates the parent agent's Agent Status
-   * overlay. Issue #140.
-   */
-  verification?: VerificationStore;
-  /**
-   * Parent turn's verification tracker + post-write check sink. Forwarded so
-   * tool calls made from inside a wrapper contribute to the same per-turn
-   * rubric the main agent composes. Issue #145.
-   */
-  verificationTracker?: VerificationTracker;
-  postWriteChecks?: Check[];
-  /**
-   * Parent turn's per-turn token-stats target. Forwarded so a tool-wrapper /
-   * specialist dispatch's steps land in the same per-turn ↑/↓ odometer as the
-   * main agent and its sub-agents — the readout reflects the *full* turn cost,
-   * including work offloaded to wrappers. Absent for cron / headless. Issue #234.
-   */
-  statsTarget?: TokenStatsTarget;
-  /**
-   * Parent turn's policy decision. Forwarded so the inner wrapper
-   * inherits the user's `toolMode` (#179) — otherwise the augment layer
-   * defaults to `'write'` and any write tool the wrapper calls bypasses
-   * the read-only block gate entirely. The shared `sessionToolAllowlist`
-   * on `options` keeps the outer gate's "Allow once" / "Allow for tool"
-   * decision from re-prompting inside the wrapper.
-   */
-  policyDecision?: PolicyDecision;
-}
-
-/** Derives the legacy {@link ToolWrapperDeps} shape from an {@link AgentContext}. */
-export function ctxToToolWrapperDeps(ctx: AgentContext): ToolWrapperDeps {
-  return {
-    config: ctx.config,
-    options: ctx.toolOptions,
-    memoryStore: ctx.stores.memory,
-    specialistStore: ctx.stores.specialists,
-    correctionStore: ctx.stores.correction,
-    mcpTools: ctx.mcp.tools,
-    mcpServerNames: ctx.mcp.serverNames,
-    mcpServerTools: ctx.mcp.serverTools,
-    ragStore: ctx.rag,
-    routineStore: ctx.stores.routines,
-    candidateStore: ctx.stores.candidates,
-    toolProfileStore: ctx.stores.toolProfiles,
-    provenance: ctx.provenance,
-    verification: ctx.verification,
-    verificationTracker: ctx.verificationTracker,
-    postWriteChecks: ctx.postWriteChecks,
-    statsTarget: ctx.statsTarget,
-    policyDecision: ctx.policyDecision,
-  };
-}
-
-/** Lifts {@link ToolWrapperDeps} into a full {@link AgentContext} for child factories. */
-export function depsToCtx(deps: ToolWrapperDeps): AgentContext {
-  return {
-    config: deps.config,
-    stores: {
-      memory: deps.memoryStore,
-      routines: deps.routineStore ?? new RoutineStore(),
-      specialists: deps.specialistStore,
-      candidates: deps.candidateStore ?? new CandidateStore(),
-      correction: deps.correctionStore,
-      toolProfiles: deps.toolProfileStore ?? new ToolProfileStore(),
-    },
-    mcp: {
-      tools: deps.mcpTools ?? {},
-      serverNames: deps.mcpServerNames ?? [],
-      serverTools: deps.mcpServerTools ?? {},
-    },
-    rag: deps.ragStore,
-    toolOptions: deps.options,
-    provenance: deps.provenance ?? new ProvenanceStore(),
-    verification: deps.verification ?? new VerificationStore(),
-    verificationTracker: deps.verificationTracker ?? new VerificationTracker(),
-    postWriteChecks: deps.postWriteChecks ?? [],
-    // Both optional on AgentContext; an explicit `undefined` is identical to an
-    // absent key for every consumer (all guard with `?.`), so assign directly
-    // rather than allocating a throwaway spread object on each wrapper dispatch.
-    statsTarget: deps.statsTarget,
-    policyDecision: deps.policyDecision,
-  };
-}
-
 /** Per-call inputs to a tool-wrapper dispatch. */
 export interface DispatchToolWrapperArgs {
   specialistId: string;
@@ -245,7 +119,7 @@ export interface DispatchToolWrapperArgs {
  */
 export async function dispatchToolWrapper(
   args: DispatchToolWrapperArgs,
-  deps: ToolWrapperDeps,
+  ctx: AgentContext,
 ): Promise<WrapperResult> {
   registerBuiltinDefinitions();
   const {
@@ -258,16 +132,8 @@ export async function dispatchToolWrapper(
     runLabel,
     skipCorrectionEnqueue,
   } = args;
-  const {
-    config,
-    options,
-    memoryStore,
-    specialistStore,
-    correctionStore,
-    mcpTools,
-    routineStore,
-    candidateStore,
-  } = deps;
+  const { config, toolOptions: options, stores } = ctx;
+  const { specialists: specialistStore, correction: correctionStore } = stores;
 
   const specialist = specialistStore.get(specialistId);
   if (!specialist) {
@@ -325,28 +191,37 @@ export async function dispatchToolWrapper(
   printSpecialistStart(id, label, input);
 
   try {
-    const innerCtx = depsToCtx(deps);
-    // Deliberately the FULL surface, not `{ surface: 'worker' }` (#253).
-    // Wrapper specialists are scoped by `targetTools`, and three bundled ones
-    // target tools the worker surface removes: `mcp-manager` needs
-    // `mcp_config` / `mcp_add_url` / `mcp_verify`, and `correction-agent` /
-    // `specialist-creator` need `specialist`. Narrowing here would break them.
+    // The FULL surface, read from the definition's own `toolSurface`
+    // declaration rather than hardcoded (#253, #322) — so the reason lives in
+    // one place and this call can't drift from it. Wrapper specialists are
+    // scoped by `targetTools`, and three bundled ones target tools the worker
+    // surface removes: `mcp-manager` needs `mcp_config` / `mcp_add_url` /
+    // `mcp_verify`, and `correction-agent` / `specialist-creator` need
+    // `specialist`. Narrowing here would break them.
+    //
+    // MCP stays the RAW bag, deliberately, and is the one dispatch that does
+    // not take `surface.mcpTools`: `buildChildTools` filters this registry by
+    // `specialist.targetTools`, which names real MCP tools, and delegates would
+    // make those names unresolvable. See issue #331 — a specialist with NO
+    // `targetTools` gets the whole registry and therefore every MCP schema,
+    // which is a pre-existing leak this PR deliberately does not widen.
     const baseTools = createTools(
       options,
-      memoryStore,
-      mcpTools,
-      routineStore,
+      stores.memory,
+      ctx.mcp.tools,
+      stores.routines,
       specialistStore,
-      candidateStore,
+      stores.candidates,
       config,
-      innerCtx.provenance,
+      ctx.provenance,
+      { surface: toolWrapperDefinition.toolSurface },
     );
     const fullRegistry: Record<string, Tool> = {
       ...baseTools,
-      agent: createSubAgentTool(innerCtx),
-      task: toolToAISDK(createTaskTool(innerCtx)),
-      specialist_run: createSpecialistRunTool(innerCtx),
-      tool_wrapper_run: createToolWrapperRunTool(innerCtx),
+      agent: createSubAgentTool(ctx),
+      task: toolToAISDK(createTaskTool(ctx)),
+      specialist_run: createSpecialistRunTool(ctx),
+      tool_wrapper_run: createToolWrapperRunTool(ctx),
     };
     const childTools = buildChildTools(specialist, fullRegistry);
     const wantStructured = specialist.structuredOutput ?? kind === 'tool-wrapper';
@@ -368,7 +243,7 @@ export async function dispatchToolWrapper(
           childTools,
           wantStructured,
         };
-    const { result, formatted: wrapped } = await runDefinition(innerCtx, def, defInput, {
+    const { result, formatted: wrapped } = await runDefinition(ctx, def, defInput, {
       abortSignal,
       overrides: { provider, model },
       // Attribute this dispatch's spend to its own per-target site (#299) so it
@@ -482,7 +357,6 @@ export function renderWrapperParentView(
  * specialist execution with validated JSON output and failure-learning.
  */
 export function createToolWrapperRunTool(ctx: AgentContext) {
-  const deps = ctxToToolWrapperDeps(ctx);
   return attachMeta(
     tool({
       description:
@@ -515,7 +389,7 @@ export function createToolWrapperRunTool(ctx: AgentContext) {
             model,
             abortSignal: execOptions.abortSignal,
           },
-          deps,
+          ctx,
         );
         return renderWrapperParentView(wrapped);
       },
