@@ -48,7 +48,10 @@ export function MenuRow({ selected, label, trailing, width, dimUnselected }: Men
       >
         {label}
       </Text>
-      {trailing != null && <Text dimColor>{trailing}</Text>}
+      {/* Themed muted, never Ink's raw `dimColor` — that attribute ignores the
+          active theme, which is exactly what the high-contrast and colorblind
+          themes exist to override (#320). The label above already does this. */}
+      {trailing != null && <Text color={colors.muted}>{trailing}</Text>}
     </Box>
   );
 }
