@@ -153,12 +153,23 @@ describe('cron participates in MCP delegation (#315)', () => {
     // just the MCP half of it. The built-in half was written out by hand, which
     // is how it ended up without these for no recorded reason.
     const names = Object.keys(await toolsOf(cronDefinition, makeCtx(true), cronInput));
-    for (const t of ['shell', 'memory', 'scratch', 'datetime', 'wait', 'web_read']) {
+    for (const t of [
+      'shell',
+      'memory',
+      'scratch',
+      'datetime',
+      'wait',
+      'web_read',
+      'web_search',
+      'file_read_lines',
+    ]) {
       expect(names).toContain(t);
     }
-    for (const t of ['web_search', 'file_read_lines', 'file_edit_lines']) {
-      expect(names).toContain(t);
-    }
+    // Withheld deliberately: a default cron job denies write-shaped `shell`
+    // (dangerous → high risk) but would pass `file_edit_lines` (write/local →
+    // medium) unprompted, so folding it in would hand every existing job an
+    // unbounded filesystem write through the one door that isn't gated.
+    expect(names).not.toContain('file_edit_lines');
     // `cite` is provenance-gated in `createTools`, and this fixture carries no
     // store — so its absence here IS the gate working. Cron passes
     // `ctx.provenance` now (it previously passed none to anything), so in a real

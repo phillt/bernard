@@ -113,7 +113,9 @@ describe('buildContextMessage — <persistent_memory> byte cap (#307)', () => {
     const content = msg!.content as string;
 
     const section = /<persistent_memory>([\s\S]*?)<\/persistent_memory>/.exec(content)?.[1] ?? '';
-    expect(section.length).toBeLessThan(MAX_PERSISTENT_MEMORY_CHARS * 1.2);
+    // Pin the cap, don't merely bound it: the only legitimate overshoot is the
+    // ~140-char truncation note appended after the budget check.
+    expect(section.length).toBeLessThan(MAX_PERSISTENT_MEMORY_CHARS + 300);
     expect(section).toContain('(truncated)');
     expect(section).toContain('were omitted');
   });

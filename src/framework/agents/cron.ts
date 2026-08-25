@@ -132,8 +132,6 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     // every server's full schema set on every step. Taking it from `surface`
     // closes that gap by construction: there is no longer a second path.
     const mcpTools = surface.mcpTools;
-    const memoryStore = ctx.stores.memory;
-    const config = ctx.config;
 
     const notifyTool = attachMeta(
       tool({
@@ -197,15 +195,9 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     // Built-in tools come from the shared registry, scoped by the surface
     // `runDefinition` already resolved for us (#333). Cron was the only
     // definition that received a resolved surface and then used just the MCP
-    // half of it, hand-rolling its built-ins — which is how it ended up
-    // without `web_search`, `file_read_lines`, `file_edit_lines` or `cite` for
-    // no recorded reason, and with a prose tool list that could drift.
-    //
-    // This widens what an unattended job can do, deliberately: cron already has
-    // `shell`, which is strictly more powerful than the file tools, so
-    // withholding them was not a security boundary. The real controls are the
-    // per-job `toolMode` / `confirmMode` / `skipPermissions` fields, which are
-    // unchanged.
+    // half of it, hand-rolling its built-ins — which is how it ended up without
+    // `web_search`, `file_read_lines` or `cite` for no recorded reason, and
+    // with a prose tool list that could drift from what it was handed.
     //
     // `ctx.provenance` is passed where it previously was not, so cron's web
     // reads and memory lookups register as citable sources like every other
@@ -214,18 +206,38 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
       // Carries the per-job `confirmDangerous` the runner installs (#260) —
       // `async () => false` for every cron job, so dangerous shell stays denied.
       ctx.toolOptions,
-      memoryStore,
+      ctx.stores.memory,
       mcpTools,
       undefined,
       undefined,
       undefined,
-      config,
+      // `config` only feeds `lineup_edit` / `specialist`, both main-audience, so
+      // it is dead under the worker surface — matching the four sibling call
+      // sites (`sub`, `task`, `specialist`, `pac-actor`) that pass undefined.
+      undefined,
       ctx.provenance,
       surface,
     );
 
+    // `file_edit_lines` is withheld, and the reason is a gate asymmetry rather
+    // than a judgement about unattended writes.
+    //
+    // A default cron job runs at `toolMode: 'write'`, `confirmThreshold:
+    // 'high'`. `shell` is `kind: 'dangerous'` → high risk → its write-shaped
+    // invocations are DENIED headlessly (only `isReadOnlyShellInvocation`
+    // commands get through). `file_edit_lines` is `kind: 'write'` +
+    // `sideEffect: 'local'` → medium → it would pass unprompted. So handing it
+    // over would give every existing job an unbounded filesystem write it
+    // provably does not have today, through the one door that isn't gated —
+    // the opposite of "shell already grants strictly more".
+    //
+    // The asymmetry itself (arbitrary local file write classified below a shell
+    // write) is the real defect, but raising `file_edit_lines` to high changes
+    // interactive behaviour for every user and needs its own decision.
+    const { file_edit_lines: _withheld, ...safeBaseTools } = baseTools;
+
     const registry: Record<string, Tool> = {
-      ...baseTools,
+      ...safeBaseTools,
       // Cron-only tools, spread last so they win any name collision.
       notify: notifyTool,
       cron_self_disable: selfDisableTool,
