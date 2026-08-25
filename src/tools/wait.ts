@@ -30,7 +30,6 @@ export function createWaitTool() {
     }),
     {
       name: 'wait',
-      audience: 'any',
       kind: 'inert',
       deterministic: false,
       sideEffect: 'none',

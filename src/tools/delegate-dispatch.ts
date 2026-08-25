@@ -14,16 +14,7 @@ import { debugLog } from '../logger.js';
 /**
  * The invocation half of per-server MCP delegation (#296), split from
  * `delegate.ts` so that building the delegation SURFACE stays independent of
- * the agent runner.
- *
- * `delegate.ts` is imported by `framework/agents/run.ts` (via
- * `resolveToolSurface`, #315) to decide which MCP bag a dispatch carries. That
- * decision is pure — it needs server names, not the ability to run an agent.
- * Dispatching a helper, by contrast, needs `runDefinition` and `runPAC`, both
- * of which live under `run.ts`. Keeping the two in one module made
- * `run.ts -> delegate.ts -> run.ts` a load-time cycle; the seam removes it, and
- * `createDelegateTool` reaches this module through a dynamic import inside
- * `execute` — resolved once, at call time, long after both modules are loaded.
+ * the agent runner. See the `await import()` in `delegate.ts` for why.
  */
 
 /**

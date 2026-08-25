@@ -1,6 +1,8 @@
 import { tool, type Tool } from 'ai';
 import type { BernardTool, ToolMeta, ToolResult } from './types.js';
 import { isToolResult } from './types.js';
+// Leaf module (no imports of its own), so this cannot create a cycle.
+import { actionOf } from '../../tool-permissions.js';
 
 /**
  * Wraps a `BernardTool` so it satisfies the AI SDK's `tool()` contract. The
@@ -140,18 +142,14 @@ export function attachActionMeta<T extends Tool>(
     deterministic: false,
     sideEffect: 'local',
     cacheable: false,
-    // The discriminator is declared once, here, for every tool built this way
-    // — the same field `isWriteAction` below refines on. Permission keys and
-    // the breadth ladder read it off the meta rather than off a name list they
-    // could disagree with (#322).
-    actionArg: 'action',
-    // Every tool built this way today is a cron control — a main-agent
-    // concern. Overridable via `opts` if a non-scheduling action-enum tool
-    // ever uses this constructor.
-    audience: 'main',
+    // Declared once, here, for every tool built this way. Permission keys and
+    // the breadth ladder read it off the meta rather than off a name list that
+    // could disagree with the tool (#322). `isWriteAction` below refines on the
+    // same `action` field, via the same reader, so the two cannot drift.
+    actionScoped: true,
     isWriteAction: (args: unknown) => {
-      const action = (args as { action?: unknown } | undefined)?.action;
-      return typeof action !== 'string' || !readActions.has(action);
+      const action = actionOf(args, { actionScoped: true });
+      return action === null || !readActions.has(action);
     },
     ...overrides,
   });

@@ -191,11 +191,20 @@ export async function dispatchToolWrapper(
   printSpecialistStart(id, label, input);
 
   try {
-    // Deliberately the FULL surface, not `{ surface: 'worker' }` (#253).
-    // Wrapper specialists are scoped by `targetTools`, and three bundled ones
-    // target tools the worker surface removes: `mcp-manager` needs
-    // `mcp_config` / `mcp_add_url` / `mcp_verify`, and `correction-agent` /
-    // `specialist-creator` need `specialist`. Narrowing here would break them.
+    // The FULL surface, read from the definition's own `toolSurface`
+    // declaration rather than hardcoded (#253, #322) — so the reason lives in
+    // one place and this call can't drift from it. Wrapper specialists are
+    // scoped by `targetTools`, and three bundled ones target tools the worker
+    // surface removes: `mcp-manager` needs `mcp_config` / `mcp_add_url` /
+    // `mcp_verify`, and `correction-agent` / `specialist-creator` need
+    // `specialist`. Narrowing here would break them.
+    //
+    // MCP stays the RAW bag, deliberately, and is the one dispatch that does
+    // not take `surface.mcpTools`: `buildChildTools` filters this registry by
+    // `specialist.targetTools`, which names real MCP tools, and delegates would
+    // make those names unresolvable. See issue #331 — a specialist with NO
+    // `targetTools` gets the whole registry and therefore every MCP schema,
+    // which is a pre-existing leak this PR deliberately does not widen.
     const baseTools = createTools(
       options,
       stores.memory,
@@ -205,6 +214,7 @@ export async function dispatchToolWrapper(
       stores.candidates,
       config,
       ctx.provenance,
+      { surface: toolWrapperDefinition.toolSurface },
     );
     const fullRegistry: Record<string, Tool> = {
       ...baseTools,

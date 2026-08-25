@@ -187,7 +187,6 @@ export function createWebSearchTool(provenance?: ProvenanceStore) {
     }),
     {
       name: 'web_search',
-      audience: 'any',
       kind: 'read',
       deterministic: false,
       sideEffect: 'network',

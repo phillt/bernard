@@ -137,18 +137,7 @@ const fakeProfileStore = {
   patchLastBadWithFix: () => {},
 };
 
-/**
- * `requireAudience` is scoped to the `createTools()` registry, the only place
- * the field is consulted: `createTools({ surface: 'worker' })` is what decides
- * whether a tool reaches a dispatched worker. The cron definition builds its
- * own inline registry (`notify`, `cron_self_disable`, the scoped notes tools)
- * that never passes through that switch, so requiring the field there would be
- * asking a question that has no consumer.
- */
-function checkMetaCoverage(
-  tools: Record<string, unknown>,
-  { requireAudience = false }: { requireAudience?: boolean } = {},
-): {
+function checkMetaCoverage(tools: Record<string, unknown>): {
   missing: string[];
   incomplete: string[];
 } {
@@ -161,18 +150,9 @@ function checkMetaCoverage(
       missing.push(name);
       continue;
     }
-    // `deterministic` / `sideEffect` are required so the cache layer and policy
-    // decisions can reason about the tool without falling back to "unknown"
-    // defaults. `audience` is required (#322) so a new tool cannot silently
-    // inherit the expensive default: the author has to say whether it is a
-    // main-agent control or something a dispatched worker may carry. Without
-    // it, adding a seventh config tool ships it to every worker and no test can
-    // notice, because no test can know it should have been excluded.
-    if (
-      meta.deterministic === undefined ||
-      meta.sideEffect === undefined ||
-      (requireAudience && meta.audience === undefined)
-    ) {
+    // Both fields are required so the cache layer and policy decisions can
+    // reason about the tool without falling back to "unknown" defaults.
+    if (meta.deterministic === undefined || meta.sideEffect === undefined) {
       incomplete.push(name);
     }
   }
@@ -193,12 +173,11 @@ describe('tool meta coverage', () => {
       new (await import('../../memory.js')).MemoryStore() as any,
     );
 
-    const { missing, incomplete } = checkMetaCoverage(tools, { requireAudience: true });
+    const { missing, incomplete } = checkMetaCoverage(tools);
     expect(missing, `Tools missing __bernardMeta: ${missing.join(', ')}`).toEqual([]);
-    expect(
-      incomplete,
-      `Tools missing deterministic/sideEffect/audience: ${incomplete.join(', ')}`,
-    ).toEqual([]);
+    expect(incomplete, `Tools missing deterministic/sideEffect: ${incomplete.join(', ')}`).toEqual(
+      [],
+    );
   });
 
   it('meta survives augmentTools — non-enumerable __bernardMeta is re-attached after the spread', async () => {

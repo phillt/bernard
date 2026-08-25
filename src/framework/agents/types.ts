@@ -6,6 +6,7 @@ import type { AgentContext } from '../context.js';
 import type { AgentHook } from '../hooks/types.js';
 import type { AgentResult } from '../runner.js';
 import type { ExecutionStrategy } from '../strategies/types.js';
+import type { CreateToolsOptions } from '../../tools/index.js';
 
 /**
  * Whether the caller persists conversation history across runs (main agent) or
@@ -33,9 +34,19 @@ export type HistoryMode = 'persistent' | 'ephemeral';
  *
  * Resolving both here inverts the failure mode: a definition that ignores the
  * parameter gets the cheap, contained surface rather than the expensive one.
+ *
+ * Extends {@link CreateToolsOptions} so call sites can pass this object
+ * straight through as `createTools`' trailing argument. The `extends` is
+ * deliberate: without it the two types were merely structurally compatible by
+ * coincidence, and adding a field to `CreateToolsOptions` would have silently
+ * changed five call sites with no compiler complaint.
  */
-export interface ResolvedToolSurface {
-  /** Which built-in registry `createTools` should assemble. */
+export interface ResolvedToolSurface extends CreateToolsOptions {
+  /**
+   * Which built-in registry `createTools` should assemble. Required here
+   * (optional on {@link CreateToolsOptions}) — a resolved surface always has
+   * an answer.
+   */
   surface: 'full' | 'worker';
   /**
    * The MCP bag to hand `createTools` — thin `delegate_<server>` tools when
@@ -124,14 +135,16 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
   /**
    * Which built-in tool registry this definition is entitled to (#253, #322).
    * Omit it: the default derives from `historyMode` — an ephemeral dispatch
-   * gets `'worker'` (Bernard's own configuration and scheduling controls
-   * dropped, see `WORKER_EXCLUDED_TOOLS`), a persistent one gets `'full'`.
+   * gets `'worker'` (the groups declaring `audience: 'main'` in `createTools`
+   * are dropped), a persistent one gets `'full'`.
    *
    * Declare it only to opt OUT of that derivation, and say why. `tool-wrapper`
    * is the sole definition that does: its `childTools` are scoped by
    * `specialist.targetTools`, and three bundled wrappers target tools the
    * worker surface removes (`mcp-manager` → `mcp_config` / `mcp_add_url` /
    * `mcp_verify`; `correction-agent` and `specialist-creator` → `specialist`).
+   * `dispatchToolWrapper` reads this field when assembling that registry, so
+   * the declaration drives the behavior rather than only documenting it.
    *
    * Resolved once per dispatch by `runDefinition` via `resolveToolSurface` and
    * handed to `systemPrompt` / `tools` — definitions never re-derive it.
@@ -139,30 +152,34 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
   toolSurface?: 'full' | 'worker';
 
   /**
-   * Fully composed system prompt for this run. May be async (memory/RAG reads).
-   *
-   * Receives the same {@link ResolvedToolSurface} as `tools` so a definition
-   * that advertises its tool list in prose (`task`) names the set it will
-   * actually be handed, rather than assembling a second registry that can
-   * drift from it.
-   */
-  systemPrompt(
-    ctx: AgentContext,
-    input: TInput,
-    surface: ResolvedToolSurface,
-  ): Promise<string> | string;
-
-  /**
    * Tool subset exposed to the model, as the AI-SDK `Record<name, Tool>`
    * runAgent expects. `surface` carries the two cross-cutting decisions
    * `runDefinition` owns — the built-in registry scope and the MCP bag — so
    * pass it straight through to `createTools` rather than re-deciding either.
+   *
+   * Resolved BEFORE `systemPrompt`, which receives the result.
    */
   tools(
     ctx: AgentContext,
     input: TInput,
     surface: ResolvedToolSurface,
   ): Promise<Record<string, Tool>> | Record<string, Tool>;
+
+  /**
+   * Fully composed system prompt for this run. May be async (memory/RAG reads).
+   *
+   * Receives the registry `tools` just returned, so a definition that
+   * advertises its tool list in prose (`task`) names the exact set it was
+   * handed. It previously assembled a SECOND registry for that — which had
+   * already drifted once (the prompt path passed no provenance, so `cite` was
+   * handed but never advertised). Passing the built set closes the drift by
+   * construction and drops the duplicate build.
+   */
+  systemPrompt(
+    ctx: AgentContext,
+    input: TInput,
+    tools: Record<string, Tool>,
+  ): Promise<string> | string;
 
   /** Strategy selector. Built per-call so e.g. ReAct can be opt-in by definition. */
   strategy(ctx: AgentContext, input: TInput): ExecutionStrategy;

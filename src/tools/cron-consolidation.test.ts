@@ -2,8 +2,25 @@ import { describe, it, expect } from 'vitest';
 import { CRON_ACTIONS, CRON_ACTION_NAMES, CRON_READ_ACTIONS, createCronTool } from './cron.js';
 import { CRON_LOGS_ACTIONS, CRON_LOGS_ACTION_NAMES } from './cron-logs.js';
 import { CRON_NOTES_ACTIONS, CRON_NOTES_ACTION_NAMES } from './cron-notes.js';
-import { createTools, WORKER_EXCLUDED_TOOLS } from './index.js';
-import { readToolMeta } from '../framework/tools/adapter.js';
+import { createTools } from './index.js';
+
+/**
+ * The built-ins declared `audience: 'main'` in `createTools`' group table — the
+ * assistant's own configuration and scheduling controls. Spelled out here (not
+ * derived from the registry) so this file states the expected outcome
+ * independently of the mechanism it is checking.
+ */
+const MAIN_AUDIENCE_TOOLS = [
+  'routine',
+  'lineup_edit',
+  'specialist',
+  'cron',
+  'cron_logs',
+  'cron_notes',
+  'mcp_config',
+  'mcp_add_url',
+  'mcp_verify',
+] as const;
 import { permissionKeyFor } from '../tool-permissions.js';
 
 const memoryStub = {
@@ -66,7 +83,8 @@ describe('cron consolidation (#253)', () => {
     // cron" — granted while listing — authorise deletion. The per-action key
     // is minted from the tool's own `meta.actionArg` (#322), so these pass the
     // real meta rather than relying on a name list kept elsewhere.
-    const cronMeta = readToolMeta(createCronTool().cron);
+    const cronMeta = (createCronTool().cron as { __bernardMeta: { actionScoped?: boolean } })
+      .__bernardMeta;
 
     it('does not collapse list and delete into one grant', () => {
       expect(permissionKeyFor('cron', { action: 'list' }, cronMeta)).toBe('cron:list');
@@ -93,25 +111,24 @@ describe('cron consolidation (#253)', () => {
   });
 
   describe('worker surface', () => {
-    const names = (surface?: 'full' | 'worker') =>
-      Object.keys(
-        createTools(
-          {} as never,
-          memoryStub,
-          {},
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          undefined,
-          surface ? { surface } : undefined,
-        ),
+    const registry = (surface?: 'full' | 'worker') =>
+      createTools(
+        {} as never,
+        memoryStub,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        surface ? { surface } : undefined,
       );
+    const names = (surface?: 'full' | 'worker') => Object.keys(registry(surface));
 
     it('drops cron and the config tools', () => {
       const worker = names('worker');
       expect(worker.filter((n) => n.startsWith('cron'))).toEqual([]);
-      for (const excluded of WORKER_EXCLUDED_TOOLS) expect(worker).not.toContain(excluded);
+      for (const mainOnly of MAIN_AUDIENCE_TOOLS) expect(worker).not.toContain(mainOnly);
     });
 
     it('keeps everything a worker actually needs', () => {
@@ -141,51 +158,18 @@ describe('cron consolidation (#253)', () => {
     });
 
     /**
-     * #322: `WORKER_EXCLUDED_TOOLS` could only fail by omission, undetectably —
-     * add a seventh config tool and it silently ships to every worker, because
-     * no test can know it should have been listed. `ToolMeta.audience` moves
-     * the fact onto the tool, `meta-coverage.test.ts` requires it, and this
-     * pins that the two never disagree.
+     * #322: which tools a worker drops used to be stated in three places — the
+     * hand-written `worker ? {} : …` branches that actually ran, a
+     * `WORKER_EXCLUDED_TOOLS` name Set, and (briefly) a `ToolMeta.audience`
+     * declaration — none of the last two driving anything. `createTools` is now
+     * an audience-tagged table of lazy groups, so `audience` IS the behavior and
+     * omitting it is a compile error. This pins the resulting set so a group
+     * silently re-tagged `'any'` is caught.
      */
-    it('the tools a worker drops are exactly the ones declaring audience: main', () => {
-      const tools = createTools(
-        {} as never,
-        memoryStub,
-        {},
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-      );
-      const declaredMain = Object.entries(tools)
-        .filter(([, t]) => readToolMeta(t)?.audience === 'main')
-        .map(([n]) => n)
-        .sort();
+    it('drops exactly the main-audience tools, and nothing else', () => {
       const worker = new Set(names('worker'));
-      const actuallyDropped = Object.keys(tools)
-        .filter((n) => !worker.has(n))
-        .sort();
-      expect(declaredMain).toEqual(actuallyDropped);
-      // Non-empty, so a registry that dropped nothing can't pass vacuously.
-      expect(declaredMain.length).toBeGreaterThan(0);
-    });
-
-    it('every worker-carried tool declares audience: any', () => {
-      const tools = createTools(
-        {} as never,
-        memoryStub,
-        {},
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        { surface: 'worker' },
-      );
-      for (const [name, t] of Object.entries(tools)) {
-        expect(readToolMeta(t)?.audience, name).toBe('any');
-      }
+      const dropped = names().filter((n) => !worker.has(n));
+      expect(dropped.sort()).toEqual([...MAIN_AUDIENCE_TOOLS].sort());
     });
   });
 });

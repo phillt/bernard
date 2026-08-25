@@ -3,6 +3,10 @@ import { makePolicyInput } from '../../../policy/test-helpers.js';
 import type { AgentContext } from '../../context.js';
 import { resolveToolSurface } from '../tool-surface.js';
 import type { AgentDefinition } from '../types.js';
+import { subAgentDefinition } from '../sub.js';
+import { taskDefinition } from '../task.js';
+import { specialistDefinition } from '../specialist.js';
+import { pacActorDefinition } from '../pac-actor.js';
 
 /**
  * Shared fixture for the per-server MCP delegation assertions (#296, #305).
@@ -69,10 +73,31 @@ export function makeCtx(
  * centrally-resolved surface (#315) rather than a hand-built one, so these
  * assertions exercise the real resolution rather than a test-local copy of it.
  */
-export function toolsOf(
+export async function toolsOf(
   def: AgentDefinition<any, any>,
   ctx: AgentContext,
   input: unknown,
-): Promise<Record<string, unknown>> | Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   return def.tools(ctx, input, resolveToolSurface(ctx, def));
+}
+
+/**
+ * The definitions that assemble their registry from `createTools` and so are
+ * observably affected by the resolved surface. Shared because both
+ * `child.mcp-delegation.test.ts` and `tool-surface.test.ts` iterate them, and a
+ * per-file copy would let one drift.
+ */
+export const CREATE_TOOLS_DEFINITIONS: ReadonlyArray<{
+  name: string;
+  def: AgentDefinition<any, any>;
+}> = [
+  { name: 'sub', def: subAgentDefinition },
+  { name: 'task', def: taskDefinition },
+  { name: 'specialist', def: specialistDefinition },
+  { name: 'pac-actor', def: pacActorDefinition },
+];
+
+/** `specialist` is the one definition whose input must carry a plan store. */
+export function inputFor(name: string): unknown {
+  return name === 'specialist' ? { planStore: {} } : {};
 }

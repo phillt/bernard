@@ -1,11 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { subAgentDefinition } from '../sub.js';
 import { taskDefinition } from '../task.js';
-import { specialistDefinition } from '../specialist.js';
 import { pacActorDefinition } from '../pac-actor.js';
 import { mcpDelegateDefinition } from '../mcp-delegate.js';
-import { makeCtx, toolsOf, DELEGATE_TOOLS, RAW_MCP_TOOLS } from './_mcp-delegation-fixture.js';
-import { resolveToolSurface } from '../tool-surface.js';
+import {
+  makeCtx,
+  toolsOf,
+  inputFor,
+  CREATE_TOOLS_DEFINITIONS,
+  DELEGATE_TOOLS,
+  RAW_MCP_TOOLS,
+} from './_mcp-delegation-fixture.js';
 import type { AgentContext } from '../../context.js';
 
 /**
@@ -15,64 +20,56 @@ import type { AgentContext } from '../../context.js';
  * `ctx.mcp.tools` must now make the same choice `main` does.
  */
 const anyInput = {} as never;
-const specialistInput = { planStore: {} } as never;
 
-/** `(name, tools(ctx, input))` for each definition that can carry MCP. */
-const DEFINITIONS: ReadonlyArray<{
-  name: string;
-  tools: (ctx: AgentContext) => Promise<Record<string, unknown>>;
-}> = [
-  { name: 'sub', tools: async (ctx) => toolsOf(subAgentDefinition, ctx, anyInput) },
-  { name: 'task', tools: async (ctx) => toolsOf(taskDefinition, ctx, anyInput) },
-  { name: 'specialist', tools: async (ctx) => toolsOf(specialistDefinition, ctx, specialistInput) },
-  { name: 'pac-actor', tools: async (ctx) => toolsOf(pacActorDefinition, ctx, anyInput) },
-];
+describe.each(CREATE_TOOLS_DEFINITIONS)(
+  '$name agent MCP delegation tool assembly (#305)',
+  ({ name, def }) => {
+    const tools = (ctx: AgentContext) => toolsOf(def, ctx, inputFor(name));
+    it('with delegation ON, carries delegate_<server> tools and no raw MCP schemas', async () => {
+      const names = Object.keys(await tools(makeCtx(true)));
+      expect(names.filter((n) => n.startsWith('delegate_')).sort()).toEqual([...DELEGATE_TOOLS]);
+      for (const raw of RAW_MCP_TOOLS) expect(names).not.toContain(raw);
+    });
 
-describe.each(DEFINITIONS)('$name agent MCP delegation tool assembly (#305)', ({ tools }) => {
-  it('with delegation ON, carries delegate_<server> tools and no raw MCP schemas', async () => {
-    const names = Object.keys(await tools(makeCtx(true)));
-    expect(names.filter((n) => n.startsWith('delegate_')).sort()).toEqual([...DELEGATE_TOOLS]);
-    for (const raw of RAW_MCP_TOOLS) expect(names).not.toContain(raw);
-  });
-
-  it('with delegation OFF, carries raw MCP tools and no delegate tools', async () => {
-    const names = Object.keys(await tools(makeCtx(false)));
-    for (const raw of RAW_MCP_TOOLS) expect(names).toContain(raw);
-    expect(names.filter((n) => n.startsWith('delegate_'))).toEqual([]);
-  });
-});
+    it('with delegation OFF, carries raw MCP tools and no delegate tools', async () => {
+      const names = Object.keys(await tools(makeCtx(false)));
+      for (const raw of RAW_MCP_TOOLS) expect(names).toContain(raw);
+      expect(names.filter((n) => n.startsWith('delegate_'))).toEqual([]);
+    });
+  },
+);
 
 describe('delegation edge cases (#305)', () => {
-  it('a caller-scoped registry still wins for the PAC actor', () => {
+  it('a caller-scoped registry still wins for the PAC actor', async () => {
     // How MCP delegation escalation scopes an actor to one server; if the
     // delegation gate overrode it, the escalated run would regain the full bag.
     const childTools = { google__gmail_list: {}, ask_user: {} };
-    const names = Object.keys(toolsOf(pacActorDefinition, makeCtx(true), { childTools }));
+    const names = Object.keys(await toolsOf(pacActorDefinition, makeCtx(true), { childTools }));
     expect(names.sort()).toEqual(['ask_user', 'google__gmail_list']);
   });
 
-  it('the delegate helper carries no delegate tool, so recursion is bounded at depth 1', () => {
+  it('the delegate helper carries no delegate tool, so recursion is bounded at depth 1', async () => {
     // `dispatchServerDelegate` scopes the helper to one server's tools plus
     // `ask_user`. Because that registry can never contain a `delegate_*` tool,
     // a helper cannot spawn another helper — no runtime depth guard needed.
     const childTools = { google__gmail_list: {}, google__gmail_get: {}, ask_user: {} };
-    const names = Object.keys(toolsOf(mcpDelegateDefinition, makeCtx(true), { childTools }));
+    const names = Object.keys(await toolsOf(mcpDelegateDefinition, makeCtx(true), { childTools }));
     expect(names.filter((n) => n.startsWith('delegate_'))).toEqual([]);
   });
 
   it("task's prompt advertises exactly the tools it hands the agent", async () => {
-    // `systemPrompt` and `tools` share one `taskTools(ctx)`, so this holds by
-    // construction. Asserting set EQUALITY (not just the delegate/raw names)
-    // is what catches the drift the two-registry version actually had: the
-    // prompt path passed no provenance, so `cite` was handed but unadvertised.
+    // `runDefinition` hands `systemPrompt` the registry `tools()` just returned
+    // (#322), so this now holds by construction. Asserting set EQUALITY (not
+    // just the delegate/raw names) is what caught the drift the old
+    // two-registry version actually had: the prompt path passed no provenance,
+    // so `cite` was handed but never advertised.
     const ctx = makeCtx(true);
+    const handed = await toolsOf(taskDefinition, ctx, anyInput);
     const advertised = /Available tools: (.*)/.exec(
-      await taskDefinition.systemPrompt(ctx, anyInput, resolveToolSurface(ctx, taskDefinition)),
+      await taskDefinition.systemPrompt(ctx, anyInput, handed as Record<string, never>),
     )?.[1];
     expect(advertised).toBeDefined();
-    expect(advertised!.split(', ').sort()).toEqual(
-      Object.keys(toolsOf(taskDefinition, ctx, anyInput)).sort(),
-    );
+    expect(advertised!.split(', ').sort()).toEqual(Object.keys(handed).sort());
   });
 
   it('falls open to the raw bag when a context carries MCP tools but no server map', async () => {
@@ -81,7 +78,7 @@ describe('delegation edge cases (#305)', () => {
     const ctx = makeCtx(true, {
       mcp: { tools: { google__gmail_list: {} }, serverNames: [], serverTools: {} },
     });
-    const names = Object.keys(toolsOf(subAgentDefinition, ctx, anyInput));
+    const names = Object.keys(await toolsOf(subAgentDefinition, ctx, anyInput));
     expect(names).toContain('google__gmail_list');
     expect(names.filter((n) => n.startsWith('delegate_'))).toEqual([]);
   });

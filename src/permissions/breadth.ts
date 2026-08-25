@@ -47,7 +47,7 @@ function within(dir: string): boolean {
 export function breadthOptionsFor(
   toolName: string,
   args: unknown,
-  meta?: { actionArg?: string } | null,
+  meta?: { actionScoped?: boolean } | null,
 ): BreadthOption[] {
   const a = args as Record<string, unknown> | undefined;
 

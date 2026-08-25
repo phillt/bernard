@@ -31,7 +31,6 @@ export function createMCPAddUrlTool() {
     }),
     {
       name: 'mcp_add_url',
-      audience: 'main',
       kind: 'write',
       deterministic: false,
       sideEffect: 'local',

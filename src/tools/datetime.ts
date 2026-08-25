@@ -28,7 +28,6 @@ export function createDateTimeTool() {
     }),
     {
       name: 'datetime',
-      audience: 'any',
       kind: 'read',
       deterministic: false,
       sideEffect: 'none',

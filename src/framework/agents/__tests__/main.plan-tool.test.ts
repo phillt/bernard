@@ -3,7 +3,7 @@ import { mainAgentDefinition } from '../main.js';
 import type { BernardConfig } from '../../../config.js';
 import type { AgentContext } from '../../context.js';
 import type { PolicyDecision } from '../../../policy/types.js';
-import { resolveToolSurface } from '../tool-surface.js';
+import { toolsOf } from './_mcp-delegation-fixture.js';
 
 /**
  * `plan` is decoupled from the ReAct enforcement loop: it's available in EVERY
@@ -69,13 +69,12 @@ const input = { planStore: {}, systemPrompt: '' } as unknown as Parameters<
   typeof mainAgentDefinition.tools
 >[1];
 
-function toolNames(
+async function toolNames(
   coordinatorMode: BernardConfig['coordinatorMode'],
   strategyId?: 'normal' | 'react',
-) {
-  const ctx = makeCtx(coordinatorMode, strategyId);
+): Promise<string[]> {
   return Object.keys(
-    mainAgentDefinition.tools(ctx, input, resolveToolSurface(ctx, mainAgentDefinition)),
+    await toolsOf(mainAgentDefinition, makeCtx(coordinatorMode, strategyId), input),
   );
 }
 
@@ -85,31 +84,33 @@ describe('main agent plan/evaluate tool gating', () => {
   // per-turn strategy. This keeps the tool block byte-identical across turns so
   // the Anthropic prompt cache holds. `plan` is always present.
 
-  it('in `auto` mode, exposes `plan` AND `evaluate` regardless of the per-turn strategy', () => {
+  it('in `auto` mode, exposes `plan` AND `evaluate` regardless of the per-turn strategy', async () => {
     // Even on a Normal turn, evaluate stays present so the tool block doesn't
     // flip between turns (cache stability).
-    const normalTurn = toolNames('auto', 'normal');
+    const normalTurn = await toolNames('auto', 'normal');
     expect(normalTurn).toContain('plan');
     expect(normalTurn).toContain('evaluate');
 
-    const reactTurn = toolNames('auto', 'react');
+    const reactTurn = await toolNames('auto', 'react');
     expect(reactTurn).toContain('plan');
     expect(reactTurn).toContain('evaluate');
   });
 
-  it('with coordinatorMode off, exposes `plan` but never `evaluate`', () => {
-    const names = toolNames('off', undefined);
+  it('with coordinatorMode off, exposes `plan` but never `evaluate`', async () => {
+    const names = await toolNames('off', undefined);
     expect(names).toContain('plan');
     expect(names).not.toContain('evaluate');
   });
 
-  it('exposes both when coordinatorMode is on with no policy decision', () => {
-    const names = toolNames('on', undefined);
+  it('exposes both when coordinatorMode is on with no policy decision', async () => {
+    const names = await toolNames('on', undefined);
     expect(names).toContain('plan');
     expect(names).toContain('evaluate');
   });
 
-  it('tool set is identical across Normal and ReAct turns within a session (cache stability)', () => {
-    expect(toolNames('auto', 'normal').sort()).toEqual(toolNames('auto', 'react').sort());
+  it('tool set is identical across Normal and ReAct turns within a session (cache stability)', async () => {
+    expect((await toolNames('auto', 'normal')).sort()).toEqual(
+      (await toolNames('auto', 'react')).sort(),
+    );
   });
 });

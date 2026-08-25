@@ -224,17 +224,18 @@ export function primaryShellCommand(command: string): string | null {
 }
 
 /**
- * The action a call dispatches on, for tools that declare a discriminator via
- * `ToolMeta.actionArg` (#322) — `null` for every other tool, and for a call
- * whose discriminator is missing or not a string.
+ * The action a call dispatches on, for tools declaring `ToolMeta.actionScoped`
+ * (#322) — `null` for every other tool, and for a call whose `action` is
+ * missing or not a non-empty string.
  *
- * Reading it off the meta rather than a name list matters because the two can
- * disagree: the meta is what the tool itself declares, and it is the same field
- * `isWriteAction` already refines on.
+ * The single reader of the discriminator: `permissionKeyFor` mints keys from
+ * it, `breadthOptionsFor` mints `action:<value>` specifiers from it, and
+ * `attachActionMeta`'s `isWriteAction` refines on it. Reading it off the meta
+ * rather than a name list matters because the two can disagree.
  */
-export function actionOf(args: unknown, meta?: { actionArg?: string } | null): string | null {
-  if (!meta?.actionArg) return null;
-  const value = (args as Record<string, unknown> | undefined)?.[meta.actionArg];
+export function actionOf(args: unknown, meta?: { actionScoped?: boolean } | null): string | null {
+  if (!meta?.actionScoped) return null;
+  const value = (args as Record<string, unknown> | undefined)?.action;
   return typeof value === 'string' && value ? value : null;
 }
 
@@ -254,9 +255,9 @@ export function actionOf(args: unknown, meta?: { actionArg?: string } | null): s
 export function permissionKeyFor(
   toolName: string,
   args: unknown,
-  meta?: { actionArg?: string } | null,
+  meta?: { actionScoped?: boolean } | null,
 ): string | null {
-  if (meta?.actionArg) {
+  if (meta?.actionScoped) {
     const action = actionOf(args, meta);
     // No readable action → no stable key, so no profile grant is offered.
     // Fail-closed: the user is asked rather than handed an over-broad option.

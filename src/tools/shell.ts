@@ -106,7 +106,6 @@ export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, Sh
   return {
     meta: {
       name: 'shell',
-      audience: 'any',
       kind: 'dangerous',
       category: 'shell',
       deterministic: false,

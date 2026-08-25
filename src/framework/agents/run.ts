@@ -130,8 +130,11 @@ export async function runDefinition<TInput, TFormatted>(
   // a missed call site failed silently and expensively. Deciding here makes the
   // definitions consumers of the answer rather than five copies of the rule.
   const surface = resolveToolSurface(ctx, def);
-  const system = await Promise.resolve(def.systemPrompt(ctx, input, surface));
   const rawTools = await Promise.resolve(def.tools(ctx, input, surface));
+  // Tools first, then the prompt that describes them: `task` interpolates
+  // `Available tools: …` and used to build its own second registry to do it,
+  // which had already drifted from the handed set.
+  const system = await Promise.resolve(def.systemPrompt(ctx, input, rawTools));
   // Central confirmation-gate install (#144). Every agent runs through this
   // path, so applying the gate here (instead of inside each definition's
   // `tools()`) means sub-agent / PAC / specialist / cron tool calls all
