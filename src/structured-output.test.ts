@@ -167,6 +167,25 @@ describe('wrapWrapperResult', () => {
     expect(result.reasoning).toEqual(['tried ls', 'tried find']);
   });
 
+  it('accepts an explicit null error and normalizes it away (#341)', () => {
+    // The observed failure: a model shown a four-key template emits four keys
+    // and puts `null` in the one that doesn't apply. That is valid JSON doing
+    // the right thing — 18 of 37 wrapper runs were discarded over it.
+    const result = wrapWrapperResult('{"status":"ok","result":"done","error":null}');
+    expect(result.status).toBe('ok');
+    expect(result.result).toBe('done');
+    // Normalized, not merely accepted: two downstream sites spread this field
+    // on `!== undefined`, so a surviving `null` would leak into the reasoning
+    // log and the parent agent's JSON against a type declaring `error?: string`.
+    expect('error' in result).toBe(false);
+  });
+
+  it('accepts an explicit null reasoning and normalizes it away (#341)', () => {
+    const result = wrapWrapperResult('{"status":"ok","result":"done","reasoning":null}');
+    expect(result.status).toBe('ok');
+    expect('reasoning' in result).toBe(false);
+  });
+
   it('does not include error key when not present in parsed output', () => {
     const text = JSON.stringify({ status: 'ok', result: 42 });
     const result = wrapWrapperResult(text);

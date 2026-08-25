@@ -45,7 +45,13 @@ export function extractJsonBlock(text: string, start: number): string | undefine
  *
  * @returns The validated object on success, or `undefined` if nothing parses.
  */
-export function parseStructuredOutput<T>(text: string, schema: z.ZodType<T>): T | undefined {
+export function parseStructuredOutput<S extends z.ZodTypeAny>(
+  text: string,
+  schema: S,
+): z.output<S> | undefined {
+  // Generic over the schema, not over `T`: `z.ZodType<T>` defaults its Input to
+  // T, so a schema carrying a `.transform` (see `nullableOptional`) would infer
+  // the pre-transform type and hand callers back the `null`s it just removed.
   const trimmed = text.trim();
 
   // 1. Direct parse
@@ -91,11 +97,37 @@ export interface WrapperResult {
   reasoning?: string[];
 }
 
+/**
+ * An optional field that also tolerates an explicit `null` (#341).
+ *
+ * A model shown a JSON template with four keys emits four keys, and puts `null`
+ * in the one that does not apply — which is the reasonable reading of the shape
+ * we hand it. `z.string().optional()` accepts `string | undefined` but **not**
+ * `null`, so `{"status":"ok","result":{...},"error":null}` failed validation and
+ * the whole payload was discarded as `parse_failed`. Observed at 18 of 37
+ * wrapper runs in one session — every one of them work that had already
+ * succeeded, thrown away and reported to the parent as an error.
+ *
+ * Widening the schema is only half the job — `null` must also be **normalized
+ * away**, because the public types declare `error?: string` and downstream
+ * sites test `!== undefined` before spreading the field into the reasoning log
+ * and the parent agent's JSON. The `.transform` does that here, at the parse
+ * boundary, so every consumer keeps its pre-existing `!== undefined` check and
+ * no caller has to remember. Normalizing at each consumer instead needs the
+ * question "did we cover them all?" answered by hand, once per field.
+ *
+ * The key stays optional in the inferred type: `isOptional()` is
+ * `safeParse(undefined).success`, which survives the `ZodEffects` wrapper.
+ */
+export function nullableOptional<T extends z.ZodTypeAny>(schema: T) {
+  return schema.nullish().transform((v) => v ?? undefined);
+}
+
 export const WrapperResultSchema = z.object({
   status: z.enum(['ok', 'error']),
   result: z.any(),
-  error: z.string().optional(),
-  reasoning: z.array(z.string()).optional(),
+  error: nullableOptional(z.string()),
+  reasoning: nullableOptional(z.array(z.string())),
 });
 
 /**
@@ -107,6 +139,8 @@ export function wrapWrapperResult(text: string): WrapperResult {
   if (parsed) {
     const { status, result, error, reasoning } = parsed;
     const out: WrapperResult = { status, result };
+    // `nullableOptional` already turned any `null` into `undefined`, so these
+    // are the same checks as before #341.
     if (error !== undefined) out.error = error;
     if (reasoning !== undefined) out.reasoning = capReasoning(reasoning);
     return out;
@@ -151,12 +185,13 @@ Your FINAL message MUST be a single valid JSON object with this shape and nothin
 {
   "status": "ok" | "error",
   "result": <any valid JSON value representing the outcome>,
-  "error": "<short error message, only when status is 'error'>",
+  "error": "<short error message — include this key ONLY when status is 'error'>",
   "reasoning": ["<short rationale for each significant decision or tool call>"]
 }
 
 Rules:
 - Be minimal. The JSON IS the output — no narrative, no explanations, no apologies outside the JSON.
+- OMIT a key you have nothing to put in rather than sending \`null\`. On success, \`error\` should be absent, not \`"error": null\`.
 - Emit the JSON only once, as your last message.
 - \`result\` is the concrete outcome (a path, a value, a short summary). Do NOT restate the user's request, and do NOT echo raw tool output the caller already has.
 - \`reasoning\` is OPTIONAL. Include at most ${REASONING_MAX_ENTRIES} entries, each one short sentence (≤25 words / ~${REASONING_MAX_CHARS} characters). Omit \`reasoning\` entirely when \`status\` is "ok" and the call was straightforward. Excess entries / overlong entries are truncated downstream — keep them short to stay in control of what survives.
