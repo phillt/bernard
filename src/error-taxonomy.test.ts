@@ -207,6 +207,28 @@ describe('isDispatchCancellation', () => {
     expect(isDispatchCancellation(new Error('Dispatch timed out after 60000 ms'))).toBe(true);
   });
 
+  it('sees through the AI SDK wrapping a re-thrown tool error (#327)', () => {
+    // A throw out of `tool.execute` comes back as ToolExecutionError. Reachable
+    // as main → `agent` → `delegate_<server>`, since sub-agents carry delegate
+    // tools. A timeout survives for free (its message is interpolated into the
+    // wrapper's); an AbortError does not, so the predicate walks `cause`.
+    const wrapped = new Error('Error executing tool delegate_google: Aborted', {
+      cause: new DOMException('Aborted', 'AbortError'),
+    });
+    wrapped.name = 'AI_ToolExecutionError';
+    expect(classifyError({ message: wrapped.message }).category).toBe('unknown');
+    expect(isDispatchCancellation(wrapped)).toBe(true);
+  });
+
+  it('terminates on a cyclic cause chain', () => {
+    // Error chains come from providers and MCP servers; a cycle must not hang
+    // the catch handler that consults this.
+    const a = new Error('a');
+    const b = new Error('b', { cause: a });
+    (a as { cause?: unknown }).cause = b;
+    expect(isDispatchCancellation(a)).toBe(false);
+  });
+
   it('leaves genuine work failures alone', () => {
     // These stay returned strings: a failed MCP call IS a tool result the
     // model should see and can recover from on its own.

@@ -257,6 +257,28 @@ function isShellContext(toolName?: string): boolean {
  */
 export function isDispatchCancellation(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  if (err.name === 'AbortError') return true;
+  // Walk `cause`, because one of these boundaries can sit inside another and
+  // the AI SDK rewrites the error in between. A throw out of `tool.execute`
+  // is wrapped in `ToolExecutionError` (`name: 'AI_ToolExecutionError'`,
+  // message `Error executing tool <name>: <cause message>`) — on the
+  // non-streaming path directly, on the streaming path via an `error` part
+  // that `runStreaming` re-throws.
+  //
+  // Reachable today as main → `agent` → `delegate_<server>`: sub-agents carry
+  // delegate tools, so a delegate helper's dispatch runs inside a sub-agent's.
+  // A *timeout* survives the wrap for free, since the cause's message is
+  // interpolated into the wrapper's and still matches. An `AbortError` does
+  // not: the wrapper's name is its own, and the cause's message is the bare
+  // `"Aborted"`, which matches neither `\bcancelled\b` nor `aborted by user`
+  // and so classifies as `unknown`. Without the walk a user's Esc stops
+  // propagating after exactly one level — #327's bug, one frame up.
+  //
+  // Bounded rather than `while (cause)`: an error chain is attacker-adjacent
+  // input (providers and MCP servers build these) and a cycle would hang the
+  // catch handler. Eight is far past any real nesting here.
+  for (let e: Error | undefined = err, depth = 0; e && depth < 8; depth++) {
+    if (e.name === 'AbortError') return true;
+    e = e.cause instanceof Error ? e.cause : undefined;
+  }
   return classifyError({ message: err.message }).category === 'timeout';
 }
