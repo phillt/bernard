@@ -48,6 +48,20 @@ export interface CronJob {
    * and `toolMode`.
    */
   skipPermissions?: boolean;
+  /**
+   * Per-job wall clock in milliseconds (#326). Falls back to
+   * `BERNARD_CRON_JOB_TIMEOUT_MS`, then to a 30-minute default; `0` disables
+   * the clock for this job.
+   *
+   * Cron used to call `runDefinition` with no `abortSignal` — it had none to
+   * give — and nothing else in `src/cron/` was a job-level clock (`shellTimeout`
+   * is per-tool). A hung job therefore held its scheduler slot forever, and
+   * once `runningCount` reached `maxConcurrent` every later fire queued behind
+   * it with no way to drain, because `drainQueue` only runs from a completing
+   * job's `finally`. One stuck job silently stopped the whole scheduler with no
+   * operator present.
+   */
+  timeoutMs?: number;
 }
 
 /** A notification generated when a cron job completes and produces output. */

@@ -167,7 +167,7 @@ vi.mock('../rag.js', () => ({
   RAGStore: vi.fn(() => mockRagStoreInstance),
 }));
 
-import { runJob, resolveCronJobPosture } from './runner.js';
+import { runJob, resolveCronJobPosture, resolveCronJobTimeoutMs } from './runner.js';
 import { loadConfig } from '../config.js';
 import type { CronJob } from './types.js';
 
@@ -568,5 +568,116 @@ describe('resolveCronJobPosture', () => {
       const { confirmAction } = resolveCronJobPosture(job);
       expect(await confirmAction(confirmInput('high'))).toBe(false);
     });
+  });
+});
+
+/**
+ * #326 — cron called `runDefinition` with no `abortSignal` and had no
+ * job-level wall clock, so a hung job held its scheduler slot forever and
+ * every later fire queued behind it undrainably.
+ */
+describe('cron job wall clock (#326)', () => {
+  // Own reset: two tests here call `runJob`, but this block sits outside
+  // `describe('runJob')` and so does not inherit its `beforeEach` — without
+  // this it would run against whatever mocks the previous suite left behind.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRagSearch.mockResolvedValue([]);
+    mockMemoryStore.getAllMemoryContents.mockReturnValue(new Map());
+    mockMemoryStore.getAllScratchContents.mockReturnValue(new Map());
+    vi.mocked(loadConfig).mockReturnValue({
+      provider: 'anthropic',
+      model: 'test',
+      maxTokens: 1024,
+      shellTimeout: 5000,
+      tokenWindow: 0,
+      ragEnabled: true,
+      theme: 'bernard',
+    } as unknown as ReturnType<typeof loadConfig>);
+    mockGenerateText.mockImplementation(async () => ({
+      text: 'done',
+      response: { messages: [] },
+    }));
+  });
+
+  const baseJob: CronJob = {
+    id: 'job-1',
+    name: 'Test',
+    schedule: '* * * * *',
+    prompt: 'do stuff',
+    enabled: true,
+    createdAt: new Date().toISOString(),
+  };
+
+  const withEnv = (v: string | undefined, fn: () => void) => {
+    const prev = process.env.BERNARD_CRON_JOB_TIMEOUT_MS;
+    if (v === undefined) delete process.env.BERNARD_CRON_JOB_TIMEOUT_MS;
+    else process.env.BERNARD_CRON_JOB_TIMEOUT_MS = v;
+    try {
+      fn();
+    } finally {
+      if (prev === undefined) delete process.env.BERNARD_CRON_JOB_TIMEOUT_MS;
+      else process.env.BERNARD_CRON_JOB_TIMEOUT_MS = prev;
+    }
+  };
+
+  it('defaults to 30 minutes so pre-existing jobs are covered', () => {
+    // Defaulted rather than opt-in: every job that exists today predates the
+    // field, and those are exactly the ones able to wedge the scheduler.
+    withEnv(undefined, () => {
+      expect(resolveCronJobTimeoutMs(baseJob)).toBe(30 * 60_000);
+    });
+  });
+
+  it('prefers the per-job value over the env default', () => {
+    withEnv('5000', () => {
+      expect(resolveCronJobTimeoutMs({ ...baseJob, timeoutMs: 1234 })).toBe(1234);
+      expect(resolveCronJobTimeoutMs(baseJob)).toBe(5000);
+    });
+  });
+
+  it('treats an empty env var as unset, not disabled', () => {
+    // `Number('')` is `0` — finite and non-positive — so reading the env
+    // through `Number()` made `BERNARD_CRON_JOB_TIMEOUT_MS=` silently turn off
+    // the clock this exists to add.
+    withEnv('', () => expect(resolveCronJobTimeoutMs(baseJob)).toBe(30 * 60_000));
+  });
+
+  it('treats zero as disabled at either level', () => {
+    withEnv('0', () => expect(resolveCronJobTimeoutMs(baseJob)).toBeNull());
+    withEnv(undefined, () =>
+      expect(resolveCronJobTimeoutMs({ ...baseJob, timeoutMs: 0 })).toBeNull(),
+    );
+  });
+
+  it('aborts a job that outruns its clock and reports it as a timeout', async () => {
+    mockGenerateText.mockImplementationOnce(
+      (opts: any) =>
+        new Promise((_, reject) => {
+          opts.abortSignal?.addEventListener('abort', () =>
+            reject(new DOMException('Aborted', 'AbortError')),
+          );
+        }),
+    );
+    const log = vi.fn();
+    const result = await runJob({ ...baseJob, timeoutMs: 50 }, log);
+    expect(result.success).toBe(false);
+    // Re-shaped from the bare AbortError the chained controller produces, so
+    // the taxonomy reads it as `timeout` rather than `unknown`.
+    expect(result.output).toMatch(/timed out after 50 ms/);
+    expect(log.mock.calls.flat().join('\n')).toMatch(/exceeded its 50 ms wall clock/);
+  });
+
+  it('passes an abort signal at all — restoring the defensive abort race', async () => {
+    // `runNonStreaming` skips its race entirely when `abortSignal` is
+    // undefined (`if (!abortSignal) return gen`), so headless runs used to have
+    // *less* protection than interactive ones.
+    let seen: AbortSignal | undefined;
+    mockGenerateText.mockImplementationOnce(async (opts: any) => {
+      seen = opts.abortSignal;
+      return { text: 'done', response: { messages: [] } };
+    });
+    await runJob(baseJob, vi.fn());
+    expect(seen).toBeInstanceOf(AbortSignal);
   });
 });

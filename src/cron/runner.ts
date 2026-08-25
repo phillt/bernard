@@ -104,6 +104,37 @@ export function resolveCronJobPosture(job: CronJob): CronJobPermissionPosture {
 }
 
 /**
+ * Default per-job wall clock (#326). Generous — a legitimate cron job can
+ * research or build for a long time — but finite, because the cost of an
+ * unbounded one is not "this job is slow", it is "the scheduler stopped".
+ */
+const DEFAULT_CRON_JOB_TIMEOUT_MS = 30 * 60_000;
+
+/**
+ * Resolves the wall clock for one job: per-job `timeoutMs` wins, then
+ * `BERNARD_CRON_JOB_TIMEOUT_MS`, then {@link DEFAULT_CRON_JOB_TIMEOUT_MS}. `0`
+ * (at either level) disables it.
+ *
+ * Defaulted rather than opt-in on purpose: every job that exists today
+ * predates this field, and those are exactly the ones currently able to wedge
+ * the scheduler.
+ */
+export function resolveCronJobTimeoutMs(job: CronJob): number | null {
+  if (job.timeoutMs !== undefined) {
+    return job.timeoutMs > 0 ? Math.floor(job.timeoutMs) : null;
+  }
+  // An empty/absent var means "unset", NOT "disabled". `Number('')` is `0`,
+  // which is finite and non-positive — so reading the env through `Number()`
+  // without this guard made `BERNARD_CRON_JOB_TIMEOUT_MS=` silently turn off
+  // the very clock this exists to add.
+  const raw = process.env.BERNARD_CRON_JOB_TIMEOUT_MS;
+  if (!raw) return DEFAULT_CRON_JOB_TIMEOUT_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_CRON_JOB_TIMEOUT_MS;
+  return n > 0 ? Math.floor(n) : null;
+}
+
+/**
  * Executes a cron job by running the agent loop (with tools) against the
  * job's prompt. Sets up the runtime context (MCP, RAG, stores), delegates the
  * actual agent loop to {@link cronDefinition} via `runDefinition`, then
@@ -233,6 +264,23 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
     }
   }
 
+  // Per-job wall clock (#326). Also the only `abortSignal` cron has ever had,
+  // so passing it additionally restores `runNonStreaming`'s defensive abort
+  // race — skipped entirely when the signal is undefined, which meant headless
+  // runs had *less* protection than interactive ones.
+  const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+  const jobAbort = new AbortController();
+  let jobTimedOut = false;
+  const jobTimer =
+    jobTimeoutMs === null
+      ? null
+      : setTimeout(() => {
+          jobTimedOut = true;
+          log(`Job "${job.name}" exceeded its ${jobTimeoutMs} ms wall clock — aborting.`);
+          jobAbort.abort();
+        }, jobTimeoutMs);
+  jobTimer?.unref?.();
+
   try {
     const def = definitions.get<CronInput, string>('cron');
     const input: CronInput = {
@@ -245,7 +293,9 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       serverNames: mcpSnapshot.serverNames,
       ragResults,
     };
-    const { formatted: output } = await runDefinition(ctx, def, input);
+    const { formatted: output } = await runDefinition(ctx, def, input, {
+      abortSignal: jobAbort.signal,
+    });
 
     // Agent Status snapshot for cron parity with the interactive Shift+Tab
     // viewer (#140). Cron doesn't run the Policy Engine and doesn't expose a
@@ -315,8 +365,30 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
 
     return { success: true, output };
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    // The wall clock fires our own controller, so the dispatch unwinds as a
+    // bare AbortError with no context. Re-shape it here, where the budget is
+    // still in scope, into a message the taxonomy reads as `timeout`.
+    const message = jobTimedOut
+      ? `Job timed out after ${jobTimeoutMs} ms (job.timeoutMs / BERNARD_CRON_JOB_TIMEOUT_MS)`
+      : err instanceof Error
+        ? err.message
+        : String(err);
     const cls = classifyError({ message });
+    // One decision, made once. `timeout` is severity `low` in the taxonomy —
+    // right for an ordinary tool timeout, wrong for a job that was holding a
+    // scheduler slot and queueing every later fire behind it with no operator
+    // present. Cron owns cron alerting (`Classification.severity` is
+    // documented on the interface as "Drives cron alert severity"), so this is
+    // decided at the site that knows, rather than by teaching the shared table
+    // about cron. Severity and the user-facing text are keyed on the same
+    // fact, so they are resolved together — split apart, an edit to one
+    // reads as complete.
+    const alert = jobTimedOut
+      ? {
+          severity: 'critical' as const,
+          text: `${cls.category} — the job hit its wall clock and was aborted; until then it was holding a scheduler slot.`,
+        }
+      : { severity: cls.severity, text: `${cls.category} — ${cls.playbook.user}` };
 
     try {
       const totalUsage = steps.reduce(
@@ -378,7 +450,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         lastRunStatus: 'error',
         lastResult: message.slice(0, 2000),
       });
-      const alert = store.createAlert({
+      const alertRecord = store.createAlert({
         jobId: job.id,
         jobName: job.name,
         message: `${cls.category}: ${message.split('\n')[0].slice(0, 200)}`,
@@ -387,9 +459,9 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       });
       sendNotification({
         title: `Bernard cron failed: ${job.name}`,
-        message: `${cls.category} — ${cls.playbook.user}`,
-        severity: cls.severity,
-        alertId: alert.id,
+        message: alert.text,
+        severity: alert.severity,
+        alertId: alertRecord.id,
         log,
       });
     } catch (alertErr) {
@@ -400,6 +472,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
 
     return { success: false, output: `Error: ${message}` };
   } finally {
+    if (jobTimer) clearTimeout(jobTimer);
     await mcpManager.close();
   }
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { cronStepRecorderHook } from '../cron-step-recorder.js';
 import type { CronLogStep } from '../../../cron/log-store.js';
+import { REDACTED } from '../../tools/redact.js';
 
 describe('cronStepRecorderHook', () => {
   it('accumulates steps with monotonically increasing stepIndex', async () => {
@@ -63,5 +64,75 @@ describe('cronStepRecorderHook', () => {
     await hook.onStepFinish!({ text: '', toolCalls: [], toolResults: [] });
     expect(steps[0].usage).toEqual({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
     expect(steps[0].finishReason).toBe('unknown');
+  });
+});
+
+/**
+ * #347 — the cap used to test `typeof result === 'string'`, so the truncating
+ * branch was effectively dead: every Bernard tool returns an object.
+ */
+describe('cronStepRecorderHook — object result cap', () => {
+  function record(result: unknown, registry?: Record<string, unknown>) {
+    const steps: CronLogStep[] = [];
+    const hook = cronStepRecorderHook(steps, registry);
+    void hook.onStepFinish!({
+      text: '',
+      toolCalls: [],
+      toolResults: [{ toolName: 'shell', toolCallId: '1', result }],
+      usage: { promptTokens: 1, completionTokens: 1 },
+      finishReason: 'stop',
+    } as never);
+    return steps[0].toolResults[0].result;
+  }
+
+  it('caps a multi-MB object result and marks it as truncated', () => {
+    // The shape that made this matter: `shell` returns `{output, is_error}`
+    // with a 10 MB maxBuffer and no cap on `output`.
+    const out = record({ output: 'x'.repeat(2_000_000), is_error: false });
+    expect(typeof out).toBe('string');
+    expect(out as string).toContain('(truncated,');
+    expect((out as string).length).toBeLessThan(11_000);
+  });
+
+  it('bounds an array-shaped result without walking all of it', () => {
+    // The shape the string-only replacer misses entirely: `file_read_lines`
+    // returns `{lines: [{num, content}, …]}` where every `content` is far
+    // under the budget, so nothing is ever replaced and the whole thing
+    // materializes. Measured at 183 ms / 75 MB for 500k lines — SLOWER than a
+    // plain stringify, since a replacer drops V8's fast path.
+    const lines = Array.from({ length: 200_000 }, (_, i) => ({ num: i, content: 'x'.repeat(40) }));
+    const started = Date.now();
+    const out = record({ path: '/big', total_lines: lines.length, lines });
+    expect(typeof out).toBe('string');
+    expect(out as string).toContain('(truncated,');
+    // O(budget), not O(result): the array is capped before its items are visited.
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('leaves a small object result structured', () => {
+    // Readers that walk the shape keep working on everything that fits.
+    const out = record({ output: 'ok', is_error: false });
+    expect(out).toEqual({ output: 'ok', is_error: false });
+  });
+
+  it('still caps a long string result', () => {
+    const out = record('y'.repeat(50_000));
+    expect(out as string).toContain('(truncated, 50000 chars total)');
+  });
+
+  it('redacts a sensitive result without serializing it first', () => {
+    const registry = {
+      shell: {
+        __bernardMeta: { name: 'shell', kind: 'dangerous', sensitiveResult: true },
+      },
+    };
+    expect(record({ secret: 'hunter2' }, registry)).toBe(REDACTED);
+  });
+
+  it('survives a result with a cycle', () => {
+    // `appendEntry` must never throw on a log write.
+    const cyclic: Record<string, unknown> = { a: 1 };
+    cyclic.self = cyclic;
+    expect(() => record(cyclic)).not.toThrow();
   });
 });
