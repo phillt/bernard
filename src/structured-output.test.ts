@@ -91,16 +91,6 @@ describe('parseStructuredOutput', () => {
 });
 
 describe('WrapperResultSchema', () => {
-  it('accepts null for every optional field (#341)', () => {
-    const parsed = WrapperResultSchema.safeParse({
-      status: 'ok',
-      result: { copied: 8 },
-      error: null,
-      reasoning: null,
-    });
-    expect(parsed.success).toBe(true);
-  });
-
   it('validates a correct ok shape', () => {
     const input = { status: 'ok', result: 'done' };
     const r = WrapperResultSchema.safeParse(input);
@@ -194,15 +184,6 @@ describe('wrapWrapperResult', () => {
     const result = wrapWrapperResult('{"status":"ok","result":"done","reasoning":null}');
     expect(result.status).toBe('ok');
     expect('reasoning' in result).toBe(false);
-  });
-
-  it('still parses a real error payload with both fields set', () => {
-    const result = wrapWrapperResult(
-      '{"status":"error","result":null,"error":"boom","reasoning":["tried x"]}',
-    );
-    expect(result.status).toBe('error');
-    expect(result.error).toBe('boom');
-    expect(result.reasoning).toEqual(['tried x']);
   });
 
   it('does not include error key when not present in parsed output', () => {

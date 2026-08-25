@@ -49,7 +49,8 @@ const CorrectionOutcomeSchema = z.object({
       specialistId: z.string(),
       input: z.string(),
     })
-    .nullish(),
+    .nullish()
+    .transform((v) => v ?? undefined),
   /**
    * The full {status, result, error?} envelope the agent observed when it ran
    * `proposedGoodCall` via `tool_wrapper_run`. The orchestrator verifies
@@ -59,8 +60,8 @@ const CorrectionOutcomeSchema = z.object({
    */
   validatedResult: nullableOptional(z.union([z.string(), z.record(z.unknown())])),
   /** Pair the orchestrator should append on success. */
-  proposedGoodExample: ProposedExampleSchema.nullish(),
-  proposedBadExample: ProposedBadExampleSchema.nullish(),
+  proposedGoodExample: nullableOptional(ProposedExampleSchema),
+  proposedBadExample: nullableOptional(ProposedBadExampleSchema),
 });
 type CorrectionOutcome = z.infer<typeof CorrectionOutcomeSchema>;
 
@@ -159,7 +160,7 @@ export async function runCorrectionAgent(
             validated: true,
             proposedGood: gate.good?.call,
             proposedBad: gate.bad?.call,
-            notes: outcome.notes ?? undefined,
+            notes: outcome.notes,
           });
         } else {
           correctionStore.update(candidate.id, {
@@ -255,11 +256,8 @@ function gateCommit(outcome: CorrectionOutcome, candidate: CorrectionCandidate):
     return { ok: false, rejected: false, reason: detail };
   }
 
-  // The schema tolerates `null` for every optional (#341) so a model emitting
-  // `"note": null` doesn't sink the whole outcome; strip it back to `undefined`
-  // here so the stored records match their declared types.
-  const good = dropNullNote(outcome.proposedGoodExample);
-  const bad = dropNullNote(outcome.proposedBadExample);
+  const good = outcome.proposedGoodExample;
+  const bad = outcome.proposedBadExample;
   if (!good && !bad) {
     return {
       ok: false,
@@ -268,15 +266,6 @@ function gateCommit(outcome: CorrectionOutcome, candidate: CorrectionCandidate):
     };
   }
   return { ok: true, good, bad };
-}
-
-/** Normalizes a proposed example's nullable `note` back to `undefined`. */
-function dropNullNote<T extends { note?: string | null }>(
-  example: T | null | undefined,
-): (Omit<T, 'note'> & { note?: string }) | undefined {
-  if (!example) return undefined;
-  const { note, ...rest } = example;
-  return note != null ? { ...rest, note } : (rest as Omit<T, 'note'> & { note?: string });
 }
 
 /**

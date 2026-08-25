@@ -70,12 +70,12 @@ vi.mock('../os-info.js', () => ({
   osPromptBlock: vi.fn(() => '## Host OS\n- Platform: linux'),
 }));
 
-vi.mock('../structured-output.js', () => ({
+vi.mock('../structured-output.js', async () => ({
+  // Spread the real module: this is a transitive dependency of
+  // `framework/agents/task.ts`, so a hand-written factory had to be extended
+  // every time an unrelated export appeared (it broke on `nullableOptional`).
+  ...(await vi.importActual<typeof import('../structured-output.js')>('../structured-output.js')),
   STRUCTURED_OUTPUT_RULES: '\n\n## Output Format (STRICT)\n...',
-  // Imported by `framework/agents/task.ts` since #341 — a schema builder, so
-  // the mock has to return something zod-shaped, not a stub.
-  nullableOptional: (schema: { nullish: () => unknown }) => schema.nullish(),
-  extractJsonBlock: vi.fn(),
   wrapWrapperResult: vi.fn((text: string) => {
     try {
       return JSON.parse(text);

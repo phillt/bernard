@@ -64,9 +64,9 @@ function validateTaskResult(parsed: unknown): TaskResult | undefined {
   const result = TaskResultSchema.safeParse(parsed);
   if (!result.success) return undefined;
   const { status, output, details } = result.data;
-  return details !== null && details !== undefined
-    ? { status, output, details }
-    : { status, output };
+  // `nullableOptional` normalized any `null` to `undefined` at parse time, so
+  // this is the same check as before #341.
+  return details !== undefined ? { status, output, details } : { status, output };
 }
 
 /**

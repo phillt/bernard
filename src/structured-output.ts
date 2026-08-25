@@ -45,7 +45,13 @@ export function extractJsonBlock(text: string, start: number): string | undefine
  *
  * @returns The validated object on success, or `undefined` if nothing parses.
  */
-export function parseStructuredOutput<T>(text: string, schema: z.ZodType<T>): T | undefined {
+export function parseStructuredOutput<S extends z.ZodTypeAny>(
+  text: string,
+  schema: S,
+): z.output<S> | undefined {
+  // Generic over the schema, not over `T`: `z.ZodType<T>` defaults its Input to
+  // T, so a schema carrying a `.transform` (see `nullableOptional`) would infer
+  // the pre-transform type and hand callers back the `null`s it just removed.
   const trimmed = text.trim();
 
   // 1. Direct parse
@@ -102,18 +108,19 @@ export interface WrapperResult {
  * wrapper runs in one session — every one of them work that had already
  * succeeded, thrown away and reported to the parent as an error.
  *
- * Widening the schema is only half the fix. `null` must be **normalized away**
- * at the parse boundary, because the public types declare `error?: string` and
- * downstream sites test `!== undefined` before spreading the field into the
- * reasoning log and the parent agent's JSON. See {@link wrapWrapperResult}.
+ * Widening the schema is only half the job — `null` must also be **normalized
+ * away**, because the public types declare `error?: string` and downstream
+ * sites test `!== undefined` before spreading the field into the reasoning log
+ * and the parent agent's JSON. The `.transform` does that here, at the parse
+ * boundary, so every consumer keeps its pre-existing `!== undefined` check and
+ * no caller has to remember. Normalizing at each consumer instead needs the
+ * question "did we cover them all?" answered by hand, once per field.
+ *
+ * The key stays optional in the inferred type: `isOptional()` is
+ * `safeParse(undefined).success`, which survives the `ZodEffects` wrapper.
  */
 export function nullableOptional<T extends z.ZodTypeAny>(schema: T) {
-  return schema.nullish();
-}
-
-/** Drops `null`/`undefined` so a normalized result never carries an empty key. */
-function present<T>(value: T | null | undefined): value is T {
-  return value !== null && value !== undefined;
+  return schema.nullish().transform((v) => v ?? undefined);
 }
 
 export const WrapperResultSchema = z.object({
@@ -132,10 +139,10 @@ export function wrapWrapperResult(text: string): WrapperResult {
   if (parsed) {
     const { status, result, error, reasoning } = parsed;
     const out: WrapperResult = { status, result };
-    // Normalize, don't just accept: `null` must not reach the log or the parent
-    // agent's JSON, both of which spread these fields on `!== undefined` (#341).
-    if (present(error)) out.error = error;
-    if (present(reasoning)) out.reasoning = capReasoning(reasoning);
+    // `nullableOptional` already turned any `null` into `undefined`, so these
+    // are the same checks as before #341.
+    if (error !== undefined) out.error = error;
+    if (reasoning !== undefined) out.reasoning = capReasoning(reasoning);
     return out;
   }
   return {
