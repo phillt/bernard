@@ -225,3 +225,38 @@ function isCorrectable(category: ToolErrorType, toolName?: string): boolean {
 function isShellContext(toolName?: string): boolean {
   return toolName === 'shell' || (typeof toolName === 'string' && toolName.startsWith('shell.'));
 }
+
+/**
+ * Does this error mean the dispatch was *cancelled*, rather than that the work
+ * *failed*? (#327)
+ *
+ * The three child-dispatch tool boundaries — `subagent`, `specialist-run`,
+ * `delegate-dispatch` — catch everything and return the message as a string.
+ * That is right for a genuine work failure: a failed MCP call IS a legitimate
+ * tool result the model should see and react to, and stringifying it preserves
+ * the useful behaviour where a model recovers from a failed sub-task on its
+ * own. It is wrong for a cancellation, which reaches the parent as a
+ * successful tool result the model reads as data and loops on — most visibly
+ * turning a user's Esc into `Sub-agent error: Aborted` while the parent keeps
+ * running until its own signal trips.
+ *
+ * Two shapes qualify, and both mean "something outside the work stopped it":
+ *
+ * - **An `AbortError`.** Either the user's signal or a provider-side
+ *   cancellation. `classifyError` cannot answer this — a `DOMException` named
+ *   `AbortError` carries the message `"Aborted"`, which matches neither
+ *   `\bcancelled\b` nor `aborted by user`, so it classifies as `unknown`.
+ * - **A `timeout`.** At *this* boundary a timeout is always the runner or the
+ *   provider giving up (the dispatch stall guard, `BERNARD_DISPATCH_TIMEOUT_MS`,
+ *   or the first-byte guard) — never a tool-level one like `shellTimeout`,
+ *   which is caught inside the tool and returned as a formatted result rather
+ *   than thrown. Handing these back as a string is what makes a stalled child
+ *   satisfy "the parent is unblocked" only in the weak sense: the parent has no
+ *   better decision available than the one we already made, and retrying a
+ *   provider that just went dark is strictly worse than unwinding.
+ */
+export function isDispatchCancellation(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === 'AbortError') return true;
+  return classifyError({ message: err.message }).category === 'timeout';
+}

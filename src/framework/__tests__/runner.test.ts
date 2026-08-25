@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('ai', () => ({
   generateText: vi.fn(),
+  streamText: vi.fn(),
 }));
 
 const logCalls: { label: string; data: any }[] = [];
@@ -18,7 +19,7 @@ vi.mock('../../logger.js', async () => {
 
 import { runAgent, type AgentSpec } from '../runner.js';
 import type { AgentHook } from '../hooks/types.js';
-import { generateText } from 'ai';
+import { generateText, streamText } from 'ai';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -220,5 +221,136 @@ describe('runAgent', () => {
       if (prev === undefined) delete process.env.BERNARD_DISPATCH_TIMEOUT_MS;
       else process.env.BERNARD_DISPATCH_TIMEOUT_MS = prev;
     }
+  });
+});
+
+/**
+ * Mid-stream stall guard (#325). The first-byte guard (#302) bounds the wait
+ * for headers; these cover what happens after they arrive.
+ */
+describe('runAgent — mid-stream stall guard', () => {
+  /**
+   * Builds a `streamText` double whose `fullStream` yields `parts`, then stops
+   * producing without ending — the shape of a provider that accepted the POST,
+   * sent some tokens, and went silent. Every result promise stays pending too,
+   * so nothing but the guard can unwind the run.
+   */
+  function makeStalledStream(parts: unknown[]) {
+    const pending = new Promise<never>(() => {});
+    return {
+      fullStream: {
+        [Symbol.asyncIterator]() {
+          let i = 0;
+          return {
+            next: async () =>
+              i < parts.length ? { value: parts[i++], done: false } : await pending,
+          };
+        },
+      },
+      text: pending,
+      steps: pending,
+      finishReason: pending,
+      usage: pending,
+      warnings: pending,
+      toolCalls: pending,
+      toolResults: pending,
+      reasoning: pending,
+      reasoningDetails: pending,
+      providerMetadata: pending,
+      request: pending,
+      response: pending,
+      files: pending,
+      sources: pending,
+    };
+  }
+
+  async function withStallBudget<T>(ms: string, fn: () => Promise<T>): Promise<T> {
+    const prev = process.env.BERNARD_STREAM_STALL_TIMEOUT_MS;
+    process.env.BERNARD_STREAM_STALL_TIMEOUT_MS = ms;
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env.BERNARD_STREAM_STALL_TIMEOUT_MS;
+      else process.env.BERNARD_STREAM_STALL_TIMEOUT_MS = prev;
+    }
+  }
+
+  it('aborts a stream that goes silent, as a self-describing timeout', async () => {
+    (streamText as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeStalledStream([{ type: 'text-delta', textDelta: 'hi' }]),
+    );
+    await withStallBudget('120', async () => {
+      // Not a bare AbortError: the REPL renders nothing for those, so a stall
+      // surfaced that way would silently swallow the turn (the #302 lesson).
+      // "timed out" also earns the `timeout` category from error-taxonomy.
+      await expect(runAgent(makeSpec({ useStreaming: true }))).rejects.toThrow(
+        /Provider stream timed out — no data received/,
+      );
+    });
+  });
+
+  it('does not fire while a tool is executing', async () => {
+    // `fullStream` emits `tool-call` when the model finishes emitting it, then
+    // nothing until `tool-result`. A sub-agent or MCP call legitimately owns
+    // minutes of that silence, so the clock pauses rather than the budget
+    // being raised past it.
+    (streamText as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeStalledStream([
+        { type: 'text-delta', textDelta: 'hi' },
+        { type: 'tool-call', toolCallId: 'c1', toolName: 'subagent', args: {} },
+      ]),
+    );
+    await withStallBudget('120', async () => {
+      const race = await Promise.race([
+        runAgent(makeSpec({ useStreaming: true })).then(
+          () => 'settled',
+          () => 'settled',
+        ),
+        new Promise<string>((r) => setTimeout(() => r('still-running'), 500)),
+      ]);
+      expect(race).toBe('still-running');
+    });
+  });
+
+  it('leaves the non-streaming branch alone', async () => {
+    // `generateText` is one opaque await with no per-byte signal, so
+    // `lastProgressAt` would never move and every dispatch would be killed at
+    // the budget. That branch stays covered by the first-byte guard.
+    (generateText as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve({ text: 'slow', steps: [] }), 400)),
+    );
+    await withStallBudget('120', async () => {
+      const result = await runAgent(makeSpec());
+      expect(result.text).toBe('slow');
+    });
+  });
+
+  it('is disabled by a zero budget', async () => {
+    (streamText as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeStalledStream([{ type: 'text-delta', textDelta: 'hi' }]),
+    );
+    await withStallBudget('0', async () => {
+      const race = await Promise.race([
+        runAgent(makeSpec({ useStreaming: true })).then(
+          () => 'settled',
+          () => 'settled',
+        ),
+        new Promise<string>((r) => setTimeout(() => r('still-running'), 400)),
+      ]);
+      expect(race).toBe('still-running');
+    });
+  });
+
+  it('keeps a user abort reading as a user abort', async () => {
+    (streamText as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeStalledStream([{ type: 'text-delta', textDelta: 'hi' }]),
+    );
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 20);
+    await withStallBudget('5000', async () => {
+      await expect(
+        runAgent(makeSpec({ useStreaming: true, abortSignal: ac.signal })),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+    });
   });
 });

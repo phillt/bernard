@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyError } from './error-taxonomy.js';
+import { classifyError, isDispatchCancellation } from './error-taxonomy.js';
 
 describe('classifyError', () => {
   describe('HTTP status mapping', () => {
@@ -185,5 +185,35 @@ describe('classifyError', () => {
       expect(cls.playbook.user).toBeTruthy();
       expect(cls.playbook.model).toBeTruthy();
     });
+  });
+});
+
+describe('isDispatchCancellation', () => {
+  it('recognizes an AbortError, which classifyError cannot', () => {
+    // A DOMException named AbortError carries the message "Aborted", which
+    // matches neither `\bcancelled\b` nor `aborted by user` — so the category
+    // route alone would call a user's Esc `unknown` and stringify it.
+    const err = new DOMException('Aborted', 'AbortError');
+    expect(classifyError({ message: err.message }).category).toBe('unknown');
+    expect(isDispatchCancellation(err)).toBe(true);
+  });
+
+  it('recognizes the runner’s own stall and timeout errors', () => {
+    expect(
+      isDispatchCancellation(
+        new Error('Provider stream timed out — no data received for 120000 ms'),
+      ),
+    ).toBe(true);
+    expect(isDispatchCancellation(new Error('Dispatch timed out after 60000 ms'))).toBe(true);
+  });
+
+  it('leaves genuine work failures alone', () => {
+    // These stay returned strings: a failed MCP call IS a tool result the
+    // model should see and can recover from on its own.
+    expect(isDispatchCancellation(new Error('HTTP 404 Not Found'))).toBe(false);
+    expect(isDispatchCancellation(new Error('API rate limit'))).toBe(false);
+    expect(isDispatchCancellation(new Error('command not found: jq'))).toBe(false);
+    expect(isDispatchCancellation('not an error')).toBe(false);
+    expect(isDispatchCancellation(undefined)).toBe(false);
   });
 });
