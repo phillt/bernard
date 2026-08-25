@@ -6,7 +6,7 @@ import {
   mcpDelegateDefinition,
   buildDelegateSystemPrompt,
 } from '../framework/agents/mcp-delegate.js';
-import { acquireSlot, releaseSlot } from './agent-pool.js';
+import { withSlot } from './agent-pool.js';
 import { createAskUserTool } from './ask-user.js';
 import { serverToolNames } from './delegate.js';
 import { debugLog } from '../logger.js';
@@ -31,68 +31,68 @@ export async function dispatchServerDelegate(
   args: { server: string; task: string; context?: string; abortSignal?: AbortSignal },
 ): Promise<string> {
   const { server, task, context, abortSignal } = args;
-  // `nested`: this helper runs INSIDE a dispatch that already holds a slot, so
-  // it must not compete for one (#305). Sub-agents carry `delegate_*` tools, and
-  // counting both against one flat cap would starve every helper the moment
-  // parallel sub-agents fill the pool — silently removing MCP access exactly
-  // when fan-out is highest. Nesting is bounded at one level: this helper's
-  // registry can never contain a `delegate_*` tool.
-  // `nested` never returns null, so there is no pool-exhausted branch here.
-  const slot = acquireSlot({ nested: true });
-  try {
-    const toolNames = serverToolNames(ctx, server);
-    const childTools: Record<string, Tool> = {};
-    for (const name of toolNames) {
-      const t = ctx.mcp.tools[name];
-      if (t) childTools[name] = t;
-    }
-    // Give the helper a direct line to the user for mid-task disambiguation
-    // (suspend-ask-resume through the live REPL popup). The tool-wrapper
-    // registry omits `ask_user`; delegation needs it because MCP tasks
-    // routinely need "which account?" clarification.
-    childTools.ask_user = createAskUserTool(ctx.toolOptions.askUser) as unknown as Tool;
+  // This helper runs INSIDE a dispatch that already holds a slot, so it must
+  // not compete for one (#305). `withSlot` detects that from its own ALS, so
+  // there is no longer a `nested: true` flag to remember (#317) — and no
+  // pool-exhausted branch, because a nested acquire cannot fail.
+  const outcome = await withSlot(async (slot) => {
+    try {
+      const toolNames = serverToolNames(ctx, server);
+      const childTools: Record<string, Tool> = {};
+      for (const name of toolNames) {
+        const t = ctx.mcp.tools[name];
+        if (t) childTools[name] = t;
+      }
+      // Give the helper a direct line to the user for mid-task disambiguation
+      // (suspend-ask-resume through the live REPL popup). The tool-wrapper
+      // registry omits `ask_user`; delegation needs it because MCP tasks
+      // routinely need "which account?" clarification.
+      childTools.ask_user = createAskUserTool(ctx.toolOptions.askUser) as unknown as Tool;
 
-    const systemPrompt = buildDelegateSystemPrompt(server, toolNames);
-    const telemetrySite = `mcp:${server}`;
-    const { formatted, stepLimitHit } = await runDefinition(
-      ctx,
-      mcpDelegateDefinition,
-      { server, task, context, slotId: slot.id, childTools, systemPrompt },
-      {
-        abortSignal,
-        // Attribute the helper's spend to its own layer (#299) so the
-        // delegation win is measurable in `bernard usage` / the UsageViewer.
-        telemetrySite,
-      },
-    );
-
-    // Self-escalation (#296 Phase 2E; see `BERNARD_MCP_DELEGATE_ESCALATION`).
-    // Only a step-limited single loop escalates — once — to a PAC pass over the
-    // SAME slot + scoped `childTools` (MCP schemas stay contained), carrying the
-    // partial findings forward so it continues rather than restarts.
-    if (stepLimitHit && ctx.config.mcpDelegateEscalation) {
-      const partial = `A single-loop attempt hit its step limit before completing this task. Continue from these partial findings rather than starting over:\n${formatted}`;
-      const escalationContext = context ? `${context}\n\n${partial}` : partial;
-      debugLog('delegate:escalate', { server, task: task.slice(0, 120) });
-      const pac = await runPAC(
+      const systemPrompt = buildDelegateSystemPrompt(server, toolNames);
+      const telemetrySite = `mcp:${server}`;
+      const { formatted, stepLimitHit } = await runDefinition(
         ctx,
-        { task, context: escalationContext, slotId: slot.id, childTools },
-        { abortSignal, telemetrySite },
+        mcpDelegateDefinition,
+        { server, task, context, slotId: slot.id, childTools, systemPrompt },
+        {
+          abortSignal,
+          // Attribute the helper's spend to its own layer (#299) so the
+          // delegation win is measurable in `bernard usage` / the UsageViewer.
+          telemetrySite,
+        },
       );
-      debugLog('delegate:escalated', {
-        server,
-        verdict: pac.verdict,
-        retries: pac.retries,
-      });
-      return pac.formatted;
-    }
 
-    return formatted;
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    debugLog('delegate:error', { server, message });
-    return `Delegation to "${server}" failed: ${message}`;
-  } finally {
-    releaseSlot();
-  }
+      // Self-escalation (#296 Phase 2E; see `BERNARD_MCP_DELEGATE_ESCALATION`).
+      // Only a step-limited single loop escalates — once — to a PAC pass over the
+      // SAME slot + scoped `childTools` (MCP schemas stay contained), carrying the
+      // partial findings forward so it continues rather than restarts.
+      if (stepLimitHit && ctx.config.mcpDelegateEscalation) {
+        const partial = `A single-loop attempt hit its step limit before completing this task. Continue from these partial findings rather than starting over:\n${formatted}`;
+        const escalationContext = context ? `${context}\n\n${partial}` : partial;
+        debugLog('delegate:escalate', { server, task: task.slice(0, 120) });
+        const pac = await runPAC(
+          ctx,
+          { task, context: escalationContext, slotId: slot.id, childTools },
+          { abortSignal, telemetrySite },
+        );
+        debugLog('delegate:escalated', {
+          server,
+          verdict: pac.verdict,
+          retries: pac.retries,
+        });
+        return pac.formatted;
+      }
+
+      return formatted;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      debugLog('delegate:error', { server, message });
+      return `Delegation to "${server}" failed: ${message}`;
+    }
+  });
+  // Unreachable: a nested acquire always succeeds. Kept as a total function
+  // rather than a non-null assertion so a future change to `withSlot` surfaces
+  // here instead of throwing at runtime.
+  return outcome.acquired ? outcome.value : `Delegation to "${server}" failed: pool exhausted.`;
 }

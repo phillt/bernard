@@ -48,6 +48,34 @@ function protectedOrThrow(err: unknown): string {
  * that shape how a sub-agent approaches work. Unlike routines (procedures), specialists
  * define *how* to work rather than *what* steps to follow.
  */
+/**
+ * Guards the invariant #331 turned from "silently expensive" into "silently
+ * inert": a `tool-wrapper` or `meta` specialist exists to front specific tools,
+ * and `buildChildTools` now hands one with no `targetTools` an EMPTY registry
+ * rather than the whole thing. That is the right default — carrying every
+ * connected MCP server's schema set was the leak — but it means such a record
+ * would be created happily and then do nothing.
+ *
+ * So reject it at the boundary where it is created. Nothing validated this
+ * before, which is precisely why the permissive default had to exist.
+ * `persona` is unaffected: it never reaches `buildChildTools` (dispatch rejects
+ * it in favour of `specialist_run`) and is scoped by the worker surface.
+ *
+ * Returns an error string, or `null` when the combination is fine.
+ */
+function targetToolsScopeError(
+  kind: string | undefined,
+  targetTools: string[] | undefined,
+): string | null {
+  const effective = kind ?? 'persona';
+  if (effective !== 'tool-wrapper' && effective !== 'meta') return null;
+  if (targetTools && targetTools.length > 0) return null;
+  return (
+    `Error: a "${effective}" specialist must declare targetTools. It fronts specific tools, ` +
+    `and one that names none is handed no tools at all. Pass e.g. targetTools: ["shell"].`
+  );
+}
+
 export function createSpecialistTool(
   specialistStore?: SpecialistStore,
   candidateStore?: CandidateStoreReader,
@@ -242,6 +270,8 @@ export function createSpecialistTool(
               const safe = validateModelParams(resolvedProvider, resolvedModel, params);
               if (Object.keys(safe).length > 0) resolvedParams = safe;
             }
+            const createScopeError = targetToolsScopeError(kind, targetTools);
+            if (createScopeError) return createScopeError;
             try {
               const specialist = store.createFull({
                 id,
@@ -309,6 +339,17 @@ export function createSpecialistTool(
             }
             if (kind !== undefined) updates.kind = kind;
             if (targetTools !== undefined) updates.targetTools = targetTools;
+            // Validate the MERGED record, not the patch: promoting a persona to
+            // `tool-wrapper` without also supplying `targetTools` is exactly the
+            // combination that would produce an inert specialist.
+            if (kind !== undefined || targetTools !== undefined) {
+              const current = store.get(id);
+              const updateScopeError = targetToolsScopeError(
+                kind ?? current?.kind,
+                targetTools ?? current?.targetTools,
+              );
+              if (updateScopeError) return updateScopeError;
+            }
             if (goodExamples !== undefined)
               updates.goodExamples = goodExamples as SpecialistExample[];
             if (badExamples !== undefined)

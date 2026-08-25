@@ -163,17 +163,30 @@ export function formatExamples(specialist: {
 }
 
 /**
- * Builds the child tool set a tool-wrapper specialist exposes. When the
- * specialist sets `targetTools`, only those names are kept; otherwise the
- * full registry is exposed (common for meta specialists that orchestrate
- * other specialists).
+ * Builds the child tool set a tool-wrapper specialist exposes: only the names
+ * in `targetTools` survive.
+ *
+ * An absent or empty `targetTools` yields **no tools** (#331). It used to yield
+ * the *entire* registry — and since `dispatchToolWrapper` assembles that
+ * registry from the raw `ctx.mcp.tools` rather than the delegation surface, an
+ * unscoped specialist carried every connected server's full MCP schema set:
+ * exactly the prefix per-server delegation (#296/#305) exists to remove. The
+ * leak was the default, not the filter.
+ *
+ * Returning `{}` is a state this function already produces, and one the caller
+ * already handles: a `targetTools` naming only unknown tools yields the same
+ * thing, and `buildSystemPrompt` tells the specialist plainly that it has no
+ * tools for this run. Failing visibly beats carrying 143 schemas quietly —
+ * and `createSpecialist` now rejects a `tool-wrapper`/`meta` record with no
+ * `targetTools` at the creation boundary, so this default should be
+ * unreachable for anything created after #331.
  */
 export function buildChildTools(
   specialist: { targetTools?: string[] },
   fullRegistry: Record<string, Tool>,
 ): Record<string, Tool> {
   const targets = specialist.targetTools;
-  if (!targets || targets.length === 0) return fullRegistry;
+  if (!targets || targets.length === 0) return {};
   const filtered: Record<string, Tool> = {};
   for (const name of targets) {
     if (fullRegistry[name]) filtered[name] = fullRegistry[name];

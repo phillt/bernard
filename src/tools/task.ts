@@ -12,7 +12,7 @@ import {
   type TaskResult,
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
-import { acquireSlot, releaseSlot, getMaxConcurrentAgents } from './agent-pool.js';
+import { withSlot, getMaxConcurrentAgents } from './agent-pool.js';
 
 // Re-export helpers + types that other modules (repl.ts, sub.ts, tests) already
 // import from this path. The implementations live in `framework/agents/task.ts`.
@@ -145,48 +145,47 @@ export function createTaskTool(ctx: AgentContext): BernardTool<TaskArgs, TaskPay
         }
       }
 
-      const slot = acquireSlot();
-      if (!slot) {
-        return err({
+      const outcome = await withSlot(async (slot) => {
+        const id = slot.id;
+        printTaskStart(resolvedTask);
+
+        try {
+          const def = definitions.get<TaskInput, TaskResult>('task');
+          const input: TaskInput = context
+            ? { task: resolvedTask, context, slotId: id }
+            : { task: resolvedTask, slotId: id };
+          const { formatted: taskResult } = await runDefinition(ctx, def, input, {
+            abortSignal: execOptions.abortSignal,
+            // Forward only the user-supplied provider/model so resolveSiteModel
+            // can fall through to the modelMode tier table when neither is set.
+            overrides: { provider, model },
+          });
+
+          const envelope = ok<TaskPayload>(
+            taskResult.details !== undefined
+              ? {
+                  innerStatus: taskResult.status,
+                  output: taskResult.output,
+                  details: taskResult.details,
+                }
+              : { innerStatus: taskResult.status, output: taskResult.output },
+          );
+          printTaskEnd(serializeTaskForModel(envelope));
+          return envelope;
+        } catch (e: unknown) {
+          const message = e instanceof Error ? e.message : String(e);
+          const errEnvelope = err<TaskPayload>({ type: 'exec_failed', message });
+          printTaskEnd(serializeTaskForModel(errEnvelope));
+          return errEnvelope;
+        }
+      });
+      if (!outcome.acquired) {
+        return err<TaskPayload>({
           type: 'exec_failed',
           message: `Maximum concurrent agents (${getMaxConcurrentAgents()}) reached. Wait for existing agents to finish.`,
         });
       }
-
-      const id = slot.id;
-      printTaskStart(resolvedTask);
-
-      try {
-        const def = definitions.get<TaskInput, TaskResult>('task');
-        const input: TaskInput = context
-          ? { task: resolvedTask, context, slotId: id }
-          : { task: resolvedTask, slotId: id };
-        const { formatted: taskResult } = await runDefinition(ctx, def, input, {
-          abortSignal: execOptions.abortSignal,
-          // Forward only the user-supplied provider/model so resolveSiteModel
-          // can fall through to the modelMode tier table when neither is set.
-          overrides: { provider, model },
-        });
-
-        const envelope = ok<TaskPayload>(
-          taskResult.details !== undefined
-            ? {
-                innerStatus: taskResult.status,
-                output: taskResult.output,
-                details: taskResult.details,
-              }
-            : { innerStatus: taskResult.status, output: taskResult.output },
-        );
-        printTaskEnd(serializeTaskForModel(envelope));
-        return envelope;
-      } catch (e: unknown) {
-        const message = e instanceof Error ? e.message : String(e);
-        const errEnvelope = err<TaskPayload>({ type: 'exec_failed', message });
-        printTaskEnd(serializeTaskForModel(errEnvelope));
-        return errEnvelope;
-      } finally {
-        releaseSlot();
-      }
+      return outcome.value;
     },
     serializeForModel: serializeTaskForModel,
   };

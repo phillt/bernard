@@ -11,7 +11,7 @@ import {
   type SpecialistInput,
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
-import { acquireSlot, releaseSlot, getMaxConcurrentAgents } from './agent-pool.js';
+import { withSlot, getMaxConcurrentAgents } from './agent-pool.js';
 
 /**
  * Creates the specialist execution tool for running tasks through a saved
@@ -78,37 +78,36 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
         return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom)}`;
       }
 
-      const slot = acquireSlot();
-      if (!slot) {
+      const outcome = await withSlot(async (slot) => {
+        const id = slot.id;
+        printSpecialistStart(id, specialist.name, task);
+
+        // Per-run plan store: shared between the `plan` tool the definition
+        // mounts and the strategy context the ReAct enforcement loop reads.
+        const planStore = new PlanStore();
+
+        try {
+          const def = definitions.get<SpecialistInput, string>('specialist');
+          const input: SpecialistInput = context
+            ? { specialistId, task, context, slotId: id, planStore }
+            : { specialistId, task, slotId: id, planStore };
+          const { formatted } = await runDefinition(ctx, def, input, {
+            abortSignal: execOptions.abortSignal,
+            overrides: { provider, model },
+            planStore,
+          });
+          printSpecialistEnd(id);
+          return formatted;
+        } catch (err: unknown) {
+          printSpecialistEnd(id);
+          const message = err instanceof Error ? err.message : String(err);
+          return `Specialist error: ${message}`;
+        }
+      });
+      if (!outcome.acquired) {
         return `Error: Maximum concurrent agents (${getMaxConcurrentAgents()}) reached. Wait for existing agents to finish.`;
       }
-
-      const id = slot.id;
-      printSpecialistStart(id, specialist.name, task);
-
-      // Per-run plan store: shared between the `plan` tool the definition
-      // mounts and the strategy context the ReAct enforcement loop reads.
-      const planStore = new PlanStore();
-
-      try {
-        const def = definitions.get<SpecialistInput, string>('specialist');
-        const input: SpecialistInput = context
-          ? { specialistId, task, context, slotId: id, planStore }
-          : { specialistId, task, slotId: id, planStore };
-        const { formatted } = await runDefinition(ctx, def, input, {
-          abortSignal: execOptions.abortSignal,
-          overrides: { provider, model },
-          planStore,
-        });
-        printSpecialistEnd(id);
-        return formatted;
-      } catch (err: unknown) {
-        printSpecialistEnd(id);
-        const message = err instanceof Error ? err.message : String(err);
-        return `Specialist error: ${message}`;
-      } finally {
-        releaseSlot();
-      }
+      return outcome.value;
     },
   });
 }

@@ -29,8 +29,12 @@ vi.mock('../framework/pac/run-pac.js', () => ({
 }));
 
 vi.mock('./agent-pool.js', () => ({
-  acquireSlot: vi.fn(() => ({ id: 1 })),
-  releaseSlot: vi.fn(),
+  // `withSlot` owns acquire+release since #317, so the mock stands in for the
+  // whole lifecycle: run the body, report it acquired.
+  withSlot: vi.fn(async (fn: (slot: { id: number }) => Promise<unknown>) => ({
+    acquired: true as const,
+    value: await fn({ id: 1 }),
+  })),
   getMaxConcurrentAgents: vi.fn(() => 4),
 }));
 
@@ -47,7 +51,7 @@ import { dispatchServerDelegate } from './delegate-dispatch.js';
 import { buildDelegateSystemPrompt } from '../framework/agents/mcp-delegate.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { runPAC } from '../framework/pac/run-pac.js';
-import { acquireSlot, releaseSlot } from './agent-pool.js';
+import { withSlot } from './agent-pool.js';
 
 function makeCtx(over: Record<string, any> = {}): any {
   return {
@@ -72,7 +76,10 @@ function makeCtx(over: Record<string, any> = {}): any {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(acquireSlot).mockReturnValue({ id: 1 });
+  vi.mocked(withSlot).mockImplementation(async (fn) => ({
+    acquired: true as const,
+    value: await fn({ id: 1 }),
+  }));
   vi.mocked(runDefinition).mockResolvedValue({
     result: {},
     formatted: 'SUMMARY',
@@ -183,28 +190,32 @@ describe('dispatchServerDelegate', () => {
     expect(input.childTools.slack__post).toBeUndefined();
   });
 
-  it('returns the capped formatted summary and releases the pool slot', async () => {
+  it('returns the capped formatted summary through exactly one slot', async () => {
     const out = await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
     expect(out).toBe('SUMMARY');
-    expect(releaseSlot).toHaveBeenCalledTimes(1);
+    expect(withSlot).toHaveBeenCalledTimes(1);
   });
 
-  it('acquires its slot as nested, so a full pool cannot starve it (#305)', async () => {
+  it('runs inside a slot, so a full pool cannot starve it (#305, #317)', async () => {
     // Replaces a test that mocked `acquireSlot` to null and asserted a
-    // pool-exhausted message. That state is now unreachable: this helper runs
+    // pool-exhausted message. That state is unreachable: this helper runs
     // inside a dispatch that already holds a slot, and sub-agents carry
     // `delegate_*` tools — competing for the flat cap would silently strip MCP
-    // from every sub-agent the moment fan-out filled the pool. The invariant
-    // worth pinning is the `nested` flag, not the dead branch.
+    // from every sub-agent the moment fan-out filled the pool. Since #317 the
+    // bypass is inferred from `withSlot`'s own ALS rather than a `nested` flag
+    // this call site had to remember, so what is worth pinning is that the work
+    // runs through `withSlot` at all.
     await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
-    expect(acquireSlot).toHaveBeenCalledWith({ nested: true });
+    expect(withSlot).toHaveBeenCalledTimes(1);
   });
 
-  it('catches a dispatch throw, releases the slot, and returns an error string', async () => {
+  it('catches a dispatch throw inside the slot and returns an error string', async () => {
     vi.mocked(runDefinition).mockRejectedValueOnce(new Error('boom'));
     const out = await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
     expect(out).toContain('boom');
-    expect(releaseSlot).toHaveBeenCalledTimes(1);
+    // The throw is handled INSIDE the callback, so the slot still resolves
+    // normally — `withSlot`'s finally is what guarantees the release.
+    expect(withSlot).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -251,8 +262,7 @@ describe('dispatchServerDelegate self-escalation (#296 Phase 2E)', () => {
     expect(pacOpts.telemetrySite).toBe('mcp:google');
     expect(pacInput.slotId).toBe(1);
     // Same slot reused for the escalation — no second acquire.
-    expect(acquireSlot).toHaveBeenCalledTimes(1);
-    expect(releaseSlot).toHaveBeenCalledTimes(1);
+    expect(withSlot).toHaveBeenCalledTimes(1);
   });
 
   it("threads the single loop's partial findings into the PAC context (continue, not restart)", async () => {
@@ -271,5 +281,56 @@ describe('dispatchServerDelegate self-escalation (#296 Phase 2E)', () => {
     const out = await dispatchServerDelegate(ctx, { server: 'google', task: 'x' });
     expect(runPAC).not.toHaveBeenCalled();
     expect(out).toBe('PARTIAL');
+  });
+});
+
+/**
+ * #332 guard.
+ *
+ * The issue proposed prebuilding the per-server delegate bag once and hanging
+ * it off `AgentContextMCP`, so `tool-surface.ts` would stop importing the tool
+ * layer. It cannot be done that way, and this test is the reason.
+ *
+ * A delegate tool closes over the `AgentContext` it was built from, and
+ * `Agent.processInput` RE-POINTS `this.ctx` every turn
+ * (`this.ctx = { ...this.ctx, policyDecision }`, `agent.ts`). So a bag built
+ * once at session start would capture a context whose `policyDecision` is
+ * permanently `undefined` — and `dispatchServerDelegate` forwards that context
+ * straight to `runDefinition`, where `policyDecision.toolMode` drives the
+ * read-only block gate (#179) and the confirm gate (#144). Caching the bag
+ * would silently disable both on every delegated MCP call.
+ *
+ * Rebuilding per dispatch (what `runDefinition` does today) is what keeps the
+ * binding live. If someone reintroduces caching, this fails.
+ */
+describe('delegate tools bind to the live context (#332)', () => {
+  it('forwards the policyDecision of the context the tool was built from', async () => {
+    const ctx = makeCtx({ policyDecision: { toolMode: { mode: 'read-only' } } });
+    const tools: any = createDelegateTools(ctx);
+
+    await tools.delegate_google.execute({ task: 'x' }, {});
+
+    const forwarded = vi.mocked(runDefinition).mock.calls[0][0] as any;
+    expect(forwarded.policyDecision).toEqual({ toolMode: { mode: 'read-only' } });
+  });
+
+  it('is not memoized — a re-pointed context yields tools bound to the new one', async () => {
+    // `Agent.processInput` does exactly this at the top of every turn, so the
+    // second context is a DIFFERENT object with the same `mcp`. Any cache keyed
+    // on the session, or on `ctx.mcp` (which is never re-assigned and so looks
+    // like a stable key), would hand back the first context's tools and fail
+    // the policyDecision assertion below.
+    const turn1 = makeCtx({ policyDecision: { toolMode: { mode: 'read-only' } } });
+    const turn2 = { ...turn1, policyDecision: { toolMode: { mode: 'write' } } };
+
+    const tools1: any = createDelegateTools(turn1);
+    const tools2: any = createDelegateTools(turn2);
+    expect(tools2.delegate_google).not.toBe(tools1.delegate_google);
+
+    await tools2.delegate_google.execute({ task: 'x' }, {});
+
+    const forwarded = vi.mocked(runDefinition).mock.calls[0][0] as any;
+    expect(forwarded).toBe(turn2);
+    expect(forwarded.policyDecision).toEqual({ toolMode: { mode: 'write' } });
   });
 });
