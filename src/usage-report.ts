@@ -268,13 +268,3 @@ export function formatCallCost(costUsd: number | null): string {
   // A single call's cost is the agg convention with "unknown" == null cost.
   return formatAggCost(costUsd ?? 0, costUsd == null);
 }
-
-/**
- * Compact ` ~$cost` suffix for the StatusBar odometer (#258). Returns `''` when
- * there's no priced cost yet (no tokens, or only unpriced custom-provider models)
- * so the bar stays clean.
- */
-export function formatTurnCost(stats: SpinnerStats | null): string {
-  const cost = formatCostSuffix(computeTurnUsageReport(stats).totalCostUsd);
-  return cost ? ` ${cost}` : '';
-}

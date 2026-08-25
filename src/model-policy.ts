@@ -302,8 +302,12 @@ function isProviderInLineup(provider: string, lineup: Lineup): boolean {
   return false;
 }
 
-/** Unique provider names referenced anywhere in the lineup (debug logging). */
-function lineupProviders(lineup: Lineup): string[] {
+/**
+ * Unique provider names referenced anywhere in the lineup. Used for debug
+ * logging and, since #306, to decide whether a provider that vanished from the
+ * model catalog is one this session actually depends on.
+ */
+export function lineupProviders(lineup: Lineup): string[] {
   const out = new Set<string>();
   for (const ladder of Object.values(lineup.roles)) {
     for (const slot of Object.values(ladder)) out.add(slot.provider);

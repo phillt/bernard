@@ -34,6 +34,7 @@ const {
   SessionTelemetry,
   telemetryFromUsageRecord,
   aggregateRecords,
+  PRICING_VERSION,
   formatSessionUsageLines,
   telemetryEnabled,
 } = await import('./session-telemetry.js');
@@ -482,6 +483,119 @@ describe('aggregateRecords + formatSessionUsageLines', () => {
     expect(lines).toContain('TRACE');
     // The tree indents the child under its parent.
     expect(lines).toMatch(/main.*\n.*pac-actor/s);
+  });
+});
+
+describe('re-pricing on read (#309)', () => {
+  // A real catalogued model, so `priceUsageUsd` returns a number here.
+  const catalogued = { site: 'main', provider: 'anthropic', modelName: 'claude-opus-4-8' } as const;
+
+  it('recovers cost for a record stored unpriced', () => {
+    const expected = priceUsageUsd('anthropic', 'claude-opus-4-8', 1000, 100, {});
+    expect(expected).not.toBeNull();
+
+    const sum = aggregateRecords('sRep', [
+      rec({ ...catalogued, promptTokens: 1000, completionTokens: 100, costUsd: null }),
+    ]);
+    expect(sum.totals.costUsd).toBeCloseTo(expected as number, 9);
+    expect(sum.totals.hasUnpriced).toBe(false);
+    expect(sum.repricedCalls).toBe(1);
+  });
+
+  it('never overwrites a cost that was already minted', () => {
+    // Re-pricing runs today's catalog against yesterday's call. A stored number
+    // is the price as it was believed at the time; only `null` carries no
+    // information. This is the guarantee that makes the fix safe to apply to
+    // every historical session.
+    const sum = aggregateRecords('sKeep', [
+      rec({ ...catalogued, promptTokens: 1000, completionTokens: 100, costUsd: 0.01 }),
+    ]);
+    expect(sum.totals.costUsd).toBeCloseTo(0.01, 9);
+    expect(sum.repricedCalls).toBe(0);
+  });
+
+  it('leaves an uncatalogued record unpriced rather than inventing a number', () => {
+    const sum = aggregateRecords('sUnk', [
+      rec({
+        site: 'main',
+        provider: 'someco',
+        modelName: 'mystery-1',
+        promptTokens: 1000,
+        costUsd: null,
+      }),
+    ]);
+    expect(sum.totals.hasUnpriced).toBe(true);
+    expect(sum.repricedCalls).toBe(0);
+  });
+
+  it('counts records minted before cache-aware pricing as possibly overstated', () => {
+    const sum = aggregateRecords('sLegacy', [
+      // No `pricingVersion` — written by a build that billed cached input at the
+      // full rate and recorded `cacheReadTokens: 0`, so the overstatement is
+      // unrecoverable from the record.
+      rec({ ...catalogued, promptTokens: 1000, costUsd: 2.79 }),
+      rec({ ...catalogued, promptTokens: 1000, costUsd: 0.9, pricingVersion: PRICING_VERSION }),
+    ]);
+    expect(sum.legacyPricedCalls).toBe(1);
+  });
+
+  it('still flags a re-priced pre-v2 record as possibly overstated', () => {
+    // The two populations overlap: the sessions recorded while xAI was missing
+    // from the catalog ALSO predate cache-token capture. Re-pricing recovers a
+    // number from their token counts, but those counts record `cacheReadTokens:
+    // 0` regardless of what was actually cached — so the recovered figure bills
+    // every input token at the full rate and is an upper bound, not a fact.
+    // Stamping the copy as current-generation would hide exactly that.
+    const sum = aggregateRecords('sBoth', [
+      rec({ ...catalogued, promptTokens: 1000, completionTokens: 100, costUsd: null }),
+    ]);
+    expect(sum.repricedCalls).toBe(1);
+    expect(sum.legacyPricedCalls).toBe(1);
+  });
+
+  it('does not flag a re-priced record whose source was already current-generation', () => {
+    const sum = aggregateRecords('sModern', [
+      rec({
+        ...catalogued,
+        promptTokens: 1000,
+        completionTokens: 100,
+        costUsd: null,
+        pricingVersion: PRICING_VERSION,
+      }),
+    ]);
+    expect(sum.repricedCalls).toBe(1);
+    expect(sum.legacyPricedCalls).toBe(0);
+  });
+
+  it('reports both caveats in the rendered usage lines', () => {
+    const sum = aggregateRecords('sLines', [
+      rec({ ...catalogued, promptTokens: 1000, completionTokens: 100, costUsd: null }),
+      rec({ ...catalogued, promptTokens: 1000, costUsd: 2.79 }),
+    ]);
+    const lines = formatSessionUsageLines(sum).join('\n');
+    expect(lines).toContain('re-priced from the current catalog');
+    expect(lines).toContain('may be overstated');
+  });
+
+  it('reports neither caveat for a session priced entirely under the current generation', () => {
+    const sum = aggregateRecords('sClean', [
+      rec({ ...catalogued, promptTokens: 1000, costUsd: 0.9, pricingVersion: PRICING_VERSION }),
+    ]);
+    const lines = formatSessionUsageLines(sum).join('\n');
+    expect(lines).not.toContain('re-priced');
+    expect(lines).not.toContain('overstated');
+  });
+
+  it('stamps the current pricing version on newly minted records', () => {
+    const t = telemetryFromUsageRecord('s1', 1, {
+      bucket: 'premium',
+      site: 'main',
+      provider: 'anthropic',
+      modelName: 'claude-opus-4-8',
+      promptTokens: 10,
+      completionTokens: 1,
+    });
+    expect(t.pricingVersion).toBe(PRICING_VERSION);
   });
 });
 

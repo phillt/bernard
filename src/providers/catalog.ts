@@ -396,6 +396,14 @@ export interface CatalogRefreshDiff {
   removed: ModelCatalogEntry[];
   /** Total entry count after the refresh. */
   total: number;
+  /**
+   * Per-provider entry counts *after* the refresh, with every built-in provider
+   * present (so a provider that lost everything reads as an explicit `0` rather
+   * than a missing key). This is what makes "a whole provider vanished"
+   * detectable: `removed` alone cannot distinguish pruning three stale models
+   * from losing the only provider you have configured (#306).
+   */
+  byProvider: Record<string, number>;
   /** Source of the catalog after the refresh. */
   source: CatalogSource;
   /** Source of the catalog *before* the refresh (`'vendored'` ⇒ no real baseline). */
@@ -424,12 +432,21 @@ export async function refreshCatalogWithDiff(): Promise<CatalogRefreshDiff> {
     const afterKeys = new Set(refreshed.entries.map(entryKey));
     const added = refreshed.entries.filter((e) => !before.has(entryKey(e)));
     const removed = prev.entries.filter((e) => !afterKeys.has(entryKey(e)));
+    const byProvider = countByProvider(refreshed.entries);
+    if (removed.length > 0) {
+      debugLog('catalog:removed', {
+        count: removed.length,
+        byProvider,
+        models: removed.map(entryKey),
+      });
+    }
     return {
       added,
       removed,
       total: refreshed.entries.length,
       source: refreshed.source,
       previousSource,
+      byProvider,
     };
   } catch (err) {
     return {
@@ -438,6 +455,7 @@ export async function refreshCatalogWithDiff(): Promise<CatalogRefreshDiff> {
       total: prev.entries.length,
       source: previousSource,
       previousSource,
+      byProvider: countByProvider(prev.entries),
       error: err instanceof Error ? err : new Error(String(err)),
     };
   }

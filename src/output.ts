@@ -92,6 +92,21 @@ export interface SpinnerStats {
    * stays 0 and the StatusBar renders a confident `$0.00`, which is how a whole
    * provider dropping out of the catalog went unnoticed. Folded alongside
    * `sessionCostUsd` in `Agent.finalizeTurnStats()`.
+   *
+   * **Deliberately duplicates `SessionTelemetry.totals.hasUnpriced`** (#311).
+   * Reading from telemetry instead would be *less* correct at this call site,
+   * for three independent reasons:
+   *   1. `sessionTelemetry` is optional here — headless runs and test stubs
+   *      omit it, so the cost cell would lose its caveat exactly where there is
+   *      no one to notice.
+   *   2. Telemetry is opt-out via `BERNARD_TELEMETRY`, so disabling it would
+   *      silently make the StatusBar claim a confident total again — the very
+   *      failure this flag exists to prevent.
+   *   3. `summary()` builds the whole dispatch tree; it is far too heavy for a
+   *      render path polled every 500 ms.
+   * Consolidating properly needs a cheap `get totals()` on `SessionTelemetry`
+   * plus a fallback for the disabled/absent case. Until then the duplication is
+   * the correct trade, not an oversight.
    */
   sessionCostPartial: boolean;
   /**

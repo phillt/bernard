@@ -1,10 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { classifyError } from '../error-taxonomy.js';
 import {
   stallGuardedFetch,
   DEFAULT_STALL_TIMEOUT_MS,
   resolveStallTimeoutMs,
 } from './stall-guard.js';
+import { getProviderRequestCount, _resetProviderRequestCountForTests } from './request-counter.js';
 
 /**
  * #302: a provider can accept the POST and never send headers. The only
@@ -160,5 +161,35 @@ describe('resolveStallTimeoutMs', () => {
     withEnv('0', () => expect(resolveStallTimeoutMs()).toBe(0));
     withEnv('-1', () => expect(resolveStallTimeoutMs()).toBe(0));
     withEnv('nonsense', () => expect(resolveStallTimeoutMs()).toBe(0));
+  });
+});
+
+/**
+ * #308: the provider billed 87 requests for a session Bernard recorded 22 calls
+ * for. The counter has to live under the SDK's retry loop and be on by default,
+ * or it can only observe a session someone already suspected.
+ */
+describe('provider request counting (#308)', () => {
+  beforeEach(() => _resetProviderRequestCountForTests());
+
+  it('counts every request the wrapper issues', async () => {
+    const guarded = stallGuardedFetch(() => 5_000, slowHeaders(0));
+    await guarded('https://api.example/v1/messages');
+    await guarded('https://api.example/v1/messages');
+    expect(getProviderRequestCount()).toBe(2);
+  });
+
+  it('keeps counting when the stall guard itself is disabled', async () => {
+    // `BERNARD_PROVIDER_STALL_TIMEOUT_MS=0` is a real off switch for the guard.
+    // It must not also silently switch off request accounting.
+    const guarded = stallGuardedFetch(() => 0, slowHeaders(0));
+    await guarded('https://api.example/v1/messages');
+    expect(getProviderRequestCount()).toBe(1);
+  });
+
+  it('counts a request that fails, since the provider still billed the attempt', async () => {
+    const guarded = stallGuardedFetch(() => 20, stalledFetch());
+    await rejectionOf(guarded('https://api.example/v1/messages'));
+    expect(getProviderRequestCount()).toBe(1);
   });
 });
