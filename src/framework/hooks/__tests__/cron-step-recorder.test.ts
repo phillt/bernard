@@ -94,6 +94,21 @@ describe('cronStepRecorderHook — object result cap', () => {
     expect((out as string).length).toBeLessThan(11_000);
   });
 
+  it('bounds an array-shaped result without walking all of it', () => {
+    // The shape the string-only replacer misses entirely: `file_read_lines`
+    // returns `{lines: [{num, content}, …]}` where every `content` is far
+    // under the budget, so nothing is ever replaced and the whole thing
+    // materializes. Measured at 183 ms / 75 MB for 500k lines — SLOWER than a
+    // plain stringify, since a replacer drops V8's fast path.
+    const lines = Array.from({ length: 200_000 }, (_, i) => ({ num: i, content: 'x'.repeat(40) }));
+    const started = Date.now();
+    const out = record({ path: '/big', total_lines: lines.length, lines });
+    expect(typeof out).toBe('string');
+    expect(out as string).toContain('(truncated,');
+    // O(budget), not O(result): the array is capped before its items are visited.
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
   it('leaves a small object result structured', () => {
     // Readers that walk the shape keep working on everything that fits.
     const out = record({ output: 'ok', is_error: false });

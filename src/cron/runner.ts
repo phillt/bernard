@@ -120,9 +120,18 @@ const DEFAULT_CRON_JOB_TIMEOUT_MS = 30 * 60_000;
  * the scheduler.
  */
 export function resolveCronJobTimeoutMs(job: CronJob): number | null {
-  const raw = job.timeoutMs ?? Number(process.env.BERNARD_CRON_JOB_TIMEOUT_MS ?? NaN);
-  if (Number.isFinite(raw)) return raw > 0 ? Math.floor(raw) : null;
-  return DEFAULT_CRON_JOB_TIMEOUT_MS;
+  if (job.timeoutMs !== undefined) {
+    return job.timeoutMs > 0 ? Math.floor(job.timeoutMs) : null;
+  }
+  // An empty/absent var means "unset", NOT "disabled". `Number('')` is `0`,
+  // which is finite and non-positive — so reading the env through `Number()`
+  // without this guard made `BERNARD_CRON_JOB_TIMEOUT_MS=` silently turn off
+  // the very clock this exists to add.
+  const raw = process.env.BERNARD_CRON_JOB_TIMEOUT_MS;
+  if (!raw) return DEFAULT_CRON_JOB_TIMEOUT_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_CRON_JOB_TIMEOUT_MS;
+  return n > 0 ? Math.floor(n) : null;
 }
 
 /**
@@ -365,13 +374,21 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         ? err.message
         : String(err);
     const cls = classifyError({ message });
-    // `timeout` is severity `low` in the taxonomy, which is right for an
-    // ordinary tool timeout — retry and move on. It is wrong here: a job that
-    // hit its wall clock was, until it was aborted, holding a scheduler slot
-    // and queueing every later fire behind it with no operator present. Raise
-    // it at the one site that knows the difference, rather than teaching the
-    // shared table about cron.
-    const severity = jobTimedOut ? 'critical' : cls.severity;
+    // One decision, made once. `timeout` is severity `low` in the taxonomy —
+    // right for an ordinary tool timeout, wrong for a job that was holding a
+    // scheduler slot and queueing every later fire behind it with no operator
+    // present. Cron owns cron alerting (`Classification.severity` is
+    // documented on the interface as "Drives cron alert severity"), so this is
+    // decided at the site that knows, rather than by teaching the shared table
+    // about cron. Severity and the user-facing text are keyed on the same
+    // fact, so they are resolved together — split apart, an edit to one
+    // reads as complete.
+    const alert = jobTimedOut
+      ? {
+          severity: 'critical' as const,
+          text: `${cls.category} — the job hit its wall clock and was aborted; until then it was holding a scheduler slot.`,
+        }
+      : { severity: cls.severity, text: `${cls.category} — ${cls.playbook.user}` };
 
     try {
       const totalUsage = steps.reduce(
@@ -433,7 +450,7 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
         lastRunStatus: 'error',
         lastResult: message.slice(0, 2000),
       });
-      const alert = store.createAlert({
+      const alertRecord = store.createAlert({
         jobId: job.id,
         jobName: job.name,
         message: `${cls.category}: ${message.split('\n')[0].slice(0, 200)}`,
@@ -442,11 +459,9 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
       });
       sendNotification({
         title: `Bernard cron failed: ${job.name}`,
-        message: jobTimedOut
-          ? `${cls.category} — the job hit its wall clock and was aborted; until then it was holding a scheduler slot.`
-          : `${cls.category} — ${cls.playbook.user}`,
-        severity,
-        alertId: alert.id,
+        message: alert.text,
+        severity: alert.severity,
+        alertId: alertRecord.id,
         log,
       });
     } catch (alertErr) {

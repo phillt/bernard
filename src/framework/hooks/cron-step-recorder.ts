@@ -1,7 +1,7 @@
 import type { CronLogStep } from '../../cron/log-store.js';
 import type { AgentHook } from './types.js';
 import { readToolMeta } from '../tools/adapter.js';
-import { redactArgs, REDACTED } from '../tools/redact.js';
+import { redactArgs, REDACTED, boundedStringify } from '../tools/redact.js';
 
 /**
  * Maximum chars to keep per tool result before truncating in the log.
@@ -21,36 +21,31 @@ const CRON_RESULT_MAX_LEN = 10240;
  * is unattended, so nobody saw the growth. `cron_logs_get` then read it all
  * back into an agent's context.
  *
- * Serializes before measuring, and bounds *during* serialization rather than
- * after: the inputs are unbounded, so a plain `JSON.stringify` of a 10 MB
- * `shell` result costs ~39 ms and ~20 MB transient before the slice throws it
- * away (measured in #343). The replacer keeps that at ~0 ms.
- *
- * Returns a string once truncation happens — a truncated object is not a valid
- * instance of its own shape, and a marker is what makes a bounded entry
- * distinguishable from a complete one. Small results keep their structure, so
- * readers that walk it still work on everything that fits.
+ * The bounded serialization itself lives in `boundedStringify` — see there for
+ * why a plain `JSON.stringify` and a naive truncating replacer are each wrong
+ * for a different result shape. What stays here is the decision this recorder
+ * owns: a result that fits keeps its real structure, and one that doesn't
+ * degrades to a marked string, because a truncated object is not a valid
+ * instance of its own shape and would read as complete.
  */
+/**
+ * The signal that an entry is bounded rather than complete. One helper so the
+ * two paths can't drift — it is the only thing a log reader has to go on.
+ */
+function mark(text: string, total: number): string {
+  return `${text}... (truncated, ${total} chars total)`;
+}
+
 function truncateResult(result: unknown, maxLen: number): unknown {
-  if (result === undefined || result === null) return result;
   if (typeof result === 'string') {
-    return result.length > maxLen
-      ? result.slice(0, maxLen) + `... (truncated, ${result.length} chars total)`
-      : result;
+    return result.length > maxLen ? mark(result.slice(0, maxLen), result.length) : result;
   }
-  let text: string;
-  try {
-    // `appendEntry` must never throw on a log write, and AI SDK results can
-    // carry cycles — same reason `previewOfResult` (#343) wraps this.
-    text =
-      JSON.stringify(result, (_key, v: unknown) =>
-        typeof v === 'string' && v.length > maxLen ? v.slice(0, maxLen) + '…' : v,
-      ) ?? String(result);
-  } catch {
-    text = String(result);
-  }
-  if (text.length <= maxLen) return result;
-  return text.slice(0, maxLen) + `... (truncated, ${text.length} chars total)`;
+  const { text, bounded } = boundedStringify(result, maxLen);
+  // `bounded` rather than `text.length > maxLen`: once the budget starts
+  // dropping keys the serialized form can come back UNDER the cap, and a
+  // length-only test would then hand back the original unbounded object.
+  if (!bounded) return result;
+  return mark(text.slice(0, maxLen), text.length);
 }
 
 /**

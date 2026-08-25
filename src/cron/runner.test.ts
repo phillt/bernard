@@ -577,6 +577,29 @@ describe('resolveCronJobPosture', () => {
  * every later fire queued behind it undrainably.
  */
 describe('cron job wall clock (#326)', () => {
+  // Own reset: two tests here call `runJob`, but this block sits outside
+  // `describe('runJob')` and so does not inherit its `beforeEach` — without
+  // this it would run against whatever mocks the previous suite left behind.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRagSearch.mockResolvedValue([]);
+    mockMemoryStore.getAllMemoryContents.mockReturnValue(new Map());
+    mockMemoryStore.getAllScratchContents.mockReturnValue(new Map());
+    vi.mocked(loadConfig).mockReturnValue({
+      provider: 'anthropic',
+      model: 'test',
+      maxTokens: 1024,
+      shellTimeout: 5000,
+      tokenWindow: 0,
+      ragEnabled: true,
+      theme: 'bernard',
+    } as unknown as ReturnType<typeof loadConfig>);
+    mockGenerateText.mockImplementation(async () => ({
+      text: 'done',
+      response: { messages: [] },
+    }));
+  });
+
   const baseJob: CronJob = {
     id: 'job-1',
     name: 'Test',
@@ -611,6 +634,13 @@ describe('cron job wall clock (#326)', () => {
       expect(resolveCronJobTimeoutMs({ ...baseJob, timeoutMs: 1234 })).toBe(1234);
       expect(resolveCronJobTimeoutMs(baseJob)).toBe(5000);
     });
+  });
+
+  it('treats an empty env var as unset, not disabled', () => {
+    // `Number('')` is `0` — finite and non-positive — so reading the env
+    // through `Number()` made `BERNARD_CRON_JOB_TIMEOUT_MS=` silently turn off
+    // the clock this exists to add.
+    withEnv('', () => expect(resolveCronJobTimeoutMs(baseJob)).toBe(30 * 60_000));
   });
 
   it('treats zero as disabled at either level', () => {

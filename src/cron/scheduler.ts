@@ -1,7 +1,15 @@
 import cron, { type ScheduledTask } from 'node-cron';
 import { CronStore } from './store.js';
-import { runJob } from './runner.js';
+import { runJob, resolveCronJobTimeoutMs, type RunJobResult } from './runner.js';
 import type { CronJob } from './types.js';
+
+/**
+ * Headroom the scheduler's slot-release backstop allows over a job's own wall
+ * clock. The inner abort should always win — it stops the work and writes a
+ * proper log entry and alert; this only fires when the hang is somewhere that
+ * abort cannot reach.
+ */
+const SLOT_RELEASE_GRACE_MS = 60_000;
 
 const DEFAULT_MAX_CONCURRENT = 3;
 
@@ -92,7 +100,7 @@ export class Scheduler {
     const currentJob = this.store.getJob(job.id) ?? job;
 
     try {
-      const result = await runJob(currentJob, this.log);
+      const result = await this.runJobBounded(currentJob);
       this.store.updateJob(job.id, {
         lastRunStatus: result.success ? 'success' : 'error',
         lastResult: result.output.slice(0, 2000), // Truncate to avoid huge JSON
@@ -108,6 +116,52 @@ export class Scheduler {
     } finally {
       this.runningCount--;
       this.drainQueue();
+    }
+  }
+
+  /**
+   * Races `runJob` against the job's own wall clock so the slot is released
+   * even when the hang is somewhere `runJob`'s internal abort cannot reach.
+   *
+   * The two layers answer different questions and both are needed (#326).
+   * `runJob`'s `AbortSignal` stops the *work* — but it only covers the region
+   * it wraps: the timer starts after `mcpManager.connect()` and the pre-run
+   * RAG search, and `mcpManager.close()` runs in a `finally` after the timer
+   * is cleared. A stdio child that ignores SIGTERM, or a slow embedding
+   * search, hangs outside it. This race guarantees the *slot* is freed
+   * regardless, which is the invariant the scheduler owns and the one whose
+   * absence wedges every later fire: `drainQueue` runs only from a completing
+   * job's `finally`, so a slot that is never released is a queue that never
+   * drains.
+   *
+   * Deliberately generous over the job's own budget, so the inner abort is
+   * what normally fires — it stops the work and writes a proper log entry and
+   * alert. This is the backstop, and reaching it means something outside the
+   * agent loop hung.
+   */
+  private async runJobBounded(job: CronJob): Promise<RunJobResult> {
+    const budget = resolveCronJobTimeoutMs(job);
+    const run = runJob(job, this.log);
+    if (budget === null) return run;
+    const grace = budget + SLOT_RELEASE_GRACE_MS;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        run,
+        new Promise<RunJobResult>((resolve) => {
+          timer = setTimeout(
+            () =>
+              resolve({
+                success: false,
+                output: `Error: job did not return ${grace} ms after starting; releasing its scheduler slot. The run may still be in flight.`,
+              }),
+            grace,
+          );
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
