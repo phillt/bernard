@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, afterAll } from 'vitest';
 import { createElement } from 'react';
 
 /**
@@ -10,29 +10,24 @@ import { createElement } from 'react';
  * the existing suite structurally cannot see it.
  *
  * Forcing colour has to happen before Ink's chalk instance is constructed, and
- * chalk caches its level at import — so this file sets the env var in a
- * top-level `beforeAll` and imports Ink dynamically afterwards. Doing that
- * inside a test alongside the plain-text assertions leaked colour into them;
- * a separate file is the only clean scope.
+ * chalk caches its level at import — hence the top-level env assignment ahead
+ * of top-level `await import`, the pattern this repo's tests already use.
+ * Setting it inside a test, alongside the plain-text assertions, leaked colour
+ * into them.
  */
+process.env.FORCE_COLOR = '3';
+const originalForceColor = process.env.FORCE_COLOR;
+const { render } = await import('ink-testing-library');
+const { MenuRow } = await import('../overlays/MenuRow.js');
+
+/** `colors.muted` is 'gray' in the default theme. Ink's `dimColor` is SGR 2. */
 const SGR_THEME_MUTED = '\u001b[90m';
 const SGR_DIM = '\u001b[2m';
 
 describe('<MenuRow> theming', () => {
-  let render: typeof import('ink-testing-library').render;
-  let MenuRow: typeof import('../overlays/MenuRow.js').MenuRow;
-
-  const originalForceColor = process.env.FORCE_COLOR;
-
-  beforeAll(async () => {
-    process.env.FORCE_COLOR = '3';
-    ({ render } = await import('ink-testing-library'));
-    ({ MenuRow } = await import('../overlays/MenuRow.js'));
-  });
-
   // `process.env` is per-WORKER, not per-file, and vitest reuses workers across
-  // files — so leaving this set makes every other Ink test in the same worker
-  // start emitting ANSI and fail its plain-text assertions. Restore it.
+  // files — leaving this set makes every other Ink test in the same worker
+  // emit ANSI and fail its plain-text assertions.
   afterAll(() => {
     if (originalForceColor === undefined) delete process.env.FORCE_COLOR;
     else process.env.FORCE_COLOR = originalForceColor;
@@ -48,9 +43,6 @@ describe('<MenuRow> theming', () => {
         }),
       ).lastFrame() ?? '';
 
-    // `colors.muted` is 'gray' in the default theme -> SGR 90. Ink's `dimColor`
-    // is SGR 2, which ignores the active theme — the whole point of the fix,
-    // and what the high-contrast and colorblind themes exist to override.
     expect(frame).toContain(SGR_THEME_MUTED + ' — Show command list');
     expect(frame).not.toContain(SGR_DIM);
   });
