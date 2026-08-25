@@ -1,4 +1,5 @@
-import { mkdtempSync } from 'node:fs';
+import { afterAll } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,4 +23,28 @@ import { join } from 'node:path';
  * exercise path resolution itself (`paths.test.ts`, `migrate.test.ts`) reset their
  * own env and re-import via `vi.resetModules()`, so they are unaffected.
  */
-process.env.BERNARD_HOME = mkdtempSync(join(tmpdir(), 'bernard-test-home-'));
+const testHome = mkdtempSync(join(tmpdir(), 'bernard-test-home-'));
+process.env.BERNARD_HOME = testHome;
+
+/**
+ * Remove it again when this file's tests finish (#319). Setup files run once
+ * per test file under Vitest's default isolation — which is what makes the
+ * isolation work — so without this the suite left one directory per test file
+ * per run, forever. A developer machine had accumulated **12,255**.
+ *
+ * Deletes the captured `testHome`, never `process.env.BERNARD_HOME`: the two
+ * tests that exercise path resolution (`paths.test.ts`, `migrate.test.ts`)
+ * delete or repoint that variable mid-run, so reading it here would either
+ * no-op or remove the wrong tree.
+ *
+ * Errors are swallowed — a throwing `afterAll` fails the whole file, and a
+ * leaked temp directory is not worth a red test. `globalTeardown` sweeps
+ * whatever this misses (a hard-killed worker never runs `afterAll`).
+ */
+afterAll(() => {
+  try {
+    rmSync(testHome, { recursive: true, force: true });
+  } catch {
+    // Best-effort cleanup only.
+  }
+});
