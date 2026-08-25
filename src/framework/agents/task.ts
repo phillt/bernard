@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { CoreMessage } from 'ai';
 import type { BernardConfig } from '../../config.js';
 import { debugLog } from '../../logger.js';
-import { extractJsonBlock } from '../../structured-output.js';
+import { extractJsonBlock, nullableOptional } from '../../structured-output.js';
 import { createTools } from '../../tools/index.js';
 import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
@@ -38,7 +38,9 @@ export interface TaskResult {
 export const TaskResultSchema = z.object({
   status: z.enum(['success', 'error']),
   output: z.any(),
-  details: z.string().optional(),
+  // Tolerates an explicit `null` and normalizes it away below — same defect and
+  // same fix as `WrapperResultSchema` (#341).
+  details: nullableOptional(z.string()),
 });
 
 /** Fraction of `config.maxSteps` allocated to task execution. */
@@ -62,7 +64,9 @@ function validateTaskResult(parsed: unknown): TaskResult | undefined {
   const result = TaskResultSchema.safeParse(parsed);
   if (!result.success) return undefined;
   const { status, output, details } = result.data;
-  return details !== undefined ? { status, output, details } : { status, output };
+  return details !== null && details !== undefined
+    ? { status, output, details }
+    : { status, output };
 }
 
 /**

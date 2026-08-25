@@ -72,6 +72,10 @@ vi.mock('../os-info.js', () => ({
 
 vi.mock('../structured-output.js', () => ({
   STRUCTURED_OUTPUT_RULES: '\n\n## Output Format (STRICT)\n...',
+  // Imported by `framework/agents/task.ts` since #341 — a schema builder, so
+  // the mock has to return something zod-shaped, not a stub.
+  nullableOptional: (schema: { nullish: () => unknown }) => schema.nullish(),
+  extractJsonBlock: vi.fn(),
   wrapWrapperResult: vi.fn((text: string) => {
     try {
       return JSON.parse(text);
@@ -423,7 +427,39 @@ describe('captureToolCalls', () => {
     expect(result).toHaveLength(1);
     expect(result[0].tool).toBe('shell');
     expect(result[0].args).toEqual({ command: 'ls' });
-    expect(result[0].resultPreview).toBe('file1.ts\nfile2.ts');
+    // JSON-encoded since #343, so a string result carries its quotes and its
+    // escapes — the tradeoff for object results being readable at all.
+    expect(result[0].resultPreview).toBe(JSON.stringify('file1.ts\nfile2.ts'));
+  });
+
+  it('renders an object result as JSON, not "[object Object]" (#343)', () => {
+    // `shell` returns `{output, is_error}`; the file tools and MCP return
+    // objects too. `String(value)` made the majority of previews useless, in
+    // the log whose whole purpose is working out what a wrapper actually did.
+    const steps = [
+      {
+        toolCalls: [{ toolName: 'shell', args: { command: 'ls' } }],
+        toolResults: [{ result: { output: 'file1.ts', is_error: false } }],
+      },
+    ];
+    const result = captureToolCalls(steps);
+    expect(result[0].resultPreview).not.toContain('[object Object]');
+    expect(result[0].resultPreview).toContain('file1.ts');
+  });
+
+  it('falls back to String() rather than throwing on an unserializable result', () => {
+    // `appendReasoningLog` is documented as never throwing, and AI SDK results
+    // are `any` — a cyclic object must not take the dispatch down with it.
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const steps = [
+      {
+        toolCalls: [{ toolName: 'shell', args: {} }],
+        toolResults: [{ result: cyclic }],
+      },
+    ];
+    expect(() => captureToolCalls(steps)).not.toThrow();
+    expect(captureToolCalls(steps)[0].resultPreview).toBe('[object Object]');
   });
 
   it('truncates resultPreview to 300 chars', () => {
@@ -451,7 +487,7 @@ describe('captureToolCalls', () => {
     ];
     const result = captureToolCalls(steps);
     expect(result).toHaveLength(2);
-    expect(result[0].resultPreview).toBe('/home/user');
+    expect(result[0].resultPreview).toBe(JSON.stringify('/home/user'));
     expect(result[1].resultPreview).toBe('');
   });
 

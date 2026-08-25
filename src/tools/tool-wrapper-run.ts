@@ -57,6 +57,33 @@ export function captureLastToolCall(steps: any[] | undefined): string {
  * scrubbed against the tool's `ToolMeta.sensitiveArgs` / `sensitiveResult`
  * fields before persistence.
  */
+/** Max characters of a tool result retained in the reasoning log. */
+export const RESULT_PREVIEW_MAX_CHARS = 300;
+
+/**
+ * Renders a tool result for the reasoning log (#343).
+ *
+ * Was `String(value)`, which yields `"[object Object]"` for the majority of
+ * Bernard tools — `shell` returns `{output, is_error}`, the file tools return
+ * objects, MCP returns `{content:[…]}`. The one field that records what a tool
+ * actually returned carried no information, in the log whose stated purpose is
+ * post-hoc triage.
+ *
+ * The `try`/`catch` is load-bearing rather than defensive: `JSON.stringify`
+ * throws on cycles and BigInt, `appendReasoningLog` is documented as never
+ * throwing, and AI SDK results are `any`. Same idiom as `mcp-result-shaper.ts`.
+ */
+export function previewOfResult(value: unknown): string {
+  if (value === undefined) return '';
+  let text: string;
+  try {
+    text = JSON.stringify(value) ?? String(value);
+  } catch {
+    text = String(value);
+  }
+  return text.slice(0, RESULT_PREVIEW_MAX_CHARS);
+}
+
 export function captureToolCalls(
   steps: any[] | undefined,
   toolRegistry?: Record<string, unknown>,
@@ -74,8 +101,7 @@ export function captureToolCalls(
       const tc = calls[i];
       const tr = results[i];
       const meta = toolRegistry ? readToolMeta(toolRegistry[tc.toolName]) : undefined;
-      const resultText = tr?.result === undefined ? '' : String(tr.result);
-      const rawPreview = resultText.slice(0, 300);
+      const rawPreview = previewOfResult(tr?.result);
       out.push({
         tool: tc.toolName,
         args: meta ? redactArgs(tc.args, meta.sensitiveArgs) : tc.args,
