@@ -30,3 +30,21 @@ export const PAGE_UP = '\x1b[5~';
 export const PAGE_DOWN = '\x1b[6~';
 
 export const tick = (ms = 10): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Readline-style editing chords (#356). Byte sequences verified against Ink's
+ * key parser — Alt-* arrive as `{meta}`, Ctrl-arrows as `{leftArrow, ctrl}`.
+ * Home/End are deliberately absent: Ink surfaces them as empty input with no
+ * flags, so they cannot be bound through `useInput`.
+ */
+export const CTRL_W = '\x17';
+export const CTRL_U = '\x15';
+export const CTRL_K = '\x0b';
+export const CTRL_D = '\x04';
+export const ALT_B = '\x1bb';
+export const ALT_F = '\x1bf';
+export const ALT_BACKSPACE = '\x1b\x7f';
+export const ALT_LEFT = '\x1b[1;3D';
+export const ALT_RIGHT = '\x1b[1;3C';
+export const CTRL_LEFT = '\x1b[1;5D';
+export const CTRL_RIGHT = '\x1b[1;5C';

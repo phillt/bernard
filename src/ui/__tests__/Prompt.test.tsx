@@ -12,6 +12,17 @@ import {
   ARROW_RIGHT,
   CTRL_A,
   CTRL_E,
+  CTRL_W,
+  CTRL_U,
+  CTRL_K,
+  CTRL_D,
+  ALT_B,
+  ALT_F,
+  ALT_BACKSPACE,
+  ALT_LEFT,
+  ALT_RIGHT,
+  CTRL_LEFT,
+  CTRL_RIGHT,
   CTRL_J,
   SHIFT_ENTER_CSIU,
   META_ENTER,
@@ -404,5 +415,116 @@ describe('<Prompt> dynamic slash commands (routines/tasks)', () => {
     stdin.write(ENTER);
     await tick();
     expect(onSubmit).toHaveBeenCalledWith('/morning-triage');
+  });
+
+  // Readline-style editing (#356). Before this, the editor handled only
+  // arrows / Ctrl-A / Ctrl-E and dropped every other chord at
+  // `if (key.ctrl || key.meta) return false`.
+  describe('readline chords', () => {
+    async function typed(keys: string[]) {
+      const onSubmit = vi.fn();
+      const { stdin } = render(createElement(Prompt, { onSubmit }));
+      await tick();
+      for (const k of keys) {
+        stdin.write(k);
+        await tick();
+      }
+      stdin.write(ENTER);
+      await tick();
+      return onSubmit;
+    }
+
+    it.each([
+      ['Alt-Left', ALT_LEFT],
+      ['Ctrl-Left', CTRL_LEFT],
+      ['Alt-B', ALT_B],
+    ])('%s moves back one word', async (_name, chord) => {
+      const onSubmit = await typed(['foo bar', chord, 'X']);
+      expect(onSubmit).toHaveBeenCalledWith('foo Xbar');
+    });
+
+    it.each([
+      ['Alt-Right', ALT_RIGHT],
+      ['Ctrl-Right', CTRL_RIGHT],
+      ['Alt-F', ALT_F],
+    ])('%s moves forward one word', async (_name, chord) => {
+      const onSubmit = await typed(['foo bar', CTRL_A, chord, 'X']);
+      expect(onSubmit).toHaveBeenCalledWith('fooX bar');
+    });
+
+    it('Ctrl-W deletes the word before the cursor', async () => {
+      const onSubmit = await typed(['foo bar baz', CTRL_W]);
+      expect(onSubmit).toHaveBeenCalledWith('foo bar');
+    });
+
+    it('Alt-Backspace deletes a word, not a character', async () => {
+      // Regression guard: Alt-Backspace arrives as `{delete, meta}`, so the
+      // plain backspace branch would consume it first and delete one char.
+      const onSubmit = await typed(['foo bar', ALT_BACKSPACE]);
+      expect(onSubmit).toHaveBeenCalledWith('foo');
+    });
+
+    it('Ctrl-U kills to the start of the line', async () => {
+      const onSubmit = await typed(['discard me', CTRL_U, 'kept']);
+      expect(onSubmit).toHaveBeenCalledWith('kept');
+    });
+
+    it('Ctrl-K kills to the end of the line', async () => {
+      const onSubmit = await typed(['keep this', CTRL_A, ARROW_RIGHT, ARROW_RIGHT, CTRL_K, 'pt']);
+      expect(onSubmit).toHaveBeenCalledWith('kept');
+    });
+
+    it('Ctrl-D deletes the character at the cursor, not before it', async () => {
+      const onSubmit = await typed(['abXc', ARROW_LEFT, ARROW_LEFT, CTRL_D]);
+      expect(onSubmit).toHaveBeenCalledWith('abc');
+    });
+
+    it('Ctrl-A / Ctrl-E act per line in a multiline buffer', async () => {
+      // The correctness half of #356: these used to jump to buffer start/end.
+      const onSubmit = await typed(['one', CTRL_J, 'two', CTRL_A, 'X']);
+      expect(onSubmit).toHaveBeenCalledWith('one\nXtwo');
+    });
+
+    it('Ctrl-E returns to the end of the current line only', async () => {
+      const onSubmit = await typed(['one', CTRL_J, 'two', CTRL_A, CTRL_E, 'X']);
+      expect(onSubmit).toHaveBeenCalledWith('one\ntwoX');
+    });
+  });
+
+  // Vertical bound (#355). Without a DimensionsProvider the context falls back
+  // to 24 rows, so the cap is `max(3, min(10, floor(24/3))) = 8`.
+  describe('height bound', () => {
+    async function typeLines(n: number) {
+      const { stdin, lastFrame } = render(createElement(Prompt, { onSubmit: () => {} }));
+      await tick();
+      for (let i = 0; i < n; i++) {
+        stdin.write(`line${i}`);
+        await tick(2);
+        if (i < n - 1) {
+          stdin.write(CTRL_J);
+          await tick(2);
+        }
+      }
+      return lastFrame() ?? '';
+    }
+
+    it('renders a short buffer unwindowed, with no affordance', async () => {
+      const frame = await typeLines(3);
+      expect(frame).toContain('line0');
+      expect(frame).toContain('line2');
+      expect(frame).not.toContain('▲');
+      expect(frame).not.toContain('▼');
+    });
+
+    it('caps a long buffer, keeps the cursor visible, and says what is hidden', async () => {
+      const frame = await typeLines(30);
+      // The last line — where the cursor is, i.e. what you are typing — must
+      // be on screen. That is the whole bug.
+      expect(frame).toContain('line29');
+      // …and the earliest ones must not be, or nothing was bounded.
+      expect(frame).not.toContain('line0\n');
+      // 30 rows, cap 8 → 22 hidden above, cursor pinned to the last row.
+      expect(frame).toMatch(/▲ 22 more lines/);
+    });
   });
 });

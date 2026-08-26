@@ -1,7 +1,9 @@
 import { Box, Text, useInput } from 'ink';
+import { HintRow } from '../hints.js';
 import { getThemeColors } from '../../theme.js';
 import type { ValuePromptOptions, ValueResult } from '../menu-types.js';
-import { useLineEditor, LineWithCursor } from '../use-line-editor.js';
+import { useLineEditor } from '../use-line-editor.js';
+import { BoundedLine, OVERLAY_RESERVED_COLUMNS } from '../BoundedLine.js';
 
 interface TextInputOverlayProps {
   options: ValuePromptOptions;
@@ -59,25 +61,38 @@ export function TextInputOverlay({ options, onResolve }: TextInputOverlayProps) 
         <Text key={`h-${idx}`}>{line}</Text>
       ))}
       {options.headerLines && options.headerLines.length > 0 && <Text> </Text>}
-      <Box>
-        <Text color={colors.accent}>{options.label}: </Text>
-        {showPlaceholder ? (
-          <Text>
-            <Text dimColor>{options.placeholder}</Text>
-            <Text color={colors.accent}>▎</Text>
-          </Text>
-        ) : (
-          <LineWithCursor
-            buffer={buffer}
-            cursor={editor.cursor}
-            showCursor
-            cursorColor={colors.accent}
-            cursorGlyph="▎"
-          />
-        )}
-      </Box>
+      {/* Label and input are stacked, not side by side (#354). As siblings in
+          a row `Box` they were separate flex items, so text could not reflow
+          across the boundary and a long answer ran off the right edge — while
+          `Prompt.tsx` wraps because it puts its prefix and buffer in ONE
+          `<Text>` flow. Stacking is better than merging them here: it gives
+          the answer the full frame width rather than `width − label.length`,
+          which matters because labels are not always short (`ask_user` passes
+          a model-written question; the custom-provider wizard passes 66
+          characters). */}
+      <Text color={colors.accent}>{options.label}:</Text>
+      {showPlaceholder ? (
+        <Text>
+          <Text color={colors.muted}>{options.placeholder}</Text>
+          <Text color={colors.accent}>▎</Text>
+        </Text>
+      ) : (
+        <BoundedLine
+          buffer={buffer}
+          cursor={editor.cursor}
+          showCursor
+          cursorColor={colors.accent}
+          cursorGlyph="▎"
+          reserveColumns={OVERLAY_RESERVED_COLUMNS}
+        />
+      )}
       <Text> </Text>
-      <Text dimColor>Enter commit · Esc cancel</Text>
+      <HintRow
+        hints={[
+          { key: 'Enter', label: 'commit' },
+          { key: 'Esc', label: 'cancel' },
+        ]}
+      />
     </Box>
   );
 }

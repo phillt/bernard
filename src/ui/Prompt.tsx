@@ -2,7 +2,8 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { SlashHints, matchSlashCommands, type SlashCommand } from './SlashHints.js';
-import { useLineEditor, LineWithCursor } from './use-line-editor.js';
+import { useLineEditor } from './use-line-editor.js';
+import { BoundedLine, PROMPT_RESERVED_COLUMNS } from './BoundedLine.js';
 
 interface PromptProps {
   /** When true, suppress key handling — used while an overlay is open. */
@@ -221,18 +222,19 @@ export function Prompt({
         borderColor={disabled ? colors.muted : colors.accent}
       >
         {renderAbove}
-        <Box paddingX={1}>
-          <Text>
-            <Text color={colors.accent} bold>
-              {'› '}
-            </Text>
-            <LineWithCursor
-              buffer={buffer}
-              cursor={editor.cursor}
-              showCursor={!disabled}
-              cursorColor={colors.accent}
-            />
-          </Text>
+        <Box flexDirection="column" paddingX={1}>
+          <BoundedLine
+            buffer={buffer}
+            cursor={editor.cursor}
+            showCursor={!disabled}
+            cursorColor={colors.accent}
+            reserveColumns={PROMPT_RESERVED_COLUMNS}
+            prefix={
+              <Text color={colors.accent} bold>
+                {'› '}
+              </Text>
+            }
+          />
         </Box>
       </Box>
       <SlashHints matches={matches} selectedIndex={clampedIndex} />
