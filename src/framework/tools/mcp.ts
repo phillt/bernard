@@ -8,7 +8,7 @@ import { detectResultFailure } from '../../tool-result-shape.js';
 /**
  * Wraps an MCP tool at the boundary so it satisfies `BernardTool` with a
  * generic envelope. Non-throwing failures are recognized by shape via
- * `detectResultFailure` (#360) — the `CallToolResult` envelope's `isError`, a
+ * `detectResultFailure` (#363) — the `CallToolResult` envelope's `isError`, a
  * flagged content entry, or the historical `"Error"`-prefixed string — and
  * become `status: 'error'`. Thrown exceptions in the MCP `execute`
  * (reconnect/network) also come back as `status: 'error'` rather than throwing,
@@ -17,7 +17,7 @@ import { detectResultFailure } from '../../tool-result-shape.js';
  * **Currently unwired.** The live MCP path is `MCPManager.getTools()`
  * (`src/mcp.ts`), which returns a raw object rather than a `ToolResult`, so MCP
  * tools take `augmentTools`' *legacy* branch and never reach the envelope one —
- * which is why #360 had to add shape detection downstream as well. Routing
+ * which is why #363 had to add shape detection downstream as well. Routing
  * `getTools()` through this wrapper is the deeper fix: it would give MCP a
  * typed `ToolErrorType` instead of `classifyError` re-parsing a message string,
  * and would let the truncation-time `isError` re-stamp in `mcp-result-shaper`
@@ -66,7 +66,7 @@ export function wrapMCPTool(
         if (isToolResult(value)) return value as ToolResult<unknown>;
         // A non-throwing MCP failure — the `CallToolResult` envelope's
         // `isError`, or the historical "Error"-prefixed string — is an error
-        // envelope, not a success (#360). The string case alone was the whole
+        // envelope, not a success (#363). The string case alone was the whole
         // check here, so a server reporting a dead transport the way the spec
         // says to (`{content, isError: true}`) came back `status: 'ok'`.
         const failure = detectResultFailure(value);

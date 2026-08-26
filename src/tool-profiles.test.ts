@@ -291,7 +291,7 @@ describe('detectToolError', () => {
       }
     });
 
-    // #360: `detectToolError` is now a thin adapter over `detectResultFailure`,
+    // #363: `detectToolError` is now a thin adapter over `detectResultFailure`,
     // so the exhaustive shape matrix lives in `tool-result-shape.test.ts`.
     // These pin the *delegation* — that the shared snippet reaches the
     // `ToolErrorInfo` union — on the two shapes that were silently uncovered.
@@ -315,7 +315,7 @@ describe('detectToolError', () => {
       expect(result).toEqual({ isError: true, snippet: 'ref 13 is a combobox' });
     });
 
-    // #360: `file_write` (#342) returns the same `{error}` shape as
+    // #363: `file_write` (#342) returns the same `{error}` shape as
     // `file_edit_lines`, but only the latter two were named, so its failures
     // were never learned from.
     it('returns error for file_write, which was never named in the old branches', () => {

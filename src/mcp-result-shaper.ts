@@ -82,7 +82,7 @@ function largestArrayKey(obj: Record<string, unknown>): string | undefined {
  * We measure the encoded size and shrink the preview budget until the whole
  * wrapper fits (bounded halving, floor 64) so the cap contract actually holds.
  *
- * A failing MCP result keeps its `isError` flag (#360). This path replaces the
+ * A failing MCP result keeps its `isError` flag (#363). This path replaces the
  * envelope wholesale, so without re-stamping it an over-budget failure would
  * arrive downstream looking like an ordinary success — the truncation silently
  * *upgrading* an error. The object path above clones and so keeps it already.

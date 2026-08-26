@@ -84,7 +84,7 @@ export function detectToolError(toolName: string, result: unknown): ToolErrorInf
   // This is the one rule `detectResultFailure` cannot infer from shape — and
   // the reason `augment`'s inline check, which reads shape only, still
   // disagrees with this function for exactly this tool. The deeper fix is at
-  // the producer (have `web_search` return a marked shape); see #360.
+  // the producer (have `web_search` return a marked shape); see #364.
   if (toolName === 'web_search' && typeof result === 'string') {
     if (result.startsWith('web_search returned no results')) {
       return { isError: true, snippet: result.slice(0, ERROR_SNIPPET_MAX) };
@@ -92,7 +92,7 @@ export function detectToolError(toolName: string, result: unknown): ToolErrorInf
     return { isError: false };
   }
 
-  // Everything else is decided by shape (#360). `shell`'s `{is_error}`,
+  // Everything else is decided by shape (#363). `shell`'s `{is_error}`,
   // `file_*`'s `{error}`, MCP's `CallToolResult.isError`, and the historical
   // "Error"-prefixed string are all recognized by the one shared predicate —
   // previously each was a separate per-tool-name branch, which is why

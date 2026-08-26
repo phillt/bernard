@@ -96,7 +96,7 @@ describe('shapeMCPResult', () => {
     expect(shapeMCPResult(null, cap(1))).toBe(null);
   });
 
-  // #360: the wrapper replaces the envelope wholesale, so without re-stamping
+  // #363: the wrapper replaces the envelope wholesale, so without re-stamping
   // the flag an over-budget failure would arrive downstream looking like a
   // success — truncation silently upgrading an error.
   it('keeps isError on a failing MCP result that falls back to the wrapper', () => {

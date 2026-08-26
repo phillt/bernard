@@ -686,7 +686,7 @@ export function augmentTools(
           // and a throw from detectToolError would silently skip it. Recording
           // must also stay asynchronous — the legacy path tests assert
           // detectToolError has not run by the time execute returns — so the
-          // gate reads the shared structural predicate directly instead (#360).
+          // gate reads the shared structural predicate directly instead (#363).
           // It replaces an inline `is_error === true || 'error' in result`,
           // which knew nothing of MCP's `isError` and misread `{error: null}`
           // (what `structured-output`'s `nullableOptional` leaves behind).
@@ -696,7 +696,7 @@ export function augmentTools(
           // to always log `'ok'` whenever execute didn't throw, which made
           // wrapper sub-dispatch errors (which surface as `{is_error: true}`
           // or `{error: '...'}` envelopes — see `wrap-with-specialist.ts`)
-          // invisible at the augment-log layer. Since #360 this also covers
+          // invisible at the augment-log layer. Since #363 this also covers
           // MCP's `{content, isError: true}`, which is how a whole session of
           // dead-socket calls logged as 254 consecutive `ok`s.
           debugLog('tool:execute:end', {

@@ -1,5 +1,5 @@
 /**
- * Structural detection of a **non-throwing** tool failure (#360).
+ * Structural detection of a **non-throwing** tool failure (#363).
  *
  * A tool can fail in two ways. It can throw — which every layer already
  * handles — or it can return, successfully, a value whose *contents* say the

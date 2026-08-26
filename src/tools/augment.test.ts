@@ -1627,7 +1627,7 @@ describe('augmentTools', () => {
       expect(provenance.list()).toHaveLength(0);
     });
 
-    it('legacy path: a failing MCP result does NOT register evidence (#360)', async () => {
+    it('legacy path: a failing MCP result does NOT register evidence (#363)', async () => {
       // The gate used to be `is_error === true || 'error' in result`, so an
       // MCP `CallToolResult` failure registered as a citable source — the
       // agent could cite "WebSocket is not open" as evidence for a claim.
@@ -1647,7 +1647,7 @@ describe('augmentTools', () => {
       expect(provenance.list()).toHaveLength(0);
     });
 
-    it('legacy path: a healthy MCP result still registers evidence (#360)', async () => {
+    it('legacy path: a healthy MCP result still registers evidence (#363)', async () => {
       const provenance = new ProvenanceStore();
       const tools = {
         'get-list-of-open-tabs': {
@@ -1664,7 +1664,7 @@ describe('augmentTools', () => {
       expect(provenance.list()).toHaveLength(1);
     });
 
-    it('legacy path: `{error: null}` still registers evidence (#360)', async () => {
+    it('legacy path: `{error: null}` still registers evidence (#363)', async () => {
       // `structured-output`'s `nullableOptional` leaves the key present with
       // `undefined`; the old `'error' in result` test read that as a failure.
       const provenance = new ProvenanceStore();
