@@ -381,15 +381,6 @@ function extractTextFromContent(content: import('ai').CoreMessage['content']): s
 }
 
 /**
- * Builds the menu entries for an `ask_user` choice question and a predicate for
- * whether a selected item is the "Other" escape hatch. Shared by the single-
- * and multi-select paths of `requestAskUser` so the #230 dedup rule lives in
- * one place: append a hatch row only when the model didn't already supply an
- * "Other"-shaped choice, and treat either the appended row (by identity — its
- * label may be custom via `otherLabel`) or any `OTHER_RE`-matching label as the
- * hatch. The matching selection routes to a free-text follow-up.
- */
-/**
  * A model-written question is a *header*, not a field label (#354). Passing it
  * as `label` put a full sentence on the input's own row; the choice path
  * already does the right thing with `requestMenu(entries, { title: q.question })`.
@@ -401,6 +392,15 @@ function askUserPrompt(question: string): ValuePromptOptions {
   return { label: 'Your answer', headerLines: [question] };
 }
 
+/**
+ * Builds the menu entries for an `ask_user` choice question and a predicate for
+ * whether a selected item is the "Other" escape hatch. Shared by the single-
+ * and multi-select paths of `requestAskUser` so the #230 dedup rule lives in
+ * one place: append a hatch row only when the model didn't already supply an
+ * "Other"-shaped choice, and treat either the appended row (by identity — its
+ * label may be custom via `otherLabel`) or any `OTHER_RE`-matching label as the
+ * hatch. The matching selection routes to a free-text follow-up.
+ */
 function buildChoiceMenu(q: AskUserQuestion): {
   entries: MenuEntry[];
   isHatch: (item: MenuItem) => boolean;
