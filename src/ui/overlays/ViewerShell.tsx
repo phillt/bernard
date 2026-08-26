@@ -118,7 +118,15 @@ export function ViewerShell({
   // App wraps the overlay in paddingX={2}, so the usable width is cols - 4.
   const rule = '─'.repeat(Math.max(4, cols - 4));
 
-  useInput((_input, key) => {
+  useInput((input, key) => {
+    // Ctrl-C closes unconditionally. `escClosesViewer` exists so a drilled-in
+    // viewer can spend Esc on "back one level", but there must still be one
+    // key that always leaves — otherwise the only exit is a level-by-level
+    // walk back out.
+    if (key.ctrl && input === 'c') {
+      onClose();
+      return;
+    }
     if (key.escape) {
       if (escClosesViewer) onClose();
     } else if (key.shift && key.tab) onCycleTab();

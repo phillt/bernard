@@ -5,6 +5,7 @@ import { Text } from 'ink';
 import { MenuOverlay } from '../overlays/MenuOverlay.js';
 import type { MenuEntry } from '../menu-types.js';
 import { ESC, ENTER, ARROW_UP, ARROW_DOWN, CTRL_C, SPACE, tick } from './_keys.js';
+import stripAnsi from 'strip-ansi';
 
 const ENTRIES: MenuEntry[] = [
   { type: 'section', title: 'Built-in' },
@@ -240,8 +241,13 @@ describe('<MenuOverlay> multi-select (#231)', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('[ ] 1. A');
     expect(frame).toContain('[ ] 2. B');
-    expect(frame).toContain('Space toggle');
-    expect(frame).toContain('Enter confirm');
+    // Footer routes through `HintRow` (#266), which colors the key token
+    // separately from its label — so the raw frame never contains the pair as
+    // a contiguous substring. Strip first, and expect the shared vocabulary
+    // (`↵` not `Enter`) from `overlay-contract.ts`.
+    const plain = stripAnsi(frame);
+    expect(plain).toContain('space toggle');
+    expect(plain).toContain('↵ confirm');
   });
 
   it('Space toggles the highlighted row without committing', async () => {

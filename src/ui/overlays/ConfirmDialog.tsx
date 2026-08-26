@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
+import { HintRow } from '../hints.js';
+import { isDismissKeyWithQ, KEY, HINT_MOVE, HINT_SELECT, HINT_CANCEL } from './overlay-contract.js';
 import type { RiskLevel } from '../../risk.js';
 import type { BlockOutcome } from '../../tools/types.js';
 import { permissionKeyLabel } from '../../tool-permissions.js';
@@ -102,11 +104,9 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   };
 
   useInput((input, key) => {
-    if (key.ctrl && input === 'c') {
-      props.onCancel();
-      return;
-    }
-    if (key.escape) {
+    // Gains `q` from the shared contract (#266) — this dialog has no text
+    // field, and `q` cancels, i.e. it resolves toward denial. Safe direction.
+    if (isDismissKeyWithQ(input, key)) {
       props.onCancel();
       return;
     }
@@ -185,11 +185,18 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         </Box>
       ) : null}
       <Text> </Text>
-      <Text dimColor>
-        {hasBreadth
-          ? '↑/↓ choose · ←/→ scope · Enter select · Esc cancel'
-          : '↑/↓ move · Enter select · Esc cancel'}
-      </Text>
+      <HintRow
+        hints={
+          hasBreadth
+            ? [
+                { key: KEY.arrows, label: 'choose' },
+                { key: KEY.leftRight, label: 'scope' },
+                HINT_SELECT,
+                HINT_CANCEL,
+              ]
+            : [HINT_MOVE, HINT_SELECT, HINT_CANCEL]
+        }
+      />
     </Box>
   );
 }

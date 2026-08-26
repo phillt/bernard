@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
+import { HintRow } from '../hints.js';
+import { isDismissKeyWithQ, KEY, HINT_MOVE, HINT_SELECT, HINT_CANCEL } from './overlay-contract.js';
 import type { MenuEntry, MenuItem, MenuOptions } from '../menu-types.js';
 import { MenuRow } from './MenuRow.js';
 
@@ -102,11 +104,7 @@ export function MenuOverlay({
   }, [signal, onCancel]);
 
   useInput((input, key) => {
-    if (key.ctrl && input === 'c') {
-      onCancel();
-      return;
-    }
-    if (key.escape || input === 'q') {
+    if (isDismissKeyWithQ(input, key)) {
       onCancel();
       return;
     }
@@ -212,11 +210,18 @@ export function MenuOverlay({
         />
       )}
       <Text> </Text>
-      <Text dimColor>
-        {multiSelect
-          ? '↑/↓ move · Space toggle · Enter confirm · Esc cancel'
-          : '↑/↓ move · Enter select · Esc cancel'}
-      </Text>
+      <HintRow
+        hints={
+          multiSelect
+            ? [
+                HINT_MOVE,
+                { key: KEY.space, label: 'toggle' },
+                { key: KEY.enter, label: 'confirm' },
+                HINT_CANCEL,
+              ]
+            : [HINT_MOVE, HINT_SELECT, HINT_CANCEL]
+        }
+      />
     </Box>
   );
 }

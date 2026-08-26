@@ -1,5 +1,6 @@
 import { Box, Text, useInput } from 'ink';
 import { HintRow } from '../hints.js';
+import { isDismissKey, KEY, HINT_CANCEL } from './overlay-contract.js';
 import { getThemeColors } from '../../theme.js';
 import type { ValuePromptOptions, ValueResult } from '../menu-types.js';
 import { useLineEditor } from '../use-line-editor.js';
@@ -30,13 +31,11 @@ export function TextInputOverlay({ options, onResolve }: TextInputOverlayProps) 
   const cancelOnEmpty = options.cancelOnEmpty !== false;
 
   useInput((input, key) => {
-    // Ctrl-C must run before the editor, which consumes other Ctrl combos
-    // (Ctrl-A / Ctrl-E move the cursor to start / end).
-    if (key.ctrl && input === 'c') {
-      onResolve({ cancelled: true });
-      return;
-    }
-    if (key.escape) {
+    // Dismiss keys run BEFORE the editor, which now claims six Ctrl letters
+    // (a/e/w/u/k/d) where it once claimed two — so ceding the keystream first
+    // is what keeps Ctrl-C from becoming editable text. Note this is the
+    // read-ONLY predicate's counterpart: `q` must reach the buffer here.
+    if (isDismissKey(input, key)) {
       onResolve({ cancelled: true });
       return;
     }
@@ -87,12 +86,7 @@ export function TextInputOverlay({ options, onResolve }: TextInputOverlayProps) 
         />
       )}
       <Text> </Text>
-      <HintRow
-        hints={[
-          { key: 'Enter', label: 'commit' },
-          { key: 'Esc', label: 'cancel' },
-        ]}
-      />
+      <HintRow hints={[{ key: KEY.enter, label: 'commit' }, HINT_CANCEL]} />
     </Box>
   );
 }

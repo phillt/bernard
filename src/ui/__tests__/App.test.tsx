@@ -102,6 +102,7 @@ import type { RAGStore } from '../../rag.js';
 import { promoteCandidate } from '../../candidate-bootstrap.js';
 import { CronStore } from '../../cron/store.js';
 import { generateText } from 'ai';
+import stripAnsi from 'strip-ansi';
 
 // ── Stub harness ────────────────────────────────────────────────────────
 
@@ -959,7 +960,7 @@ describe('<App> requestAskUser multi-select (#231)', () => {
     const frame = lastFrame()!;
     expect(frame).toContain('Any must-haves?');
     expect(frame).toContain('[ ] 1. Bunkhouse');
-    expect(frame).toContain('Space toggle');
+    expect(stripAnsi(frame)).toContain('space toggle');
     // toggle items 1 and 3, then commit
     stdin.write('1');
     await tick();

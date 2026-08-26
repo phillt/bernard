@@ -1,5 +1,7 @@
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
+import { HintRow } from '../hints.js';
+import { isDismissKeyWithQ, KEY, HINT_CLOSE } from './overlay-contract.js';
 
 interface HelpOverlayProps {
   onClose: () => void;
@@ -53,6 +55,26 @@ const HELP_ROWS: HelpRow[] = [
 ];
 
 /**
+ * The line-editor chords (#356), which work in the prompt and in every overlay
+ * text field. Listed here because they appeared in no hint surface at all —
+ * `HintBar` has no room and the footer legends cover only the active overlay's
+ * own keys, so an editing chord was undiscoverable short of reading the source.
+ *
+ * `Home`/`End` are deliberately absent: Ink surfaces both of their encodings as
+ * empty input with no key flags, so they cannot be bound through `useInput` at
+ * all (see #356). `Ctrl-A`/`Ctrl-E` stand in, and are line-wise rather than
+ * buffer-wise.
+ */
+const EDITING_ROWS: readonly HelpRow[] = [
+  { command: '⌥←  ⌥→', description: 'Move by word (also ⌃← / ⌃→, or ⌥B / ⌥F)' },
+  { command: '⌃A  ⌃E', description: 'Start / end of the current line' },
+  { command: '⌃W', description: 'Delete the word before the cursor (also ⌥⌫)' },
+  { command: '⌃U  ⌃K', description: 'Delete to start / end of the line' },
+  { command: '⌃D', description: 'Delete the character at the cursor' },
+  { command: '⇧↵', description: 'Insert a newline without submitting (also ⌃J)' },
+];
+
+/**
  * Read-only help screen rendered as an overlay. Replaces the legacy
  * `printHelp()` stdout dump. Esc / Enter / q close it; Shift-Tab cycling
  * still works because the active overlay = 'help' is treated like the
@@ -61,7 +83,9 @@ const HELP_ROWS: HelpRow[] = [
 export function HelpOverlay({ onClose }: HelpOverlayProps) {
   const colors = getThemeColors();
   useInput((input, key) => {
-    if (key.escape || key.return || input === 'q') onClose();
+    // Enter also closes: these are read-only, so there is nothing to commit
+    // and Enter reads as "acknowledge".
+    if (isDismissKeyWithQ(input, key) || key.return) onClose();
   });
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -74,11 +98,26 @@ export function HelpOverlay({ onClose }: HelpOverlayProps) {
           <Box width={20}>
             <Text color={colors.accent}>{row.command}</Text>
           </Box>
-          <Text dimColor>— {row.description}</Text>
+          <Text color={colors.muted}>— {row.description}</Text>
         </Box>
       ))}
       <Text> </Text>
-      <Text dimColor>Enter / Esc / q to close</Text>
+      <Text color={colors.accent} bold>
+        Editing
+      </Text>
+      <Text> </Text>
+      {EDITING_ROWS.map((row) => (
+        <Box key={row.command}>
+          <Box width={20}>
+            <Text color={colors.accent}>{row.command}</Text>
+          </Box>
+          <Text color={colors.muted}>— {row.description}</Text>
+        </Box>
+      ))}
+      <Text> </Text>
+      <HintRow
+        hints={[{ key: KEY.enter, label: 'close' }, HINT_CLOSE, { key: 'q', label: 'close' }]}
+      />
     </Box>
   );
 }
