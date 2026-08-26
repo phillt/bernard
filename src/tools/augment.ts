@@ -1,4 +1,5 @@
 import { type ToolProfileStore, classifyShellCommand, detectToolError } from '../tool-profiles.js';
+import { detectResultFailure } from '../tool-result-shape.js';
 import { debugLog } from '../logger.js';
 import { printInfo } from '../output.js';
 import { readBernardSource, readToolMeta, preserveMeta } from '../framework/tools/adapter.js';
@@ -683,21 +684,23 @@ export function augmentTools(
           // setImmediate below races with `provenance.clear()` at the start
           // of the next turn (back-to-back processInput, /task path, tests),
           // and a throw from detectToolError would silently skip it. We use
-          // a cheap inline check for the legacy error shapes instead of
-          // calling detectToolError synchronously, which would also break
-          // the "result returned before recording" invariant the legacy
-          // path tests assert.
-          const looksLikeError =
-            capturedResult !== null &&
-            typeof capturedResult === 'object' &&
-            ((capturedResult as Record<string, unknown>).is_error === true ||
-              'error' in (capturedResult as Record<string, unknown>));
+          // a cheap inline shape check instead of calling detectToolError
+          // synchronously, which would also break the "result returned before
+          // recording" invariant the legacy path tests assert.
+          // Shape-only, so it stays cheap and total on the hot path. It is the
+          // same predicate `detectToolError` falls back to (#360) — these two
+          // had drifted, and this one's `'error' in result` also misread
+          // `{error: null}` (what `structured-output`'s `nullableOptional`
+          // leaves behind) as a failure.
+          const looksLikeError = detectResultFailure(capturedResult) !== undefined;
           // Log a non-throwing failure as `status: 'error'` so the JSONL
           // reflects what the model actually received. The legacy path used
           // to always log `'ok'` whenever execute didn't throw, which made
           // wrapper sub-dispatch errors (which surface as `{is_error: true}`
           // or `{error: '...'}` envelopes — see `wrap-with-specialist.ts`)
-          // invisible at the augment-log layer.
+          // invisible at the augment-log layer. Since #360 this also covers
+          // MCP's `{content, isError: true}`, which is how a whole session of
+          // dead-socket calls logged as 254 consecutive `ok`s.
           debugLog('tool:execute:end', {
             tool: toolName,
             durationMs: Date.now() - execStartedAt,

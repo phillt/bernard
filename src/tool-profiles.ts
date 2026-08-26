@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { TOOL_PROFILES_DIR } from './paths.js';
 import { atomicWriteFileSync, seedOnce } from './fs-utils.js';
 import type { ToolErrorType } from './framework/tools/types.js';
+import { ERROR_SNIPPET_MAX, detectResultFailure } from './tool-result-shape.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -79,49 +80,23 @@ export type ToolErrorInfo = { isError: true; snippet: string } | { isError: fals
 export function detectToolError(toolName: string, result: unknown): ToolErrorInfo {
   if (result === null || result === undefined) return { isError: false };
 
-  // shell: { output: string, is_error: boolean }
-  if (toolName === 'shell' && typeof result === 'object') {
-    const r = result as Record<string, unknown>;
-    if (r.is_error === true) {
-      return { isError: true, snippet: String(r.output ?? '').slice(0, 200) };
-    }
-    return { isError: false };
-  }
-
-  // web_read: returns string starting with "Error:"
-  if (toolName === 'web_read' && typeof result === 'string') {
-    if (result.startsWith('Error:')) {
-      return { isError: true, snippet: result.slice(0, 200) };
-    }
-    return { isError: false };
-  }
-
-  // web_search: provider failures / no-result diagnostics are returned as strings
+  // web_search: a provider-chain failure is a plain diagnostic string with no
+  // structural marker, so it can only be recognized by its own convention.
+  // This is the one rule `detectResultFailure` cannot infer from shape.
   if (toolName === 'web_search' && typeof result === 'string') {
     if (result.startsWith('web_search returned no results')) {
-      return { isError: true, snippet: result.slice(0, 200) };
+      return { isError: true, snippet: result.slice(0, ERROR_SNIPPET_MAX) };
     }
     return { isError: false };
   }
 
-  // file_read_lines, file_edit_lines: { error: string }
-  if (
-    (toolName === 'file_read_lines' || toolName === 'file_edit_lines') &&
-    typeof result === 'object'
-  ) {
-    const r = result as Record<string, unknown>;
-    if (typeof r.error === 'string') {
-      return { isError: true, snippet: r.error.slice(0, 200) };
-    }
-    return { isError: false };
-  }
-
-  // Generic fallback for MCP and unknown tools: string starting with "Error"
-  if (typeof result === 'string' && result.startsWith('Error')) {
-    return { isError: true, snippet: result.slice(0, 200) };
-  }
-
-  return { isError: false };
+  // Everything else is decided by shape (#360). `shell`'s `{is_error}`,
+  // `file_*`'s `{error}`, MCP's `CallToolResult.isError`, and the historical
+  // "Error"-prefixed string are all recognized by the one shared predicate —
+  // previously each was a separate per-tool-name branch, which is why
+  // `file_write` and every MCP tool were silently uncovered.
+  const snippet = detectResultFailure(result);
+  return snippet === undefined ? { isError: false } : { isError: true, snippet };
 }
 
 // ---------------------------------------------------------------------------

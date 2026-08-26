@@ -1,4 +1,5 @@
 import { capSubagentResult } from './tools/result-cap.js';
+import { isMCPErrorResult } from './tool-result-shape.js';
 
 /**
  * MCP result-shaping mode (#297). `off` passes results through untouched;
@@ -84,6 +85,11 @@ function largestArrayKey(obj: Record<string, unknown>): string | undefined {
  * `maxChars - 40` alone therefore lets the encoded wrapper overshoot `maxChars`.
  * We measure the encoded size and shrink the preview budget until the whole
  * wrapper fits (bounded halving, floor 64) so the cap contract actually holds.
+ *
+ * A failing MCP result keeps its `isError` flag (#360). This path replaces the
+ * envelope wholesale, so without re-stamping it an over-budget failure would
+ * arrive downstream looking like an ordinary success — the truncation silently
+ * *upgrading* an error. The object path above clones and so keeps it already.
  */
 function truncatedWrapper(result: unknown, maxChars: number): Record<string, unknown> {
   let raw: string;
@@ -94,14 +100,17 @@ function truncatedWrapper(result: unknown, maxChars: number): Record<string, unk
     // never throw out of the shaping path into the MCP retry/reconnect catch.
     raw = String(result);
   }
-  let budget = Math.max(64, maxChars - 40);
-  let wrapper: Record<string, unknown> = {
+  const failed = isMCPErrorResult(result);
+  const build = (b: number): Record<string, unknown> => ({
     _truncated: true,
-    preview: capSubagentResult(raw, budget),
-  };
+    ...(failed ? { isError: true } : {}),
+    preview: capSubagentResult(raw, b),
+  });
+  let budget = Math.max(64, maxChars - 40);
+  let wrapper = build(budget);
   while (serializedSize(wrapper) > maxChars && budget > 64) {
     budget = Math.max(64, Math.floor(budget / 2));
-    wrapper = { _truncated: true, preview: capSubagentResult(raw, budget) };
+    wrapper = build(budget);
   }
   return wrapper;
 }
