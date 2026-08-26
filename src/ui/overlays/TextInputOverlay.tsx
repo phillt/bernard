@@ -2,7 +2,8 @@ import { Box, Text, useInput } from 'ink';
 import { HintRow } from '../hints.js';
 import { getThemeColors } from '../../theme.js';
 import type { ValuePromptOptions, ValueResult } from '../menu-types.js';
-import { useLineEditor, LineWithCursor } from '../use-line-editor.js';
+import { useLineEditor } from '../use-line-editor.js';
+import { BoundedLine, OVERLAY_RESERVED_COLUMNS } from '../BoundedLine.js';
 
 interface TextInputOverlayProps {
   options: ValuePromptOptions;
@@ -70,22 +71,21 @@ export function TextInputOverlay({ options, onResolve }: TextInputOverlayProps) 
           a model-written question; the custom-provider wizard passes 66
           characters). */}
       <Text color={colors.accent}>{options.label}:</Text>
-      <Text>
-        {showPlaceholder ? (
-          <Text>
-            <Text color={colors.muted}>{options.placeholder}</Text>
-            <Text color={colors.accent}>▎</Text>
-          </Text>
-        ) : (
-          <LineWithCursor
-            buffer={buffer}
-            cursor={editor.cursor}
-            showCursor
-            cursorColor={colors.accent}
-            cursorGlyph="▎"
-          />
-        )}
-      </Text>
+      {showPlaceholder ? (
+        <Text>
+          <Text color={colors.muted}>{options.placeholder}</Text>
+          <Text color={colors.accent}>▎</Text>
+        </Text>
+      ) : (
+        <BoundedLine
+          buffer={buffer}
+          cursor={editor.cursor}
+          showCursor
+          cursorColor={colors.accent}
+          cursorGlyph="▎"
+          reserveColumns={OVERLAY_RESERVED_COLUMNS}
+        />
+      )}
       <Text> </Text>
       <HintRow
         hints={[

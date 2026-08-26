@@ -4,6 +4,7 @@ import { createElement } from 'react';
 import { TextInputOverlay } from '../overlays/TextInputOverlay.js';
 import { ESC, ENTER, BACKSPACE, CTRL_C, CTRL_J, META_ENTER, ARROW_LEFT, tick } from './_keys.js';
 import { HINT_DIVIDER } from '../hints.js';
+import stripAnsi from 'strip-ansi';
 
 describe('<TextInputOverlay>', () => {
   it('renders label, initial value, and the commit hint', () => {
@@ -13,7 +14,10 @@ describe('<TextInputOverlay>', () => {
         onResolve: () => {},
       }),
     );
-    const frame = lastFrame() ?? '';
+    // Stripped, because `HintRow` colors the key token separately from its
+    // label — the literal substring never appears once ANSI is emitted. Same
+    // helper `hints.test.tsx` uses for the same reason.
+    const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('New profile name');
     expect(frame).toContain('staging');
     // Routed through the shared `HintRow` (#354) so the footer picks up theme
@@ -40,6 +44,23 @@ describe('<TextInputOverlay>', () => {
     const inputRow = lines.findIndex((l) => l.includes('the answer'));
     expect(labelRow).toBeGreaterThanOrEqual(0);
     expect(inputRow).toBeGreaterThan(labelRow);
+  });
+
+  it('bounds a long answer vertically, like the prompt (#355)', () => {
+    // The overlay shares `useLineEditor` with `Prompt`, so it had the same
+    // unbounded growth — measured at 85 rows for an 8k answer inside the same
+    // fixed-height modal frame. Reachable because `insert()` strips newlines
+    // for single-line editors, so a pasted answer is one long soft-wrapped
+    // line. Both now render through `BoundedLine`.
+    const { lastFrame } = render(
+      createElement(TextInputOverlay, {
+        options: { label: 'Answer', initialValue: 'x'.repeat(8000) },
+        onResolve: () => {},
+      }),
+    );
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame.split('\n').length).toBeLessThan(20);
+    expect(frame).toContain('▲');
   });
 
   it('renders placeholder when buffer is empty', () => {

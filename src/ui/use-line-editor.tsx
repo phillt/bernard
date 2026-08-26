@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Text, type Key } from 'ink';
 import { looksLikeMouseReport } from './mouse.js';
+import { lineStart, lineEnd, wordLeft, wordRight } from './line-geometry.js';
 
 /**
  * Shared single-line editing state for the REPL's text inputs (`Prompt`,
@@ -42,50 +43,23 @@ export interface LineEditorOptions {
 const CRLF_RE = /\r\n?/g;
 const NEWLINE_RE = /\n/g;
 
-/**
- * Boundary math for the readline-style bindings, exported as pure functions so
- * they can be unit-tested without rendering — the same split `mouse.ts`
- * (`parseSGRWheel`) and `viewer-util.ts` already use.
- *
- * All four are **line**-wise, not buffer-wise. The prompt is genuinely
- * multiline (Shift+Enter inserts `\n`), and readline semantics are per line;
- * for a single-line buffer — every `TextInputOverlay` caller — the two are
- * identical.
- */
-
-/** Index of the first character on the cursor's line. */
-export function lineStart(buffer: string, cursor: number): number {
-  if (cursor <= 0) return 0;
-  const nl = buffer.lastIndexOf('\n', cursor - 1);
-  return nl === -1 ? 0 : nl + 1;
+interface EditorState {
+  buffer: string;
+  cursor: number;
 }
-
-/** Index just past the last character on the cursor's line (before the `\n`). */
-export function lineEnd(buffer: string, cursor: number): number {
-  const nl = buffer.indexOf('\n', cursor);
-  return nl === -1 ? buffer.length : nl;
-}
-
-const WS_RE = /\s/;
 
 /**
- * Start of the word at or before the cursor: skip any whitespace immediately
- * behind it, then consume the run of non-whitespace. Matches the bash/readline
- * default (`backward-word`) and every editor's Alt-←.
+ * Removes `[from, to)` and leaves the cursor at `from` — what every kill and
+ * delete binding wants. Clamping here subsumes each binding's own bounds
+ * guard, which is why they were drifting: the four hand-written copies this
+ * replaces disagreed about the no-op test (`cursor >= length` in one,
+ * `from === cursor` in the others) purely because they were typed separately.
  */
-export function wordLeft(buffer: string, cursor: number): number {
-  let i = Math.min(cursor, buffer.length);
-  while (i > 0 && WS_RE.test(buffer[i - 1])) i--;
-  while (i > 0 && !WS_RE.test(buffer[i - 1])) i--;
-  return i;
-}
-
-/** End of the word at or after the cursor — the mirror of {@link wordLeft}. */
-export function wordRight(buffer: string, cursor: number): number {
-  let i = Math.max(0, cursor);
-  while (i < buffer.length && WS_RE.test(buffer[i])) i++;
-  while (i < buffer.length && !WS_RE.test(buffer[i])) i++;
-  return i;
+function deleteRange(s: EditorState, from: number, to: number): EditorState {
+  const f = Math.max(0, Math.min(from, s.buffer.length));
+  const t = Math.max(f, Math.min(to, s.buffer.length));
+  if (f === t) return s;
+  return { buffer: s.buffer.slice(0, f) + s.buffer.slice(t), cursor: f };
 }
 
 export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineEditor {
@@ -118,89 +92,53 @@ export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineE
 
   const handleKey = useCallback(
     (input: string, key: Key): boolean => {
-      // Word-wise movement. Alt-←/→ and Ctrl-←/→ are the same intent with
-      // different terminal encodings; Alt-B/F are the emacs spelling. Tested
-      // before the plain arrows, which would otherwise swallow the modified
-      // form (Ink sets `leftArrow` on both).
+      // `moveTo` / `deleteRange` keep every branch to one line, so the two
+      // load-bearing orderings below stay visible rather than buried in
+      // eight-line blocks. This is still one linear if-chain, not a dispatch
+      // table: the last two branches are not "apply a state transform", so a
+      // table would need an escape hatch for them AND would still have to be
+      // ordered — documenting the constraint no better than these comments.
+      const moveTo = (fn: (b: string, c: number) => number): true => {
+        setState((s) => ({ ...s, cursor: fn(s.buffer, s.cursor) }));
+        return true;
+      };
+      const editTo = (fn: (s: EditorState) => EditorState): true => {
+        setState(fn);
+        return true;
+      };
+
+      // ORDERING 1: word-wise before the plain arrows, which would otherwise
+      // swallow the modified form (Ink sets `leftArrow` on both). Alt-←/→ and
+      // Ctrl-←/→ are the same intent in different terminal encodings; Alt-B/F
+      // are the emacs spelling.
       const wordMod = key.meta || key.ctrl;
-      if (wordMod && (key.leftArrow || input === 'b')) {
-        setState((s) => ({ ...s, cursor: wordLeft(s.buffer, s.cursor) }));
-        return true;
-      }
-      if (wordMod && (key.rightArrow || input === 'f')) {
-        setState((s) => ({ ...s, cursor: wordRight(s.buffer, s.cursor) }));
-        return true;
-      }
-      if (key.leftArrow) {
-        setState((s) => ({ ...s, cursor: Math.max(0, s.cursor - 1) }));
-        return true;
-      }
-      if (key.rightArrow) {
-        setState((s) => ({ ...s, cursor: Math.min(s.buffer.length, s.cursor + 1) }));
-        return true;
-      }
+      if (wordMod && (key.leftArrow || input === 'b')) return moveTo(wordLeft);
+      if (wordMod && (key.rightArrow || input === 'f')) return moveTo(wordRight);
+      if (key.leftArrow) return moveTo((_b, c) => Math.max(0, c - 1));
+      if (key.rightArrow) return moveTo((b, c) => Math.min(b.length, c + 1));
       // Emacs-style Home/End — Ink's Key has no home/end flags, and the raw
       // Home/End escapes reach `useInput` as empty input with no flags at all,
       // so they are indistinguishable from noise and cannot be bound here.
-      if (key.ctrl && input === 'a') {
-        setState((s) => ({ ...s, cursor: lineStart(s.buffer, s.cursor) }));
-        return true;
-      }
-      if (key.ctrl && input === 'e') {
-        setState((s) => ({ ...s, cursor: lineEnd(s.buffer, s.cursor) }));
-        return true;
-      }
-      // Delete word before the cursor. MUST precede the backspace branch:
-      // Alt-Backspace arrives as `{delete: true, meta: true}`, so the plain
-      // backspace test below would consume it and delete a single character.
+      if (key.ctrl && input === 'a') return moveTo(lineStart);
+      if (key.ctrl && input === 'e') return moveTo(lineEnd);
+
+      // ORDERING 2: word-delete before plain backspace. Alt-Backspace arrives
+      // as `{delete: true, meta: true}`, so the backspace branch below would
+      // otherwise consume it and delete a single character.
       if ((key.ctrl && input === 'w') || (key.meta && (key.backspace || key.delete))) {
-        setState((s) => {
-          const from = wordLeft(s.buffer, s.cursor);
-          if (from === s.cursor) return s;
-          return { buffer: s.buffer.slice(0, from) + s.buffer.slice(s.cursor), cursor: from };
-        });
-        return true;
+        return editTo((s) => deleteRange(s, wordLeft(s.buffer, s.cursor), s.cursor));
       }
-      // Kill to line start / line end.
       if (key.ctrl && input === 'u') {
-        setState((s) => {
-          const from = lineStart(s.buffer, s.cursor);
-          if (from === s.cursor) return s;
-          return { buffer: s.buffer.slice(0, from) + s.buffer.slice(s.cursor), cursor: from };
-        });
-        return true;
+        return editTo((s) => deleteRange(s, lineStart(s.buffer, s.cursor), s.cursor));
       }
       if (key.ctrl && input === 'k') {
-        setState((s) => {
-          const to = lineEnd(s.buffer, s.cursor);
-          if (to === s.cursor) return s;
-          return { buffer: s.buffer.slice(0, s.cursor) + s.buffer.slice(to), cursor: s.cursor };
-        });
-        return true;
+        return editTo((s) => deleteRange(s, s.cursor, lineEnd(s.buffer, s.cursor)));
       }
       // Forward delete (the character AT the cursor), unlike backspace below.
-      if (key.ctrl && input === 'd') {
-        setState((s) => {
-          if (s.cursor >= s.buffer.length) return s;
-          return {
-            buffer: s.buffer.slice(0, s.cursor) + s.buffer.slice(s.cursor + 1),
-            cursor: s.cursor,
-          };
-        });
-        return true;
-      }
-      if (key.backspace || key.delete) {
-        // Both treated as backspace (delete before cursor) — terminals conflate
-        // the two in Ink, matching ink-text-input's convention.
-        setState((s) => {
-          if (s.cursor === 0) return s;
-          return {
-            buffer: s.buffer.slice(0, s.cursor - 1) + s.buffer.slice(s.cursor),
-            cursor: s.cursor - 1,
-          };
-        });
-        return true;
-      }
+      if (key.ctrl && input === 'd') return editTo((s) => deleteRange(s, s.cursor, s.cursor + 1));
+      // Backspace and delete are conflated by terminals in Ink, matching
+      // `ink-text-input`'s convention: both remove before the cursor.
+      if (key.backspace || key.delete) return editTo((s) => deleteRange(s, s.cursor - 1, s.cursor));
       if (key.ctrl || key.meta) return false;
       // Printable input (including multi-char paste): insert at the cursor.
       // `input` is empty for arrow/function keys, so those fall through.
@@ -218,111 +156,6 @@ export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineE
   );
 
   return { buffer: state.buffer, cursor: state.cursor, setBuffer, clear, insert, handleKey };
-}
-
-/**
- * One visual row after hard-wrapping: a half-open range of `buffer`.
- *
- * Carrying indices rather than strings is what makes the cursor rebase exact —
- * every row maps back to the slice it came from, so no counting of consumed
- * newlines is required.
- */
-export interface WrapRow {
-  start: number;
-  end: number;
-}
-
-/**
- * Hard-wraps `buffer` at `width`, preserving every character (#355).
- *
- * Deliberately NOT `wrapText` from `overlays/viewer-util.ts`: that word-wraps,
- * collapses runs of whitespace and re-injects indentation, all of which destroy
- * the character-index → (row, col) mapping an editor cursor depends on. Here a
- * row boundary is purely positional, so the mapping stays exact.
- *
- * Measures in UTF-16 code units, inheriting the limitation this module already
- * documents for `cursor`: a CJK or emoji-heavy line renders wider than it
- * measures. Acceptable for the same reason — it can misposition the window by
- * a row, and the caller's fixed-height box enforces the bound regardless.
- */
-export function wrapRows(buffer: string, width: number): WrapRow[] {
-  const w = Math.max(1, width);
-  const rows: WrapRow[] = [];
-  let base = 0;
-  for (const line of buffer.split('\n')) {
-    if (line.length === 0) {
-      rows.push({ start: base, end: base });
-    } else {
-      for (let i = 0; i < line.length; i += w) {
-        rows.push({ start: base + i, end: Math.min(base + i + w, base + line.length) });
-      }
-    }
-    base += line.length + 1; // + the '\n'
-  }
-  return rows;
-}
-
-/** Index into {@link wrapRows}' output of the row `cursor` sits on. */
-export function cursorRowIndex(rows: readonly WrapRow[], cursor: number): number {
-  for (let i = rows.length - 1; i >= 0; i--) {
-    if (cursor >= rows[i].start) return i;
-  }
-  return 0;
-}
-
-export interface BufferWindow {
-  /** The visible rows, pre-wrapped and newline-joined. */
-  text: string;
-  /** `cursor` rebased into {@link text}. */
-  cursor: number;
-  /** Rows hidden above / below — drives the scroll affordance. */
-  above: number;
-  below: number;
-}
-
-/**
- * Picks the `maxRows`-tall slice of `buffer` containing the cursor.
- *
- * The result is **pre-wrapped**: every line is at most `width`, so Ink has
- * nothing left to re-wrap and the row arithmetic cannot disagree with what is
- * rendered. That is the whole point of wrapping here instead of letting
- * `<Text>` do it — Ink word-wraps, which yields a different row count than the
- * one driving the window, and the cursor would drift out of view.
- *
- * Below the cap the buffer is returned untouched, so ordinary typing keeps
- * Ink's own word-wrapping and looks exactly as it did before.
- */
-export function windowBuffer(
-  buffer: string,
-  cursor: number,
-  width: number,
-  maxRows: number,
-): BufferWindow {
-  const cap = Math.max(1, maxRows);
-  const rows = wrapRows(buffer, width);
-  if (rows.length <= cap) return { text: buffer, cursor, above: 0, below: 0 };
-
-  // Keep the cursor on the last visible row once scrolled: predictable, and it
-  // needs no offset state (this is an input, not a free-scrolling viewport).
-  const cRow = cursorRowIndex(rows, cursor);
-  const offset = Math.min(Math.max(0, cRow - cap + 1), rows.length - cap);
-  const visible = rows.slice(offset, offset + cap);
-
-  let text = '';
-  let rebased = 0;
-  for (let i = 0; i < visible.length; i++) {
-    const r = visible[i];
-    if (i > 0) text += '\n';
-    if (cursor >= r.start && cursor <= r.end) rebased = text.length + (cursor - r.start);
-    text += buffer.slice(r.start, r.end);
-  }
-
-  return {
-    text,
-    cursor: rebased,
-    above: offset,
-    below: rows.length - offset - cap,
-  };
 }
 
 interface LineWithCursorProps {

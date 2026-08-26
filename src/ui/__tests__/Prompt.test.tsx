@@ -516,18 +516,13 @@ describe('<Prompt> dynamic slash commands (routines/tasks)', () => {
       expect(frame).not.toContain('▼');
     });
 
-    it('caps a long buffer and keeps the cursor line visible', async () => {
+    it('caps a long buffer, keeps the cursor visible, and says what is hidden', async () => {
       const frame = await typeLines(30);
       // The last line — where the cursor is, i.e. what you are typing — must
       // be on screen. That is the whole bug.
       expect(frame).toContain('line29');
       // …and the earliest ones must not be, or nothing was bounded.
       expect(frame).not.toContain('line0\n');
-      expect(frame).toContain('▲');
-    });
-
-    it('reports how many lines are hidden above', async () => {
-      const frame = await typeLines(30);
       // 30 rows, cap 8 → 22 hidden above, cursor pinned to the last row.
       expect(frame).toMatch(/▲ 22 more lines/);
     });

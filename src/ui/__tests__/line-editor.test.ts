@@ -6,7 +6,7 @@ import {
   wordRight,
   wrapRows,
   windowBuffer,
-} from '../use-line-editor.js';
+} from '../line-geometry.js';
 
 /**
  * Boundary math for the readline bindings (#356). Pure functions, so these
