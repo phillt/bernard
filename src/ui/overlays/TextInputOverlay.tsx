@@ -1,7 +1,7 @@
 import { Box, Text, useInput } from 'ink';
-import { HintRow } from '../hints.js';
-import { isDismissKey, KEY, HINT_CANCEL } from './overlay-contract.js';
+import { isDismissKey } from './overlay-contract.js';
 import { getThemeColors } from '../../theme.js';
+import { HintRow, KEY, HINT_CANCEL } from '../hints.js';
 import type { ValuePromptOptions, ValueResult } from '../menu-types.js';
 import { useLineEditor } from '../use-line-editor.js';
 import { BoundedLine, OVERLAY_RESERVED_COLUMNS } from '../BoundedLine.js';

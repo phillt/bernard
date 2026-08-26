@@ -4,6 +4,7 @@ import { MenuRow } from './MenuRow.js';
 import { HintRow, type KeyHint } from '../hints.js';
 import { getThemeColors } from '../../theme.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
+import { isCtrlC } from './overlay-contract.js';
 
 /** One pre-rendered visual row. `node` MUST occupy exactly one terminal line. */
 export interface OverlayLine {
@@ -123,7 +124,7 @@ export function ViewerShell({
     // viewer can spend Esc on "back one level", but there must still be one
     // key that always leaves — otherwise the only exit is a level-by-level
     // walk back out.
-    if (key.ctrl && input === 'c') {
+    if (isCtrlC(input, key)) {
       onClose();
       return;
     }

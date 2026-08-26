@@ -1,5 +1,8 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { createElement } from 'react';
+// Static import — its FORCE_COLOR assignment must run before the dynamic
+// imports below construct Ink's chalk instance. See `_force-color.ts`.
+import { SGR_DIM, SGR_THEME_MUTED, restoreForceColor } from './_force-color.js';
 
 /**
  * Colour assertions for `MenuRow` (#320) — deliberately its own file.
@@ -15,23 +18,11 @@ import { createElement } from 'react';
  * Setting it inside a test, alongside the plain-text assertions, leaked colour
  * into them.
  */
-process.env.FORCE_COLOR = '3';
-const originalForceColor = process.env.FORCE_COLOR;
 const { render } = await import('ink-testing-library');
 const { MenuRow } = await import('../overlays/MenuRow.js');
 
-/** `colors.muted` is 'gray' in the default theme. Ink's `dimColor` is SGR 2. */
-const SGR_THEME_MUTED = '\u001b[90m';
-const SGR_DIM = '\u001b[2m';
-
 describe('<MenuRow> theming', () => {
-  // `process.env` is per-WORKER, not per-file, and vitest reuses workers across
-  // files — leaving this set makes every other Ink test in the same worker
-  // emit ANSI and fail its plain-text assertions.
-  afterAll(() => {
-    if (originalForceColor === undefined) delete process.env.FORCE_COLOR;
-    else process.env.FORCE_COLOR = originalForceColor;
-  });
+  afterAll(restoreForceColor);
 
   it('renders trailing text in the active theme, not raw dimColor', () => {
     const frame =

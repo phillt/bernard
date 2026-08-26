@@ -4,6 +4,7 @@ import { getThemeColors } from '../../theme.js';
 import type { MenuEntry, MenuItem } from '../menu-types.js';
 import { ViewerShell, type OverlayTab } from './ViewerShell.js';
 import { MenuRow } from './MenuRow.js';
+import { HINT_MOVE, HINT_SELECT, HINT_SWITCH_TAB, HINT_CLOSE } from '../hints.js';
 
 /** The settings tabs, in cycle order. `id` matches the `SettingsTab` union. */
 export type SettingsTab = 'options' | 'agent-options';
@@ -12,12 +13,7 @@ export const SETTINGS_TABS: readonly OverlayTab[] = [
   { id: 'agent-options', label: 'Agent options' },
 ];
 
-const KEY_HINTS = [
-  { key: '↑/↓', label: 'move' },
-  { key: '↵', label: 'select' },
-  { key: '⇧⇥', label: 'switch tab' },
-  { key: 'esc', label: 'close' },
-];
+const KEY_HINTS = [HINT_MOVE, HINT_SELECT, HINT_SWITCH_TAB, HINT_CLOSE];
 
 function isSection(entry: MenuEntry): entry is { type: 'section'; title: string } {
   return 'type' in entry && entry.type === 'section';

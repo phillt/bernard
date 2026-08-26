@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
-import { HintRow } from '../hints.js';
-import { isDismissKeyWithQ, KEY, HINT_SELECT } from './overlay-contract.js';
+import { HintRow, KEY, HINT_SELECT } from '../hints.js';
+import { isDismissKeyWithQ } from './overlay-contract.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 import { truncate } from '../../text.js';
 import { MenuRow } from './MenuRow.js';
@@ -72,7 +72,7 @@ export function ModelGridOverlay({
 
   useInput((input, key) => {
     if (items.length === 0) {
-      if (key.escape || (key.ctrl && input === 'c')) onCancel();
+      if (isDismissKeyWithQ(input, key)) onCancel();
       return;
     }
     if (isDismissKeyWithQ(input, key)) {

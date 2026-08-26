@@ -2,24 +2,11 @@ import { describe, it, expect } from 'vitest';
 import type { Key } from 'ink';
 import { isDismissKey, isDismissKeyWithQ } from '../overlays/overlay-contract.js';
 
-const key = (over: Partial<Key> = {}): Key =>
-  ({
-    upArrow: false,
-    downArrow: false,
-    leftArrow: false,
-    rightArrow: false,
-    pageDown: false,
-    pageUp: false,
-    return: false,
-    escape: false,
-    ctrl: false,
-    shift: false,
-    tab: false,
-    backspace: false,
-    delete: false,
-    meta: false,
-    ...over,
-  }) as Key;
+// The enumeration a fuller literal would carry buys nothing here: the cast
+// removes the type check, and both predicates test `=== true` explicitly, so
+// an absent field already reads false. A stale literal behind a cast would
+// still compile while looking authoritative.
+const key = (over: Partial<Key> = {}): Key => over as Key;
 
 /**
  * The keybinding contract (#266). Pure predicates, so the rules can be pinned

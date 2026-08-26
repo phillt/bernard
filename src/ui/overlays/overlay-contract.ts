@@ -1,5 +1,4 @@
 import type { Key } from 'ink';
-import type { KeyHint } from '../hints.js';
 
 /**
  * The one keybinding contract every overlay obeys (#266).
@@ -10,17 +9,37 @@ import type { KeyHint } from '../hints.js';
  * dropped by the other eight, including every Shift+Tab viewer. The rules:
  *
  * - **`Esc` always dismisses.** Already near-universal; unchanged.
- * - **`Ctrl-C` always dismisses.** The reflex for "get me out of here" should
- *   never depend on which overlay happens to be open.
+ * - **`Ctrl-C` exits the app, and does NOT reach these predicates in
+ *   production.** `render()` defaults to `exitOnCtrlC: true` and `src/index.ts`
+ *   passes no options, so Ink swallows Ctrl-C before dispatching to any
+ *   `useInput` — its source says so: *"If app is not supposed to exit on
+ *   Ctrl+C, then let input listener handle it"*. The clause below is kept
+ *   because `ink-testing-library` hardcodes `exitOnCtrlC: false`, so it is what
+ *   the tests exercise, and because it is the correct behaviour the moment that
+ *   default changes. But nothing here makes Ctrl-C close an overlay today, and
+ *   claiming otherwise would be a guarantee the codebase cannot honour — see
+ *   the `exitOnCtrlC` follow-up.
  * - **`q` dismisses surfaces with no text field.** It cannot be universal — a
  *   text field must be able to receive the character — so it is opt-in per
  *   overlay via {@link isDismissKeyWithQ} rather than folded into
  *   {@link isDismissKey}.
  */
 
+/**
+ * `Ctrl-C` alone. Exported because two callers need it *without* `Esc`:
+ * `ViewerShell` gates Esc on `escClosesViewer` (a drilled-in viewer spends Esc
+ * on "back one level") but must still close unconditionally on Ctrl-C, and
+ * `ModelGridOverlay`'s empty-list branch has no rows to cancel out of. Without
+ * this atom both hand-roll the comparison — which is what the module exists to
+ * stop.
+ */
+export function isCtrlC(input: string, key: Key): boolean {
+  return key.ctrl === true && input === 'c';
+}
+
 /** `Esc` or `Ctrl-C` — the two that dismiss every overlay, text fields included. */
 export function isDismissKey(input: string, key: Key): boolean {
-  return key.escape === true || (key.ctrl === true && input === 'c');
+  return key.escape === true || isCtrlC(input, key);
 }
 
 /**
@@ -38,34 +57,12 @@ export function isDismissKeyWithQ(input: string, key: Key): boolean {
 }
 
 /**
- * The shared hint vocabulary (#266).
+ * {@link isDismissKeyWithQ} plus `Enter`, for a purely informational surface.
  *
- * One spelling per key, because five coexisted: `Esc`/`esc`, `Enter`/`↵`,
- * `shift+tab`/`⇧⇥`, and `cancel`/`back`/`close` for the same physical key.
- * Lowercase glyph style wins because seven of the eight surfaces already
- * rendering through `HintRow` used it — the odd one out was `TextInputOverlay`,
- * which is converted here.
+ * `Enter` only closes where there is nothing to commit — on those screens it
+ * reads as "acknowledge", whereas anywhere else it means "commit the
+ * highlighted thing" and closing on it would discard a choice.
  */
-export const KEY = {
-  esc: 'esc',
-  enter: '↵',
-  shiftTab: '⇧⇥',
-  space: 'space',
-  arrows: '↑/↓',
-  arrowsAll: '←/→/↑/↓',
-  leftRight: '←/→',
-  pageKeys: '⇞⇟',
-} as const;
-
-/** `esc close` — the dismiss hint for a read-only surface. */
-export const HINT_CLOSE: KeyHint = { key: KEY.esc, label: 'close' };
-/** `esc cancel` — the dismiss hint for a surface that commits something. */
-export const HINT_CANCEL: KeyHint = { key: KEY.esc, label: 'cancel' };
-/** `⇧⇥ switch tab` — the viewer tab-cycle hint. */
-export const HINT_SWITCH_TAB: KeyHint = { key: KEY.shiftTab, label: 'switch tab' };
-/** `↑/↓ move` — selection movement, as distinct from `scroll`. */
-export const HINT_MOVE: KeyHint = { key: KEY.arrows, label: 'move' };
-/** `↑/↓ scroll` — viewport movement, as distinct from `move`. */
-export const HINT_SCROLL: KeyHint = { key: KEY.arrows, label: 'scroll' };
-/** `↵ select` — commit the highlighted row. */
-export const HINT_SELECT: KeyHint = { key: KEY.enter, label: 'select' };
+export function isAcknowledgeKey(input: string, key: Key): boolean {
+  return isDismissKeyWithQ(input, key) || key.return === true;
+}

@@ -1,7 +1,7 @@
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
-import { HintRow } from '../hints.js';
-import { isDismissKeyWithQ, KEY, HINT_CLOSE } from './overlay-contract.js';
+import { HintRow, HINT_CLOSE_ANY } from '../hints.js';
+import { isAcknowledgeKey } from './overlay-contract.js';
 
 export interface InfoLine {
   text: string;
@@ -23,9 +23,7 @@ interface InfoOverlayProps {
 export function InfoOverlay({ title, lines, onClose }: InfoOverlayProps) {
   const colors = getThemeColors();
   useInput((input, key) => {
-    // Enter also closes: these are read-only, so there is nothing to commit
-    // and Enter reads as "acknowledge".
-    if (isDismissKeyWithQ(input, key) || key.return) onClose();
+    if (isAcknowledgeKey(input, key)) onClose();
   });
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -39,9 +37,7 @@ export function InfoOverlay({ title, lines, onClose }: InfoOverlayProps) {
         </Text>
       ))}
       <Text> </Text>
-      <HintRow
-        hints={[{ key: KEY.enter, label: 'close' }, HINT_CLOSE, { key: 'q', label: 'close' }]}
-      />
+      <HintRow hints={[HINT_CLOSE_ANY]} />
     </Box>
   );
 }

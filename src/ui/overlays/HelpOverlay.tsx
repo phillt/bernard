@@ -1,7 +1,7 @@
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
-import { HintRow } from '../hints.js';
-import { isDismissKeyWithQ, KEY, HINT_CLOSE } from './overlay-contract.js';
+import { HintRow, HINT_CLOSE_ANY } from '../hints.js';
+import { isAcknowledgeKey } from './overlay-contract.js';
 
 interface HelpOverlayProps {
   onClose: () => void;
@@ -75,6 +75,16 @@ const EDITING_ROWS: readonly HelpRow[] = [
 ];
 
 /**
+ * One table, one renderer. The two lists were separate `.map()` blocks with
+ * byte-identical bodies — which had already cost something inside this change:
+ * the `dimColor` → theme-colour fix had to be typed twice.
+ */
+const SECTIONS: readonly { title: string; rows: readonly HelpRow[] }[] = [
+  { title: 'Commands', rows: HELP_ROWS },
+  { title: 'Editing', rows: EDITING_ROWS },
+];
+
+/**
  * Read-only help screen rendered as an overlay. Replaces the legacy
  * `printHelp()` stdout dump. Esc / Enter / q close it; Shift-Tab cycling
  * still works because the active overlay = 'help' is treated like the
@@ -83,41 +93,28 @@ const EDITING_ROWS: readonly HelpRow[] = [
 export function HelpOverlay({ onClose }: HelpOverlayProps) {
   const colors = getThemeColors();
   useInput((input, key) => {
-    // Enter also closes: these are read-only, so there is nothing to commit
-    // and Enter reads as "acknowledge".
-    if (isDismissKeyWithQ(input, key) || key.return) onClose();
+    if (isAcknowledgeKey(input, key)) onClose();
   });
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text color={colors.accent} bold>
-        Commands
-      </Text>
-      <Text> </Text>
-      {HELP_ROWS.map((row) => (
-        <Box key={row.command}>
-          <Box width={20}>
-            <Text color={colors.accent}>{row.command}</Text>
-          </Box>
-          <Text color={colors.muted}>— {row.description}</Text>
+      {SECTIONS.map((section) => (
+        <Box key={section.title} flexDirection="column">
+          <Text color={colors.accent} bold>
+            {section.title}
+          </Text>
+          <Text> </Text>
+          {section.rows.map((row) => (
+            <Box key={row.command}>
+              <Box width={20}>
+                <Text color={colors.accent}>{row.command}</Text>
+              </Box>
+              <Text color={colors.muted}>— {row.description}</Text>
+            </Box>
+          ))}
+          <Text> </Text>
         </Box>
       ))}
-      <Text> </Text>
-      <Text color={colors.accent} bold>
-        Editing
-      </Text>
-      <Text> </Text>
-      {EDITING_ROWS.map((row) => (
-        <Box key={row.command}>
-          <Box width={20}>
-            <Text color={colors.accent}>{row.command}</Text>
-          </Box>
-          <Text color={colors.muted}>— {row.description}</Text>
-        </Box>
-      ))}
-      <Text> </Text>
-      <HintRow
-        hints={[{ key: KEY.enter, label: 'close' }, HINT_CLOSE, { key: 'q', label: 'close' }]}
-      />
+      <HintRow hints={[HINT_CLOSE_ANY]} />
     </Box>
   );
 }
