@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { ModelGridOverlay } from '../overlays/ModelGridOverlay.js';
+import stripAnsi from 'strip-ansi';
 import {
   ESC,
   ENTER,
@@ -164,7 +165,8 @@ describe('<ModelGridOverlay>', () => {
   it('renders the keymap hint line', () => {
     const { lastFrame } = mountGrid({});
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('Enter');
-    expect(frame).toContain('Esc');
+    const plain = stripAnsi(frame);
+    expect(plain).toContain('↵ select');
+    expect(plain).toContain('esc back');
   });
 });

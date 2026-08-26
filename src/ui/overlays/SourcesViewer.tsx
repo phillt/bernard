@@ -10,6 +10,15 @@ import type { KeyHint } from '../hints.js';
 import { MenuRow, MENU_MARKER } from './MenuRow.js';
 import { VIEWER_TABS } from './viewer-tabs.js';
 import { navDelta, clamp, clampOffset, listPosition, wrapText } from './viewer-util.js';
+import {
+  KEY,
+  HINT_MOVE,
+  HINT_SCROLL,
+  HINT_SWITCH_TAB,
+  HINT_CLOSE,
+  HINT_BACK,
+  HINT_BACK_TO_LIST,
+} from '../hints.js';
 
 interface SourcesViewerProps {
   agent: Agent;
@@ -163,12 +172,7 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
         tabs={VIEWER_TABS}
         activeTab="sources"
         position={position}
-        keyHints={[
-          { key: '↑/↓', label: 'move' },
-          { key: '↵', label: 'open' },
-          { key: '⇧⇥', label: 'switch tab' },
-          { key: 'esc', label: 'close' },
-        ]}
+        keyHints={[HINT_MOVE, { key: KEY.enter, label: 'open' }, HINT_SWITCH_TAB, HINT_CLOSE]}
         onClose={onClose}
         onCycleTab={onCycleTab}
       >
@@ -206,16 +210,12 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
       : listPosition(srcOffset, bodyRows, sources.length);
   const keyHints: KeyHint[] =
     focus === 'content'
-      ? [
-          { key: '↑/↓', label: 'scroll' },
-          { key: 'esc/←', label: 'back to list' },
-          { key: '⇧⇥', label: 'switch tab' },
-        ]
+      ? [HINT_SCROLL, HINT_BACK_TO_LIST, HINT_SWITCH_TAB]
       : [
-          { key: '↑/↓', label: 'move' },
+          HINT_MOVE,
           ...(contentOverflows ? [{ key: '→', label: 'read' }] : []),
-          { key: 'esc/←', label: 'back' },
-          { key: '⇧⇥', label: 'switch tab' },
+          HINT_BACK,
+          HINT_SWITCH_TAB,
         ];
 
   return (

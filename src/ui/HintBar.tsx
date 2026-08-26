@@ -1,5 +1,5 @@
 import { Box } from 'ink';
-import { HintRow, type KeyHint } from './hints.js';
+import { HintRow, KEY, HINT_CLOSE, type KeyHint } from './hints.js';
 
 interface HintBarProps {
   busy: boolean;
@@ -26,23 +26,23 @@ export function HintBar({ busy, overlayActive, slashActive, scrollable }: HintBa
 
 function pickHints(state: HintBarProps): KeyHint[] {
   if (state.overlayActive) {
-    return [{ key: 'esc', label: 'close' }];
+    return [HINT_CLOSE];
   }
   if (state.busy) {
-    return [{ key: 'esc', label: 'interrupt' }];
+    return [{ key: KEY.esc, label: 'interrupt' }];
   }
   if (state.slashActive) {
     return [
-      { key: '↑↓', label: 'select' },
+      { key: KEY.arrows, label: 'select' },
       { key: 'tab', label: 'complete' },
-      { key: '↵', label: 'run' },
+      { key: KEY.enter, label: 'run' },
     ];
   }
   const idle: KeyHint[] = [
     { key: '/', label: 'commands' },
-    { key: 'shift+tab', label: 'status' },
+    { key: KEY.shiftTab, label: 'status' },
   ];
   // In full-screen the transcript scrolls in-app (no native scrollback).
-  if (state.scrollable) idle.push({ key: '⇞⇟', label: 'scroll' });
+  if (state.scrollable) idle.push({ key: KEY.pageKeys, label: 'scroll' });
   return idle;
 }

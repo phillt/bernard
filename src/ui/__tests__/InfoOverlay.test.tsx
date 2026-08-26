@@ -3,6 +3,7 @@ import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { InfoOverlay, type InfoLine } from '../overlays/InfoOverlay.js';
 import { ESC, ENTER, tick } from './_keys.js';
+import stripAnsi from 'strip-ansi';
 
 const SAMPLE_LINES: InfoLine[] = [
   { text: 'first line' },
@@ -24,7 +25,11 @@ describe('<InfoOverlay>', () => {
     expect(frame).toContain('first line');
     expect(frame).toContain('second line');
     expect(frame).toContain('third line');
-    expect(frame).toContain('Enter / Esc / q to close');
+    // Was `Enter / Esc / q to close` — a third separator style (` / `) and a
+    // third casing. Now the shared `HintRow` vocabulary (#266).
+    // One compound entry rather than three rows each saying "close" — the
+    // `↑/↓`-style idiom this codebase already uses for multi-key hints.
+    expect(stripAnsi(frame)).toContain('↵/esc/q close');
   });
 
   it('closes on Esc', async () => {

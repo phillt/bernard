@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
+import { HintRow, KEY, HINT_SELECT } from '../hints.js';
+import { isDismissKeyWithQ } from './overlay-contract.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 import { truncate } from '../../text.js';
 import { MenuRow } from './MenuRow.js';
@@ -70,14 +72,10 @@ export function ModelGridOverlay({
 
   useInput((input, key) => {
     if (items.length === 0) {
-      if (key.escape || (key.ctrl && input === 'c')) onCancel();
+      if (isDismissKeyWithQ(input, key)) onCancel();
       return;
     }
-    if (key.ctrl && input === 'c') {
-      onCancel();
-      return;
-    }
-    if (key.escape || input === 'q') {
+    if (isDismissKeyWithQ(input, key)) {
       onCancel();
       return;
     }
@@ -145,10 +143,14 @@ export function ModelGridOverlay({
         ))}
       </Box>
       <Text> </Text>
-      <Text dimColor>
-        ←/→/↑/↓ move · Enter select · Esc back
-        {currentItem !== undefined ? ' · * = current' : ''}
-      </Text>
+      <HintRow
+        hints={[
+          { key: KEY.arrowsAll, label: 'move' },
+          HINT_SELECT,
+          { key: KEY.esc, label: 'back' },
+          ...(currentItem !== undefined ? [{ key: '*', label: '= current' }] : []),
+        ]}
+      />
     </Box>
   );
 }

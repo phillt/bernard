@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
+import { HintRow, KEY, HINT_MOVE, HINT_SELECT, HINT_CANCEL } from '../hints.js';
+import { isDismissKeyWithQ } from './overlay-contract.js';
 import type { MenuEntry, MenuItem, MenuOptions } from '../menu-types.js';
 import { MenuRow } from './MenuRow.js';
 
@@ -57,7 +59,7 @@ function isSection(entry: MenuEntry): entry is { type: 'section'; title: string 
  *   - ↑/↓ moves the highlight (sections are skipped)
  *   - digits 1-9 commit the matching item immediately
  *   - Enter commits the highlighted item
- *   - Esc / q / Ctrl-C cancel
+ *   - Esc / q cancel (Ctrl-C exits the app — see `overlay-contract.ts`)
  *
  * Section dividers from `MenuEntry` are rendered as muted headers between
  * items, never selectable. `options.headerLines` renders above the title so
@@ -102,11 +104,7 @@ export function MenuOverlay({
   }, [signal, onCancel]);
 
   useInput((input, key) => {
-    if (key.ctrl && input === 'c') {
-      onCancel();
-      return;
-    }
-    if (key.escape || input === 'q') {
+    if (isDismissKeyWithQ(input, key)) {
       onCancel();
       return;
     }
@@ -212,11 +210,18 @@ export function MenuOverlay({
         />
       )}
       <Text> </Text>
-      <Text dimColor>
-        {multiSelect
-          ? '↑/↓ move · Space toggle · Enter confirm · Esc cancel'
-          : '↑/↓ move · Enter select · Esc cancel'}
-      </Text>
+      <HintRow
+        hints={[
+          HINT_MOVE,
+          ...(multiSelect
+            ? [
+                { key: KEY.space, label: 'toggle' },
+                { key: KEY.enter, label: 'confirm' },
+              ]
+            : [HINT_SELECT]),
+          HINT_CANCEL,
+        ]}
+      />
     </Box>
   );
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
+import stripAnsi from 'strip-ansi';
 import { createElement } from 'react';
 import { ConfirmDialog } from '../overlays/ConfirmDialog.js';
 import type { BreadthOption } from '../../permissions/breadth.js';
@@ -403,7 +404,9 @@ describe('<ConfirmDialog>', () => {
       await tick();
       const frame = lastFrame() ?? '';
       expect(frame).toContain('Will allow: `touch x` for this profile');
-      expect(frame).toContain('←/→ scope');
+      // Stripped: the footer routes through `HintRow` (#266), which colors the
+      // key token separately from its label.
+      expect(stripAnsi(frame)).toContain('←/→ scope');
     });
 
     it('arrows are inert and no profile row renders when breadthOptions is absent', async () => {

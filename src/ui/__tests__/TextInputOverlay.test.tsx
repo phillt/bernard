@@ -24,7 +24,7 @@ describe('<TextInputOverlay>', () => {
     // colors instead of raw `dimColor` — same defect fixed for MenuRow in
     // #320. That brings the shared `HINT_DIVIDER` spacing with it, so the
     // separator is built from the constant rather than spelled out here.
-    expect(frame).toContain(`Enter commit${HINT_DIVIDER}Esc cancel`);
+    expect(frame).toContain(`↵ commit${HINT_DIVIDER}esc cancel`);
   });
 
   it('stacks the label above the input so a long answer can wrap (#354)', () => {

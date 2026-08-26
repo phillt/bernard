@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Box, useInput } from 'ink';
 import { ViewerShell, viewerViewport, type OverlayLine, type OverlayTab } from './ViewerShell.js';
+import { HINT_SCROLL, HINT_SWITCH_TAB, HINT_CLOSE } from '../hints.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 
 export type { OverlayLine, OverlayTab } from './ViewerShell.js';
@@ -71,11 +72,7 @@ export function ScrollableOverlay({
       tabs={tabs}
       activeTab={activeTab}
       position={position}
-      keyHints={[
-        { key: '↑/↓', label: 'scroll' },
-        { key: '⇧⇥', label: 'switch tab' },
-        { key: 'esc', label: 'close' },
-      ]}
+      keyHints={[HINT_SCROLL, HINT_SWITCH_TAB, HINT_CLOSE]}
       onClose={onClose}
       onCycleTab={onCycleTab}
     >
