@@ -389,6 +389,18 @@ function extractTextFromContent(content: import('ai').CoreMessage['content']): s
  * label may be custom via `otherLabel`) or any `OTHER_RE`-matching label as the
  * hatch. The matching selection routes to a free-text follow-up.
  */
+/**
+ * A model-written question is a *header*, not a field label (#354). Passing it
+ * as `label` put a full sentence on the input's own row; the choice path
+ * already does the right thing with `requestMenu(entries, { title: q.question })`.
+ *
+ * `headerLines` entries render as plain `<Text>` in a column, which Ink
+ * soft-wraps on its own — so no explicit wrapping is needed here.
+ */
+function askUserPrompt(question: string): ValuePromptOptions {
+  return { label: 'Your answer', headerLines: [question] };
+}
+
 function buildChoiceMenu(q: AskUserQuestion): {
   entries: MenuEntry[];
   isHatch: (item: MenuItem) => boolean;
@@ -3234,7 +3246,7 @@ export function App({
 
       // Free-text question (no choices) — prompt with TextInputOverlay.
       if (!q.choices || q.choices.length === 0) {
-        const result = await requestTextInput({ label: q.question });
+        const result = await requestTextInput(askUserPrompt(q.question));
         if (result.cancelled) return { cancelled: true, answered: answers };
         answers.push(result.raw.trim());
         continue;
@@ -3253,7 +3265,7 @@ export function App({
         if (result.cancelled) return { cancelled: true, answered: answers };
         const picked = result.items.filter((item) => !isHatch(item)).map((item) => item.label);
         if (result.items.some(isHatch)) {
-          const free = await requestTextInput({ label: q.question });
+          const free = await requestTextInput(askUserPrompt(q.question));
           if (free.cancelled) return { cancelled: true, answered: answers };
           const typed = free.raw.trim();
           if (typed) picked.push(typed);
@@ -3267,7 +3279,7 @@ export function App({
 
       if (isHatch(result.item)) {
         // User picked "Other" — gather free-form text.
-        const free = await requestTextInput({ label: q.question });
+        const free = await requestTextInput(askUserPrompt(q.question));
         if (free.cancelled) return { cancelled: true, answered: answers };
         answers.push(free.raw.trim());
       } else {

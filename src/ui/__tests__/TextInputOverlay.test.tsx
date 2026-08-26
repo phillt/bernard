@@ -3,6 +3,7 @@ import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { TextInputOverlay } from '../overlays/TextInputOverlay.js';
 import { ESC, ENTER, BACKSPACE, CTRL_C, CTRL_J, META_ENTER, ARROW_LEFT, tick } from './_keys.js';
+import { HINT_DIVIDER } from '../hints.js';
 
 describe('<TextInputOverlay>', () => {
   it('renders label, initial value, and the commit hint', () => {
@@ -15,7 +16,30 @@ describe('<TextInputOverlay>', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('New profile name');
     expect(frame).toContain('staging');
-    expect(frame).toContain('Enter commit · Esc cancel');
+    // Routed through the shared `HintRow` (#354) so the footer picks up theme
+    // colors instead of raw `dimColor` — same defect fixed for MenuRow in
+    // #320. That brings the shared `HINT_DIVIDER` spacing with it, so the
+    // separator is built from the constant rather than spelled out here.
+    expect(frame).toContain(`Enter commit${HINT_DIVIDER}Esc cancel`);
+  });
+
+  it('stacks the label above the input so a long answer can wrap (#354)', () => {
+    // As row siblings, label and input were separate flex items and text could
+    // not reflow across the boundary — a long answer ran off the right edge.
+    // `ask_user` passes a model-written question as the label, which is the
+    // pathological case.
+    const label = 'Which of the following deployment targets should we use for this rollout';
+    const { lastFrame } = render(
+      createElement(TextInputOverlay, {
+        options: { label, initialValue: 'the answer' },
+        onResolve: () => {},
+      }),
+    );
+    const lines = (lastFrame() ?? '').split('\n');
+    const labelRow = lines.findIndex((l) => l.includes(label.slice(0, 20)));
+    const inputRow = lines.findIndex((l) => l.includes('the answer'));
+    expect(labelRow).toBeGreaterThanOrEqual(0);
+    expect(inputRow).toBeGreaterThan(labelRow);
   });
 
   it('renders placeholder when buffer is empty', () => {

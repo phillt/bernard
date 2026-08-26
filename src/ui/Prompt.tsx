@@ -2,7 +2,8 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { SlashHints, matchSlashCommands, type SlashCommand } from './SlashHints.js';
-import { useLineEditor, LineWithCursor } from './use-line-editor.js';
+import { useLineEditor, LineWithCursor, windowBuffer } from './use-line-editor.js';
+import { useDimensionsCtx } from './DimensionsContext.js';
 
 interface PromptProps {
   /** When true, suppress key handling — used while an overlay is open. */
@@ -73,6 +74,23 @@ export function Prompt({
   // buffer (not on the history rail).
   const [historyCursor, setHistoryCursor] = useState<number | null>(null);
   const colors = getThemeColors();
+
+  // Bound the input's height (#355). The full-screen frame is pinned to
+  // `height={rows}`, so an unbounded prompt just clips — with no scroll and no
+  // guarantee the cursor is inside the visible part, which is exactly "I can't
+  // see what I'm typing". `TranscriptViewport` flex-grows, so capping here is
+  // enough: the transcript yields the space back automatically.
+  //
+  // Read from the context, not `useStdout` — under the test renderer these
+  // disagree (context falls back to 80 columns, ink-testing-library's stdout
+  // reports 100), and the context is the source every other component uses.
+  const { columns, rows } = useDimensionsCtx();
+  // Usable width: the frame's paddingX={2}, this box's round border, the input
+  // row's paddingX={1}, and the '› ' prefix. Same subtraction ContextViewer
+  // documents at its top.
+  const inputWidth = Math.max(20, columns - 10);
+  const maxInputRows = Math.max(3, Math.min(10, Math.floor(rows / 3)));
+  const view = windowBuffer(buffer, editor.cursor, inputWidth, maxInputRows);
 
   // Computed every render rather than memoized: `dynamicCommands` is a stable
   // getter whose *returned* list changes when routines/tasks are added/removed,
@@ -221,18 +239,28 @@ export function Prompt({
         borderColor={disabled ? colors.muted : colors.accent}
       >
         {renderAbove}
-        <Box paddingX={1}>
+        <Box flexDirection="column" paddingX={1}>
+          {view.above > 0 && (
+            <Text
+              color={colors.muted}
+            >{`▲ ${view.above} more line${view.above === 1 ? '' : 's'}`}</Text>
+          )}
           <Text>
             <Text color={colors.accent} bold>
               {'› '}
             </Text>
             <LineWithCursor
-              buffer={buffer}
-              cursor={editor.cursor}
+              buffer={view.text}
+              cursor={view.cursor}
               showCursor={!disabled}
               cursorColor={colors.accent}
             />
           </Text>
+          {view.below > 0 && (
+            <Text
+              color={colors.muted}
+            >{`▼ ${view.below} more line${view.below === 1 ? '' : 's'}`}</Text>
+          )}
         </Box>
       </Box>
       <SlashHints matches={matches} selectedIndex={clampedIndex} />
