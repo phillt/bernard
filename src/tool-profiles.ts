@@ -74,15 +74,17 @@ export function classifyShellCommand(command: string): string {
 export type ToolErrorInfo = { isError: true; snippet: string } | { isError: false };
 
 /**
- * Detects whether a tool's return value indicates an error. Each tool has a
- * different error shape so we normalize them into a single discriminated union.
+ * Adapts the shared structural predicate (`detectResultFailure`) to the
+ * `ToolErrorInfo` union, plus `web_search`'s name-specific string convention —
+ * the one failure with no structural marker to read.
  */
 export function detectToolError(toolName: string, result: unknown): ToolErrorInfo {
-  if (result === null || result === undefined) return { isError: false };
-
   // web_search: a provider-chain failure is a plain diagnostic string with no
   // structural marker, so it can only be recognized by its own convention.
-  // This is the one rule `detectResultFailure` cannot infer from shape.
+  // This is the one rule `detectResultFailure` cannot infer from shape — and
+  // the reason `augment`'s inline check, which reads shape only, still
+  // disagrees with this function for exactly this tool. The deeper fix is at
+  // the producer (have `web_search` return a marked shape); see #360.
   if (toolName === 'web_search' && typeof result === 'string') {
     if (result.startsWith('web_search returned no results')) {
       return { isError: true, snippet: result.slice(0, ERROR_SNIPPET_MAX) };

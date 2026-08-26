@@ -1,5 +1,5 @@
 import { capSubagentResult } from './tools/result-cap.js';
-import { isMCPErrorResult } from './tool-result-shape.js';
+import { isMCPErrorResult, isPlainObject } from './tool-result-shape.js';
 
 /**
  * MCP result-shaping mode (#297). `off` passes results through untouched;
@@ -28,10 +28,6 @@ function serializedSize(v: unknown): number {
   } catch {
     return Infinity;
   }
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return v !== null && typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype;
 }
 
 /**
@@ -100,17 +96,15 @@ function truncatedWrapper(result: unknown, maxChars: number): Record<string, unk
     // never throw out of the shaping path into the MCP retry/reconnect catch.
     raw = String(result);
   }
-  const failed = isMCPErrorResult(result);
-  const build = (b: number): Record<string, unknown> => ({
-    _truncated: true,
-    ...(failed ? { isError: true } : {}),
-    preview: capSubagentResult(raw, b),
-  });
   let budget = Math.max(64, maxChars - 40);
-  let wrapper = build(budget);
+  const wrapper: Record<string, unknown> = {
+    _truncated: true,
+    preview: capSubagentResult(raw, budget),
+  };
+  if (isMCPErrorResult(result)) wrapper.isError = true;
   while (serializedSize(wrapper) > maxChars && budget > 64) {
     budget = Math.max(64, Math.floor(budget / 2));
-    wrapper = build(budget);
+    wrapper.preview = capSubagentResult(raw, budget);
   }
   return wrapper;
 }

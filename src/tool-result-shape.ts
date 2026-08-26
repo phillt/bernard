@@ -35,7 +35,12 @@
 /** Max length of a returned error snippet, matching the historical cap. */
 export const ERROR_SNIPPET_MAX = 200;
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
+/**
+ * A JSON-ish record, not a class instance. Exported because `mcp-result-shaper`
+ * needs the same test and already imports this module — it had its own
+ * byte-identical copy, which is the drift this module exists to stop.
+ */
+export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && Object.getPrototypeOf(v) === Object.prototype;
 }
 
@@ -45,21 +50,43 @@ function nonEmptyString(v: unknown): string | undefined {
 }
 
 /**
- * Joins the `text` of an MCP `content` array. When `flaggedOnly`, keeps just
- * the entries that carry their own `isError: true` — some servers flag the
- * individual content item rather than the envelope, and in that case the
- * unflagged siblings are ordinary output that would dilute the snippet.
+ * The failure text of an MCP `content` array, in one bounded pass.
+ *
+ * Entries carrying their own `isError: true` win: when a server flags the
+ * individual item rather than the envelope, the unflagged siblings are
+ * ordinary output that would dilute the snippet. When nothing is flagged the
+ * whole content is the failure text.
+ *
+ * Both buckets stop growing at `limit` because the caller only ever keeps the
+ * first `limit` characters. Accumulating past it means concatenating the entire
+ * payload to throw all but 200 bytes away — for a full accessibility snapshot
+ * (reachable with `BERNARD_MCP_RESULT_SHAPING=off`, which leaves `content`
+ * uncapped) that is ~6 ms and a multi-megabyte transient, per failed call, on
+ * the path between a tool returning and its value reaching the model. The scan
+ * itself still visits every entry: a flagged entry may be last, and which
+ * bucket wins is not known until the array is exhausted.
  */
-function mcpContentText(content: unknown, flaggedOnly: boolean): string {
+function mcpFailureText(content: unknown, limit: number): string {
   if (!Array.isArray(content)) return '';
-  const parts: string[] = [];
+  const flagged: string[] = [];
+  const all: string[] = [];
+  let flaggedLen = 0;
+  let allLen = 0;
   for (const item of content) {
     if (!isPlainObject(item)) continue;
-    if (flaggedOnly && item.isError !== true) continue;
+    if (flaggedLen >= limit) break; // flagged already wins and is already full
     const text = nonEmptyString(item.text);
-    if (text) parts.push(text);
+    if (!text) continue;
+    if (item.isError === true) {
+      flagged.push(text);
+      flaggedLen += text.length + 1;
+    }
+    if (allLen < limit) {
+      all.push(text);
+      allLen += text.length + 1;
+    }
   }
-  return parts.join('\n');
+  return (flagged.length ? flagged : all).join('\n');
 }
 
 /**
@@ -98,22 +125,19 @@ export function isMCPErrorResult(result: unknown): boolean {
  * which is what `structured-output`'s `nullableOptional` leaves behind.
  */
 export function detectResultFailure(result: unknown): string | undefined {
-  if (result === null || result === undefined) return undefined;
-
   if (typeof result === 'string') {
     return result.startsWith('Error') ? result.slice(0, ERROR_SNIPPET_MAX) : undefined;
   }
 
+  // Covers null/undefined and class instances too, so no separate nullish guard.
   if (!isPlainObject(result)) return undefined;
 
   if (isMCPErrorResult(result)) {
-    // Prefer the flagged entries; fall back to the whole content when the
-    // envelope carried the flag and no individual entry did, then to a
-    // truncation wrapper's `preview`, then to a bare marker so the snippet is
-    // never empty (an empty snippet reads as success to `recordOutcome`).
+    // Falls back to a truncation wrapper's `preview`, then to a bare marker, so
+    // the snippet is never empty — an empty snippet reads as success to
+    // `recordOutcome`.
     const snippet =
-      mcpContentText(result.content, true) ||
-      mcpContentText(result.content, false) ||
+      mcpFailureText(result.content, ERROR_SNIPPET_MAX) ||
       nonEmptyString(result.preview) ||
       'MCP tool reported isError';
     return snippet.slice(0, ERROR_SNIPPET_MAX);

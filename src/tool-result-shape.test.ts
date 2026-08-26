@@ -71,6 +71,31 @@ describe('detectResultFailure', () => {
       expect(detectResultFailure({ content: [{ type: 'text', text: 'fine' }] })).toBeUndefined();
     });
 
+    it('prefers a flagged entry even when it is last in the array', () => {
+      // The scan cannot stop at the first unflagged entries — which bucket wins
+      // is not known until the array is exhausted.
+      const result = {
+        content: [
+          { type: 'text', text: 'noise one' },
+          { type: 'text', text: 'noise two' },
+          { type: 'text', text: 'the actual failure', isError: true },
+        ],
+      };
+      expect(detectResultFailure(result)).toBe('the actual failure');
+    });
+
+    it('bounds accumulation instead of joining the whole payload for 200 chars', () => {
+      // Two 5 MB entries: joining them costs ~6 ms and a multi-megabyte
+      // transient to then discard all but 200 bytes.
+      const big = 'x'.repeat(5_000_000);
+      const result = { content: [{ text: big }, { text: big }], isError: true };
+      const started = performance.now();
+      const snippet = detectResultFailure(result);
+      const elapsed = performance.now() - started;
+      expect(snippet).toHaveLength(200);
+      expect(elapsed).toBeLessThan(50);
+    });
+
     it('truncates a long snippet to 200 chars', () => {
       const result = { content: [{ type: 'text', text: 'x'.repeat(300) }], isError: true };
       expect(detectResultFailure(result)).toHaveLength(200);
@@ -135,20 +160,11 @@ describe('detectResultFailure', () => {
 });
 
 describe('isMCPErrorResult', () => {
+  // The rest of the matrix is covered through `detectResultFailure` above.
+  // This pins the one fact only the shaper depends on: the envelope test must
+  // not require a `content` array, or `mcp-result-shaper`'s truncation wrapper
+  // (which has no `content`) would stop reading as a failure after a round-trip.
   it('is true for an envelope flag with no content array', () => {
-    expect(isMCPErrorResult({ isError: true })).toBe(true);
-  });
-
-  it('is true for a flagged content entry', () => {
-    expect(isMCPErrorResult({ content: [{ text: 'x', isError: true }] })).toBe(true);
-  });
-
-  it('is false for a healthy result', () => {
-    expect(isMCPErrorResult({ content: [{ text: 'x' }], isError: false })).toBe(false);
-  });
-
-  it('is false for non-objects', () => {
-    expect(isMCPErrorResult('Error: nope')).toBe(false);
-    expect(isMCPErrorResult(null)).toBe(false);
+    expect(isMCPErrorResult({ _truncated: true, isError: true, preview: 'boom' })).toBe(true);
   });
 });

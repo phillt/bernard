@@ -14,6 +14,16 @@ import { detectResultFailure } from '../../tool-result-shape.js';
  * (reconnect/network) also come back as `status: 'error'` rather than throwing,
  * so the augment layer can record them deterministically.
  *
+ * **Currently unwired.** The live MCP path is `MCPManager.getTools()`
+ * (`src/mcp.ts`), which returns a raw object rather than a `ToolResult`, so MCP
+ * tools take `augmentTools`' *legacy* branch and never reach the envelope one —
+ * which is why #360 had to add shape detection downstream as well. Routing
+ * `getTools()` through this wrapper is the deeper fix: it would give MCP a
+ * typed `ToolErrorType` instead of `classifyError` re-parsing a message string,
+ * and would let the truncation-time `isError` re-stamp in `mcp-result-shaper`
+ * go away. That is an architectural change with its own blast radius, so this
+ * stays as the shape it should take rather than being deleted.
+ *
  * Pass the AI-SDK MCP `Tool` (already reconnect-wrapped by `MCPManager.getTools`)
  * plus the originating server name. The default `kind` is derived from the
  * tool's name suffix (`isReadOnlyMCPSuffix`): names ending in

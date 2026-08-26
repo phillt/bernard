@@ -291,11 +291,14 @@ describe('detectToolError', () => {
       }
     });
 
-    // #360: an MCP tool returns an object, never a string, so the old
-    // string-prefix fallback could never fire for one. Measured consequence on
-    // a real install: of 100 learned profiles, every MCP tool sat at 0 recorded
-    // errors — `open-browser-tab` at 84 successes / 0 errors across sessions
-    // where it demonstrably failed.
+    // #360: `detectToolError` is now a thin adapter over `detectResultFailure`,
+    // so the exhaustive shape matrix lives in `tool-result-shape.test.ts`.
+    // These pin the *delegation* — that the shared snippet reaches the
+    // `ToolErrorInfo` union — on the two shapes that were silently uncovered.
+    // An MCP tool returns an object, never a string, so the old string-prefix
+    // fallback could never fire for one: on a real install, of 100 learned
+    // profiles every MCP tool sat at 0 recorded errors, `open-browser-tab` at
+    // 84 successes / 0 errors across sessions where it demonstrably failed.
     it('returns error for an MCP result flagged on the envelope', () => {
       const result = detectToolError('open-browser-tab', {
         content: [{ type: 'text', text: 'WebSocket is not open' }],
@@ -312,14 +315,6 @@ describe('detectToolError', () => {
       expect(result).toEqual({ isError: true, snippet: 'ref 13 is a combobox' });
     });
 
-    it('returns isError: false for a healthy MCP result', () => {
-      const result = detectToolError('get-list-of-open-tabs', {
-        content: [{ type: 'text', text: 'tab id=22' }],
-        isError: false,
-      });
-      expect(result).toEqual({ isError: false });
-    });
-
     // #360: `file_write` (#342) returns the same `{error}` shape as
     // `file_edit_lines`, but only the latter two were named, so its failures
     // were never learned from.
@@ -328,12 +323,6 @@ describe('detectToolError', () => {
         error: 'Parent directory does not exist: /nope',
       });
       expect(result).toEqual({ isError: true, snippet: 'Parent directory does not exist: /nope' });
-    });
-
-    it('returns isError: false for a successful file_write', () => {
-      expect(detectToolError('file_write', { path: '/tmp/a', bytes: 12 })).toEqual({
-        isError: false,
-      });
     });
 
     it('does not treat "Error" prefix as error for shell tool (uses is_error field instead)', () => {

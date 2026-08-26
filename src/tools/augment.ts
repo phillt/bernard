@@ -1,5 +1,5 @@
 import { type ToolProfileStore, classifyShellCommand, detectToolError } from '../tool-profiles.js';
-import { detectResultFailure } from '../tool-result-shape.js';
+import { ERROR_SNIPPET_MAX, detectResultFailure } from '../tool-result-shape.js';
 import { debugLog } from '../logger.js';
 import { printInfo } from '../output.js';
 import { readBernardSource, readToolMeta, preserveMeta } from '../framework/tools/adapter.js';
@@ -253,8 +253,8 @@ const DENIED_LEGACY_RESULT = {
  * For tools that originated as {@link import('../framework/tools/types.js').BernardTool}
  * (detected via the `__bernardSource` side-channel attached by `toolToAISDK`),
  * error detection reads the envelope discriminator directly — no heuristics.
- * For legacy AI-SDK tools and MCP-wrapped tools, the historical
- * `detectToolError` heuristic path still applies.
+ * For legacy AI-SDK tools and MCP-wrapped tools, the shared structural
+ * `detectResultFailure` path applies instead.
  *
  * Does NOT modify tool descriptions, parameters, or any other field.
  *
@@ -609,7 +609,7 @@ export function augmentTools(
               envelope.status === 'error'
                 ? `${envelope.error.message}${envelope.error.snippet ? `\n${envelope.error.snippet}` : ''}`.slice(
                     0,
-                    200,
+                    ERROR_SNIPPET_MAX,
                   )
                 : undefined;
             setImmediate(() =>
@@ -683,15 +683,13 @@ export function augmentTools(
           // Evidence pointer (#141), synchronous: deferring this inside the
           // setImmediate below races with `provenance.clear()` at the start
           // of the next turn (back-to-back processInput, /task path, tests),
-          // and a throw from detectToolError would silently skip it. We use
-          // a cheap inline shape check instead of calling detectToolError
-          // synchronously, which would also break the "result returned before
-          // recording" invariant the legacy path tests assert.
-          // Shape-only, so it stays cheap and total on the hot path. It is the
-          // same predicate `detectToolError` falls back to (#360) — these two
-          // had drifted, and this one's `'error' in result` also misread
-          // `{error: null}` (what `structured-output`'s `nullableOptional`
-          // leaves behind) as a failure.
+          // and a throw from detectToolError would silently skip it. Recording
+          // must also stay asynchronous — the legacy path tests assert
+          // detectToolError has not run by the time execute returns — so the
+          // gate reads the shared structural predicate directly instead (#360).
+          // It replaces an inline `is_error === true || 'error' in result`,
+          // which knew nothing of MCP's `isError` and misread `{error: null}`
+          // (what `structured-output`'s `nullableOptional` leaves behind).
           const looksLikeError = detectResultFailure(capturedResult) !== undefined;
           // Log a non-throwing failure as `status: 'error'` so the JSONL
           // reflects what the model actually received. The legacy path used
