@@ -59,7 +59,7 @@ function isSection(entry: MenuEntry): entry is { type: 'section'; title: string 
  *   - ↑/↓ moves the highlight (sections are skipped)
  *   - digits 1-9 commit the matching item immediately
  *   - Enter commits the highlighted item
- *   - Esc / q / Ctrl-C cancel
+ *   - Esc / q cancel (Ctrl-C exits the app — see `overlay-contract.ts`)
  *
  * Section dividers from `MenuEntry` are rendered as muted headers between
  * items, never selectable. `options.headerLines` renders above the title so

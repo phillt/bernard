@@ -120,10 +120,12 @@ export function ViewerShell({
   const rule = '─'.repeat(Math.max(4, cols - 4));
 
   useInput((input, key) => {
-    // Ctrl-C closes unconditionally. `escClosesViewer` exists so a drilled-in
+    // Ctrl-C would close unconditionally — `escClosesViewer` exists so a drilled-in
     // viewer can spend Esc on "back one level", but there must still be one
     // key that always leaves — otherwise the only exit is a level-by-level
-    // walk back out.
+    // walk back out. In production it never fires: Ink's `exitOnCtrlC` default
+    // swallows Ctrl-C before `useInput` sees it, so this is exercised only by
+    // the test harness. See `overlay-contract.ts` and the #360 follow-up.
     if (isCtrlC(input, key)) {
       onClose();
       return;

@@ -13,7 +13,8 @@ interface TextInputOverlayProps {
 
 /**
  * Ink replacement for the readline `promptValue()` flow. Renders a labeled
- * input field with cursor; commits on Enter, cancels on Esc / Ctrl-C.
+ * input field with cursor; commits on Enter, cancels on Esc. (Ctrl-C exits
+ * the app rather than reaching here — see `overlay-contract.ts`.)
  *
  * Phase D (#215) seam: the legacy REPL called `promptValue(rl, ...)` for
  * every free-text mutation (new profile name, new specialist description,
@@ -31,10 +32,12 @@ export function TextInputOverlay({ options, onResolve }: TextInputOverlayProps) 
   const cancelOnEmpty = options.cancelOnEmpty !== false;
 
   useInput((input, key) => {
-    // Dismiss keys run BEFORE the editor, which now claims six Ctrl letters
+    // Dismiss runs BEFORE the editor, which now claims six Ctrl letters
     // (a/e/w/u/k/d) where it once claimed two — so ceding the keystream first
-    // is what keeps Ctrl-C from becoming editable text. Note this is the
-    // read-ONLY predicate's counterpart: `q` must reach the buffer here.
+    // is what keeps Esc from reaching the buffer.
+    //
+    // `isDismissKey`, not `isDismissKeyWithQ`: this is the one surface where a
+    // character can land in a buffer, so `q` has to stay typeable.
     if (isDismissKey(input, key)) {
       onResolve({ cancelled: true });
       return;
