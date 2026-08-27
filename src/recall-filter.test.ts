@@ -68,6 +68,13 @@ function makeRagStore(candidates: RAGSearchResultWithId[]) {
 
 const HISTORY: CoreMessage[] = [];
 
+/** Minimal MemoryStore stub — the curator only reads `getAllMemoryContents`. */
+function makeMemoryStore(entries: Record<string, string>) {
+  return {
+    getAllMemoryContents: () => new Map(Object.entries(entries)),
+  } as unknown as import('./memory.js').MemoryStore;
+}
+
 beforeEach(() => {
   generateTextMock.mockReset();
   clearLLMCache();
@@ -171,5 +178,109 @@ describe('recallFilter', () => {
     expect(result.status).toBe('filtered');
     if (result.status !== 'filtered') return;
     expect(result.facts.map((f) => f.fact)).toEqual(['fact one']);
+  });
+});
+
+describe('recallFilter — memory reconciliation (#371)', () => {
+  const MEMORY = {
+    'daily-blaze-no-time': 'Daily Blaze emails no longer include a Time line.',
+    'email-accounts': 'Work mail is phil@phoneburner.com.',
+  };
+
+  it('passes curated memory to the model as authoritative context', async () => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ keep: [1] }) });
+    const { store } = makeRagStore([candidate('a', 'template includes Time ~X hrs')]);
+
+    await recallFilter('draft my blaze', makeConfig(), store, HISTORY, {
+      memoryStore: makeMemoryStore(MEMORY),
+    });
+
+    const sent = generateTextMock.mock.calls[0][0];
+    expect(sent.messages[0].content).toContain('Curated memory');
+    expect(sent.messages[0].content).toContain('daily-blaze-no-time');
+  });
+
+  it('returns the reconciliation note when the model supplies one', async () => {
+    const note = 'The memory overrides the Time line; the rest of the template stands.';
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({ keep: [1], reconciliation: note }),
+    });
+    const { store } = makeRagStore([candidate('a', 'template includes Time ~X hrs')]);
+
+    const result = await recallFilter('draft my blaze', makeConfig(), store, HISTORY, {
+      memoryStore: makeMemoryStore(MEMORY),
+    });
+
+    expect(result.status).toBe('filtered');
+    if (result.status !== 'filtered') return;
+    expect(result.reconciliation).toBe(note);
+    // Facts stay verbatim — the note sits beside them, never merged in.
+    expect(result.facts[0].fact).toBe('template includes Time ~X hrs');
+  });
+
+  it('leaves reconciliation undefined for null / blank / no conflict', async () => {
+    for (const raw of [
+      { keep: [1], reconciliation: null },
+      { keep: [1] },
+      { keep: [1], reconciliation: '   ' },
+    ]) {
+      generateTextMock.mockReset();
+      clearLLMCache();
+      generateTextMock.mockResolvedValue({ text: JSON.stringify(raw) });
+      const { store } = makeRagStore([candidate('a', 'x')]);
+      const result = await recallFilter('q', makeConfig(), store, HISTORY, {
+        memoryStore: makeMemoryStore(MEMORY),
+      });
+      if (result.status !== 'filtered') throw new Error('expected filtered');
+      expect(result.reconciliation).toBeUndefined();
+    }
+  });
+
+  it('keeps the selection when only the note is malformed', async () => {
+    // Selection is the job the pipeline cannot cheaply fall back from; a bad
+    // note must not discard a good pick.
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({ keep: [1], reconciliation: 42, memoryPriority: 'nonsense' }),
+    });
+    const { store } = makeRagStore([candidate('a', 'fact one')]);
+
+    const result = await recallFilter('q', makeConfig(), store, HISTORY, {
+      memoryStore: makeMemoryStore(MEMORY),
+    });
+
+    expect(result.status).toBe('filtered');
+    if (result.status !== 'filtered') return;
+    expect(result.facts.map((f) => f.fact)).toEqual(['fact one']);
+    expect(result.reconciliation).toBeUndefined();
+    expect(result.memoryPriority).toBeUndefined();
+  });
+
+  it('drops memoryPriority keys that do not exist', async () => {
+    // A hallucinated key would otherwise reorder real entries around a ghost.
+    generateTextMock.mockResolvedValue({
+      text: JSON.stringify({
+        keep: [1],
+        memoryPriority: ['email-accounts', 'invented-key', 'daily-blaze-no-time'],
+      }),
+    });
+    const { store } = makeRagStore([candidate('a', 'x')]);
+
+    const result = await recallFilter('q', makeConfig(), store, HISTORY, {
+      memoryStore: makeMemoryStore(MEMORY),
+    });
+
+    if (result.status !== 'filtered') throw new Error('expected filtered');
+    expect(result.memoryPriority).toEqual(['email-accounts', 'daily-blaze-no-time']);
+  });
+
+  it('works with no memory store at all (headless / tests)', async () => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ keep: [1] }) });
+    const { store } = makeRagStore([candidate('a', 'x')]);
+
+    const result = await recallFilter('q', makeConfig(), store, HISTORY);
+
+    expect(result.status).toBe('filtered');
+    const sent = generateTextMock.mock.calls[0][0];
+    expect(sent.messages[0].content).not.toContain('Curated memory');
   });
 });

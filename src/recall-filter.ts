@@ -8,6 +8,7 @@ import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token
 import { buildRecentTurnsBlock, oneLine } from './reference-resolver.js';
 import { buildRAGQuery, extractRecentUserTexts, extractRecentToolContext } from './rag-query.js';
 import { getDomain } from './domains.js';
+import type { MemoryStore } from './memory.js';
 
 /**
  * RAG Recall Filter — a pre-turn LLM pass that decides which recalled memories
@@ -30,7 +31,24 @@ import { getDomain } from './domains.js';
 
 export type RecallFilterResult =
   | { status: 'noop' }
-  | { status: 'filtered'; facts: RAGSearchResult[] };
+  | {
+      status: 'filtered';
+      facts: RAGSearchResult[];
+      /**
+       * How user-curated memory bears on the facts above — e.g. that a memory
+       * supersedes one clause of an otherwise-still-correct recalled fact
+       * (#371). Rendered beside the facts, never merged into them. `undefined`
+       * when there is nothing to reconcile.
+       */
+      reconciliation?: string;
+      /**
+       * Memory keys ordered most- to least-relevant to this turn. Used ONLY to
+       * decide packing order when memory exceeds its char budget; under budget
+       * every entry is injected regardless, so this changes nothing. Replaces
+       * a drop-by-filename outcome with a drop-by-relevance one.
+       */
+      memoryPriority?: string[];
+    };
 
 /** Deterministic classification — small JSON list of ids. */
 const RECALL_FILTER_MAX_TOKENS = 512;
@@ -60,9 +78,16 @@ Rules:
 - Do NOT rewrite, merge, summarize, or invent facts. Only select from the numbered candidates by their number.
 - It is valid to keep all of them, or to keep none.
 
+You may also be given "## Curated memory" — notes the user explicitly asked the assistant to remember. These are authoritative in a way candidate facts are not: candidates were auto-extracted from past sessions by similarity, memory was written down on purpose.
+
+Second job — reconcile. If a memory contradicts or narrows something a KEPT candidate says, write one short "reconciliation" sentence telling the assistant how to read them together. Be precise about scope: recalled facts are usually mostly still correct with one stale clause, so say which part the memory overrides and that the rest still applies. Do not restate a memory that no kept candidate touches. Set it to null when there is no conflict — that is the common case.
+
+Third job — rank memory. Return "memoryPriority": every memory key, ordered most- to least-relevant to this request. This is only consulted if memory has to be trimmed to fit; include all keys.
+
 Output strict JSON and nothing else:
-  {"keep": [<numbers>]}
-where <numbers> are the ids of the candidate facts to keep (e.g. {"keep":[1,3,4]}). Use {"keep":[]} to drop everything.`;
+  {"keep": [<numbers>], "reconciliation": <string or null>, "memoryPriority": [<keys>]}
+e.g. {"keep":[1,3],"reconciliation":"The memory \`daily-blaze-no-time\` overrides the \"Time ~X hrs\" line in fact 1; the rest of that template still applies.","memoryPriority":["daily-blaze-no-time","email-accounts"]}
+Use {"keep":[]} to drop every candidate. Omit or null "reconciliation" when nothing conflicts.`;
 
 /** Renders the numbered candidate list the model selects from. */
 function buildCandidateBlock(candidates: RAGSearchResultWithId[]): string {
@@ -74,23 +99,79 @@ function buildCandidateBlock(candidates: RAGSearchResultWithId[]): string {
   ].join('\n');
 }
 
-/** Parses `{"keep":[...]}` into a set of 1-based indices, or null on malformed input. */
-function parseKeepResponse(text: string, candidateCount: number): Set<number> | null {
+/** Cap per memory entry in the curator prompt — enough to judge, not the whole file. */
+const MAX_MEMORY_CHARS = 400;
+
+/** Renders the curated-memory block the model reconciles against. `''` when empty. */
+function buildMemoryBlock(memoryStore?: MemoryStore): string {
+  if (!memoryStore) return '';
+  let entries: Map<string, string>;
+  try {
+    entries = memoryStore.getAllMemoryContents();
+  } catch {
+    return '';
+  }
+  if (entries.size === 0) return '';
+  return [
+    '## Curated memory (authoritative — written down on purpose)',
+    ...Array.from(
+      entries,
+      ([key, content]) => `- \`${key}\`: ${oneLine(content, MAX_MEMORY_CHARS)}`,
+    ),
+  ].join('\n');
+}
+
+interface CuratorResponse {
+  keep: Set<number>;
+  reconciliation?: string;
+  memoryPriority?: string[];
+}
+
+/**
+ * Parses the curator's JSON. Returns null only when `keep` is unusable — a
+ * malformed `reconciliation` or `memoryPriority` degrades to `undefined`
+ * rather than discarding a good selection, since selection is the job the
+ * pipeline cannot fall back from cheaply.
+ */
+function parseCuratorResponse(
+  text: string,
+  candidateCount: number,
+  knownMemoryKeys: Set<string>,
+): CuratorResponse | null {
   const match = text.match(/\{[\s\S]*\}/);
   if (!match) return null;
+  let parsed: Record<string, unknown>;
   try {
-    const parsed = JSON.parse(match[0]);
-    if (!parsed || !Array.isArray(parsed.keep)) return null;
-    const keep = new Set<number>();
-    for (const n of parsed.keep) {
-      if (typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= candidateCount) {
-        keep.add(n);
-      }
-    }
-    return keep;
+    parsed = JSON.parse(match[0]);
   } catch {
     return null;
   }
+  if (!parsed || !Array.isArray(parsed.keep)) return null;
+
+  const keep = new Set<number>();
+  for (const n of parsed.keep) {
+    if (typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= candidateCount) {
+      keep.add(n);
+    }
+  }
+
+  const rawNote = parsed.reconciliation;
+  const reconciliation =
+    typeof rawNote === 'string' && rawNote.trim().length > 0 ? rawNote.trim() : undefined;
+
+  // Keys are echoed back by the model, so filter to ones that actually exist —
+  // a hallucinated key would otherwise reorder real entries around a ghost.
+  let memoryPriority: string[] | undefined;
+  if (Array.isArray(parsed.memoryPriority)) {
+    const seen = new Set<string>();
+    const ordered = parsed.memoryPriority.filter(
+      (k): k is string =>
+        typeof k === 'string' && knownMemoryKeys.has(k) && !seen.has(k) && !!seen.add(k),
+    );
+    if (ordered.length > 0) memoryPriority = ordered;
+  }
+
+  return { keep, reconciliation, memoryPriority };
 }
 
 /**
@@ -109,9 +190,21 @@ export async function recallFilter(
   config: BernardConfig,
   ragStore: RAGStore,
   history: CoreMessage[],
-  abortSignal?: AbortSignal,
-  onUsage?: UsageRecorder,
+  opts: {
+    /**
+     * Curated memory, passed as READ-ONLY context so the curator can reconcile
+     * it against the candidates and rank it for trimming. Memory is never a
+     * candidate for elimination here — it is still injected unconditionally by
+     * `renderPersistentMemory`. That distinction is what separates this from
+     * #307 Phase 3, which was deferred precisely because routing memory
+     * *through* the filter could drop a curated entry for looking off-topic.
+     */
+    memoryStore?: MemoryStore;
+    abortSignal?: AbortSignal;
+    onUsage?: UsageRecorder;
+  } = {},
 ): Promise<RecallFilterResult> {
+  const { memoryStore, abortSignal, onUsage } = opts;
   // Build the same context-enriched query the agent uses, so the candidate set
   // matches what retrieval would surface (just wider).
   const recentTexts = extractRecentUserTexts(history, 2);
@@ -137,15 +230,20 @@ export async function recallFilter(
   }
 
   const historyBlock = buildRecentTurnsBlock(history);
+  const memoryBlock = buildMemoryBlock(memoryStore);
   const userMessage = [
     `## User request\n${agentInput}`,
     historyBlock,
+    memoryBlock,
     buildCandidateBlock(candidates),
   ]
     .filter((s) => s.length > 0)
     .join('\n\n');
 
-  debugLog('recall-filter:request', { candidates: candidates.length });
+  debugLog('recall-filter:request', {
+    candidates: candidates.length,
+    memoryEntries: memoryBlock ? memoryBlock.split('\n').length - 1 : 0,
+  });
 
   try {
     const site = resolveSiteModel(config, 'recall-filter');
@@ -201,11 +299,15 @@ export async function recallFilter(
       if (cacheKey) setCachedLLM(cacheKey, rawText);
     }
 
-    const keep = parseKeepResponse(rawText, candidates.length);
-    if (!keep) {
+    const knownMemoryKeys = new Set(
+      memoryStore ? Array.from(memoryStore.getAllMemoryContents().keys()) : [],
+    );
+    const parsed = parseCuratorResponse(rawText, candidates.length, knownMemoryKeys);
+    if (!parsed) {
       debugLog('recall-filter:noop', { reason: 'parse-failed', raw: rawText.slice(0, 200) });
       return { status: 'noop' };
     }
+    const { keep, reconciliation, memoryPriority } = parsed;
 
     // If the user aborted while the model was responding, don't commit any
     // side effects: this turn's context is discarded by the caller, so bumping
@@ -224,7 +326,13 @@ export async function recallFilter(
       similarity,
       domain,
     }));
-    return { status: 'filtered', facts };
+    if (reconciliation) debugLog('recall-filter:reconciliation', { note: reconciliation });
+    return {
+      status: 'filtered',
+      facts,
+      ...(reconciliation !== undefined ? { reconciliation } : {}),
+      ...(memoryPriority !== undefined ? { memoryPriority } : {}),
+    };
   } catch (err) {
     debugLog('recall-filter:error', err instanceof Error ? err.message : String(err));
     return { status: 'noop' };

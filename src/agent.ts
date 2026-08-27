@@ -438,7 +438,14 @@ export class Agent {
     userInput: string,
     images?: ImageAttachment[],
     resolvedReferences?: ResolvedEntry[],
-    options?: { ragResults?: RAGSearchResult[]; originalInput?: string },
+    options?: {
+      ragResults?: RAGSearchResult[];
+      /** Curator note on how memory bears on `ragResults` (#371). */
+      recallReconciliation?: string;
+      /** Curator's memory ranking, used only as packing order when over budget (#371). */
+      memoryPriority?: string[];
+      originalInput?: string;
+    },
   ): Promise<void> {
     const turnStartedAt = Date.now();
     let turnAborted = false;
@@ -693,6 +700,8 @@ export class Agent {
       const inputBase = {
         userInput,
         ragResults,
+        recallReconciliation: options?.recallReconciliation,
+        memoryPriority: options?.memoryPriority,
         resolvedReferences,
         routineSummaries,
         specialistSummaries,
