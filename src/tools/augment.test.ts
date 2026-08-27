@@ -1627,6 +1627,57 @@ describe('augmentTools', () => {
       expect(provenance.list()).toHaveLength(0);
     });
 
+    it('legacy path: a failing MCP result does NOT register evidence (#363)', async () => {
+      // The gate used to be `is_error === true || 'error' in result`, so an
+      // MCP `CallToolResult` failure registered as a citable source — the
+      // agent could cite "WebSocket is not open" as evidence for a claim.
+      const provenance = new ProvenanceStore();
+      const tools = {
+        'open-browser-tab': {
+          execute: vi.fn(async () => ({
+            content: [{ type: 'text', text: 'WebSocket is not open' }],
+            isError: true,
+          })),
+        },
+      };
+      const augmented = augmentTools(tools, evidenceOn(provenance));
+
+      await augmented['open-browser-tab'].execute({ url: 'https://example.com' }, {});
+
+      expect(provenance.list()).toHaveLength(0);
+    });
+
+    it('legacy path: a healthy MCP result still registers evidence (#363)', async () => {
+      const provenance = new ProvenanceStore();
+      const tools = {
+        'get-list-of-open-tabs': {
+          execute: vi.fn(async () => ({
+            content: [{ type: 'text', text: 'tab id=22' }],
+            isError: false,
+          })),
+        },
+      };
+      const augmented = augmentTools(tools, evidenceOn(provenance));
+
+      await augmented['get-list-of-open-tabs'].execute({}, {});
+
+      expect(provenance.list()).toHaveLength(1);
+    });
+
+    it('legacy path: `{error: null}` still registers evidence (#363)', async () => {
+      // `structured-output`'s `nullableOptional` leaves the key present with
+      // `undefined`; the old `'error' in result` test read that as a failure.
+      const provenance = new ProvenanceStore();
+      const tools = {
+        legacy_tool: { execute: vi.fn(async () => ({ status: 'ok', error: null })) },
+      };
+      const augmented = augmentTools(tools, evidenceOn(provenance));
+
+      await augmented.legacy_tool.execute({ x: 1 }, {});
+
+      expect(provenance.list()).toHaveLength(1);
+    });
+
     it('legacy path: registration survives detectToolError throws (sync — outside the setImmediate catch)', async () => {
       const provenance = new ProvenanceStore();
       vi.mocked(detectToolError).mockImplementation(() => {

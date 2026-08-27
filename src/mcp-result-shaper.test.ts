@@ -96,6 +96,23 @@ describe('shapeMCPResult', () => {
     expect(shapeMCPResult(null, cap(1))).toBe(null);
   });
 
+  // #363: the wrapper replaces the envelope wholesale, so without re-stamping
+  // the flag an over-budget failure would arrive downstream looking like a
+  // success — truncation silently upgrading an error.
+  it('keeps isError on a failing MCP result that falls back to the wrapper', () => {
+    const huge = { isError: true, detail: 'x'.repeat(5000), note: 'y'.repeat(5000) };
+    const shaped = shapeMCPResult(huge, { mode: 'cap', maxChars: 500 }) as Record<string, unknown>;
+    expect(shaped._truncated).toBe(true);
+    expect(shaped.isError).toBe(true);
+  });
+
+  it('does not invent isError on a large successful result', () => {
+    const huge = { detail: 'x'.repeat(5000), note: 'y'.repeat(5000) };
+    const shaped = shapeMCPResult(huge, { mode: 'cap', maxChars: 500 }) as Record<string, unknown>;
+    expect(shaped._truncated).toBe(true);
+    expect(shaped.isError).toBeUndefined();
+  });
+
   it('exposes a sane default budget', () => {
     expect(DEFAULT_MCP_RESULT_MAX_CHARS).toBeGreaterThan(1000);
   });

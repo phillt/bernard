@@ -291,6 +291,40 @@ describe('detectToolError', () => {
       }
     });
 
+    // #363: `detectToolError` is now a thin adapter over `detectResultFailure`,
+    // so the exhaustive shape matrix lives in `tool-result-shape.test.ts`.
+    // These pin the *delegation* — that the shared snippet reaches the
+    // `ToolErrorInfo` union — on the two shapes that were silently uncovered.
+    // An MCP tool returns an object, never a string, so the old string-prefix
+    // fallback could never fire for one: on a real install, of 100 learned
+    // profiles every MCP tool sat at 0 recorded errors, `open-browser-tab` at
+    // 84 successes / 0 errors across sessions where it demonstrably failed.
+    it('returns error for an MCP result flagged on the envelope', () => {
+      const result = detectToolError('open-browser-tab', {
+        content: [{ type: 'text', text: 'WebSocket is not open' }],
+        isError: true,
+      });
+      expect(result).toEqual({ isError: true, snippet: 'WebSocket is not open' });
+    });
+
+    it('returns error for an MCP result flagged on a content entry only', () => {
+      const result = detectToolError('type-into-page-element', {
+        content: [{ type: 'text', text: 'ref 13 is a combobox', isError: true }],
+        isError: false,
+      });
+      expect(result).toEqual({ isError: true, snippet: 'ref 13 is a combobox' });
+    });
+
+    // #363: `file_write` (#342) returns the same `{error}` shape as
+    // `file_edit_lines`, but only the latter two were named, so its failures
+    // were never learned from.
+    it('returns error for file_write, which was never named in the old branches', () => {
+      const result = detectToolError('file_write', {
+        error: 'Parent directory does not exist: /nope',
+      });
+      expect(result).toEqual({ isError: true, snippet: 'Parent directory does not exist: /nope' });
+    });
+
     it('does not treat "Error" prefix as error for shell tool (uses is_error field instead)', () => {
       // shell tool uses is_error, not string prefix check
       const result = detectToolError('shell', 'Error: something');

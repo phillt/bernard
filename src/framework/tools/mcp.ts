@@ -3,15 +3,26 @@ import type { BernardTool, ToolMeta, ToolResult } from './types.js';
 import { isToolResult } from './types.js';
 import { isReadOnlyMCPSuffix } from '../../risk.js';
 import { normalizeToolResult } from '../../text.js';
+import { detectResultFailure } from '../../tool-result-shape.js';
 
 /**
  * Wraps an MCP tool at the boundary so it satisfies `BernardTool` with a
- * generic envelope. This is the **one place** that retains heuristic error
- * detection for MCP-provided returns — any string starting with `"Error"` (or
- * a result that fails to serialize) is treated as an error envelope. Thrown
- * exceptions in the MCP `execute` (reconnect/network) propagate up as
- * `status: 'error'` rather than throwing, so the augment layer can record
- * them deterministically.
+ * generic envelope. Non-throwing failures are recognized by shape via
+ * `detectResultFailure` (#363) — the `CallToolResult` envelope's `isError`, a
+ * flagged content entry, or the historical `"Error"`-prefixed string — and
+ * become `status: 'error'`. Thrown exceptions in the MCP `execute`
+ * (reconnect/network) also come back as `status: 'error'` rather than throwing,
+ * so the augment layer can record them deterministically.
+ *
+ * **Currently unwired.** The live MCP path is `MCPManager.getTools()`
+ * (`src/mcp.ts`), which returns a raw object rather than a `ToolResult`, so MCP
+ * tools take `augmentTools`' *legacy* branch and never reach the envelope one —
+ * which is why #363 had to add shape detection downstream as well. Routing
+ * `getTools()` through this wrapper is the deeper fix: it would give MCP a
+ * typed `ToolErrorType` instead of `classifyError` re-parsing a message string,
+ * and would let the truncation-time `isError` re-stamp in `mcp-result-shaper`
+ * go away. That is an architectural change with its own blast radius, so this
+ * stays as the shape it should take rather than being deleted.
  *
  * Pass the AI-SDK MCP `Tool` (already reconnect-wrapped by `MCPManager.getTools`)
  * plus the originating server name. The default `kind` is derived from the
@@ -53,13 +64,14 @@ export function wrapMCPTool(
           opts,
         );
         if (isToolResult(value)) return value as ToolResult<unknown>;
-        // Heuristic: MCP servers historically return string errors prefixed
-        // with "Error". detectToolError used to catch these; localize it here.
-        if (typeof value === 'string' && value.startsWith('Error')) {
-          return {
-            status: 'error',
-            error: { type: 'exec_failed', message: value.slice(0, 200) },
-          };
+        // A non-throwing MCP failure — the `CallToolResult` envelope's
+        // `isError`, or the historical "Error"-prefixed string — is an error
+        // envelope, not a success (#363). The string case alone was the whole
+        // check here, so a server reporting a dead transport the way the spec
+        // says to (`{content, isError: true}`) came back `status: 'ok'`.
+        const failure = detectResultFailure(value);
+        if (failure !== undefined) {
+          return { status: 'error', error: { type: 'exec_failed', message: failure } };
         }
         return { status: 'ok', result: normalizeToolResult(value) };
       } catch (e) {
