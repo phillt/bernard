@@ -50,7 +50,6 @@ export function captureLastToolCall(steps: any[] | undefined): string {
   return '(no tool call)';
 }
 
-/** Max characters of a tool result retained in the reasoning log. */
 /**
  * Re-labels a wrapper result whose real failure was **running out of steps**.
  *
@@ -78,7 +77,7 @@ export function captureLastToolCall(steps: any[] | undefined): string {
 export function reclassifyStepLimit(
   wrapped: WrapperResult,
   stepLimitHit: boolean,
-  steps?: number,
+  steps: number,
 ): WrapperResult {
   if (!stepLimitHit) return wrapped;
 
@@ -93,15 +92,15 @@ export function reclassifyStepLimit(
   const parseFailed = wrapped.status === 'error' && wrapped.error === 'parse_failed';
   if (!emptyOk && !parseFailed) return wrapped;
 
-  const budget = steps !== undefined ? ` (${steps})` : '';
   return {
     ...wrapped,
     status: 'error',
-    result: `Specialist ran out of steps${budget} before producing a final answer. Its work may be partially applied — check state before retrying.`,
+    result: `Specialist ran out of steps (${steps}) before producing a final answer. ${classifyError({ message: 'step_limit' }).playbook.model}`,
     error: 'step_limit',
   };
 }
 
+/** Max characters of a tool result retained in the reasoning log. */
 const RESULT_PREVIEW_MAX_CHARS = 300;
 
 /**
@@ -340,7 +339,7 @@ export async function dispatchToolWrapper(
           telemetrySite: `tool-wrapper:${specialistId}`,
         });
 
-        const wrapped = reclassifyStepLimit(rawWrapped, stepLimitHit, result.steps?.length);
+        const wrapped = reclassifyStepLimit(rawWrapped, stepLimitHit, result.steps?.length ?? 0);
 
         printSpecialistEnd(id);
 
@@ -350,14 +349,9 @@ export async function dispatchToolWrapper(
           input,
           toolCalls: captureToolCalls(result.steps as any[], childTools),
           finalOutput: wrapped.result,
-          status:
-            wrapped.status === 'ok'
-              ? 'ok'
-              : wrapped.error === 'step_limit'
-                ? 'step_limit'
-                : wrapped.error === 'parse_failed'
-                  ? 'parse_failed'
-                  : 'error',
+          // Mirrors `error` rather than re-deriving it per label — a ternary
+          // per label is an edit here for every new one.
+          status: wrapped.status === 'ok' ? 'ok' : (wrapped.error ?? 'error'),
           ...(wrapped.error !== undefined ? { error: wrapped.error } : {}),
           ...(wrapped.reasoning !== undefined ? { reasoning: wrapped.reasoning } : {}),
         });

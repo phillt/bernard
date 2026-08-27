@@ -131,6 +131,7 @@ export type ToolErrorType =
   | 'transient'
   | 'parse_failed'
   | 'pool_exhausted'
+  | 'step_limit'
   | 'cancelled'
   | 'denied'
   | 'unknown';

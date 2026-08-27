@@ -30,6 +30,18 @@ function fakeManager(opts: {
   } as unknown as ReturnType<typeof getActiveMCPManager>;
 }
 
+/** The probe half of a reconciliation test; only `registration` varies. */
+function probeOk(toolNames = ['browser_navigate', 'browser_click'], durationMs = 800) {
+  mockGet.mockReturnValue({ command: 'npx' });
+  mockVerify.mockResolvedValue({
+    ok: true,
+    toolCount: toolNames.length,
+    toolNames,
+    durationMs,
+    timedOut: false,
+  });
+}
+
 describe('mcp_verify tool', () => {
   beforeEach(() => {
     mockGet.mockReset();
@@ -91,17 +103,10 @@ describe('mcp_verify tool', () => {
   });
 
   describe('live-session reconciliation', () => {
-    // `connected: false` covers two opposite situations and the verdict differs.
-    // Conflating them is what made a caller delete a config it had just written.
+    // `connected: false` covers two opposite situations; see
+    // `LiveRegistration.knownAtStartup`.
     it('a JUST-ADDED server reads as success — restart is a next step, not a fault', async () => {
-      mockGet.mockReturnValue({ command: 'npx' });
-      mockVerify.mockResolvedValue({
-        ok: true,
-        toolCount: 2,
-        toolNames: ['browser_navigate', 'browser_click'],
-        durationMs: 800,
-        timedOut: false,
-      });
+      probeOk(['browser_navigate', 'browser_click'], 800);
       mockActiveManager.mockReturnValue(
         fakeManager({
           registration: {
@@ -122,14 +127,7 @@ describe('mcp_verify tool', () => {
     });
 
     it('a server that FAILED at startup reads as needing attention, with the reason', async () => {
-      mockGet.mockReturnValue({ command: 'npx' });
-      mockVerify.mockResolvedValue({
-        ok: true,
-        toolCount: 2,
-        toolNames: ['browser_navigate', 'browser_click'],
-        durationMs: 800,
-        timedOut: false,
-      });
+      probeOk(['browser_navigate', 'browser_click'], 800);
       mockActiveManager.mockReturnValue(
         fakeManager({
           registration: {
@@ -149,14 +147,7 @@ describe('mcp_verify tool', () => {
     });
 
     it('a name collision needs attention even on a just-added server', async () => {
-      mockGet.mockReturnValue({ command: 'npx' });
-      mockVerify.mockResolvedValue({
-        ok: true,
-        toolCount: 2,
-        toolNames: ['browser_navigate', 'browser_click'],
-        durationMs: 800,
-        timedOut: false,
-      });
+      probeOk(['browser_navigate', 'browser_click'], 800);
       mockActiveManager.mockReturnValue(
         fakeManager({
           registration: {
@@ -176,14 +167,7 @@ describe('mcp_verify tool', () => {
     });
 
     it('confirms all tools are active when the server is live and unshadowed', async () => {
-      mockGet.mockReturnValue({ command: 'npx' });
-      mockVerify.mockResolvedValue({
-        ok: true,
-        toolCount: 2,
-        toolNames: ['browser_navigate', 'browser_click'],
-        durationMs: 90,
-        timedOut: false,
-      });
+      probeOk(['browser_navigate', 'browser_click'], 90);
       mockActiveManager.mockReturnValue(
         fakeManager({
           registration: {
@@ -200,14 +184,7 @@ describe('mcp_verify tool', () => {
     });
 
     it('reports tools shadowed by another server', async () => {
-      mockGet.mockReturnValue({ command: 'npx' });
-      mockVerify.mockResolvedValue({
-        ok: true,
-        toolCount: 2,
-        toolNames: ['browser_navigate', 'browser_click'],
-        durationMs: 90,
-        timedOut: false,
-      });
+      probeOk(['browser_navigate', 'browser_click'], 90);
       mockActiveManager.mockReturnValue(
         fakeManager({
           registration: {
@@ -221,7 +198,7 @@ describe('mcp_verify tool', () => {
       );
       const out = await run({ key: 'playwright' });
       expect(out).toContain('only 1 of 2');
-      expect(out).toContain('shadowed');
+      expect(out).toContain('Name collision');
       expect(out).toContain('browser_navigate → "other-server"');
     });
 
@@ -239,7 +216,12 @@ describe('mcp_verify tool', () => {
         fakeManager({ statuses: [{ name: 'playwright', connected: true, toolCount: 23 }] }),
       );
       const out = await run({ key: 'playwright' });
-      expect(out).toContain('✗ VERDICT: "playwright" failed');
+      // Not `✗`: the probe's cold start was slow, but the session already has
+      // the server and its tools are callable, so reporting a failure would
+      // send the caller to fix something that works.
+      expect(out).toContain('⚠ VERDICT:');
+      expect(out).not.toContain('✗');
+      expect(out).toContain('Probe failed after 15000ms [timed out]');
       expect(out).toContain('IS currently loaded in this session (23 tool(s))');
     });
   });

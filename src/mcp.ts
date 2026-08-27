@@ -103,6 +103,30 @@ function startConnect(serverConfig: MCPServerConfig): {
  * (stdio or URL-based), aggregates tools from all servers, and handles
  * automatic reconnection with retry when a tool call fails.
  */
+/**
+ * How a probed server's tools actually resolve in the running session.
+ *
+ * - `connected` — this session has a live client for the server.
+ * - `knownAtStartup` — the server was in the config when this session launched.
+ *   Read together with `connected`, this is the whole verdict, and collapsing
+ *   the two is what let a caller delete a config it had just written correctly:
+ *   a server added *since* launch was never attempted, so "not loaded" is the
+ *   expected state and a restart is the ordinary next step; a server present at
+ *   launch that is still not connected actually failed, and `error` says why.
+ * - `live` — routed to this server right now, callable.
+ * - `shadowed` — another server exported the same name and won the
+ *   last-writer-wins race in {@link MCPManager.connect}, so calls go elsewhere.
+ * - `missing` — not in the live tool set at all.
+ */
+export interface LiveRegistration {
+  connected: boolean;
+  knownAtStartup: boolean;
+  error?: string;
+  live: string[];
+  shadowed: { tool: string; owner: string }[];
+  missing: string[];
+}
+
 export class MCPManager {
   private clients: Map<string, MCPClient> = new Map();
   private serverStatuses: ServerStatus[] = [];
@@ -455,40 +479,12 @@ export class MCPManager {
   /**
    * Reconciles a fresh {@link verifyMCPServer} probe against the tools actually
    * wired into THIS running session. A probe spawns the server in isolation, so
-   * it always reports the server's own health — but that says nothing about
-   * whether the running agent can call those tools. A tool is:
-   *   - `live`     — currently routed to this server (callable now),
-   *   - `shadowed` — a *different* server exported the same name and won the
-   *                  last-writer-wins race in {@link connect}, so calls route
-   *                  elsewhere,
-   *   - `missing`  — not in the live tool set at all (the server wasn't
-   *                  connected when the session snapshotted its tools at
-   *                  startup — a restart is needed to pick it up).
-   * This is what turns a misleading "healthy, 23 tools" into an honest "healthy
-   * in isolation but not actually loaded in this session."
+   * it reports the server's own health — which says nothing about whether the
+   * running agent can call those tools. Turns a misleading "healthy, 23 tools"
+   * into an honest account of what is callable right now. See
+   * {@link LiveRegistration} for what each field means.
    */
-  getLiveRegistration(
-    name: string,
-    probeToolNames: string[],
-  ): {
-    connected: boolean;
-    /**
-     * Whether this session **tried** to connect the server at startup.
-     *
-     * `connected: false` alone conflates two opposite situations, and the
-     * difference is the whole verdict: a server added *since* launch was never
-     * attempted (there is no status row for it), so "not loaded" is the
-     * expected, healthy state and a restart is the ordinary next step; a server
-     * that was in the config at launch and is still not connected actually
-     * failed, and `error` says why. Reading the first as the second is how a
-     * caller ends up deleting a config it just wrote correctly.
-     */
-    knownAtStartup: boolean;
-    error?: string;
-    live: string[];
-    shadowed: { tool: string; owner: string }[];
-    missing: string[];
-  } {
+  getLiveRegistration(name: string, probeToolNames: string[]): LiveRegistration {
     const status = this.serverStatuses.find((s) => s.name === name);
     const live: string[] = [];
     const shadowed: { tool: string; owner: string }[] = [];
@@ -501,7 +497,12 @@ export class MCPManager {
     }
     return {
       connected: status?.connected ?? false,
-      knownAtStartup: status !== undefined,
+      // `serverConfigs` is populated once, from the config as it was at
+      // startup, and is never added to afterwards — so `has` is the literal
+      // statement of this field. Deriving it from a `serverStatuses` row
+      // instead would mean "has ever been attempted", which `doReconnectServer`
+      // can push to at runtime.
+      knownAtStartup: this.serverConfigs.has(name),
       error: status?.error,
       live,
       shadowed,

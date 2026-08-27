@@ -74,6 +74,11 @@ const PLAYBOOKS: Record<ToolErrorType, { user: string; model: string }> = {
     model:
       'Tool-wrapper pool is at capacity. Wait or sequence the call after current work completes. Do not retry immediately.',
   },
+  step_limit: {
+    user: 'The sub-agent ran out of steps before finishing — its work may be partially applied.',
+    model:
+      'The dispatch hit its step budget and was cut off before producing a final answer. Some of its work may already be applied — check the current state before retrying, and retry with a narrower request rather than the same one.',
+  },
   cancelled: {
     user: 'Cancelled.',
     model: 'The previous call was cancelled by the user. Do not retry without instruction.',
@@ -101,6 +106,7 @@ const SEVERITY: Record<ToolErrorType, 'low' | 'normal' | 'critical'> = {
   transient: 'low',
   parse_failed: 'low',
   pool_exhausted: 'low',
+  step_limit: 'low',
   cancelled: 'low',
   denied: 'normal',
   unknown: 'low',
@@ -111,6 +117,7 @@ const RETRYABLE: ReadonlySet<ToolErrorType> = new Set<ToolErrorType>([
   'transient',
   'parse_failed',
   'pool_exhausted',
+  'step_limit',
   'timeout',
 ]);
 
@@ -157,6 +164,7 @@ function pickCategory(input: ClassifyInput): ToolErrorType {
 
   // Bernard-internal markers first — they're high-confidence.
   if (/pool_exhausted|Maximum concurrent agents/i.test(m)) return 'pool_exhausted';
+  if (/step_limit|ran out of steps/i.test(m)) return 'step_limit';
   if (/Specialist did not produce valid structured output|parse_failed/i.test(m)) {
     return 'parse_failed';
   }
