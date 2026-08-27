@@ -106,6 +106,19 @@ export interface CompactResult {
  * the main-only concerns of persistent history, compression, emergency
  * truncation, auto-continue, and IO wiring.
  */
+/**
+ * Orders memory keys the way `renderPersistentMemory` packs them, so the
+ * per-turn context record leads with the entries most likely to have survived
+ * a budget trim. Mirrors `orderForPacking`; kept separate because that operates
+ * on entries and this on bare keys, and the record is a display artefact.
+ */
+function orderMemoryKeysForDisplay(keys: string[], priority?: string[]): string[] {
+  if (!priority || priority.length === 0) return keys;
+  const rank = new Map(priority.map((k, i) => [k, i]));
+  const last = priority.length;
+  return [...keys].sort((a, b) => (rank.get(a) ?? last) - (rank.get(b) ?? last));
+}
+
 export class Agent {
   private history: CoreMessage[] = [];
   private config: BernardConfig;
@@ -440,9 +453,8 @@ export class Agent {
     resolvedReferences?: ResolvedEntry[],
     options?: {
       ragResults?: RAGSearchResult[];
-      /** Curator note on how memory bears on `ragResults` (#371). */
+      /** Curator outputs; see `recall-filter.ts` and `orderForPacking` (#371). */
       recallReconciliation?: string;
-      /** Curator's memory ranking, used only as packing order when over budget (#371). */
       memoryPriority?: string[];
       originalInput?: string;
     },
@@ -1088,10 +1100,19 @@ export class Agent {
         resolvedReferences: this.lastResolvedReferences.map((e) => ({ ...e })),
         recalledFacts: this.lastRAGResults.map((f) => ({ ...f })),
         // Read at snapshot rather than threaded out of `buildContextMessage`:
-        // injection is unconditional, so the store's key list IS what went in.
-        // (A write during the turn could drift by one entry — acceptable for a
-        // display record, and it becomes exact once the curator picks the set.)
-        injectedMemoryKeys: this.memoryStore.listMemory(),
+        // under budget injection is unconditional, so the store's key list IS
+        // what went in. Over budget it is NOT — `renderPersistentMemory` drops
+        // the tail, and this would then report a memory as injected on exactly
+        // the turn it was dropped, which is the only turn anyone looks. So
+        // apply the same ordering the renderer used and record the ranked keys
+        // first; the viewer's list then leads with what actually survived.
+        // (A write during the turn can still drift by one entry — acceptable
+        // for a display record. Making this exact needs the renderer to report
+        // what it kept; see #371 follow-ups.)
+        injectedMemoryKeys: orderMemoryKeysForDisplay(
+          this.memoryStore.listMemory(),
+          options?.memoryPriority,
+        ),
       });
 
       // Per-turn qualifier outcome (#167). One structured line that pairs the

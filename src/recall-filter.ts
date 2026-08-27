@@ -8,7 +8,9 @@ import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token
 import { buildRecentTurnsBlock, oneLine } from './reference-resolver.js';
 import { buildRAGQuery, extractRecentUserTexts, extractRecentToolContext } from './rag-query.js';
 import { getDomain } from './domains.js';
-import type { MemoryStore } from './memory.js';
+import { REWRITER_HINTS_KEY, type MemoryStore } from './memory.js';
+import { MAX_PERSISTENT_MEMORY_CHARS } from './context-message.js';
+import { plural } from './text.js';
 
 /**
  * RAG Recall Filter — a pre-turn LLM pass that decides which recalled memories
@@ -82,12 +84,28 @@ You may also be given "## Curated memory" — notes the user explicitly asked th
 
 Second job — reconcile. If a memory contradicts or narrows something a KEPT candidate says, write one short "reconciliation" sentence telling the assistant how to read them together. Be precise about scope: recalled facts are usually mostly still correct with one stale clause, so say which part the memory overrides and that the rest still applies. Do not restate a memory that no kept candidate touches. Set it to null when there is no conflict — that is the common case.
 
-Third job — rank memory. Return "memoryPriority": every memory key, ordered most- to least-relevant to this request. This is only consulted if memory has to be trimmed to fit; include all keys.
-
 Output strict JSON and nothing else:
-  {"keep": [<numbers>], "reconciliation": <string or null>, "memoryPriority": [<keys>]}
-e.g. {"keep":[1,3],"reconciliation":"The memory \`daily-blaze-no-time\` overrides the \"Time ~X hrs\" line in fact 1; the rest of that template still applies.","memoryPriority":["daily-blaze-no-time","email-accounts"]}
+  {"keep": [<numbers>], "reconciliation": <string or null>}
+e.g. {"keep":[1,3],"reconciliation":"The memory \`daily-blaze-no-time\` overrides the \"Time ~X hrs\" line in the kept template fact; the rest of that template still applies."}
 Use {"keep":[]} to drop every candidate. Omit or null "reconciliation" when nothing conflicts.`;
+
+/**
+ * Appended ONLY when curated memory exceeds its injection budget, i.e. when
+ * something will actually be dropped.
+ *
+ * Asking unconditionally made the model echo every memory key verbatim on every
+ * turn — ~250 serial output tokens on a pass that blocks the user's turn, for a
+ * ranking that is discarded whenever memory fits (the common case). Worse, the
+ * echo shares `RECALL_FILTER_MAX_TOKENS` with `keep`: enough entries and the
+ * JSON truncates mid-array, `parseCuratorResponse` fails, and the **selection**
+ * is lost with it. The cost scaled with memory size — i.e. against precisely
+ * the users the ranking exists to help.
+ */
+const MEMORY_RANKING_PROMPT = `
+
+Extra job for this request — curated memory is too large to fit in full, so some of it will be dropped. Return "memoryPriority": every memory key, ordered most- to least-relevant to this request, and include all of them.
+IMPORTANT: a standing rule ("never email the client directly", "always run tests before pushing") is relevant even when it is off-topic for this request — rank those high. Rank low only entries that are situational and clearly do not apply.
+Output shape becomes: {"keep": [<numbers>], "reconciliation": <string or null>, "memoryPriority": [<keys>]}`;
 
 /** Renders the numbered candidate list the model selects from. */
 function buildCandidateBlock(candidates: RAGSearchResultWithId[]): string {
@@ -99,26 +117,68 @@ function buildCandidateBlock(candidates: RAGSearchResultWithId[]): string {
   ].join('\n');
 }
 
-/** Cap per memory entry in the curator prompt — enough to judge, not the whole file. */
-const MAX_MEMORY_CHARS = 400;
+/**
+ * Per-entry preview cap in the curator prompt. Deliberately larger than
+ * `reference-resolver`'s 140: that pass only has to recognise which entry names
+ * an entity; this one has to spot a clause inside an entry that contradicts a
+ * recalled fact, which needs more of the text.
+ */
+const MAX_MEMORY_ENTRY_CHARS = 400;
+
+/**
+ * Whole-block cap. Without it the block is `MAX_MEMORY_ENTRY_CHARS × entries`
+ * and unbounded — so a user over the persistent-memory budget would send the
+ * cheap-tier curator *more* memory than the main agent it advises, since
+ * `renderPersistentMemory` drops entries at that budget and this would not.
+ * Same constant, so the curator never sees more than the agent.
+ */
+const MAX_MEMORY_BLOCK_CHARS = MAX_PERSISTENT_MEMORY_CHARS;
+
+/**
+ * Reads memory once for the whole pass. `getAllMemoryContents` is `readdirSync`
+ * plus a `readFileSync` per entry with no cache, so callers must not re-derive
+ * keys from a second call.
+ *
+ * Excludes `rewriter-hints`: it is internal infra written by the resolver, and
+ * presenting it to the curator as "written down on purpose" would let it
+ * compete for the memory budget as though the user had authored it.
+ * `reference-resolver` drops it before its own prompt for the same reason.
+ */
+function readCuratedMemory(memoryStore?: MemoryStore): Map<string, string> {
+  if (!memoryStore) return new Map();
+  try {
+    const entries = memoryStore.getAllMemoryContents();
+    entries.delete(REWRITER_HINTS_KEY);
+    return entries;
+  } catch {
+    return new Map();
+  }
+}
 
 /** Renders the curated-memory block the model reconciles against. `''` when empty. */
-function buildMemoryBlock(memoryStore?: MemoryStore): string {
-  if (!memoryStore) return '';
-  let entries: Map<string, string>;
-  try {
-    entries = memoryStore.getAllMemoryContents();
-  } catch {
-    return '';
-  }
+function buildMemoryBlock(entries: Map<string, string>): string {
   if (entries.size === 0) return '';
-  return [
-    '## Curated memory (authoritative — written down on purpose)',
-    ...Array.from(
-      entries,
-      ([key, content]) => `- \`${key}\`: ${oneLine(content, MAX_MEMORY_CHARS)}`,
-    ),
-  ].join('\n');
+  const lines = ['## Curated memory (authoritative — written down on purpose)'];
+  let used = 0;
+  let omitted = 0;
+  for (const [key, content] of entries) {
+    const line = `- \`${key}\`: ${oneLine(content, MAX_MEMORY_ENTRY_CHARS)}`;
+    if (used + line.length > MAX_MEMORY_BLOCK_CHARS) {
+      omitted++;
+      continue;
+    }
+    lines.push(line);
+    used += line.length;
+  }
+  if (omitted > 0) lines.push(`- … ${omitted} more ${plural(omitted, 'entry', 'entries')} omitted`);
+  return lines.join('\n');
+}
+
+/** Total chars of curated memory — decides whether a ranking is worth asking for. */
+function memoryChars(entries: Map<string, string>): number {
+  let n = 0;
+  for (const [key, content] of entries) n += key.length + content.length;
+  return n;
 }
 
 interface CuratorResponse {
@@ -163,11 +223,14 @@ function parseCuratorResponse(
   // a hallucinated key would otherwise reorder real entries around a ghost.
   let memoryPriority: string[] | undefined;
   if (Array.isArray(parsed.memoryPriority)) {
-    const seen = new Set<string>();
-    const ordered = parsed.memoryPriority.filter(
-      (k): k is string =>
-        typeof k === 'string' && knownMemoryKeys.has(k) && !seen.has(k) && !!seen.add(k),
-    );
+    // A Set both dedupes and preserves insertion order.
+    const ordered = [
+      ...new Set(
+        parsed.memoryPriority.filter(
+          (k): k is string => typeof k === 'string' && knownMemoryKeys.has(k),
+        ),
+      ),
+    ];
     if (ordered.length > 0) memoryPriority = ordered;
   }
 
@@ -193,11 +256,22 @@ export async function recallFilter(
   opts: {
     /**
      * Curated memory, passed as READ-ONLY context so the curator can reconcile
-     * it against the candidates and rank it for trimming. Memory is never a
-     * candidate for elimination here — it is still injected unconditionally by
-     * `renderPersistentMemory`. That distinction is what separates this from
-     * #307 Phase 3, which was deferred precisely because routing memory
-     * *through* the filter could drop a curated entry for looking off-topic.
+     * it against the candidates and — only when memory is over budget — rank it
+     * for trimming.
+     *
+     * The distinction from #307 Phase 3 is narrower than "memory is never
+     * eliminated", which is false in the one regime the ranking fires. Under
+     * budget nothing is dropped and the ranking is unused; over budget
+     * `renderPersistentMemory` drops the tail either way, and the tail is now
+     * chosen by relevance rather than by filename. So the curator never causes
+     * a drop — it only decides which drop — where Phase 3 would have had it
+     * filtering memory on every turn, including turns where nothing was over
+     * budget at all.
+     *
+     * The residual risk is real and is why {@link MEMORY_RANKING_PROMPT}
+     * explicitly protects standing rules: a topical ranker puts "never email
+     * the client directly" last by construction, and that is exactly the entry
+     * that must not be dropped.
      */
     memoryStore?: MemoryStore;
     abortSignal?: AbortSignal;
@@ -230,7 +304,13 @@ export async function recallFilter(
   }
 
   const historyBlock = buildRecentTurnsBlock(history);
-  const memoryBlock = buildMemoryBlock(memoryStore);
+  const memoryEntries = readCuratedMemory(memoryStore);
+  const memoryBlock = buildMemoryBlock(memoryEntries);
+  // Only worth a ranking when something will actually be dropped.
+  const needsRanking = memoryChars(memoryEntries) > MAX_PERSISTENT_MEMORY_CHARS;
+  const systemPrompt = needsRanking
+    ? RECALL_FILTER_SYSTEM_PROMPT + MEMORY_RANKING_PROMPT
+    : RECALL_FILTER_SYSTEM_PROMPT;
   const userMessage = [
     `## User request\n${agentInput}`,
     historyBlock,
@@ -242,7 +322,8 @@ export async function recallFilter(
 
   debugLog('recall-filter:request', {
     candidates: candidates.length,
-    memoryEntries: memoryBlock ? memoryBlock.split('\n').length - 1 : 0,
+    memoryEntries: memoryEntries.size,
+    needsRanking,
   });
 
   try {
@@ -258,7 +339,7 @@ export async function recallFilter(
           modelId: site.model.modelId,
           providerOptions: site.providerOptions,
           params: site.params,
-          system: RECALL_FILTER_SYSTEM_PROMPT,
+          system: systemPrompt,
           userContent: userMessage,
         }
       : null;
@@ -279,7 +360,7 @@ export async function recallFilter(
           // Slot params (temperature/topP) apply, but spread BEFORE maxTokens so
           // this site's output cap stays authoritative (#286).
           ...site.params,
-          system: RECALL_FILTER_SYSTEM_PROMPT,
+          system: systemPrompt,
           messages: [{ role: 'user', content: userMessage }],
           maxSteps: 1,
           maxTokens: RECALL_FILTER_MAX_TOKENS,
@@ -299,10 +380,7 @@ export async function recallFilter(
       if (cacheKey) setCachedLLM(cacheKey, rawText);
     }
 
-    const knownMemoryKeys = new Set(
-      memoryStore ? Array.from(memoryStore.getAllMemoryContents().keys()) : [],
-    );
-    const parsed = parseCuratorResponse(rawText, candidates.length, knownMemoryKeys);
+    const parsed = parseCuratorResponse(rawText, candidates.length, new Set(memoryEntries.keys()));
     if (!parsed) {
       debugLog('recall-filter:noop', { reason: 'parse-failed', raw: rawText.slice(0, 200) });
       return { status: 'noop' };
@@ -327,12 +405,7 @@ export async function recallFilter(
       domain,
     }));
     if (reconciliation) debugLog('recall-filter:reconciliation', { note: reconciliation });
-    return {
-      status: 'filtered',
-      facts,
-      ...(reconciliation !== undefined ? { reconciliation } : {}),
-      ...(memoryPriority !== undefined ? { memoryPriority } : {}),
-    };
+    return { status: 'filtered', facts, reconciliation, memoryPriority };
   } catch (err) {
     debugLog('recall-filter:error', err instanceof Error ? err.message : String(err));
     return { status: 'noop' };

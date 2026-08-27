@@ -35,6 +35,7 @@ import { recallFilter } from './recall-filter.js';
 import type { RAGStore, RAGSearchResultWithId } from './rag.js';
 import type { BernardConfig } from './config.js';
 import { clearLLMCache } from './llm-cache.js';
+import { MAX_PERSISTENT_MEMORY_CHARS } from './context-message.js';
 import type { CoreMessage } from 'ai';
 
 function makeConfig(overrides?: Partial<BernardConfig>): BernardConfig {
@@ -218,22 +219,74 @@ describe('recallFilter — memory reconciliation (#371)', () => {
     expect(result.facts[0].fact).toBe('template includes Time ~X hrs');
   });
 
-  it('leaves reconciliation undefined for null / blank / no conflict', async () => {
-    for (const raw of [
-      { keep: [1], reconciliation: null },
-      { keep: [1] },
-      { keep: [1], reconciliation: '   ' },
-    ]) {
-      generateTextMock.mockReset();
-      clearLLMCache();
-      generateTextMock.mockResolvedValue({ text: JSON.stringify(raw) });
-      const { store } = makeRagStore([candidate('a', 'x')]);
-      const result = await recallFilter('q', makeConfig(), store, HISTORY, {
-        memoryStore: makeMemoryStore(MEMORY),
-      });
-      if (result.status !== 'filtered') throw new Error('expected filtered');
-      expect(result.reconciliation).toBeUndefined();
-    }
+  it.each([
+    ['null', { keep: [1], reconciliation: null }],
+    ['absent', { keep: [1] }],
+    ['blank', { keep: [1], reconciliation: '   ' }],
+  ])('leaves reconciliation undefined when %s', async (_label, raw) => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify(raw) });
+    const { store } = makeRagStore([candidate('a', 'x')]);
+    const result = await recallFilter('q', makeConfig(), store, HISTORY, {
+      memoryStore: makeMemoryStore(MEMORY),
+    });
+    if (result.status !== 'filtered') throw new Error('expected filtered');
+    expect(result.reconciliation).toBeUndefined();
+  });
+
+  it('does NOT ask for a memory ranking when memory fits the budget', async () => {
+    // Asking unconditionally costs a verbatim echo of every key — serial output
+    // tokens on a blocking pass — for a ranking nothing will consult.
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ keep: [1] }) });
+    const { store } = makeRagStore([candidate('a', 'x')]);
+
+    await recallFilter('q', makeConfig(), store, HISTORY, {
+      memoryStore: makeMemoryStore(MEMORY),
+    });
+
+    expect(generateTextMock.mock.calls[0][0].system).not.toContain('memoryPriority');
+  });
+
+  it('asks for a memory ranking only once memory is over budget', async () => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ keep: [1] }) });
+    const { store } = makeRagStore([candidate('a', 'x')]);
+    const huge = { a: 'x'.repeat(MAX_PERSISTENT_MEMORY_CHARS + 1) };
+
+    await recallFilter('q', makeConfig(), store, HISTORY, {
+      memoryStore: makeMemoryStore(huge),
+    });
+
+    const system = generateTextMock.mock.calls[0][0].system;
+    expect(system).toContain('memoryPriority');
+    // A topical ranker would bury a standing rule; the prompt must say not to.
+    expect(system).toContain('standing rule');
+  });
+
+  it('never shows the curator `rewriter-hints` — internal infra, not user-curated', async () => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ keep: [1] }) });
+    const { store } = makeRagStore([candidate('a', 'x')]);
+
+    await recallFilter('q', makeConfig(), store, HISTORY, {
+      memoryStore: makeMemoryStore({ ...MEMORY, 'rewriter-hints': 'internal resolver state' }),
+    });
+
+    const sent = generateTextMock.mock.calls[0][0].messages[0].content;
+    expect(sent).toContain('daily-blaze-no-time');
+    expect(sent).not.toContain('rewriter-hints');
+  });
+
+  it('bounds the memory block so the curator never sees more than the agent', async () => {
+    generateTextMock.mockResolvedValue({ text: JSON.stringify({ keep: [1] }) });
+    const { store } = makeRagStore([candidate('a', 'x')]);
+    const many = Object.fromEntries(
+      Array.from({ length: 200 }, (_, i) => [`k${i}`, 'y'.repeat(400)]),
+    );
+
+    await recallFilter('q', makeConfig(), store, HISTORY, { memoryStore: makeMemoryStore(many) });
+
+    const sent = generateTextMock.mock.calls[0][0].messages[0].content as string;
+    expect(sent).toContain('more entries omitted');
+    const block = sent.slice(sent.indexOf('## Curated memory'));
+    expect(block.length).toBeLessThanOrEqual(MAX_PERSISTENT_MEMORY_CHARS + 500);
   });
 
   it('keeps the selection when only the note is malformed', async () => {

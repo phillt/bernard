@@ -155,13 +155,6 @@ describe('buildContextMessage — section order', () => {
 describe('buildContextMessage — curator reconciliation + memory packing (#371)', () => {
   const RAG = [{ fact: 'template includes Time ~X hrs', similarity: 0.9, domain: 'general' }];
 
-  function memoryStore(entries: Record<string, string>) {
-    return {
-      getAllMemoryContents: () => new Map(Object.entries(entries)),
-      getAllScratchContents: () => new Map(),
-    } as never;
-  }
-
   it('renders the reconciliation note inside <recalled_context>, beside verbatim facts', () => {
     const msg = buildContextMessage({
       ragResults: RAG,
@@ -184,7 +177,7 @@ describe('buildContextMessage — curator reconciliation + memory packing (#371)
     // cannot change what the model sees.
     const entries = { alpha: 'a'.repeat(50), beta: 'b'.repeat(50), gamma: 'c'.repeat(50) };
     const withPriority = buildContextMessage({
-      memoryStore: memoryStore(entries),
+      memoryStore: memoryStoreWith(Object.entries(entries)),
       memoryPriority: ['gamma'],
     })!.content as string;
     for (const key of Object.keys(entries)) expect(withPriority).toContain(key);
@@ -198,13 +191,14 @@ describe('buildContextMessage — curator reconciliation + memory packing (#371)
     const big = 'x'.repeat(Math.floor(MAX_PERSISTENT_MEMORY_CHARS * 0.6));
     const entries = { aaa: `boilerplate ${big}`, zzz: `the rule that matters ${big}` };
 
-    const unranked = buildContextMessage({ memoryStore: memoryStore(entries) })!.content as string;
+    const unranked = buildContextMessage({ memoryStore: memoryStoreWith(Object.entries(entries)) })!
+      .content as string;
     expect(unranked).toContain('boilerplate');
     expect(unranked).not.toContain('the rule that matters');
     expect(unranked).toContain('(truncated)');
 
     const ranked = buildContextMessage({
-      memoryStore: memoryStore(entries),
+      memoryStore: memoryStoreWith(Object.entries(entries)),
       memoryPriority: ['zzz', 'aaa'],
     })!.content as string;
     expect(ranked).toContain('the rule that matters');
@@ -217,7 +211,7 @@ describe('buildContextMessage — curator reconciliation + memory packing (#371)
     const big = 'x'.repeat(Math.floor(MAX_PERSISTENT_MEMORY_CHARS * 0.55));
     const entries = { aaa: `alpha ${big}`, bbb: `beta ${big}`, zzz: 'ranked first' };
     const ranked = buildContextMessage({
-      memoryStore: memoryStore(entries),
+      memoryStore: memoryStoreWith(Object.entries(entries)),
       memoryPriority: ['zzz'],
     })!.content as string;
     expect(ranked).toContain('ranked first');

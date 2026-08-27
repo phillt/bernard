@@ -50,9 +50,8 @@ import type { AgentDefinition } from './types.js';
 export interface MainInput {
   userInput: string;
   ragResults?: RAGSearchResult[];
-  /** Curator note on how curated memory bears on `ragResults` (#371). */
+  /** Curator outputs; see `recall-filter.ts` and `orderForPacking` (#371). */
   recallReconciliation?: string;
-  /** Curator's memory ranking; packing order when memory is over budget (#371). */
   memoryPriority?: string[];
   resolvedReferences?: ResolvedEntry[];
   routineSummaries: RoutineSummary[];

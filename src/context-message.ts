@@ -26,18 +26,12 @@ export interface ContextMessageInputs {
   memoryStore?: MemoryStore;
   ragResults?: RAGSearchResult[];
   /**
-   * Curator note on how curated memory bears on `ragResults` (#371) — e.g.
-   * which clause of a still-mostly-correct recalled fact a memory overrides.
-   * Rendered inside `<recalled_context>` beside the facts, never merged into
-   * them, so provenance `rawRef`s and `[^Sn]` citations stay intact.
+   * Curator note on how curated memory bears on `ragResults` (#371). Rendered
+   * inside `<recalled_context>` beside the facts, never merged into them, so
+   * provenance `rawRef`s and `[^Sn]` citations stay intact.
    */
   recallReconciliation?: string;
-  /**
-   * Memory keys, most- to least-relevant this turn. Consulted ONLY as packing
-   * order when memory exceeds {@link MAX_PERSISTENT_MEMORY_CHARS}; under budget
-   * every entry is injected either way, so this is a no-op. See
-   * {@link renderPersistentMemory}.
-   */
+  /** Memory keys, most- to least-relevant. See {@link orderForPacking}. */
   memoryPriority?: string[];
   includeScratch?: boolean;
   mcpServerNames?: string[];
@@ -296,10 +290,10 @@ function orderForPacking(
   const entries = Array.from(memories);
   if (!priority || priority.length === 0) return entries;
   const rank = new Map(priority.map((key, i) => [key, i]));
-  return entries
-    .map((entry, i) => ({ entry, i, rank: rank.get(entry[0]) ?? Infinity }))
-    .sort((a, b) => a.rank - b.rank || a.i - b.i)
-    .map((x) => x.entry);
+  // `Array#sort` is stable (ES2019), so unranked entries — all tied at `last` —
+  // keep their original relative order without an index tiebreak.
+  const last = priority.length;
+  return entries.sort((a, b) => (rank.get(a[0]) ?? last) - (rank.get(b[0]) ?? last));
 }
 
 function renderPersistentMemory(memoryStore?: MemoryStore, priority?: string[]): string | null {
