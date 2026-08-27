@@ -118,7 +118,6 @@ async function searchDuckDuckGo(query: string, limit: number): Promise<SearchRes
 }
 
 function formatResults(results: SearchResult[], ids?: string[]): string {
-  if (results.length === 0) return 'No results found.';
   return results
     .map((r, i) => {
       const idTag = ids?.[i] ? `[${ids[i]}] ` : '';
@@ -160,7 +159,11 @@ export function createWebSearchTool(provenance?: ProvenanceStore) {
           ['tavily', () => searchTavily(query, cappedLimit)],
           ['duckduckgo', () => searchDuckDuckGo(query, cappedLimit)],
         ];
-        const failures: string[] = [];
+        // Two states the old single string conflated. Every provider returns
+        // `undefined` when it is unavailable or threw, and `[]` when it
+        // answered with nothing — so the split needs no provider change.
+        const errored: string[] = [];
+        const empty: string[] = [];
         for (const [name, fn] of attempts) {
           const results = await fn();
           if (results && results.length > 0) {
@@ -176,10 +179,22 @@ export function createWebSearchTool(provenance?: ProvenanceStore) {
               : undefined;
             return `Provider: ${name}\n\n${formatResults(results, ids)}`;
           }
-          failures.push(name);
+          (results === undefined ? errored : empty).push(name);
         }
+        // A provider answered and the web simply has nothing. That is a real,
+        // citable observation and a successful call — deliberately NOT
+        // `Error:`-prefixed (#364). Marking it a failure would teach the tool
+        // profile that an obscure query is a usage mistake, and would suppress
+        // evidence registration for a search that genuinely ran.
+        if (empty.length > 0) {
+          return (
+            `No results for "${query}" (searched: ${empty.join(', ')}). ` +
+            'Try different or broader terms, or call web_read with a known URL.'
+          );
+        }
+        // Nothing answered at all. Retrying is pointless, so say so.
         return (
-          `web_search returned no results (tried: ${failures.join(', ')}). ` +
+          `Error: web_search could not reach any provider (tried: ${errored.join(', ')}). ` +
           'If you know a likely documentation URL, call web_read directly. ' +
           'To enable higher-quality search, set BRAVE_API_KEY or TAVILY_API_KEY.'
         );

@@ -207,11 +207,24 @@ describe('detectToolError', () => {
     });
   });
 
-  describe('web_search tool', () => {
-    it('returns error when result starts with "web_search returned no results"', () => {
-      const msg = 'web_search returned no results (tried: brave, tavily, duckduckgo).';
+  // #364 deleted the last tool-name branch. These are the regression guard for
+  // the DELETION — that web_search is now decided by shape like everything
+  // else — not evidence of a remaining special case.
+  describe('web_search (no longer name-specific — #364)', () => {
+    it('detects the unreachable-providers diagnostic via the shared Error: prefix', () => {
+      const msg =
+        'Error: web_search could not reach any provider (tried: brave, tavily, duckduckgo).';
       const result = detectToolError('web_search', msg);
       expect(result).toEqual({ isError: true, snippet: msg });
+    });
+
+    it('does NOT treat a zero-match search as a failure', () => {
+      // A provider answered and the web has nothing — a successful search.
+      const result = detectToolError(
+        'web_search',
+        'No results for "obscure query" (searched: duckduckgo). Try different or broader terms.',
+      );
+      expect(result).toEqual({ isError: false });
     });
 
     it('returns isError: false for successful provider results', () => {

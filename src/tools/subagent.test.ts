@@ -54,6 +54,7 @@ import { createSubAgentTool, _resetSubAgentState } from './subagent.js';
 import { getActiveCount } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 import { assembleContext } from '../framework/context.js';
+import { detectResultFailure } from '../tool-result-shape.js';
 
 const { getModelForConfig: mockGetModel } = await import('../providers/index.js');
 
@@ -176,12 +177,16 @@ describe('subagent tool', () => {
       { task: 'test' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
     );
-    expect(result).toContain('Sub-agent error:');
+    expect(result).toContain('Sub-agent failed:');
     expect(result).toContain('API rate limit');
+    // The real regression guard (#364): the `toContain` above passed before the
+    // fix too. What was broken is that nothing could SEE this as a failure, so
+    // it registered as citable evidence and bumped successCount.
+    expect(detectResultFailure(result)).toBeDefined();
   });
 
   it('re-throws a cancellation instead of handing it back as a result (#327)', async () => {
-    // A user's Esc used to arrive at the parent as `Sub-agent error: Aborted`
+    // A user's Esc used to arrive at the parent as a `Sub-agent failed: Aborted`
     // — a *successful* tool result the model reads as data and keeps looping
     // on, until its own signal happens to trip.
     mockGenerateText.mockRejectedValue(new DOMException('Aborted', 'AbortError'));

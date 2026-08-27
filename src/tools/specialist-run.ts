@@ -103,9 +103,12 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
           } catch (err: unknown) {
             printSpecialistEnd(id);
             // A cancelled dispatch unwinds; a failed one is a tool result (#327).
+            // The `Error:` prefix is load-bearing, not decoration: it is what
+            // `detectResultFailure` reads (#364). Without it the failure below
+            // registers as citable evidence and bumps this tool's successCount.
             if (isDispatchCancellation(err)) throw err;
             const message = err instanceof Error ? err.message : String(err);
-            return `Specialist error: ${message}`;
+            return `Error: Specialist "${specialistId}" failed: ${message}`;
           }
         },
         () =>

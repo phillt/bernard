@@ -27,9 +27,11 @@
  * the handful whose shape was hard-coded. `open-browser-tab` sat at 84
  * successes / 0 errors across sessions where it demonstrably failed.
  *
- * This module is the single structural answer. Tool-*specific* string
- * conventions that can't be inferred from shape (`web_search`'s "returned no
- * results") deliberately stay with their tool in `detectToolError`.
+ * This module is the single structural answer, and since #364 it is the ONLY
+ * one: `web_search` held the last tool-specific string convention until it was
+ * taught to emit the `"Error: "` prefix, so `detectToolError` now has no
+ * tool-name branches and agrees with `augment`'s shape-only inline gate for
+ * every tool.
  */
 
 /** Max length of a returned error snippet, matching the historical cap. */

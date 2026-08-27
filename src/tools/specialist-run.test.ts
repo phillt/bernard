@@ -61,6 +61,7 @@ vi.mock('ai', async (importOriginal) => {
 });
 
 import { createSpecialistRunTool } from './specialist-run.js';
+import { detectResultFailure } from '../tool-result-shape.js';
 import { _resetPool } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 import { SpecialistStore } from '../specialists.js';
@@ -234,8 +235,9 @@ describe('specialist-run tool', () => {
       { specialistId: 'email-triage', task: 'Triage emails' },
       { toolCallId: '1', messages: [], abortSignal: undefined as any },
     );
-    expect(result).toContain('Specialist error:');
+    expect(result).toContain('Specialist "email-triage" failed:');
     expect(result).toContain('API rate limit');
+    expect(detectResultFailure(result)).toBeDefined();
   });
 
   it('returns error string when concurrent limit exceeded', async () => {
