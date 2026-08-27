@@ -1,5 +1,6 @@
 import { TOOL_WRAPPER_LOG } from './paths.js';
 import { appendJsonl, readJsonlTail, rotateJsonlByCount } from './jsonl.js';
+import type { ToolErrorType } from './framework/tools/types.js';
 
 /**
  * One entry per `tool_wrapper_run` invocation. Appended as a JSONL line to
@@ -13,7 +14,12 @@ export interface ReasoningLogEntry {
   input: string;
   toolCalls: Array<{ tool: string; args: unknown; resultPreview: string }>;
   finalOutput: unknown;
-  status: 'ok' | 'error' | 'parse_failed';
+  /**
+   * `'ok'`, or the `WrapperResult.error` label when there is one — normally a
+   * {@link ToolErrorType} such as `parse_failed` or `step_limit`, but typed
+   * `string` because that field is written by the model and is not constrained.
+   */
+  status: 'ok' | 'error' | ToolErrorType | (string & {});
   error?: string;
   reasoning?: string[];
   /** Session id if available (short identifier to correlate related runs). */

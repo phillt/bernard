@@ -109,8 +109,10 @@ import {
   captureToolCalls,
   createToolWrapperRunTool,
   renderWrapperParentView,
+  reclassifyStepLimit,
 } from './tool-wrapper-run.js';
 import { _resetPool } from './agent-pool.js';
+import { classifyError } from '../error-taxonomy.js';
 import { DEFAULT_SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 import type { AgentContext } from '../framework/context.js';
 
@@ -917,5 +919,61 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     // Release is `withSlot`'s `finally` now, so acquire/release can no longer
     // drift — what is left worth pinning is that each run takes exactly one.
     expect(vi.mocked(withSlot)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('reclassifyStepLimit', () => {
+  // See `reclassifyStepLimit` for why this exists.
+  const parseFailed = {
+    status: 'error' as const,
+    result: 'Specialist did not produce valid structured output',
+    error: 'parse_failed',
+  };
+
+  it('re-labels a parse_failed that was really a step-limit cutoff', () => {
+    const out = reclassifyStepLimit(parseFailed, true, 13);
+    expect(out.status).toBe('error');
+    expect(out.error).toBe('step_limit');
+    expect(out.result).toContain('ran out of steps (13)');
+    // The recovery advice comes from the taxonomy playbook, not a second
+    // hand-written copy, so every surface that renders `step_limit` agrees.
+    expect(out.result).toContain('check the current state before retrying');
+  });
+
+  it('classifies as a real taxonomy category, not `unknown`', () => {
+    // The whole point of the re-label: `classifyError('step_limit')` must
+    // resolve. An unmapped label would be *worse* than the `parse_failed` it
+    // replaces — that one is `retryable: true` with a concrete playbook, and
+    // `unknown` is `retryable: false` / "did not match any known pattern".
+    const cls = classifyError({ message: reclassifyStepLimit(parseFailed, true, 13).error! });
+    expect(cls.category).toBe('step_limit');
+    expect(cls.retryable).toBe(true);
+    expect(cls.correctable).toBe(false); // a budget is not a call-shape mistake
+  });
+
+  it('leaves parse_failed alone when the limit was not hit', () => {
+    expect(reclassifyStepLimit(parseFailed, false, 5)).toBe(parseFailed);
+  });
+
+  it('re-labels an empty `ok` — an unstructured wrapper cut off mid-work', () => {
+    const out = reclassifyStepLimit({ status: 'ok', result: '   ' }, true, 13);
+    expect(out.status).toBe('error');
+    expect(out.error).toBe('step_limit');
+  });
+
+  it('preserves a structured object result even when the limit was hit', () => {
+    // Testing `typeof !== 'string'` here would discard every parsed result.
+    const ok = { status: 'ok' as const, result: { added: 'browsermcp', tools: 12 } };
+    expect(reclassifyStepLimit(ok, true, 13)).toBe(ok);
+  });
+
+  it('preserves substantive text output even when the limit was hit', () => {
+    const ok = { status: 'ok' as const, result: 'Server added and verified.' };
+    expect(reclassifyStepLimit(ok, true, 13)).toBe(ok);
+  });
+
+  it('leaves a genuine non-parse error untouched', () => {
+    const err = { status: 'error' as const, result: 'boom', error: 'exec_failed' };
+    expect(reclassifyStepLimit(err, true, 13)).toBe(err);
   });
 });
