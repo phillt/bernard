@@ -151,3 +151,71 @@ describe('buildContextMessage — section order', () => {
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
   });
 });
+
+describe('buildContextMessage — curator reconciliation + memory packing (#371)', () => {
+  const RAG = [{ fact: 'template includes Time ~X hrs', similarity: 0.9, domain: 'general' }];
+
+  it('renders the reconciliation note inside <recalled_context>, beside verbatim facts', () => {
+    const msg = buildContextMessage({
+      ragResults: RAG,
+      recallReconciliation: 'The memory overrides the Time line; the rest stands.',
+    });
+    const content = msg!.content as string;
+    expect(content).toContain('Reconciliation with curated memory');
+    expect(content).toContain('The memory overrides the Time line');
+    // The fact itself is untouched — provenance rawRefs and [^Sn] depend on it.
+    expect(content).toContain('template includes Time ~X hrs');
+  });
+
+  it('omits the note when the curator produced none', () => {
+    const msg = buildContextMessage({ ragResults: RAG });
+    expect(msg!.content as string).not.toContain('Reconciliation with curated memory');
+  });
+
+  it('under budget: every entry is injected regardless of priority', () => {
+    // The no-op property that makes this safe — nothing is dropped, so order
+    // cannot change what the model sees.
+    const entries = { alpha: 'a'.repeat(50), beta: 'b'.repeat(50), gamma: 'c'.repeat(50) };
+    const withPriority = buildContextMessage({
+      memoryStore: memoryStoreWith(Object.entries(entries)),
+      memoryPriority: ['gamma'],
+    })!.content as string;
+    for (const key of Object.keys(entries)) expect(withPriority).toContain(key);
+    expect(withPriority).not.toContain('(truncated)');
+  });
+
+  it('over budget: survival is decided by filename without a ranking, by relevance with one', () => {
+    // Two entries, each >half the budget, so exactly one can survive. Unranked
+    // they pack in Map order and `aaa` wins on its name alone — `zzz` is the
+    // rule that matters and it is the one that goes. That is the defect.
+    const big = 'x'.repeat(Math.floor(MAX_PERSISTENT_MEMORY_CHARS * 0.6));
+    const entries = { aaa: `boilerplate ${big}`, zzz: `the rule that matters ${big}` };
+
+    const unranked = buildContextMessage({ memoryStore: memoryStoreWith(Object.entries(entries)) })!
+      .content as string;
+    expect(unranked).toContain('boilerplate');
+    expect(unranked).not.toContain('the rule that matters');
+    expect(unranked).toContain('(truncated)');
+
+    const ranked = buildContextMessage({
+      memoryStore: memoryStoreWith(Object.entries(entries)),
+      memoryPriority: ['zzz', 'aaa'],
+    })!.content as string;
+    expect(ranked).toContain('the rule that matters');
+    expect(ranked).not.toContain('boilerplate');
+  });
+
+  it('over budget: unranked entries keep their original relative order after ranked ones', () => {
+    // A truncated or partial ranking must degrade to today's behaviour, not
+    // reshuffle what it did not mention.
+    const big = 'x'.repeat(Math.floor(MAX_PERSISTENT_MEMORY_CHARS * 0.55));
+    const entries = { aaa: `alpha ${big}`, bbb: `beta ${big}`, zzz: 'ranked first' };
+    const ranked = buildContextMessage({
+      memoryStore: memoryStoreWith(Object.entries(entries)),
+      memoryPriority: ['zzz'],
+    })!.content as string;
+    expect(ranked).toContain('ranked first');
+    expect(ranked).toContain('alpha'); // first of the unranked, by original order
+    expect(ranked).not.toContain('beta');
+  });
+});

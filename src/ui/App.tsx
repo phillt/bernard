@@ -2620,6 +2620,8 @@ export function App({
     agentInput: string;
     resolvedEntries: ResolvedEntry[];
     ragResults?: RAGSearchResult[];
+    recallReconciliation?: string;
+    memoryPriority?: string[];
   }> {
     const pipelineStartedAt = Date.now();
     debugLog('pre-turn:start', { inputLen: input.length });
@@ -2696,18 +2698,22 @@ export function App({
     // On any `noop` we leave `ragResults` undefined and the agent runs its own
     // narrow search — i.e. fail-open to legacy behavior.
     let ragResults: RAGSearchResult[] | undefined;
+    let recallReconciliation: string | undefined;
+    let memoryPriority: string[] | undefined;
     if (config.recallFilter && stores.rag) {
       try {
-        const result = await recallFilter(
-          agentInput,
-          config,
-          stores.rag,
-          agent.getHistory(),
-          signal,
-          recordPreTurnUsage,
-        );
+        const result = await recallFilter(agentInput, config, stores.rag, agent.getHistory(), {
+          // Read-only: the curator reconciles against memory and ranks it, but
+          // never drops it — `renderPersistentMemory` still injects every entry
+          // that fits (#371).
+          memoryStore: stores.memory,
+          abortSignal: signal,
+          onUsage: recordPreTurnUsage,
+        });
         if (result.status === 'filtered') {
           ragResults = result.facts;
+          recallReconciliation = result.reconciliation;
+          memoryPriority = result.memoryPriority;
         }
       } catch (err: unknown) {
         debugLog('app:recall-filter', err instanceof Error ? err.message : String(err));
@@ -2720,8 +2726,9 @@ export function App({
       rewritten: agentInput !== input,
       refCount: resolvedEntries.length,
       recallFiltered: ragResults !== undefined,
+      reconciled: recallReconciliation !== undefined,
     });
-    return { agentInput, resolvedEntries, ragResults };
+    return { agentInput, resolvedEntries, ragResults, recallReconciliation, memoryPriority };
   }
 
   /**
@@ -2815,10 +2822,8 @@ export function App({
       // tokens land in the same ledger as the main loop. `processInput` then
       // won't reset and wipe them.
       agent.beginTurnStats();
-      const { agentInput, resolvedEntries, ragResults } = await runPreTurnPipeline(
-        input,
-        controller.signal,
-      );
+      const { agentInput, resolvedEntries, ragResults, recallReconciliation, memoryPriority } =
+        await runPreTurnPipeline(input, controller.signal);
       if (controller.signal.aborted) return;
       // `processInput` pushes the user message to `agent.history` synchronously
       // (before its first internal await), so by the time the returned promise
@@ -2830,6 +2835,8 @@ export function App({
       // detail) rather than the dispatched version.
       const inflight = agent.processInput(agentInput, images, resolvedEntries, {
         ragResults,
+        recallReconciliation,
+        memoryPriority,
         originalInput: input,
       });
       commitNewHistory({ rewriteForLastUser: input !== agentInput ? input : undefined });

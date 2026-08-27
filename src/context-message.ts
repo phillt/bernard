@@ -25,6 +25,14 @@ export interface ContextMessageInputs {
   currentDateTime?: string;
   memoryStore?: MemoryStore;
   ragResults?: RAGSearchResult[];
+  /**
+   * Curator note on how curated memory bears on `ragResults` (#371). Rendered
+   * inside `<recalled_context>` beside the facts, never merged into them, so
+   * provenance `rawRef`s and `[^Sn]` citations stay intact.
+   */
+  recallReconciliation?: string;
+  /** Memory keys, most- to least-relevant. See {@link orderForPacking}. */
+  memoryPriority?: string[];
   includeScratch?: boolean;
   mcpServerNames?: string[];
   routineSummaries?: RoutineSummary[];
@@ -84,8 +92,14 @@ export function buildContextMessage(inputs: ContextMessageInputs): CoreMessage |
       tag: 'specialist_match_advisory',
       render: () => renderSpecialistMatches(inputs.specialistMatches),
     },
-    { tag: 'recalled_context', render: () => renderRecalledContext(inputs.ragResults) },
-    { tag: 'persistent_memory', render: () => renderPersistentMemory(inputs.memoryStore) },
+    {
+      tag: 'recalled_context',
+      render: () => renderRecalledContext(inputs.ragResults, inputs.recallReconciliation),
+    },
+    {
+      tag: 'persistent_memory',
+      render: () => renderPersistentMemory(inputs.memoryStore, inputs.memoryPriority),
+    },
     {
       tag: 'scratch_notes',
       render: () => renderScratchNotes(inputs.memoryStore, inputs.includeScratch ?? true),
@@ -192,7 +206,10 @@ function renderSpecialistMatches(matches?: SpecialistMatch[]): string | null {
     .join('\n');
 }
 
-function renderRecalledContext(ragResults?: RAGSearchResult[]): string | null {
+function renderRecalledContext(
+  ragResults?: RAGSearchResult[],
+  reconciliation?: string,
+): string | null {
   if (!ragResults || ragResults.length === 0) return null;
   const intro =
     'Auto-recalled observations from past sessions. Hints, not rules — they were matched by similarity and may be outdated or from a different context.';
@@ -209,6 +226,12 @@ function renderRecalledContext(ragResults?: RAGSearchResult[]): string | null {
     for (const r of results) {
       blocks.push(`- ${escapeXml(r.fact)}`);
     }
+  }
+  if (reconciliation) {
+    // Sits beside the facts, which stay verbatim. The facts above are hints
+    // matched by similarity; this line is how the user's own curated notes
+    // change the reading of them.
+    blocks.push(`### Reconciliation with curated memory\n${escapeXml(reconciliation)}`);
   }
   return blocks.join('\n');
 }
@@ -240,13 +263,46 @@ export const MAX_PERSISTENT_MEMORY_CHARS = (() => {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 24_000;
 })();
 
-function renderPersistentMemory(memoryStore?: MemoryStore): string | null {
+/**
+ * Packing order for `<persistent_memory>` (#371).
+ *
+ * Only matters when memory exceeds the budget, because that is the only time
+ * anything is dropped — and *that* is the defect this fixes. The loop below
+ * packs in Map order, which traces back to readdir, so for any user over the
+ * cap **which curated facts survive is decided by filename**: `aaron.md` gets
+ * in, `zzz-never-do-this.md` does not, with no relevance judgement anywhere in
+ * the path. `continue` rather than `break` also lets one large early file crowd
+ * out several small later ones.
+ *
+ * When the curator supplied a ranking, pack in that order instead, so the
+ * entries that go are the ones least relevant to this turn. Under budget the
+ * order is irrelevant — everything fits either way and nothing is dropped —
+ * which is what keeps this a no-op for the common case.
+ *
+ * Keys the curator omitted keep their original relative order and follow the
+ * ranked ones, so a hallucinated or truncated ranking degrades to today's
+ * behaviour rather than losing entries outright.
+ */
+function orderForPacking(
+  memories: Map<string, string>,
+  priority?: string[],
+): Array<[string, string]> {
+  const entries = Array.from(memories);
+  if (!priority || priority.length === 0) return entries;
+  const rank = new Map(priority.map((key, i) => [key, i]));
+  // `Array#sort` is stable (ES2019), so unranked entries — all tied at `last` —
+  // keep their original relative order without an index tiebreak.
+  const last = priority.length;
+  return entries.sort((a, b) => (rank.get(a[0]) ?? last) - (rank.get(b[0]) ?? last));
+}
+
+function renderPersistentMemory(memoryStore?: MemoryStore, priority?: string[]): string | null {
   if (!memoryStore) return null;
   const memories = memoryStore.getAllMemoryContents();
   if (memories.size === 0) return null;
   const blocks: string[] = [];
   let used = 0;
-  for (const [key, content] of memories) {
+  for (const [key, content] of orderForPacking(memories, priority)) {
     const block = `### ${escapeXml(key)}\n${escapeXml(content)}`;
     // Whole entries only. Truncating mid-entry would hand the model a fact that
     // stops mid-sentence, which is worse than not having it — it reads as

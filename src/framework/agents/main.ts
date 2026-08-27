@@ -50,6 +50,9 @@ import type { AgentDefinition } from './types.js';
 export interface MainInput {
   userInput: string;
   ragResults?: RAGSearchResult[];
+  /** Curator outputs; see `recall-filter.ts` and `orderForPacking` (#371). */
+  recallReconciliation?: string;
+  memoryPriority?: string[];
   resolvedReferences?: ResolvedEntry[];
   routineSummaries: RoutineSummary[];
   specialistSummaries: SpecialistSummary[];
@@ -145,6 +148,8 @@ function buildMainContextInputs(ctx: AgentContext, input: Omit<MainInput, 'syste
     // their prior (often context-less) message shape.
     currentDateTime: formatCurrentDateTime(),
     ragResults: input.ragResults,
+    recallReconciliation: input.recallReconciliation,
+    memoryPriority: input.memoryPriority,
     mcpServerNames: ctx.mcp.serverNames,
     routineSummaries: input.routineSummaries,
     specialistSummaries: input.specialistSummaries,
