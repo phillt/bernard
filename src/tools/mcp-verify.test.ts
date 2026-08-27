@@ -55,7 +55,8 @@ describe('mcp_verify tool', () => {
       timedOut: false,
     });
     const out = await run({ key: 'figma' });
-    expect(out).toContain('✓ "figma" connected in 120ms');
+    expect(out).toContain('✓ VERDICT: "figma" is correctly configured and working');
+    expect(out).toContain('connected in 120ms');
     expect(out).toContain('3 tool(s)');
     expect(out).toContain('a, b, c');
   });
@@ -71,7 +72,7 @@ describe('mcp_verify tool', () => {
       error: 'Timed out after 15000ms — … "--stdio" …',
     });
     const out = await run({ key: 'figma' });
-    expect(out).toContain('✗ "figma" failed');
+    expect(out).toContain('✗ VERDICT: "figma" failed');
     expect(out).toContain('[timed out]');
     expect(out).toContain('--stdio');
   });
@@ -90,7 +91,9 @@ describe('mcp_verify tool', () => {
   });
 
   describe('live-session reconciliation', () => {
-    it('flags a probe-healthy server that is NOT loaded in this session', async () => {
+    // `connected: false` covers two opposite situations and the verdict differs.
+    // Conflating them is what made a caller delete a config it had just written.
+    it('a JUST-ADDED server reads as success — restart is a next step, not a fault', async () => {
       mockGet.mockReturnValue({ command: 'npx' });
       mockVerify.mockResolvedValue({
         ok: true,
@@ -103,6 +106,36 @@ describe('mcp_verify tool', () => {
         fakeManager({
           registration: {
             connected: false,
+            knownAtStartup: false, // never attempted — added after launch
+            live: [],
+            shadowed: [],
+            missing: ['browser_navigate', 'browser_click'],
+          },
+        }),
+      );
+      const out = await run({ key: 'browsermcp' });
+      expect(out).toContain('✓ VERDICT: "browsermcp" is correctly configured and working');
+      expect(out).toContain('do not re-add or remove it');
+      expect(out).toContain('added after startup, which is expected');
+      expect(out).toContain('Restart Bernard');
+      expect(out).not.toContain('⚠');
+    });
+
+    it('a server that FAILED at startup reads as needing attention, with the reason', async () => {
+      mockGet.mockReturnValue({ command: 'npx' });
+      mockVerify.mockResolvedValue({
+        ok: true,
+        toolCount: 2,
+        toolNames: ['browser_navigate', 'browser_click'],
+        durationMs: 800,
+        timedOut: false,
+      });
+      mockActiveManager.mockReturnValue(
+        fakeManager({
+          registration: {
+            connected: false,
+            knownAtStartup: true, // was in the config at launch and did not connect
+            error: 'handshake timeout',
             live: [],
             shadowed: [],
             missing: ['browser_navigate', 'browser_click'],
@@ -110,10 +143,36 @@ describe('mcp_verify tool', () => {
         }),
       );
       const out = await run({ key: 'playwright' });
-      // The exact "healthy but not there" signal.
-      expect(out).toContain('✓ "playwright" connected in 800ms');
-      expect(out).toContain('NOT loaded');
-      expect(out).toContain('Restart Bernard');
+      expect(out).toContain('⚠ VERDICT:');
+      expect(out).toContain('needs attention');
+      expect(out).toContain('failed to connect (handshake timeout)');
+    });
+
+    it('a name collision needs attention even on a just-added server', async () => {
+      mockGet.mockReturnValue({ command: 'npx' });
+      mockVerify.mockResolvedValue({
+        ok: true,
+        toolCount: 2,
+        toolNames: ['browser_navigate', 'browser_click'],
+        durationMs: 800,
+        timedOut: false,
+      });
+      mockActiveManager.mockReturnValue(
+        fakeManager({
+          registration: {
+            connected: false,
+            knownAtStartup: false,
+            live: [],
+            shadowed: [{ tool: 'browser_navigate', owner: 'playwright' }],
+            missing: ['browser_click'],
+          },
+        }),
+      );
+      const out = await run({ key: 'browsermcp' });
+      expect(out).toContain('⚠ VERDICT:');
+      expect(out).toContain('Name collision');
+      expect(out).toContain('browser_navigate → "playwright"');
+      expect(out).toContain('last-writer-wins');
     });
 
     it('confirms all tools are active when the server is live and unshadowed', async () => {
@@ -129,6 +188,7 @@ describe('mcp_verify tool', () => {
         fakeManager({
           registration: {
             connected: true,
+            knownAtStartup: true,
             live: ['browser_navigate', 'browser_click'],
             shadowed: [],
             missing: [],
@@ -136,7 +196,7 @@ describe('mcp_verify tool', () => {
         }),
       );
       const out = await run({ key: 'playwright' });
-      expect(out).toContain('✓ Live: all 2 tool(s) are active');
+      expect(out).toContain('Live: all 2 tool(s) are active');
     });
 
     it('reports tools shadowed by another server', async () => {
@@ -152,6 +212,7 @@ describe('mcp_verify tool', () => {
         fakeManager({
           registration: {
             connected: true,
+            knownAtStartup: true,
             live: ['browser_click'],
             shadowed: [{ tool: 'browser_navigate', owner: 'other-server' }],
             missing: [],
@@ -178,7 +239,7 @@ describe('mcp_verify tool', () => {
         fakeManager({ statuses: [{ name: 'playwright', connected: true, toolCount: 23 }] }),
       );
       const out = await run({ key: 'playwright' });
-      expect(out).toContain('✗ "playwright" failed');
+      expect(out).toContain('✗ VERDICT: "playwright" failed');
       expect(out).toContain('IS currently loaded in this session (23 tool(s))');
     });
   });

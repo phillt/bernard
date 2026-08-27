@@ -472,6 +472,18 @@ export class MCPManager {
     probeToolNames: string[],
   ): {
     connected: boolean;
+    /**
+     * Whether this session **tried** to connect the server at startup.
+     *
+     * `connected: false` alone conflates two opposite situations, and the
+     * difference is the whole verdict: a server added *since* launch was never
+     * attempted (there is no status row for it), so "not loaded" is the
+     * expected, healthy state and a restart is the ordinary next step; a server
+     * that was in the config at launch and is still not connected actually
+     * failed, and `error` says why. Reading the first as the second is how a
+     * caller ends up deleting a config it just wrote correctly.
+     */
+    knownAtStartup: boolean;
     error?: string;
     live: string[];
     shadowed: { tool: string; owner: string }[];
@@ -487,7 +499,14 @@ export class MCPManager {
       else if (owner) shadowed.push({ tool: t, owner });
       else missing.push(t);
     }
-    return { connected: status?.connected ?? false, error: status?.error, live, shadowed, missing };
+    return {
+      connected: status?.connected ?? false,
+      knownAtStartup: status !== undefined,
+      error: status?.error,
+      live,
+      shadowed,
+      missing,
+    };
   }
 
   /** Gracefully closes all active MCP client connections. */

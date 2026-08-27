@@ -109,6 +109,7 @@ import {
   captureToolCalls,
   createToolWrapperRunTool,
   renderWrapperParentView,
+  reclassifyStepLimit,
 } from './tool-wrapper-run.js';
 import { _resetPool } from './agent-pool.js';
 import { DEFAULT_SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
@@ -917,5 +918,61 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     // Release is `withSlot`'s `finally` now, so acquire/release can no longer
     // drift — what is left worth pinning is that each run takes exactly one.
     expect(vi.mocked(withSlot)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('reclassifyStepLimit', () => {
+  // A dispatch cut off at its step limit never reaches the turn where it would
+  // write its JSON, so `wrapWrapperResult` sees empty text and reports
+  // `parse_failed` — true, and useless: it blames the output format for a
+  // budget problem. Observed on a real run where a specialist burned all 13
+  // steps and the parent was told its JSON was malformed.
+  const parseFailed = {
+    status: 'error' as const,
+    result: 'Specialist did not produce valid structured output',
+    error: 'parse_failed',
+  };
+
+  it('re-labels a parse_failed that was really a step-limit cutoff', () => {
+    const out = reclassifyStepLimit(parseFailed, true, 13);
+    expect(out.status).toBe('error');
+    expect(out.error).toBe('step_limit');
+    expect(out.result).toContain('ran out of steps (13)');
+    expect(out.result).toContain('may be partially applied');
+  });
+
+  it('leaves parse_failed alone when the limit was not hit', () => {
+    expect(reclassifyStepLimit(parseFailed, false, 5)).toBe(parseFailed);
+  });
+
+  it('omits the step count when it is unknown', () => {
+    const out = reclassifyStepLimit(parseFailed, true, undefined);
+    expect(out.result).toContain('ran out of steps before');
+  });
+
+  it('re-labels an empty `ok` — an unstructured wrapper cut off mid-work', () => {
+    // `wantStructured: false` never parses, so a cutoff hands the parent an
+    // empty *success*, which is worse than a wrong label.
+    const out = reclassifyStepLimit({ status: 'ok', result: '   ' }, true, 13);
+    expect(out.status).toBe('error');
+    expect(out.error).toBe('step_limit');
+  });
+
+  it('preserves a structured object result even when the limit was hit', () => {
+    // The model may have wrapped up on its last step. Testing `typeof !==
+    // 'string'` here would discard every successfully-parsed structured
+    // result — exactly the work this guard exists to keep.
+    const ok = { status: 'ok' as const, result: { added: 'browsermcp', tools: 12 } };
+    expect(reclassifyStepLimit(ok, true, 13)).toBe(ok);
+  });
+
+  it('preserves substantive text output even when the limit was hit', () => {
+    const ok = { status: 'ok' as const, result: 'Server added and verified.' };
+    expect(reclassifyStepLimit(ok, true, 13)).toBe(ok);
+  });
+
+  it('leaves a genuine non-parse error untouched', () => {
+    const err = { status: 'error' as const, result: 'boom', error: 'exec_failed' };
+    expect(reclassifyStepLimit(err, true, 13)).toBe(err);
   });
 });

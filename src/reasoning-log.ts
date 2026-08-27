@@ -13,7 +13,7 @@ export interface ReasoningLogEntry {
   input: string;
   toolCalls: Array<{ tool: string; args: unknown; resultPreview: string }>;
   finalOutput: unknown;
-  status: 'ok' | 'error' | 'parse_failed';
+  status: 'ok' | 'error' | 'parse_failed' | 'step_limit';
   error?: string;
   reasoning?: string[];
   /** Session id if available (short identifier to correlate related runs). */
