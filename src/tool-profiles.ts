@@ -372,12 +372,6 @@ export class ToolProfileStore {
  */
 export const MAX_PROFILE_PROMPT_CHARS = 4000;
 
-/**
- * Renders tool profiles into a compact system-prompt block. Only profiles with
- * at least one guideline or bad example are included. At most 2 bad examples
- * shown per tool. Profiles are sorted by error count (most errors first) and
- * the total output is capped at {@link MAX_PROFILE_PROMPT_CHARS}.
- */
 /** Dismissed failures before a tool is called out as unreliable in the prompt. */
 const UNRELIABLE_MIN_DISMISSED = 5;
 
@@ -411,6 +405,13 @@ function dismissedTotal(profile: ToolProfile): number {
 
 /**
  * Renders the `## Tool Usage Profiles` block.
+ *
+ * A profile is included when it has a guideline, a bad example, **or** at least
+ * {@link UNRELIABLE_MIN_DISMISSED} dismissed failures — that third arm is what
+ * lets a tool with nothing learned about it still be reported as unreliable. At
+ * most 2 bad examples are shown per tool; profiles are sorted by error count
+ * (most errors first) and the block is capped at
+ * {@link MAX_PROFILE_PROMPT_CHARS}.
  *
  * NOT filtered by the live tool registry, deliberately. Profiles are never
  * deleted, so a removed MCP server leaves its tools' profiles behind forever,
