@@ -35,6 +35,24 @@ export interface ToolProfile {
   updatedAt: string;
   errorCount: number;
   successCount: number;
+  /**
+   * Failures that were detected but **dismissed** as non-correctable, keyed by
+   * taxonomy category (#366).
+   *
+   * `recordOutcome` only records a bad example — and only bumps `errorCount` —
+   * when `classifyError(...).correctable`. Everything else hit a `debugLog` and
+   * vanished: neither counter moved, so a tool that fails constantly in a way
+   * the model cannot fix was indistinguishable from one that never fails.
+   * `delegate_browser-control` read 36 successes / 0 errors across sessions
+   * where its delegations demonstrably failed.
+   *
+   * Keyed by category rather than a bare total because the useful question is
+   * *why* — a tool sitting at `{unknown: 47}` is evidence the taxonomy may be
+   * too narrow for MCP-authored messages, which a single integer cannot show.
+   *
+   * Optional: profiles written before #366 simply lack it.
+   */
+  dismissed?: Record<string, number>;
 }
 
 export const MAX_PROFILE_EXAMPLES = 5;
@@ -256,6 +274,19 @@ export class ToolProfileStore {
     this.save({ ...profile, successCount: profile.successCount + 1 });
   }
 
+  /**
+   * Records a failure that was detected but is not a call-shape mistake, so
+   * there is nothing for the model to learn (#366). Deliberately does NOT touch
+   * `errorCount`, which is the count of failures that produced a bad example —
+   * conflating them would make the learned-example ratio meaningless.
+   */
+  recordDismissed(toolKey: string, category: string): void {
+    const profile = this.getOrCreate(toolKey);
+    const dismissed = { ...(profile.dismissed ?? {}) };
+    dismissed[category] = (dismissed[category] ?? 0) + 1;
+    this.save({ ...profile, dismissed });
+  }
+
   recordGoodExample(toolKey: string, args: string, note?: string): void {
     const profile = this.getOrCreate(toolKey);
     const good: ToolProfileExample = {
@@ -347,10 +378,69 @@ export const MAX_PROFILE_PROMPT_CHARS = 4000;
  * shown per tool. Profiles are sorted by error count (most errors first) and
  * the total output is capped at {@link MAX_PROFILE_PROMPT_CHARS}.
  */
+/** Dismissed failures before a tool is called out as unreliable in the prompt. */
+const UNRELIABLE_MIN_DISMISSED = 5;
+
+/**
+ * Session-frozen snapshot of each profile's dismissed totals.
+ *
+ * The system prompt is rebuilt **every turn** (`run.ts` calls
+ * `def.systemPrompt` per dispatch) and is the Anthropic prompt-cache prefix
+ * (#269). A live count would therefore change the cached prefix on every
+ * dismissed failure — and dismissals are frequent, since every MCP, delegate
+ * and sub-agent failure lands there — trading the ~90% cache discount for a
+ * full re-bill of the whole prefix, repeatedly.
+ *
+ * Freezing at first use keeps the prefix byte-stable for the session while
+ * still telling the model what it needs. Operators get the live numbers from
+ * `bernard tool-profiles`, which reads disk directly.
+ */
+const dismissedSnapshot = new Map<string, number>();
+let snapshotTaken = false;
+
+/** Test seam — drops the session freeze so a suite can vary the input. */
+export function _resetDismissedSnapshot(): void {
+  dismissedSnapshot.clear();
+  snapshotTaken = false;
+}
+
+function dismissedTotal(profile: ToolProfile): number {
+  if (!snapshotTaken) return Object.values(profile.dismissed ?? {}).reduce((a, b) => a + b, 0);
+  return dismissedSnapshot.get(profile.toolName) ?? 0;
+}
+
+/**
+ * Renders the `## Tool Usage Profiles` block.
+ *
+ * NOT filtered by the live tool registry, deliberately. Profiles are never
+ * deleted, so a removed MCP server leaves its tools' profiles behind forever,
+ * and this sorts by `errorCount` descending — a dead tool could out-rank live
+ * ones at the character budget. Filtering needs to tell an orphaned MCP profile
+ * from a built-in one, which needs the `ToolMeta.category` link proposed in
+ * #377; and the registry is not in scope here anyway, since `agent.ts`
+ * pre-renders this prompt before tools are built. Narrower than it looks: a
+ * tool that no longer exists cannot be called, so it can only carry dismissed
+ * counts it accumulated before its server was removed.
+ */
 export function buildToolProfilesPrompt(store: ToolProfileStore): string {
-  const profiles = store
-    .list()
-    .filter((p) => p.guidelines.length > 0 || p.badExamples.length > 0)
+  const all = store.list();
+  if (!snapshotTaken) {
+    for (const p of all) {
+      dismissedSnapshot.set(
+        p.toolName,
+        Object.values(p.dismissed ?? {}).reduce((a, b) => a + b, 0),
+      );
+    }
+    snapshotTaken = true;
+  }
+
+  const profiles = all
+    .filter(
+      (p) =>
+        p.guidelines.length > 0 ||
+        p.badExamples.length > 0 ||
+        dismissedTotal(p) >= UNRELIABLE_MIN_DISMISSED,
+    )
     .sort((a, b) => b.errorCount - a.errorCount);
 
   if (profiles.length === 0) return '';
@@ -367,6 +457,17 @@ export function buildToolProfilesPrompt(store: ToolProfileStore): string {
 
     for (const g of profile.guidelines) {
       sectionLines.push(`- ${g}`);
+    }
+
+    const dismissed = dismissedTotal(profile);
+    if (dismissed >= UNRELIABLE_MIN_DISMISSED) {
+      // Actionable, unlike the raw count: the model cannot fix these calls, but
+      // it can choose a different route or stop retrying the same one.
+      sectionLines.push(
+        `- Unreliable: ${dismissed} recent failure(s) here were environmental, not call-shape ` +
+          `mistakes. Retrying the same call is unlikely to help — prefer an alternative tool or ` +
+          `report the blocker.`,
+      );
     }
 
     const shownBad = profile.badExamples.slice(-2);
