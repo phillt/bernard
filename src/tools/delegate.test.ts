@@ -49,6 +49,7 @@ import { buildDelegateSystemPrompt } from '../framework/agents/mcp-delegate.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { runPAC } from '../framework/pac/run-pac.js';
 import { withUncappedSlot } from './agent-pool.js';
+import { detectResultFailure } from '../tool-result-shape.js';
 
 function makeCtx(over: Record<string, any> = {}): any {
   return {
@@ -193,10 +194,16 @@ describe('dispatchServerDelegate', () => {
     expect(withUncappedSlot).toHaveBeenCalledTimes(1);
   });
 
-  it('catches a dispatch throw and returns an error string', async () => {
+  it('catches a dispatch throw and returns a DETECTABLE error string (#364)', async () => {
+    // With delegation on, `delegate_<server>` is the main agent's MCP surface,
+    // so an undetectable failure here registers as citable evidence and bumps
+    // successCount — observed at 36 successes / 0 errors. This site had no
+    // coverage of the failure *shape* at all, which is how it drifted.
     vi.mocked(runDefinition).mockRejectedValueOnce(new Error('boom'));
     const out = await dispatchServerDelegate(makeCtx(), { server: 'google', task: 'x' });
     expect(out).toContain('boom');
+    expect(out).toContain('Delegation to "google" failed');
+    expect(detectResultFailure(out)).toBeDefined();
   });
 
   it('re-throws a cancellation rather than returning it as a summary (#327)', async () => {

@@ -5,6 +5,7 @@ vi.mock('ai', () => ({
 }));
 
 import { createWebSearchTool } from './web-search.js';
+import { detectResultFailure } from '../tool-result-shape.js';
 
 // ---------------------------------------------------------------------------
 // Fetch mock helpers
@@ -271,7 +272,7 @@ describe('createWebSearchTool', () => {
 
       expect(result).not.toMatch(/^Provider: brave/);
       // Should have fallen through to DDG
-      expect(result).toMatch(/Provider: duckduckgo|web_search returned no results/);
+      expect(result).toContain('Provider: duckduckgo');
     });
 
     it('falls through to next provider when Tavily fetch throws', async () => {
@@ -306,10 +307,11 @@ describe('createWebSearchTool', () => {
 
       const result = await tool.execute({ query: 'hopeless query' });
 
-      expect(result).toContain('web_search returned no results');
+      expect(result).toContain('Error: web_search could not reach any provider');
       expect(result).toContain('brave');
       expect(result).toContain('tavily');
       expect(result).toContain('duckduckgo');
+      expect(detectResultFailure(result)).toBeDefined();
     });
 
     it('diagnostic string suggests calling web_read directly', async () => {
@@ -406,7 +408,7 @@ describe('createWebSearchTool', () => {
       expect(calledUrl).toContain('vitest');
     });
 
-    it('returns diagnostic when DDG returns non-OK status', async () => {
+    it('returns an Error: diagnostic when DDG returns non-OK status', async () => {
       vi.stubGlobal(
         'fetch',
         createMockFetch({
@@ -416,10 +418,15 @@ describe('createWebSearchTool', () => {
 
       const result = await tool.execute({ query: 'test' });
 
-      expect(result).toContain('web_search returned no results');
+      // Non-OK response → `undefined` → nothing answered at all.
+      expect(result).toContain('Error: web_search could not reach any provider');
+      expect(detectResultFailure(result)).toBeDefined();
     });
 
-    it('returns diagnostic when DDG HTML has no result nodes', async () => {
+    it('returns a non-error "no results" message when DDG responds with zero matches', async () => {
+      // A provider answered and the web has nothing. That is a successful
+      // search, not a tool failure (#364) — marking it an error would teach
+      // the profile that an obscure query is a usage mistake.
       vi.stubGlobal(
         'fetch',
         createMockFetch({
@@ -429,7 +436,27 @@ describe('createWebSearchTool', () => {
 
       const result = await tool.execute({ query: 'test' });
 
-      expect(result).toContain('web_search returned no results');
+      expect(result).toContain('No results for "test"');
+      expect(result).toContain('duckduckgo');
+      expect(detectResultFailure(result)).toBeUndefined();
+    });
+
+    it('prefers the "no results" message when some providers errored and one answered empty', async () => {
+      vi.stubEnv('BRAVE_API_KEY', 'test-key');
+      vi.stubGlobal(
+        'fetch',
+        createMockFetch({
+          'api.search.brave.com': () => {
+            throw new Error('network error');
+          },
+          'html.duckduckgo.com': () => htmlResponse(DDG_HTML_EMPTY),
+        }),
+      );
+
+      const result = await tool.execute({ query: 'test' });
+
+      expect(result).toContain('No results for');
+      expect(detectResultFailure(result)).toBeUndefined();
     });
   });
 

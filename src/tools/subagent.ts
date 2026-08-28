@@ -98,9 +98,12 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
           } catch (err: unknown) {
             printSubAgentEnd(id);
             // A cancelled dispatch unwinds; a failed one is a tool result (#327).
+            // The `Error:` prefix is load-bearing, not decoration: it is what
+            // `detectResultFailure` reads (#364). Without it the failure below
+            // registers as citable evidence and bumps this tool's successCount.
             if (isDispatchCancellation(err)) throw err;
             const message = err instanceof Error ? err.message : String(err);
-            return `Sub-agent error: ${message}`;
+            return `Error: Sub-agent failed: ${message}`;
           }
         },
         () =>

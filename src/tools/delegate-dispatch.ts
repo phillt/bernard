@@ -91,8 +91,12 @@ export async function dispatchServerDelegate(
       const message = err instanceof Error ? err.message : String(err);
       debugLog('delegate:error', { server, message });
       // A cancelled dispatch unwinds; a failed one is a tool result (#327).
+      // The `Error:` prefix is load-bearing, not decoration: it is what
+      // `detectResultFailure` reads (#364). Without it the failure below
+      // registers as citable evidence and bumps this tool's successCount —
+      // and with delegation on, this tool IS the main agent's MCP surface.
       if (isDispatchCancellation(err)) throw err;
-      return `Delegation to "${server}" failed: ${message}`;
+      return `Error: Delegation to "${server}" failed: ${message}`;
     }
   });
 }

@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { TOOL_PROFILES_DIR } from './paths.js';
 import { atomicWriteFileSync, seedOnce } from './fs-utils.js';
 import type { ToolErrorType } from './framework/tools/types.js';
-import { ERROR_SNIPPET_MAX, detectResultFailure } from './tool-result-shape.js';
+import { detectResultFailure } from './tool-result-shape.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -75,28 +75,19 @@ export type ToolErrorInfo = { isError: true; snippet: string } | { isError: fals
 
 /**
  * Adapts the shared structural predicate (`detectResultFailure`) to the
- * `ToolErrorInfo` union, plus `web_search`'s name-specific string convention —
- * the one failure with no structural marker to read.
+ * `ToolErrorInfo` union.
+ *
+ * Every failure is decided by shape (#363): `shell`'s `{is_error}`, `file_*`'s
+ * `{error}`, MCP's `CallToolResult.isError`, and the `"Error"`-prefixed string.
+ * There are **no tool-name branches left** — `web_search` held the last one
+ * until #364 taught it to emit the prefix, which also ended the one case where
+ * this function and `augment`'s shape-only inline gate disagreed.
+ *
+ * `toolName` is retained for the ~30 call sites that pass it and because a
+ * future convention may need it, but nothing reads it today. A follow-up could
+ * reasonably inline this into `detectResultFailure`.
  */
-export function detectToolError(toolName: string, result: unknown): ToolErrorInfo {
-  // web_search: a provider-chain failure is a plain diagnostic string with no
-  // structural marker, so it can only be recognized by its own convention.
-  // This is the one rule `detectResultFailure` cannot infer from shape — and
-  // the reason `augment`'s inline check, which reads shape only, still
-  // disagrees with this function for exactly this tool. The deeper fix is at
-  // the producer (have `web_search` return a marked shape); see #364.
-  if (toolName === 'web_search' && typeof result === 'string') {
-    if (result.startsWith('web_search returned no results')) {
-      return { isError: true, snippet: result.slice(0, ERROR_SNIPPET_MAX) };
-    }
-    return { isError: false };
-  }
-
-  // Everything else is decided by shape (#363). `shell`'s `{is_error}`,
-  // `file_*`'s `{error}`, MCP's `CallToolResult.isError`, and the historical
-  // "Error"-prefixed string are all recognized by the one shared predicate —
-  // previously each was a separate per-tool-name branch, which is why
-  // `file_write` and every MCP tool were silently uncovered.
+export function detectToolError(_toolName: string, result: unknown): ToolErrorInfo {
   const snippet = detectResultFailure(result);
   return snippet === undefined ? { isError: false } : { isError: true, snippet };
 }
