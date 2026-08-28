@@ -88,6 +88,10 @@ function recordOutcome(
         });
         printInfo(`  ~ profile ${profileKey} — recorded error (${cls.category})`);
       } else {
+        // Detected, but not a call-shape mistake — nothing to learn. Counting
+        // it keeps the tool's record honest: before #366 this branch moved
+        // neither counter, so the call simply vanished from the profile.
+        profileStore.recordDismissed(profileKey, cls.category);
         debugLog(`augment:${toolName}:error:dismissed`, {
           profileKey,
           category: cls.category,

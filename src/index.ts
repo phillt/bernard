@@ -57,6 +57,7 @@ import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
 import { listMCPServers, removeMCPServer, MCPManager, setActiveMCPManager } from './mcp.js';
+import { ToolProfileStore } from './tool-profiles.js';
 import { runFirstTimeSetup } from './setup.js';
 import { getLocalVersion, startupUpdateCheck, interactiveUpdate } from './update.js';
 import { factsList, factsSearch, clearFacts } from './facts-cli.js';
@@ -1091,6 +1092,52 @@ program
       autoUpdate: enabled,
     });
     printInfo(`Auto-update ${enabled ? 'enabled' : 'disabled'}.`);
+  });
+
+program
+  .command('tool-profiles')
+  .description('Show learned tool reliability: successes, learned errors, and dismissed failures')
+  .action(() => {
+    try {
+      const store = new ToolProfileStore({ seed: false });
+      const rows = store
+        .list()
+        .map((p) => {
+          const dismissed = Object.values(p.dismissed ?? {}).reduce((a, b) => a + b, 0);
+          const byCategory = Object.entries(p.dismissed ?? {})
+            .sort((a, b) => b[1] - a[1])
+            .map(([c, n]) => `${c}:${n}`)
+            .join(' ');
+          return { name: p.toolName, ok: p.successCount, err: p.errorCount, dismissed, byCategory };
+        })
+        .filter((r) => r.ok > 0 || r.err > 0 || r.dismissed > 0)
+        // Most-failing first — the reason to run this is to find what is broken.
+        .sort((a, b) => b.err + b.dismissed - (a.err + a.dismissed) || b.ok - a.ok);
+
+      if (rows.length === 0) {
+        printInfo('No tool profiles recorded yet.');
+        return;
+      }
+      const pad = Math.max(...rows.map((r) => r.name.length));
+      printInfo('tool'.padEnd(pad) + '   ok   learned  dismissed');
+      for (const r of rows) {
+        const line =
+          r.name.padEnd(pad) +
+          String(r.ok).padStart(5) +
+          String(r.err).padStart(9) +
+          String(r.dismissed).padStart(11) +
+          (r.byCategory ? `   (${r.byCategory})` : '');
+        printInfo(line);
+      }
+      printInfo('');
+      printInfo('learned   = failures that were call-shape mistakes, recorded as bad examples');
+      printInfo('dismissed = failures the model cannot fix (environmental) — a high count with no');
+      printInfo('            learned errors means the tool is unreliable, not misused');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
   });
 
 program

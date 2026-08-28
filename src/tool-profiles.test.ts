@@ -4,6 +4,7 @@ import {
   detectToolError,
   ToolProfileStore,
   buildToolProfilesPrompt,
+  _resetDismissedSnapshot,
   MAX_PROFILE_EXAMPLES,
   MAX_PROFILE_PROMPT_CHARS,
   type ToolProfile,
@@ -621,6 +622,55 @@ describe('ToolProfileStore', () => {
     });
   });
 
+  describe('recordDismissed (#366)', () => {
+    it('counts by category and leaves BOTH other counters alone', () => {
+      // The point of a separate counter: `errorCount` means "produced a bad
+      // example". Folding dismissals into it would make the learned ratio lie.
+      const profile = makeProfile({
+        toolName: 'delegate_browser-control',
+        successCount: 36,
+        errorCount: 0,
+      });
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(profile));
+
+      store.recordDismissed('delegate_browser-control', 'unknown');
+
+      const saved = JSON.parse(
+        vi.mocked(fsUtils.atomicWriteFileSync).mock.calls.at(-1)![1] as string,
+      );
+      expect(saved.dismissed).toEqual({ unknown: 1 });
+      expect(saved.successCount).toBe(36);
+      expect(saved.errorCount).toBe(0);
+    });
+
+    it('accumulates per category rather than a bare total', () => {
+      // A tool sitting at {unknown: 47} is evidence the taxonomy may be too
+      // narrow for MCP-authored messages; a single integer cannot show that.
+      const profile = makeProfile({ toolName: 'x', dismissed: { unknown: 4, rate_limit: 1 } });
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(profile));
+
+      store.recordDismissed('x', 'unknown');
+
+      const saved = JSON.parse(
+        vi.mocked(fsUtils.atomicWriteFileSync).mock.calls.at(-1)![1] as string,
+      );
+      expect(saved.dismissed).toEqual({ unknown: 5, rate_limit: 1 });
+    });
+
+    it('starts from nothing on a profile written before #366', () => {
+      const profile = makeProfile({ toolName: 'legacy' });
+      delete (profile as Record<string, unknown>).dismissed;
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(profile));
+
+      store.recordDismissed('legacy', 'timeout');
+
+      const saved = JSON.parse(
+        vi.mocked(fsUtils.atomicWriteFileSync).mock.calls.at(-1)![1] as string,
+      );
+      expect(saved.dismissed).toEqual({ timeout: 1 });
+    });
+  });
+
   describe('recordSuccess', () => {
     it('increments successCount without storing an example', () => {
       const profile = makeProfile({ toolName: 'shell.gh', successCount: 12 });
@@ -811,7 +861,46 @@ describe('buildToolProfilesPrompt', () => {
     vi.mocked(fs.readdirSync).mockReturnValue([] as any);
     vi.mocked(fs.existsSync).mockReturnValue(false);
     vi.mocked(fs.readFileSync).mockReturnValue('');
+    _resetDismissedSnapshot();
     store = new ToolProfileStore();
+  });
+
+  describe('unreliable tools (#366)', () => {
+    function withProfile(profile: Record<string, unknown>) {
+      vi.mocked(fs.readdirSync).mockReturnValue(['t.json'] as any);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(profile));
+    }
+
+    it('calls out a tool whose failures are all environmental', () => {
+      // The case that motivated #366: no guidelines, no bad examples — before
+      // this the tool was simply absent from the prompt and read 36/0.
+      withProfile(makeProfile({ toolName: 'delegate_x', dismissed: { unknown: 6 } }));
+      const out = buildToolProfilesPrompt(store);
+      expect(out).toContain('delegate_x');
+      expect(out).toContain('Unreliable: 6 recent failure(s)');
+      // Actionable, not just a number.
+      expect(out).toContain('prefer an alternative tool');
+    });
+
+    it('stays quiet below the threshold', () => {
+      withProfile(makeProfile({ toolName: 'delegate_x', dismissed: { unknown: 4 } }));
+      expect(buildToolProfilesPrompt(store)).toBe('');
+    });
+
+    it('FREEZES the count for the session so the prompt-cache prefix stays stable', () => {
+      // The system prompt is rebuilt every turn and is the Anthropic cache
+      // prefix (#269). A live count would change it on every dismissed failure
+      // — and dismissals are frequent — re-billing the whole prefix each time.
+      withProfile(makeProfile({ toolName: 'delegate_x', dismissed: { unknown: 6 } }));
+      const first = buildToolProfilesPrompt(store);
+
+      withProfile(makeProfile({ toolName: 'delegate_x', dismissed: { unknown: 99 } }));
+      expect(buildToolProfilesPrompt(store)).toBe(first);
+
+      // A new session picks up the new number.
+      _resetDismissedSnapshot();
+      expect(buildToolProfilesPrompt(store)).toContain('Unreliable: 99');
+    });
   });
 
   it('returns empty string when no profiles have guidelines or bad examples', () => {
