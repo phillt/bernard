@@ -2,6 +2,7 @@ import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import { HintRow, HINT_CLOSE_ANY } from '../hints.js';
 import { isAcknowledgeKey } from './overlay-contract.js';
+import { SLASH_COMMANDS } from '../slash-commands.js';
 
 interface HelpOverlayProps {
   onClose: () => void;
@@ -12,47 +13,22 @@ interface HelpRow {
   description: string;
 }
 
-const HELP_ROWS: HelpRow[] = [
-  { command: '/help', description: 'Show this help' },
-  { command: '/clear', description: 'Clear conversation (--save / -s to summarize first)' },
-  { command: '/compact', description: 'Compress conversation history in-place' },
-  { command: '/task', description: 'Run an isolated task (no history, structured output)' },
-  { command: '/image', description: 'Attach an image: /image <path> [prompt]' },
-  { command: '/memory', description: 'List persistent memories' },
-  { command: '/scratch', description: 'List session scratch notes' },
-  { command: '/mcp', description: 'List MCP servers and tools' },
-  { command: '/cron', description: 'Show cron jobs and daemon status' },
-  { command: '/facts', description: 'Show RAG facts in the current context window' },
-  { command: '/lineup', description: 'Edit the active lineup (per-role × premium/mid/cheap)' },
-  { command: '/lineups', description: 'List, switch, or create tier lineups' },
-  { command: '/models', description: 'Browse the model catalog and add custom providers' },
-  { command: '/refresh-models', description: 'Force-refresh the model catalog from the gateway' },
-  { command: '/provider', description: 'Manage providers (alias of /models)' },
-  { command: '/theme', description: 'Switch color theme' },
-  { command: '/voice', description: 'Toggle text-to-speech readback and backend' },
-  { command: '/routines', description: 'List saved routines' },
-  { command: '/create-routine', description: 'Create a routine with guided AI assistance' },
-  { command: '/create-task', description: 'Create a task routine with guided AI assistance' },
-  { command: '/specialists', description: 'List specialist agents' },
-  { command: '/create-specialist', description: 'Create a specialist with guided AI assistance' },
-  { command: '/candidates', description: 'Review specialist suggestions' },
-  {
-    command: '/options',
-    description: 'View and set options (max-tokens, max-steps, shell-timeout, token-window)',
-  },
-  {
-    command: '/agent-options',
-    description: 'Configure agent behavior (toggles, thresholds, saved assets)',
-  },
-  {
-    command: '/tool-permissions',
-    description: 'View/remove profile tool grants; toggle skip-permissions mode',
-  },
-  { command: '/profiles', description: 'Switch / create settings profiles' },
-  { command: '/manage-profiles', description: 'Rename or delete saved profiles' },
-  { command: '/update', description: 'Check for and install updates' },
-  { command: '/exit', description: 'Quit Bernard' },
-];
+/**
+ * The `Commands` section, derived from the one slash-command catalogue rather
+ * than retyped here (#390). This was a hand-maintained second copy of it; see
+ * `SLASH_COMMANDS` for what that cost and `SlashCommand.detail` for the
+ * fallback below.
+ *
+ * The field rename (`name` → `command`) is a one-line bridge on purpose:
+ * `HelpRow` is the row shape this file's renderer takes, and `EDITING_ROWS`
+ * below reuses it for keyboard chords that are not slash commands at all — so
+ * renaming either side to make the shapes line up would have coupled the chord
+ * table to the command catalogue for no gain.
+ */
+const HELP_ROWS: readonly HelpRow[] = SLASH_COMMANDS.map((cmd) => ({
+  command: cmd.name,
+  description: cmd.detail ?? cmd.description,
+}));
 
 /**
  * The line-editor chords (#356), which work in the prompt and in every overlay
@@ -85,10 +61,11 @@ const SECTIONS: readonly { title: string; rows: readonly HelpRow[] }[] = [
 ];
 
 /**
- * Read-only help screen rendered as an overlay. Replaces the legacy
- * `printHelp()` stdout dump. Esc / Enter / q close it; Shift-Tab cycling
- * still works because the active overlay = 'help' is treated like the
- * other viewer overlays (status, sources).
+ * Read-only help screen rendered as an overlay, replacing a legacy stdout dump
+ * that #390 finally deleted — it had outlived its last caller and gone stale by
+ * ten commands. Esc / Enter / q close it; Shift-Tab cycling still works because
+ * the active overlay = 'help' is treated like the other viewer overlays
+ * (status, sources).
  */
 export function HelpOverlay({ onClose }: HelpOverlayProps) {
   const colors = getThemeColors();

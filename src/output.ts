@@ -385,36 +385,3 @@ export function printSpecialistEnd(_id: number): void {}
 export function printTaskStart(_task: string): void {}
 
 export function printTaskEnd(_result: string): void {}
-
-export function printHelp(): void {
-  const lines = [
-    '\nCommands:',
-    '  /help    — Show this help',
-    '  /clear   — Clear conversation (--save/-s to summarize first)',
-    '  /compact — Compress conversation history in-place',
-    '  /task    — Run an isolated task (no history, structured output)',
-    '  /image   — Attach an image: /image <path> [prompt]',
-    '  /memory  — List persistent memories',
-    '  /scratch — List session scratch notes',
-    '  /mcp     — List MCP servers and tools',
-    '  /cron    — Show cron jobs and daemon status',
-    '  /facts   — Show RAG facts in current context window',
-    '  /lineup  — Edit the active lineup (per-role × premium/mid/cheap grid)',
-    '  /lineups — List, switch, or create tier lineups',
-    '  /models  — Browse the model catalog and add custom providers',
-    '  /provider — Manage providers (alias of /models)',
-    '  /theme   — Switch color theme',
-    '  /routines — List saved routines',
-    '  /create-routine — Create a routine with guided AI assistance',
-    '  /create-task — Create a task routine with guided AI assistance',
-    '  /specialists — List specialist agents',
-    '  /create-specialist — Create a specialist with guided AI assistance',
-    '  /candidates — Review specialist suggestions',
-    '  /options — View and set options',
-    '  /agent-options — Configure agent behavior',
-    '  /update  — Check for and install updates',
-    '  exit     — Quit Bernard',
-    '',
-  ];
-  console.log(lines.join('\n'));
-}
