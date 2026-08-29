@@ -1,5 +1,5 @@
 import { detectToolError } from '../../tool-profiles.js';
-import { getOutputSink } from './output-sink.js';
+import { toolFailureFor, getOutputSink } from './output-sink.js';
 import type { AgentHook } from './types.js';
 
 /**
@@ -57,6 +57,9 @@ export function outputHook(prefix?: string): AgentHook {
             callId: tr.toolCallId,
             result: tr.result,
             isError: errInfo.isError,
+            // The recovery advice the user needs; the red colouring alone only
+            // says that something failed, not what to do about it.
+            failure: toolFailureFor(tr.toolName, tr.result),
             agentLabel: prefix,
           });
         }

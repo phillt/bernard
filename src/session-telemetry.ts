@@ -19,7 +19,13 @@ import type { UsageBucket } from './output.js';
 import type { UsageRecord } from './framework/hooks/token-stats.js';
 import { getCurrentDispatchIds } from './framework/dispatch-context.js';
 import { truncate } from './text.js';
-import { priceUsageForRecord, formatAggCost, formatCallCost, formatTiers } from './usage-report.js';
+import {
+  priceUsageForRecord,
+  formatAggCost,
+  formatCallCost,
+  formatTiers,
+  costUpperBoundSuffix,
+} from './usage-report.js';
 import { formatTokenCount, formatElapsed } from './output.js';
 import { appendJsonl, readJsonlTail, listFilesByMtime, pruneFilesByMtime } from './jsonl.js';
 import { TELEMETRY_DIR, sessionTelemetryPath } from './paths.js';
@@ -137,6 +143,13 @@ export interface TelemetryAggregate {
    * Always 0 for a live session.
    */
   legacyPricedCalls: number;
+  /**
+   * Portion of {@link TelemetryAgg.costUsd} contributed by those legacy
+   * records. The count alone is the wrong discriminator for "is this figure
+   * trustworthy" — many cheap legacy calls beside a few expensive modern ones
+   * barely move the total. Always 0 for a live session.
+   */
+  legacyPricedCostUsd: number;
 }
 
 /** How many top calls to retain — matches what the viewer + CLI display. */
@@ -372,6 +385,7 @@ export class SessionTelemetry {
       // these in for a session replayed from disk.
       repricedCalls: 0,
       legacyPricedCalls: 0,
+      legacyPricedCostUsd: 0,
     };
   }
 }
@@ -490,6 +504,7 @@ export function aggregateRecords(
   };
   let repricedCalls = 0;
   let legacyPricedCalls = 0;
+  let legacyPricedCostUsd = 0;
   // `persist: false` makes `record` a pure in-memory fold (no disk write).
   for (const r of records) {
     const priced = repriceIfUnpriced(r, priceOf);
@@ -500,12 +515,14 @@ export function aggregateRecords(
     // So a recovered cost from a pre-v2 record is still potentially overstated.
     if (priced.costUsd != null && (r.pricingVersion ?? 0) < PRICING_VERSION) {
       legacyPricedCalls++;
+      legacyPricedCostUsd += priced.costUsd;
     }
     store.record(priced);
   }
   const summary = store.summary();
   summary.repricedCalls = repricedCalls;
   summary.legacyPricedCalls = legacyPricedCalls;
+  summary.legacyPricedCostUsd = legacyPricedCostUsd;
   // The store's `startedAt` is aggregation time (~now), so for a session
   // reconstructed from disk the real span must come from the record timestamps,
   // not `Date.now() - startedAt` (which would render `Duration: 0s`).
@@ -591,11 +608,14 @@ export function formatSessionUsageLines(summary: TelemetryAggregate): string[] {
   const t = summary.totals;
   const lines: string[] = [];
   lines.push(`Bernard session: ${summary.sessionId}`);
+  // The headline carries its own caveat because it is the line that gets read,
+  // quoted and screenshotted on its own; the TOTAL block below is followed by
+  // the full explanation a few lines later, so stamping both is redundant.
+  const headlineCost =
+    formatAggCost(t.costUsd, t.hasUnpriced) +
+    costUpperBoundSuffix(t.costUsd, summary.legacyPricedCostUsd);
   lines.push(
-    `Duration: ${formatElapsed(summary.durationMs)}   Calls: ${t.calls}   Cost: ${formatAggCost(
-      t.costUsd,
-      t.hasUnpriced,
-    )}`,
+    `Duration: ${formatElapsed(summary.durationMs)}   Calls: ${t.calls}   Cost: ${headlineCost}`,
   );
   lines.push('');
   lines.push('TOTAL');

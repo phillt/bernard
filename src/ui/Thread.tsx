@@ -13,6 +13,7 @@ import type {
 
 type ReasoningPart = { type: 'reasoning'; text: string };
 type RedactedReasoningPart = { type: 'redacted-reasoning'; data: string };
+import { toolFailureFor, type ToolFailure } from '../framework/hooks/output-sink.js';
 import { getThemeColors } from '../theme.js';
 import { truncate } from '../text.js';
 import { formatCostSuffix } from '../usage-report.js';
@@ -374,6 +375,33 @@ function StreamGroupBody({
   return <>{elements}</>;
 }
 
+/**
+ * The recovery line beneath a failed tool result.
+ *
+ * The red colouring above says a call failed; this says what to do about it.
+ * Before #353 this text (`Classification.playbook.user`) was handed to a
+ * `printToolFailure` stub and dropped, while the *model's* playbook leaked into
+ * the result the user reads — so on a rate limit they saw "You are
+ * rate-limited. Do not retry immediately. Suggest waiting…", an instruction
+ * addressed to the model, instead of "wait or switch lineup with /lineups".
+ */
+function ToolFailureHint({ failure }: { failure: ToolFailure }) {
+  const colors = getThemeColors();
+  const color =
+    failure.severity === 'critical'
+      ? colors.error
+      : failure.severity === 'normal'
+        ? colors.warning
+        : undefined;
+  return (
+    <Box marginLeft={2}>
+      <Text color={color} dimColor={color === undefined}>
+        {failure.category} · {failure.hint}
+      </Text>
+    </Box>
+  );
+}
+
 function StreamingToolResult({
   result,
 }: {
@@ -381,10 +409,13 @@ function StreamingToolResult({
 }) {
   const colors = getThemeColors();
   return (
-    <Box marginLeft={2}>
-      <Text color={result.isError ? colors.error : undefined} dimColor={!result.isError}>
-        ↳ {renderResultSnippet(result.result)}
-      </Text>
+    <Box flexDirection="column">
+      <Box marginLeft={2}>
+        <Text color={result.isError ? colors.error : undefined} dimColor={!result.isError}>
+          ↳ {renderResultSnippet(result.result)}
+        </Text>
+      </Box>
+      {result.failure && <ToolFailureHint failure={result.failure} />}
     </Box>
   );
 }
@@ -611,12 +642,20 @@ function ToolResultMessage({ message }: { message: CoreToolMessage }) {
     <Box flexDirection="column" marginLeft={2}>
       {visible.map((part: ToolResultPart, idx) => {
         const snippet = renderResultSnippet(part.result);
-        const isError = part.isError === true;
+        // Recomputed rather than carried: the committed transcript is rebuilt
+        // from `CoreMessage`s, which have no room for a sink-only field, and a
+        // hint that only lived on the streaming event would disappear the
+        // instant the turn ended.
+        const failure = toolFailureFor(part.toolName, part.result);
+        const isError = part.isError === true || failure !== undefined;
         return (
-          <Box key={idx}>
-            <Text color={isError ? colors.error : undefined} dimColor={!isError}>
-              ↳ {snippet}
-            </Text>
+          <Box key={idx} flexDirection="column">
+            <Box>
+              <Text color={isError ? colors.error : undefined} dimColor={!isError}>
+                ↳ {snippet}
+              </Text>
+            </Box>
+            {failure && <ToolFailureHint failure={failure} />}
           </Box>
         );
       })}

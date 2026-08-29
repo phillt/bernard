@@ -486,6 +486,59 @@ describe('aggregateRecords + formatSessionUsageLines', () => {
   });
 });
 
+describe('legacy-derived totals are marked an upper bound (#388)', () => {
+  const catalogued = { site: 'main', provider: 'anthropic', modelName: 'claude-opus-4-8' } as const;
+
+  /** A record priced under the current generation — not legacy. */
+  function modern(promptTokens: number) {
+    return rec({
+      ...catalogued,
+      promptTokens,
+      completionTokens: 10,
+      costUsd: null,
+      pricingVersion: PRICING_VERSION,
+    });
+  }
+  /** A record from before cache-aware capture — its cost may be overstated. */
+  function legacy(promptTokens: number) {
+    return rec({ ...catalogued, promptTokens, completionTokens: 10, costUsd: null });
+  }
+
+  it('accumulates the legacy share of cost, not just the call count', () => {
+    const sum = aggregateRecords('sShare', [legacy(1000), modern(1000)]);
+    expect(sum.legacyPricedCalls).toBe(1);
+    // Same tokens either side, so the legacy half is half the money.
+    expect(sum.legacyPricedCostUsd).toBeCloseTo(sum.totals.costUsd / 2, 9);
+  });
+
+  it('marks the headline when most of the money is legacy-derived', () => {
+    const lines = formatSessionUsageLines(aggregateRecords('sAll', [legacy(1000), legacy(2000)]));
+    expect(lines[1]).toContain('(upper bound)');
+  });
+
+  it('does NOT mark a total that is only incidentally legacy', () => {
+    // The reason the threshold is a share of COST and not of calls: many cheap
+    // legacy calls beside a few expensive modern ones is a total that is
+    // essentially right, and a caveat that fires there becomes noise.
+    const many = Array.from({ length: 20 }, () => legacy(1));
+    const lines = formatSessionUsageLines(aggregateRecords('sMixed', [...many, modern(500_000)]));
+    expect(lines[1]).not.toContain('(upper bound)');
+  });
+
+  it('leaves the TOTAL block unqualified — its full caveat follows it', () => {
+    const lines = formatSessionUsageLines(aggregateRecords('sAll2', [legacy(1000)]));
+    const totalCost = lines.find((l) => l.trimStart().startsWith('Cost:'));
+    expect(totalCost).toBeDefined();
+    expect(totalCost).not.toContain('(upper bound)');
+    expect(lines.some((l) => l.includes('predates cache-aware token capture'))).toBe(true);
+  });
+
+  it('says nothing for a fully current session', () => {
+    const lines = formatSessionUsageLines(aggregateRecords('sModern', [modern(1000)]));
+    expect(lines[1]).not.toContain('(upper bound)');
+  });
+});
+
 describe('re-pricing on read (#309)', () => {
   // A real catalogued model, so `priceUsageUsd` returns a number here.
   const catalogued = { site: 'main', provider: 'anthropic', modelName: 'claude-opus-4-8' } as const;

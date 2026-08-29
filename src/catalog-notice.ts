@@ -31,7 +31,7 @@ import { nameList, plural } from './text.js';
  *   entry. This is the incident shape, and the only one that must survive the
  *   next keystroke.
  */
-export type CatalogNoticeKind = 'none' | 'added' | 'removed' | 'provider-wiped';
+export type CatalogNoticeKind = 'none' | 'added' | 'removed' | 'provider-wiped' | 'provider-empty';
 
 export interface CatalogNotice {
   kind: CatalogNoticeKind;
@@ -46,9 +46,35 @@ export interface CatalogNoticeOptions {
    * losing entries is housekeeping; one inside it going to zero is an outage.
    */
   providersInUse: string[];
+  /**
+   * Per-provider counts of the bundled snapshot
+   * ({@link vendoredProviderCounts}). The diff-independent baseline.
+   *
+   * Required rather than optional on purpose: defaulting it to `{}` would
+   * silently disable the carried-over check for any caller that forgot it,
+   * which is the exact class of silent degradation this notice exists to catch.
+   */
+  vendoredByProvider: Record<string, number>;
 }
 
 const NONE: CatalogNotice = { kind: 'none', message: '' };
+
+/**
+ * The carried-over case. Worded to distinguish it from `provider-wiped`: the
+ * catalog *is* missing the provider rather than having just lost it, so the
+ * recovery is a refresh, not a wait.
+ */
+function providerEmpty(providers: string[]): CatalogNotice {
+  return {
+    kind: 'provider-empty',
+    message:
+      `Model catalog: no entries for ${nameList(providers)}, which ` +
+      `${plural(providers.length, 'is', 'are')} configured for this session. ` +
+      `Context-window and cost figures for ` +
+      `${plural(providers.length, 'it', 'them')} will use defaults (128k window, ` +
+      `cost shown as n/a). Run /refresh-models to rebuild the catalog.`,
+  };
+}
 
 /**
  * Decide what (if anything) to tell the user about a catalog refresh.
@@ -69,8 +95,26 @@ export function catalogRefreshNotice(
   diff: CatalogRefreshDiff,
   opts: CatalogNoticeOptions,
 ): CatalogNotice {
-  if (diff.error) return NONE;
-  if (diff.previousSource === 'vendored') return NONE;
+  // Runs BEFORE both suppressions below, because neither applies to it.
+  //
+  // A provider can be missing from the catalog without having lost anything in
+  // *this* refresh — a poisoned cache written by an earlier run yields
+  // `removed: []`, so the diff-driven checks say nothing and every subsequent
+  // session inherits the damage in silence. That is what the `xai` →
+  // `spacexai` rename actually did: one run warned, the rest did not.
+  //
+  // `diff.error` must not suppress it (offline plus a bad cache is the worst
+  // case, and on error `byProvider` reflects the cache we are still serving),
+  // and neither must a vendored baseline (a fresh install whose first live
+  // fetch drops a provider is precisely the incident).
+  const emptyProviders = opts.providersInUse
+    .filter((p) => (opts.vendoredByProvider[p] ?? 0) > 0 && (diff.byProvider[p] ?? 0) === 0)
+    .sort();
+
+  if (diff.error) return emptyProviders.length > 0 ? providerEmpty(emptyProviders) : NONE;
+  if (diff.previousSource === 'vendored') {
+    return emptyProviders.length > 0 ? providerEmpty(emptyProviders) : NONE;
+  }
 
   const lostProviders = new Set(diff.removed.map((e) => e.provider));
   const inUse = new Set(opts.providersInUse);
@@ -89,6 +133,8 @@ export function catalogRefreshNotice(
         `will fall back to defaults (128k window, cost shown as n/a) until the catalog recovers.`,
     };
   }
+
+  if (emptyProviders.length > 0) return providerEmpty(emptyProviders);
 
   if (diff.removed.length > 0) {
     return {

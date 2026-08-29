@@ -305,3 +305,25 @@ describe('disk-cache schema versioning (#269)', () => {
     expect(cat.entries.some((e: { model: string }) => e.model === 'stale-model')).toBe(true);
   });
 });
+
+describe('vendoredProviderCounts', () => {
+  useTempHome('bernard-catalog-vendored-');
+
+  it('reports a non-zero count for every built-in provider', async () => {
+    // This is the discriminator `catalog-notice` uses to tell "the catalog lost
+    // this provider" from "it never had it". If a future snapshot regresses to
+    // zero for a provider — e.g. another `owned_by` rename slipping past
+    // `resolveGatewayOwner` — the carried-over check silently disarms for it,
+    // which is the failure this locks down.
+    const m = await loadModule();
+    const counts = m.vendoredProviderCounts();
+    for (const provider of ['anthropic', 'openai', 'xai']) {
+      expect(counts[provider], `vendored snapshot has no ${provider} entries`).toBeGreaterThan(0);
+    }
+  });
+
+  it('is memoized across calls', async () => {
+    const m = await loadModule();
+    expect(m.vendoredProviderCounts()).toBe(m.vendoredProviderCounts());
+  });
+});
