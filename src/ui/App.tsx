@@ -1271,14 +1271,7 @@ export function App({
           return;
         }
         // Delete path — confirm, then remove the job + its logs.
-        const confirm = await requestMenu(
-          [
-            { label: `Delete "${job.name}"`, description: 'This cannot be undone.' },
-            { label: 'Cancel' },
-          ],
-          { title: 'Confirm deletion' },
-        );
-        if (confirm.cancelled || confirm.index === 1) continue; // back to list
+        if (!(await confirmDeletion(requestMenu, job.name))) continue; // back to list
         store.deleteJob(job.id);
         new CronLogStore().deleteJobLogs(job.id);
         syncDaemon();
@@ -1764,14 +1757,7 @@ export function App({
         return;
       }
       // Delete path.
-      const confirm = await requestMenu(
-        [
-          { label: `Delete "${target.name}"`, description: 'This cannot be undone.' },
-          { label: 'Cancel' },
-        ],
-        { title: 'Confirm deletion' },
-      );
-      if (confirm.cancelled || confirm.index === 1) return;
+      if (!(await confirmDeletion(requestMenu, target.name))) return;
       try {
         deleteProfile(target.id);
         flashToast(`Deleted profile "${target.name}".`, 'success');
@@ -1842,14 +1828,7 @@ export function App({
           return;
         }
         // Delete path — confirm with the standard two-item menu.
-        const confirm = await requestMenu(
-          [
-            { label: `Delete "${r.name}"`, description: 'This cannot be undone.' },
-            { label: 'Cancel' },
-          ],
-          { title: 'Confirm deletion' },
-        );
-        if (confirm.cancelled || confirm.index === 1) continue; // back to list
+        if (!(await confirmDeletion(requestMenu, r.name))) continue; // back to list
         stores.routines.delete(r.id);
         flashToast(`Deleted ${r.name}.`, 'success');
         continue;
@@ -1937,14 +1916,7 @@ export function App({
           continue; // back to the refreshed list
         }
         // Delete path — confirm with the standard two-item menu (house style).
-        const confirm = await requestMenu(
-          [
-            { label: `Delete "${s.name}"`, description: 'This cannot be undone.' },
-            { label: 'Cancel' },
-          ],
-          { title: 'Confirm deletion' },
-        );
-        if (confirm.cancelled || confirm.index === 1) continue; // back to list
+        if (!(await confirmDeletion(requestMenu, s.name))) continue; // back to list
         stores.specialists.delete(s.id);
         flashToast(`Deleted ${s.name}.`, 'success');
         continue;
@@ -3698,18 +3670,58 @@ export function App({
   );
 }
 
-type RequestMenuFn = (
+/**
+ * The overlay-request signatures the module-level helpers below take as
+ * parameters, because they live OUTSIDE `<App>` and so cannot close over its
+ * versions. There used to be two of these blocks — a `*Fn`-suffixed one here
+ * and an unsuffixed superset further down — plus a third copy spelled out
+ * inline in `runAddProviderInk`. One block, declared above its first consumer.
+ *
+ * `MenuResult` comes from `ink-handlers.ts`, where it was already exported and
+ * then re-spelled inline in five places.
+ */
+type RequestMenu = (
   entries: MenuEntry[],
   options?: MenuOptions,
-) => Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }>;
-type RequestTextInputFn = (options: ValuePromptOptions) => Promise<ValueResult>;
-type FlashToastFn = (message: string, variant?: ToastVariant) => void;
+  signal?: AbortSignal,
+) => Promise<MenuResult>;
+type RequestGridMenu = (
+  items: string[],
+  options?: { title?: string; footer?: string; initialIndex?: number; currentItem?: string },
+) => Promise<{ cancelled: true } | { cancelled: false; index: number }>;
+type RequestTextInput = (options: ValuePromptOptions, signal?: AbortSignal) => Promise<ValueResult>;
+type FlashToast = (message: string, variant?: ToastVariant) => void;
+
+/**
+ * The delete-confirmation menu, which was copy-pasted five times (cron,
+ * profiles, routines, specialists, lineups) with a byte-identical menu in all
+ * five.
+ *
+ * Module-level, and `requestMenu` is its FIRST PARAMETER rather than a closure
+ * capture, because the lineups call site lives outside `<App>` and receives
+ * `requestMenu` as an argument of its own. (The module-level helpers already
+ * have a parameter of that name, so a helper closing over the component's
+ * `requestMenu` would silently be the wrong one.)
+ *
+ * The AFTERMATH is deliberately NOT shared: cancel control flow differs
+ * (`continue` at the four loop sites vs. `return` in profiles), two of five
+ * wrap the deletion in try/catch, there are three distinct toast wordings, and
+ * cron additionally clears job logs and re-syncs the daemon. All of that stays
+ * at the call sites.
+ */
+async function confirmDeletion(requestMenu: RequestMenu, name: string): Promise<boolean> {
+  const confirm = await requestMenu(
+    [{ label: `Delete "${name}"`, description: 'This cannot be undone.' }, { label: 'Cancel' }],
+    { title: 'Confirm deletion' },
+  );
+  return !confirm.cancelled && confirm.index === 0;
+}
 
 async function pickWizardField(
   field: WizardFieldData,
   current: unknown,
-  requestMenu: RequestMenuFn,
-  requestTextInput: RequestTextInputFn,
+  requestMenu: RequestMenu,
+  requestTextInput: RequestTextInput,
 ): Promise<unknown> {
   const kind = field.field;
   if (kind.kind === 'list') {
@@ -3759,9 +3771,9 @@ async function pickWizardField(
  * `{cancelled:true}` if the user aborts the name prompt or save confirm.
  */
 async function runProfileWizardInk(
-  requestMenu: RequestMenuFn,
-  requestTextInput: RequestTextInputFn,
-  _flashToast: FlashToastFn,
+  requestMenu: RequestMenu,
+  requestTextInput: RequestTextInput,
+  _flashToast: FlashToast,
 ): Promise<{ cancelled: true } | { cancelled: false; name: string; settings: ProfileSettings }> {
   let name = '';
   for (let attempt = 0; attempt < 3 && !name; attempt += 1) {
@@ -4024,12 +4036,9 @@ Remember: the systemPrompt should read like a persona definition — who this sp
  * non-empty model and key) so the on-disk shape is identical.
  */
 async function runAddProviderInk(
-  requestMenu: (
-    entries: MenuEntry[],
-    options?: MenuOptions,
-  ) => Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }>,
-  requestTextInput: (options: ValuePromptOptions) => Promise<ValueResult>,
-  flashToast: (message: string, variant?: ToastVariant) => void,
+  requestMenu: RequestMenu,
+  requestTextInput: RequestTextInput,
+  flashToast: FlashToast,
 ): Promise<{ entry: ReturnType<typeof saveCustomProvider>; apiKey: string } | null> {
   const sdkEntries: MenuEntry[] = SUPPORTED_SDKS.map((s) => ({ label: s, value: s }));
   const sdkResult = await requestMenu(sdkEntries, { title: 'Which SDK to use?' });
@@ -4101,17 +4110,6 @@ function formatCatalogFooter(): string {
         : `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
   return `Model catalog: ${source}, refreshed ${ageLabel} — /refresh-models to fetch.`;
 }
-
-type RequestMenu = (
-  entries: MenuEntry[],
-  options?: MenuOptions,
-) => Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }>;
-type RequestGridMenu = (
-  items: string[],
-  options?: { title?: string; footer?: string; initialIndex?: number; currentItem?: string },
-) => Promise<{ cancelled: true } | { cancelled: false; index: number }>;
-type RequestTextInput = (options: ValuePromptOptions) => Promise<ValueResult>;
-type FlashToast = (message: string, variant?: ToastVariant) => void;
 
 /**
  * Generation-params editor step (issue #286). Rendered after a model is picked
@@ -4723,14 +4721,7 @@ async function runLineupEditorInk(
       continue;
     }
     if (value.kind === 'delete') {
-      const confirm = await requestMenu(
-        [
-          { label: `Delete "${draft.name}"`, description: 'This cannot be undone.' },
-          { label: 'Cancel' },
-        ],
-        { title: 'Confirm deletion' },
-      );
-      if (confirm.cancelled || confirm.index === 1) continue;
+      if (!(await confirmDeletion(requestMenu, draft.name))) continue;
       try {
         deleteLineup(draft.id);
         flashToast(`Deleted lineup "${draft.name}".`, 'success');
