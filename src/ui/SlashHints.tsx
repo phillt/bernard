@@ -1,75 +1,10 @@
 import { Box } from 'ink';
 import { MenuRow } from './overlays/MenuRow.js';
+import { type SlashCommand } from './slash-commands.js';
 
-export interface SlashCommand {
-  name: string;
-  description: string;
-}
-
-/**
- * Canonical slash-command catalogue surfaced to the autocomplete hint strip.
- * Mirrors the rows rendered by `<HelpOverlay>` and every branch handled by
- * `<App>.handleSubmit` — keep these in sync when adding a command. Items the
- * user can't dispatch directly from the prompt (e.g. variants with required
- * args) belong in the help screen, not here.
- */
-export const SLASH_COMMANDS: readonly SlashCommand[] = [
-  { name: '/help', description: 'Show command list' },
-  { name: '/clear', description: 'Clear conversation (--save / -s to summarize first)' },
-  { name: '/compact', description: 'Compress conversation history in-place' },
-  { name: '/task', description: 'Run an isolated task (no history, structured output)' },
-  { name: '/image', description: 'Attach an image: /image <path> [prompt]' },
-  { name: '/memory', description: 'List persistent memories' },
-  { name: '/scratch', description: 'List session scratch notes' },
-  { name: '/mcp', description: 'List MCP servers and tools' },
-  { name: '/cron', description: 'Show cron jobs and daemon status' },
-  { name: '/rag', description: 'Toggle / inspect the RAG store' },
-  { name: '/facts', description: 'Show RAG facts in the current context window' },
-  { name: '/policy', description: 'Show last policy decision' },
-  { name: '/usage', description: 'Last turn token + cost breakdown by tier (alias /cost)' },
-  { name: '/lineup', description: 'Edit the active lineup (per-role × premium/mid/cheap)' },
-  { name: '/lineups', description: 'List, switch, or create tier lineups' },
-  { name: '/models', description: 'Browse the model catalog and add custom providers' },
-  { name: '/refresh-models', description: 'Force-refresh the model catalog from the gateway' },
-  { name: '/provider', description: 'Manage providers (alias of /models)' },
-  { name: '/theme', description: 'Switch color theme' },
-  { name: '/voice', description: 'Toggle text-to-speech readback and backend' },
-  { name: '/routines', description: 'List saved routines' },
-  { name: '/create-routine', description: 'Create a routine with guided AI assistance' },
-  { name: '/create-task', description: 'Create a task routine with guided AI assistance' },
-  { name: '/specialists', description: 'List specialist agents' },
-  { name: '/create-specialist', description: 'Create a specialist with guided AI assistance' },
-  { name: '/candidates', description: 'Review specialist suggestions' },
-  { name: '/options', description: 'View and set options (max-tokens, max-steps, …)' },
-  { name: '/agent-options', description: 'Configure agent behavior (toggles, thresholds)' },
-  {
-    name: '/tool-permissions',
-    description: 'View/remove profile tool grants; skip-permissions toggle',
-  },
-  { name: '/profiles', description: 'Switch / create settings profiles' },
-  { name: '/manage-profiles', description: 'Rename or delete saved profiles' },
-  { name: '/update', description: 'Check for and install updates' },
-  { name: '/exit', description: 'Quit Bernard' },
-];
-
-/**
- * Returns the subset of commands whose name prefix-matches the buffer. `extra`
- * carries dynamic, session-specific commands — the user's saved routines and
- * tasks — so typing `/my-routine` autocompletes the same way a built-in does.
- */
-export function matchSlashCommands(
-  buffer: string,
-  extra: readonly SlashCommand[] = [],
-): SlashCommand[] {
-  if (!buffer.startsWith('/')) return [];
-  // Hide hints once the user has started typing args (a space terminates the
-  // command token); they're past the picker at that point.
-  if (buffer.includes(' ')) return [];
-  const query = buffer.slice(1).toLowerCase();
-  return [...SLASH_COMMANDS, ...extra].filter((c) =>
-    c.name.slice(1).toLowerCase().startsWith(query),
-  );
-}
+// The catalogue itself lives in `slash-commands.js` — plain data, no Ink — and
+// is re-exported here so importers that predate the split keep working.
+export { SLASH_COMMANDS, matchSlashCommands, type SlashCommand } from './slash-commands.js';
 
 interface SlashHintsProps {
   /** Filtered match list, computed by the caller so navigation state agrees. */
