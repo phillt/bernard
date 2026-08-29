@@ -5,6 +5,12 @@ import type { Key } from 'ink';
  * `ContextViewer`): list-navigation key mapping, cursor/window clamping,
  * scroll-position formatting, and greedy word-wrap. No React, no side effects —
  * kept in one place so both two-panel viewers behave identically.
+ *
+ * The two frame/viewport helpers below moved here from `ViewerShell.tsx` (#266)
+ * for the reason `line-geometry.ts` gives at its own head: `menu-geometry.ts`
+ * builds on `viewerFrameHeight`, and leaving it in a `.tsx` would drag React and
+ * Ink into a pure-arithmetic test suite that needs neither. `ViewerShell` still
+ * re-exports both, so its existing importers are untouched.
  */
 
 /**
@@ -25,6 +31,40 @@ export function navDelta(input: string, key: Key, pageSize: number, total: numbe
 
 export function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(n, hi));
+}
+
+/**
+ * Upper bound for the overlay frame, used only to size the content viewport
+ * (see {@link viewerViewport}). Always one short of the terminal: a dynamic
+ * (non-Static) Ink frame that fills the last row can't be erased cleanly — the
+ * trailing newline scrolls the terminal and desyncs the cursor math, leaving
+ * stale rows after the overlay closes.
+ *
+ * NOTE: the shell deliberately does NOT pin its Box to this height — see the
+ * `ViewerShell` body for why. This is a windowing bound, not a layout height.
+ */
+export function viewerFrameHeight(rows: number): number {
+  return Math.max(1, rows - 1);
+}
+
+/**
+ * How many content rows fit above the bottom chrome. Bottom chrome is always the
+ * scroll-position line + a separator rule + the key hints (3 rows); a non-empty
+ * tab menu adds a single horizontal tab row plus a second separator.
+ *
+ * Only for content rendered *inside* `ViewerShell` — it charges for chrome the
+ * shell renders. A free-standing overlay (`MenuOverlay`, `ModelGridOverlay`)
+ * counts its own chrome via `menu-geometry.overlayViewport` instead.
+ */
+export function viewerViewport(rows: number, opts: { tabCount?: number } = {}): number {
+  const { tabCount = 0 } = opts;
+  const hasTabs = tabCount > 0;
+  const bottom =
+    1 /* position */ +
+    1 /* rule */ +
+    (hasTabs ? 1 /* tab row */ + 1 /* rule */ : 0) +
+    1; /* hints */
+  return Math.max(1, viewerFrameHeight(rows) - bottom);
 }
 
 /** Keep the cursor visible: scroll the window only when it would fall off an edge. */

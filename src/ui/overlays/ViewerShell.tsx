@@ -19,34 +19,12 @@ export interface OverlayTab {
 }
 
 /**
- * Upper bound for the overlay frame, used only to size the content viewport
- * (see {@link viewerViewport}). Always one short of the terminal: a dynamic
- * (non-Static) Ink frame that fills the last row can't be erased cleanly — the
- * trailing newline scrolls the terminal and desyncs the cursor math, leaving
- * stale rows after the overlay closes.
- *
- * NOTE: the shell deliberately does NOT pin its Box to this height — see the
- * `ViewerShell` body for why. This is a windowing bound, not a layout height.
+ * The frame/viewport arithmetic now lives in `viewer-util.ts` (#266) — pure
+ * geometry that `menu-geometry.ts` builds on, and that must not pull React and
+ * Ink into a test suite needing neither (the `line-geometry.ts` doctrine).
+ * Re-exported here so the three existing importers keep their import path.
  */
-export function viewerFrameHeight(rows: number): number {
-  return Math.max(1, rows - 1);
-}
-
-/**
- * How many content rows fit above the bottom chrome. Bottom chrome is always the
- * scroll-position line + a separator rule + the key hints (3 rows); a non-empty
- * tab menu adds a single horizontal tab row plus a second separator.
- */
-export function viewerViewport(rows: number, opts: { tabCount?: number } = {}): number {
-  const { tabCount = 0 } = opts;
-  const hasTabs = tabCount > 0;
-  const bottom =
-    1 /* position */ +
-    1 /* rule */ +
-    (hasTabs ? 1 /* tab row */ + 1 /* rule */ : 0) +
-    1; /* hints */
-  return Math.max(1, viewerFrameHeight(rows) - bottom);
-}
+export { viewerFrameHeight, viewerViewport } from './viewer-util.js';
 
 interface ViewerShellProps {
   /** Shift-Tab tab menu rendered at the bottom. */
