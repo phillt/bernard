@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { HelpOverlay } from '../overlays/HelpOverlay.js';
+import { SLASH_COMMANDS } from '../SlashHints.js';
 import { ESC, ENTER, tick } from './_keys.js';
 import stripAnsi from 'strip-ansi';
 
@@ -9,34 +10,14 @@ describe('<HelpOverlay>', () => {
   it('lists every documented slash command', () => {
     const { lastFrame } = render(createElement(HelpOverlay, { onClose: () => {} }));
     const frame = lastFrame() ?? '';
-    for (const cmd of [
-      '/help',
-      '/clear',
-      '/compact',
-      '/task',
-      '/image',
-      '/memory',
-      '/scratch',
-      '/mcp',
-      '/cron',
-      '/facts',
-      '/provider',
-      '/model',
-      '/theme',
-      '/routines',
-      '/create-routine',
-      '/create-task',
-      '/specialists',
-      '/create-specialist',
-      '/candidates',
-      '/options',
-      '/agent-options',
-      '/profiles',
-      '/manage-profiles',
-      '/update',
-      '/exit',
-    ]) {
-      expect(frame).toContain(cmd);
+    // Derived from the catalogue, not retyped (#390). The list that stood here
+    // was the third copy of it and had gone stale on its own terms — it omitted
+    // eight live commands, and its `/model` entry passed only as a SUBSTRING of
+    // the rendered `/models`, so it asserted a command the help screen has never
+    // shown. A frame-contains check over the source list cannot drift that way.
+    for (const cmd of SLASH_COMMANDS) {
+      expect(frame).toContain(cmd.name);
+      expect(frame).toContain(cmd.detail ?? cmd.description);
     }
     expect(frame).toContain('Commands');
     // Was `Enter / Esc / q to close` — a third separator style (` / `) and a
