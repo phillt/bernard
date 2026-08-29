@@ -129,6 +129,16 @@ export class PlanStore {
     this.notify();
   }
 
+  /**
+   * True when a plan exists at all. Distinct from {@link isComplete}, which is
+   * vacuously true for an empty plan — callers asking "was a plan even made?"
+   * were otherwise reaching through {@link view}, which copies every step just
+   * to read a length.
+   */
+  hasSteps(): boolean {
+    return this.steps.length > 0;
+  }
+
   /** True when every step is in a terminal state (done, cancelled, error). */
   isComplete(): boolean {
     return this.steps.every((s) => TERMINAL_STATUSES.has(s.status));

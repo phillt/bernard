@@ -1,7 +1,18 @@
 /**
- * ReAct (coordinator) mode primitives shared by the main agent and specialist
- * dispatch tools (`specialist_run`). Extracted from `agent.ts` so tools — which
- * are imported BY agent.ts — can use them without forming a circular import.
+ * Coordinator-mode prompt and step math, plus the plan-enforcement vocabulary.
+ *
+ * The enforcement primitives here — {@link computePlanNeeds},
+ * {@link shouldEnforcePlan}, {@link buildEnforcementFeedback},
+ * {@link REACT_ENFORCEMENT_MAX_RETRIES}, {@link REACT_AUTO_CANCEL_NOTE} — are
+ * **not** ReAct-only since #303: the Normal-turn reconcile path in
+ * `framework/strategies/plan-enforcement.ts` uses the same ones. Only the
+ * coordinator prompt and `computeEffectiveMaxSteps` are genuinely
+ * coordinator-specific. Relocating the shared half out of this module is filed
+ * as follow-up work; keeping it here for now avoids churn mid-change.
+ *
+ * Originally extracted from `agent.ts` to dodge a circular import via the tool
+ * layer; today `agent.ts` (re-export) and `plan-enforcement.ts` are the only
+ * importers.
  */
 
 export const REACT_COORDINATOR_PROMPT = `## Coordinator Mode (Active)
@@ -87,13 +98,14 @@ When all plan steps are in terminal states and you are ready to respond to the u
  * no tools had nothing to coordinate, so its missing plan is correct.
  */
 export function computePlanNeeds(args: {
-  planStepCount: number;
+  hasPlan: boolean;
   unresolvedCount: number;
   usedTools: boolean;
 }): { needsReconcile: boolean; needsPlanCreation: boolean } {
   return {
-    needsReconcile: args.planStepCount > 0 && args.unresolvedCount > 0,
-    needsPlanCreation: args.planStepCount === 0 && args.usedTools,
+    // No `hasPlan` conjunct: unresolved steps can only exist if steps do.
+    needsReconcile: args.unresolvedCount > 0,
+    needsPlanCreation: !args.hasPlan && args.usedTools,
   };
 }
 
@@ -110,14 +122,19 @@ export function computePlanNeeds(args: {
  * on one that ran out of budget before it could.
  */
 export function shouldEnforcePlan(args: {
-  reactMode: boolean;
+  /**
+   * Does this caller enforce plan *creation*? Named for the capability rather
+   * than the mode: reconciliation runs in both, so a `reactMode` field would
+   * invite exactly the ReAct-vs-Normal reading that is now wrong.
+   */
+  enforceMissingPlan: boolean;
   aborted: boolean;
   stepLimitHit: boolean;
   needsReconcile: boolean;
   needsPlanCreation: boolean;
 }): boolean {
   if (args.aborted || args.stepLimitHit) return false;
-  return args.needsReconcile || (args.reactMode && args.needsPlanCreation);
+  return args.needsReconcile || (args.enforceMissingPlan && args.needsPlanCreation);
 }
 
 /**

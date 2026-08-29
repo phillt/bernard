@@ -10,34 +10,12 @@ import { NormalStrategy } from '../normal.js';
 import { PlanStore } from '../../../plan-store.js';
 import { REACT_ENFORCEMENT_MAX_RETRIES } from '../../../react.js';
 import { printInfo, printWarning } from '../../../output.js';
+import { baseResult, toolUseResult, makeCtx as makeBaseCtx } from './_harness.js';
 import type { StrategyContext } from '../types.js';
-import type { BernardConfig } from '../../../config.js';
 
-const baseResult = {
-  finishReason: 'stop',
-  steps: [],
-  response: { messages: [] },
-  usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-} as any;
-
-// A turn that invoked at least one tool. Only relevant to the "never nag a
-// turn into planning" case — missing-plan enforcement is off here by design.
-const toolUseResult = {
-  ...baseResult,
-  steps: [{ toolCalls: [{ toolName: 'shell' }] }],
-} as any;
-
-function makeCtx(
-  overrides: Partial<StrategyContext> & { config?: Partial<BernardConfig> } = {},
-): StrategyContext & { iterate: ReturnType<typeof vi.fn> } {
-  const { config: configOverride, ...rest } = overrides;
-  return {
-    // Normal turn — the whole point of this strategy.
-    config: { coordinatorMode: 'off', maxSteps: 10, ...configOverride } as BernardConfig,
-    userInput: 'do stuff',
-    iterate: vi.fn(async () => baseResult),
-    ...rest,
-  } as any;
+/** Normal-turn context — the mode this strategy exists for. */
+function makeCtx(overrides: Partial<StrategyContext> = {}): ReturnType<typeof makeBaseCtx> {
+  return makeBaseCtx({ config: { coordinatorMode: 'off' }, ...overrides });
 }
 
 function strategy(): PlanReconcileStrategy {

@@ -17,7 +17,8 @@ import type { StrategyContext } from './types.js';
 /** Inputs for {@link enforcePlan}. */
 export interface PlanEnforcementOpts {
   ctx: StrategyContext;
-  planStore: PlanStore;
+  /** Absent when the site mounts no `plan` tool — nothing to reconcile. */
+  planStore: PlanStore | undefined;
   /** Result of the strategy's own loop; re-prompts build on its messages. */
   result: AgentResult;
   /**
@@ -57,6 +58,7 @@ export interface PlanEnforcementOpts {
 export async function enforcePlan(opts: PlanEnforcementOpts): Promise<AgentResult> {
   const { ctx, planStore, enforceMissingPlan, systemSuffix, enforcementMaxSteps } = opts;
   let result = opts.result;
+  if (!planStore) return result;
 
   // Trivial-turn escape hatch: a turn that answered without touching a single
   // tool AND never created a plan had nothing to coordinate — re-prompting
@@ -64,14 +66,14 @@ export async function enforcePlan(opts: PlanEnforcementOpts): Promise<AgentResul
   // calls on greetings and one-line answers.
   const usedTools = (result.steps ?? []).some((s) => (s.toolCalls?.length ?? 0) > 0);
   const { needsReconcile, needsPlanCreation } = computePlanNeeds({
-    planStepCount: planStore.view().length,
+    hasPlan: planStore.hasSteps(),
     unresolvedCount: planStore.unresolvedCount(),
     usedTools,
   });
 
   if (
     !shouldEnforcePlan({
-      reactMode: enforceMissingPlan,
+      enforceMissingPlan,
       aborted: ctx.abortSignal?.aborted === true,
       stepLimitHit: ctx.getStepLimitHit?.() === true,
       needsReconcile,
@@ -85,17 +87,18 @@ export async function enforcePlan(opts: PlanEnforcementOpts): Promise<AgentResul
   // A missing plan only counts as unfinished when this caller enforces it;
   // otherwise the loop would spin on a Normal turn that legitimately has none.
   const isUnfinished = (): boolean =>
-    planStore.unresolvedCount() > 0 || (enforceMissingPlan && planStore.view().length === 0);
+    planStore.unresolvedCount() > 0 || (enforceMissingPlan && !planStore.hasSteps());
 
   let attempts = 0;
   while (isUnfinished() && attempts < REACT_ENFORCEMENT_MAX_RETRIES) {
     if (ctx.abortSignal?.aborted) break;
     attempts++;
-    const planMissing = planStore.view().length === 0;
+    const unresolved = planStore.unresolvedCount();
+    const planMissing = !planStore.hasSteps();
     printWarning(
       planMissing
         ? `${prefixTag}Coordinator turn ended without a plan. Prompting to create one... (${attempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`
-        : `${prefixTag}Plan has ${planStore.unresolvedCount()} unresolved step(s). Prompting to resolve... (${attempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`,
+        : `${prefixTag}Plan has ${unresolved} unresolved step(s). Prompting to resolve... (${attempts}/${REACT_ENFORCEMENT_MAX_RETRIES})`,
     );
 
     const feedback = planMissing
@@ -118,20 +121,18 @@ export async function enforcePlan(opts: PlanEnforcementOpts): Promise<AgentResul
     }
   }
 
-  if (!planStore.isComplete()) {
-    const cancelled = planStore.cancelAllUnresolved(REACT_AUTO_CANCEL_NOTE);
-    if (cancelled > 0) {
-      printInfo(
-        `${prefixTag}Auto-cancelled ${cancelled} unresolved plan step(s) after enforcement retries.`,
-      );
-    }
+  // `cancelAllUnresolved` returns 0 exactly when the plan was already terminal,
+  // so its count doubles as the "did anything need cancelling" test.
+  const cancelled = planStore.cancelAllUnresolved(REACT_AUTO_CANCEL_NOTE);
+  if (cancelled > 0) {
+    printInfo(
+      `${prefixTag}Auto-cancelled ${cancelled} unresolved plan step(s) after enforcement retries.`,
+    );
   } else if (
     enforceMissingPlan &&
-    planStore.view().length === 0 &&
+    !planStore.hasSteps() &&
     attempts >= REACT_ENFORCEMENT_MAX_RETRIES
   ) {
-    // `isComplete()` is vacuously true for an empty plan, so the give-up notice
-    // for a never-created plan needs its own branch.
     printInfo(
       `${prefixTag}Coordinator turn finished without a plan after ${REACT_ENFORCEMENT_MAX_RETRIES} re-prompt(s).`,
     );

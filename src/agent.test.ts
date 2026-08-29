@@ -640,7 +640,7 @@ describe('prompt-injection regression (issue #172)', () => {
 
 describe('shouldEnforcePlan', () => {
   const base = {
-    reactMode: true,
+    enforceMissingPlan: true,
     aborted: false,
     stepLimitHit: false,
     needsReconcile: true,
@@ -651,28 +651,30 @@ describe('shouldEnforcePlan', () => {
     expect(shouldEnforcePlan(base)).toBe(true);
   });
 
-  it('reconciles an unresolved plan even when reactMode is off (#303)', () => {
+  it('reconciles an unresolved plan even when plan-creation enforcement is off (#303)', () => {
     // The whole point of the split: a plan the model chose to make is a promise
     // to the user regardless of which strategy the turn ran under.
-    expect(shouldEnforcePlan({ ...base, reactMode: false })).toBe(true);
+    expect(shouldEnforcePlan({ ...base, enforceMissingPlan: false })).toBe(true);
   });
 
-  it('does NOT demand a plan be created when reactMode is off', () => {
+  it('does NOT demand a plan be created when the caller does not enforce creation', () => {
     // Missing-plan enforcement stays coordinator-only — otherwise every trivial
     // Normal turn gets nagged into planning.
     const missing = { ...base, needsReconcile: false, needsPlanCreation: true };
-    expect(shouldEnforcePlan({ ...missing, reactMode: false })).toBe(false);
-    expect(shouldEnforcePlan({ ...missing, reactMode: true })).toBe(true);
+    expect(shouldEnforcePlan({ ...missing, enforceMissingPlan: false })).toBe(false);
+    expect(shouldEnforcePlan({ ...missing, enforceMissingPlan: true })).toBe(true);
   });
 
   it('returns false when aborted', () => {
     expect(shouldEnforcePlan({ ...base, aborted: true })).toBe(false);
-    expect(shouldEnforcePlan({ ...base, aborted: true, reactMode: false })).toBe(false);
+    expect(shouldEnforcePlan({ ...base, aborted: true, enforceMissingPlan: false })).toBe(false);
   });
 
   it('returns false when step-limit was hit', () => {
     expect(shouldEnforcePlan({ ...base, stepLimitHit: true })).toBe(false);
-    expect(shouldEnforcePlan({ ...base, stepLimitHit: true, reactMode: false })).toBe(false);
+    expect(shouldEnforcePlan({ ...base, stepLimitHit: true, enforceMissingPlan: false })).toBe(
+      false,
+    );
   });
 
   it('returns false when the plan is already in a resolved state', () => {
@@ -682,25 +684,25 @@ describe('shouldEnforcePlan', () => {
 
 describe('computePlanNeeds', () => {
   it('separates an abandoned plan from a never-created one', () => {
-    expect(computePlanNeeds({ planStepCount: 3, unresolvedCount: 1, usedTools: true })).toEqual({
+    expect(computePlanNeeds({ hasPlan: true, unresolvedCount: 1, usedTools: true })).toEqual({
       needsReconcile: true,
       needsPlanCreation: false,
     });
-    expect(computePlanNeeds({ planStepCount: 0, unresolvedCount: 0, usedTools: true })).toEqual({
+    expect(computePlanNeeds({ hasPlan: false, unresolvedCount: 0, usedTools: true })).toEqual({
       needsReconcile: false,
       needsPlanCreation: true,
     });
   });
 
   it('keeps the trivial-turn escape hatch: no plan and no tools is fine', () => {
-    expect(computePlanNeeds({ planStepCount: 0, unresolvedCount: 0, usedTools: false })).toEqual({
+    expect(computePlanNeeds({ hasPlan: false, unresolvedCount: 0, usedTools: false })).toEqual({
       needsReconcile: false,
       needsPlanCreation: false,
     });
   });
 
   it('reports nothing to do for a fully resolved plan', () => {
-    expect(computePlanNeeds({ planStepCount: 3, unresolvedCount: 0, usedTools: true })).toEqual({
+    expect(computePlanNeeds({ hasPlan: true, unresolvedCount: 0, usedTools: true })).toEqual({
       needsReconcile: false,
       needsPlanCreation: false,
     });
@@ -2110,8 +2112,10 @@ describe('Agent', () => {
         expect(steps[0].note).toContain('enforcement retries exhausted');
       });
 
-      // #303: these four pin the Normal-turn half. Before the split, a Normal
-      // turn could build a plan, show it in the plan panel, and abandon it.
+      // #303, integration layer. The behaviour of `enforcePlan` itself is
+      // covered directly in `strategies/__tests__/plan-reconcile.test.ts`;
+      // these two only prove the wiring — that main opts in, and that a Normal
+      // turn actually reaches the loop through the real dispatch stack.
       it('reconciles an unresolved plan on a Normal turn, then auto-cancels', async () => {
         const agent = makeAgent(makeConfig({ coordinatorMode: 'off' }), toolOptions, store);
         const planStore = (agent as unknown as { planStore: any }).planStore;
@@ -2133,49 +2137,6 @@ describe('Agent', () => {
         mockGenerateText.mockResolvedValue({
           ...baseResult,
           steps: [{ toolCalls: [{ toolName: 'shell' }] }],
-        });
-        await agent.processInput('hi');
-        expect(mockGenerateText).toHaveBeenCalledTimes(1);
-      });
-
-      it('does not re-prompt a Normal turn whose plan is fully resolved', async () => {
-        const agent = makeAgent(makeConfig({ coordinatorMode: 'off' }), toolOptions, store);
-        const planStore = (agent as unknown as { planStore: any }).planStore;
-        mockGenerateText.mockImplementation(async () => {
-          if (planStore.view().length === 0) {
-            planStore.create([{ description: 'done thing', verification: 'check' }]);
-            planStore.update(1, 'done', { signoff: 'observed the output' });
-          }
-          return baseResult;
-        });
-        await agent.processInput('hi');
-        expect(mockGenerateText).toHaveBeenCalledTimes(1);
-      });
-
-      it('reconciles without dragging the coordinator prompt onto a Normal turn', async () => {
-        // The re-prompt must not smuggle in several KB of coordinator
-        // instructions that the qualifier deliberately routed this turn away
-        // from — the feedback message is self-contained.
-        const agent = makeAgent(makeConfig({ coordinatorMode: 'off' }), toolOptions, store);
-        const planStore = (agent as unknown as { planStore: any }).planStore;
-        mockGenerateText.mockImplementation(async () => {
-          if (planStore.view().length === 0)
-            planStore.create([{ description: 'unresolved', verification: 'check' }]);
-          return baseResult;
-        });
-        await agent.processInput('hi');
-        const second = mockGenerateText.mock.calls[1][0];
-        expect(second.system).not.toContain('Coordinator Mode (Active)');
-      });
-
-      it('still suppresses Normal-turn reconciliation on abort', async () => {
-        const agent = makeAgent(makeConfig({ coordinatorMode: 'off' }), toolOptions, store);
-        const planStore = (agent as unknown as { planStore: any }).planStore;
-        mockGenerateText.mockImplementation(async () => {
-          if (planStore.view().length === 0)
-            planStore.create([{ description: 'unresolved', verification: 'check' }]);
-          agent.abort();
-          return baseResult;
         });
         await agent.processInput('hi');
         expect(mockGenerateText).toHaveBeenCalledTimes(1);

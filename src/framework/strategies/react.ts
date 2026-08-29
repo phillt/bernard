@@ -58,9 +58,6 @@ export class ReActStrategy implements ExecutionStrategy {
 
     const result = await this.inner.run(wrappedCtx);
 
-    const planStore = ctx.planStore;
-    if (!planStore) return result;
-
     // Enforcement budget is intentionally `config.maxSteps * enforcementRatio`
     // (not `baseMaxSteps * ratio`) to preserve historical behavior: callers
     // that reduce the initial budget (specialist halves it) still get the full
@@ -69,7 +66,7 @@ export class ReActStrategy implements ExecutionStrategy {
     const enforcementRatio = this.opts.enforcementStepRatio ?? 1;
     return enforcePlan({
       ctx,
-      planStore,
+      planStore: ctx.planStore,
       result,
       // Coordinator mode mandates planning, so a missing plan is enforceable
       // here — unlike on a Normal turn (#303).

@@ -3,6 +3,9 @@ import { buildStrategy } from '../build-strategy.js';
 import { NormalStrategy } from '../normal.js';
 import { ReActStrategy } from '../react.js';
 import { PlanReconcileStrategy } from '../plan-reconcile.js';
+import { PlanStore } from '../../../plan-store.js';
+import { REACT_ENFORCEMENT_MAX_RETRIES } from '../../../react.js';
+import { baseResult } from './_harness.js';
 import type { BernardConfig } from '../../../config.js';
 import type { StrategyContext } from '../types.js';
 
@@ -94,14 +97,27 @@ describe('buildStrategy', () => {
       ).toBeInstanceOf(PlanReconcileStrategy);
     });
 
-    it('yields to ReAct rather than double-wrapping', () => {
+    it('yields to ReAct rather than double-wrapping', async () => {
       // The two wrappers are gated on opposite polarity of the same predicate,
-      // so exactly one enforcement pass can ever run for a turn.
-      const strategy = buildStrategy(makeConfig({ coordinatorMode: 'on' }), {
-        enforcePlanReconcile: true,
-      });
+      // so exactly one enforcement pass can ever run for a turn. Asserting the
+      // outer type alone would be vacuous (they are unrelated classes), so this
+      // drives a real turn: a ReAct turn that abandons its plan must re-prompt
+      // exactly REACT_ENFORCEMENT_MAX_RETRIES times, not twice that.
+      const config = makeConfig({ coordinatorMode: 'on' });
+      const strategy = buildStrategy(config, { enforcePlanReconcile: true });
       expect(strategy).toBeInstanceOf(ReActStrategy);
-      expect(strategy).not.toBeInstanceOf(PlanReconcileStrategy);
+
+      const planStore = new PlanStore();
+      const ctx = makeCtx(config);
+      (ctx.iterate as any).mockImplementation(async () => {
+        if (!planStore.hasSteps())
+          planStore.create([{ description: 'unresolved', verification: 'check' }]);
+        return baseResult;
+      });
+      (ctx as any).planStore = planStore;
+
+      await strategy.run(ctx);
+      expect(ctx.iterate).toHaveBeenCalledTimes(1 + REACT_ENFORCEMENT_MAX_RETRIES);
     });
 
     it('yields to a per-turn react override too', () => {

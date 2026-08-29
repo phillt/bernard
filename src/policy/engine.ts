@@ -7,7 +7,13 @@ import { modelPolicy } from './model.js';
 import { scratchPolicy } from './scratch.js';
 import { strategyPolicy } from './strategy.js';
 import { toolModePolicy } from './tool-mode.js';
-import type { PolicyDecision, PolicyEngine, PolicyInput, PolicyResult } from './types.js';
+import type {
+  PolicyDecision,
+  PolicyEngine,
+  PolicyInput,
+  PolicyResult,
+  PolicySignals,
+} from './types.js';
 
 /**
  * Composes every sub-policy in a fixed order, builds a {@link PolicyDecision}
@@ -65,11 +71,16 @@ export class DefaultPolicyEngine implements PolicyEngine {
       toolMode: toolMode.reason,
     };
 
-    // `signals` is the qualifier's raw feature map (#385). Logged beside the
-    // decision so a misclassification shows which signals were live, rather
-    // than only which branch won.
-    debugLog('policy:decide', { decision, reasons, signals: strategy.signals });
+    // Diagnostic siblings of `reasons`, same keying. Only policies that expose
+    // a feature map appear — today that is the qualifier (#385), whose
+    // `signals` say what was live when a branch won, not just which won.
+    const signals: Record<string, PolicySignals> = {};
+    for (const [name, sub] of Object.entries({ strategy, models, concise, scratch })) {
+      if (sub.signals) signals[name] = sub.signals;
+    }
 
-    return { decision, reasons };
+    debugLog('policy:decide', { decision, reasons, signals });
+
+    return { decision, reasons, signals };
   }
 }

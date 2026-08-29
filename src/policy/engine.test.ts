@@ -78,14 +78,32 @@ describe('DefaultPolicyEngine', () => {
     engine.decide(makePolicyInput({ config: { coordinatorMode: 'auto' } }));
     const calls = vi.mocked(logger.debugLog).mock.calls;
     const payload = calls.find(([label]) => label === 'policy:decide')![1] as {
-      signals?: Record<string, unknown>;
+      signals?: Record<string, Record<string, unknown>>;
     };
-    expect(payload.signals).toMatchObject({
+    // Keyed by sub-policy name, the same shape as `reasons` — so a future
+    // policy exposing signals is attributed rather than merged into one blob.
+    expect(payload.signals!.strategy).toMatchObject({
       multiStep: expect.any(Boolean),
       toolKw: expect.any(Boolean),
       bloom: expect.any(String),
     });
-    expect(typeof payload.signals!.tokens).toBe('number');
+    expect(typeof payload.signals!.strategy.tokens).toBe('number');
+  });
+
+  it('omits sub-policies that expose no signals', () => {
+    // Only the qualifier has a feature map today; the other seven must not
+    // appear as empty keys.
+    const engine = new DefaultPolicyEngine();
+    const result = engine.decide(makePolicyInput({ config: { coordinatorMode: 'auto' } }));
+    expect(Object.keys(result.signals)).toEqual(['strategy']);
+  });
+
+  it('exposes no signals for the coordinator-mode short-circuits', () => {
+    // `on`/`off` never consult the qualifier, so there is nothing to report.
+    const engine = new DefaultPolicyEngine();
+    expect(engine.decide(makePolicyInput({ config: { coordinatorMode: 'on' } })).signals).toEqual(
+      {},
+    );
   });
 
   it('reacts to config.coordinatorMode changes between calls', () => {

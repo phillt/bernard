@@ -75,16 +75,6 @@ export function buildStrategy(
 // ---- Bootstrap registrations -------------------------------------------------
 // Each new strategy adds one import + one registerStrategy call here.
 
-// Reconciliation for turns ReAct did NOT claim. Gated on the opposite polarity
-// of the same predicate as the wrapper above, so the two can never both wrap a
-// single turn — exactly-once enforcement holds by construction, independent of
-// registration order (#303).
-registerStrategy((inner, config, opts) =>
-  opts.enforcePlanReconcile && !isReactEffective(config, { strategyId: opts.strategyId })
-    ? new PlanReconcileStrategy(inner)
-    : null,
-);
-
 registerStrategy((inner, config, opts) => {
   // Prefer the Policy Engine's per-turn decision; fall back to
   // `config.coordinatorMode === 'on'` when the engine hasn't supplied one
@@ -100,3 +90,13 @@ registerStrategy((inner, config, opts) => {
       })
     : null;
 });
+
+// Reconciliation for turns ReAct did NOT claim (#303). Gated on the opposite
+// polarity of the same predicate as the wrapper above, so the two can never
+// both wrap a single turn — exactly-once enforcement holds by construction
+// rather than by a runtime check, and does not depend on this order.
+registerStrategy((inner, config, opts) =>
+  opts.enforcePlanReconcile && !isReactEffective(config, { strategyId: opts.strategyId })
+    ? new PlanReconcileStrategy(inner)
+    : null,
+);

@@ -119,6 +119,16 @@ describe('hasMultiStepLanguage', () => {
     expect(hasMultiStepLanguage('check the logs next open a ticket')).toBe(true);
   });
 
+  it('applies the conditional guard to every pattern, not just the bare form', () => {
+    // The strip is hoisted to the whole detector, so an `if` clause cannot
+    // smuggle an escalation in through the `first ... then` pattern either.
+    expect(hasMultiStepLanguage('first check the logs, and if it fails then run the linter')).toBe(
+      false,
+    );
+    // ...while a genuine `first ... then` with no conditional still escalates.
+    expect(hasMultiStepLanguage('first refactor the parser, then update the tests')).toBe(true);
+  });
+
   it('does NOT treat a conditional "then" as a sequence', () => {
     // "if X then Y" is one branch, not two steps — and unlike the
     // conversational cases it DOES carry a tool verb, so the following-verb

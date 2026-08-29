@@ -10,34 +10,8 @@ import { NormalStrategy } from '../normal.js';
 import { PlanStore } from '../../../plan-store.js';
 import { REACT_COORDINATOR_PROMPT, REACT_ENFORCEMENT_MAX_RETRIES } from '../../../react.js';
 import { printInfo, printWarning } from '../../../output.js';
-import type { StrategyContext, IterateOpts } from '../types.js';
-import type { BernardConfig } from '../../../config.js';
-
-const baseResult = {
-  finishReason: 'stop',
-  steps: [],
-  response: { messages: [] },
-  usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
-} as any;
-
-// A turn that invoked at least one tool — missing-plan enforcement only
-// fires for these (the trivial-turn escape hatch skips tool-free turns).
-const toolUseResult = {
-  ...baseResult,
-  steps: [{ toolCalls: [{ toolName: 'shell' }] }],
-} as any;
-
-function makeCtx(
-  overrides: Partial<StrategyContext> & { config?: Partial<BernardConfig> } = {},
-): StrategyContext & { iterate: ReturnType<typeof vi.fn> } {
-  const { config: configOverride, ...rest } = overrides;
-  return {
-    config: { coordinatorMode: 'on', maxSteps: 10, ...configOverride } as BernardConfig,
-    userInput: 'do stuff',
-    iterate: vi.fn(async () => baseResult),
-    ...rest,
-  } as any;
-}
+import { baseResult, toolUseResult, makeCtx } from './_harness.js';
+import type { IterateOpts } from '../types.js';
 
 beforeEach(() => {
   vi.mocked(printInfo).mockClear();
