@@ -353,7 +353,19 @@ describe('<App> full-screen layout', () => {
     const frame = lastFrame() ?? '';
     // Help overlay content is shown; the prompt chevron is gone (overlay zone
     // replaces the thread+chrome in full-screen).
-    expect(frame.toLowerCase()).toContain('help');
+    //
+    // Asserted on the overlay's footer legend rather than any one command row:
+    // the help screen renders ~48 lines into the 24-row full-screen frame and
+    // nothing bounds it, so rows overwrite each other and *which* ones survive
+    // is a function of the total row count. This used to check for the literal
+    // 'help', which passed only because `/help` happened to land on a surviving
+    // line — adding one command to the catalogue (#390) shifted the parity and
+    // broke it, with the overlay working exactly as before. The footer is the
+    // last line rendered, so it is there whatever the row count. (The overflow
+    // itself is a separate, pre-existing defect — this overlay needs the same
+    // height bounding `BoundedLine` gave the inputs.)
+    expect(stripAnsi(frame)).toContain('↵/esc/q close');
+    expect(frame).not.toContain('›');
     unmount();
   });
 });
