@@ -7,6 +7,7 @@ import { MenuRow } from './MenuRow.js';
 import { HINT_MOVE, HINT_SELECT, HINT_SWITCH_TAB, HINT_CLOSE } from '../hints.js';
 import { isShellOwnedKey } from './overlay-contract.js';
 import { useListCursor } from './use-list-cursor.js';
+import { isSection, itemsOf } from './menu-geometry.js';
 
 /** The settings tabs, in cycle order. `id` matches the `SettingsTab` union. */
 export type SettingsTab = 'options' | 'agent-options';
@@ -16,10 +17,6 @@ export const SETTINGS_TABS: readonly OverlayTab[] = [
 ];
 
 const KEY_HINTS = [HINT_MOVE, HINT_SELECT, HINT_SWITCH_TAB, HINT_CLOSE];
-
-function isSection(entry: MenuEntry): entry is { type: 'section'; title: string } {
-  return 'type' in entry && entry.type === 'section';
-}
 
 interface SettingsOverlayProps {
   initialTab: SettingsTab;
@@ -52,7 +49,7 @@ export function SettingsOverlay({
   const colors = getThemeColors();
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const entries = tab === 'options' ? optionsEntries : agentEntries;
-  const items = entries.filter((e): e is MenuItem => !isSection(e));
+  const items = itemsOf(entries);
   const {
     index: highlight,
     setIndex: setHighlight,

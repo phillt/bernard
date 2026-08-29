@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
-import { HintRow, KEY, HINT_MOVE, HINT_SELECT, HINT_CANCEL } from '../hints.js';
+import { KEY, HINT_MOVE, HINT_SELECT, HINT_CANCEL } from '../hints.js';
 import { isDismissKeyWithQ } from './overlay-contract.js';
 import { useListCursor, useListWindow } from './use-list-cursor.js';
 import {
@@ -13,9 +13,11 @@ import {
   overlayViewport,
   pullBackSection,
 } from './menu-geometry.js';
+import { listPosition } from './viewer-util.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 import type { MenuEntry, MenuItem, MenuOptions } from '../menu-types.js';
 import { MenuRow } from './MenuRow.js';
+import { OverlayFooter, OVERLAY_FOOTER_ROWS } from './OverlayFooter.js';
 
 interface MenuOverlayBaseProps {
   entries: MenuEntry[];
@@ -163,16 +165,34 @@ export function MenuOverlay({
   // each: an `ask_user` question or a long title soft-wraps to two, and a
   // constant would silently hand back a row the frame does not have.
   const usableColumns = termColumns - 4;
+  // The widest description any row could show, so the reserved height is stable
+  // as the highlight moves. Split layout suppresses descriptions entirely.
+  const longestDescription = isSplit
+    ? undefined
+    : items.reduce<string | undefined>(
+        (longest, item) =>
+          item.description && item.description.length > (longest?.length ?? 0)
+            ? item.description
+            : longest,
+        undefined,
+      );
   const headerLines = options?.headerLines ?? [];
   const chrome =
     1 /* the marginTop below */ +
     chromeRows([...headerLines, options?.title], usableColumns) +
     (headerLines.length > 0 ? 1 : 0) /* blank after the header block */ +
     (options?.title ? 1 : 0) /* blank after the title */ +
-    1 /* the highlighted row's description — reserved unconditionally */ +
-    1 /* blank above the footer chrome */ +
-    1 /* position line — always reserved, see below */ +
-    1 /* HintRow */ +
+    // The highlighted row's description, MEASURED for the same reason the title
+    // is. It renders at `marginLeft={4}` inside App's `paddingX={2}`, so it
+    // wraps at `columns - 8` — 72 on an 80-column terminal — and real menu
+    // content already exceeds that (`domains.ts` and the profile wizard both
+    // carry 76–79-char descriptions). A flat row here would under-count by one
+    // on exactly those entries and overflow the frame: the defect this
+    // windowing exists to fix, reintroduced by the one term that wasn't
+    // measured. Reserved unconditionally rather than only when the highlighted
+    // entry has a description, so moving the cursor never resizes the window.
+    chromeRows([longestDescription], usableColumns - 4) +
+    OVERLAY_FOOTER_ROWS /* blank + position line + HintRow */ +
     reserveRows;
   const viewport = overlayViewport(termRows, chrome);
   const cursorEntry = entryIndexOfItem(entries, highlight);
@@ -184,11 +204,9 @@ export function MenuOverlay({
   // something the user can be "on", so `items 3–9 of 40` is the number that
   // matches the digits printed beside the rows.
   const itemsBefore = countItemsBefore(entries, offset);
-  const visibleItemCount = visibleEntries.filter((e) => !isSection(e)).length;
-  const position =
-    visibleItemCount < items.length
-      ? `items ${itemsBefore + 1}–${itemsBefore + visibleItemCount} of ${items.length}`
-      : null;
+  const visibleItemCount = itemsOf(visibleEntries).length;
+  const pos = listPosition(itemsBefore, visibleItemCount, items.length);
+  const position = pos ? `items ${pos.first}–${pos.last} of ${pos.total}` : null;
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -210,7 +228,7 @@ export function MenuOverlay({
             <MenuList
               entries={visibleEntries}
               startEntry={offset}
-              allEntries={entries}
+              itemsBefore={itemsBefore}
               highlight={highlight}
               multiSelect={false}
               checked={checked}
@@ -237,21 +255,14 @@ export function MenuOverlay({
         <MenuList
           entries={visibleEntries}
           startEntry={offset}
-          allEntries={entries}
+          itemsBefore={itemsBefore}
           highlight={highlight}
           multiSelect={multiSelect}
           checked={checked}
         />
       )}
-      <Text> </Text>
-      {/* The position row is ALWAYS reserved — blank when everything fits, as
-          `ViewerShell` does with a null position. Rendering it conditionally
-          would make the layout height depend on the very budget it feeds, so
-          the last row would flicker in and out as the list crossed the
-          threshold. `colors.muted`, never Ink's `dimColor`, which ignores the
-          active theme (pinned by `overlay-footers.theme.test.tsx`). */}
-      <Text color={colors.muted}>{position ?? ' '}</Text>
-      <HintRow
+      <OverlayFooter
+        position={position}
         hints={[
           HINT_MOVE,
           ...(multiSelect
@@ -269,8 +280,8 @@ export function MenuOverlay({
 
 function MenuList({
   entries,
-  startEntry = 0,
-  allEntries,
+  startEntry,
+  itemsBefore,
   highlight,
   multiSelect = false,
   checked,
@@ -278,10 +289,15 @@ function MenuList({
 }: {
   /** The VISIBLE window of entries. */
   entries: MenuEntry[];
-  /** Index into {@link allEntries} that `entries[0]` came from. */
-  startEntry?: number;
-  /** The full entry list, needed to count the items scrolled off the top. */
-  allEntries?: MenuEntry[];
+  /** Index in the FULL list that `entries[0]` came from — seeds the React keys. */
+  startEntry: number;
+  /**
+   * Selectable items scrolled off the top. Passed in rather than recomputed
+   * here: the parent already needs it for the position line, and a second
+   * `countItemsBefore` call with the same arguments is one more place for the
+   * seed below to go wrong.
+   */
+  itemsBefore: number;
   highlight: number;
   multiSelect?: boolean;
   checked?: Set<number>;
@@ -292,9 +308,8 @@ function MenuList({
   // Seeded with the items scrolled off the top, NOT 0. Three things read this
   // counter — the number printed beside the row, the digit shortcut's target,
   // and `checked.has(i)` — so a zero seed on a scrolled multi-select renumbers
-  // the visible rows and ticks the wrong box. `countItemsBefore` is a tested
-  // pure function rather than an inline filter for exactly that reason.
-  let itemIndex = countItemsBefore(allEntries ?? entries, startEntry);
+  // the visible rows and ticks the wrong box.
+  let itemIndex = itemsBefore;
   return (
     <Box flexDirection="column">
       {entries.map((entry, idx) => {

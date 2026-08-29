@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Key } from 'ink';
 import { listNavIntent, type ListNavOptions } from './list-nav.js';
 import { clamp, clampOffset } from './viewer-util.js';
@@ -24,8 +24,7 @@ import { clamp, clampOffset } from './viewer-util.js';
  * 3. `use-line-editor.tsx` made exactly this call, and both `Prompt.tsx` and
  *    `TextInputOverlay.tsx` consume it that way.
  */
-export interface ListCursorOptions extends Omit<ListNavOptions, 'total'> {
-  total: number;
+export interface ListCursorOptions extends ListNavOptions {
   /** Starting row, clamped into `[0, total-1]` (and `0` when `total` is 0). */
   initialIndex?: number;
   /** Enter, and — unless {@link onDigit} overrides — a digit. Receives an INDEX. */
@@ -104,18 +103,24 @@ export function useListCursor(opts: ListCursorOptions): ListCursor {
 /**
  * Scroll offset for a windowed list, wrapping `viewer-util.clampOffset`.
  *
- * `useState` holds the raw offset but the DERIVED value is recomputed from
- * `clampOffset` on every render, so a resize or a shrinking list can never
- * strand the window past the end. The `useEffect` write-back is **not**
- * optional: with a permanently-zero stored offset, `clampOffset` re-derives the
- * minimum window containing the cursor every render, which pins the cursor to
- * the bottom edge and re-scrolls on every single upward keypress.
+ * The returned offset is re-derived on every render, so a resize or a shrinking
+ * list can never strand the window past the end — the discipline
+ * `ScrollableOverlay` documents and the two drill-down viewers still lack.
  */
 export function useListWindow(cursor: number, size: number, total: number): { offset: number } {
-  const [stored, setStored] = useState(0);
-  const offset = clampOffset(cursor, stored, size, total);
-  useEffect(() => {
-    if (offset !== stored) setStored(offset);
-  }, [offset, stored]);
+  // A ref, not state: the stored offset is never *read* by the render — it only
+  // seeds the next `clampOffset`, which is idempotent, so writing it back
+  // through `setState` produced a second commit (and a full Ink/Yoga layout
+  // pass over the overlay) on every keystroke that moved the window, for an
+  // output that could not change. Once the cursor is past the first screen it
+  // sits on a window edge for most of a traversal, so that was nearly every ↓.
+  //
+  // The hysteresis itself is load-bearing and must not be dropped: with a
+  // permanently-zero offset, `clampOffset` recomputes `cursor - size + 1` every
+  // render and pins the cursor to the bottom edge, so the list would scroll on
+  // every upward keypress.
+  const stored = useRef(0);
+  const offset = clampOffset(cursor, stored.current, size, total);
+  stored.current = offset;
   return { offset };
 }

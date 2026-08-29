@@ -438,4 +438,28 @@ describe('<MenuOverlay> windowing (#266)', () => {
     const lines = stripAnsi(lastFrame() ?? '').split('\n');
     expect(lines.length).toBeLessThanOrEqual(FALLBACK_DIMENSIONS.rows - 1);
   });
+
+  it('stays in frame when the highlighted description soft-wraps', async () => {
+    // The description renders at marginLeft={4} inside App's paddingX={2}, so
+    // it wraps at columns - 8 = 72. Real menu content already exceeds that —
+    // `domains.ts` and the profile wizard carry 76-79 char descriptions — so a
+    // flat one-row reservation under-counts by exactly one and puts the frame
+    // back over the budget this windowing exists to hold. Measured instead.
+    const long = 'x'.repeat(150); // wraps to 3 rows at 72 columns
+    const entries = Array.from({ length: 40 }, (_, i) => ({
+      label: `item-${i + 1}`,
+      description: long,
+    }));
+    const { lastFrame, stdin } = mountMenu({ entries });
+    await tick();
+    expect(stripAnsi(lastFrame() ?? '').split('\n').length).toBeLessThanOrEqual(
+      FALLBACK_DIMENSIONS.rows - 1,
+    );
+    // …and still bounded once a description is actually on screen mid-list.
+    for (let i = 0; i < 12; i++) stdin.write(ARROW_DOWN);
+    await tick();
+    const plain = stripAnsi(lastFrame() ?? '');
+    expect(plain.split('\n').length).toBeLessThanOrEqual(FALLBACK_DIMENSIONS.rows - 1);
+    expect(plain).toContain('13. item-13');
+  });
 });

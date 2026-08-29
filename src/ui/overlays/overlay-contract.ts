@@ -26,12 +26,13 @@ import type { Key } from 'ink';
  */
 
 /**
- * `Ctrl-C` alone. Exported because two callers need it *without* `Esc`:
- * `ViewerShell` gates Esc on `escClosesViewer` (a drilled-in viewer spends Esc
- * on "back one level") but must still close unconditionally on Ctrl-C, and
- * `ModelGridOverlay`'s empty-list branch has no rows to cancel out of. Without
- * this atom both hand-roll the comparison — which is what the module exists to
- * stop.
+ * `Ctrl-C` alone. Exported because `ViewerShell` needs it *without* `Esc`: it
+ * gates Esc on `escClosesViewer` (a drilled-in viewer spends Esc on "back one
+ * level") but must still close unconditionally on Ctrl-C. Without this atom it
+ * would hand-roll the comparison — which is what the module exists to stop.
+ *
+ * It had a second caller, `ModelGridOverlay`'s empty-list branch; #266 removed
+ * that branch by making `listNavIntent` decline every key at `total === 0`.
  */
 export function isCtrlC(input: string, key: Key): boolean {
   return key.ctrl === true && input === 'c';

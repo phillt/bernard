@@ -1,6 +1,6 @@
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
-import { HintRow, KEY, HINT_SELECT } from '../hints.js';
+import { KEY, HINT_SELECT } from '../hints.js';
 import { isDismissKeyWithQ } from './overlay-contract.js';
 import { useListCursor, useListWindow } from './use-list-cursor.js';
 import { chromeRows, overlayViewport } from './menu-geometry.js';
@@ -8,6 +8,7 @@ import { listPosition } from './viewer-util.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 import { truncate } from '../../text.js';
 import { MenuRow } from './MenuRow.js';
+import { OverlayFooter, OVERLAY_FOOTER_ROWS } from './OverlayFooter.js';
 
 export interface ModelGridOverlayProps {
   title?: string;
@@ -115,9 +116,7 @@ export function ModelGridOverlay({
     chromeRows([title, footer], usableColumns) +
     (title ? 1 : 0) /* blank after title */ +
     (footer ? 1 : 0) /* blank after footer */ +
-    1 /* blank above the footer chrome */ +
-    1 /* position line — always reserved, see below */ +
-    1 /* HintRow */ +
+    OVERLAY_FOOTER_ROWS /* blank + position line + HintRow */ +
     reserveRows;
   const viewport = overlayViewport(termRows, chrome);
   const cursorRow = Math.floor(highlight / columns);
@@ -161,17 +160,8 @@ export function ModelGridOverlay({
           </Box>
         ))}
       </Box>
-      <Text> </Text>
-      {/* The position row is ALWAYS reserved — blank when everything fits, as
-          `ViewerShell` does with a null position. Rendering it conditionally
-          would make the layout height depend on the very budget it feeds, so
-          the last row would flicker in and out as the list crossed the
-          threshold. `colors.muted`, never Ink's `dimColor`, which ignores the
-          active theme (pinned by `overlay-footers.theme.test.tsx`). */}
-      <Text color={colors.muted}>
-        {position ? `rows ${position.first}–${position.last} of ${position.total}` : ' '}
-      </Text>
-      <HintRow
+      <OverlayFooter
+        position={position ? `rows ${position.first}–${position.last} of ${position.total}` : null}
         hints={[
           { key: KEY.arrowsAll, label: 'move' },
           HINT_SELECT,

@@ -486,6 +486,51 @@ export function buildResumeSeed(history: CoreMessage[], toolDetails: boolean): S
  * `src/tools/types.ts:58-100` exactly so Phase D can swap them in without
  * touching tool code.
  */
+/**
+ * Opens a modal overlay as a promise that settles exactly once, whether the
+ * user answers it or the caller's `AbortSignal` fires first (#266).
+ *
+ * Every overlay request needs the same five things: a synchronous pre-check so
+ * an already-aborted signal never mounts anything, a `settled` latch so an
+ * abort racing a keystroke resolves once, an `onAbort` that tears the overlay
+ * DOWN before resolving (otherwise the frame keeps a dialog nobody can answer),
+ * `{ once: true }`, and `removeEventListener` on the normal path so a
+ * long-lived signal does not retain the closure.
+ *
+ * That was written out five times — and the previous comment here *described*
+ * the five copies as "shared verbatim", which is the tell. The parameterised
+ * parts are only which pending slot to clear and what "cancelled" means for
+ * this result type; `install` runs any per-overlay work (a session-allowlist
+ * write, a persisted permission rule) before calling `settle`. Collapsing them
+ * puts overlay teardown in ONE place, which is what stops the sixth overlay
+ * from forgetting `setActiveOverlay(null)`.
+ */
+function openOverlay<T>(
+  signal: AbortSignal | undefined,
+  cancelled: T,
+  close: () => void,
+  install: (settle: (value: T) => void) => void,
+): Promise<T> {
+  if (signal?.aborted) return Promise.resolve(cancelled);
+  return new Promise<T>((resolve) => {
+    let settled = false;
+    const finish = (value: T): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const onAbort = () => {
+      close();
+      finish(cancelled);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    install((value) => {
+      signal?.removeEventListener('abort', onAbort);
+      finish(value);
+    });
+  });
+}
+
 export function App({
   agent,
   config,
@@ -3035,46 +3080,40 @@ export function App({
     requestAskUser,
   };
 
+  // Overlay teardown, one closure per pending slot. Passed to `openOverlay` so
+  // an abort clears the same state the user's own answer would have.
+  const closeMenu = () => {
+    setPendingMenu(null);
+    setActiveOverlay(null);
+  };
+  const closeMultiMenu = () => {
+    setPendingMultiMenu(null);
+    setActiveOverlay(null);
+  };
+  const closeDialog = () => {
+    setPendingDialog(null);
+    setActiveOverlay(null);
+  };
+  const closeTextInput = () => {
+    setPendingTextInput(null);
+    setActiveOverlay(null);
+  };
+
   /**
-   * The overlay-cancellation idiom, shared verbatim by `requestConfirm`,
-   * `requestBlock` and the three helpers below (#266): a synchronous pre-check,
-   * a `settled` guard so an abort racing a user's keystroke resolves once, an
-   * `onAbort` that tears the overlay DOWN before resolving, `{ once: true }`,
-   * and `removeEventListener` on the normal path.
-   *
    * `signal` is optional and TRAILING so the ~40 call sites that have none are
    * untouched. Before this, `MenuOverlay` carried a `signal` prop nothing ever
    * passed — exercised only by its own tests — while the abort that actually
    * happens, an agent turn cancelled with an `ask_user` menu on screen, left
-   * the menu on the screen.
+   * the menu on the screen. See {@link openOverlay} for the settle/teardown
+   * race every one of these shares.
    */
   function requestMenu(
     entries: MenuEntry[],
     options?: MenuOptions,
     signal?: AbortSignal,
   ): Promise<MenuResult> {
-    if (signal?.aborted) return Promise.resolve({ cancelled: true });
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (value: MenuResult): void => {
-        if (settled) return;
-        settled = true;
-        resolve(value);
-      };
-      const onAbort = () => {
-        setPendingMenu(null);
-        setActiveOverlay(null);
-        finish({ cancelled: true });
-      };
-      signal?.addEventListener('abort', onAbort, { once: true });
-      setPendingMenu({
-        entries,
-        options,
-        resolve: (value) => {
-          signal?.removeEventListener('abort', onAbort);
-          finish(value);
-        },
-      });
+    return openOverlay<MenuResult>(signal, { cancelled: true }, closeMenu, (settle) => {
+      setPendingMenu({ entries, options, resolve: settle });
       setActiveOverlay('menu');
     });
   }
@@ -3101,28 +3140,8 @@ export function App({
     options?: MenuOptions,
     signal?: AbortSignal,
   ): Promise<MultiMenuResult> {
-    if (signal?.aborted) return Promise.resolve({ cancelled: true });
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (value: MultiMenuResult): void => {
-        if (settled) return;
-        settled = true;
-        resolve(value);
-      };
-      const onAbort = () => {
-        setPendingMultiMenu(null);
-        setActiveOverlay(null);
-        finish({ cancelled: true });
-      };
-      signal?.addEventListener('abort', onAbort, { once: true });
-      setPendingMultiMenu({
-        entries,
-        options,
-        resolve: (value) => {
-          signal?.removeEventListener('abort', onAbort);
-          finish(value);
-        },
-      });
+    return openOverlay<MultiMenuResult>(signal, { cancelled: true }, closeMultiMenu, (settle) => {
+      setPendingMultiMenu({ entries, options, resolve: settle });
       setActiveOverlay('multi-menu');
     });
   }
@@ -3237,30 +3256,16 @@ export function App({
   function requestConfirm(input: ConfirmActionInput, signal?: AbortSignal): Promise<boolean> {
     const key = `${input.toolName}:${stableHash(input.args)}`;
     if (confirmAllowSession.current.get(key)) return Promise.resolve(true);
-    if (signal?.aborted) return Promise.resolve(false);
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      const finish = (value: boolean): void => {
-        if (settled) return;
-        settled = true;
-        resolve(value);
-      };
-      const onAbort = () => {
-        setPendingDialog(null);
-        setActiveOverlay(null);
-        finish(false);
-      };
-      signal?.addEventListener('abort', onAbort, { once: true });
+    return openOverlay<boolean>(signal, false, closeDialog, (settle) => {
       setPendingDialog({
         kind: 'confirm',
         input,
         resolve: (allowed, scope, breadth) => {
-          signal?.removeEventListener('abort', onAbort);
           if (allowed && scope === 'session') confirmAllowSession.current.set(key, true);
           if (allowed && scope === 'profile') {
             persistPermissionRule(buildRuleFromBreadth(input.toolName, breadth, 'allow'));
           }
-          finish(allowed);
+          settle(allowed);
         },
       });
       setActiveOverlay('confirm');
@@ -3268,29 +3273,15 @@ export function App({
   }
 
   function requestBlock(input: BlockActionInput, signal?: AbortSignal): Promise<BlockOutcome> {
-    if (signal?.aborted) return Promise.resolve('deny' as BlockOutcome);
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (value: BlockOutcome): void => {
-        if (settled) return;
-        settled = true;
-        resolve(value);
-      };
-      const onAbort = () => {
-        setPendingDialog(null);
-        setActiveOverlay(null);
-        finish('deny');
-      };
-      signal?.addEventListener('abort', onAbort, { once: true });
+    return openOverlay<BlockOutcome>(signal, 'deny', closeDialog, (settle) => {
       setPendingDialog({
         kind: 'block',
         input,
         resolve: (outcome, breadth) => {
-          signal?.removeEventListener('abort', onAbort);
           if (outcome === 'allow-tool-for-profile') {
             persistPermissionRule(buildRuleFromBreadth(input.toolName, breadth, 'allow'));
           }
-          finish(outcome);
+          settle(outcome);
         },
       });
       setActiveOverlay('confirm');
@@ -3302,27 +3293,8 @@ export function App({
     options: ValuePromptOptions,
     signal?: AbortSignal,
   ): Promise<ValueResult> {
-    if (signal?.aborted) return Promise.resolve({ cancelled: true });
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (value: ValueResult): void => {
-        if (settled) return;
-        settled = true;
-        resolve(value);
-      };
-      const onAbort = () => {
-        setPendingTextInput(null);
-        setActiveOverlay(null);
-        finish({ cancelled: true });
-      };
-      signal?.addEventListener('abort', onAbort, { once: true });
-      setPendingTextInput({
-        options,
-        resolve: (value) => {
-          signal?.removeEventListener('abort', onAbort);
-          finish(value);
-        },
-      });
+    return openOverlay<ValueResult>(signal, { cancelled: true }, closeTextInput, (settle) => {
+      setPendingTextInput({ options, resolve: settle });
       setActiveOverlay('text-input');
     });
   }
