@@ -1337,3 +1337,96 @@ describe('buildResumeSeed (--resume transcript replay)', () => {
     expect(buildResumeSeed([], false)).toEqual([]);
   });
 });
+
+/**
+ * The abort path that actually exists (#266).
+ *
+ * `MenuOverlay` and `ModelGridOverlay` each carried a `signal` prop with an
+ * abort-listener effect that NO caller ever passed — `grep -rn "signal={"
+ * src/ui` returned nothing — so it was exercised only by their own tests.
+ * Meanwhile the real case went unhandled: `requestMenu` took no signal at all,
+ * and `requestAskUser` polled `signal?.aborted` only BETWEEN questions, so an
+ * agent abort while an `ask_user` menu was on screen left the menu up until the
+ * user answered it.
+ */
+describe('<App> overlay abort (#266)', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('tears down a live ask_user menu when the turn is aborted', async () => {
+    const { lastFrame, unmount } = renderApp();
+    await tick();
+    const ac = new AbortController();
+    const pending = getInkHandlers()!.requestAskUser(
+      [{ question: 'Which environment?', choices: ['staging', 'prod'] }],
+      ac.signal,
+    );
+    await tick(40);
+    expect(lastFrame()!).toContain('Which environment?');
+
+    ac.abort();
+    await tick(40);
+    expect(lastFrame()!).not.toContain('Which environment?');
+    await expect(pending).resolves.toEqual({ cancelled: true, answered: [] });
+    unmount();
+  });
+
+  it('tears down a live ask_user free-text prompt when the turn is aborted', async () => {
+    const { lastFrame, unmount } = renderApp();
+    await tick();
+    const ac = new AbortController();
+    const pending = getInkHandlers()!.requestAskUser(
+      [{ question: 'Name the release?' }],
+      ac.signal,
+    );
+    await tick(40);
+    expect(lastFrame()!).toContain('Name the release?');
+
+    ac.abort();
+    await tick(40);
+    expect(lastFrame()!).not.toContain('Name the release?');
+    await expect(pending).resolves.toEqual({ cancelled: true, answered: [] });
+    unmount();
+  });
+
+  it('never opens the overlay when the signal is already aborted', async () => {
+    const { lastFrame, unmount } = renderApp();
+    await tick();
+    const ac = new AbortController();
+    ac.abort();
+    const result = await getInkHandlers()!.requestMenu(
+      [{ label: 'only-choice' }],
+      { title: 'should not appear' },
+      ac.signal,
+    );
+    await tick(40);
+    expect(result).toEqual({ cancelled: true });
+    expect(lastFrame()!).not.toContain('should not appear');
+    unmount();
+  });
+
+  it('forwards the signal through the ink-handlers bridge shim', async () => {
+    // The shim used to take only `(entries, options)`, so a signal handed to
+    // `getInkHandlers().requestMenu` was silently dropped one frame short of
+    // the overlay. This asserts it arrives.
+    const { lastFrame, unmount } = renderApp();
+    await tick();
+    const ac = new AbortController();
+    const pending = getInkHandlers()!.requestMenu(
+      [{ label: 'only-choice' }],
+      { title: 'bridge menu' },
+      ac.signal,
+    );
+    await tick(40);
+    expect(lastFrame()!).toContain('bridge menu');
+    ac.abort();
+    await tick(40);
+    expect(lastFrame()!).not.toContain('bridge menu');
+    await expect(pending).resolves.toEqual({ cancelled: true });
+    unmount();
+  });
+});

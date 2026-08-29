@@ -169,7 +169,7 @@ import { Toast, type ToastVariant } from './Toast.js';
 import { persistAgentState } from './save.js';
 import { MessageStore } from './message-store.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
-import { setInkHandlers } from './ink-handlers.js';
+import { setInkHandlers, type MenuResult } from './ink-handlers.js';
 import { injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
 import {
   VoiceService,
@@ -276,10 +276,11 @@ interface ToastState {
 interface PendingMenu {
   entries: MenuEntry[];
   options?: MenuOptions;
-  resolve: (
-    result: { cancelled: true } | { cancelled: false; index: number; item: MenuItem },
-  ) => void;
+  resolve: (result: MenuResult) => void;
 }
+
+/** Multi-select's result shape — the sibling of {@link MenuResult} (#231). */
+export type MultiMenuResult = { cancelled: true } | { cancelled: false; items: MenuItem[] };
 
 /**
  * Multi-select counterpart of {@link PendingMenu} (#231). Kept separate so the
@@ -290,7 +291,7 @@ interface PendingMenu {
 interface PendingMultiMenu {
   entries: MenuEntry[];
   options?: MenuOptions;
-  resolve: (result: { cancelled: true } | { cancelled: false; items: MenuItem[] }) => void;
+  resolve: (result: MultiMenuResult) => void;
 }
 
 interface PendingGrid {
@@ -748,18 +749,26 @@ export function App({
   } | null>(null);
   useEffect(() => {
     setInkHandlers({
-      requestMenu: (entries, options) => handlersRef.current!.requestMenu(entries, options),
+      // Forwards `signal` — the shim used to take only two parameters, so a
+      // signal handed to `getInkHandlers().requestMenu` was silently dropped
+      // one frame short of the overlay (#266).
+      requestMenu: (entries, options, signal) =>
+        handlersRef.current!.requestMenu(entries, options, signal),
       requestConfirm: (input, signal) => handlersRef.current!.requestConfirm(input, signal),
       requestBlock: (input, signal) => handlersRef.current!.requestBlock(input, signal),
-      requestTextInput: (options) => handlersRef.current!.requestTextInput(options),
+      requestTextInput: (options, signal) => handlersRef.current!.requestTextInput(options, signal),
       requestAskUser: (questions, signal) => handlersRef.current!.requestAskUser(questions, signal),
       requestConfirmDangerous: async (command, signal) => {
-        if (signal?.aborted) return false;
+        // The signal now reaches the overlay, so an abort while the menu is on
+        // screen tears it down. The two `signal?.aborted` polls this replaces
+        // bracketed an await that could not be interrupted: they could only
+        // observe an abort that happened before the menu opened or after the
+        // user had already answered it.
         const result = await handlersRef.current!.requestMenu(
           [{ label: 'Allow once' }, { label: 'Cancel' }],
           { title: `⚠ Dangerous command: ${command}` },
+          signal,
         );
-        if (signal?.aborted) return false;
         return !result.cancelled && result.index === 0;
       },
     });
@@ -3054,12 +3063,46 @@ export function App({
     requestAskUser,
   };
 
+  /**
+   * The overlay-cancellation idiom, shared verbatim by `requestConfirm`,
+   * `requestBlock` and the three helpers below (#266): a synchronous pre-check,
+   * a `settled` guard so an abort racing a user's keystroke resolves once, an
+   * `onAbort` that tears the overlay DOWN before resolving, `{ once: true }`,
+   * and `removeEventListener` on the normal path.
+   *
+   * `signal` is optional and TRAILING so the ~40 call sites that have none are
+   * untouched. Before this, `MenuOverlay` carried a `signal` prop nothing ever
+   * passed — exercised only by its own tests — while the abort that actually
+   * happens, an agent turn cancelled with an `ask_user` menu on screen, left
+   * the menu on the screen.
+   */
   function requestMenu(
     entries: MenuEntry[],
     options?: MenuOptions,
-  ): Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }> {
+    signal?: AbortSignal,
+  ): Promise<MenuResult> {
+    if (signal?.aborted) return Promise.resolve({ cancelled: true });
     return new Promise((resolve) => {
-      setPendingMenu({ entries, options, resolve });
+      let settled = false;
+      const finish = (value: MenuResult): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const onAbort = () => {
+        setPendingMenu(null);
+        setActiveOverlay(null);
+        finish({ cancelled: true });
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      setPendingMenu({
+        entries,
+        options,
+        resolve: (value) => {
+          signal?.removeEventListener('abort', onAbort);
+          finish(value);
+        },
+      });
       setActiveOverlay('menu');
     });
   }
@@ -3080,13 +3123,34 @@ export function App({
     });
   }
 
-  /** Multi-select sibling of {@link requestMenu} (#231). */
+  /** Multi-select sibling of {@link requestMenu} (#231). Same abort idiom. */
   function requestMultiMenu(
     entries: MenuEntry[],
     options?: MenuOptions,
-  ): Promise<{ cancelled: true } | { cancelled: false; items: MenuItem[] }> {
+    signal?: AbortSignal,
+  ): Promise<MultiMenuResult> {
+    if (signal?.aborted) return Promise.resolve({ cancelled: true });
     return new Promise((resolve) => {
-      setPendingMultiMenu({ entries, options, resolve });
+      let settled = false;
+      const finish = (value: MultiMenuResult): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const onAbort = () => {
+        setPendingMultiMenu(null);
+        setActiveOverlay(null);
+        finish({ cancelled: true });
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      setPendingMultiMenu({
+        entries,
+        options,
+        resolve: (value) => {
+          signal?.removeEventListener('abort', onAbort);
+          finish(value);
+        },
+      });
       setActiveOverlay('multi-menu');
     });
   }
@@ -3261,9 +3325,32 @@ export function App({
     });
   }
 
-  function requestTextInput(options: ValuePromptOptions): Promise<ValueResult> {
+  /** Free-text sibling of {@link requestMenu}. Same abort idiom. */
+  function requestTextInput(
+    options: ValuePromptOptions,
+    signal?: AbortSignal,
+  ): Promise<ValueResult> {
+    if (signal?.aborted) return Promise.resolve({ cancelled: true });
     return new Promise((resolve) => {
-      setPendingTextInput({ options, resolve });
+      let settled = false;
+      const finish = (value: ValueResult): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const onAbort = () => {
+        setPendingTextInput(null);
+        setActiveOverlay(null);
+        finish({ cancelled: true });
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      setPendingTextInput({
+        options,
+        resolve: (value) => {
+          signal?.removeEventListener('abort', onAbort);
+          finish(value);
+        },
+      });
       setActiveOverlay('text-input');
     });
   }
@@ -3274,11 +3361,14 @@ export function App({
   ): Promise<AskUserBatchResult> {
     const answers: (string | string[])[] = [];
     for (const q of questions) {
+      // Belt-and-braces since #266: every overlay below now takes the signal
+      // itself, so an abort mid-question tears the overlay down instead of
+      // waiting for the user to answer it and the loop to come back here.
       if (signal?.aborted) return { cancelled: true, answered: answers };
 
       // Free-text question (no choices) — prompt with TextInputOverlay.
       if (!q.choices || q.choices.length === 0) {
-        const result = await requestTextInput(askUserPrompt(q.question));
+        const result = await requestTextInput(askUserPrompt(q.question), signal);
         if (result.cancelled) return { cancelled: true, answered: answers };
         answers.push(result.raw.trim());
         continue;
@@ -3293,11 +3383,11 @@ export function App({
       // The answer is the array of chosen labels; an "Other"-shaped pick still
       // routes to a free-text follow-up (same dedup behavior as single-select).
       if (q.multiSelect) {
-        const result = await requestMultiMenu(entries, { title: q.question });
+        const result = await requestMultiMenu(entries, { title: q.question }, signal);
         if (result.cancelled) return { cancelled: true, answered: answers };
         const picked = result.items.filter((item) => !isHatch(item)).map((item) => item.label);
         if (result.items.some(isHatch)) {
-          const free = await requestTextInput(askUserPrompt(q.question));
+          const free = await requestTextInput(askUserPrompt(q.question), signal);
           if (free.cancelled) return { cancelled: true, answered: answers };
           const typed = free.raw.trim();
           if (typed) picked.push(typed);
@@ -3306,12 +3396,12 @@ export function App({
         continue;
       }
 
-      const result = await requestMenu(entries, { title: q.question });
+      const result = await requestMenu(entries, { title: q.question }, signal);
       if (result.cancelled) return { cancelled: true, answered: answers };
 
       if (isHatch(result.item)) {
         // User picked "Other" — gather free-form text.
-        const free = await requestTextInput(askUserPrompt(q.question));
+        const free = await requestTextInput(askUserPrompt(q.question), signal);
         if (free.cancelled) return { cancelled: true, answered: answers };
         answers.push(free.raw.trim());
       } else {

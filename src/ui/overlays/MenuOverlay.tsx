@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import { HintRow, KEY, HINT_MOVE, HINT_SELECT, HINT_CANCEL } from '../hints.js';
@@ -29,14 +29,6 @@ interface MenuOverlayBaseProps {
    * it knows what box it sits in.
    */
   reserveRows?: number;
-  /**
-   * Optional external cancel signal. The legacy `selectFromMenu` accepts one
-   * via `MenuOptions.signal` so a parent (e.g. an aborted agent turn) can drop
-   * a stale menu without user interaction. Mirroring that here keeps the
-   * `askUser` and confirm-action paths unaffected when the user presses Esc
-   * mid-turn.
-   */
-  signal?: AbortSignal;
 }
 
 /**
@@ -85,15 +77,15 @@ export function MenuOverlay({
   options,
   onSelect,
   onCancel,
-  signal,
   reserveRows = 0,
   multiSelect = false,
   onMultiSelect,
 }: MenuOverlayProps) {
   const colors = getThemeColors();
-  // Terminal size comes from the context, never `useStdout`: under the test
-  // renderer the two disagree (context falls back to 80×24, ink-testing-library
-  // reports 100 columns), and the context is the only one that tracks SIGWINCH.
+  // Terminal size comes from the context, never `useStdout`: the context is the
+  // one reactive source (it subscribes to SIGWINCH once at the top of the tree),
+  // and under the test renderer the two disagree — no provider falls back to 80
+  // columns while ink-testing-library's stdout reports 100.
   const { columns: termColumns, rows: termRows } = useDimensionsCtx();
   const items = itemsOf(entries);
   // Set of *item* indices (sections excluded) currently checked. Multi-select only.
@@ -139,17 +131,6 @@ export function MenuOverlay({
     onToggle: toggle,
     onDigit: multiSelect ? toggle : commit,
   });
-
-  useEffect(() => {
-    if (!signal) return;
-    if (signal.aborted) {
-      onCancel();
-      return;
-    }
-    const onAbort = () => onCancel();
-    signal.addEventListener('abort', onAbort);
-    return () => signal.removeEventListener('abort', onAbort);
-  }, [signal, onCancel]);
 
   useInput((input, key) => {
     // Dismissal is decided first, ahead of the shared list keystream, so

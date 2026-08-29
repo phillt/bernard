@@ -33,7 +33,6 @@ function mountGrid(opts: {
   footer?: string;
   initialIndex?: number;
   currentItem?: string;
-  signal?: AbortSignal;
 }) {
   const onSelect = opts.onSelect ?? vi.fn();
   const onCancel = opts.onCancel ?? vi.fn();
@@ -46,7 +45,6 @@ function mountGrid(opts: {
       footer: opts.footer,
       initialIndex: opts.initialIndex,
       currentItem: opts.currentItem,
-      signal: opts.signal,
     }),
   );
   return { ...harness, onSelect, onCancel };
@@ -136,24 +134,6 @@ describe('<ModelGridOverlay>', () => {
       await tick();
       expect(onCancel).toHaveBeenCalledTimes(1);
     }
-  });
-
-  it('pre-aborted signal fires onCancel synchronously', async () => {
-    const ac = new AbortController();
-    ac.abort();
-    const { onCancel } = mountGrid({ signal: ac.signal });
-    await tick();
-    expect(onCancel).toHaveBeenCalledTimes(1);
-  });
-
-  it('signal aborted mid-render fires onCancel', async () => {
-    const ac = new AbortController();
-    const { onCancel } = mountGrid({ signal: ac.signal });
-    await tick();
-    expect(onCancel).not.toHaveBeenCalled();
-    ac.abort();
-    await tick();
-    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it('empty items list still allows Esc to cancel', async () => {

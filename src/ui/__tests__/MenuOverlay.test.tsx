@@ -34,7 +34,6 @@ function mountMenu(opts: {
   onSelect?: ReturnType<typeof vi.fn>;
   onCancel?: ReturnType<typeof vi.fn>;
   options?: Parameters<typeof MenuOverlay>[0]['options'];
-  signal?: AbortSignal;
   reserveRows?: number;
 }) {
   const onSelect = opts.onSelect ?? vi.fn();
@@ -48,7 +47,6 @@ function mountMenu(opts: {
         onSelect,
         onCancel,
         options: opts.options,
-        signal: opts.signal,
         reserveRows: opts.reserveRows,
       }),
     ),
@@ -141,24 +139,6 @@ describe('<MenuOverlay>', () => {
       await tick();
       expect(onCancel).toHaveBeenCalledTimes(1);
     }
-  });
-
-  it('pre-aborted signal fires onCancel synchronously', async () => {
-    const ac = new AbortController();
-    ac.abort();
-    const { onCancel } = mountMenu({ signal: ac.signal });
-    await tick();
-    expect(onCancel).toHaveBeenCalledTimes(1);
-  });
-
-  it('signal aborted mid-render fires onCancel', async () => {
-    const ac = new AbortController();
-    const { onCancel } = mountMenu({ signal: ac.signal });
-    await tick();
-    expect(onCancel).not.toHaveBeenCalled();
-    ac.abort();
-    await tick();
-    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it('headerLines render above the title and items', () => {

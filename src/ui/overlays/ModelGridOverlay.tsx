@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import { HintRow, KEY, HINT_SELECT } from '../hints.js';
@@ -18,7 +17,6 @@ export interface ModelGridOverlayProps {
   currentItem?: string;
   onSelect: (index: number) => void;
   onCancel: () => void;
-  signal?: AbortSignal;
   /**
    * Rows consumed by chrome OUTSIDE this overlay, which only the caller knows:
    * the alert banner, and legacy inline mode where the overlay is appended
@@ -45,8 +43,10 @@ function computeColumns(termWidth: number, longestItemLen: number): number {
  *
  * Built for the lineup model picker where one provider can have 40+ models
  * and a single column scrolls off-screen. The grid keeps the eye-saccade
- * count low while staying within `MenuOverlay`'s keyboard idioms (Esc
- * cancels, Enter commits, abort signal pre-aborts to cancel).
+ * count low while staying within `MenuOverlay`'s keyboard idioms (Esc / q
+ * cancel, Enter commits). Cancellation from a parent is the caller's business:
+ * `requestGridMenu` resolves the promise and unmounts, rather than this
+ * component subscribing to a signal of its own (#266).
  */
 export function ModelGridOverlay({
   title,
@@ -56,13 +56,13 @@ export function ModelGridOverlay({
   currentItem,
   onSelect,
   onCancel,
-  signal,
   reserveRows = 0,
 }: ModelGridOverlayProps) {
   const colors = getThemeColors();
-  // Terminal size comes from the context, never `useStdout`: under the test
-  // renderer the two disagree (context falls back to 80×24, ink-testing-library
-  // reports 100 columns), and the context is the only one that tracks SIGWINCH.
+  // Terminal size comes from the context, never `useStdout`: the context is the
+  // one reactive source (it subscribes to SIGWINCH once at the top of the tree),
+  // and under the test renderer the two disagree — no provider falls back to 80
+  // columns while ink-testing-library's stdout reports 100.
   const { columns: termWidth, rows: termRows } = useDimensionsCtx();
 
   const longestItemLen = items.reduce((m, s) => Math.max(m, s.length), 1);
@@ -85,17 +85,6 @@ export function ModelGridOverlay({
     digits: false,
     onCommit: onSelect,
   });
-
-  useEffect(() => {
-    if (!signal) return;
-    if (signal.aborted) {
-      onCancel();
-      return;
-    }
-    const onAbort = () => onCancel();
-    signal.addEventListener('abort', onAbort);
-    return () => signal.removeEventListener('abort', onAbort);
-  }, [signal, onCancel]);
 
   useInput((input, key) => {
     if (isDismissKeyWithQ(input, key)) {
