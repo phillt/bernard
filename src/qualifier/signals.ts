@@ -112,9 +112,37 @@ function connectiveWithVerbRe(): RegExp {
   return CONNECTIVE_WITH_VERB_RE;
 }
 
+// Bare sequencer + following tool-invocation verb. Same shape and same guard as
+// `connectiveWithVerbRe`, minus the required `and`/`after` prefix — "X, then run
+// Y" is one of the most ordinary ways to phrase a two-step request, and it
+// matched nothing before (#385). The following-verb requirement is what keeps
+// conversational uses out: "I tried X and then Y happened" has no verb after
+// the connective, so it stays single-step.
+let BARE_SEQUENCER_RE: RegExp | null = null;
+function bareSequencerRe(): RegExp {
+  if (!BARE_SEQUENCER_RE) {
+    const verbs = TOOL_INVOCATION_VERBS.join('|');
+    BARE_SEQUENCER_RE = new RegExp(
+      `\\b(?:then|next)\\b[\\s,]*(?:\\w+\\s+){0,3}(?:${verbs})\\b`,
+      'i',
+    );
+  }
+  return BARE_SEQUENCER_RE;
+}
+
+/**
+ * Conditional `then`, which is not a sequencer: "if the build fails then run
+ * the linter" describes one branch, not two steps — and it contains a tool verb,
+ * so the guard above cannot reject it. Stripped before the bare-sequencer test.
+ * Bounded to a single sentence so an `if` early in a paragraph cannot swallow a
+ * genuine sequencer later in it.
+ */
+const CONDITIONAL_CLAUSE_RE = /\bif\b[^.?!]*?\bthen\b/gi;
+
 export function hasMultiStepLanguage(text: string): boolean {
   if (MULTI_STEP_PATTERNS.some((re) => re.test(text))) return true;
-  return connectiveWithVerbRe().test(text);
+  if (connectiveWithVerbRe().test(text)) return true;
+  return bareSequencerRe().test(text.replace(CONDITIONAL_CLAUSE_RE, ' '));
 }
 
 /**

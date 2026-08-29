@@ -109,6 +109,30 @@ describe('hasMultiStepLanguage', () => {
     expect(hasMultiStepLanguage('what happened after that?')).toBe(false);
   });
 
+  it('matches a bare "then" sequencer without a leading "and" (#385)', () => {
+    // "X, then Y" is one of the most ordinary two-step phrasings and matched
+    // nothing before: the connective rule required the `and then` bigram and
+    // the `first ... then` pattern required a literal "first".
+    expect(hasMultiStepLanguage('get the emails then create an issue')).toBe(true);
+    expect(hasMultiStepLanguage('read the file, then update the tests')).toBe(true);
+    expect(hasMultiStepLanguage('fetch the report then send it to john')).toBe(true);
+    expect(hasMultiStepLanguage('check the logs next open a ticket')).toBe(true);
+  });
+
+  it('does NOT treat a conditional "then" as a sequence', () => {
+    // "if X then Y" is one branch, not two steps — and unlike the
+    // conversational cases it DOES carry a tool verb, so the following-verb
+    // guard cannot reject it on its own.
+    expect(hasMultiStepLanguage('if the build fails then run the linter')).toBe(false);
+    expect(hasMultiStepLanguage('if it errors then delete the cache')).toBe(false);
+  });
+
+  it('does NOT treat a temporal "then" as a sequence', () => {
+    // Narrating what happened, not requesting work.
+    expect(hasMultiStepLanguage('it worked, then it broke')).toBe(false);
+    expect(hasMultiStepLanguage('the job ran and then the disk filled up')).toBe(false);
+  });
+
   it('matches 2+ bullet list', () => {
     expect(hasMultiStepLanguage('- item one\n- item two')).toBe(true);
     expect(hasMultiStepLanguage('* a\n* b')).toBe(true);

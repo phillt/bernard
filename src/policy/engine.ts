@@ -65,7 +65,10 @@ export class DefaultPolicyEngine implements PolicyEngine {
       toolMode: toolMode.reason,
     };
 
-    debugLog('policy:decide', { decision, reasons });
+    // `signals` is the qualifier's raw feature map (#385). Logged beside the
+    // decision so a misclassification shows which signals were live, rather
+    // than only which branch won.
+    debugLog('policy:decide', { decision, reasons, signals: strategy.signals });
 
     return { decision, reasons };
   }

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { buildStrategy } from '../build-strategy.js';
 import { NormalStrategy } from '../normal.js';
 import { ReActStrategy } from '../react.js';
+import { PlanReconcileStrategy } from '../plan-reconcile.js';
 import type { BernardConfig } from '../../../config.js';
 import type { StrategyContext } from '../types.js';
 
@@ -76,5 +77,39 @@ describe('buildStrategy', () => {
     await strategy.run(ctx);
     const firstCall = (ctx.iterate as any).mock.calls[0][0];
     expect(firstCall.systemSuffix).toBeUndefined();
+  });
+
+  describe('plan reconciliation opt-in (#303)', () => {
+    it('is off by default, so specialist and sub-agent sites are unchanged', () => {
+      // Specialist passes only `enforcementStepRatio`; this is the executable
+      // form of the main-only constraint.
+      expect(
+        buildStrategy(makeConfig({ coordinatorMode: 'off' }), { enforcementStepRatio: 0.25 }),
+      ).toBeInstanceOf(NormalStrategy);
+    });
+
+    it('wraps a Normal turn when the caller opts in', () => {
+      expect(
+        buildStrategy(makeConfig({ coordinatorMode: 'off' }), { enforcePlanReconcile: true }),
+      ).toBeInstanceOf(PlanReconcileStrategy);
+    });
+
+    it('yields to ReAct rather than double-wrapping', () => {
+      // The two wrappers are gated on opposite polarity of the same predicate,
+      // so exactly one enforcement pass can ever run for a turn.
+      const strategy = buildStrategy(makeConfig({ coordinatorMode: 'on' }), {
+        enforcePlanReconcile: true,
+      });
+      expect(strategy).toBeInstanceOf(ReActStrategy);
+      expect(strategy).not.toBeInstanceOf(PlanReconcileStrategy);
+    });
+
+    it('yields to a per-turn react override too', () => {
+      const strategy = buildStrategy(makeConfig({ coordinatorMode: 'off' }), {
+        enforcePlanReconcile: true,
+        strategyId: 'react',
+      });
+      expect(strategy).toBeInstanceOf(ReActStrategy);
+    });
   });
 });

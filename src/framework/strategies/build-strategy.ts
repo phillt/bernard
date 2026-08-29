@@ -2,6 +2,7 @@ import type { BernardConfig } from '../../config.js';
 import { isReactEffective } from '../../policy/effective.js';
 import type { PolicyDecision } from '../../policy/types.js';
 import { NormalStrategy } from './normal.js';
+import { PlanReconcileStrategy } from './plan-reconcile.js';
 import { ReActStrategy } from './react.js';
 import type { ExecutionStrategy } from './types.js';
 
@@ -18,6 +19,13 @@ export interface BuildStrategyOpts {
    * can vary strategy per turn without flipping the global config flag.
    */
   strategyId?: PolicyDecision['strategyId'];
+  /**
+   * Opt in to plan reconciliation on non-ReAct turns (#303). Main agent only:
+   * it is the site whose abandoned plans the user actually sees. Specialist
+   * sites leave it unset and keep exactly today's behavior, and the definitions
+   * that instantiate {@link NormalStrategy} directly never reach this builder.
+   */
+  enforcePlanReconcile?: boolean;
 }
 
 /**
@@ -66,6 +74,16 @@ export function buildStrategy(
 
 // ---- Bootstrap registrations -------------------------------------------------
 // Each new strategy adds one import + one registerStrategy call here.
+
+// Reconciliation for turns ReAct did NOT claim. Gated on the opposite polarity
+// of the same predicate as the wrapper above, so the two can never both wrap a
+// single turn — exactly-once enforcement holds by construction, independent of
+// registration order (#303).
+registerStrategy((inner, config, opts) =>
+  opts.enforcePlanReconcile && !isReactEffective(config, { strategyId: opts.strategyId })
+    ? new PlanReconcileStrategy(inner)
+    : null,
+);
 
 registerStrategy((inner, config, opts) => {
   // Prefer the Policy Engine's per-turn decision; fall back to

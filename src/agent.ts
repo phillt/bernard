@@ -83,6 +83,7 @@ import {
 export {
   REACT_COORDINATOR_PROMPT,
   shouldEnforcePlan,
+  computePlanNeeds,
   REACT_MAX_STEPS_CEILING,
   computeEffectiveMaxSteps,
   REACT_ENFORCEMENT_MAX_RETRIES,

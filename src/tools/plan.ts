@@ -24,9 +24,14 @@ const stepInputSchema = z.object({
 /**
  * Creates the `plan` tool. Exposed in every mode (not just coordinator/ReAct):
  * it's a structured, user-visible plan the model can record instead of
- * narrating one in prose. The ReAct *enforcement* loop (re-prompting on
- * unresolved steps) lives in the strategy (`react.ts`), not here — so in Normal
- * mode this is just a scratchpad with no enforcement.
+ * narrating one in prose.
+ *
+ * Enforcement lives in the strategy layer, not here. Since #303 the split is:
+ * *reconciliation* (finish what you started) runs in every mode on the main
+ * agent, while *plan creation* stays coordinator-only. So a plan recorded on a
+ * Normal turn is no longer a consequence-free scratchpad — which is why the
+ * tool description states the terminal-state rule, since a Normal turn never
+ * receives the coordinator prompt that would otherwise carry it.
  *
  * Each step carries a verification criterion at creation time. Marking a step
  * `done` requires a `signoff` attesting that the verification was actually
@@ -42,7 +47,7 @@ export function createPlanTool(planStore: PlanStore, onPlanReplaced?: () => void
   // No terminal rendering here: the Ink `PlanPanel` subscribes to the
   // PlanStore directly, and the transcript echo lives in `src/ui/Thread.tsx`.
   return tool({
-    description: `Track and manage a structured plan for the current turn. Required in coordinator mode; available in every mode. When a task has multiple steps worth tracking, prefer recording them here — a structured plan the user can see — over narrating the plan in prose. Skip it for trivial or single-step turns. Each step has a \`verification\` criterion (set at creation) describing how you'll prove it succeeded. Actions: 'create' seeds a plan with step objects {description, verification}; 'add' appends one such step; 'update' transitions a step's status; 'view' shows the plan. Marking 'done' requires \`signoff\` (attesting verification was performed). Marking 'cancelled' or 'error' requires \`note\` (the reason). The plan is visible to the user. Each \`description\` and \`verification\` must be a single line of plain text — no newlines (neither literal nor escaped as \\n), no code blocks, no multi-paragraph prose. Keep each entry under ${STEP_FIELD_MAX} characters; if a step needs more context, split it into multiple smaller steps.`,
+    description: `Track and manage a structured plan for the current turn. Required in coordinator mode; available in every mode. When a task has multiple steps worth tracking, prefer recording them here — a structured plan the user can see — over narrating the plan in prose. Skip it for trivial or single-step turns. Each step has a \`verification\` criterion (set at creation) describing how you'll prove it succeeded. Actions: 'create' seeds a plan with step objects {description, verification}; 'add' appends one such step; 'update' transitions a step's status; 'view' shows the plan. Marking 'done' requires \`signoff\` (attesting verification was performed). Marking 'cancelled' or 'error' requires \`note\` (the reason). The plan is visible to the user. Before your final response every step must be in a terminal state (done, cancelled, or error); any left pending or in_progress will trigger a re-prompt, in every mode. Each \`description\` and \`verification\` must be a single line of plain text — no newlines (neither literal nor escaped as \\n), no code blocks, no multi-paragraph prose. Keep each entry under ${STEP_FIELD_MAX} characters; if a step needs more context, split it into multiple smaller steps.`,
     parameters: z.object({
       action: z.enum(['create', 'update', 'add', 'view']).describe('The action to perform'),
       steps: z

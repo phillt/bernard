@@ -34,9 +34,15 @@ export function isReactEffective(
  * turns, which invalidates the Anthropic prompt cache (tools are the first,
  * largest cached block and can't carry a mid-array breakpoint). Keeping the
  * tool present for the whole session keeps the block byte-identical so the
- * cache holds. The ReAct *enforcement* loop still keys off the per-turn
- * {@link isReactEffective} in the strategy — same rationale as the always-on
- * `plan` tool: an exposed-but-unenforced tool on a Normal turn is harmless.
+ * cache holds. That is safe for `evaluate`, which is an inert reflection tool —
+ * exposing it on a Normal turn costs nothing but the schema bytes.
+ *
+ * It was NOT safe for `plan`, which mutates user-visible state: a Normal turn
+ * could record a plan, render it in the plan panel, and abandon it, because
+ * enforcement keyed off the per-turn {@link isReactEffective}. Since #303 the
+ * loop is split — *reconciliation* runs in any mode (main agent), *plan
+ * creation* stays coordinator-only — so tool membership and enforcement are now
+ * decided independently, which is what let this stay session-stable.
  */
 export function isReactPossible(config: Pick<BernardConfig, 'coordinatorMode'>): boolean {
   return config.coordinatorMode !== 'off';

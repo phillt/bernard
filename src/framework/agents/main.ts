@@ -253,10 +253,12 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     // byte-identical across turns for the cache to hit.
     //
     // Keeping `evaluate` present for the whole session (when mode != 'off') is
-    // harmless on Normal turns: like the always-on `plan` tool, the ReAct
-    // *enforcement* loop lives in the strategy (`react.ts`), not the tool, so an
-    // exposed-but-unenforced tool on a single-shot turn just gives the model a
-    // place to record a verification — no enforcement, no loop.
+    // harmless on Normal turns because it is an inert reflection tool. The
+    // always-on `plan` tool is NOT in that category — it mutates user-visible
+    // state — which is why #303 split enforcement so a Normal turn still has to
+    // reconcile a plan it chose to make. Enforcement lives in the strategy
+    // layer either way, so an exposed `evaluate` on a single-shot turn just
+    // gives the model a place to record a verification.
     const reactToolsAvailable = isReactPossible(ctx.config);
     const tools: Record<string, Tool> = {
       ...baseTools,
@@ -285,7 +287,12 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
   },
 
   strategy(ctx) {
-    return buildStrategy(ctx.config, { strategyId: ctx.policyDecision?.strategyId });
+    return buildStrategy(ctx.config, {
+      strategyId: ctx.policyDecision?.strategyId,
+      // Main is the only site that opts in: its plans are the ones rendered in
+      // the plan panel, so an abandoned one is a visible broken promise (#303).
+      enforcePlanReconcile: true,
+    });
   },
 
   stepBudget(config) {

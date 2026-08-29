@@ -70,6 +70,24 @@ describe('DefaultPolicyEngine', () => {
     expect(policyDecideCall![1]).toHaveProperty('reasons');
   });
 
+  it('logs the qualifier feature map alongside the decision (#385)', () => {
+    // `reason` names the winning branch; `signals` names what was live when it
+    // won. Without this a misclassification is only diagnosable by reading the
+    // qualifier source and reconstructing its inputs.
+    const engine = new DefaultPolicyEngine();
+    engine.decide(makePolicyInput({ config: { coordinatorMode: 'auto' } }));
+    const calls = vi.mocked(logger.debugLog).mock.calls;
+    const payload = calls.find(([label]) => label === 'policy:decide')![1] as {
+      signals?: Record<string, unknown>;
+    };
+    expect(payload.signals).toMatchObject({
+      multiStep: expect.any(Boolean),
+      toolKw: expect.any(Boolean),
+      bloom: expect.any(String),
+    });
+    expect(typeof payload.signals!.tokens).toBe('number');
+  });
+
   it('reacts to config.coordinatorMode changes between calls', () => {
     const engine = new DefaultPolicyEngine();
     const off = engine.decide(makePolicyInput({ config: { coordinatorMode: 'off' } }));
