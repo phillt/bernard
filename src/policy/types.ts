@@ -49,13 +49,22 @@ export interface PolicyDecision {
   };
 }
 
+/** Raw feature map a sub-policy used to decide, for telemetry only. */
+export type PolicySignals = Record<string, boolean | number | string>;
+
 /**
  * What a sub-policy emits: its own sub-decision shape (the value for one
  * `PolicyDecision` key) plus a free-form `reason` string. Reason codes are
  * stable identifiers (kebab-case), not free prose — they end up in
  * `debugLog` and in the `/policy` REPL command output.
+ *
+ * `signals` is the optional diagnostic sibling of `reason`: where `reason`
+ * names the branch that won, `signals` records what was live when it did. It
+ * lives on the base rather than inside a policy's `T` because `T` is defined
+ * as the value for one `PolicyDecision` key, and a debug payload is not that —
+ * putting it there would make every future policy re-widen its own generic.
  */
-export type SubDecision<T> = T & { reason: string };
+export type SubDecision<T> = T & { reason: string; signals?: PolicySignals };
 
 /** Pure per-turn function from input to one sub-decision. */
 export type SubPolicy<T> = (input: PolicyInput) => SubDecision<T>;
@@ -64,6 +73,8 @@ export interface PolicyResult {
   decision: PolicyDecision;
   /** Map keyed by sub-policy name (e.g. `'strategy'`, `'scratch'`). */
   reasons: Record<string, string>;
+  /** Same keying as {@link reasons}; only policies that expose one appear. */
+  signals: Record<string, PolicySignals>;
 }
 
 export interface PolicyEngine {

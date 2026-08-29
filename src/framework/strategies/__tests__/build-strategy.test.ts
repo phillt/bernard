@@ -2,6 +2,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { buildStrategy } from '../build-strategy.js';
 import { NormalStrategy } from '../normal.js';
 import { ReActStrategy } from '../react.js';
+import { PlanReconcileStrategy } from '../plan-reconcile.js';
+import { PlanStore } from '../../../plan-store.js';
+import { REACT_ENFORCEMENT_MAX_RETRIES } from '../../../react.js';
+import { baseResult } from './_harness.js';
 import type { BernardConfig } from '../../../config.js';
 import type { StrategyContext } from '../types.js';
 
@@ -76,5 +80,52 @@ describe('buildStrategy', () => {
     await strategy.run(ctx);
     const firstCall = (ctx.iterate as any).mock.calls[0][0];
     expect(firstCall.systemSuffix).toBeUndefined();
+  });
+
+  describe('plan reconciliation opt-in (#303)', () => {
+    it('is off by default, so specialist and sub-agent sites are unchanged', () => {
+      // Specialist passes only `enforcementStepRatio`; this is the executable
+      // form of the main-only constraint.
+      expect(
+        buildStrategy(makeConfig({ coordinatorMode: 'off' }), { enforcementStepRatio: 0.25 }),
+      ).toBeInstanceOf(NormalStrategy);
+    });
+
+    it('wraps a Normal turn when the caller opts in', () => {
+      expect(
+        buildStrategy(makeConfig({ coordinatorMode: 'off' }), { enforcePlanReconcile: true }),
+      ).toBeInstanceOf(PlanReconcileStrategy);
+    });
+
+    it('yields to ReAct rather than double-wrapping', async () => {
+      // The two wrappers are gated on opposite polarity of the same predicate,
+      // so exactly one enforcement pass can ever run for a turn. Asserting the
+      // outer type alone would be vacuous (they are unrelated classes), so this
+      // drives a real turn: a ReAct turn that abandons its plan must re-prompt
+      // exactly REACT_ENFORCEMENT_MAX_RETRIES times, not twice that.
+      const config = makeConfig({ coordinatorMode: 'on' });
+      const strategy = buildStrategy(config, { enforcePlanReconcile: true });
+      expect(strategy).toBeInstanceOf(ReActStrategy);
+
+      const planStore = new PlanStore();
+      const ctx = makeCtx(config);
+      (ctx.iterate as any).mockImplementation(async () => {
+        if (!planStore.hasSteps())
+          planStore.create([{ description: 'unresolved', verification: 'check' }]);
+        return baseResult;
+      });
+      (ctx as any).planStore = planStore;
+
+      await strategy.run(ctx);
+      expect(ctx.iterate).toHaveBeenCalledTimes(1 + REACT_ENFORCEMENT_MAX_RETRIES);
+    });
+
+    it('yields to a per-turn react override too', () => {
+      const strategy = buildStrategy(makeConfig({ coordinatorMode: 'off' }), {
+        enforcePlanReconcile: true,
+        strategyId: 'react',
+      });
+      expect(strategy).toBeInstanceOf(ReActStrategy);
+    });
   });
 });

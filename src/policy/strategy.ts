@@ -35,7 +35,7 @@ export const strategyPolicy: SubPolicy<{ id: StrategyId }> = (input) => {
         config: input.config,
         context: { turnIndex: input.turnIndex },
       });
-      return { id: result.strategyId, reason: result.reason };
+      return { id: result.strategyId, reason: result.reason, signals: result.signals };
     }
   }
 };

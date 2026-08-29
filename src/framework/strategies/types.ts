@@ -35,7 +35,7 @@ export interface StrategyContext {
   abortSignal?: AbortSignal;
   /** Prefix for log lines emitted from the strategy (e.g. `[id]` for specialists). */
   prefix?: string;
-  /** Plan store used by ReAct enforcement; same instance the plan tool mutates. */
+  /** Plan store used by plan enforcement (ReAct and reconcile alike); same instance the plan tool mutates. */
   planStore?: PlanStore;
   /** Returns true when the most recent iterate result hit `maxSteps`. Called
    *  by ReActStrategy after its initial iterate. Defaults to false. */

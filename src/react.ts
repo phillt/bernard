@@ -1,7 +1,18 @@
 /**
- * ReAct (coordinator) mode primitives shared by the main agent and specialist
- * dispatch tools (`specialist_run`). Extracted from `agent.ts` so tools — which
- * are imported BY agent.ts — can use them without forming a circular import.
+ * Coordinator-mode prompt and step math, plus the plan-enforcement vocabulary.
+ *
+ * The enforcement primitives here — {@link computePlanNeeds},
+ * {@link shouldEnforcePlan}, {@link buildEnforcementFeedback},
+ * {@link REACT_ENFORCEMENT_MAX_RETRIES}, {@link REACT_AUTO_CANCEL_NOTE} — are
+ * **not** ReAct-only since #303: the Normal-turn reconcile path in
+ * `framework/strategies/plan-enforcement.ts` uses the same ones. Only the
+ * coordinator prompt and `computeEffectiveMaxSteps` are genuinely
+ * coordinator-specific. Relocating the shared half out of this module is filed
+ * as follow-up work; keeping it here for now avoids churn mid-change.
+ *
+ * Originally extracted from `agent.ts` to dodge a circular import via the tool
+ * layer; today `agent.ts` (re-export) and `plan-enforcement.ts` are the only
+ * importers.
  */
 
 export const REACT_COORDINATOR_PROMPT = `## Coordinator Mode (Active)
@@ -74,22 +85,56 @@ When all plan steps are in terminal states and you are ready to respond to the u
 4. Skip this synthesis step only for trivial work where no plan was created.`;
 
 /**
- * Pure predicate: should the ReAct plan-enforcement loop run after the main
+ * Splits "the plan store is not fully resolved" into the two situations that
+ * deserve different fates (#303).
+ *
+ * They used to be one `needsEnforcement` flag, which forced both to share the
+ * ReAct gate. But they are not the same claim: *a plan exists and was
+ * abandoned* is a broken promise the user can see in the plan panel, and is
+ * wrong in any mode; *no plan was ever created* is a coordinator mandate, and
+ * enforcing it on a Normal turn would nag every trivial ask into planning.
+ *
+ * `needsPlanCreation` keeps the trivial-turn escape hatch: a turn that called
+ * no tools had nothing to coordinate, so its missing plan is correct.
+ */
+export function computePlanNeeds(args: {
+  hasPlan: boolean;
+  unresolvedCount: number;
+  usedTools: boolean;
+}): { needsReconcile: boolean; needsPlanCreation: boolean } {
+  return {
+    // No `hasPlan` conjunct: unresolved steps can only exist if steps do.
+    needsReconcile: args.unresolvedCount > 0,
+    needsPlanCreation: !args.hasPlan && args.usedTools,
+  };
+}
+
+/**
+ * Pure predicate: should the plan-enforcement loop run after the main
  * generateText call?
  *
- * `needsEnforcement` is true when the plan store is not in a fully resolved
- * state — either no plan was ever created (model skipped the `plan` tool
- * entirely), or one was created but still has unresolved steps. In
- * coordinator mode we re-prompt on both, since the coordinator prompt
- * mandates planning for any non-trivial task.
+ * Reconciliation is mode-independent — if the model built a plan, it owes the
+ * user a terminal state for every step whatever strategy the turn ran under.
+ * Only *plan creation* is coordinator-gated.
+ *
+ * `aborted` and `stepLimitHit` suppress both in every mode, and deliberately
+ * so: you do not re-prompt "finish your plan" on a turn the user cancelled, or
+ * on one that ran out of budget before it could.
  */
 export function shouldEnforcePlan(args: {
-  reactMode: boolean;
+  /**
+   * Does this caller enforce plan *creation*? Named for the capability rather
+   * than the mode: reconciliation runs in both, so a `reactMode` field would
+   * invite exactly the ReAct-vs-Normal reading that is now wrong.
+   */
+  enforceMissingPlan: boolean;
   aborted: boolean;
   stepLimitHit: boolean;
-  needsEnforcement: boolean;
+  needsReconcile: boolean;
+  needsPlanCreation: boolean;
 }): boolean {
-  return args.reactMode && !args.aborted && !args.stepLimitHit && args.needsEnforcement;
+  if (args.aborted || args.stepLimitHit) return false;
+  return args.needsReconcile || (args.enforceMissingPlan && args.needsPlanCreation);
 }
 
 /**

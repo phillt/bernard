@@ -96,25 +96,39 @@ const MULTI_STEP_PATTERNS: RegExp[] = [
   /\bfirst\b[^.]{0,80}\b(?:then|next|after that|finally)\b/i,
 ];
 
-// Connective + following tool-invocation verb within a few words. Built
-// lazily after TOOL_INVOCATION_VERBS is defined below.
-let CONNECTIVE_WITH_VERB_RE: RegExp | null = null;
-function connectiveWithVerbRe(): RegExp {
-  if (!CONNECTIVE_WITH_VERB_RE) {
-    const verbs = TOOL_INVOCATION_VERBS.join('|');
-    // "and then X", "after that X", "and also X" where X is a task verb
-    // within ~4 words (allows "and then please run", "after that, go fix").
-    CONNECTIVE_WITH_VERB_RE = new RegExp(
-      `\\b(?:and then|after that|and also)\\b[\\s,]*(?:\\w+\\s+){0,3}(?:${verbs})\\b`,
-      'i',
-    );
-  }
-  return CONNECTIVE_WITH_VERB_RE;
-}
+// Sequencer + a following tool-invocation verb within ~3 words: "and then
+// please run", "after that, go fix", "X, then create Y". A bare `then`/`next`
+// covers the `and then` case too (the word boundary sits inside it), so one
+// alternation serves both — only `after that` / `and also` need their own.
+//
+// The following-verb requirement is the whole guard: it is what keeps
+// conversational uses out, since "I tried X and then Y happened" has no task
+// verb after the connective.
+const SEQUENCER_WITH_VERB_RE = new RegExp(
+  `\\b(?:then|next|after that|and also)\\b[\\s,]*(?:\\w+\\s+){0,3}(?:${TOOL_INVOCATION_VERBS.join('|')})\\b`,
+  'i',
+);
+
+/**
+ * Conditional clauses, which are not sequences: "if the build fails then run
+ * the linter" describes one branch, not two steps — and it carries a tool verb,
+ * so the following-verb guard cannot reject it.
+ *
+ * Stripped once for the whole detector rather than for the newest pattern
+ * alone: "a conditional is not a sequence" is a property of multi-step
+ * detection, so `first check X, and if it fails then run Y` should not escalate
+ * either. Bounded to a single sentence so an `if` early in a paragraph cannot
+ * swallow a genuine sequencer later in it.
+ *
+ * Deliberately narrow — `when`/`unless` are unhandled. Covering them properly
+ * wants clause segmentation rather than another regex (#385 follow-up).
+ */
+const CONDITIONAL_CLAUSE_RE = /\bif\b[^.?!]*?\bthen\b/gi;
 
 export function hasMultiStepLanguage(text: string): boolean {
-  if (MULTI_STEP_PATTERNS.some((re) => re.test(text))) return true;
-  return connectiveWithVerbRe().test(text);
+  const sequential = text.replace(CONDITIONAL_CLAUSE_RE, ' ');
+  if (MULTI_STEP_PATTERNS.some((re) => re.test(sequential))) return true;
+  return SEQUENCER_WITH_VERB_RE.test(sequential);
 }
 
 /**
