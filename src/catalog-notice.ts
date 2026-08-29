@@ -27,11 +27,18 @@ import { nameList, plural } from './text.js';
  * - `none` — nothing worth saying (or no trustworthy baseline to diff against).
  * - `added` — new models are available; the pre-existing success toast.
  * - `removed` — models disappeared, but none this session depends on.
- * - `provider-wiped` — a provider this session actually uses lost *every*
- *   entry. This is the incident shape, and the only one that must survive the
- *   next keystroke.
+ * - `provider-empty` — a provider this session uses has *no* entries, without
+ *   having lost any in this refresh: the damage was inherited from a cache an
+ *   earlier run wrote (#387). Diff-driven checks are blind to it, which is how
+ *   the `xai` → `spacexai` rename stayed silent after the run that caused it.
+ * - `provider-wiped` — a provider this session uses lost *every* entry in this
+ *   refresh. Same consequence as `provider-empty` but with the richer "lost N
+ *   models just now" detail, so it takes precedence when both apply.
+ *
+ * The last two are incident shapes: both must survive the next keystroke, so
+ * the caller routes them to the durable transcript notice rather than a toast.
  */
-export type CatalogNoticeKind = 'none' | 'added' | 'removed' | 'provider-wiped' | 'provider-empty';
+export type CatalogNoticeKind = 'none' | 'added' | 'removed' | 'provider-empty' | 'provider-wiped';
 
 export interface CatalogNotice {
   kind: CatalogNoticeKind;
