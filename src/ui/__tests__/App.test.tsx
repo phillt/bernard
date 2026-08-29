@@ -362,8 +362,8 @@ describe('<App> full-screen layout', () => {
     // line — adding one command to the catalogue (#390) shifted the parity and
     // broke it, with the overlay working exactly as before. The footer is the
     // last line rendered, so it is there whatever the row count. (The overflow
-    // itself is a separate, pre-existing defect — this overlay needs the same
-    // height bounding `BoundedLine` gave the inputs.)
+    // itself is a separate, pre-existing defect — measured at 44 lines before
+    // this change added any commands. Filed as #392.)
     expect(stripAnsi(frame)).toContain('↵/esc/q close');
     expect(frame).not.toContain('›');
     unmount();

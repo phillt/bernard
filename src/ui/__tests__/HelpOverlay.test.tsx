@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { HelpOverlay } from '../overlays/HelpOverlay.js';
-import { SLASH_COMMANDS } from '../SlashHints.js';
+import { SLASH_COMMANDS } from '../slash-commands.js';
 import { ESC, ENTER, tick } from './_keys.js';
 import stripAnsi from 'strip-ansi';
 

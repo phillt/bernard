@@ -2,7 +2,7 @@ import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import { HintRow, HINT_CLOSE_ANY } from '../hints.js';
 import { isAcknowledgeKey } from './overlay-contract.js';
-import { SLASH_COMMANDS } from '../SlashHints.js';
+import { SLASH_COMMANDS } from '../slash-commands.js';
 
 interface HelpOverlayProps {
   onClose: () => void;
@@ -15,20 +15,15 @@ interface HelpRow {
 
 /**
  * The `Commands` section, derived from the one slash-command catalogue rather
- * than retyped here (#390). This used to be a hand-maintained second table
- * whose only sync mechanism was a comment in `SlashHints.tsx` asking the reader
- * to keep them aligned — by the time it was fixed it had lost `/rag`, `/policy`
- * and `/usage` and disagreed with the strip on four descriptions.
+ * than retyped here (#390). This was a hand-maintained second copy of it; see
+ * `SLASH_COMMANDS` for what that cost and `SlashCommand.detail` for the
+ * fallback below.
  *
  * The field rename (`name` → `command`) is a one-line bridge on purpose:
  * `HelpRow` is the row shape this file's renderer takes, and `EDITING_ROWS`
  * below reuses it for keyboard chords that are not slash commands at all — so
  * renaming either side to make the shapes line up would have coupled the chord
  * table to the command catalogue for no gain.
- *
- * `detail ?? description` is the width budget: the hint strip sits beside the
- * prompt and the help screen owns a full frame, so the few commands that read
- * better long say so via `detail` (see `SlashCommand`).
  */
 const HELP_ROWS: readonly HelpRow[] = SLASH_COMMANDS.map((cmd) => ({
   command: cmd.name,
@@ -66,10 +61,11 @@ const SECTIONS: readonly { title: string; rows: readonly HelpRow[] }[] = [
 ];
 
 /**
- * Read-only help screen rendered as an overlay. Replaces the legacy
- * `printHelp()` stdout dump. Esc / Enter / q close it; Shift-Tab cycling
- * still works because the active overlay = 'help' is treated like the
- * other viewer overlays (status, sources).
+ * Read-only help screen rendered as an overlay, replacing a legacy stdout dump
+ * that #390 finally deleted — it had outlived its last caller and gone stale by
+ * ten commands. Esc / Enter / q close it; Shift-Tab cycling still works because
+ * the active overlay = 'help' is treated like the other viewer overlays
+ * (status, sources).
  */
 export function HelpOverlay({ onClose }: HelpOverlayProps) {
   const colors = getThemeColors();
