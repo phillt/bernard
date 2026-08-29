@@ -4,7 +4,7 @@ import { debugLog } from '../logger.js';
 import { printInfo } from '../output.js';
 import { readBernardSource, readToolMeta, preserveMeta } from '../framework/tools/adapter.js';
 import { isCacheable, type ToolResult } from '../framework/tools/types.js';
-import { classifyError } from '../error-taxonomy.js';
+import { stripFailureMarker, classifyError } from '../error-taxonomy.js';
 import type { BlockActionInput, BlockOutcome, ConfirmActionInput, ToolOptions } from './types.js';
 import type { ConfirmThreshold } from '../risk.js';
 import { riskFromMeta, shouldBlockInReadOnly, shouldConfirm } from '../risk.js';
@@ -24,10 +24,8 @@ import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js
  * the profile playbook — strip it before classifying or storing as a bad
  * example so the recorded bytes are the raw underlying error.
  */
-const FAILURE_HINT_PREFIX = /^\[failure: [a-z_]+\][^\n]*\n?/;
-
 function stripFailureHint(snippet: string): string {
-  return snippet.replace(FAILURE_HINT_PREFIX, '');
+  return stripFailureMarker(snippet);
 }
 
 /**

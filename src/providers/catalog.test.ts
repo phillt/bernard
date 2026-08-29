@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { BUILTIN_PROVIDERS } from './types.js';
 
 import { CACHE_SCHEMA_VERSION } from './catalog.js';
 
@@ -303,5 +304,31 @@ describe('disk-cache schema versioning (#269)', () => {
     const cat = m.loadCatalogSync();
     expect(cat.source).toBe('disk');
     expect(cat.entries.some((e: { model: string }) => e.model === 'stale-model')).toBe(true);
+  });
+});
+
+describe('vendoredProviderCounts', () => {
+  useTempHome('bernard-catalog-vendored-');
+
+  it('reports a non-zero count for every built-in provider', async () => {
+    // This is the discriminator `catalog-notice` uses to tell "the catalog lost
+    // this provider" from "it never had it". If a future snapshot regresses to
+    // zero for a provider — e.g. another `owned_by` rename slipping past
+    // `resolveGatewayOwner` — the carried-over check silently disarms for it,
+    // which is the failure this locks down.
+    const m = await loadModule();
+    const counts = m.vendoredProviderCounts();
+    // Iterate the real list, not a literal: adding a built-in without
+    // refreshing the snapshot leaves it at 0 on both sides, which silently
+    // disarms the carried-over check for exactly the newest provider. A
+    // hardcoded triple would pass right through that.
+    for (const provider of BUILTIN_PROVIDERS) {
+      expect(counts[provider], `vendored snapshot has no ${provider} entries`).toBeGreaterThan(0);
+    }
+  });
+
+  it('is memoized across calls', async () => {
+    const m = await loadModule();
+    expect(m.vendoredProviderCounts()).toBe(m.vendoredProviderCounts());
   });
 });

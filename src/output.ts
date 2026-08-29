@@ -370,13 +370,6 @@ export function printWarning(message: string): void {
 // In-REPL no-ops — the legacy markers (▶ tool calls, ◉ thinking, ┌─ sub:1)
 // would corrupt Ink's render. The equivalent information surfaces through the
 // streaming sink (StreamEvent kinds: tool-call, tool-result, text-delta).
-export function printToolFailure(
-  _category: string,
-  _snippet: string,
-  _hint: string,
-  _severity: 'low' | 'normal' | 'critical' = 'normal',
-): void {}
-
 export function printThought(_thought: string, _prefix?: string): void {}
 
 export function printEvaluation(_evaluation: string, _prefix?: string): void {}

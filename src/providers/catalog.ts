@@ -319,6 +319,25 @@ export async function loadCatalog(opts: { force?: boolean } = {}): Promise<Cache
   return current;
 }
 
+/**
+ * Per-provider entry counts of the **bundled** snapshot.
+ *
+ * The diff-independent baseline for "is a provider missing that shouldn't be".
+ * A bare `count === 0` on the live catalog cannot answer that — `countByProvider`
+ * seeds every built-in to `0`, so it fires for any provider simply never
+ * catalogued. The vendored snapshot dissolves the ambiguity: it ships with the
+ * binary, so a provider it carries that the live catalog lacks can only mean our
+ * parser or the gateway lost them.
+ *
+ * Memoized: the snapshot is a static asset, and `loadVendored` parses the whole
+ * file.
+ */
+let vendoredCounts: Record<string, number> | null = null;
+export function vendoredProviderCounts(): Record<string, number> {
+  vendoredCounts ??= countByProvider(loadVendored().entries);
+  return vendoredCounts;
+}
+
 /** Returns all catalog entries for a single built-in provider. */
 export function getCatalogForProvider(provider: BuiltinProvider): ModelCatalogEntry[] {
   const cat = loadCatalogSync();
@@ -463,6 +482,7 @@ export async function refreshCatalogWithDiff(): Promise<CatalogRefreshDiff> {
 
 /** Test-only hook to flush the in-memory cache so a fresh load is forced. */
 export function _resetCatalogCacheForTests(): void {
+  vendoredCounts = null;
   memoryCache = null;
   inflight = null;
 }

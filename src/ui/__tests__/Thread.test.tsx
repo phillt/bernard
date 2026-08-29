@@ -171,6 +171,46 @@ describe('<Thread>', () => {
     expect(lastFrame()).toContain('file1');
   });
 
+  it('renders the user-facing recovery hint under a failed tool result (#353)', () => {
+    // The committed path recomputes the failure: streaming events are replaced
+    // by static items at turn commit, so a hint that only lived on the stream
+    // would vanish the moment the turn ended.
+    const history: CoreMessage[] = [
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'c1',
+            toolName: 'shell',
+            result: { output: 'bash: nope: command not found', is_error: true },
+          },
+        ],
+      },
+    ];
+    const frame = stripAnsi(
+      render(createElement(Thread, { staticItems: items(history, true) })).lastFrame() ?? '',
+    );
+    // That it is the USER's playbook is pinned in `tool-failure.test.ts`;
+    // here the question is only whether the line reaches the transcript.
+    expect(frame).toContain('not_found');
+  });
+
+  it('adds no hint line to a successful tool result', () => {
+    const history: CoreMessage[] = [
+      {
+        role: 'tool',
+        content: [
+          { type: 'tool-result', toolCallId: 'c1', toolName: 'shell', result: { output: 'ok' } },
+        ],
+      },
+    ];
+    const frame = stripAnsi(
+      render(createElement(Thread, { staticItems: items(history, true) })).lastFrame() ?? '',
+    );
+    expect(frame).not.toContain('·');
+  });
+
   it('truncates oversized assistant tool-call args', () => {
     const longCmd = 'x'.repeat(500);
     const history: CoreMessage[] = [

@@ -2,8 +2,7 @@ import { dispatchToolWrapper } from './tool-wrapper-run.js';
 import type { AgentContext } from '../framework/context.js';
 import { debugLog } from '../logger.js';
 import { preserveMeta } from '../framework/tools/adapter.js';
-import { classifyError } from '../error-taxonomy.js';
-import { printToolFailure } from '../output.js';
+import { failureMarker, classifyError } from '../error-taxonomy.js';
 
 /**
  * Builds the natural-language input handed to a wrapper specialist when the
@@ -119,12 +118,16 @@ export function wrapToolWithSpecialist<TArgs>(
           // an empty line. PR #189 review feedback.
           const snippet = wrapped.error ?? String(wrapped.result ?? '');
           const cls = classifyError({ message: snippet, toolName });
-          printToolFailure(cls.category, snippet, cls.playbook.user, cls.severity);
+          // The user-facing half (`playbook.user`) is rendered by the Ink
+          // thread from the sink's `tool-result.failure`, built centrally in
+          // `output-sink.ts` — which covers every tool, not just the shimmed
+          // ones. This site only stamps the marker so the category survives
+          // into that classification (#353).
           // Prepend a one-line model-facing hint so the next turn's
           // tool-result message carries category + recovery guidance.
           // augment.ts strips this `[failure: ...]` prefix before recording
           // bad examples so the hint doesn't pollute the tool-profile bytes.
-          const hint = `[failure: ${cls.category}] ${cls.playbook.model}`;
+          const hint = `${failureMarker(cls.category)} ${cls.playbook.model}`;
           const annotated = {
             ...wrapped,
             error: wrapped.error ? `${hint}\n${wrapped.error}` : hint,

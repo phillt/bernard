@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { classifyError, isDispatchCancellation, DISPATCH_ABORT_NAME } from './error-taxonomy.js';
+import {
+  classifyError,
+  isDispatchCancellation,
+  DISPATCH_ABORT_NAME,
+  failureMarker,
+  parseFailureMarker,
+  classifyToolFailure,
+} from './error-taxonomy.js';
 
 describe('classifyError', () => {
   describe('HTTP status mapping', () => {
@@ -253,5 +260,40 @@ describe('isDispatchCancellation', () => {
     expect(isDispatchCancellation(new Error('command not found: jq'))).toBe(false);
     expect(isDispatchCancellation('not an error')).toBe(false);
     expect(isDispatchCancellation(undefined)).toBe(false);
+  });
+});
+
+describe('failure markers (#353)', () => {
+  it('round-trips a category through the marker', () => {
+    expect(parseFailureMarker(failureMarker('rate_limit'))).toBe('rate_limit');
+    expect(parseFailureMarker(`Error (${failureMarker('auth')} blah): detail`)).toBe('auth');
+  });
+
+  it('returns null when there is no marker, or an unknown one', () => {
+    expect(parseFailureMarker('plain old failure text')).toBeNull();
+    expect(parseFailureMarker('[failure: not_a_category]')).toBeNull();
+  });
+
+  it('trusts the marker over the patterns — the reason it exists', () => {
+    // Re-classifying an already-annotated result is not idempotent: the string
+    // now holds the playbook prose, not the original error. Measured, `auth`
+    // round-trips to `unknown`, dropping severity critical -> low and replacing
+    // concrete advice with "did not match any known pattern".
+    const annotated =
+      `Error (${failureMarker('auth')} Authentication failed. Do not retry. ` +
+      `Ask the user to re-authenticate (e.g. /models for API keys) or surface the issue.): boom`;
+
+    expect(classifyError({ message: annotated, toolName: 'shell' }).category).toBe('unknown');
+
+    const kept = classifyToolFailure({ snippet: annotated, toolName: 'shell' });
+    expect(kept.category).toBe('auth');
+    expect(kept.severity).toBe('critical');
+  });
+
+  it('falls back to pattern classification when unmarked', () => {
+    const snippet = 'connect ECONNREFUSED 127.0.0.1:443';
+    expect(classifyToolFailure({ snippet, toolName: 'shell' })).toEqual(
+      classifyError({ message: snippet, toolName: 'shell' }),
+    );
   });
 });

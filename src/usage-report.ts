@@ -290,6 +290,35 @@ export function formatAggCost(costUsd: number, hasUnpriced: boolean): string {
   return hasUnpriced ? 'n/a' : '~$0.00';
 }
 
+/**
+ * Legacy-cost share above which a rolled-up total is an upper bound rather than
+ * an estimate. A majority: below this the overstatement is a rounding error,
+ * and a qualifier that fires on mixed sessions trains readers to ignore it.
+ */
+const UPPER_BOUND_SHARE = 0.5;
+
+/**
+ * ` (upper bound)` when most of a rolled-up total came from records that
+ * predate cache-aware token capture, else `''`.
+ *
+ * Those records carry `cacheReadTokens: 0` whether or not input was cached, so
+ * every cached token is re-billed at the full input rate — a ~4x overstatement
+ * on one measured session (headline `~$27.87` against ~$6.95 of real spend).
+ *
+ * Thresholded on the legacy share of **cost**, not of calls: 300 cheap legacy
+ * `think` calls beside 5 expensive modern ones would stamp a total that is
+ * essentially right, which is exactly how a caveat becomes noise.
+ *
+ * Kept out of {@link formatAggCost} deliberately — three of that helper's call
+ * sites are live-session or per-row figures where legacy records cannot occur
+ * by construction, so widening it would add an always-false argument and churn
+ * a width-constrained StatusBar cell.
+ */
+export function costUpperBoundNote(totalCostUsd: number, legacyCostUsd: number): string {
+  if (totalCostUsd <= 0 || legacyCostUsd <= 0) return '';
+  return legacyCostUsd / totalCostUsd >= UPPER_BOUND_SHARE ? ' (upper bound)' : '';
+}
+
 /** Cost cell for a single call whose cost may be unknown: `~$x` or `n/a`. */
 export function formatCallCost(costUsd: number | null): string {
   // A single call's cost is the agg convention with "unknown" == null cost.

@@ -48,6 +48,7 @@ const {
   formatTiers,
   priceUsageUsd,
   priceUsageBreakdown,
+  costUpperBoundNote,
 } = await import('./usage-report.js');
 
 function entry(
@@ -387,5 +388,22 @@ describe('reconciles against a real provider bill (xAI, 2026-08-22)', () => {
   it('is monotonic: crediting more cache never costs more', () => {
     expect(priceSession(1)).toBeLessThan(priceSession(CACHE_HIT));
     expect(priceSession(CACHE_HIT)).toBeLessThan(priceSession(0));
+  });
+});
+
+describe('costUpperBoundNote', () => {
+  it('marks a majority-legacy total', () => {
+    expect(costUpperBoundNote(10, 6)).toBe(' (upper bound)');
+    expect(costUpperBoundNote(10, 5)).toBe(' (upper bound)');
+  });
+
+  it('stays quiet below the majority threshold', () => {
+    expect(costUpperBoundNote(10, 4.9)).toBe('');
+  });
+
+  it('stays quiet when there is nothing priced to qualify', () => {
+    expect(costUpperBoundNote(0, 0)).toBe('');
+    expect(costUpperBoundNote(0, 5)).toBe('');
+    expect(costUpperBoundNote(10, 0)).toBe('');
   });
 });

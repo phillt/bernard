@@ -22,6 +22,7 @@ import {
   getCatalogAgeMs,
   getCatalogSource,
   refreshCatalogWithDiff,
+  vendoredProviderCounts,
 } from '../providers/catalog.js';
 import { catalogRefreshNotice } from '../catalog-notice.js';
 import { getLocalVersion } from '../update.js';
@@ -794,8 +795,15 @@ export function App({
     void (async () => {
       try {
         const diff = await refreshCatalogWithDiff();
-        const notice = catalogRefreshNotice(diff, { providersInUse: providersInUse(config) });
+        const notice = catalogRefreshNotice(diff, {
+          providersInUse: providersInUse(config),
+          vendoredByProvider: vendoredProviderCounts(),
+        });
         switch (notice.kind) {
+          // Both go to the transcript rather than a toast: `handleSubmit`
+          // clears toasts on the next keystroke, and "your cost and context
+          // numbers are wrong" has to outlive that.
+          case 'provider-empty':
           case 'provider-wiped':
             pushAssistantNotice(notice.message);
             break;

@@ -13,7 +13,7 @@ export interface Classification {
   correctable: boolean;
   /** Hint for `ToolError.retryable`. */
   retryable: boolean;
-  /** Drives cron alert severity. */
+  /** Drives cron alert severity and the in-thread failure hint's colour (#353). */
   severity: 'low' | 'normal' | 'critical';
   playbook: { user: string; model: string };
 }
@@ -130,14 +130,84 @@ const RETRYABLE: ReadonlySet<ToolErrorType> = new Set<ToolErrorType>([
  * a shell "command not found" is a learnable mistake; a web 404 is not.
  */
 export function classifyError(input: ClassifyInput): Classification {
-  const category = pickCategory(input);
+  return build(pickCategory(input), input.toolName);
+}
+
+/** Assembles the classification for a category the caller already knows. */
+function build(category: ToolErrorType, toolName?: string): Classification {
   return {
     category,
-    correctable: isCorrectable(category, input.toolName),
+    correctable: isCorrectable(category, toolName),
     retryable: RETRYABLE.has(category),
     severity: SEVERITY[category],
     playbook: PLAYBOOKS[category],
   };
+}
+
+/**
+ * The `[failure: <category>]` marker the wrapper shim stamps onto a failed
+ * result so the category survives into the next turn's tool-result message.
+ */
+export function failureMarker(category: ToolErrorType): string {
+  return `[failure: ${category}]`;
+}
+
+const FAILURE_MARKER_RE = /\[failure: ([a-z_]+)\]/;
+/** The marker plus the rest of its line, for stripping it back out. */
+const FAILURE_MARKER_LINE_RE = /^\[failure: [a-z_]+\][^\n]*\n?/;
+
+/**
+ * Reads a {@link failureMarker} back out of a result string, or `null`.
+ *
+ * Not anchored: `formatWrappedResult` wraps the shim's annotated error into
+ * `Error (<marker> <hint>): <detail>`, so the marker is mid-string by the time
+ * anything downstream sees it.
+ */
+export function parseFailureMarker(text: string): ToolErrorType | null {
+  const m = FAILURE_MARKER_RE.exec(text);
+  const cat = m?.[1];
+  return cat && cat in PLAYBOOKS ? (cat as ToolErrorType) : null;
+}
+
+/**
+ * Removes a leading {@link failureMarker} line from a snippet.
+ *
+ * The model-facing playbook rides on that line, and it must not reach the
+ * tool-profile bad-example bytes. Lives here so the format has exactly one
+ * owner — a producer and two consumers spread across modules is how the
+ * stripper silently stops matching when the marker changes.
+ */
+export function stripFailureMarker(text: string): string {
+  return text.replace(FAILURE_MARKER_LINE_RE, '');
+}
+
+/**
+ * Classifies a failed tool result, trusting an embedded marker over the
+ * patterns.
+ *
+ * Re-running {@link classifyError} on an already-annotated result is not
+ * idempotent, because the string it would match on now contains the *playbook
+ * prose* rather than the original error. Measured: an `auth` failure
+ * round-trips to `unknown`, dropping severity from `critical` to `low` and
+ * replacing concrete recovery advice with "the error did not match any known
+ * pattern". `permission` and `rate_limit` survive only by accident, their prose
+ * happening to match their own regex.
+ *
+ * So where a marker exists it is authoritative — it was written by the
+ * classifier that saw the real error.
+ *
+ * This is a stopgap for a missing typed channel. `wrapMCPTool`
+ * (`framework/tools/mcp.ts`) already carries a real `ToolErrorType` envelope
+ * and is unwired; routing `MCPManager.getTools()` through it (#365) would
+ * remove the need to smuggle a category through prose — for MCP. The wrapper
+ * shim's own routed tools would still need a typed path of their own, so #365
+ * shrinks this rather than deleting it.
+ */
+export function classifyToolFailure(input: { snippet: string; toolName?: string }): Classification {
+  const marked = parseFailureMarker(input.snippet);
+  return marked
+    ? build(marked, input.toolName)
+    : classifyError({ message: input.snippet, toolName: input.toolName });
 }
 
 function pickCategory(input: ClassifyInput): ToolErrorType {
