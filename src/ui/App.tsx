@@ -423,6 +423,23 @@ function buildChoiceMenu(q: AskUserQuestion): {
 const RESUME_REPLAY_MAX_CHARS = 2000;
 
 /**
+ * Rows the alert banner occupies when visible: its `marginTop` plus a
+ * single-line bordered box (top rule, one line of text, bottom rule).
+ */
+const BANNER_ROWS = 4;
+
+/**
+ * Rows the live prompt chrome occupies in legacy (non-full-screen) mode, where
+ * an overlay is appended BELOW it rather than replacing it: the bordered prompt
+ * box (3) plus the hint/status row, with one row of slack for the toast or
+ * spinner that can appear above the prompt. An estimate by construction — the
+ * chrome is content-sized there — and deliberately generous, since over-
+ * reserving costs one list row while under-reserving overflows the screen,
+ * which is the defect being fixed.
+ */
+const LEGACY_INLINE_CHROME_ROWS = 5;
+
+/**
  * Builds the transcript seed shown after `bernard -r`.
  *
  * The Ink cutover dropped the old `printConversationReplay` call and left an
@@ -3310,6 +3327,17 @@ export function App({
     </Box>
   );
 
+  // Rows the windowed overlays (#266) do NOT get, because something outside
+  // them occupies those rows. Only App knows about either consumer, which is
+  // why this is a prop and not a constant inside the overlay — the same shape
+  // and reasoning as `BoundedLine`'s `reserveColumns`.
+  //
+  // Derived on EVERY render, never memoised on mount: the alert banner can
+  // appear while an overlay is already open, and a budget captured at open
+  // would then be one bordered box too generous.
+  const overlayReserveRows =
+    (banner ? BANNER_ROWS : 0) + (fullScreen ? 0 : LEGACY_INLINE_CHROME_ROWS);
+
   // Full-screen renders the scrollable <TranscriptViewport>; legacy mode keeps
   // the <Static>-based <Thread> (terminal scrollback). The epoch key remounts
   // either one on /clear.
@@ -3416,6 +3444,7 @@ export function App({
         <MenuOverlay
           entries={pendingMenu.entries}
           options={pendingMenu.options}
+          reserveRows={overlayReserveRows}
           onSelect={(index, item) => {
             pendingMenu.resolve({ cancelled: false, index, item });
             setPendingMenu(null);
@@ -3433,6 +3462,7 @@ export function App({
           multiSelect
           entries={pendingMultiMenu.entries}
           options={pendingMultiMenu.options}
+          reserveRows={overlayReserveRows}
           onMultiSelect={(items) => {
             pendingMultiMenu.resolve({ cancelled: false, items });
             setPendingMultiMenu(null);
@@ -3448,6 +3478,7 @@ export function App({
       {activeOverlay === 'grid' && pendingGrid && (
         <ModelGridOverlay
           items={pendingGrid.items}
+          reserveRows={overlayReserveRows}
           title={pendingGrid.options?.title}
           footer={pendingGrid.options?.footer}
           initialIndex={pendingGrid.options?.initialIndex}

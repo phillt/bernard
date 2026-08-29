@@ -3,7 +3,9 @@ import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import { HintRow, KEY, HINT_SELECT } from '../hints.js';
 import { isDismissKeyWithQ } from './overlay-contract.js';
-import { useListCursor } from './use-list-cursor.js';
+import { useListCursor, useListWindow } from './use-list-cursor.js';
+import { chromeRows, overlayViewport } from './menu-geometry.js';
+import { listPosition } from './viewer-util.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 import { truncate } from '../../text.js';
 import { MenuRow } from './MenuRow.js';
@@ -17,6 +19,14 @@ export interface ModelGridOverlayProps {
   onSelect: (index: number) => void;
   onCancel: () => void;
   signal?: AbortSignal;
+  /**
+   * Rows consumed by chrome OUTSIDE this overlay, which only the caller knows:
+   * the alert banner, and legacy inline mode where the overlay is appended
+   * below the live prompt instead of replacing it. Same shape and reasoning as
+   * `BoundedLine`'s `reserveColumns` — each caller passes its own because only
+   * it knows what box it sits in.
+   */
+  reserveRows?: number;
 }
 
 const MIN_TERM_WIDTH = 50;
@@ -47,9 +57,13 @@ export function ModelGridOverlay({
   onSelect,
   onCancel,
   signal,
+  reserveRows = 0,
 }: ModelGridOverlayProps) {
   const colors = getThemeColors();
-  const { columns: termWidth } = useDimensionsCtx();
+  // Terminal size comes from the context, never `useStdout`: under the test
+  // renderer the two disagree (context falls back to 80×24, ink-testing-library
+  // reports 100 columns), and the context is the only one that tracks SIGWINCH.
+  const { columns: termWidth, rows: termRows } = useDimensionsCtx();
 
   const longestItemLen = items.reduce((m, s) => Math.max(m, s.length), 1);
   const columns = computeColumns(termWidth, longestItemLen);
@@ -96,6 +110,32 @@ export function ModelGridOverlay({
     rows.push(items.slice(i, i + columns).map((_, j) => i + j));
   }
 
+  // Windowing (#266). Every grid row is exactly one terminal line by
+  // construction, so `clampOffset` / `listPosition` apply verbatim over grid-row
+  // indices — no coordinate translation beyond `index → floor(index/columns)`.
+  // Unwindowed, a 58-model provider rendered 58 rows at ≤50 columns (one column,
+  // one model per row), which is every lineup-slot edit on a narrow terminal.
+  //
+  // App wraps the overlay in paddingX={2}, so the usable width is termWidth - 4.
+  // The title and footer are MEASURED rather than charged a flat row each: the
+  // catalog footer routinely soft-wraps to two, and a constant would silently
+  // hand back a row the frame does not have.
+  const usableColumns = termWidth - 4;
+  const chrome =
+    1 /* the marginTop below */ +
+    chromeRows([title, footer], usableColumns) +
+    (title ? 1 : 0) /* blank after title */ +
+    (footer ? 1 : 0) /* blank after footer */ +
+    1 /* blank above the footer chrome */ +
+    1 /* position line — always reserved, see below */ +
+    1 /* HintRow */ +
+    reserveRows;
+  const viewport = overlayViewport(termRows, chrome);
+  const cursorRow = Math.floor(highlight / columns);
+  const { offset } = useListWindow(cursorRow, viewport, rows.length);
+  const visibleRows = rows.slice(offset, offset + viewport);
+  const position = listPosition(offset, viewport, rows.length);
+
   return (
     <Box flexDirection="column" marginTop={1}>
       {title && (
@@ -113,8 +153,8 @@ export function ModelGridOverlay({
         </>
       )}
       <Box flexDirection="column">
-        {rows.map((row, rowIdx) => (
-          <Box key={`r-${rowIdx}`} flexDirection="row">
+        {visibleRows.map((row, rowIdx) => (
+          <Box key={`r-${offset + rowIdx}`} flexDirection="row">
             {row.map((cellIndex) => {
               const value = items[cellIndex];
               const isCurrent = currentItem !== undefined && value === currentItem;
@@ -133,6 +173,15 @@ export function ModelGridOverlay({
         ))}
       </Box>
       <Text> </Text>
+      {/* The position row is ALWAYS reserved — blank when everything fits, as
+          `ViewerShell` does with a null position. Rendering it conditionally
+          would make the layout height depend on the very budget it feeds, so
+          the last row would flicker in and out as the list crossed the
+          threshold. `colors.muted`, never Ink's `dimColor`, which ignores the
+          active theme (pinned by `overlay-footers.theme.test.tsx`). */}
+      <Text color={colors.muted}>
+        {position ? `rows ${position.first}–${position.last} of ${position.total}` : ' '}
+      </Text>
       <HintRow
         hints={[
           { key: KEY.arrowsAll, label: 'move' },

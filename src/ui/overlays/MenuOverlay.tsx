@@ -3,7 +3,17 @@ import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import { HintRow, KEY, HINT_MOVE, HINT_SELECT, HINT_CANCEL } from '../hints.js';
 import { isDismissKeyWithQ } from './overlay-contract.js';
-import { useListCursor } from './use-list-cursor.js';
+import { useListCursor, useListWindow } from './use-list-cursor.js';
+import {
+  chromeRows,
+  countItemsBefore,
+  entryIndexOfItem,
+  isSection,
+  itemsOf,
+  overlayViewport,
+  pullBackSection,
+} from './menu-geometry.js';
+import { useDimensionsCtx } from '../DimensionsContext.js';
 import type { MenuEntry, MenuItem, MenuOptions } from '../menu-types.js';
 import { MenuRow } from './MenuRow.js';
 
@@ -11,6 +21,14 @@ interface MenuOverlayBaseProps {
   entries: MenuEntry[];
   options?: MenuOptions;
   onCancel: () => void;
+  /**
+   * Rows consumed by chrome OUTSIDE this overlay, which only the caller knows:
+   * the alert banner, and legacy inline mode where the overlay is appended
+   * below the live prompt instead of replacing it. Same shape and reasoning as
+   * `BoundedLine`'s `reserveColumns` — each caller passes its own because only
+   * it knows what box it sits in.
+   */
+  reserveRows?: number;
   /**
    * Optional external cancel signal. The legacy `selectFromMenu` accepts one
    * via `MenuOptions.signal` so a parent (e.g. an aborted agent turn) can drop
@@ -49,10 +67,6 @@ type MenuOverlayProps = MenuOverlayBaseProps &
       }
   );
 
-function isSection(entry: MenuEntry): entry is { type: 'section'; title: string } {
-  return 'type' in entry && entry.type === 'section';
-}
-
 /**
  * Replaces `selectFromMenu` from `src/menu.ts` with an Ink overlay.
  *
@@ -72,11 +86,16 @@ export function MenuOverlay({
   onSelect,
   onCancel,
   signal,
+  reserveRows = 0,
   multiSelect = false,
   onMultiSelect,
 }: MenuOverlayProps) {
   const colors = getThemeColors();
-  const items = entries.filter((e): e is MenuItem => !isSection(e));
+  // Terminal size comes from the context, never `useStdout`: under the test
+  // renderer the two disagree (context falls back to 80×24, ink-testing-library
+  // reports 100 columns), and the context is the only one that tracks SIGWINCH.
+  const { columns: termColumns, rows: termRows } = useDimensionsCtx();
+  const items = itemsOf(entries);
   // Set of *item* indices (sections excluded) currently checked. Multi-select only.
   const [checked, setChecked] = useState<Set<number>>(() => new Set());
 
@@ -150,6 +169,46 @@ export function MenuOverlay({
   const isSplit = options?.layout === 'split' && !multiSelect && !!options?.renderDetail;
   const highlightedItem = items[highlight];
 
+  // Windowing (#266). The cursor is in ITEM space and the window in ENTRY
+  // space; `entryIndexOfItem` / `countItemsBefore` are the only conversion.
+  //
+  // Rows are uniform-plus-a-constant — every entry is one row except the
+  // highlighted one, which adds a second when it carries a description — so ONE
+  // reserved row makes `clampOffset` apply as-is. See `menu-geometry.ts` for why
+  // that beats a variable-cost algorithm.
+  //
+  // App wraps the overlay in paddingX={2}, so the usable width is columns - 4.
+  // Header lines and the title are MEASURED rather than charged a flat row
+  // each: an `ask_user` question or a long title soft-wraps to two, and a
+  // constant would silently hand back a row the frame does not have.
+  const usableColumns = termColumns - 4;
+  const headerLines = options?.headerLines ?? [];
+  const chrome =
+    1 /* the marginTop below */ +
+    chromeRows([...headerLines, options?.title], usableColumns) +
+    (headerLines.length > 0 ? 1 : 0) /* blank after the header block */ +
+    (options?.title ? 1 : 0) /* blank after the title */ +
+    1 /* the highlighted row's description — reserved unconditionally */ +
+    1 /* blank above the footer chrome */ +
+    1 /* position line — always reserved, see below */ +
+    1 /* HintRow */ +
+    reserveRows;
+  const viewport = overlayViewport(termRows, chrome);
+  const cursorEntry = entryIndexOfItem(entries, highlight);
+  const { offset: rawOffset } = useListWindow(cursorEntry, viewport, entries.length);
+  const offset = pullBackSection(entries, rawOffset, viewport, cursorEntry);
+  const visibleEntries = entries.slice(offset, offset + viewport);
+
+  // The position line counts ITEMS, not entries — a section header is not
+  // something the user can be "on", so `items 3–9 of 40` is the number that
+  // matches the digits printed beside the rows.
+  const itemsBefore = countItemsBefore(entries, offset);
+  const visibleItemCount = visibleEntries.filter((e) => !isSection(e)).length;
+  const position =
+    visibleItemCount < items.length
+      ? `items ${itemsBefore + 1}–${itemsBefore + visibleItemCount} of ${items.length}`
+      : null;
+
   return (
     <Box flexDirection="column" marginTop={1}>
       {options?.headerLines?.map((line, idx) => (
@@ -168,7 +227,9 @@ export function MenuOverlay({
         <Box flexDirection="row">
           <Box flexDirection="column" marginRight={3}>
             <MenuList
-              entries={entries}
+              entries={visibleEntries}
+              startEntry={offset}
+              allEntries={entries}
               highlight={highlight}
               multiSelect={false}
               checked={checked}
@@ -193,13 +254,22 @@ export function MenuOverlay({
         </Box>
       ) : (
         <MenuList
-          entries={entries}
+          entries={visibleEntries}
+          startEntry={offset}
+          allEntries={entries}
           highlight={highlight}
           multiSelect={multiSelect}
           checked={checked}
         />
       )}
       <Text> </Text>
+      {/* The position row is ALWAYS reserved — blank when everything fits, as
+          `ViewerShell` does with a null position. Rendering it conditionally
+          would make the layout height depend on the very budget it feeds, so
+          the last row would flicker in and out as the list crossed the
+          threshold. `colors.muted`, never Ink's `dimColor`, which ignores the
+          active theme (pinned by `overlay-footers.theme.test.tsx`). */}
+      <Text color={colors.muted}>{position ?? ' '}</Text>
       <HintRow
         hints={[
           HINT_MOVE,
@@ -218,12 +288,19 @@ export function MenuOverlay({
 
 function MenuList({
   entries,
+  startEntry = 0,
+  allEntries,
   highlight,
   multiSelect = false,
   checked,
   suppressDescription = false,
 }: {
+  /** The VISIBLE window of entries. */
   entries: MenuEntry[];
+  /** Index into {@link allEntries} that `entries[0]` came from. */
+  startEntry?: number;
+  /** The full entry list, needed to count the items scrolled off the top. */
+  allEntries?: MenuEntry[];
   highlight: number;
   multiSelect?: boolean;
   checked?: Set<number>;
@@ -231,17 +308,26 @@ function MenuList({
   suppressDescription?: boolean;
 }) {
   const colors = getThemeColors();
-  let itemIndex = 0;
+  // Seeded with the items scrolled off the top, NOT 0. Three things read this
+  // counter — the number printed beside the row, the digit shortcut's target,
+  // and `checked.has(i)` — so a zero seed on a scrolled multi-select renumbers
+  // the visible rows and ticks the wrong box. `countItemsBefore` is a tested
+  // pure function rather than an inline filter for exactly that reason.
+  let itemIndex = countItemsBefore(allEntries ?? entries, startEntry);
   return (
     <Box flexDirection="column">
       {entries.map((entry, idx) => {
         if (isSection(entry)) {
           return (
-            <Text key={`s-${idx}`} color={colors.muted}>
+            <Text key={`s-${startEntry + idx}`} color={colors.muted}>
               {entry.title}
             </Text>
           );
         }
+        // Digits stay ABSOLUTE: the number beside a row is its index in the
+        // whole menu, so `3` always names the third item whether or not the
+        // window has scrolled. Window-relative numbering would make every
+        // printed number lie the moment the list moved.
         const n = itemIndex + 1;
         const myIndex = itemIndex;
         itemIndex++;
@@ -251,7 +337,7 @@ function MenuList({
         const checkbox = multiSelect ? `${checked?.has(myIndex) ? '[x]' : '[ ]'} ` : '';
         const label = `${checkbox}${n}. ${entry.label}${activeMarker}${annotation}`;
         return (
-          <Box key={`i-${idx}`} flexDirection="column">
+          <Box key={`i-${startEntry + idx}`} flexDirection="column">
             <MenuRow selected={isHighlighted} label={label} />
             {!suppressDescription && isHighlighted && entry.description && (
               <Box marginLeft={4}>
