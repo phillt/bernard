@@ -5,6 +5,8 @@ import type { MenuEntry, MenuItem } from '../menu-types.js';
 import { ViewerShell, type OverlayTab } from './ViewerShell.js';
 import { MenuRow } from './MenuRow.js';
 import { HINT_MOVE, HINT_SELECT, HINT_SWITCH_TAB, HINT_CLOSE } from '../hints.js';
+import { isShellOwnedKey } from './overlay-contract.js';
+import { useListCursor } from './use-list-cursor.js';
 
 /** The settings tabs, in cycle order. `id` matches the `SettingsTab` union. */
 export type SettingsTab = 'options' | 'agent-options';
@@ -51,32 +53,26 @@ export function SettingsOverlay({
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const entries = tab === 'options' ? optionsEntries : agentEntries;
   const items = entries.filter((e): e is MenuItem => !isSection(e));
-  const [highlight, setHighlight] = useState(() =>
-    Math.min(Math.max(0, initialIndex), Math.max(0, items.length - 1)),
-  );
+  const {
+    index: highlight,
+    setIndex: setHighlight,
+    handleKey,
+  } = useListCursor({
+    total: items.length,
+    initialIndex,
+    onCommit: (idx) => {
+      const item = items[idx];
+      if (item) onSelect(tab, idx, item);
+    },
+  });
 
   useInput((input, key) => {
-    // Esc + Shift+Tab belong to ViewerShell (close / cycle-tab); ignore them here.
-    if (key.escape || (key.shift && key.tab)) return;
-    if (key.return) {
-      const item = items[highlight];
-      if (item) onSelect(tab, highlight, item);
-      return;
-    }
-    if (key.upArrow) {
-      setHighlight((h) => Math.max(0, h - 1));
-      return;
-    }
-    if (key.downArrow) {
-      // Clamp the lower bound to 0 so a tab with no selectable items (only
-      // section headers) can't drive highlight negative via items.length - 1.
-      setHighlight((h) => Math.max(0, Math.min(items.length - 1, h + 1)));
-      return;
-    }
-    if (/^[1-9]$/.test(input)) {
-      const idx = parseInt(input, 10) - 1;
-      if (idx < items.length) onSelect(tab, idx, items[idx]);
-    }
+    // Esc + Shift+Tab belong to ViewerShell (close / cycle-tab); Ink dispatches
+    // to both handlers, so this one must decline them explicitly. A
+    // pre-condition, not a branch — which is exactly why `useListCursor` hands
+    // back a `handleKey` instead of owning a second `useInput` of its own.
+    if (isShellOwnedKey(input, key)) return;
+    handleKey(input, key);
   });
 
   const highlighted = items[highlight];

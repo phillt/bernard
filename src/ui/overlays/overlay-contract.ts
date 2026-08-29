@@ -57,6 +57,21 @@ export function isDismissKeyWithQ(input: string, key: Key): boolean {
 }
 
 /**
+ * The keys a wrapping {@link ViewerShell} claims for itself: `Esc` (close),
+ * `Shift+Tab` (cycle tab) and `Ctrl-C`. Content layered *inside* the shell —
+ * `SettingsOverlay` — must return early on these so the shell's own `useInput`
+ * is the only handler that acts, Ink having no stop-propagation.
+ *
+ * `Ctrl-C` is behaviour-neutral today (it matches no branch in any inner
+ * handler) and is included so the predicate names what `ViewerShell` actually
+ * claims. A predicate that is a subset of the real thing is the kind that
+ * silently stops being true when the shell grows a key.
+ */
+export function isShellOwnedKey(input: string, key: Key): boolean {
+  return key.escape === true || (key.shift === true && key.tab === true) || isCtrlC(input, key);
+}
+
+/**
  * {@link isDismissKeyWithQ} plus `Enter`, for a purely informational surface.
  *
  * `Enter` only closes where there is nothing to commit — on those screens it

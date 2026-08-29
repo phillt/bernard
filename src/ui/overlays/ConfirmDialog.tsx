@@ -3,6 +3,8 @@ import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import { HintRow, KEY, HINT_MOVE, HINT_SELECT, HINT_CANCEL } from '../hints.js';
 import { isDismissKeyWithQ } from './overlay-contract.js';
+import { useListCursor } from './use-list-cursor.js';
+import { clamp } from './viewer-util.js';
 import type { RiskLevel } from '../../risk.js';
 import type { BlockOutcome } from '../../tools/types.js';
 import { permissionKeyLabel } from '../../tool-permissions.js';
@@ -88,7 +90,6 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         ];
   const choices = rows.map((r) => r.choice);
   const labels = rows.map((r) => r.label);
-  const [highlight, setHighlight] = useState(0);
 
   const commit = (idx: number) => {
     if (props.kind === 'confirm') {
@@ -103,37 +104,27 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     }
   };
 
+  // The ←/→ KEYMAP is shared (`horizontal: 'axis'`); the state it drives is not.
+  // `breadthIdx` / `breadthOptions` / `hasBreadth` are permission-domain
+  // semantics with exactly one consumer, so they stay here — the shared module
+  // only answers "the user pressed the second axis, by this much".
+  const { index: highlight, handleKey } = useListCursor({
+    total: choices.length,
+    onCommit: commit,
+    horizontal: hasBreadth ? 'axis' : 'none',
+    onAxis: (delta) => setBreadthIdx((b) => clamp(b + delta, 0, breadthOptions.length - 1)),
+  });
+
   useInput((input, key) => {
     // Gains `q` from the shared contract (#266) — this dialog has no text
     // field, and `q` cancels, i.e. it resolves toward denial. Safe direction.
+    // Dismissal is tested first, ahead of the list keystream, so the precedence
+    // stays a readable if-chain rather than a `useInput` registration order.
     if (isDismissKeyWithQ(input, key)) {
       props.onCancel();
       return;
     }
-    if (key.return) {
-      commit(highlight);
-      return;
-    }
-    if (key.upArrow) {
-      setHighlight((h) => Math.max(0, h - 1));
-      return;
-    }
-    if (key.downArrow) {
-      setHighlight((h) => Math.min(choices.length - 1, h + 1));
-      return;
-    }
-    if (key.leftArrow) {
-      if (hasBreadth) setBreadthIdx((b) => Math.max(0, b - 1));
-      return;
-    }
-    if (key.rightArrow) {
-      if (hasBreadth) setBreadthIdx((b) => Math.min(breadthOptions.length - 1, b + 1));
-      return;
-    }
-    if (/^[1-9]$/.test(input)) {
-      const idx = parseInt(input, 10) - 1;
-      if (idx < choices.length) commit(idx);
-    }
+    handleKey(input, key);
   });
 
   const riskColor =

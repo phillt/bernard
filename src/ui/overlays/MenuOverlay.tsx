@@ -3,6 +3,7 @@ import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import { HintRow, KEY, HINT_MOVE, HINT_SELECT, HINT_CANCEL } from '../hints.js';
 import { isDismissKeyWithQ } from './overlay-contract.js';
+import { useListCursor } from './use-list-cursor.js';
 import type { MenuEntry, MenuItem, MenuOptions } from '../menu-types.js';
 import { MenuRow } from './MenuRow.js';
 
@@ -76,11 +77,6 @@ export function MenuOverlay({
 }: MenuOverlayProps) {
   const colors = getThemeColors();
   const items = entries.filter((e): e is MenuItem => !isSection(e));
-  // Start on the caller-requested item (clamped) so a looping manager can
-  // restore the cursor when it re-shows a list; defaults to the first item.
-  const [highlight, setHighlight] = useState(() =>
-    Math.min(Math.max(0, options?.initialIndex ?? 0), Math.max(0, items.length - 1)),
-  );
   // Set of *item* indices (sections excluded) currently checked. Multi-select only.
   const [checked, setChecked] = useState<Set<number>>(() => new Set());
 
@@ -91,6 +87,39 @@ export function MenuOverlay({
       else next.add(idx);
       return next;
     });
+
+  const commit = (idx: number) => {
+    if (multiSelect) {
+      // Commit the checked set in row order; fall back to the highlighted row
+      // when nothing is checked so Enter is never a no-op.
+      const picked =
+        checked.size > 0 ? items.filter((_, i) => checked.has(i)) : items[idx] ? [items[idx]] : [];
+      // The discriminated-union props type requires onMultiSelect in
+      // multi-select mode; the fallback is belt-and-suspenders for untyped JS
+      // callers so a missing handler can never strand the overlay.
+      if (onMultiSelect) onMultiSelect(picked);
+      else onCancel();
+      return;
+    }
+    const item = items[idx];
+    if (item) onSelect?.(idx, item);
+  };
+
+  // The cursor starts on the caller-requested item (clamped) so a looping
+  // manager can restore it when it re-shows a list; defaults to the first item.
+  //
+  // Multi-select's one difference — a digit TOGGLES rather than commits — is
+  // the VALUE of `onDigit`, not a mode flag in the shared module: `list-nav.ts`
+  // answers "which index did the user name?", and this overlay answers "what
+  // does naming an index mean here?".
+  const { index: highlight, handleKey } = useListCursor({
+    total: items.length,
+    initialIndex: options?.initialIndex ?? 0,
+    onCommit: commit,
+    toggleOnSpace: multiSelect,
+    onToggle: toggle,
+    onDigit: multiSelect ? toggle : commit,
+  });
 
   useEffect(() => {
     if (!signal) return;
@@ -104,53 +133,14 @@ export function MenuOverlay({
   }, [signal, onCancel]);
 
   useInput((input, key) => {
+    // Dismissal is decided first, ahead of the shared list keystream, so
+    // "dismiss beats digit" stays a readable if-chain — see the note on
+    // `useListCursor` for why the hook does not own a `useInput` of its own.
     if (isDismissKeyWithQ(input, key)) {
       onCancel();
       return;
     }
-    if (key.return) {
-      if (multiSelect) {
-        // Commit the checked set in row order; fall back to the highlighted row
-        // when nothing is checked so Enter is never a no-op.
-        const picked =
-          checked.size > 0
-            ? items.filter((_, i) => checked.has(i))
-            : items[highlight]
-              ? [items[highlight]]
-              : [];
-        // The discriminated-union props type requires onMultiSelect in
-        // multi-select mode; the fallback is belt-and-suspenders for untyped JS
-        // callers so a missing handler can never strand the overlay.
-        if (onMultiSelect) onMultiSelect(picked);
-        else onCancel();
-        return;
-      }
-      const item = items[highlight];
-      if (item) onSelect?.(highlight, item);
-      return;
-    }
-    if (key.upArrow) {
-      setHighlight((h) => Math.max(0, h - 1));
-      return;
-    }
-    if (key.downArrow) {
-      setHighlight((h) => Math.min(items.length - 1, h + 1));
-      return;
-    }
-    // Space toggles the highlighted row in multi-select mode (no-op otherwise).
-    if (multiSelect && input === ' ') {
-      toggle(highlight);
-      return;
-    }
-    if (/^[1-9]$/.test(input)) {
-      const idx = parseInt(input, 10) - 1;
-      if (idx < items.length) {
-        // In multi-select a digit toggles that row's checkbox; in single-select
-        // it commits immediately (unchanged behavior).
-        if (multiSelect) toggle(idx);
-        else onSelect?.(idx, items[idx]);
-      }
-    }
+    handleKey(input, key);
   });
 
   // Split layout: numbered list on the left, a bordered detail card for the

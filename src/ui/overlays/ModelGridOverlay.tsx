@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
 import { HintRow, KEY, HINT_SELECT } from '../hints.js';
 import { isDismissKeyWithQ } from './overlay-contract.js';
+import { useListCursor } from './use-list-cursor.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 import { truncate } from '../../text.js';
 import { MenuRow } from './MenuRow.js';
@@ -57,7 +58,19 @@ export function ModelGridOverlay({
     Math.max(8, Math.floor((termWidth - 4) / columns)),
   );
 
-  const [highlight, setHighlight] = useState(Math.max(0, Math.min(items.length - 1, initialIndex)));
+  // A grid is one flat list read in row-major order, so the shared keystream
+  // covers it with two options: ↑/↓ step a whole row (`step: columns`), ←/→ are
+  // ordinary ±1 cursor movement (`horizontal: 'move'`), and no digits — a grid
+  // prints no row numbers, so there is nothing for one to name. `total === 0`
+  // now subsumes the hand-rolled empty-list early-out this replaced.
+  const { index: highlight, handleKey } = useListCursor({
+    total: items.length,
+    initialIndex,
+    step: columns,
+    horizontal: 'move',
+    digits: false,
+    onCommit: onSelect,
+  });
 
   useEffect(() => {
     if (!signal) return;
@@ -71,34 +84,11 @@ export function ModelGridOverlay({
   }, [signal, onCancel]);
 
   useInput((input, key) => {
-    if (items.length === 0) {
-      if (isDismissKeyWithQ(input, key)) onCancel();
-      return;
-    }
     if (isDismissKeyWithQ(input, key)) {
       onCancel();
       return;
     }
-    if (key.return) {
-      onSelect(highlight);
-      return;
-    }
-    if (key.leftArrow) {
-      setHighlight((h) => Math.max(0, h - 1));
-      return;
-    }
-    if (key.rightArrow) {
-      setHighlight((h) => Math.min(items.length - 1, h + 1));
-      return;
-    }
-    if (key.upArrow) {
-      setHighlight((h) => Math.max(0, h - columns));
-      return;
-    }
-    if (key.downArrow) {
-      setHighlight((h) => Math.min(items.length - 1, h + columns));
-      return;
-    }
+    handleKey(input, key);
   });
 
   const rows: number[][] = [];
