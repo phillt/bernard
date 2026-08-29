@@ -191,9 +191,9 @@ describe('<Thread>', () => {
     const frame = stripAnsi(
       render(createElement(Thread, { staticItems: items(history, true) })).lastFrame() ?? '',
     );
+    // That it is the USER's playbook is pinned in `tool-failure.test.ts`;
+    // here the question is only whether the line reaches the transcript.
     expect(frame).toContain('not_found');
-    // The line addressed to the user, never the one addressed to the model.
-    expect(frame).not.toContain('Re-issue the call');
   });
 
   it('adds no hint line to a successful tool result', () => {

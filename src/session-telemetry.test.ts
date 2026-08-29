@@ -517,9 +517,7 @@ describe('legacy-derived totals are marked an upper bound (#388)', () => {
   });
 
   it('does NOT mark a total that is only incidentally legacy', () => {
-    // The reason the threshold is a share of COST and not of calls: many cheap
-    // legacy calls beside a few expensive modern ones is a total that is
-    // essentially right, and a caveat that fires there becomes noise.
+    // Pins the cost-share threshold against a call-count one.
     const many = Array.from({ length: 20 }, () => legacy(1));
     const lines = formatSessionUsageLines(aggregateRecords('sMixed', [...many, modern(500_000)]));
     expect(lines[1]).not.toContain('(upper bound)');
@@ -531,11 +529,6 @@ describe('legacy-derived totals are marked an upper bound (#388)', () => {
     expect(totalCost).toBeDefined();
     expect(totalCost).not.toContain('(upper bound)');
     expect(lines.some((l) => l.includes('predates cache-aware token capture'))).toBe(true);
-  });
-
-  it('says nothing for a fully current session', () => {
-    const lines = formatSessionUsageLines(aggregateRecords('sModern', [modern(1000)]));
-    expect(lines[1]).not.toContain('(upper bound)');
   });
 });
 

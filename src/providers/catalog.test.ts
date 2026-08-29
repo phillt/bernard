@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { BUILTIN_PROVIDERS } from './types.js';
 
 import { CACHE_SCHEMA_VERSION } from './catalog.js';
 
@@ -317,7 +318,11 @@ describe('vendoredProviderCounts', () => {
     // which is the failure this locks down.
     const m = await loadModule();
     const counts = m.vendoredProviderCounts();
-    for (const provider of ['anthropic', 'openai', 'xai']) {
+    // Iterate the real list, not a literal: adding a built-in without
+    // refreshing the snapshot leaves it at 0 on both sides, which silently
+    // disarms the carried-over check for exactly the newest provider. A
+    // hardcoded triple would pass right through that.
+    for (const provider of BUILTIN_PROVIDERS) {
       expect(counts[provider], `vendored snapshot has no ${provider} entries`).toBeGreaterThan(0);
     }
   });

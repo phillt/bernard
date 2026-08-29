@@ -153,6 +153,8 @@ export function failureMarker(category: ToolErrorType): string {
 }
 
 const FAILURE_MARKER_RE = /\[failure: ([a-z_]+)\]/;
+/** The marker plus the rest of its line, for stripping it back out. */
+const FAILURE_MARKER_LINE_RE = /^\[failure: [a-z_]+\][^\n]*\n?/;
 
 /**
  * Reads a {@link failureMarker} back out of a result string, or `null`.
@@ -165,6 +167,18 @@ export function parseFailureMarker(text: string): ToolErrorType | null {
   const m = FAILURE_MARKER_RE.exec(text);
   const cat = m?.[1];
   return cat && cat in PLAYBOOKS ? (cat as ToolErrorType) : null;
+}
+
+/**
+ * Removes a leading {@link failureMarker} line from a snippet.
+ *
+ * The model-facing playbook rides on that line, and it must not reach the
+ * tool-profile bad-example bytes. Lives here so the format has exactly one
+ * owner — a producer and two consumers spread across modules is how the
+ * stripper silently stops matching when the marker changes.
+ */
+export function stripFailureMarker(text: string): string {
+  return text.replace(FAILURE_MARKER_LINE_RE, '');
 }
 
 /**
@@ -181,6 +195,13 @@ export function parseFailureMarker(text: string): ToolErrorType | null {
  *
  * So where a marker exists it is authoritative — it was written by the
  * classifier that saw the real error.
+ *
+ * This is a stopgap for a missing typed channel. `wrapMCPTool`
+ * (`framework/tools/mcp.ts`) already carries a real `ToolErrorType` envelope
+ * and is unwired; routing `MCPManager.getTools()` through it (#365) would
+ * remove the need to smuggle a category through prose — for MCP. The wrapper
+ * shim's own routed tools would still need a typed path of their own, so #365
+ * shrinks this rather than deleting it.
  */
 export function classifyToolFailure(input: { snippet: string; toolName?: string }): Classification {
   const marked = parseFailureMarker(input.snippet);

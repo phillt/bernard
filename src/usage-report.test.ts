@@ -48,7 +48,7 @@ const {
   formatTiers,
   priceUsageUsd,
   priceUsageBreakdown,
-  costUpperBoundSuffix,
+  costUpperBoundNote,
 } = await import('./usage-report.js');
 
 function entry(
@@ -391,19 +391,19 @@ describe('reconciles against a real provider bill (xAI, 2026-08-22)', () => {
   });
 });
 
-describe('costUpperBoundSuffix', () => {
+describe('costUpperBoundNote', () => {
   it('marks a majority-legacy total', () => {
-    expect(costUpperBoundSuffix(10, 6)).toBe(' (upper bound)');
-    expect(costUpperBoundSuffix(10, 5)).toBe(' (upper bound)');
+    expect(costUpperBoundNote(10, 6)).toBe(' (upper bound)');
+    expect(costUpperBoundNote(10, 5)).toBe(' (upper bound)');
   });
 
   it('stays quiet below the majority threshold', () => {
-    expect(costUpperBoundSuffix(10, 4.9)).toBe('');
+    expect(costUpperBoundNote(10, 4.9)).toBe('');
   });
 
   it('stays quiet when there is nothing priced to qualify', () => {
-    expect(costUpperBoundSuffix(0, 0)).toBe('');
-    expect(costUpperBoundSuffix(0, 5)).toBe('');
-    expect(costUpperBoundSuffix(10, 0)).toBe('');
+    expect(costUpperBoundNote(0, 0)).toBe('');
+    expect(costUpperBoundNote(0, 5)).toBe('');
+    expect(costUpperBoundNote(10, 0)).toBe('');
   });
 });

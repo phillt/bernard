@@ -314,7 +314,7 @@ const UPPER_BOUND_SHARE = 0.5;
  * by construction, so widening it would add an always-false argument and churn
  * a width-constrained StatusBar cell.
  */
-export function costUpperBoundSuffix(totalCostUsd: number, legacyCostUsd: number): string {
+export function costUpperBoundNote(totalCostUsd: number, legacyCostUsd: number): string {
   if (totalCostUsd <= 0 || legacyCostUsd <= 0) return '';
   return legacyCostUsd / totalCostUsd >= UPPER_BOUND_SHARE ? ' (upper bound)' : '';
 }

@@ -168,7 +168,23 @@ describe('catalogRefreshNotice — a cache carried over from a previous run (#38
     const n = catalogRefreshNotice(diff(poisoned), opts({ providersInUse: ['xai'] }));
     expect(n.kind).toBe('provider-empty');
     expect(n.message).toContain('xai');
-    expect(n.message).toContain('/refresh-models');
+  });
+
+  it('does not suggest a refresh that just happened and cannot help', () => {
+    // This notice goes to the transcript, where it cannot be dismissed. If the
+    // provider is genuinely gone upstream it recurs every session, so telling
+    // the user to run the refresh that produced this state would be an
+    // undismissable suggestion that does nothing.
+    const afterNetwork = catalogRefreshNotice(diff(poisoned), opts({ providersInUse: ['xai'] }));
+    expect(afterNetwork.message).not.toContain('/refresh-models');
+    expect(afterNetwork.message).toContain('upstream');
+
+    // Serving a cache we could not replace: a refresh genuinely might fix it.
+    const offline = catalogRefreshNotice(
+      diff({ ...poisoned, error: new Error('offline') }),
+      opts({ providersInUse: ['xai'] }),
+    );
+    expect(offline.message).toContain('/refresh-models');
   });
 
   it('ignores a provider this session does not use', () => {

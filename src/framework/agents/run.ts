@@ -10,7 +10,7 @@ import { makeRepairHook } from '../../tool-call-repair.js';
 import { toolBlockBytes } from '../../tool-bytes.js';
 import { augmentTools } from '../../tools/augment.js';
 import type { AgentContext } from '../context.js';
-import { toolFailureFor, getOutputSink } from '../hooks/output-sink.js';
+import { getOutputSink } from '../hooks/output-sink.js';
 import {
   tokenStatsHook,
   tokenTotalsHook,
@@ -310,7 +310,6 @@ export async function runDefinition<TInput, TFormatted>(
           callId: ev.callId,
           result: ev.result,
           isError: errInfo.isError,
-          failure: toolFailureFor(ev.toolName, ev.result),
         });
       }
     : undefined;

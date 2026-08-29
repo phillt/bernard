@@ -59,20 +59,31 @@ export interface CatalogNoticeOptions {
 
 const NONE: CatalogNotice = { kind: 'none', message: '' };
 
+/** The consequence both empty-provider cases share. */
+const FALLBACK_CLAUSE = 'will use defaults (128k window, cost shown as n/a)';
+
 /**
- * The carried-over case. Worded to distinguish it from `provider-wiped`: the
- * catalog *is* missing the provider rather than having just lost it, so the
- * recovery is a refresh, not a wait.
+ * The carried-over case: the catalog *is* missing the provider, rather than
+ * having just lost it in this refresh.
+ *
+ * `refreshable` gates the advice. Suggesting `/refresh-models` after a refresh
+ * has already succeeded promises a fix that cannot work — it would re-fetch and
+ * find the same absence — and this notice goes to the transcript, where the
+ * user cannot dismiss it. An undismissable recurring suggestion that does
+ * nothing is worse than the silence this replaced.
  */
-function providerEmpty(providers: string[]): CatalogNotice {
+function providerEmpty(providers: string[], refreshable: boolean): CatalogNotice {
+  const advice = refreshable
+    ? 'Run /refresh-models to rebuild the catalog.'
+    : 'The gateway answered but returned nothing for ' +
+      `${plural(providers.length, 'it', 'them')}, so this is upstream.`;
   return {
     kind: 'provider-empty',
     message:
       `Model catalog: no entries for ${nameList(providers)}, which ` +
       `${plural(providers.length, 'is', 'are')} configured for this session. ` +
       `Context-window and cost figures for ` +
-      `${plural(providers.length, 'it', 'them')} will use defaults (128k window, ` +
-      `cost shown as n/a). Run /refresh-models to rebuild the catalog.`,
+      `${plural(providers.length, 'it', 'them')} ${FALLBACK_CLAUSE}. ${advice}`,
   };
 }
 
@@ -111,10 +122,20 @@ export function catalogRefreshNotice(
     .filter((p) => (opts.vendoredByProvider[p] ?? 0) > 0 && (diff.byProvider[p] ?? 0) === 0)
     .sort();
 
-  if (diff.error) return emptyProviders.length > 0 ? providerEmpty(emptyProviders) : NONE;
-  if (diff.previousSource === 'vendored') {
-    return emptyProviders.length > 0 ? providerEmpty(emptyProviders) : NONE;
-  }
+  // Stale in either direction, and they fail differently: a snapshot BEHIND
+  // reality (a new built-in not yet vendored) reads 0 on both sides and
+  // silently disarms the check for exactly the newest provider — the
+  // `vendoredProviderCounts` test guards that by iterating `BUILTIN_PROVIDERS`.
+  // A snapshot AHEAD (a provider genuinely retired upstream) fires every
+  // session, which is why the advice below is gated on whether a refresh could
+  // plausibly help. Re-basing this on "the fetch succeeded and returned other
+  // providers" would need no build-time artifact at all — filed as follow-up.
+  const carried =
+    emptyProviders.length > 0
+      ? providerEmpty(emptyProviders, diff.error !== undefined || diff.source !== 'network')
+      : null;
+
+  if (diff.error || diff.previousSource === 'vendored') return carried ?? NONE;
 
   const lostProviders = new Set(diff.removed.map((e) => e.provider));
   const inUse = new Set(opts.providersInUse);
@@ -130,11 +151,11 @@ export function catalogRefreshNotice(
         `(${diff.removed.length} ${plural(diff.removed.length, 'model', 'models')} removed). ` +
         `You have ${plural(wipedProviders.length, 'it', 'them')} configured, so context-window ` +
         `and cost figures for ${plural(wipedProviders.length, 'that provider', 'those providers')} ` +
-        `will fall back to defaults (128k window, cost shown as n/a) until the catalog recovers.`,
+        `will fall back to ${FALLBACK_CLAUSE.replace('will use ', '')} until the catalog recovers.`,
     };
   }
 
-  if (emptyProviders.length > 0) return providerEmpty(emptyProviders);
+  if (carried) return carried;
 
   if (diff.removed.length > 0) {
     return {

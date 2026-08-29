@@ -1,6 +1,3 @@
-import { classifyToolFailure, type Classification } from '../../error-taxonomy.js';
-import type { ToolErrorType } from '../tools/types.js';
-import { detectToolError } from '../../tool-profiles.js';
 /**
  * Module-level seam connecting the framework's output channel to a live
  * consumer (the Ink message store in Phase C, but the interface is concrete
@@ -41,42 +38,8 @@ export type StreamEvent =
       callId: string;
       result: unknown;
       isError: boolean;
-      /** Present only when `isError`. See {@link ToolFailure}. */
-      failure?: ToolFailure;
       agentLabel?: string;
     };
-
-/**
- * The user-facing half of a classified tool failure.
- *
- * A failed call already renders red, so this is not about visibility — it is
- * the recovery advice. Before this existed the call site surfaced
- * `playbook.model` (an instruction addressed to the model) into the result the
- * user reads, while `playbook.user` — the line telling *them* what to do — was
- * passed to a `printToolFailure` stub and discarded.
- */
-export interface ToolFailure {
-  category: ToolErrorType;
-  /** `Classification.playbook.user` — one-line recovery guidance. */
-  hint: string;
-  severity: Classification['severity'];
-}
-
-/**
- * Builds the failure payload for a result already known to have failed.
- *
- * Lives here so the two sink emitters (`framework/agents/run.ts` for the
- * streaming path, `framework/hooks/output.ts` for the bulk one) cannot drift.
- * Both already call `detectToolError`, whose `snippet` is exactly the input the
- * classifier wants — so this covers every tool, not just the four the wrapper
- * shim routes.
- */
-export function toolFailureFor(toolName: string, result: unknown): ToolFailure | undefined {
-  const info = detectToolError(toolName, result);
-  if (!info.isError) return undefined;
-  const cls = classifyToolFailure({ snippet: info.snippet, toolName });
-  return { category: cls.category, hint: cls.playbook.user, severity: cls.severity };
-}
 
 /**
  * Minimal contract the framework needs from a consumer. The concrete

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { toolFailureFor } from '../output-sink.js';
-import { failureMarker } from '../../../error-taxonomy.js';
+import { toolFailureFor } from './tool-failure.js';
+import { failureMarker } from './error-taxonomy.js';
 
 /**
  * `toolFailureFor` is the single builder both sink emitters use, so the
@@ -21,15 +21,15 @@ describe('toolFailureFor', () => {
     expect(f!.hint.length).toBeGreaterThan(0);
   });
 
-  it('honours an embedded marker over the prose', () => {
-    // A shim-routed result already carries the classifier's verdict; re-running
-    // the patterns on the playbook text would mis-read it.
+  it('finds a marker inside the detected snippet', () => {
+    // The marker's authority over the patterns is pinned in
+    // `error-taxonomy.test.ts`; what is this layer's own is that
+    // `detectToolError` surfaces the snippet the marker lives in.
     const f = toolFailureFor('shell', {
-      output: `Error (${failureMarker('auth')} Authentication failed. Do not retry.): x`,
+      output: `Error (${failureMarker('rate_limit')} slow down): x`,
       is_error: true,
     });
-    expect(f!.category).toBe('auth');
-    expect(f!.severity).toBe('critical');
+    expect(f!.category).toBe('rate_limit');
   });
 
   it('works for MCP-shaped failures too, not just the shimmed tools', () => {

@@ -24,7 +24,7 @@ import {
   formatAggCost,
   formatCallCost,
   formatTiers,
-  costUpperBoundSuffix,
+  costUpperBoundNote,
 } from './usage-report.js';
 import { formatTokenCount, formatElapsed } from './output.js';
 import { appendJsonl, readJsonlTail, listFilesByMtime, pruneFilesByMtime } from './jsonl.js';
@@ -145,9 +145,9 @@ export interface TelemetryAggregate {
   legacyPricedCalls: number;
   /**
    * Portion of {@link TelemetryAgg.costUsd} contributed by those legacy
-   * records. The count alone is the wrong discriminator for "is this figure
-   * trustworthy" — many cheap legacy calls beside a few expensive modern ones
-   * barely move the total. Always 0 for a live session.
+   * records — the discriminator `costUpperBoundNote` thresholds on, and see
+   * there for why it is cost rather than the count. Always 0 for a live
+   * session.
    */
   legacyPricedCostUsd: number;
 }
@@ -613,7 +613,7 @@ export function formatSessionUsageLines(summary: TelemetryAggregate): string[] {
   // the full explanation a few lines later, so stamping both is redundant.
   const headlineCost =
     formatAggCost(t.costUsd, t.hasUnpriced) +
-    costUpperBoundSuffix(t.costUsd, summary.legacyPricedCostUsd);
+    costUpperBoundNote(t.costUsd, summary.legacyPricedCostUsd);
   lines.push(
     `Duration: ${formatElapsed(summary.durationMs)}   Calls: ${t.calls}   Cost: ${headlineCost}`,
   );
