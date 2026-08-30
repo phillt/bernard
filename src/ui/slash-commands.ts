@@ -134,10 +134,20 @@ interface BuiltinSlashCommand extends SlashCommand {
  * `<App>.handleSubmit`'s if-chain cannot be derived from here (its branches
  * close over REPL state), so {@link DISPATCHED_COMMANDS} stands in for it and
  * `__tests__/slash-catalogue.test.ts` reconciles the two sets. Adding a command
- * means adding it here AND to that dispatch — but neither omission is silent
+ * means adding it here AND to that dispatch — but neither *addition* is silent
  * any more: the branch won't compile without the name in
- * {@link DISPATCHED_COMMANDS}, and an entry here whose name isn't in it won't
- * compile either.
+ * {@link DISPATCHED_COMMANDS} (enforced jointly by `DispatchedCommand` and the
+ * `no-restricted-syntax` rule in `eslint.config.mjs`, which stops a bare
+ * `text === '/foo'` from bypassing the helpers), and an entry here whose name
+ * isn't in it won't compile either.
+ *
+ * **Deletion is the asymmetric direction.** Removing a branch and leaving its
+ * array entry behind still compiles and still passes — the entry then reads as
+ * evidence of a command that no longer exists, and the catalogue keeps
+ * advertising it. The old source-scraping test caught that by construction, at
+ * the cost of being blind to any branch shape it didn't recognise. Neither
+ * guard covers both directions; this one was chosen because additions are what
+ * actually happen.
  *
  * Items the user can't dispatch directly from the prompt (variants with
  * required args) belong in the help screen, not here.

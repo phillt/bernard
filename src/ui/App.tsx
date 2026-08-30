@@ -541,10 +541,18 @@ function openOverlay<T>(
  * is the list `__tests__/slash-catalogue.test.ts` reconciles against the
  * documented catalogue, and **these helpers are the only thing making that
  * list true**. Written as bare literals the branches agree with the array by
- * nobody's decision; routed through `DispatchedCommand`, adding
- * `if (text === '/foo')` without listing `/foo` stops compiling. That is the
- * historical failure — `/session-log` shipped dispatched and documented
- * nowhere — caught at the branch, before a test runs.
+ * nobody's decision; routed through `DispatchedCommand`, `is(text, '/foo')`
+ * does not compile until `/foo` is in the array. That is the historical failure
+ * — `/session-log` shipped dispatched and documented nowhere — caught at the
+ * branch, before a test runs.
+ *
+ * The helpers can only do that when they are actually used: a bare
+ * `text === '/foo'` type-checks perfectly well, so the type alone would leave
+ * the guarantee resting on whoever writes the next branch remembering the
+ * house style. `eslint.config.mjs` closes that with a `no-restricted-syntax`
+ * rule scoped to this file, banning the raw comparison outright so the helper
+ * is the only way to write it. Delete the rule and these comments become
+ * aspirational rather than true.
  *
  * Conditions only. Branch bodies read `text` directly (they slice args off it),
  * which is why these take the raw string rather than owning the parse.
@@ -568,11 +576,11 @@ const startsWithCmd = (text: string, command: DispatchedCommand): boolean =>
  * check above could not see — precisely the invisible-shape problem #393 exists
  * to remove.
  */
-const LEGACY_TOGGLE_POINTERS: Readonly<Partial<Record<DispatchedCommand, string>>> = {
+const LEGACY_TOGGLE_POINTERS: Readonly<Record<string, string | undefined>> = {
   '/react': 'Coordinator (ReAct) mode → /agent-options',
   '/tool-details': 'Tool-call details → /agent-options',
   '/debug': 'Debug logging → /options',
-};
+} satisfies Partial<Record<DispatchedCommand, string>>;
 
 export function App({
   agent,
@@ -2080,7 +2088,14 @@ export function App({
     }
 
     if (is(text, '/create-routine') || is(text, '/create-task') || is(text, '/create-specialist')) {
+      // Guarded rather than asserted. Typing the record's values as possibly
+      // undefined (#393) turned what had been an implicit agreement between two
+      // lists into a compile error here: the branch matches three names, the
+      // record supplies three, and nothing had been checking those were the
+      // same three. A missing key would have sent `undefined` into
+      // `runAgentTurn` as the user's whole prompt.
       const seed = CREATE_SEED_PROMPTS[text];
+      if (!seed) return;
       await runAgentTurn(seed);
       return;
     }
@@ -2140,7 +2155,7 @@ export function App({
     // agent turn. The table is module-level (LEGACY_TOGGLE_POINTERS) — it was a
     // fresh object literal per submit, and its keys are the only dispatch here
     // that isn't an `if`, so they need the same typed home as the rest.
-    const legacyPointer = LEGACY_TOGGLE_POINTERS[text as DispatchedCommand];
+    const legacyPointer = LEGACY_TOGGLE_POINTERS[text];
     if (legacyPointer) {
       flashToast(`This command moved. ${legacyPointer}`, 'warning');
       return;
@@ -3987,7 +4002,7 @@ function buildRoutineEditSeed(r: Routine): string {
   ].join('\n');
 }
 
-const CREATE_SEED_PROMPTS: Record<string, string> = {
+const CREATE_SEED_PROMPTS: Readonly<Record<string, string | undefined>> = {
   '/create-routine': `The user wants to create a new routine interactively. Guide them through the process:
 
 1. Ask what workflow they want to save (what task, what steps, what's the goal)
