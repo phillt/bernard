@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { TextInputOverlay } from '../overlays/TextInputOverlay.js';
-import { ESC, ENTER, BACKSPACE, CTRL_C, CTRL_J, META_ENTER, ARROW_LEFT, tick } from './_keys.js';
+import { ESC, ENTER, BACKSPACE, CTRL_J, META_ENTER, ARROW_LEFT, tick } from './_keys.js';
 import { HINT_DIVIDER } from '../hints.js';
 import stripAnsi from 'strip-ansi';
 
@@ -107,20 +107,18 @@ describe('<TextInputOverlay>', () => {
     expect(onResolve).toHaveBeenCalledWith({ cancelled: false, raw: 'ab' });
   });
 
-  it('Esc and Ctrl-C cancel', async () => {
-    for (const keystroke of [ESC, CTRL_C]) {
-      const onResolve = vi.fn();
-      const { stdin } = render(
-        createElement(TextInputOverlay, {
-          options: { label: 'L', initialValue: 'x' },
-          onResolve,
-        }),
-      );
-      await tick();
-      stdin.write(keystroke);
-      await tick();
-      expect(onResolve).toHaveBeenCalledWith({ cancelled: true });
-    }
+  it('Esc cancels', async () => {
+    const onResolve = vi.fn();
+    const { stdin } = render(
+      createElement(TextInputOverlay, {
+        options: { label: 'L', initialValue: 'x' },
+        onResolve,
+      }),
+    );
+    await tick();
+    stdin.write(ESC);
+    await tick();
+    expect(onResolve).toHaveBeenCalledWith({ cancelled: true });
   });
 
   it('empty Enter cancels by default (cancelOnEmpty)', async () => {

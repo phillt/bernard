@@ -11,7 +11,6 @@ export const ARROW_UP = '[A';
 export const ARROW_DOWN = '[B';
 export const ARROW_LEFT = '[D';
 export const ARROW_RIGHT = '[C';
-export const CTRL_C = '';
 export const CTRL_A = '\x01';
 export const CTRL_E = '\x05';
 export const CTRL_J = '\n';

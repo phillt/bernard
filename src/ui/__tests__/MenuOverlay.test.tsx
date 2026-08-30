@@ -6,7 +6,7 @@ import { MenuOverlay } from '../overlays/MenuOverlay.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
 import { FALLBACK_DIMENSIONS } from '../useDimensions.js';
 import type { MenuEntry } from '../menu-types.js';
-import { ESC, ENTER, ARROW_UP, ARROW_DOWN, CTRL_C, SPACE, tick } from './_keys.js';
+import { ESC, ENTER, ARROW_UP, ARROW_DOWN, SPACE, tick } from './_keys.js';
 import stripAnsi from 'strip-ansi';
 
 const ENTRIES: MenuEntry[] = [
@@ -131,8 +131,8 @@ describe('<MenuOverlay>', () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it('Esc, q, and Ctrl-C cancel', async () => {
-    for (const keystroke of [ESC, 'q', CTRL_C]) {
+  it('Esc and q cancel', async () => {
+    for (const keystroke of [ESC, 'q']) {
       const { stdin, onCancel } = mountMenu({});
       await tick();
       stdin.write(keystroke);

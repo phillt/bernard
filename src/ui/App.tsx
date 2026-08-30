@@ -473,7 +473,9 @@ export function buildResumeSeed(history: CoreMessage[], toolDetails: boolean): S
 /**
  * Top-level Ink component. Owns the lifecycle of a Bernard REPL session:
  * turn submission, history versioning, overlay queueing, Shift-Tab cycling,
- * and Esc / Ctrl-C handling.
+ * and Esc handling. Ctrl-C is *not* handled here: Ink's `exitOnCtrlC` default
+ * unmounts on it before any `useInput` runs (#360), which reaches `onExit` via
+ * the unmount effect below.
  *
  * `<App>` is **not** mounted from `src/index.ts` in Phase B — the legacy
  * readline REPL is still the user-visible entry point. The dev preview

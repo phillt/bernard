@@ -68,7 +68,8 @@ type MenuOverlayProps = MenuOverlayBaseProps &
  *   - ↑/↓ moves the highlight (sections are skipped)
  *   - digits 1-9 commit the matching item immediately
  *   - Enter commits the highlighted item
- *   - Esc / q cancel (Ctrl-C exits the app — see `overlay-contract.ts`)
+ *   - Esc / q cancel (see `overlay-contract.ts`; Ctrl-C quits Bernard and
+ *     never reaches an overlay — #360)
  *
  * Section dividers from `MenuEntry` are rendered as muted headers between
  * items, never selectable. `options.headerLines` renders above the title so
