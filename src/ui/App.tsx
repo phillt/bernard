@@ -671,7 +671,14 @@ export function App({
   // chrome (spinner, plan panel, toast, prompt, hint/status bars) is hidden so
   // the viewer reads as a replacement for the thread, not an addition below it.
   // <Thread> itself stays mounted (unmounting it reprints <Static> scrollback).
+  //
+  // 'help' is in this list despite not being a Shift-Tab tab (#392): the flag
+  // decides whether the overlay REPLACES the chrome or is appended under it,
+  // and in legacy inline mode help was landing below the whole prompt box —
+  // five more rows on a surface that already overflowed the frame. Full-screen
+  // was never affected; it branches on `activeOverlay !== null` instead.
   const viewerActive =
+    activeOverlay === 'help' ||
     activeOverlay === 'status' ||
     activeOverlay === 'sources' ||
     activeOverlay === 'context' ||
@@ -3551,7 +3558,9 @@ export function App({
           }}
         />
       )}
-      {activeOverlay === 'help' && <HelpOverlay onClose={() => setActiveOverlay(null)} />}
+      {activeOverlay === 'help' && (
+        <HelpOverlay onClose={() => setActiveOverlay(null)} reserveRows={overlayReserveRows} />
+      )}
       {activeOverlay === 'info' && pendingInfo && (
         <InfoOverlay
           title={pendingInfo.title}

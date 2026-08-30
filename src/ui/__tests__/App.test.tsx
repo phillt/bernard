@@ -24,6 +24,7 @@ import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ENTER, ESC, SHIFT_TAB, tick } from './_keys.js';
+import stripAnsi from 'strip-ansi';
 
 // ── Module mocks (all hoisted by vitest) ────────────────────────────────
 
@@ -545,9 +546,15 @@ describe('<App> /help overlay', () => {
     await tick();
     await submit(stdin, '/help');
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('/exit');
+    // What this test owns is the WIRING — the slash command mounts the
+    // overlay. It used to name three commands scattered through the
+    // catalogue, which stopped being a statement about App the moment help
+    // was windowed to the frame (#392): `/exit` is simply below the fold now.
+    // The catalogue itself is asserted against the pure `helpLines()` in
+    // `HelpOverlay.test.tsx`, with no renderer at all.
+    expect(frame).toContain('Commands');
     expect(frame).toContain('/help');
-    expect(frame).toContain('/memory');
+    expect(stripAnsi(frame)).toContain('↵/esc/q close');
     unmount();
   });
 });
