@@ -150,6 +150,7 @@ import { useDimensionsCtx } from './DimensionsContext.js';
 import { formatAgentError, type ErrorPanelData } from './error-format.js';
 import { Prompt } from './Prompt.js';
 import type { SlashCommand } from './SlashHints.js';
+import type { DispatchedCommand } from './slash-commands.js';
 import { Spinner } from './Spinner.js';
 import { StatusBar } from './StatusBar.js';
 import { HintBar } from './HintBar.js';
@@ -530,6 +531,48 @@ function openOverlay<T>(
     });
   });
 }
+
+/**
+ * The two shapes every slash branch in `handleSubmit` tests, typed so the
+ * command literal must be a member of `DISPATCHED_COMMANDS` (#393).
+ *
+ * They look like ceremony around `===` and `startsWith`, and deleting them
+ * would silently gut the guarantee they exist for — so: `DISPATCHED_COMMANDS`
+ * is the list `__tests__/slash-catalogue.test.ts` reconciles against the
+ * documented catalogue, and **these helpers are the only thing making that
+ * list true**. Written as bare literals the branches agree with the array by
+ * nobody's decision; routed through `DispatchedCommand`, adding
+ * `if (text === '/foo')` without listing `/foo` stops compiling. That is the
+ * historical failure — `/session-log` shipped dispatched and documented
+ * nowhere — caught at the branch, before a test runs.
+ *
+ * Conditions only. Branch bodies read `text` directly (they slice args off it),
+ * which is why these take the raw string rather than owning the parse.
+ */
+const is = (text: string, command: DispatchedCommand): boolean => text === command;
+
+/**
+ * Prefix form, for the four commands that take arguments. The trailing space is
+ * part of the test: `/task` must not swallow a routine named `/taskboard`.
+ */
+const startsWithCmd = (text: string, command: DispatchedCommand): boolean =>
+  text.startsWith(`${command} `);
+
+/**
+ * Standalone toggles consolidated into `/agent-options` or `/options` in
+ * pre-Phase-D releases, mapped to the pointer each one flashes.
+ *
+ * Module scope rather than a per-submit object literal, and keyed on
+ * `DispatchedCommand`: these three dispatch by lookup instead of by an `if`, so
+ * without the key type they would be the one part of the chain the compile-time
+ * check above could not see — precisely the invisible-shape problem #393 exists
+ * to remove.
+ */
+const LEGACY_TOGGLE_POINTERS: Readonly<Partial<Record<DispatchedCommand, string>>> = {
+  '/react': 'Coordinator (ReAct) mode → /agent-options',
+  '/tool-details': 'Tool-call details → /agent-options',
+  '/debug': 'Debug logging → /options',
+};
 
 export function App({
   agent,
@@ -966,14 +1009,14 @@ export function App({
     if (bannerVisible) setBannerVisible(false);
 
     // ── Simple one-shot slash commands (no overlay, no agent turn) ──
-    if (text === '/exit' || text === '/quit') {
+    if (is(text, '/exit') || is(text, '/quit')) {
       if (exitedRef.current) return;
       exitedRef.current = true;
       await onExit();
       exit();
       return;
     }
-    if (text === '/clear' || text.startsWith('/clear ')) {
+    if (is(text, '/clear') || startsWithCmd(text, '/clear')) {
       const clearArgs = text.slice('/clear'.length).trim();
       const shouldSave = clearArgs === '--save' || clearArgs === '-s';
       if (clearArgs && !shouldSave) {
@@ -1090,11 +1133,11 @@ export function App({
       flashToast('Conversation history cleared.', 'success');
       return;
     }
-    if (text === '/help') {
+    if (is(text, '/help')) {
       setActiveOverlay('help');
       return;
     }
-    if (text === '/session-log') {
+    if (is(text, '/session-log')) {
       flashToast(
         isDebugEnabled()
           ? `Session log: ${getSessionLogPath()}`
@@ -1102,7 +1145,7 @@ export function App({
       );
       return;
     }
-    if (text === '/refresh-models') {
+    if (is(text, '/refresh-models')) {
       flashToast('Refreshing model catalog…');
       try {
         const refreshed = await loadCatalog({ force: true });
@@ -1119,7 +1162,7 @@ export function App({
       }
       return;
     }
-    if (text === '/memory') {
+    if (is(text, '/memory')) {
       const keys = stores.memory.listMemory();
       flashToast(
         keys.length === 0
@@ -1128,7 +1171,7 @@ export function App({
       );
       return;
     }
-    if (text === '/scratch') {
+    if (is(text, '/scratch')) {
       const keys = stores.memory.listScratch();
       flashToast(
         keys.length === 0
@@ -1137,7 +1180,7 @@ export function App({
       );
       return;
     }
-    if (text === '/compact') {
+    if (is(text, '/compact')) {
       const history = agent.getHistory();
       if (history.length < MIN_HISTORY_FOR_FACTS) {
         flashToast('Not enough conversation to compact.', 'warning');
@@ -1177,7 +1220,7 @@ export function App({
       return;
     }
 
-    if (text === '/policy') {
+    if (is(text, '/policy')) {
       const last = agent.getLastPolicyDecision();
       if (!last) {
         flashToast('No policy decision yet — send a message first.');
@@ -1196,14 +1239,14 @@ export function App({
       return;
     }
 
-    if (text === '/usage' || text === '/cost') {
+    if (is(text, '/usage') || is(text, '/cost')) {
       // Opens the scrollable Usage & Cost viewer (#258) — the same tab reachable
       // via Shift-Tab. Shows the last turn's per-tier/model token + cost breakdown.
       setActiveOverlay('usage');
       return;
     }
 
-    if (text === '/mcp') {
+    if (is(text, '/mcp')) {
       if (!stores.mcp) {
         flashToast(`No MCP servers configured. Add servers to ${MCP_CONFIG_PATH}`);
         return;
@@ -1227,7 +1270,7 @@ export function App({
       return;
     }
 
-    if (text === '/cron') {
+    if (is(text, '/cron')) {
       const store = new CronStore();
       // Start/stop the daemon to match whether any job is enabled — mirrors the
       // ensureDaemon / stopIfNoEnabledJobs side-effects of the cron tools.
@@ -1325,7 +1368,7 @@ export function App({
       }
     }
 
-    if (text === '/rag') {
+    if (is(text, '/rag')) {
       if (!stores.rag) {
         flashToast('RAG is disabled. Set BERNARD_RAG_ENABLED=true (default) to enable.');
         return;
@@ -1364,7 +1407,7 @@ export function App({
       return;
     }
 
-    if (text === '/facts') {
+    if (is(text, '/facts')) {
       const results = agent.getLastRAGResults();
       if (results.length === 0) {
         flashToast('No RAG facts in current context window.');
@@ -1389,7 +1432,7 @@ export function App({
       return;
     }
 
-    if (text === '/update') {
+    if (is(text, '/update')) {
       flashToast('Checking for updates…');
       try {
         await interactiveUpdate();
@@ -1403,7 +1446,7 @@ export function App({
       return;
     }
 
-    if (text === '/theme') {
+    if (is(text, '/theme')) {
       const allKeys = getThemeKeys();
       const currentKey = getActiveThemeKey();
       const regularKeys = allKeys.filter((k) => k !== 'high-contrast' && k !== 'colorblind');
@@ -1441,12 +1484,12 @@ export function App({
       return;
     }
 
-    if (text === '/tool-permissions') {
+    if (is(text, '/tool-permissions')) {
       await runToolPermissionsMenu();
       return;
     }
 
-    if (text === '/voice' || text.startsWith('/voice ')) {
+    if (is(text, '/voice') || startsWithCmd(text, '/voice')) {
       // Persist the current voice fields onto the active profile.
       const persistVoice = () =>
         saveActiveSettings({
@@ -1562,12 +1605,12 @@ export function App({
       return;
     }
 
-    if (text === '/provider' || text === '/models') {
+    if (is(text, '/provider') || is(text, '/models')) {
       await runModelsCatalogInk(config, requestMenu, requestTextInput, flashToast);
       return;
     }
 
-    if (text === '/model') {
+    if (is(text, '/model')) {
       flashToast(
         'Model selection is now per-tier. Use /lineup to edit the active lineup, or /lineups to switch.',
         'info',
@@ -1575,7 +1618,7 @@ export function App({
       return;
     }
 
-    if (text === '/lineup') {
+    if (is(text, '/lineup')) {
       const lineups = loadLineups();
       const active = resolveActiveLineup(lineups, config.activeLineupId, config.provider);
       const edited = await runLineupEditorInk(
@@ -1600,7 +1643,7 @@ export function App({
       return;
     }
 
-    if (text === '/lineups') {
+    if (is(text, '/lineups')) {
       const all = listLineups();
       // Resolve once so a stale `config.activeLineupId` (e.g. pointing at a
       // lineup the user deleted) falls through to whatever resolveActiveLineup
@@ -1698,12 +1741,12 @@ export function App({
       return;
     }
 
-    if (text === '/agent-options') {
+    if (is(text, '/agent-options')) {
       await runSettings('agent-options');
       return;
     }
 
-    if (text === '/profiles') {
+    if (is(text, '/profiles')) {
       const profiles = listProfiles();
       const entries: MenuEntry[] = profiles.map((p) => ({
         label: p.name,
@@ -1772,7 +1815,7 @@ export function App({
       return;
     }
 
-    if (text === '/manage-profiles') {
+    if (is(text, '/manage-profiles')) {
       const profiles = listProfiles();
       if (profiles.length === 0) {
         flashToast('No profiles configured.');
@@ -1812,12 +1855,12 @@ export function App({
       return;
     }
 
-    if (text === '/options') {
+    if (is(text, '/options')) {
       await runSettings('options');
       return;
     }
 
-    if (text === '/routines') {
+    if (is(text, '/routines')) {
       let firstPass = true;
       let listIndex = 0;
       for (;;) {
@@ -1880,7 +1923,7 @@ export function App({
       }
     }
 
-    if (text === '/specialists') {
+    if (is(text, '/specialists')) {
       const builtinIds = getBuiltinSpecialistIds();
       // Loop so Back / Esc in an action menu returns to the (refreshed) list;
       // only Esc on the list itself, or a hand-off action (Edit), exits.
@@ -1968,7 +2011,7 @@ export function App({
       }
     }
 
-    if (text === '/candidates') {
+    if (is(text, '/candidates')) {
       let firstPass = true;
       let listIndex = 0;
       for (;;) {
@@ -2036,13 +2079,13 @@ export function App({
       }
     }
 
-    if (text === '/create-routine' || text === '/create-task' || text === '/create-specialist') {
+    if (is(text, '/create-routine') || is(text, '/create-task') || is(text, '/create-specialist')) {
       const seed = CREATE_SEED_PROMPTS[text];
       await runAgentTurn(seed);
       return;
     }
 
-    if (text === '/task' || text.startsWith('/task ')) {
+    if (is(text, '/task') || startsWithCmd(text, '/task')) {
       const description = text.slice('/task'.length).trim();
       if (!description) {
         flashToast('Usage: /task <description>', 'error');
@@ -2052,7 +2095,7 @@ export function App({
       return;
     }
 
-    if (text === '/image' || text.startsWith('/image ')) {
+    if (is(text, '/image') || startsWithCmd(text, '/image')) {
       const argsText = text.slice('/image'.length).trim();
       if (!argsText) {
         flashToast('Usage: /image <path> [prompt]', 'error');
@@ -2094,14 +2137,12 @@ export function App({
     // Backwards-compat shims: standalone toggles that were consolidated into
     // /agent-options or /options in pre-Phase-D releases. Print a short
     // pointer so users typing the old name aren't silently dropped into the
-    // agent turn.
-    const legacyToggle: Record<string, string> = {
-      '/react': 'Coordinator (ReAct) mode → /agent-options',
-      '/tool-details': 'Tool-call details → /agent-options',
-      '/debug': 'Debug logging → /options',
-    };
-    if (legacyToggle[text]) {
-      flashToast(`This command moved. ${legacyToggle[text]}`, 'warning');
+    // agent turn. The table is module-level (LEGACY_TOGGLE_POINTERS) — it was a
+    // fresh object literal per submit, and its keys are the only dispatch here
+    // that isn't an `if`, so they need the same typed home as the rest.
+    const legacyPointer = LEGACY_TOGGLE_POINTERS[text as DispatchedCommand];
+    if (legacyPointer) {
+      flashToast(`This command moved. ${legacyPointer}`, 'warning');
       return;
     }
 

@@ -5,15 +5,91 @@
  * split from `use-line-editor.tsx` and `mouse.ts` from `useMouseWheel.ts`: the
  * catalogue is plain data, and living inside `SlashHints.tsx` meant every
  * consumer — including a test that renders nothing — pulled Ink and React in
- * behind it. `App.tsx` imports only the *type* today for exactly that reason,
- * so the dispatch cannot cheaply consult the catalogue it is supposed to agree
- * with; this is the prerequisite for closing that gap.
+ * behind it. That is also what lets `App.tsx` import {@link DispatchedCommand}
+ * from here (#393) without a cycle back through the component that owns the
+ * dispatch.
  *
- * `SlashHints.tsx` re-exports all three names, so existing importers are
- * unaffected.
+ * `SlashHints.tsx` re-exports the three original names, so existing importers
+ * are unaffected.
  */
 
+/**
+ * Every command literal `<App>.handleSubmit` branches on (#393).
+ *
+ * This array is **load-bearing at compile time**, and that is the whole point.
+ * A hand-written list checked only by a test against {@link SLASH_COMMANDS} is
+ * blind to the failure that actually happened: someone writes
+ * `if (text === '/foo')` without listing it here, and nothing anywhere
+ * objects — which is exactly how `/session-log` shipped dispatched and
+ * undocumented. So `App.tsx` routes every branch condition through the typed
+ * `is` / `startsWithCmd` helpers declared beside `handleSubmit`, whose second
+ * parameter is {@link DispatchedCommand}. An unlisted command is then a type
+ * error at the branch itself, which is louder and earlier than any test.
+ *
+ * That leaves this module free of Ink and React, which is why the array lives
+ * here and not in `App.tsx`: `__tests__/slash-catalogue.test.ts` renders
+ * nothing and should not drag a ~45-module component graph in to compare two
+ * string sets. It replaces a regex that read `App.tsx` as source text, knew two
+ * branch shapes, and silently lost coverage for any third.
+ *
+ * Order follows the dispatch chain so the two read as one document. Names not
+ * in {@link SLASH_COMMANDS} are dispatched on purpose (aliases, deprecation
+ * pointers) and are enumerated with their reasons in the test's
+ * `DELIBERATELY_UNDOCUMENTED`.
+ */
+export const DISPATCHED_COMMANDS = [
+  '/exit',
+  '/quit',
+  '/clear',
+  '/help',
+  '/session-log',
+  '/refresh-models',
+  '/memory',
+  '/scratch',
+  '/compact',
+  '/policy',
+  '/usage',
+  '/cost',
+  '/mcp',
+  '/cron',
+  '/rag',
+  '/facts',
+  '/update',
+  '/theme',
+  '/tool-permissions',
+  '/voice',
+  '/provider',
+  '/models',
+  '/model',
+  '/lineup',
+  '/lineups',
+  '/agent-options',
+  '/profiles',
+  '/manage-profiles',
+  '/options',
+  '/routines',
+  '/specialists',
+  '/candidates',
+  '/create-routine',
+  '/create-task',
+  '/create-specialist',
+  '/task',
+  '/image',
+  '/react',
+  '/tool-details',
+  '/debug',
+] as const;
+
+/** One of the literals in {@link DISPATCHED_COMMANDS}. */
+export type DispatchedCommand = (typeof DISPATCHED_COMMANDS)[number];
+
 export interface SlashCommand {
+  /**
+   * Not narrowed to {@link DispatchedCommand}: the dynamic routine completions
+   * `App.tsx` synthesizes from the user's `RoutineStore` are `SlashCommand`s
+   * too, and their names (`/{routine-id}`) exist only at runtime.
+   * {@link SLASH_COMMANDS} narrows it via {@link BuiltinSlashCommand}.
+   */
   name: string;
   /** One-line gloss for the prompt-adjacent hint strip, which is narrow. */
   description: string;
@@ -34,6 +110,17 @@ export interface SlashCommand {
 }
 
 /**
+ * A catalogue entry, as distinct from a runtime-synthesized routine
+ * completion. Narrowing `name` here is the other half of the #393 guarantee:
+ * documenting a command that nothing dispatches is a compile error too, so the
+ * two directions of drift are both closed at build time rather than one at
+ * build time and one in a test.
+ */
+interface BuiltinSlashCommand extends SlashCommand {
+  name: DispatchedCommand;
+}
+
+/**
  * The single source of truth for Bernard's slash commands (#390).
  *
  * This list feeds **both** the autocomplete hint strip (via
@@ -44,16 +131,18 @@ export interface SlashCommand {
  * entries with four disagreeing descriptions, and `/session-log` — a working
  * command — appeared in neither.
  *
- * `<App>.handleSubmit`'s if-chain remains a third, unsynchronised source. It
- * cannot be derived from here (its branches close over REPL state), so
- * `__tests__/slash-catalogue.test.ts` reconciles the two by reading that file
- * as source text — see its header for why that is a stopgap and what the real
- * fix is. Adding a command means adding it here AND to that dispatch.
+ * `<App>.handleSubmit`'s if-chain cannot be derived from here (its branches
+ * close over REPL state), so {@link DISPATCHED_COMMANDS} stands in for it and
+ * `__tests__/slash-catalogue.test.ts` reconciles the two sets. Adding a command
+ * means adding it here AND to that dispatch — but neither omission is silent
+ * any more: the branch won't compile without the name in
+ * {@link DISPATCHED_COMMANDS}, and an entry here whose name isn't in it won't
+ * compile either.
  *
  * Items the user can't dispatch directly from the prompt (variants with
  * required args) belong in the help screen, not here.
  */
-export const SLASH_COMMANDS: readonly SlashCommand[] = [
+export const SLASH_COMMANDS: readonly BuiltinSlashCommand[] = [
   { name: '/help', description: 'Show command list', detail: 'Show this help' },
   { name: '/clear', description: 'Clear conversation (--save / -s to summarize first)' },
   { name: '/compact', description: 'Compress conversation history in-place' },
