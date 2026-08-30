@@ -4,7 +4,6 @@ import { MenuRow } from './MenuRow.js';
 import { HintRow, type KeyHint } from '../hints.js';
 import { getThemeColors } from '../../theme.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
-import { isCtrlC } from './overlay-contract.js';
 
 /** One pre-rendered visual row. `node` MUST occupy exactly one terminal line. */
 export interface OverlayLine {
@@ -50,6 +49,10 @@ interface ViewerShellProps {
    * stop-propagation, so without this gate the shell's Esc would close the
    * viewer at the same moment the inner handler tries to step back a level.
    * Shift-Tab tab-cycling stays live in both states.
+   *
+   * With it `false` the shell claims no key that unconditionally leaves —
+   * Ctrl-C quits Bernard rather than closing an overlay (#360) — so getting out
+   * of a drilled-in viewer is a level-by-level walk of repeated Esc.
    */
   escClosesViewer?: boolean;
 }
@@ -97,17 +100,7 @@ export function ViewerShell({
   // App wraps the overlay in paddingX={2}, so the usable width is cols - 4.
   const rule = '─'.repeat(Math.max(4, cols - 4));
 
-  useInput((input, key) => {
-    // Ctrl-C would close unconditionally — `escClosesViewer` exists so a drilled-in
-    // viewer can spend Esc on "back one level", but there must still be one
-    // key that always leaves — otherwise the only exit is a level-by-level
-    // walk back out. In production it never fires: Ink's `exitOnCtrlC` default
-    // swallows Ctrl-C before `useInput` sees it, so this is exercised only by
-    // the test harness. See `overlay-contract.ts` and the #360 follow-up.
-    if (isCtrlC(input, key)) {
-      onClose();
-      return;
-    }
+  useInput((_input, key) => {
     if (key.escape) {
       if (escClosesViewer) onClose();
     } else if (key.shift && key.tab) onCycleTab();

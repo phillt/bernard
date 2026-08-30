@@ -11,7 +11,6 @@ export const ARROW_UP = '[A';
 export const ARROW_DOWN = '[B';
 export const ARROW_LEFT = '[D';
 export const ARROW_RIGHT = '[C';
-export const CTRL_C = '';
 export const CTRL_A = '\x01';
 export const CTRL_E = '\x05';
 export const CTRL_J = '\n';
@@ -41,6 +40,10 @@ export const CTRL_W = '\x17';
 export const CTRL_U = '\x15';
 export const CTRL_K = '\x0b';
 export const CTRL_D = '\x04';
+/** Ctrl-B / Ctrl-F. Word-wise here, not char-wise: `use-line-editor`'s
+ *  `wordMod` is `key.meta || key.ctrl`, so these land in the Alt-B/F branch. */
+export const CTRL_B = '\x02';
+export const CTRL_F = '\x06';
 export const ALT_B = '\x1bb';
 export const ALT_F = '\x1bf';
 export const ALT_BACKSPACE = '\x1b\x7f';

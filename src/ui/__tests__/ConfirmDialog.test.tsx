@@ -4,7 +4,7 @@ import stripAnsi from 'strip-ansi';
 import { createElement } from 'react';
 import { ConfirmDialog } from '../overlays/ConfirmDialog.js';
 import type { BreadthOption } from '../../permissions/breadth.js';
-import { ESC, ENTER, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT, CTRL_C, tick } from './_keys.js';
+import { ESC, ENTER, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT, tick } from './_keys.js';
 
 /** A two-step breadth ladder fixture (exact → any args). */
 const BREADTH: BreadthOption[] = [
@@ -106,23 +106,21 @@ describe('<ConfirmDialog>', () => {
       expect(onResolve).toHaveBeenCalledWith(true, 'session', undefined);
     });
 
-    it('Esc and Ctrl-C call onCancel', async () => {
-      for (const keystroke of [ESC, CTRL_C]) {
-        const onCancel = vi.fn();
-        const { stdin } = render(
-          createElement(ConfirmDialog, {
-            kind: 'confirm',
-            toolName: 't',
-            reason: 'r',
-            onResolve: () => {},
-            onCancel,
-          }),
-        );
-        await tick();
-        stdin.write(keystroke);
-        await tick();
-        expect(onCancel).toHaveBeenCalledTimes(1);
-      }
+    it('Esc calls onCancel', async () => {
+      const onCancel = vi.fn();
+      const { stdin } = render(
+        createElement(ConfirmDialog, {
+          kind: 'confirm',
+          toolName: 't',
+          reason: 'r',
+          onResolve: () => {},
+          onCancel,
+        }),
+      );
+      await tick();
+      stdin.write(ESC);
+      await tick();
+      expect(onCancel).toHaveBeenCalledTimes(1);
     });
 
     it('falls back to "action" label when no risk is provided', () => {

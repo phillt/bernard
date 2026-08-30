@@ -22,7 +22,10 @@ import type { Key } from 'ink';
  *    it safe inside `SettingsOverlay`, whose dismissal keys belong to the
  *    wrapping `ViewerShell`. Dismissal stays in `overlay-contract.ts`; the two
  *    modules compose and are never merged — an overlay decides *first* whether a
- *    key dismisses, and only then asks what it means for the list.
+ *    key dismisses, and only then asks what it means for the list. `Ctrl-C`
+ *    belongs to no overlay at all — Ink quits on it before any `useInput` runs
+ *    (#360) — and is asserted here anyway, so no future branch can start
+ *    swallowing the one key that always leaves the program.
  * 2. **`total === 0` yields `null` for every key.** This subsumes
  *    `ModelGridOverlay`'s empty-list early-out and `SettingsOverlay`'s extra
  *    lower clamp: with nothing to point at there is no navigation to do, so the
