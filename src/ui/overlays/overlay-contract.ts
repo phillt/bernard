@@ -31,15 +31,22 @@ import type { Key } from 'ink';
  * in the terminal, bought for a *second* way to do what `Esc` already does
  * under this contract.
  *
- * Two costs are real and are recorded here so the decision reads as taken
- * rather than defaulted into. Ctrl-C leaves through Ink's unmount, so `onExit()`
- * runs fire-and-forget (`void`, in `<App>`'s unmount effect) where `/exit`
- * awaits it — the other option would have put Ctrl-C on the graceful path. And
- * the deleted `ViewerShell` branch justified itself with "there must still be
- * one key that always leaves", which was already false for the two viewers
- * passing `escClosesViewer={false}` (`ContextViewer`, `SourcesViewer`), where
- * leaving is a level-by-level walk of repeated Esc. It stays false; the comment
- * went rather than persisting as a promise nothing keeps.
+ * One real cost is recorded here so the decision reads as taken rather than
+ * defaulted into: the deleted `ViewerShell` branch justified itself with "there
+ * must still be one key that always leaves", which was already false for the two
+ * viewers passing `escClosesViewer={false}` (`ContextViewer`, `SourcesViewer`),
+ * where leaving is a level-by-level walk of repeated Esc. It stays false; the
+ * comment went rather than persisting as a promise nothing keeps.
+ *
+ * A second cost was considered and **is not one** — recorded because it looks
+ * like one and the next reader deserves to not re-derive it. Ctrl-C leaves
+ * through Ink's unmount, so `onExit()` runs fire-and-forget (`void`, in
+ * `<App>`'s unmount effect) where `/exit` awaits it, which reads like Ctrl-C
+ * skipping teardown. It does not: `src/index.ts` passes `onExit: async () => {}`
+ * on purpose — real cleanup runs after `await waitUntilExit()`, precisely so its
+ * `printInfo` calls don't write through a still-mounted Ink renderer — and the
+ * unmount reaches that await identically to `/exit`. `README.md` is right to
+ * call Ctrl-C "graceful exit with cleanup".
  */
 
 /**
