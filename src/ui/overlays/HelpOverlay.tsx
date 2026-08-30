@@ -12,6 +12,13 @@ import { truncate } from '../../text.js';
 
 interface HelpOverlayProps {
   onClose: () => void;
+  /**
+   * Rows the caller has already spent above this overlay — the alert banner.
+   * Same contract as `MenuOverlay` / `ModelGridOverlay`: only `<App>` knows what
+   * else is on screen, and the banner can appear *while* an overlay is open, so
+   * the budget is derived every render rather than fixed at mount.
+   */
+  reserveRows?: number;
 }
 
 interface HelpRow {
@@ -181,7 +188,7 @@ function descriptionWidth(usableColumns: number): number {
  * screen) mode help REPLACES the prompt chrome instead of rendering below it,
  * which was adding five more rows to a surface already twice too tall.
  */
-export function HelpOverlay({ onClose }: HelpOverlayProps) {
+export function HelpOverlay({ onClose, reserveRows = 0 }: HelpOverlayProps) {
   const colors = getThemeColors();
   // Terminal size comes from the context, never `useStdout`: the context is the
   // one reactive source (it subscribes to SIGWINCH once at the top of the tree),
@@ -192,9 +199,17 @@ export function HelpOverlay({ onClose }: HelpOverlayProps) {
 
   // Chrome is a constant here, unlike `MenuOverlay` / `ModelGridOverlay`, which
   // measure theirs with `chromeRows`: help renders no title, header block or
-  // footnote above the list, so there is nothing that can soft-wrap. Every
-  // wrappable string on this screen is a CONTENT row, inside the window.
-  const chrome = 1 /* the marginTop below */ + OVERLAY_FOOTER_ROWS;
+  // footnote ABOVE the list, so nothing up there can soft-wrap. (The footer's
+  // own strings can, on a very narrow terminal, against a flat
+  // `OVERLAY_FOOTER_ROWS` — that is the same bet both sibling overlays take, so
+  // it stays consistent rather than being solved here alone.)
+  //
+  // `reserveRows` is what the caller subtracts for rows this overlay never
+  // sees: the alert banner, which renders ABOVE the overlay zone in both the
+  // full-screen and legacy branches and can appear while help is open. Help
+  // also joins `viewerActive`, which handles the legacy prompt chrome — the two
+  // cover different rows and both are needed.
+  const chrome = 1 /* the marginTop below */ + OVERLAY_FOOTER_ROWS + reserveRows;
   const viewport = overlayViewport(termRows, chrome);
   const maxOffset = Math.max(0, lines.length - viewport);
 
@@ -210,8 +225,11 @@ export function HelpOverlay({ onClose }: HelpOverlayProps) {
 
   useInput((input, key) => {
     // Dismissal is decided first, ahead of the scroll keystream — the ordering
-    // every overlay obeys (#266), and load-bearing here because `q` closes and
-    // would otherwise be a candidate for a movement key.
+    // every overlay obeys (#266). The two key sets happen not to overlap today
+    // (`navDelta` claims j/k/g/G and the arrows; `isAcknowledgeKey` claims Esc,
+    // Enter and `q`), so this is convention rather than a live necessity — but
+    // it is the convention that keeps a future movement key from silently
+    // shadowing a dismiss key, which is why it is not left to chance.
     if (isAcknowledgeKey(input, key)) {
       onClose();
       return;

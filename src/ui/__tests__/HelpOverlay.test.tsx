@@ -52,9 +52,11 @@ describe('helpLines()', () => {
    * The catalogue assertion runs against the pure row list, with no renderer
    * and no terminal size — the `line-geometry.ts` doctrine. It used to read the
    * rendered frame, which stopped working the moment the screen was windowed
-   * (#392): 46 rows into a 23-row frame means ~29 of the 34 commands are below
-   * the fold on any given render. Weakening it to "appears after scrolling"
-   * would have tested the scrollbar, not the catalogue.
+   * (#392): a 24-row terminal gives `viewerFrameHeight(24) = 23`, less 4 rows of
+   * chrome, so 19 lines are visible — of which the first two are the `Commands`
+   * header and its blank. That leaves 17 of the 34 commands on screen and 17
+   * below the fold on any given render. Weakening it to "appears after
+   * scrolling" would have tested the scrollbar, not the catalogue.
    */
   it('lists every documented slash command', () => {
     const commands = helpLines().filter((l) => l.kind === 'command');

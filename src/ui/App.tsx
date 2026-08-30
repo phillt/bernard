@@ -3556,7 +3556,9 @@ export function App({
           }}
         />
       )}
-      {activeOverlay === 'help' && <HelpOverlay onClose={() => setActiveOverlay(null)} />}
+      {activeOverlay === 'help' && (
+        <HelpOverlay onClose={() => setActiveOverlay(null)} reserveRows={overlayReserveRows} />
+      )}
       {activeOverlay === 'info' && pendingInfo && (
         <InfoOverlay
           title={pendingInfo.title}
