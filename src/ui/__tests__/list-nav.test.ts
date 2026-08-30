@@ -114,9 +114,11 @@ describe('listNavIntent', () => {
   describe('never claims a dismissal or shell key', () => {
     // The SettingsOverlay-safety invariant. It belongs pinned in a file rather
     // than inferred from four components: this module runs INSIDE a ViewerShell
-    // whose Esc / Shift+Tab / Ctrl-C are the shell's, and `q` cancels every
-    // menu. Every option combination is exercised, because a future branch
-    // could claim one of these only under some flag.
+    // whose Esc / Shift+Tab are the shell's, `q` cancels every menu, and
+    // Ctrl-C is nobody's — Ink quits on it before any `useInput` runs (#360),
+    // so claiming it here could only ever mean swallowing a quit. Every option
+    // combination is exercised, because a future branch could claim one of
+    // these only under some flag.
     const OPTIONS = [
       { total: 5 },
       { total: 5, horizontal: 'move' as const, toggleOnSpace: true },

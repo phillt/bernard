@@ -13,8 +13,8 @@ interface TextInputOverlayProps {
 
 /**
  * Ink replacement for the readline `promptValue()` flow. Renders a labeled
- * input field with cursor; commits on Enter, cancels on Esc. (Ctrl-C exits
- * the app rather than reaching here — see `overlay-contract.ts`.)
+ * input field with cursor; commits on Enter, cancels on Esc. (Ctrl-C quits
+ * Bernard rather than reaching here — see `overlay-contract.ts`.)
  *
  * Phase D (#215) seam: the legacy REPL called `promptValue(rl, ...)` for
  * every free-text mutation (new profile name, new specialist description,

@@ -5,16 +5,7 @@ import { ModelGridOverlay } from '../overlays/ModelGridOverlay.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
 import { FALLBACK_DIMENSIONS } from '../useDimensions.js';
 import stripAnsi from 'strip-ansi';
-import {
-  ESC,
-  ENTER,
-  ARROW_UP,
-  ARROW_DOWN,
-  ARROW_LEFT,
-  ARROW_RIGHT,
-  CTRL_C,
-  tick,
-} from './_keys.js';
+import { ESC, ENTER, ARROW_UP, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT, tick } from './_keys.js';
 
 const ITEMS = [
   'claude-opus-4-6',
@@ -126,8 +117,8 @@ describe('<ModelGridOverlay>', () => {
     expect(onSelect.mock.calls[0][0]).toBe(0);
   });
 
-  it('Esc, q, and Ctrl-C cancel', async () => {
-    for (const keystroke of [ESC, 'q', CTRL_C]) {
+  it('Esc and q cancel', async () => {
+    for (const keystroke of [ESC, 'q']) {
       const { stdin, onCancel } = mountGrid({});
       await tick();
       stdin.write(keystroke);
