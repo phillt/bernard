@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { ModelGridOverlay } from '../overlays/ModelGridOverlay.js';
+import { DimensionsProvider } from '../DimensionsContext.js';
+import { FALLBACK_DIMENSIONS } from '../useDimensions.js';
 import stripAnsi from 'strip-ansi';
 import {
   ESC,
@@ -31,7 +33,6 @@ function mountGrid(opts: {
   footer?: string;
   initialIndex?: number;
   currentItem?: string;
-  signal?: AbortSignal;
 }) {
   const onSelect = opts.onSelect ?? vi.fn();
   const onCancel = opts.onCancel ?? vi.fn();
@@ -44,7 +45,6 @@ function mountGrid(opts: {
       footer: opts.footer,
       initialIndex: opts.initialIndex,
       currentItem: opts.currentItem,
-      signal: opts.signal,
     }),
   );
   return { ...harness, onSelect, onCancel };
@@ -136,24 +136,6 @@ describe('<ModelGridOverlay>', () => {
     }
   });
 
-  it('pre-aborted signal fires onCancel synchronously', async () => {
-    const ac = new AbortController();
-    ac.abort();
-    const { onCancel } = mountGrid({ signal: ac.signal });
-    await tick();
-    expect(onCancel).toHaveBeenCalledTimes(1);
-  });
-
-  it('signal aborted mid-render fires onCancel', async () => {
-    const ac = new AbortController();
-    const { onCancel } = mountGrid({ signal: ac.signal });
-    await tick();
-    expect(onCancel).not.toHaveBeenCalled();
-    ac.abort();
-    await tick();
-    expect(onCancel).toHaveBeenCalledTimes(1);
-  });
-
   it('empty items list still allows Esc to cancel', async () => {
     const { stdin, onCancel } = mountGrid({ items: [] });
     await tick();
@@ -168,5 +150,81 @@ describe('<ModelGridOverlay>', () => {
     const plain = stripAnsi(frame);
     expect(plain).toContain('↵ select');
     expect(plain).toContain('esc back');
+  });
+});
+
+/**
+ * Windowing (#266) — the reported symptom. A provider with 58 models whose
+ * names are long enough to force a single column rendered 58 rows into a frame
+ * that has at most `rows - 1`, which is every lineup-slot edit on a narrow
+ * terminal. Every grid row is exactly one terminal line by construction, so
+ * `clampOffset` / `listPosition` apply verbatim over grid-row indices.
+ *
+ * Wrapped in `DimensionsProvider` as in production. Note the two axes resolve
+ * from different places under the test renderer: `columns` comes from
+ * ink-testing-library's stdout (100), `rows` from `FALLBACK_DIMENSIONS` (24)
+ * because that stdout declares none. The names are padded to 50 so the width
+ * arithmetic yields ONE column either way — the single-column case is the
+ * reported bug, and pinning it removes the harness's column count from the
+ * assertions.
+ */
+const LONG_ITEMS = Array.from({ length: 58 }, (_, i) =>
+  `model-${String(i + 1).padStart(2, '0')}`.padEnd(50, '-'),
+);
+
+function mountLongGrid(opts: { onSelect?: ReturnType<typeof vi.fn> } = {}) {
+  const onSelect = opts.onSelect ?? vi.fn();
+  const harness = render(
+    createElement(
+      DimensionsProvider,
+      null,
+      createElement(ModelGridOverlay, {
+        items: LONG_ITEMS,
+        onSelect,
+        onCancel: vi.fn(),
+      }),
+    ),
+  );
+  return { ...harness, onSelect };
+}
+
+describe('<ModelGridOverlay> windowing (#266)', () => {
+  it('shows the scroll position when the grid overflows', async () => {
+    const { lastFrame } = mountLongGrid();
+    await tick();
+    expect(stripAnsi(lastFrame() ?? '')).toMatch(/rows 1–\d+ of 58/);
+  });
+
+  it('reserves the position row (blank) when everything fits', async () => {
+    const { lastFrame } = mountGrid({});
+    await tick();
+    expect(stripAnsi(lastFrame() ?? '')).not.toMatch(/rows \d+–\d+ of \d+/);
+  });
+
+  it('keeps the highlight rendered when ArrowDown walks past the viewport', async () => {
+    const { stdin, lastFrame } = mountLongGrid();
+    await tick();
+    for (let i = 0; i < 30; i++) stdin.write(ARROW_DOWN);
+    await tick();
+    const plain = stripAnsi(lastFrame() ?? '');
+    expect(plain).toContain(LONG_ITEMS[30]);
+    expect(plain).not.toContain(LONG_ITEMS[0]);
+  });
+
+  it('Enter still returns the ABSOLUTE index after scrolling', async () => {
+    const { stdin, onSelect } = mountLongGrid();
+    await tick();
+    for (let i = 0; i < 30; i++) stdin.write(ARROW_DOWN);
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onSelect).toHaveBeenCalledWith(30);
+  });
+
+  it('never renders more rows than the frame has — the reported symptom', async () => {
+    const { lastFrame } = mountLongGrid();
+    await tick();
+    const lines = stripAnsi(lastFrame() ?? '').split('\n');
+    expect(lines.length).toBeLessThanOrEqual(FALLBACK_DIMENSIONS.rows - 1);
   });
 });

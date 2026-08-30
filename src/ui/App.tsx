@@ -169,7 +169,7 @@ import { Toast, type ToastVariant } from './Toast.js';
 import { persistAgentState } from './save.js';
 import { MessageStore } from './message-store.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
-import { setInkHandlers } from './ink-handlers.js';
+import { setInkHandlers, type MenuResult } from './ink-handlers.js';
 import { injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
 import {
   VoiceService,
@@ -276,10 +276,11 @@ interface ToastState {
 interface PendingMenu {
   entries: MenuEntry[];
   options?: MenuOptions;
-  resolve: (
-    result: { cancelled: true } | { cancelled: false; index: number; item: MenuItem },
-  ) => void;
+  resolve: (result: MenuResult) => void;
 }
+
+/** Multi-select's result shape — the sibling of {@link MenuResult} (#231). */
+export type MultiMenuResult = { cancelled: true } | { cancelled: false; items: MenuItem[] };
 
 /**
  * Multi-select counterpart of {@link PendingMenu} (#231). Kept separate so the
@@ -290,7 +291,7 @@ interface PendingMenu {
 interface PendingMultiMenu {
   entries: MenuEntry[];
   options?: MenuOptions;
-  resolve: (result: { cancelled: true } | { cancelled: false; items: MenuItem[] }) => void;
+  resolve: (result: MultiMenuResult) => void;
 }
 
 interface PendingGrid {
@@ -423,6 +424,23 @@ function buildChoiceMenu(q: AskUserQuestion): {
 const RESUME_REPLAY_MAX_CHARS = 2000;
 
 /**
+ * Rows the alert banner occupies when visible: its `marginTop` plus a
+ * single-line bordered box (top rule, one line of text, bottom rule).
+ */
+const BANNER_ROWS = 4;
+
+/**
+ * Rows the live prompt chrome occupies in legacy (non-full-screen) mode, where
+ * an overlay is appended BELOW it rather than replacing it: the bordered prompt
+ * box (3) plus the hint/status row, with one row of slack for the toast or
+ * spinner that can appear above the prompt. An estimate by construction — the
+ * chrome is content-sized there — and deliberately generous, since over-
+ * reserving costs one list row while under-reserving overflows the screen,
+ * which is the defect being fixed.
+ */
+const LEGACY_INLINE_CHROME_ROWS = 5;
+
+/**
  * Builds the transcript seed shown after `bernard -r`.
  *
  * The Ink cutover dropped the old `printConversationReplay` call and left an
@@ -468,6 +486,51 @@ export function buildResumeSeed(history: CoreMessage[], toolDetails: boolean): S
  * `src/tools/types.ts:58-100` exactly so Phase D can swap them in without
  * touching tool code.
  */
+/**
+ * Opens a modal overlay as a promise that settles exactly once, whether the
+ * user answers it or the caller's `AbortSignal` fires first (#266).
+ *
+ * Every overlay request needs the same five things: a synchronous pre-check so
+ * an already-aborted signal never mounts anything, a `settled` latch so an
+ * abort racing a keystroke resolves once, an `onAbort` that tears the overlay
+ * DOWN before resolving (otherwise the frame keeps a dialog nobody can answer),
+ * `{ once: true }`, and `removeEventListener` on the normal path so a
+ * long-lived signal does not retain the closure.
+ *
+ * That was written out five times — and the previous comment here *described*
+ * the five copies as "shared verbatim", which is the tell. The parameterised
+ * parts are only which pending slot to clear and what "cancelled" means for
+ * this result type; `install` runs any per-overlay work (a session-allowlist
+ * write, a persisted permission rule) before calling `settle`. Collapsing them
+ * puts overlay teardown in ONE place, which is what stops the sixth overlay
+ * from forgetting `setActiveOverlay(null)`.
+ */
+function openOverlay<T>(
+  signal: AbortSignal | undefined,
+  cancelled: T,
+  close: () => void,
+  install: (settle: (value: T) => void) => void,
+): Promise<T> {
+  if (signal?.aborted) return Promise.resolve(cancelled);
+  return new Promise<T>((resolve) => {
+    let settled = false;
+    const finish = (value: T): void => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const onAbort = () => {
+      close();
+      finish(cancelled);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    install((value) => {
+      signal?.removeEventListener('abort', onAbort);
+      finish(value);
+    });
+  });
+}
+
 export function App({
   agent,
   config,
@@ -731,18 +794,26 @@ export function App({
   } | null>(null);
   useEffect(() => {
     setInkHandlers({
-      requestMenu: (entries, options) => handlersRef.current!.requestMenu(entries, options),
+      // Forwards `signal` — the shim used to take only two parameters, so a
+      // signal handed to `getInkHandlers().requestMenu` was silently dropped
+      // one frame short of the overlay (#266).
+      requestMenu: (entries, options, signal) =>
+        handlersRef.current!.requestMenu(entries, options, signal),
       requestConfirm: (input, signal) => handlersRef.current!.requestConfirm(input, signal),
       requestBlock: (input, signal) => handlersRef.current!.requestBlock(input, signal),
-      requestTextInput: (options) => handlersRef.current!.requestTextInput(options),
+      requestTextInput: (options, signal) => handlersRef.current!.requestTextInput(options, signal),
       requestAskUser: (questions, signal) => handlersRef.current!.requestAskUser(questions, signal),
       requestConfirmDangerous: async (command, signal) => {
-        if (signal?.aborted) return false;
+        // The signal now reaches the overlay, so an abort while the menu is on
+        // screen tears it down. The two `signal?.aborted` polls this replaces
+        // bracketed an await that could not be interrupted: they could only
+        // observe an abort that happened before the menu opened or after the
+        // user had already answered it.
         const result = await handlersRef.current!.requestMenu(
           [{ label: 'Allow once' }, { label: 'Cancel' }],
           { title: `⚠ Dangerous command: ${command}` },
+          signal,
         );
-        if (signal?.aborted) return false;
         return !result.cancelled && result.index === 0;
       },
     });
@@ -1245,14 +1316,7 @@ export function App({
           return;
         }
         // Delete path — confirm, then remove the job + its logs.
-        const confirm = await requestMenu(
-          [
-            { label: `Delete "${job.name}"`, description: 'This cannot be undone.' },
-            { label: 'Cancel' },
-          ],
-          { title: 'Confirm deletion' },
-        );
-        if (confirm.cancelled || confirm.index === 1) continue; // back to list
+        if (!(await confirmDeletion(requestMenu, job.name))) continue; // back to list
         store.deleteJob(job.id);
         new CronLogStore().deleteJobLogs(job.id);
         syncDaemon();
@@ -1738,14 +1802,7 @@ export function App({
         return;
       }
       // Delete path.
-      const confirm = await requestMenu(
-        [
-          { label: `Delete "${target.name}"`, description: 'This cannot be undone.' },
-          { label: 'Cancel' },
-        ],
-        { title: 'Confirm deletion' },
-      );
-      if (confirm.cancelled || confirm.index === 1) return;
+      if (!(await confirmDeletion(requestMenu, target.name))) return;
       try {
         deleteProfile(target.id);
         flashToast(`Deleted profile "${target.name}".`, 'success');
@@ -1816,14 +1873,7 @@ export function App({
           return;
         }
         // Delete path — confirm with the standard two-item menu.
-        const confirm = await requestMenu(
-          [
-            { label: `Delete "${r.name}"`, description: 'This cannot be undone.' },
-            { label: 'Cancel' },
-          ],
-          { title: 'Confirm deletion' },
-        );
-        if (confirm.cancelled || confirm.index === 1) continue; // back to list
+        if (!(await confirmDeletion(requestMenu, r.name))) continue; // back to list
         stores.routines.delete(r.id);
         flashToast(`Deleted ${r.name}.`, 'success');
         continue;
@@ -1911,14 +1961,7 @@ export function App({
           continue; // back to the refreshed list
         }
         // Delete path — confirm with the standard two-item menu (house style).
-        const confirm = await requestMenu(
-          [
-            { label: `Delete "${s.name}"`, description: 'This cannot be undone.' },
-            { label: 'Cancel' },
-          ],
-          { title: 'Confirm deletion' },
-        );
-        if (confirm.cancelled || confirm.index === 1) continue; // back to list
+        if (!(await confirmDeletion(requestMenu, s.name))) continue; // back to list
         stores.specialists.delete(s.id);
         flashToast(`Deleted ${s.name}.`, 'success');
         continue;
@@ -3037,12 +3080,40 @@ export function App({
     requestAskUser,
   };
 
+  // Overlay teardown, one closure per pending slot. Passed to `openOverlay` so
+  // an abort clears the same state the user's own answer would have.
+  const closeMenu = () => {
+    setPendingMenu(null);
+    setActiveOverlay(null);
+  };
+  const closeMultiMenu = () => {
+    setPendingMultiMenu(null);
+    setActiveOverlay(null);
+  };
+  const closeDialog = () => {
+    setPendingDialog(null);
+    setActiveOverlay(null);
+  };
+  const closeTextInput = () => {
+    setPendingTextInput(null);
+    setActiveOverlay(null);
+  };
+
+  /**
+   * `signal` is optional and TRAILING so the ~40 call sites that have none are
+   * untouched. Before this, `MenuOverlay` carried a `signal` prop nothing ever
+   * passed — exercised only by its own tests — while the abort that actually
+   * happens, an agent turn cancelled with an `ask_user` menu on screen, left
+   * the menu on the screen. See {@link openOverlay} for the settle/teardown
+   * race every one of these shares.
+   */
   function requestMenu(
     entries: MenuEntry[],
     options?: MenuOptions,
-  ): Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }> {
-    return new Promise((resolve) => {
-      setPendingMenu({ entries, options, resolve });
+    signal?: AbortSignal,
+  ): Promise<MenuResult> {
+    return openOverlay<MenuResult>(signal, { cancelled: true }, closeMenu, (settle) => {
+      setPendingMenu({ entries, options, resolve: settle });
       setActiveOverlay('menu');
     });
   }
@@ -3063,13 +3134,14 @@ export function App({
     });
   }
 
-  /** Multi-select sibling of {@link requestMenu} (#231). */
+  /** Multi-select sibling of {@link requestMenu} (#231). Same abort idiom. */
   function requestMultiMenu(
     entries: MenuEntry[],
     options?: MenuOptions,
-  ): Promise<{ cancelled: true } | { cancelled: false; items: MenuItem[] }> {
-    return new Promise((resolve) => {
-      setPendingMultiMenu({ entries, options, resolve });
+    signal?: AbortSignal,
+  ): Promise<MultiMenuResult> {
+    return openOverlay<MultiMenuResult>(signal, { cancelled: true }, closeMultiMenu, (settle) => {
+      setPendingMultiMenu({ entries, options, resolve: settle });
       setActiveOverlay('multi-menu');
     });
   }
@@ -3184,30 +3256,16 @@ export function App({
   function requestConfirm(input: ConfirmActionInput, signal?: AbortSignal): Promise<boolean> {
     const key = `${input.toolName}:${stableHash(input.args)}`;
     if (confirmAllowSession.current.get(key)) return Promise.resolve(true);
-    if (signal?.aborted) return Promise.resolve(false);
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      const finish = (value: boolean): void => {
-        if (settled) return;
-        settled = true;
-        resolve(value);
-      };
-      const onAbort = () => {
-        setPendingDialog(null);
-        setActiveOverlay(null);
-        finish(false);
-      };
-      signal?.addEventListener('abort', onAbort, { once: true });
+    return openOverlay<boolean>(signal, false, closeDialog, (settle) => {
       setPendingDialog({
         kind: 'confirm',
         input,
         resolve: (allowed, scope, breadth) => {
-          signal?.removeEventListener('abort', onAbort);
           if (allowed && scope === 'session') confirmAllowSession.current.set(key, true);
           if (allowed && scope === 'profile') {
             persistPermissionRule(buildRuleFromBreadth(input.toolName, breadth, 'allow'));
           }
-          finish(allowed);
+          settle(allowed);
         },
       });
       setActiveOverlay('confirm');
@@ -3215,38 +3273,28 @@ export function App({
   }
 
   function requestBlock(input: BlockActionInput, signal?: AbortSignal): Promise<BlockOutcome> {
-    if (signal?.aborted) return Promise.resolve('deny' as BlockOutcome);
-    return new Promise((resolve) => {
-      let settled = false;
-      const finish = (value: BlockOutcome): void => {
-        if (settled) return;
-        settled = true;
-        resolve(value);
-      };
-      const onAbort = () => {
-        setPendingDialog(null);
-        setActiveOverlay(null);
-        finish('deny');
-      };
-      signal?.addEventListener('abort', onAbort, { once: true });
+    return openOverlay<BlockOutcome>(signal, 'deny', closeDialog, (settle) => {
       setPendingDialog({
         kind: 'block',
         input,
         resolve: (outcome, breadth) => {
-          signal?.removeEventListener('abort', onAbort);
           if (outcome === 'allow-tool-for-profile') {
             persistPermissionRule(buildRuleFromBreadth(input.toolName, breadth, 'allow'));
           }
-          finish(outcome);
+          settle(outcome);
         },
       });
       setActiveOverlay('confirm');
     });
   }
 
-  function requestTextInput(options: ValuePromptOptions): Promise<ValueResult> {
-    return new Promise((resolve) => {
-      setPendingTextInput({ options, resolve });
+  /** Free-text sibling of {@link requestMenu}. Same abort idiom. */
+  function requestTextInput(
+    options: ValuePromptOptions,
+    signal?: AbortSignal,
+  ): Promise<ValueResult> {
+    return openOverlay<ValueResult>(signal, { cancelled: true }, closeTextInput, (settle) => {
+      setPendingTextInput({ options, resolve: settle });
       setActiveOverlay('text-input');
     });
   }
@@ -3257,11 +3305,14 @@ export function App({
   ): Promise<AskUserBatchResult> {
     const answers: (string | string[])[] = [];
     for (const q of questions) {
+      // Belt-and-braces since #266: every overlay below now takes the signal
+      // itself, so an abort mid-question tears the overlay down instead of
+      // waiting for the user to answer it and the loop to come back here.
       if (signal?.aborted) return { cancelled: true, answered: answers };
 
       // Free-text question (no choices) — prompt with TextInputOverlay.
       if (!q.choices || q.choices.length === 0) {
-        const result = await requestTextInput(askUserPrompt(q.question));
+        const result = await requestTextInput(askUserPrompt(q.question), signal);
         if (result.cancelled) return { cancelled: true, answered: answers };
         answers.push(result.raw.trim());
         continue;
@@ -3276,11 +3327,11 @@ export function App({
       // The answer is the array of chosen labels; an "Other"-shaped pick still
       // routes to a free-text follow-up (same dedup behavior as single-select).
       if (q.multiSelect) {
-        const result = await requestMultiMenu(entries, { title: q.question });
+        const result = await requestMultiMenu(entries, { title: q.question }, signal);
         if (result.cancelled) return { cancelled: true, answered: answers };
         const picked = result.items.filter((item) => !isHatch(item)).map((item) => item.label);
         if (result.items.some(isHatch)) {
-          const free = await requestTextInput(askUserPrompt(q.question));
+          const free = await requestTextInput(askUserPrompt(q.question), signal);
           if (free.cancelled) return { cancelled: true, answered: answers };
           const typed = free.raw.trim();
           if (typed) picked.push(typed);
@@ -3289,12 +3340,12 @@ export function App({
         continue;
       }
 
-      const result = await requestMenu(entries, { title: q.question });
+      const result = await requestMenu(entries, { title: q.question }, signal);
       if (result.cancelled) return { cancelled: true, answered: answers };
 
       if (isHatch(result.item)) {
         // User picked "Other" — gather free-form text.
-        const free = await requestTextInput(askUserPrompt(q.question));
+        const free = await requestTextInput(askUserPrompt(q.question), signal);
         if (free.cancelled) return { cancelled: true, answered: answers };
         answers.push(free.raw.trim());
       } else {
@@ -3309,6 +3360,17 @@ export function App({
       <Text color={colors.warning}>{alertBanner}</Text>
     </Box>
   );
+
+  // Rows the windowed overlays (#266) do NOT get, because something outside
+  // them occupies those rows. Only App knows about either consumer, which is
+  // why this is a prop and not a constant inside the overlay — the same shape
+  // and reasoning as `BoundedLine`'s `reserveColumns`.
+  //
+  // Derived on EVERY render, never memoised on mount: the alert banner can
+  // appear while an overlay is already open, and a budget captured at open
+  // would then be one bordered box too generous.
+  const overlayReserveRows =
+    (banner ? BANNER_ROWS : 0) + (fullScreen ? 0 : LEGACY_INLINE_CHROME_ROWS);
 
   // Full-screen renders the scrollable <TranscriptViewport>; legacy mode keeps
   // the <Static>-based <Thread> (terminal scrollback). The epoch key remounts
@@ -3416,6 +3478,7 @@ export function App({
         <MenuOverlay
           entries={pendingMenu.entries}
           options={pendingMenu.options}
+          reserveRows={overlayReserveRows}
           onSelect={(index, item) => {
             pendingMenu.resolve({ cancelled: false, index, item });
             setPendingMenu(null);
@@ -3433,6 +3496,7 @@ export function App({
           multiSelect
           entries={pendingMultiMenu.entries}
           options={pendingMultiMenu.options}
+          reserveRows={overlayReserveRows}
           onMultiSelect={(items) => {
             pendingMultiMenu.resolve({ cancelled: false, items });
             setPendingMultiMenu(null);
@@ -3448,6 +3512,7 @@ export function App({
       {activeOverlay === 'grid' && pendingGrid && (
         <ModelGridOverlay
           items={pendingGrid.items}
+          reserveRows={overlayReserveRows}
           title={pendingGrid.options?.title}
           footer={pendingGrid.options?.footer}
           initialIndex={pendingGrid.options?.initialIndex}
@@ -3577,18 +3642,58 @@ export function App({
   );
 }
 
-type RequestMenuFn = (
+/**
+ * The overlay-request signatures the module-level helpers below take as
+ * parameters, because they live OUTSIDE `<App>` and so cannot close over its
+ * versions. There used to be two of these blocks — a `*Fn`-suffixed one here
+ * and an unsuffixed superset further down — plus a third copy spelled out
+ * inline in `runAddProviderInk`. One block, declared above its first consumer.
+ *
+ * `MenuResult` comes from `ink-handlers.ts`, where it was already exported and
+ * then re-spelled inline in five places.
+ */
+type RequestMenu = (
   entries: MenuEntry[],
   options?: MenuOptions,
-) => Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }>;
-type RequestTextInputFn = (options: ValuePromptOptions) => Promise<ValueResult>;
-type FlashToastFn = (message: string, variant?: ToastVariant) => void;
+  signal?: AbortSignal,
+) => Promise<MenuResult>;
+type RequestGridMenu = (
+  items: string[],
+  options?: { title?: string; footer?: string; initialIndex?: number; currentItem?: string },
+) => Promise<{ cancelled: true } | { cancelled: false; index: number }>;
+type RequestTextInput = (options: ValuePromptOptions, signal?: AbortSignal) => Promise<ValueResult>;
+type FlashToast = (message: string, variant?: ToastVariant) => void;
+
+/**
+ * The delete-confirmation menu, which was copy-pasted five times (cron,
+ * profiles, routines, specialists, lineups) with a byte-identical menu in all
+ * five.
+ *
+ * Module-level, and `requestMenu` is its FIRST PARAMETER rather than a closure
+ * capture, because the lineups call site lives outside `<App>` and receives
+ * `requestMenu` as an argument of its own. (The module-level helpers already
+ * have a parameter of that name, so a helper closing over the component's
+ * `requestMenu` would silently be the wrong one.)
+ *
+ * The AFTERMATH is deliberately NOT shared: cancel control flow differs
+ * (`continue` at the four loop sites vs. `return` in profiles), two of five
+ * wrap the deletion in try/catch, there are three distinct toast wordings, and
+ * cron additionally clears job logs and re-syncs the daemon. All of that stays
+ * at the call sites.
+ */
+async function confirmDeletion(requestMenu: RequestMenu, name: string): Promise<boolean> {
+  const confirm = await requestMenu(
+    [{ label: `Delete "${name}"`, description: 'This cannot be undone.' }, { label: 'Cancel' }],
+    { title: 'Confirm deletion' },
+  );
+  return !confirm.cancelled && confirm.index === 0;
+}
 
 async function pickWizardField(
   field: WizardFieldData,
   current: unknown,
-  requestMenu: RequestMenuFn,
-  requestTextInput: RequestTextInputFn,
+  requestMenu: RequestMenu,
+  requestTextInput: RequestTextInput,
 ): Promise<unknown> {
   const kind = field.field;
   if (kind.kind === 'list') {
@@ -3638,9 +3743,9 @@ async function pickWizardField(
  * `{cancelled:true}` if the user aborts the name prompt or save confirm.
  */
 async function runProfileWizardInk(
-  requestMenu: RequestMenuFn,
-  requestTextInput: RequestTextInputFn,
-  _flashToast: FlashToastFn,
+  requestMenu: RequestMenu,
+  requestTextInput: RequestTextInput,
+  _flashToast: FlashToast,
 ): Promise<{ cancelled: true } | { cancelled: false; name: string; settings: ProfileSettings }> {
   let name = '';
   for (let attempt = 0; attempt < 3 && !name; attempt += 1) {
@@ -3903,12 +4008,9 @@ Remember: the systemPrompt should read like a persona definition — who this sp
  * non-empty model and key) so the on-disk shape is identical.
  */
 async function runAddProviderInk(
-  requestMenu: (
-    entries: MenuEntry[],
-    options?: MenuOptions,
-  ) => Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }>,
-  requestTextInput: (options: ValuePromptOptions) => Promise<ValueResult>,
-  flashToast: (message: string, variant?: ToastVariant) => void,
+  requestMenu: RequestMenu,
+  requestTextInput: RequestTextInput,
+  flashToast: FlashToast,
 ): Promise<{ entry: ReturnType<typeof saveCustomProvider>; apiKey: string } | null> {
   const sdkEntries: MenuEntry[] = SUPPORTED_SDKS.map((s) => ({ label: s, value: s }));
   const sdkResult = await requestMenu(sdkEntries, { title: 'Which SDK to use?' });
@@ -3980,17 +4082,6 @@ function formatCatalogFooter(): string {
         : `${Math.floor(mins / 60)}h ${mins % 60}m ago`;
   return `Model catalog: ${source}, refreshed ${ageLabel} — /refresh-models to fetch.`;
 }
-
-type RequestMenu = (
-  entries: MenuEntry[],
-  options?: MenuOptions,
-) => Promise<{ cancelled: true } | { cancelled: false; index: number; item: MenuItem }>;
-type RequestGridMenu = (
-  items: string[],
-  options?: { title?: string; footer?: string; initialIndex?: number; currentItem?: string },
-) => Promise<{ cancelled: true } | { cancelled: false; index: number }>;
-type RequestTextInput = (options: ValuePromptOptions) => Promise<ValueResult>;
-type FlashToast = (message: string, variant?: ToastVariant) => void;
 
 /**
  * Generation-params editor step (issue #286). Rendered after a model is picked
@@ -4602,14 +4693,7 @@ async function runLineupEditorInk(
       continue;
     }
     if (value.kind === 'delete') {
-      const confirm = await requestMenu(
-        [
-          { label: `Delete "${draft.name}"`, description: 'This cannot be undone.' },
-          { label: 'Cancel' },
-        ],
-        { title: 'Confirm deletion' },
-      );
-      if (confirm.cancelled || confirm.index === 1) continue;
+      if (!(await confirmDeletion(requestMenu, draft.name))) continue;
       try {
         deleteLineup(draft.id);
         flashToast(`Deleted lineup "${draft.name}".`, 'success');

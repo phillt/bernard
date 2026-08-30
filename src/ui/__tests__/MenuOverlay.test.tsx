@@ -3,6 +3,8 @@ import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import { Text } from 'ink';
 import { MenuOverlay } from '../overlays/MenuOverlay.js';
+import { DimensionsProvider } from '../DimensionsContext.js';
+import { FALLBACK_DIMENSIONS } from '../useDimensions.js';
 import type { MenuEntry } from '../menu-types.js';
 import { ESC, ENTER, ARROW_UP, ARROW_DOWN, CTRL_C, SPACE, tick } from './_keys.js';
 import stripAnsi from 'strip-ansi';
@@ -15,23 +17,39 @@ const ENTRIES: MenuEntry[] = [
   { label: 'ollama', description: 'Local Llama via OpenAI shim' },
 ];
 
+/**
+ * Wrapped in `DimensionsProvider` as in production — but that is belt-and-
+ * braces, not coverage: without it `useDimensionsCtx` silently falls back to
+ * 80×24 instead of failing, so a missing provider would change which value the
+ * overlay read and no assertion here would notice. (The two axes even come from
+ * different places under the test renderer: `columns` from ink-testing-library's
+ * stdout, 100; `rows` from `FALLBACK_DIMENSIONS`, 24, since that stdout declares
+ * none.) The real answer to that trap is that the interesting assertions live in
+ * the pure `menu-geometry.test.ts` / `list-nav.test.ts`, which need no
+ * dimensions at all; the window here is driven by the PRODUCTION `reserveRows`
+ * prop rather than a test-only height override.
+ */
 function mountMenu(opts: {
   entries?: MenuEntry[];
   onSelect?: ReturnType<typeof vi.fn>;
   onCancel?: ReturnType<typeof vi.fn>;
   options?: Parameters<typeof MenuOverlay>[0]['options'];
-  signal?: AbortSignal;
+  reserveRows?: number;
 }) {
   const onSelect = opts.onSelect ?? vi.fn();
   const onCancel = opts.onCancel ?? vi.fn();
   const harness = render(
-    createElement(MenuOverlay, {
-      entries: opts.entries ?? ENTRIES,
-      onSelect,
-      onCancel,
-      options: opts.options,
-      signal: opts.signal,
-    }),
+    createElement(
+      DimensionsProvider,
+      null,
+      createElement(MenuOverlay, {
+        entries: opts.entries ?? ENTRIES,
+        onSelect,
+        onCancel,
+        options: opts.options,
+        reserveRows: opts.reserveRows,
+      }),
+    ),
   );
   return { ...harness, onSelect, onCancel };
 }
@@ -123,24 +141,6 @@ describe('<MenuOverlay>', () => {
     }
   });
 
-  it('pre-aborted signal fires onCancel synchronously', async () => {
-    const ac = new AbortController();
-    ac.abort();
-    const { onCancel } = mountMenu({ signal: ac.signal });
-    await tick();
-    expect(onCancel).toHaveBeenCalledTimes(1);
-  });
-
-  it('signal aborted mid-render fires onCancel', async () => {
-    const ac = new AbortController();
-    const { onCancel } = mountMenu({ signal: ac.signal });
-    await tick();
-    expect(onCancel).not.toHaveBeenCalled();
-    ac.abort();
-    await tick();
-    expect(onCancel).toHaveBeenCalledTimes(1);
-  });
-
   it('headerLines render above the title and items', () => {
     const { lastFrame } = mountMenu({
       options: { headerLines: ['Question 2 of 3', '--'], title: 'Pick one' },
@@ -221,16 +221,22 @@ function mountMulti(opts?: {
   entries?: MenuEntry[];
   onMultiSelect?: ReturnType<typeof vi.fn>;
   onCancel?: ReturnType<typeof vi.fn>;
+  reserveRows?: number;
 }) {
   const onMultiSelect = opts?.onMultiSelect ?? vi.fn();
   const onCancel = opts?.onCancel ?? vi.fn();
   const harness = render(
-    createElement(MenuOverlay, {
-      entries: opts?.entries ?? MULTI_ENTRIES,
-      multiSelect: true,
-      onMultiSelect,
-      onCancel,
-    }),
+    createElement(
+      DimensionsProvider,
+      null,
+      createElement(MenuOverlay, {
+        entries: opts?.entries ?? MULTI_ENTRIES,
+        multiSelect: true,
+        onMultiSelect,
+        onCancel,
+        reserveRows: opts?.reserveRows,
+      }),
+    ),
   );
   return { ...harness, onMultiSelect, onCancel };
 }
@@ -325,5 +331,135 @@ describe('<MenuOverlay> multi-select (#231)', () => {
     harness.stdin.write(ENTER);
     await tick();
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Windowing (#266). Unwindowed, a 40-item menu rendered 40 rows into a frame
+ * that has at most `rows - 1`, pushing the footer — and on a long enough list
+ * the highlighted row itself — off the screen.
+ *
+ * The budget is driven by the PRODUCTION `reserveRows` prop rather than a
+ * test-only height override, because that is the knob App actually turns.
+ */
+const LONG_ENTRIES: MenuEntry[] = [
+  { type: 'section', title: 'Group A' },
+  ...Array.from({ length: 20 }, (_, i) => ({ label: `item-${i + 1}` })),
+  { type: 'section', title: 'Group B' },
+  ...Array.from({ length: 20 }, (_, i) => ({ label: `item-${i + 21}` })),
+];
+
+/** Squeezes the 80×24 fallback frame down to a five-row content window. */
+const SQUEEZE = 13;
+
+const POSITION_RE = /items \d+–\d+ of \d+/;
+
+describe('<MenuOverlay> windowing (#266)', () => {
+  it('renders the highlighted row and not the fortieth', async () => {
+    const { lastFrame } = mountMenu({ entries: LONG_ENTRIES, reserveRows: SQUEEZE });
+    await tick();
+    const plain = stripAnsi(lastFrame() ?? '');
+    expect(plain).toContain('1. item-1');
+    expect(plain).not.toContain('40. item-40');
+  });
+
+  it('keeps the highlight on screen as ArrowDown walks past the viewport', async () => {
+    const { stdin, lastFrame } = mountMenu({ entries: LONG_ENTRIES, reserveRows: SQUEEZE });
+    await tick();
+    for (let i = 0; i < 30; i++) stdin.write(ARROW_DOWN);
+    await tick();
+    const plain = stripAnsi(lastFrame() ?? '');
+    // Absolute numbering, not window-relative: the printed number is the item's
+    // index in the whole menu, so a scrolled row still reads `31.`.
+    expect(plain).toContain('31. item-31');
+    expect(plain).not.toContain('1. item-1\n');
+  });
+
+  it('shows the scroll position, and reserves the row (blank) when the list fits', async () => {
+    const long = mountMenu({ entries: LONG_ENTRIES, reserveRows: SQUEEZE });
+    await tick();
+    expect(stripAnsi(long.lastFrame() ?? '')).toMatch(/items 1–\d+ of 40/);
+
+    const short = mountMenu({});
+    await tick();
+    expect(stripAnsi(short.lastFrame() ?? '')).not.toMatch(POSITION_RE);
+  });
+
+  it('digits still address ABSOLUTE indices after scrolling', async () => {
+    const { stdin, onSelect } = mountMenu({ entries: LONG_ENTRIES, reserveRows: SQUEEZE });
+    await tick();
+    for (let i = 0; i < 30; i++) stdin.write(ARROW_DOWN);
+    await tick();
+    stdin.write('3');
+    await tick();
+    // `3` names item 3 of the whole menu, not the third visible row.
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect.mock.calls[0][0]).toBe(2);
+    expect(onSelect.mock.calls[0][1].label).toBe('item-3');
+  });
+
+  it('multi-select checkbox state survives scrolling', async () => {
+    const { stdin, onMultiSelect } = mountMulti({
+      entries: LONG_ENTRIES,
+      reserveRows: SQUEEZE,
+    });
+    await tick();
+    stdin.write('1');
+    await tick();
+    for (let i = 0; i < 25; i++) stdin.write(ARROW_DOWN);
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(onMultiSelect).toHaveBeenCalledTimes(1);
+    expect(onMultiSelect.mock.calls[0][0].map((i: { label: string }) => i.label)).toEqual([
+      'item-1',
+    ]);
+  });
+
+  it('pulls a section header back in above its first visible item', async () => {
+    const { stdin, lastFrame } = mountMenu({ entries: LONG_ENTRIES, reserveRows: SQUEEZE });
+    await tick();
+    // Walk past the Group B boundary, then back up onto its first item: the
+    // window now starts exactly on `item-21`, whose header would otherwise sit
+    // one row above the top edge.
+    for (let i = 0; i < 24; i++) stdin.write(ARROW_DOWN);
+    await tick();
+    for (let i = 0; i < 4; i++) stdin.write(ARROW_UP);
+    await tick();
+    const plain = stripAnsi(lastFrame() ?? '');
+    expect(plain).toContain('21. item-21');
+    expect(plain).toContain('Group B');
+  });
+
+  it('never renders more rows than the frame has — the reported symptom', async () => {
+    // No `reserveRows`: the real full-screen budget on an 80×24 terminal.
+    const { lastFrame } = mountMenu({ entries: LONG_ENTRIES });
+    await tick();
+    const lines = stripAnsi(lastFrame() ?? '').split('\n');
+    expect(lines.length).toBeLessThanOrEqual(FALLBACK_DIMENSIONS.rows - 1);
+  });
+
+  it('stays in frame when the highlighted description soft-wraps', async () => {
+    // The description renders at marginLeft={4} inside App's paddingX={2}, so
+    // it wraps at columns - 8 = 72. Real menu content already exceeds that —
+    // `domains.ts` and the profile wizard carry 76-79 char descriptions — so a
+    // flat one-row reservation under-counts by exactly one and puts the frame
+    // back over the budget this windowing exists to hold. Measured instead.
+    const long = 'x'.repeat(150); // wraps to 3 rows at 72 columns
+    const entries = Array.from({ length: 40 }, (_, i) => ({
+      label: `item-${i + 1}`,
+      description: long,
+    }));
+    const { lastFrame, stdin } = mountMenu({ entries });
+    await tick();
+    expect(stripAnsi(lastFrame() ?? '').split('\n').length).toBeLessThanOrEqual(
+      FALLBACK_DIMENSIONS.rows - 1,
+    );
+    // …and still bounded once a description is actually on screen mid-list.
+    for (let i = 0; i < 12; i++) stdin.write(ARROW_DOWN);
+    await tick();
+    const plain = stripAnsi(lastFrame() ?? '');
+    expect(plain.split('\n').length).toBeLessThanOrEqual(FALLBACK_DIMENSIONS.rows - 1);
+    expect(plain).toContain('13. item-13');
   });
 });

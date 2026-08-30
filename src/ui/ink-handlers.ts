@@ -35,10 +35,21 @@ import type {
 export type MenuResult = { cancelled: true } | { cancelled: false; index: number; item: MenuItem };
 
 export interface InkHandlers {
-  requestMenu: (entries: MenuEntry[], options?: MenuOptions) => Promise<MenuResult>;
+  /**
+   * `signal` is optional and TRAILING so the many call sites without one are
+   * unaffected. It must be declared here, not only on App's own closure: the
+   * registered shim is typed by this interface, and while it took two
+   * parameters a signal passed through `getInkHandlers()` was silently dropped
+   * one frame short of the overlay (#266).
+   */
+  requestMenu: (
+    entries: MenuEntry[],
+    options?: MenuOptions,
+    signal?: AbortSignal,
+  ) => Promise<MenuResult>;
   requestConfirm: (input: ConfirmActionInput, signal?: AbortSignal) => Promise<boolean>;
   requestBlock: (input: BlockActionInput, signal?: AbortSignal) => Promise<BlockOutcome>;
-  requestTextInput: (options: ValuePromptOptions) => Promise<ValueResult>;
+  requestTextInput: (options: ValuePromptOptions, signal?: AbortSignal) => Promise<ValueResult>;
   requestAskUser: (
     questions: AskUserQuestion[],
     signal?: AbortSignal,

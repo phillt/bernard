@@ -26,12 +26,13 @@ import type { Key } from 'ink';
  */
 
 /**
- * `Ctrl-C` alone. Exported because two callers need it *without* `Esc`:
- * `ViewerShell` gates Esc on `escClosesViewer` (a drilled-in viewer spends Esc
- * on "back one level") but must still close unconditionally on Ctrl-C, and
- * `ModelGridOverlay`'s empty-list branch has no rows to cancel out of. Without
- * this atom both hand-roll the comparison — which is what the module exists to
- * stop.
+ * `Ctrl-C` alone. Exported because `ViewerShell` needs it *without* `Esc`: it
+ * gates Esc on `escClosesViewer` (a drilled-in viewer spends Esc on "back one
+ * level") but must still close unconditionally on Ctrl-C. Without this atom it
+ * would hand-roll the comparison — which is what the module exists to stop.
+ *
+ * It had a second caller, `ModelGridOverlay`'s empty-list branch; #266 removed
+ * that branch by making `listNavIntent` decline every key at `total === 0`.
  */
 export function isCtrlC(input: string, key: Key): boolean {
   return key.ctrl === true && input === 'c';
@@ -54,6 +55,21 @@ export function isDismissKey(input: string, key: Key): boolean {
  */
 export function isDismissKeyWithQ(input: string, key: Key): boolean {
   return isDismissKey(input, key) || input === 'q';
+}
+
+/**
+ * The keys a wrapping {@link ViewerShell} claims for itself: `Esc` (close),
+ * `Shift+Tab` (cycle tab) and `Ctrl-C`. Content layered *inside* the shell —
+ * `SettingsOverlay` — must return early on these so the shell's own `useInput`
+ * is the only handler that acts, Ink having no stop-propagation.
+ *
+ * `Ctrl-C` is behaviour-neutral today (it matches no branch in any inner
+ * handler) and is included so the predicate names what `ViewerShell` actually
+ * claims. A predicate that is a subset of the real thing is the kind that
+ * silently stops being true when the shell grows a key.
+ */
+export function isShellOwnedKey(input: string, key: Key): boolean {
+  return key.escape === true || (key.shift === true && key.tab === true) || isCtrlC(input, key);
 }
 
 /**
