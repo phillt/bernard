@@ -9,7 +9,14 @@ import { ViewerShell, viewerViewport } from './ViewerShell.js';
 import type { KeyHint } from '../hints.js';
 import { MenuRow, MENU_MARKER } from './MenuRow.js';
 import { VIEWER_TABS } from './viewer-tabs.js';
-import { navDelta, clamp, clampOffset, listPosition, wrapText } from './viewer-util.js';
+import {
+  navDelta,
+  clamp,
+  clampOffset,
+  listPosition,
+  wrapText,
+  openAtNewest,
+} from './viewer-util.js';
 import {
   KEY,
   HINT_MOVE,
@@ -48,6 +55,14 @@ const GUTTER = MENU_MARKER.length;
  * the live viewport height, so the frame can never exceed the terminal (which
  * previously made the list look endless and the right card render blank).
  *
+ * The turn list opens on the NEWEST turn (`openAtNewest`, #248). It deliberately
+ * does NOT auto-drill into it: the level-1 list is the only place the session's
+ * shape is visible, and drilling on open would spend the viewer's first Esc on
+ * "back to the list" (`escClosesViewer={false}` while drilled) — so Shift+Tab
+ * followed by Esc, the reflex for "I opened the wrong tab", would no longer
+ * close anything. Recent-first already reduces "sources for the last answer" to
+ * a single Enter, which is what the cost of an extra keystroke was buying.
+ *
  * The shell owns Shift-Tab always and Esc only at the turn list
  * (`escClosesViewer`); the inner handlers own Esc everywhere deeper.
  */
@@ -59,8 +74,13 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
 
   // `null` = turn list; a number = the index into `turns` we've drilled into.
   const [drillTarget, setDrillTarget] = useState<number | null>(null);
-  const [turnCursor, setTurnCursor] = useState(0);
-  const [turnOffset, setTurnOffset] = useState(0);
+  // Recent-first (#248). `useState`'s initializer runs once, at mount, which is
+  // exactly the intent: it is a DEFAULT, not a pin — every later cursor move
+  // goes through `moveTurn`. Recomputing the seed each render is free, and the
+  // viewer is modal over an idle agent, so `turns` cannot grow underneath it.
+  const firstTurn = openAtNewest(turns.length, viewport);
+  const [turnCursor, setTurnCursor] = useState(firstTurn.cursor);
+  const [turnOffset, setTurnOffset] = useState(firstTurn.offset);
   const [srcCursor, setSrcCursor] = useState(0);
   const [srcOffset, setSrcOffset] = useState(0);
   // When drilled in: 'list' navigates citations, 'content' scrolls the card.

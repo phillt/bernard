@@ -126,3 +126,28 @@ export function wrapText(s: string, width: number): string[] {
   }
   return out;
 }
+
+/**
+ * Where a turn list should OPEN — cursor on the newest turn, window scrolled so
+ * that row is actually on screen (#248).
+ *
+ * Both drill-down viewers list turns in append order, which is oldest-first
+ * (`agent.ts` pushes each completed turn onto the end), so a cursor seeded at 0
+ * landed on the FIRST turn of the session — for anyone with a history, the least
+ * relevant row, and the newest one reachable only by knowing that `G` jumps to
+ * the end. "Show me the sources for what you just said" is the reason the viewer
+ * is opened at all.
+ *
+ * The offset comes from {@link clampOffset} — the same clamping the arrow keys
+ * use — rather than a second copy of the arithmetic: seeding `cursor = total-1`
+ * with `offset = 0` would highlight a row scrolled off the bottom of the window,
+ * so the first painted frame would show no selection at all.
+ *
+ * Shared rather than written twice because `SourcesViewer` and `ContextViewer`
+ * are near-line-for-line siblings; a local copy in each is how one of them ends
+ * up recent-first and the other doesn't.
+ */
+export function openAtNewest(total: number, size: number): { cursor: number; offset: number } {
+  const cursor = Math.max(0, total - 1);
+  return { cursor, offset: clampOffset(cursor, 0, size, total) };
+}

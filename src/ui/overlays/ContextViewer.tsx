@@ -12,7 +12,14 @@ import { ViewerShell, viewerViewport } from './ViewerShell.js';
 import type { KeyHint } from '../hints.js';
 import { MenuRow, MENU_MARKER } from './MenuRow.js';
 import { VIEWER_TABS } from './viewer-tabs.js';
-import { navDelta, clamp, clampOffset, listPosition, wrapText } from './viewer-util.js';
+import {
+  navDelta,
+  clamp,
+  clampOffset,
+  listPosition,
+  wrapText,
+  openAtNewest,
+} from './viewer-util.js';
 import {
   KEY,
   HINT_MOVE,
@@ -60,8 +67,13 @@ export function ContextViewer({ agent, onClose, onCycleTab }: ContextViewerProps
   const turns = useMemo(() => agent.getTurnContext(), [agent]);
 
   const [drilled, setDrilled] = useState(false);
-  const [turnCursor, setTurnCursor] = useState(0);
-  const [turnOffset, setTurnOffset] = useState(0);
+  // Recent-first (#248) — the same seed, from the same helper, as
+  // `SourcesViewer`. See `openAtNewest` for why the offset is derived rather
+  // than left at 0, and the `SourcesViewer` header for why neither viewer
+  // auto-drills on open.
+  const firstTurn = openAtNewest(turns.length, viewport);
+  const [turnCursor, setTurnCursor] = useState(firstTurn.cursor);
+  const [turnOffset, setTurnOffset] = useState(firstTurn.offset);
   const [secCursor, setSecCursor] = useState(0);
   const [secOffset, setSecOffset] = useState(0);
   // When drilled in: 'list' navigates sections, 'content' scrolls the body.

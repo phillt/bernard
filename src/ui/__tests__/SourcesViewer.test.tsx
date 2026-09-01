@@ -97,6 +97,8 @@ describe('<SourcesViewer> two-panel browser', () => {
       createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS) }),
     );
     await tick();
+    stdin.write('g'); // recent-first (#248): walk back to turn 1, this fixture's rich turn.
+    await tick();
     stdin.write(ENTER);
     await tick();
     const frame = lastFrame() ?? '';
@@ -116,6 +118,8 @@ describe('<SourcesViewer> two-panel browser', () => {
     const { stdin, lastFrame } = render(
       createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS) }),
     );
+    await tick();
+    stdin.write('g'); // recent-first (#248): walk back to turn 1, this fixture's rich turn.
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -182,6 +186,8 @@ describe('<SourcesViewer> two-panel browser', () => {
     const { stdin, lastFrame } = render(
       createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS) }),
     );
+    await tick();
+    stdin.write('g'); // recent-first (#248): walk back to turn 1, this fixture's rich turn.
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -394,7 +400,7 @@ describe('<SourcesViewer> two-panel browser', () => {
     expect(frame).not.toContain('not cited');
   });
 
-  it('windows a long turn history and scrolls to reveal later turns', async () => {
+  it('opens on the newest turn, with the window scrolled to show it (#248)', async () => {
     const turns: TurnProvenance[] = Array.from({ length: 30 }, (_, i) => ({
       turnIndex: i,
       userInput: `req-${i}`,
@@ -406,12 +412,26 @@ describe('<SourcesViewer> two-panel browser', () => {
     }));
     const { stdin, lastFrame } = renderViewer(makeAgent(turns));
     let frame = lastFrame() ?? '';
-    expect(frame).toContain('Turn 1 ·');
-    expect(frame).not.toContain('Turn 30 ·');
+    // Turn 30 is both rendered (the window scrolled to it) and highlighted (the
+    // cursor is on it) — an unscrolled window would satisfy neither.
+    expect(frame).toContain('Turn 30 ·');
+    expect(frame).toMatch(/> Turn 30 ·/);
+    expect(frame).not.toContain('Turn 1 ·');
+    // ...and `g` still walks back to the oldest turn.
     await tick();
-    stdin.write('G'); // jump to last turn
+    stdin.write('g');
     await tick();
     frame = lastFrame() ?? '';
-    expect(frame).toContain('Turn 30 ·');
+    expect(frame).toContain('Turn 1 ·');
+    expect(frame).not.toContain('Turn 30 ·');
+  });
+
+  it('drills into the newest turn on a single Enter (#248)', async () => {
+    const { stdin, lastFrame } = renderViewer(makeAgent(REGRESSION_TURNS));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    // Turn 2's only source — reached with one keystroke, no `G` first.
+    expect(lastFrame() ?? '').toContain('shell:cargo --version');
   });
 });
