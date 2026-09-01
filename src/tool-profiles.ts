@@ -28,6 +28,15 @@ export interface ToolProfileBadExample {
 export interface ToolProfile {
   toolName: string;
   category?: string;
+  /**
+   * The older profile key this one was seeded from, when a key rename carried
+   * a learned history forward (#413).
+   *
+   * Recorded so the prompt builder can suppress the superseded profile without
+   * deleting it: the legacy file stays on disk for rollback, but injecting both
+   * would double-count a tool's history and spend the prompt budget twice.
+   */
+  supersedes?: string;
   guidelines: string[];
   goodExamples: ToolProfileExample[];
   badExamples: ToolProfileBadExample[];
@@ -223,10 +232,35 @@ export class ToolProfileStore {
     }
   }
 
-  getOrCreate(toolKey: string): ToolProfile {
+  /**
+   * The profile for `toolKey`, creating an empty one if none exists.
+   *
+   * `seedFrom` carries a learned history across a key rename. MCP tool keys
+   * changed shape when tools were namespaced per server (#413), and the
+   * profiles on disk — 109 on one real install, including `browser_click.json`
+   * and `brave_search.json` — are keyed by the OLD bare name. Rather than
+   * rewrite user data, a first create under the new key copies the old
+   * profile's guidelines, examples and counters forward.
+   *
+   * The legacy file is deliberately left on disk: it costs nothing (the orphan
+   * filter in {@link buildToolProfilesPrompt} keeps it out of the prompt) and
+   * it makes the change rollback-safe.
+   */
+  getOrCreate(toolKey: string, opts: { seedFrom?: string } = {}): ToolProfile {
     const existing = this.get(toolKey);
     if (existing) return existing;
     const now = new Date().toISOString();
+    const legacy = opts.seedFrom && opts.seedFrom !== toolKey ? this.get(opts.seedFrom) : undefined;
+    if (legacy) {
+      return {
+        ...legacy,
+        // Re-stamped, since `save()` derives the path from this field.
+        toolName: toolKey,
+        supersedes: opts.seedFrom,
+        createdAt: now,
+        updatedAt: now,
+      };
+    }
     return {
       toolName: toolKey,
       guidelines: [],
@@ -237,6 +271,23 @@ export class ToolProfileStore {
       errorCount: 0,
       successCount: 0,
     };
+  }
+
+  /**
+   * Ensures `toolKey` has a profile, seeding it from `seedFrom` the first time
+   * if that legacy profile exists and this one does not yet.
+   *
+   * A single call rather than a `seedFrom` parameter on each of the four
+   * `record*` methods: seeding is a one-shot migration concern and the record
+   * methods should not each have to remember it. No-ops once the new profile
+   * exists, which is after the first recorded outcome.
+   */
+  ensureSeeded(toolKey: string, seedFrom: string | undefined): void {
+    if (!seedFrom || seedFrom === toolKey) return;
+    if (this.get(toolKey)) return;
+    const legacy = this.get(seedFrom);
+    if (!legacy) return;
+    this.save(this.getOrCreate(toolKey, { seedFrom }));
   }
 
   save(profile: ToolProfile): void {
@@ -413,18 +464,47 @@ function dismissedTotal(profile: ToolProfile): number {
  * (most errors first) and the block is capped at
  * {@link MAX_PROFILE_PROMPT_CHARS}.
  *
- * NOT filtered by the live tool registry, deliberately. Profiles are never
- * deleted, so a removed MCP server leaves its tools' profiles behind forever,
- * and this sorts by `errorCount` descending — a dead tool could out-rank live
- * ones at the character budget. Filtering needs to tell an orphaned MCP profile
- * from a built-in one, which needs the `ToolMeta.category` link proposed in
- * #377; and the registry is not in scope here anyway, since `agent.ts`
- * pre-renders this prompt before tools are built. Narrower than it looks: a
- * tool that no longer exists cannot be called, so it can only carry dismissed
- * counts it accumulated before its server was removed.
+ * Filtered by `liveKeys` when the caller supplies it (#413) — see
+ * {@link filterLiveProfiles}. This used to be unfiltered on the grounds that
+ * telling an orphaned MCP profile from a built-in needed the `ToolMeta.category`
+ * link proposed in #377, and that "the registry is not in scope here anyway".
+ * The second half was simply wrong: the live call site is
+ * `framework/agents/main.ts`, which has `ctx`. The first half is answered by
+ * the `mcp.` key prefix, which namespacing made meaningful. Removing a server's
+ * profiles from disk is still #377's job; this only stops them being injected.
  */
-export function buildToolProfilesPrompt(store: ToolProfileStore): string {
-  const all = store.list();
+/**
+ * Drops profiles that can no longer be acted on.
+ *
+ * Two kinds. A profile **superseded** by a rename (#413) is always dropped —
+ * its history now lives under the new key, and injecting both would
+ * double-count it. An `mcp.*` profile whose tool is not in `liveKeys` is
+ * dropped when that set is supplied: after namespacing, every MCP profile
+ * written under the old bare key names a tool the model can no longer call.
+ *
+ * This matters more than it looks. The block is NOT otherwise filtered by the
+ * registry, and it sorts by `errorCount` descending — so a high-error orphan
+ * outranks live tools and can crowd them out of `MAX_PROFILE_PROMPT_CHARS`.
+ * Non-MCP profiles are left alone: `liveKeys` is a single dispatch's registry,
+ * and a built-in absent from a worker surface is still a real tool elsewhere.
+ */
+function filterLiveProfiles(
+  profiles: ToolProfile[],
+  liveKeys?: ReadonlySet<string>,
+): ToolProfile[] {
+  const superseded = new Set(profiles.map((p) => p.supersedes).filter(Boolean) as string[]);
+  return profiles.filter((p) => {
+    if (superseded.has(p.toolName)) return false;
+    if (!liveKeys || !p.toolName.startsWith('mcp.')) return true;
+    return liveKeys.has(p.toolName.slice('mcp.'.length));
+  });
+}
+
+export function buildToolProfilesPrompt(
+  store: ToolProfileStore,
+  opts: { liveKeys?: ReadonlySet<string> } = {},
+): string {
+  const all = filterLiveProfiles(store.list(), opts.liveKeys);
   if (!snapshotTaken) {
     for (const p of all) {
       dismissedSnapshot.set(

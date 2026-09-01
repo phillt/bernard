@@ -14,6 +14,7 @@ import type { ProvenanceStore } from '../provenance.js';
 import type { ToolMeta } from '../framework/tools/types.js';
 import { isDangerous, isSafelisted } from './shell.js';
 import { permissionKeyFor } from '../tool-permissions.js';
+import { parseMCPToolName } from '../mcp-names.js';
 import { resolveGrant, type ToolNameAliasResolver } from '../permissions/engine.js';
 import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js';
 
@@ -31,6 +32,14 @@ function stripFailureHint(snippet: string): string {
 /**
  * Returns the profile key for a given tool invocation. Shell commands are
  * classified into sub-categories; MCP tools are prefixed with `mcp.`.
+ *
+ * The MCP branch used to test `toolName.includes('__')` against the
+ * `@ai-sdk/mcp` convention Bernard did not actually follow — it registered
+ * bare names, so the branch never fired and MCP profiles were written
+ * indistinguishably from built-ins. Since #413 the registry key really is
+ * namespaced, so the branch is live and the key is honest about which server a
+ * profile belongs to. Existing bare-keyed profiles are carried forward by
+ * `getOrCreate`'s `seedFrom`, not rewritten.
  */
 function resolveProfileKey(toolName: string, args: unknown): string {
   if (toolName === 'shell' && args && typeof args === 'object') {
@@ -39,11 +48,19 @@ function resolveProfileKey(toolName: string, args: unknown): string {
       return `shell.${classifyShellCommand(cmd)}`;
     }
   }
-  // MCP tools follow the @ai-sdk/mcp naming convention: serverName__toolName
-  if (toolName.includes('__')) {
+  if (parseMCPToolName(toolName)) {
     return `mcp.${toolName}`;
   }
   return toolName;
+}
+
+/**
+ * The legacy profile key this call's history would have been stored under
+ * before #413 — the bare tool name — or `undefined` for a tool whose key did
+ * not change.
+ */
+function legacyProfileKey(toolName: string): string | undefined {
+  return parseMCPToolName(toolName)?.tool;
 }
 
 function safeSerialize(args: unknown): string {
@@ -67,6 +84,17 @@ function recordOutcome(
   errorSnippet: string | undefined,
 ): void {
   try {
+    // Carry a pre-#413 bare-keyed history forward on first write under the new
+    // namespaced key. No-op for every non-MCP tool and after the first record.
+    //
+    // Its own try: seeding is a best-effort migration, recording is the actual
+    // job. Sharing the outer catch meant any failure here — including a store
+    // that predates the method — silently skipped the record that followed.
+    try {
+      profileStore.ensureSeeded?.(profileKey, legacyProfileKey(toolName));
+    } catch {
+      // A carried-over history is a nicety; never lose the outcome over it.
+    }
     if (errorSnippet !== undefined) {
       // Strip the wrapper-shim's `[failure: <category>] ...` hint before
       // classification + storage. Otherwise the recorded bad-example bytes

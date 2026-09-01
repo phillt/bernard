@@ -1133,3 +1133,118 @@ describe('buildToolProfilesPrompt', () => {
     expect(output.length).toBeLessThanOrEqual(MAX_PROFILE_PROMPT_CHARS);
   });
 });
+
+// #413: MCP tool keys changed shape. 109 profiles on one real install were
+// keyed by the old bare name, so learned history had to survive the rename
+// without rewriting anything on disk.
+describe('profile continuity across a key rename (#413)', () => {
+  let store: ToolProfileStore;
+
+  /** Present exactly these profiles on the mocked filesystem. */
+  function onDisk(...profiles: ToolProfile[]): void {
+    vi.mocked(fs.readdirSync).mockReturnValue(profiles.map((p) => `${p.toolName}.json`) as any);
+    // `get()` is a readFileSync + JSON.parse in a try/catch, so an absent
+    // profile has to THROW here — returning '' would parse-fail anyway, but
+    // throwing is what the real fs does and keeps the intent readable.
+    vi.mocked(fs.readFileSync).mockImplementation((path: any) => {
+      // Exact filename, not a suffix: `mcp.pw_ab12cd__browser_click.json`
+      // ends with `browser_click.json`, which would resolve the new key to the
+      // legacy profile and hide the very seeding this asserts.
+      const hit = profiles.find((p) => String(path).endsWith(`/${p.toolName}.json`));
+      if (!hit) throw new Error('ENOENT');
+      return JSON.stringify(hit);
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetDismissedSnapshot();
+    store = new ToolProfileStore();
+    // The constructor seeds ~9 default profiles; only writes made by the code
+    // under test should be visible to these assertions.
+    vi.mocked(fsUtils.atomicWriteFileSync).mockClear();
+  });
+
+  it('seeds a new key from the legacy profile, leaving the legacy file in place', () => {
+    const legacy = makeProfile({
+      toolName: 'browser_click',
+      badExamples: [{ summary: 's', args: '{}', errorSnippet: 'boom', fix: 'f' }],
+      successCount: 7,
+      errorCount: 1,
+    });
+    onDisk(legacy);
+
+    store.ensureSeeded('mcp.pw_ab12cd__browser_click', 'browser_click');
+
+    const written = vi.mocked(fsUtils.atomicWriteFileSync).mock.calls.at(-1);
+    const seeded = JSON.parse(written![1] as string);
+    expect(seeded.toolName).toBe('mcp.pw_ab12cd__browser_click');
+    expect(seeded.supersedes).toBe('browser_click');
+    expect(seeded.badExamples).toHaveLength(1);
+    expect(seeded.successCount).toBe(7);
+    // Rollback-safe: the legacy file is never unlinked or rewritten.
+    expect(written![0]).toContain('mcp.pw_ab12cd__browser_click');
+  });
+
+  it('does not overwrite a profile that already exists under the new key', () => {
+    onDisk(
+      makeProfile({ toolName: 'browser_click', successCount: 7 }),
+      makeProfile({ toolName: 'mcp.pw_ab12cd__browser_click', successCount: 0 }),
+    );
+
+    store.ensureSeeded('mcp.pw_ab12cd__browser_click', 'browser_click');
+
+    expect(fsUtils.atomicWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when there is no legacy profile to carry', () => {
+    onDisk();
+    store.ensureSeeded('mcp.pw_ab12cd__browser_click', 'browser_click');
+    expect(fsUtils.atomicWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it('never injects both a profile and the one it superseded', () => {
+    onDisk(
+      makeProfile({ toolName: 'browser_click', guidelines: ['legacy guidance'] }),
+      makeProfile({
+        toolName: 'mcp.pw_ab12cd__browser_click',
+        guidelines: ['legacy guidance'],
+        supersedes: 'browser_click',
+      }),
+    );
+
+    const out = buildToolProfilesPrompt(store, {
+      liveKeys: new Set(['pw_ab12cd__browser_click']),
+    });
+
+    expect(out).toContain('mcp.pw_ab12cd__browser_click');
+    expect(out).not.toContain('### browser_click');
+  });
+
+  // The block sorts by errorCount desc and was never registry-filtered, so a
+  // dead high-error profile outranks live tools at the character budget.
+  it('omits an mcp profile whose tool is not in the live registry', () => {
+    onDisk(
+      makeProfile({ toolName: 'mcp.gone_ff00aa__old_tool', guidelines: ['dead'], errorCount: 99 }),
+      makeProfile({ toolName: 'mcp.pw_ab12cd__browser_click', guidelines: ['live'] }),
+    );
+
+    const out = buildToolProfilesPrompt(store, {
+      liveKeys: new Set(['pw_ab12cd__browser_click']),
+    });
+
+    expect(out).toContain('mcp.pw_ab12cd__browser_click');
+    expect(out).not.toContain('old_tool');
+  });
+
+  // `liveKeys` is one dispatch's registry, and a built-in withheld from a
+  // worker surface is still a real tool elsewhere — so the filter is scoped to
+  // `mcp.*` keys only. (Asserted on the rendered label, since `shell.git`
+  // prints as "shell (git commands)".)
+  it('leaves non-mcp profiles alone even when absent from liveKeys', () => {
+    onDisk(makeProfile({ toolName: 'shell.git', guidelines: ['use --no-pager'] }));
+    const out = buildToolProfilesPrompt(store, { liveKeys: new Set<string>() });
+    expect(out).toContain('shell (git commands)');
+    expect(out).toContain('use --no-pager');
+  });
+});
