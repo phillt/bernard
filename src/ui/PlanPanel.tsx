@@ -54,7 +54,7 @@ function stepIcon(status: StepStatus, colors: ThemeColors): { icon: string; colo
  * step-count cap by design (full panel)" and predicted the bite; it was
  * understated on both counts. Steps used to `wrap="wrap"` with a hanging
  * indent, and a description is capped per FIELD (400 chars) not per row, so a
- * single maximal step was 7 rows and a 10-step plan of them ~72 — three
+ * single maximal step was 6 rows and a 10-step plan of them 63 — nearly three
  * terminal-heights inside a `height={rows}` frame, which `TranscriptViewport`
  * absorbs by shrinking toward zero. Steps now truncate to exactly one row and
  * the list is windowed on the `in_progress` step. All the arithmetic lives in
@@ -78,7 +78,10 @@ export function PlanPanel({ agent, maxRows, reserveColumns }: PlanPanelProps) {
     });
   }, [agent]);
 
-  if (steps.length === 0) return null;
+  // `maxRows === 0` is the caller saying the frame has no room to spare — see
+  // `planPanelMaxRows`, which yields the whole panel rather than let the prompt
+  // box exceed a short terminal. Not an error state: the user can still type.
+  if (steps.length === 0 || maxRows <= 0) return null;
   const { done, total } = summarizePlan(steps);
   // Fixed-width gutter cells so the description column aligns across rows and
   // stays deterministic regardless of how the terminal measures the status

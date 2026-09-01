@@ -13,7 +13,7 @@ import { planPanelMaxRows } from './plan-window.js';
  * `BoundedLine`'s `reserveColumns`: the border belongs to this component, so
  * the child must not be guessing at it.
  */
-const PROMPT_BORDER_COLUMNS = 2;
+export const PROMPT_BORDER_COLUMNS = 2;
 
 /**
  * The row/column budget `Prompt` grants whatever renders inside its border
@@ -105,9 +105,12 @@ export function Prompt({
   const colors = getThemeColors();
   // Read here rather than inside the child so the whole box's height is one
   // readable expression: `planPanelMaxRows(rows)` above + `BoundedLine`'s
-  // `max(3, min(10, floor(rows / 3)))` below + this border. The two caps stay
-  // INDEPENDENT — see `plan-window.ts` for why a shared pool would need both
-  // children to lift their demand up here — but the plan's is the smaller one.
+  // `max(3, min(10, floor(rows / 3)))` below, PLUS its two `▲/▼` affordance
+  // rows, which sit outside its own cap — plus this border and the marginTop,
+  // which is `PROMPT_CHROME_ROWS`. The two caps stay INDEPENDENT — see
+  // `plan-window.ts` for why a shared pool would need both children to lift
+  // their demand up here — but they are jointly bounded there, because the
+  // fractions alone are not a bound once both floors are counted.
   const { rows } = useDimensionsCtx();
 
   // Computed every render rather than memoized: `dynamicCommands` is a stable

@@ -5,6 +5,7 @@ import {
   NOTE_SEPARATOR,
   PLAN_CHROME_ROWS,
   PLAN_GUTTER_COLUMNS,
+  PROMPT_CHROME_ROWS,
   activeStepIndex,
   planListRows,
   planPanelMaxRows,
@@ -41,10 +42,41 @@ describe('planPanelMaxRows', () => {
     }
   });
 
-  it('never returns less than chrome plus one step', () => {
-    for (const rows of [1, 2, 5, 8, 12]) {
-      expect(planPanelMaxRows(rows)).toBeGreaterThanOrEqual(PLAN_CHROME_ROWS + 1);
-      expect(planListRows(planPanelMaxRows(rows))).toBeGreaterThanOrEqual(1);
+  it('is either zero or big enough to be worth drawing — never in between', () => {
+    // A header with no step under it is worse than no panel, so the cap has a
+    // floor. The floor is what makes the joint bound below non-trivial: it
+    // cannot be satisfied by shaving the panel down a row at a time.
+    for (let rows = 1; rows <= 120; rows++) {
+      const got = planPanelMaxRows(rows);
+      if (got === 0) continue;
+      expect(got).toBeGreaterThanOrEqual(PLAN_CHROME_ROWS + 1);
+      expect(planListRows(got)).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('yields the panel entirely on a terminal too short to hold both', () => {
+    // Measured before the joint bound existed: at 12 rows the panel took 4 and
+    // the input 6, which with 3 rows of border and margin is 13 of 12 — the
+    // prompt box exceeded the frame on its own, which is the failure class
+    // (#392/#396) this cap exists to end.
+    for (const rows of [1, 5, 10, 12]) expect(planPanelMaxRows(rows)).toBe(0);
+    expect(planPanelMaxRows(24)).toBeGreaterThan(0);
+  });
+
+  it('leaves the prompt box inside the frame at every terminal height', () => {
+    // The bound the two caps did not have. Neither fraction is wrong on its own
+    // — a quarter plus a third is seven twelfths — but both have floors, and at
+    // a short enough terminal the floors dominate the fractions.
+    //
+    // From 8 rows up. Below that the *input's* own floor — 3 rows plus 2
+    // affordance rows plus 3 of border and margin — exceeds the frame with the
+    // plan already yielded to 0, so there is nothing this cap can give back.
+    // That floor is `BoundedLine`'s (#355) and predates this change; an 8-row
+    // terminal is broken either way and is not what #358 is about.
+    for (let rows = 8; rows <= 200; rows++) {
+      const input = Math.max(3, Math.min(10, Math.floor(rows / 3))) + 2; // affordances
+      const box = planPanelMaxRows(rows) + input + PROMPT_CHROME_ROWS;
+      expect(box).toBeLessThanOrEqual(rows);
     }
   });
 
@@ -54,6 +86,8 @@ describe('planPanelMaxRows', () => {
   });
 
   it('is monotonic in terminal height', () => {
+    // Including across the yield threshold: the panel appears once and never
+    // flickers back out as the terminal grows.
     let prev = 0;
     for (let rows = 1; rows <= 120; rows++) {
       const got = planPanelMaxRows(rows);

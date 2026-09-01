@@ -14,9 +14,9 @@ import { clampOffset, listPosition } from './overlays/viewer-util.js';
  * **The defect is two axes, not one.** `PlanStore.create` / `add` push without
  * limit and the `plan` tool's schema declares no `.max()`, so the step count is
  * unbounded; and `STEP_FIELD_MAX` caps a description at 400 characters per
- * FIELD, not per row, so one maximal step soft-wraps to 7 rows (8 with a
- * cancelled note) in the ~66 columns the panel gets at 80. Capping only the
- * count leaves a 3-step plan able to occupy 21 rows. The horizontal cap is also
+ * FIELD, not per row, so one maximal step soft-wraps to 6 rows (7 with a
+ * cancelled note) in the 69-70 columns the panel gets at 80. Capping only the
+ * count leaves a 3-step plan able to occupy 18 rows. The horizontal cap is also
  * what makes windowing over step INDICES valid — one step is one row, so
  * `clampOffset` / `listPosition` apply unmodified — which is the move
  * `HelpOverlay` made in #392 with `descriptionWidth`.
@@ -28,11 +28,17 @@ import { clampOffset, listPosition } from './overlays/viewer-util.js';
  * breaks. Same failure class as #392 / #396.
  *
  * Deliberately NOT `line-geometry.windowBuffer`: that takes a single string
- * with a character cursor and rebases the index into a pre-wrapped slice, wraps
- * positionally rather than by word, and PINS the cursor to the last visible
- * row. All three are right for an input and wrong for a step list, whose
- * implicit cursor is the `in_progress` step and should stay wherever in the
- * window it already sits.
+ * with a character cursor and rebases the index into a pre-wrapped slice, and
+ * wraps positionally rather than by word. Both are right for an input and wrong
+ * for a step list, whose unit is a whole step and whose implicit cursor is the
+ * `in_progress` step rather than a character offset.
+ *
+ * Both window on a cursor; they differ in where that cursor is held. An input
+ * pins to the LAST visible row, because that is where the next keystroke lands.
+ * A plan pins the active step into view wherever the clamp puts it — and
+ * recomputes that from the steps on every render rather than carrying an
+ * offset, because the panel takes no scroll input, so there is no user-chosen
+ * position that a recompute could throw away.
  *
  * Deliberately NOT `menu-geometry.overlayViewport` / `viewer-util.
  * viewerFrameHeight` either: both baseline at `rows - 1` because the component
@@ -77,10 +83,48 @@ const MAX_PANEL_ROWS = PLAN_CHROME_ROWS + 6;
  * gap is wider than 1/3 vs. 1/4 makes it look, because the plan pays its three
  * chrome rows out of this budget while the input's two affordance rows are
  * siblings outside its own cap.
+ *
+ * **The fractions alone are not a bound, and that is the trap this function
+ * exists to close.** A quarter plus a third is seven twelfths, which fits — but
+ * both have *floors* (4 here, 3 + 2 affordance rows there), and at a short
+ * enough terminal the floors dominate the fractions: at 12 rows the panel would
+ * take 4 and the input 6, which with 3 rows of border and margin is 13 of 12.
+ * The prompt box would exceed the frame on its own, which is precisely the
+ * failure class (#392/#396) that bounding the panel is meant to end.
+ *
+ * So the plan yields. It is the lower-priority consumer, and it is the one that
+ * can be absent without breaking the REPL — a user can still type. Below the
+ * height where a minimum panel plus the input plus chrome plus a usable
+ * transcript all fit, this returns **0** and `PlanPanel` renders nothing. That
+ * is a real behaviour change at ≤ ~14 rows, and the honest one: a plan panel
+ * that squeezes the transcript to zero is worse than no plan panel.
  */
 export function planPanelMaxRows(termRows: number): number {
-  return Math.max(MIN_PANEL_ROWS, Math.min(MAX_PANEL_ROWS, Math.floor(termRows / 4)));
+  const quarter = Math.max(MIN_PANEL_ROWS, Math.min(MAX_PANEL_ROWS, Math.floor(termRows / 4)));
+  // What the rest of the frame has already claimed: the input at its own cap
+  // plus its two affordance rows, the box border, `Prompt`'s marginTop, and a
+  // floor under the transcript so it never reaches zero.
+  const spoken = inputRegionRows(termRows) + PROMPT_CHROME_ROWS + MIN_TRANSCRIPT_ROWS;
+  const room = termRows - spoken;
+  return room >= MIN_PANEL_ROWS ? Math.min(quarter, room) : 0;
 }
+
+/**
+ * `BoundedLine`'s vertical budget, restated here so the sum above can be
+ * checked. Duplicating a constant is the lesser evil: the alternative is
+ * `plan-window.ts` importing a React component's module for one number, and the
+ * pairing is pinned by `plan-window.test.ts` so the two cannot drift silently.
+ */
+function inputRegionRows(termRows: number): number {
+  return Math.max(3, Math.min(10, Math.floor(termRows / 3))) + BOUNDED_LINE_AFFORDANCE_ROWS;
+}
+
+/** `▲ N more` and `▼ N more`, which sit outside `BoundedLine`'s own cap. */
+const BOUNDED_LINE_AFFORDANCE_ROWS = 2;
+/** The round border's two rows plus `Prompt`'s `marginTop={1}`. */
+export const PROMPT_CHROME_ROWS = 3;
+/** Below this the transcript is not worth calling one. */
+const MIN_TRANSCRIPT_ROWS = 3;
 
 /** Step rows left over once {@link PLAN_CHROME_ROWS} is paid. */
 export function planListRows(maxRows: number): number {
@@ -142,8 +186,10 @@ export const PLAN_GUTTER_COLUMNS = 2 + 2 + 1;
  * as `BoundedLine`'s prop of that name.
  *
  * Floored at 8 rather than 1: below that the row is illegible anyway, and a
- * hard floor keeps a pathologically narrow terminal from producing a width of
- * zero that `truncate` would turn into a bare ellipsis.
+ * hard floor keeps a pathologically narrow terminal from reaching the widths
+ * where `truncate` stops being a truncation — at `max === 1` it returns a bare
+ * `…`, and at `max <= 0` it returns the string all but its last character, i.e.
+ * WIDER than the budget it was given.
  */
 export function stepTextWidth(
   columns: number,

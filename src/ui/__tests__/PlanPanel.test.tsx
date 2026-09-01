@@ -7,7 +7,8 @@ import type { Agent } from '../../agent.js';
 import { PlanStore } from '../../plan-store.js';
 import { FALLBACK_DIMENSIONS } from '../useDimensions.js';
 import { PLAN_CHROME_ROWS, planListRows, planPanelMaxRows } from '../plan-window.js';
-import { tick } from './_keys.js';
+import { PROMPT_BORDER_COLUMNS } from '../Prompt.js';
+import { frameRows, tick } from './_keys.js';
 
 function makeAgent(store: PlanStore): Agent {
   return {
@@ -28,7 +29,6 @@ function makeAgent(store: PlanStore): Agent {
  * is what production computes for a 24-row terminal.
  */
 const DEFAULT_MAX_ROWS = planPanelMaxRows(FALLBACK_DIMENSIONS.rows);
-const PROMPT_BORDER_COLUMNS = 2;
 
 function mountPanel(store: PlanStore, maxRows: number = DEFAULT_MAX_ROWS) {
   return render(
@@ -39,8 +39,6 @@ function mountPanel(store: PlanStore, maxRows: number = DEFAULT_MAX_ROWS) {
     }),
   );
 }
-
-const frameRows = (frame: string | undefined) => stripAnsi(frame ?? '').split('\n').length;
 
 /** A description long enough to soft-wrap several times if nothing bounds it. */
 const LONG = 'x'.repeat(400);
@@ -121,7 +119,7 @@ describe('<PlanPanel>', () => {
 /**
  * The bound (#358). Before this the panel had NO height assertion at all and no
  * test used more than three short steps, so both axes of the defect — an
- * uncapped step count and a 400-character description wrapping to 7 rows —
+ * uncapped step count and a 400-character description wrapping to 6 rows —
  * were free to regress silently.
  */
 describe('<PlanPanel> height bound', () => {
@@ -132,8 +130,8 @@ describe('<PlanPanel> height bound', () => {
       Array.from({ length: 10 }, (_, i) => `${i}-${LONG}`),
     );
     const { lastFrame } = mountPanel(store);
-    // Unbounded this was ~72 rows: 10 steps × 7 wrapped rows + chrome, three
-    // terminal-heights inside a `height={rows}` frame.
+    // Unbounded this was 63 rows: 10 steps × 6 wrapped rows + chrome, nearly
+    // three terminal-heights inside a `height={rows}` frame.
     expect(frameRows(lastFrame())).toBeLessThanOrEqual(DEFAULT_MAX_ROWS);
   });
 

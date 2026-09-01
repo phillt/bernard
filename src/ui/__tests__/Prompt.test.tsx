@@ -33,6 +33,7 @@ import {
   SHIFT_ENTER_CSIU,
   META_ENTER,
   tick,
+  frameRows,
 } from './_keys.js';
 
 const TAB = '\t';
@@ -568,8 +569,6 @@ describe('<Prompt> with a pinned plan inside the border', () => {
     );
   }
 
-  const frameRows = (frame: string | undefined) => stripAnsi(frame ?? '').split('\n').length;
-
   it('renders the plan and the input inside one box', async () => {
     const { stdin, lastFrame } = mountWithPlan(3);
     await tick();
@@ -582,7 +581,8 @@ describe('<Prompt> with a pinned plan inside the border', () => {
 
   /**
    * Worst case on both axes at once: a 12-step plan of maximal descriptions
-   * above a 30-line pasted buffer. Unbounded the plan alone was ~87 rows.
+   * above a 30-line pasted buffer. Unbounded the plan alone was 75 rows
+   * (12 steps x 6 wrapped rows + 3 of chrome).
    *
    * The budget is the sum of the two INDEPENDENT caps plus this component's own
    * chrome, which is the readable expression the render-prop exists to make

@@ -1,5 +1,8 @@
+import stripAnsi from 'strip-ansi';
+
 /**
- * Keystroke and timing helpers for ink-testing-library tests.
+ * Keystroke, timing and frame-measurement helpers for ink-testing-library
+ * tests.
  *
  * `ink-testing-library` writes to a synthetic stdin synchronously, but Ink's
  * `useInput` subscription needs a microtask tick before the handler fires.
@@ -51,3 +54,18 @@ export const ALT_LEFT = '\x1b[1;3D';
 export const ALT_RIGHT = '\x1b[1;3C';
 export const CTRL_LEFT = '\x1b[1;5D';
 export const CTRL_RIGHT = '\x1b[1;5C';
+
+/**
+ * Rows a rendered frame actually occupies.
+ *
+ * Three height-bound suites (`HelpOverlay`, `Prompt`, `PlanPanel`) had their
+ * own copy of this, and all three shared one inaccuracy: `''.split('\n')` is
+ * `['']`, so a component that rendered NOTHING measured as one row. That is
+ * load-bearing since #358 — `planPanelMaxRows` returns 0 on a terminal too
+ * short to hold both children, and a panel that correctly renders nothing has
+ * to measure as 0 or the bound it is being held to is unsatisfiable.
+ */
+export function frameRows(frame: string | undefined): number {
+  const text = stripAnsi(frame ?? '');
+  return text === '' ? 0 : text.split('\n').length;
+}
