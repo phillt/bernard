@@ -135,12 +135,11 @@ describe('pruneFileGroupsByMtime', () => {
 
     pruneFileGroupsByMtime(dir, 2, groupOf);
 
-    expect(listFilesByMtime(dir).map((f) => f.name).sort()).toEqual([
-      's0-mcp-stderr.log',
-      's0.jsonl',
-      's3-mcp-stderr.log',
-      's3.jsonl',
-    ]);
+    expect(
+      listFilesByMtime(dir)
+        .map((f) => f.name)
+        .sort(),
+    ).toEqual(['s0-mcp-stderr.log', 's0.jsonl', 's3-mcp-stderr.log', 's3.jsonl']);
   });
 
   it('leaves ungrouped files alone and never throws on a missing dir', () => {
