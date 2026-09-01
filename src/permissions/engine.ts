@@ -13,6 +13,11 @@
  */
 
 import type { PermissionRule } from '../tool-permissions.js';
+// Declared in the leaf every consumer already imports; re-exported here for the
+// permission-layer callers that reach for it from this module. Injected rather
+// than resolved internally so this stays a pure function of its inputs.
+import type { ToolNameAliasResolver } from '../mcp-names.js';
+export type { ToolNameAliasResolver };
 import { parseShellCommand, type ParsedShell } from './shell-ast.js';
 import {
   matchShellSpecifier,
@@ -30,14 +35,6 @@ function ruleMatchesShell(rule: PermissionRule, command: string): boolean {
   if (rule.tool !== 'shell') return false;
   return rule.specifier === undefined || matchShellSpecifier(rule.specifier, command);
 }
-
-/**
- * Resolves a rule's stored tool name to the live name it refers to, or `null`
- * when it refers to nothing resolvable. Injected rather than imported so this
- * module stays a pure function of its inputs; the default is identity, which
- * is exactly the pre-#413 behaviour.
- */
-export type ToolNameAliasResolver = (storedName: string) => string | null;
 
 /**
  * Does a rule's `tool` field name this call?

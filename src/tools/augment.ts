@@ -14,7 +14,7 @@ import type { ProvenanceStore } from '../provenance.js';
 import type { ToolMeta } from '../framework/tools/types.js';
 import { isDangerous, isSafelisted } from './shell.js';
 import { permissionKeyFor } from '../tool-permissions.js';
-import { parseMCPToolName } from '../mcp-names.js';
+import { mcpProfileKey, parseMCPToolName } from '../mcp-names.js';
 import { resolveGrant, type ToolNameAliasResolver } from '../permissions/engine.js';
 import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js';
 
@@ -49,18 +49,22 @@ function resolveProfileKey(toolName: string, args: unknown): string {
     }
   }
   if (parseMCPToolName(toolName)) {
-    return `mcp.${toolName}`;
+    return mcpProfileKey(toolName);
   }
   return toolName;
 }
 
 /**
  * The legacy profile key this call's history would have been stored under
- * before #413 — the bare tool name — or `undefined` for a tool whose key did
- * not change.
+ * before #413 — the server's own name for the tool — or `undefined` for a tool
+ * whose key did not change.
+ *
+ * Read from `meta.rawName` rather than parsed back out of the namespaced key:
+ * `sanitize` rewrites `.` to `_` at every rung and the last rung truncates, so
+ * the key is not a reliable inverse.
  */
-function legacyProfileKey(toolName: string): string | undefined {
-  return parseMCPToolName(toolName)?.tool;
+function legacyProfileKey(meta: ToolMeta | undefined): string | undefined {
+  return meta?.rawName;
 }
 
 function safeSerialize(args: unknown): string {
@@ -82,6 +86,7 @@ function recordOutcome(
   profileKey: string,
   argsSnippet: string,
   errorSnippet: string | undefined,
+  meta?: ToolMeta,
 ): void {
   try {
     // Carry a pre-#413 bare-keyed history forward on first write under the new
@@ -91,7 +96,12 @@ function recordOutcome(
     // job. Sharing the outer catch meant any failure here — including a store
     // that predates the method — silently skipped the record that followed.
     try {
-      profileStore.ensureSeeded?.(profileKey, legacyProfileKey(toolName));
+      // Stamps `category` (`mcp.<server>`) as well as carrying history forward.
+      // The field has been declared on `ToolProfile` since it was written and
+      // never assigned by anything — it is what lets the prompt filter tell an
+      // orphaned MCP profile from a built-in, and it is the tool -> server link
+      // #377 needs in order to cascade profile deletion on server removal.
+      profileStore.ensureSeeded?.(profileKey, legacyProfileKey(meta), meta?.category);
     } catch {
       // A carried-over history is a nicety; never lose the outcome over it.
     }
@@ -186,16 +196,12 @@ export interface AugmentOptions {
   getToolPermissions?: ToolOptions['getToolPermissions'];
   /**
    * Maps a persisted tool name onto the live name it refers to, for grants
-   * stored before MCP tools were namespaced per server (#413). Returns `null`
-   * when the stored name resolves to nothing, or to more than one server's
-   * tool — both fail closed, so the user is asked again.
+   * stored before MCP tools were namespaced per server (#413).
    *
-   * Injected rather than derived here on purpose: it must be built over the
-   * WHOLE live MCP surface, and `tools` in this function is only the current
-   * dispatch's registry. Inside a `delegate_<server>` helper that registry
-   * holds a single server, so a locally-built resolver would find a stored
-   * bare `browser_click` unambiguous and honour a grant the user made while a
-   * different server owned that name.
+   * Injected, never derived from `tools` — see `AgentContextMCP.resolveAlias`
+   * for why the scope has to be the whole live surface. Pass
+   * `ctx.mcp.resolveAlias`; omitting it leaves both gates on exact matching,
+   * which is the pre-#413 behaviour.
    */
   resolveToolAlias?: ToolNameAliasResolver;
   /**
@@ -602,6 +608,7 @@ export function augmentTools(
                     resolveProfileKey(toolName, args),
                     safeSerialize(args),
                     undefined,
+                    readToolMeta(toolDef),
                   ),
                 );
                 // Evidence pointer (#141) for cache hits: without this, a
@@ -657,7 +664,14 @@ export function augmentTools(
                   )
                 : undefined;
             setImmediate(() =>
-              recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet),
+              recordOutcome(
+                profileStore,
+                toolName,
+                profileKey,
+                argsSnippet,
+                errSnippet,
+                readToolMeta(toolDef),
+              ),
             );
 
             const serialized = source.serializeForModel(envelope);
@@ -759,7 +773,14 @@ export function augmentTools(
             try {
               const errorInfo = detectToolError(toolName, capturedResult);
               const errSnippet = errorInfo.isError ? errorInfo.snippet : undefined;
-              recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet);
+              recordOutcome(
+                profileStore,
+                toolName,
+                profileKey,
+                argsSnippet,
+                errSnippet,
+                readToolMeta(toolDef),
+              );
             } catch {
               // detectToolError throws are swallowed; recording must never propagate.
             }

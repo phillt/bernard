@@ -1203,7 +1203,7 @@ describe('profile continuity across a key rename (#413)', () => {
     expect(fsUtils.atomicWriteFileSync).not.toHaveBeenCalled();
   });
 
-  it('never injects both a profile and the one it superseded', () => {
+  it('never surfaces both a profile and the one it superseded', () => {
     onDisk(
       makeProfile({ toolName: 'browser_click', guidelines: ['legacy guidance'] }),
       makeProfile({
@@ -1225,8 +1225,17 @@ describe('profile continuity across a key rename (#413)', () => {
   // dead high-error profile outranks live tools at the character budget.
   it('omits an mcp profile whose tool is not in the live registry', () => {
     onDisk(
-      makeProfile({ toolName: 'mcp.gone_ff00aa__old_tool', guidelines: ['dead'], errorCount: 99 }),
-      makeProfile({ toolName: 'mcp.pw_ab12cd__browser_click', guidelines: ['live'] }),
+      makeProfile({
+        toolName: 'mcp.gone_ff00aa__old_tool',
+        category: 'mcp.gone',
+        guidelines: ['dead'],
+        errorCount: 99,
+      }),
+      makeProfile({
+        toolName: 'mcp.pw_ab12cd__browser_click',
+        category: 'mcp.playwright',
+        guidelines: ['live'],
+      }),
     );
 
     const out = buildToolProfilesPrompt(store, {
@@ -1235,6 +1244,33 @@ describe('profile continuity across a key rename (#413)', () => {
 
     expect(out).toContain('mcp.pw_ab12cd__browser_click');
     expect(out).not.toContain('old_tool');
+  });
+
+  // The population the filter exists for. Before #413 `resolveProfileKey`'s MCP
+  // branch never fired, so every pre-existing MCP profile was written under a
+  // BARE key — indistinguishable from a built-in by shape. A prefix test on the
+  // key passed all of them straight through; the `category` field is what
+  // actually identifies them.
+  it('omits a bare-keyed orphan from a server that is gone', () => {
+    onDisk(
+      makeProfile({
+        toolName: 'browser_click',
+        category: 'mcp.browser-control',
+        guidelines: ['dead server'],
+        errorCount: 99,
+      }),
+    );
+
+    const out = buildToolProfilesPrompt(store, { liveKeys: new Set(['something_else']) });
+
+    expect(out).toBe('');
+  });
+
+  it('keeps an uncategorised profile, which may predate the category write', () => {
+    onDisk(makeProfile({ toolName: 'browser_click', guidelines: ['unknown provenance'] }));
+    expect(buildToolProfilesPrompt(store, { liveKeys: new Set<string>() })).toContain(
+      'unknown provenance',
+    );
   });
 
   // `liveKeys` is one dispatch's registry, and a built-in withheld from a

@@ -4,6 +4,7 @@ import { TOOL_PROFILES_DIR } from './paths.js';
 import { atomicWriteFileSync, seedOnce } from './fs-utils.js';
 import type { ToolErrorType } from './framework/tools/types.js';
 import { detectResultFailure } from './tool-result-shape.js';
+import { toolNameFromProfileKey } from './mcp-names.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -246,7 +247,7 @@ export class ToolProfileStore {
    * filter in {@link buildToolProfilesPrompt} keeps it out of the prompt) and
    * it makes the change rollback-safe.
    */
-  getOrCreate(toolKey: string, opts: { seedFrom?: string } = {}): ToolProfile {
+  getOrCreate(toolKey: string, opts: { seedFrom?: string; category?: string } = {}): ToolProfile {
     const existing = this.get(toolKey);
     if (existing) return existing;
     const now = new Date().toISOString();
@@ -257,12 +258,14 @@ export class ToolProfileStore {
         // Re-stamped, since `save()` derives the path from this field.
         toolName: toolKey,
         supersedes: opts.seedFrom,
+        category: opts.category ?? legacy.category,
         createdAt: now,
         updatedAt: now,
       };
     }
     return {
       toolName: toolKey,
+      category: opts.category,
       guidelines: [],
       goodExamples: [],
       badExamples: [],
@@ -282,12 +285,13 @@ export class ToolProfileStore {
    * methods should not each have to remember it. No-ops once the new profile
    * exists, which is after the first recorded outcome.
    */
-  ensureSeeded(toolKey: string, seedFrom: string | undefined): void {
-    if (!seedFrom || seedFrom === toolKey) return;
+  ensureSeeded(toolKey: string, seedFrom: string | undefined, category?: string): void {
     if (this.get(toolKey)) return;
-    const legacy = this.get(seedFrom);
-    if (!legacy) return;
-    this.save(this.getOrCreate(toolKey, { seedFrom }));
+    // `getOrCreate` already decides whether a legacy profile exists; asking
+    // again here would duplicate both the reads and the decision. `supersedes`
+    // is set iff it found one.
+    const seeded = this.getOrCreate(toolKey, { seedFrom, category });
+    if (seeded.supersedes || (category && category !== seeded.category)) this.save(seeded);
   }
 
   save(profile: ToolProfile): void {
@@ -365,7 +369,23 @@ export class ToolProfileStore {
     }
   }
 
+  /**
+   * Every profile on disk, minus any superseded by a key rename (#413).
+   *
+   * Suppression lives here rather than in the prompt builder because
+   * "superseded" is a property of the record, not of one reader. The operator
+   * surface (`bernard tool-profiles`) reads this too, and after a seed the
+   * legacy record and its successor carry identical counters — filtering in
+   * only one reader means the other silently double-counts.
+   */
   list(): ToolProfile[] {
+    const all = this.listAll();
+    const superseded = new Set(all.map((p) => p.supersedes).filter(Boolean) as string[]);
+    return superseded.size === 0 ? all : all.filter((p) => !superseded.has(p.toolName));
+  }
+
+  /** Every profile on disk, including superseded ones. */
+  listAll(): ToolProfile[] {
     try {
       return fs
         .readdirSync(TOOL_PROFILES_DIR)
@@ -476,27 +496,31 @@ function dismissedTotal(profile: ToolProfile): number {
 /**
  * Drops profiles that can no longer be acted on.
  *
- * Two kinds. A profile **superseded** by a rename (#413) is always dropped —
- * its history now lives under the new key, and injecting both would
- * double-count it. An `mcp.*` profile whose tool is not in `liveKeys` is
- * dropped when that set is supplied: after namespacing, every MCP profile
- * written under the old bare key names a tool the model can no longer call.
+ * An `mcp.*` profile whose tool is absent from `liveKeys` is dropped when that
+ * set is supplied. The test is on {@link ToolProfile.category} (`mcp.<server>`)
+ * rather than on the key's shape, because the key is exactly what does NOT
+ * identify these: before #413 the MCP branch of `resolveProfileKey` never
+ * fired, so every pre-existing MCP profile was written under a **bare** name
+ * indistinguishable from a built-in — which is the entire orphan population.
+ * A prefix test would have passed all of them straight through.
  *
  * This matters more than it looks. The block is NOT otherwise filtered by the
  * registry, and it sorts by `errorCount` descending — so a high-error orphan
  * outranks live tools and can crowd them out of `MAX_PROFILE_PROMPT_CHARS`.
- * Non-MCP profiles are left alone: `liveKeys` is a single dispatch's registry,
- * and a built-in absent from a worker surface is still a real tool elsewhere.
+ * Profiles with no `category` are left alone: an uncategorised profile is
+ * either a built-in or predates the category write, and `liveKeys` is one
+ * dispatch's registry — a built-in withheld from a worker surface is still a
+ * real tool elsewhere.
  */
 function filterLiveProfiles(
   profiles: ToolProfile[],
   liveKeys?: ReadonlySet<string>,
 ): ToolProfile[] {
-  const superseded = new Set(profiles.map((p) => p.supersedes).filter(Boolean) as string[]);
+  if (!liveKeys) return profiles;
   return profiles.filter((p) => {
-    if (superseded.has(p.toolName)) return false;
-    if (!liveKeys || !p.toolName.startsWith('mcp.')) return true;
-    return liveKeys.has(p.toolName.slice('mcp.'.length));
+    if (!p.category?.startsWith('mcp.')) return true;
+    const tool = toolNameFromProfileKey(p.toolName) ?? p.toolName;
+    return liveKeys.has(tool);
   });
 }
 

@@ -1,5 +1,6 @@
 /**
- * Namespaced naming for MCP tools (#413).
+ * MCP registry primitives: namespaced naming, alias resolution, and the one
+ * flatten that derives a flat tool bag from the per-server map (#413).
  *
  * Bernard used to register every server's tools in one flat, last-writer-wins
  * map, so two servers exporting `browser_click` could not coexist — measured,
@@ -48,7 +49,7 @@ export const MCP_NAME_MAX = 64;
 export const MCP_HASH_LEN = 6;
 
 /** Separator between the server segment and the tool name. */
-export const MCP_NS_SEP = '__';
+const MCP_NS_SEP = '__';
 
 /** Longest human-readable server label kept before the hash takes over. */
 const SERVER_LABEL_MAX = 24;
@@ -137,9 +138,11 @@ export function parseMCPToolName(name: string): { serverSegment: string; tool: s
  * Alias index over the live tool surface: `alias -> canonical live name`, or
  * `null` when the alias is ambiguous.
  *
- * `null` is a *recorded* ambiguity rather than an absent key, so a caller can
- * tell "two servers claim this" from "nobody does" — both fail closed, but
- * only the first is worth logging.
+ * `null` is a **tombstone**, not a convenience. Deleting the key on the second
+ * claimant instead would let a *third* matching name re-insert the alias as
+ * unique, silently un-ambiguating a three-way collision and honouring a grant
+ * against whichever server happened to be listed last. The entry has to
+ * survive to keep saying "no".
  */
 export type MCPAliasIndex = ReadonlyMap<string, string | null>;
 
@@ -183,7 +186,8 @@ function stripHash(segment: string): string | null {
  * `delegate_<server>` helper the registry holds a single server, so an index
  * built there would resolve a stored bare `browser_click` *uniquely* — and
  * silently honour a permission grant the user made while a different server
- * owned that name. Ambiguity is only visible from the global view.
+ * owned that name. Ambiguity is only visible from the global view, which is
+ * why `MCPManager.snapshot()` is the only thing that calls this.
  *
  * A live name is never shadowed by an alias: if some tool is literally called
  * `browser_click`, that mapping wins and is not marked ambiguous.
@@ -228,12 +232,9 @@ export function resolveMCPName(
  * it impossible for the flat bag and the per-server map to disagree about a
  * key: there is only one place a key is written.
  *
- * Lives in this leaf rather than beside `MCPManager` because it is a pure
- * operation on plain objects that test fixtures also need, and importing
- * `mcp.ts` for it drags in `@ai-sdk/mcp`, `node:fs` and the whole `config`
- * chain — the edge `tool-bytes.ts` and `tool-result-shape.ts` exist to refuse.
- * Fixtures deriving `tools` through this same function is what stops them
- * encoding a state the real assembler could never produce.
+ * Lives in this leaf rather than beside `MCPManager` for the reason given at
+ * the top of this file; fixtures deriving `tools` through this same function is
+ * what stops them encoding a state the real assembler could never produce.
  */
 export function flattenServerTools<T>(
   serverTools: Record<string, Record<string, T>>,
@@ -241,4 +242,46 @@ export function flattenServerTools<T>(
   const flat: Record<string, T> = {};
   for (const tools of Object.values(serverTools)) Object.assign(flat, tools);
   return flat;
+}
+
+/** Prefix marking a tool profile as belonging to an MCP tool. */
+const MCP_PROFILE_PREFIX = 'mcp.';
+
+/**
+ * The tool-profile key for an MCP tool, and its inverse.
+ *
+ * Minted and parsed here rather than spelled literally at both ends: the
+ * producer (`tools/augment.ts`) and the consumer (`tool-profiles.ts`) sit in
+ * different layers, and a prefix change would otherwise leave the reader
+ * silently dropping every MCP profile or keeping every orphan, with no type
+ * error — the same mint/parse join this issue removed from `MCPManager`.
+ */
+export function mcpProfileKey(toolName: string): string {
+  return `${MCP_PROFILE_PREFIX}${toolName}`;
+}
+
+/** `mcp.<name>` -> `<name>`, or `null` when `key` is not an MCP profile key. */
+export function toolNameFromProfileKey(key: string): string | null {
+  return key.startsWith(MCP_PROFILE_PREFIX) ? key.slice(MCP_PROFILE_PREFIX.length) : null;
+}
+
+/**
+ * Resolves a stored tool name onto the live name it refers to, or `null` when
+ * it refers to nothing resolvable — unknown, or exported by more than one
+ * server. Both cases fail closed at every consumer.
+ *
+ * Declared here, in the leaf every consumer already imports, rather than in
+ * `permissions/engine.ts`: the tool-wrapper and reference-lookup consumers have
+ * no other reason to reach into the permissions layer, and hand-respelling the
+ * signature inline loses the `null`-means-ambiguous contract the whole
+ * fail-closed design rests on.
+ */
+export type ToolNameAliasResolver = (storedName: string) => string | null;
+
+/** Builds a {@link ToolNameAliasResolver} over a whole live tool surface. */
+export function makeAliasResolver(liveNames: Iterable<string>): ToolNameAliasResolver {
+  const names = [...liveNames];
+  const live = new Set(names);
+  const index = buildMCPAliasIndex(names);
+  return (stored) => resolveMCPName(stored, live, index);
 }

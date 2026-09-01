@@ -13,6 +13,7 @@ import { ProvenanceStore } from '../provenance.js';
 import { VerificationStore } from '../agent-status.js';
 import { VerificationTracker } from '../verification-tracker.js';
 import type { Check } from '../rubric.js';
+import type { ToolNameAliasResolver } from '../mcp-names.js';
 
 export interface AgentContextStores {
   memory: MemoryStore;
@@ -53,6 +54,24 @@ export interface AgentContextMCP {
    * `MCPManager.snapshot()` rather than by hand.
    */
   serverTools: Record<string, Record<string, any>>;
+  /**
+   * Resolves a tool name persisted before MCP tools were namespaced per server
+   * onto the live name it refers to, or `null` when it resolves to nothing or
+   * to more than one server's tool (#413).
+   *
+   * Assembled by `MCPManager.snapshot()` over the WHOLE live surface, which is
+   * the point of putting it here rather than letting each consumer build one:
+   * inside a `delegate_<server>` helper the dispatch's own registry holds a
+   * single server, so a locally-built resolver would find a stored bare
+   * `browser_click` unambiguous and honour a grant the user made while a
+   * different server owned that name. Building it wrongly is unrepresentable
+   * when there is only one assembler.
+   *
+   * Required, for the same reason as `serverTools`. `assembleContext` defaults
+   * it to exact-match-only so a context built without MCP behaves exactly as
+   * it did before #413.
+   */
+  resolveAlias: ToolNameAliasResolver;
 }
 
 export interface AgentContext {
@@ -139,6 +158,9 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
       tools: input.mcp?.tools ?? {},
       serverNames: input.mcp?.serverNames ?? [],
       serverTools: input.mcp?.serverTools ?? {},
+      // Exact-match-only default: a context built without MCP behaves exactly
+      // as it did before #413.
+      resolveAlias: input.mcp?.resolveAlias ?? (() => null),
     },
     rag: input.rag,
     toolOptions: input.toolOptions,

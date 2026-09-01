@@ -4,7 +4,7 @@ import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
-import { parseMCPToolName } from './mcp-names.js';
+import { parseMCPToolName, type ToolNameAliasResolver } from './mcp-names.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 
 /**
@@ -103,11 +103,15 @@ function isReadKindTool(tool: unknown): boolean {
   return readToolMeta(tool)?.kind === 'read';
 }
 
-function collectAllowedTools(tools: Record<string, any>, extraAllowed: string[]): ToolDescriptor[] {
+function collectAllowedTools(
+  tools: Record<string, any>,
+  extraAllowed: string[],
+  resolveAlias?: ToolNameAliasResolver,
+): ToolDescriptor[] {
   const out: ToolDescriptor[] = [];
   for (const [name, tool] of Object.entries(tools)) {
     if (!tool || typeof tool.execute !== 'function') continue;
-    if (!isAllowedLookupTool(name, extraAllowed) && !isReadKindTool(tool)) continue;
+    if (!isAllowedLookupTool(name, extraAllowed, resolveAlias) && !isReadKindTool(tool)) continue;
     out.push(describeTool(name, tool));
   }
   return out;
@@ -398,11 +402,18 @@ export async function runReferenceLookup(
   tools: Record<string, any>,
   config: BernardConfig,
   abortSignal?: AbortSignal,
+  /**
+   * Resolves a `BERNARD_LOOKUP_TOOLS` entry naming a pre-#413 bare MCP tool
+   * onto its live namespaced name. Supply `ctx.mcp.resolveAlias`; omitting it
+   * silently reduces the allowlist to exact matches, which is how the first cut
+   * of #413 shipped this parameter unused.
+   */
+  resolveAlias?: ToolNameAliasResolver,
 ): Promise<ReferenceLookupResult> {
   if (!config.referenceLookup) {
     return { status: 'none' };
   }
-  const candidates = collectAllowedTools(tools, config.referenceLookupTools);
+  const candidates = collectAllowedTools(tools, config.referenceLookupTools, resolveAlias);
   debugLog('reference-tool-lookup:candidates', {
     reference,
     count: candidates.length,

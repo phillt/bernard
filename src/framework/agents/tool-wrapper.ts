@@ -1,6 +1,7 @@
 import type { CoreMessage, Tool } from 'ai';
 import { classifyError } from '../../error-taxonomy.js';
 import { debugLog } from '../../logger.js';
+import type { ToolNameAliasResolver } from '../../mcp-names.js';
 import { resolveSiteModel } from '../../model-policy.js';
 import { osPromptBlock } from '../../os-info.js';
 import {
@@ -261,7 +262,7 @@ export function formatExamples(specialist: {
 export function buildChildTools(
   specialist: { targetTools?: string[] },
   fullRegistry: Record<string, Tool>,
-  resolveAlias?: (storedName: string) => string | null,
+  resolveAlias?: ToolNameAliasResolver,
 ): Record<string, Tool> {
   const targets = specialist.targetTools;
   if (!targets || targets.length === 0) return {};
@@ -271,7 +272,7 @@ export function buildChildTools(
     // namespaced per server (#413) names a bare tool. Resolve it forward;
     // `null` (unknown, or exported by more than one server) keeps the
     // pre-existing silent drop rather than guessing which server was meant.
-    const live = fullRegistry[name] ? name : (resolveAlias?.(name) ?? null);
+    const live = fullRegistry[name] ? name : resolveAlias?.(name);
     if (live && fullRegistry[live]) {
       filtered[live] = fullRegistry[live];
       continue;

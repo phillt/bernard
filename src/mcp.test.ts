@@ -25,8 +25,6 @@ const { printInfo, printError } = await import('./output.js');
 const { MCPManager, verifyMCPServer } = await import('./mcp.js');
 const { mcpToolName } = await import('./mcp-names.js');
 const { readToolMeta } = await import('./framework/tools/adapter.js');
-const readMeta = (t: any) => readToolMeta(t) as any;
-const readMetaName = (t: any) => readMeta(t)?.name;
 const { Experimental_StdioMCPTransport } = await import('@ai-sdk/mcp/mcp-stdio');
 const mockStdioTransport = Experimental_StdioMCPTransport as unknown as ReturnType<typeof vi.fn>;
 
@@ -48,6 +46,34 @@ function makeDynamicTool(executeFn: (...args: any[]) => any) {
     description: 'test tool',
     execute: executeFn,
   };
+}
+
+/**
+ * Connects `spec` = `{ serverName: [rawToolName, …] }` and returns the manager.
+ * Each tool's execute resolves to `<server>:<tool>` so a test can assert which
+ * client a call actually reached.
+ */
+async function connectServers(
+  manager: InstanceType<typeof MCPManager>,
+  spec: Record<string, string[]>,
+): Promise<void> {
+  const clients = Object.fromEntries(
+    Object.entries(spec).map(([server, tools]) => [
+      server,
+      makeMockClient(
+        Object.fromEntries(
+          tools.map((t) => [t, makeDynamicTool(vi.fn().mockResolvedValue(`${server}:${t}`))]),
+        ),
+      ),
+    ]),
+  );
+  const order = Object.keys(spec);
+  let n = 0;
+  mockCreateMCPClient.mockImplementation(async () => clients[order[n++]]);
+  vi.spyOn(manager, 'loadConfig').mockReturnValue({
+    mcpServers: Object.fromEntries(order.map((s) => [s, { url: `http://${s}` }])),
+  });
+  await manager.connect();
 }
 
 describe('MCPManager reconnection', () => {
@@ -526,26 +552,11 @@ describe('MCPManager per-server registry (#413)', () => {
     manager = new MCPManager();
   });
 
-  async function connectTwoSharing(): Promise<void> {
-    const a = makeMockClient({
-      shared: makeDynamicTool(vi.fn()),
-      onlyA: makeDynamicTool(vi.fn()),
-    });
-    const b = makeMockClient({
-      shared: makeDynamicTool(vi.fn()),
-      onlyB: makeDynamicTool(vi.fn()),
-    });
-    mockCreateMCPClient.mockImplementation((opts: any) =>
-      Promise.resolve(opts.transport?.url === 'http://a' ? a : b),
-    );
-    vi.spyOn(manager, 'loadConfig').mockReturnValue({
-      mcpServers: { serverA: { url: 'http://a' }, serverB: { url: 'http://b' } },
-    });
-    await manager.connect();
-  }
+  const twoSharing = () =>
+    connectServers(manager, { serverA: ['shared', 'onlyA'], serverB: ['shared', 'onlyB'] });
 
   it('both servers keep every tool they export, collision included', async () => {
-    await connectTwoSharing();
+    await twoSharing();
 
     const perServer = manager.getServerTools();
     expect(Object.keys(perServer.serverA).sort()).toEqual(
@@ -559,7 +570,7 @@ describe('MCPManager per-server registry (#413)', () => {
   // The regression that started the issue: a server's advertised tool count and
   // the tools a delegate helper can actually reach must agree.
   it("each server's tool count matches what it actually kept", async () => {
-    await connectTwoSharing();
+    await twoSharing();
 
     const perServer = manager.getServerTools();
     for (const status of manager.getServerStatuses()) {
@@ -568,7 +579,7 @@ describe('MCPManager per-server registry (#413)', () => {
   });
 
   it('snapshot derives the flat bag from the per-server map, sharing identities', async () => {
-    await connectTwoSharing();
+    await twoSharing();
 
     const snap = manager.snapshot();
     const aKey = mcpToolName('serverA', 'onlyA');
@@ -580,7 +591,7 @@ describe('MCPManager per-server registry (#413)', () => {
   // A dead server used to keep its tools registered, so its stale entry went on
   // occupying a name a healthy server also exported — with no way to fall back.
   it('a failed reconnect drops only that server, leaving the other callable', async () => {
-    await connectTwoSharing();
+    await twoSharing();
 
     mockCreateMCPClient.mockRejectedValue(new Error('down'));
     expect(await manager.reconnectServer('serverB')).toBe(false);
@@ -602,40 +613,31 @@ describe('MCPManager namespaced names (#413)', () => {
     manager = new MCPManager();
   });
 
-  async function connectTwoSharing() {
-    const a = makeMockClient({ browser_click: makeDynamicTool(vi.fn().mockResolvedValue('A')) });
-    const b = makeMockClient({ browser_click: makeDynamicTool(vi.fn().mockResolvedValue('B')) });
-    mockCreateMCPClient.mockImplementation((opts: any) =>
-      Promise.resolve(opts.transport?.url === 'http://pw' ? a : b),
-    );
-    vi.spyOn(manager, 'loadConfig').mockReturnValue({
-      mcpServers: { playwright: { url: 'http://pw' }, browsermcp: { url: 'http://bm' } },
-    });
-    await manager.connect();
-  }
+  const twoClickers = () =>
+    connectServers(manager, { playwright: ['browser_click'], browsermcp: ['browser_click'] });
 
   // The exact regression from the issue: both servers keep the name, and each
   // routes to its own client.
   it('registers both servers browser_click and routes each to its own client', async () => {
-    await connectTwoSharing();
+    await twoClickers();
 
     const tools = manager.getTools();
     const pw = tools[mcpToolName('playwright', 'browser_click')];
     const bm = tools[mcpToolName('browsermcp', 'browser_click')];
     expect(pw).toBeDefined();
     expect(bm).toBeDefined();
-    expect(await pw.execute({})).toBe('A');
-    expect(await bm.execute({})).toBe('B');
+    expect(await pw.execute({})).toBe('playwright:browser_click');
+    expect(await bm.execute({})).toBe('browsermcp:browser_click');
   });
 
   // The permission and block gates key on the registry key; the deterministic
   // result cache keys on `meta.name`. If those ever diverge the two silently
   // stop describing the same tool.
   it('keeps meta.name in lockstep with the registry key', async () => {
-    await connectTwoSharing();
+    await twoClickers();
 
     for (const [key, tool] of Object.entries(manager.getTools())) {
-      expect((tool as any).meta?.name ?? readMetaName(tool)).toBe(key);
+      expect(readToolMeta(tool)?.name).toBe(key);
     }
   });
 
@@ -653,14 +655,14 @@ describe('MCPManager namespaced names (#413)', () => {
     await manager.connect();
 
     const tools = manager.getTools();
-    expect(readMeta(tools[mcpToolName('srv', 'brave_search')]).kind).toBe('read');
-    expect(readMeta(tools[mcpToolName('srv', 'browser_click')]).kind).toBe('write');
+    expect(readToolMeta(tools[mcpToolName('srv', 'brave_search')])?.kind).toBe('read');
+    expect(readToolMeta(tools[mcpToolName('srv', 'browser_click')])?.kind).toBe('write');
   });
 
   // A name must depend only on its own server, never on config order — the
   // whole reason the segment carries a content hash rather than a suffix.
   it('produces identical keys regardless of server order in the config', async () => {
-    await connectTwoSharing();
+    await twoClickers();
     const first = Object.keys(manager.getTools()).sort();
 
     const m2 = new MCPManager();

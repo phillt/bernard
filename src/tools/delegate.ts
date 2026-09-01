@@ -16,9 +16,8 @@ import { mcpServerSegment } from '../mcp-names.js';
 
 /**
  * Tool names routed to `server`, from the per-server map threaded at bootstrap.
- * Exported for `delegate-dispatch.ts`, which scopes a helper to the same set.
  */
-export function serverToolNames(ctx: AgentContext, server: string): string[] {
+function serverToolNames(ctx: AgentContext, server: string): string[] {
   return Object.keys(serverToolMap(ctx, server));
 }
 
@@ -43,15 +42,19 @@ export function serverToolMap(ctx: AgentContext, server: string): Record<string,
  * inside the helper, so gating the delegation entry point too would
  * double-prompt.
  *
- * `toolName` is the registry key the tool will be exposed under; it defaults to
- * `delegate_<sanitized-server>` but callers pass the collision-disambiguated key
- * (see {@link createDelegateTools}) so `meta.name` stays in lockstep with the
- * key the model — and the augment/permission layers — actually see.
+ * The registry key is `delegate_<server-segment>`, derived from the server's
+ * own name, so `meta.name` stays in lockstep with the key the model — and the
+ * augment/permission layers — actually see.
  */
+/** The registry key for a server's delegate tool. */
+export function delegateToolName(server: string): string {
+  return `delegate_${mcpServerSegment(server)}`;
+}
+
 export function createDelegateTool(
   ctx: AgentContext,
   server: string,
-  toolName: string = `delegate_${mcpServerSegment(server)}`,
+  toolName: string = delegateToolName(server),
 ): Tool {
   const toolNames = serverToolNames(ctx, server);
   const preview = toolNames.slice(0, 8).join(', ');
@@ -130,10 +133,7 @@ export function mcpToolSurface(ctx: AgentContext): Record<string, Tool> {
 
 /**
  * Builds the full set of `delegate_<server>` tools for the main agent — one per
- * connected server that actually has tools. Servers are keyed by their
- * sanitized tool name; a name collision (two servers sanitizing to the same
- * token) is disambiguated with a numeric suffix so no delegate silently
- * shadows another.
+ * connected server that actually has tools.
  */
 export function createDelegateTools(ctx: AgentContext): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
@@ -145,8 +145,7 @@ export function createDelegateTools(ctx: AgentContext): Record<string, Tool> {
     // in iteration order, which meant editing `mcp.json` could renumber a
     // DIFFERENT server's key — and this key is persisted, in permission grants
     // and tool-profile filenames (#413).
-    const key = `delegate_${mcpServerSegment(server)}`;
-    tools[key] = createDelegateTool(ctx, server, key);
+    tools[delegateToolName(server)] = createDelegateTool(ctx, server);
   }
   return tools;
 }

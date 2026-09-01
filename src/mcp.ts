@@ -6,7 +6,12 @@ import { jsonSchema } from 'ai';
 import { printInfo, printError } from './output.js';
 import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
 import { openSessionSidecarFd } from './logger.js';
-import { flattenServerTools, mcpToolName } from './mcp-names.js';
+import {
+  flattenServerTools,
+  makeAliasResolver,
+  mcpServerSegment,
+  mcpToolName,
+} from './mcp-names.js';
 import { attachMeta } from './framework/tools/adapter.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
@@ -426,12 +431,19 @@ export class MCPManager {
   }
 
   /**
-   * Returns all MCP tools, converted for AI SDK v4 compatibility.
+   * Returns `{ server: { namespacedName: tool } }`, converted for AI SDK v4
+   * compatibility.
    *
    * Each tool's `execute` method is wrapped with automatic reconnect-and-retry:
    * if a call fails, the owning server is reconnected and the call retried once.
+   *
+   * This is the conversion; {@link MCPManager.getTools} is a flatten of it.
+   * Carries the tool OBJECTS, not just names (#413) — the name-only shape made
+   * every consumer re-look-up each name in the flat bag, and that join is what
+   * let the two structures disagree, silently, because
+   * `dispatchServerDelegate` guarded the lookup with `if (t)`.
    */
-  getTools(shaping?: MCPResultShapingConfig): Record<string, any> {
+  getServerTools(shaping?: MCPResultShapingConfig): Record<string, Record<string, any>> {
     // Structure-aware result shaping (#297): bound over-budget MCP results
     // before they enter an agent's context so a large list/body doesn't re-bill
     // on every subsequent step. `off` (or unset) is a pass-through.
@@ -442,10 +454,13 @@ export class MCPManager {
     // @ai-sdk/provider-utils@4.x, but ai@4.x expects type:undefined and
     // parameters wrapped with @ai-sdk/ui-utils's jsonSchema (which includes
     // the validatorSymbol needed for argument validation).
-    const converted: Record<string, any> = {};
-    // Two levels, so the owning server is the position rather than a lookup in
-    // a second map that could disagree with this one.
+    const converted: Record<string, Record<string, any>> = {};
+    // Converted straight into per-server buckets, so the owning server is the
+    // position rather than a lookup. `getTools()` then FLATTENS this — the same
+    // derive-don't-author rule the registry itself follows, and the reason
+    // there is no re-grouping pass that could silently drop a key.
     for (const [serverName, serverTools] of this.serverTools.entries()) {
+      converted[serverName] = {};
       for (const [name, { raw, tool }] of Object.entries(serverTools)) {
         const baseTool = this.convertTool(name, tool);
         const originalExecute = baseTool.execute;
@@ -490,12 +505,16 @@ export class MCPManager {
           // gates key on the registry key while `result-cache.ts` keys on
           // `meta.name`, so a divergence would silently split them.
           name,
+          // The server's own name for this tool, and the owning server. Both
+          // are authored here and would otherwise be trapped inside the
+          // manager, forcing every consumer into a lossy re-parse of the key.
+          rawName: raw,
           kind: isRead ? 'read' : 'write',
           category: `mcp.${serverName}`,
           deterministic: false,
           sideEffect: isRead ? 'network' : 'local',
         };
-        converted[name] = attachMeta(wrapped, meta);
+        converted[serverName][name] = attachMeta(wrapped, meta);
       }
     }
     return converted;
@@ -512,27 +531,30 @@ export class MCPManager {
   }
 
   /**
-   * Returns `{ server: { toolName: tool } }` over every connected server — the
-   * per-server view threaded into `AgentContextMCP.serverTools` at bootstrap so
-   * per-server MCP delegation (#296) can scope each helper sub-agent to that
-   * server's real tools while the main agent carries only one
-   * `delegate_<server>` tool.
+   * Every MCP tool in one name-keyed bag.
    *
-   * Carries the tool OBJECTS, not just their names (#413). The name-only shape
-   * forced every consumer to re-look-up each name in the flat bag, which is the
-   * join that made a disagreement between the two structures possible — and
-   * silent: `dispatchServerDelegate` guarded that lookup with `if (t)`, so a
-   * mismatch left a helper running with no tools at all while its system prompt
-   * still advertised them.
+   * Derived from {@link MCPManager.getServerTools}, never assembled separately:
+   * the flat form is what a delegation-off dispatch and the tool-wrapper
+   * registry need, but authoring it independently is what allowed the two
+   * shapes to disagree in the first place (#413).
    */
-  getServerTools(shaping?: MCPResultShapingConfig): Record<string, Record<string, any>> {
-    const converted = this.getTools(shaping);
-    const out: Record<string, Record<string, any>> = {};
+  getTools(shaping?: MCPResultShapingConfig): Record<string, any> {
+    return flattenServerTools(this.getServerTools(shaping));
+  }
+
+  /**
+   * `{ server: [rawToolName, …] }` — the names the servers themselves use, for
+   * display.
+   *
+   * The registry key is namespaced and, at the truncation ladder's last rung,
+   * not invertible; `mcpToolName`'s docstring says plainly that nothing
+   * downstream may recover the raw name from it. So the UI gets the
+   * authoritative value from here rather than re-deriving a lossy one.
+   */
+  getServerToolNames(): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
     for (const [server, tools] of this.serverTools.entries()) {
-      out[server] = {};
-      for (const name of Object.keys(tools)) {
-        if (converted[name]) out[server][name] = converted[name];
-      }
+      out[server] = Object.values(tools).map((t) => t.raw);
     }
     return out;
   }
@@ -549,10 +571,20 @@ export class MCPManager {
   snapshot(shaping?: MCPResultShapingConfig): AgentContextMCP {
     // One authored structure, one derived — see `flattenServerTools`.
     const serverTools = this.getServerTools(shaping);
+    const tools = flattenServerTools(serverTools);
     return {
-      tools: flattenServerTools(serverTools),
+      tools,
       serverNames: this.getConnectedServerNames(),
       serverTools,
+      // Built here, over the whole live surface, because this is the single
+      // assembler — a consumer building its own would only see its dispatch's
+      // registry and could call an ambiguous name unambiguous. Delegate keys
+      // are included: they are exposed to the model and were hashed too, so a
+      // grant stored against `delegate_playwright` must still resolve.
+      resolveAlias: makeAliasResolver([
+        ...Object.keys(tools),
+        ...this.getConnectedServerNames().map((s) => `delegate_${mcpServerSegment(s)}`),
+      ]),
     };
   }
 
