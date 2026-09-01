@@ -25,6 +25,7 @@ import {
   type ToolWrapperInput,
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
+import { mcpAliasResolverFor } from '../framework/agents/mcp-alias.js';
 
 // Re-export the helpers that other modules (tests, parity scripts) already
 // import from this path. Implementations live in `framework/agents/tool-wrapper.ts`.
@@ -261,7 +262,7 @@ export async function dispatchToolWrapper(
               specialist_run: createSpecialistRunTool(ctx),
               tool_wrapper_run: createToolWrapperRunTool(ctx),
             };
-            const childTools = buildChildTools(specialist, fullRegistry);
+            const childTools = buildChildTools(specialist, fullRegistry, mcpAliasResolverFor(ctx));
             const wantStructured = specialist.structuredOutput ?? kind === 'tool-wrapper';
 
             const def = definitions.get<ToolWrapperInput, WrapperResult>('tool-wrapper');

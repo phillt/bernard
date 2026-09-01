@@ -4,6 +4,7 @@ import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
+import { parseMCPToolName } from './mcp-names.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 
 /**
@@ -49,11 +50,23 @@ const ALWAYS_ALLOWED_BUILTINS = new Set(['web_search', 'web_read']);
  * tools are restricted to {@link ALWAYS_ALLOWED_BUILTINS} unless explicitly
  * extended via `extraAllowed` (sourced from `BERNARD_LOOKUP_TOOLS`).
  */
-export function isAllowedLookupTool(name: string, extraAllowed: string[] = []): boolean {
-  if (extraAllowed.includes(name)) return true;
+export function isAllowedLookupTool(
+  name: string,
+  extraAllowed: string[] = [],
+  resolveAlias?: (storedName: string) => string | null,
+): boolean {
+  // `BERNARD_LOOKUP_TOOLS` is user-authored and may predate MCP tool
+  // namespacing (#413), so an entry naming a bare MCP tool is resolved
+  // forward. `null` (unknown, or exported by more than one server) simply
+  // fails the check, as before.
+  if (extraAllowed.some((e) => e === name || resolveAlias?.(e) === name)) return true;
   if (ALWAYS_ALLOWED_BUILTINS.has(name)) return true;
-  if (name.includes('__')) {
-    return isReadOnlyMCPSuffix(name);
+  const parsed = parseMCPToolName(name);
+  if (parsed) {
+    // Classify on the tool half only. The server prefix is not part of the
+    // verb, and `isReadOnlyMCPSuffix` is end-anchored so it would happen to
+    // work either way — but not once a long name is middle-truncated.
+    return isReadOnlyMCPSuffix(parsed.tool);
   }
   return false;
 }

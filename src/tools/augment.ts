@@ -14,7 +14,7 @@ import type { ProvenanceStore } from '../provenance.js';
 import type { ToolMeta } from '../framework/tools/types.js';
 import { isDangerous, isSafelisted } from './shell.js';
 import { permissionKeyFor } from '../tool-permissions.js';
-import { resolveGrant } from '../permissions/engine.js';
+import { resolveGrant, type ToolNameAliasResolver } from '../permissions/engine.js';
 import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js';
 
 /**
@@ -156,6 +156,20 @@ export interface AugmentOptions {
    * exactly as before #212.
    */
   getToolPermissions?: ToolOptions['getToolPermissions'];
+  /**
+   * Maps a persisted tool name onto the live name it refers to, for grants
+   * stored before MCP tools were namespaced per server (#413). Returns `null`
+   * when the stored name resolves to nothing, or to more than one server's
+   * tool — both fail closed, so the user is asked again.
+   *
+   * Injected rather than derived here on purpose: it must be built over the
+   * WHOLE live MCP surface, and `tools` in this function is only the current
+   * dispatch's registry. Inside a `delegate_<server>` helper that registry
+   * holds a single server, so a locally-built resolver would find a stored
+   * bare `browser_click` unambiguous and honour a grant the user made while a
+   * different server owned that name.
+   */
+  resolveToolAlias?: ToolNameAliasResolver;
   /**
    * Deterministic tool result cache toggle (#171). When omitted or `true`,
    * tools whose `ToolMeta` passes `isCacheable` (deterministic + no side
@@ -388,7 +402,7 @@ export function augmentTools(
   ): 'allow' | 'deny' | 'ask' => {
     const rules = opts.getToolPermissions?.() ?? [];
     if (rules.length === 0) return 'ask';
-    const decision = resolveGrant(toolName, args, rules, isDangerousShell);
+    const decision = resolveGrant(toolName, args, rules, isDangerousShell, opts.resolveToolAlias);
     if (decision === 'deny') debugLog(`augment:${toolName}:${gate}:profile-deny`, {});
     return decision;
   };

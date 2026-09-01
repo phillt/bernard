@@ -1,5 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
 import { classifyError } from '../../error-taxonomy.js';
+import { debugLog } from '../../logger.js';
 import { resolveSiteModel } from '../../model-policy.js';
 import { osPromptBlock } from '../../os-info.js';
 import {
@@ -260,12 +261,24 @@ export function formatExamples(specialist: {
 export function buildChildTools(
   specialist: { targetTools?: string[] },
   fullRegistry: Record<string, Tool>,
+  resolveAlias?: (storedName: string) => string | null,
 ): Record<string, Tool> {
   const targets = specialist.targetTools;
   if (!targets || targets.length === 0) return {};
   const filtered: Record<string, Tool> = {};
   for (const name of targets) {
-    if (fullRegistry[name]) filtered[name] = fullRegistry[name];
+    // `targetTools` is persisted, so a record written before MCP tools were
+    // namespaced per server (#413) names a bare tool. Resolve it forward;
+    // `null` (unknown, or exported by more than one server) keeps the
+    // pre-existing silent drop rather than guessing which server was meant.
+    const live = fullRegistry[name] ? name : (resolveAlias?.(name) ?? null);
+    if (live && fullRegistry[live]) {
+      filtered[live] = fullRegistry[live];
+      continue;
+    }
+    // `{}` is a supported result (#331), so a drop is otherwise invisible —
+    // which is how an all-MCP wrapper could silently become tool-less.
+    debugLog('tool-wrapper:target-tool-unresolved', { name });
   }
   return filtered;
 }

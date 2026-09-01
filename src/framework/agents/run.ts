@@ -22,6 +22,7 @@ import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
+import { mcpAliasResolverFor } from './mcp-alias.js';
 import type {
   AgentDefinition,
   FormatMeta,
@@ -174,6 +175,10 @@ export async function runDefinition<TInput, TFormatted>(
     // Profile-persisted grants (#212). Live reader so mid-session grants and
     // profile switches apply immediately. Cron's toolOptions omit it.
     getToolPermissions: ctx.toolOptions.getToolPermissions,
+    // Grants persisted before MCP tools were namespaced (#413) name a bare
+    // tool. Built from the whole live MCP surface, never from `rawTools` —
+    // see `mcpAliasResolverFor`.
+    resolveToolAlias: mcpAliasResolverFor(ctx),
     cacheEnabled: config.cacheEnabled,
     // Evidence-pointer registration (#141). Shared by reference into
     // sub-agent / tool-wrapper contexts so a `shell` call inside a wrapper
