@@ -1,4 +1,5 @@
 import type { CoreMessage, Tool } from 'ai';
+import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
@@ -83,8 +84,39 @@ export const mcpDelegateDefinition: AgentDefinition<McpDelegateInput, string> = 
     return [outputHook(`delegate:${input.slotId}`)];
   },
 
-  formatResult(result) {
-    return capSubagentResult(result.text);
+  formatResult(result, input, _ctx, meta) {
+    // The empty guard every sibling text-returning definition already had, and
+    // this one did not (#395). `capSubagentResult('')` is `''` — there is no
+    // floor — so a helper that returned no text handed the main agent an empty
+    // string as a *successful* tool result.
+    //
+    // Two things make that specific rather than theoretical:
+    //
+    // 1. **Empty is a routine outcome here, not a pathological one.** AI SDK v4
+    //    keeps only the LAST step's text (`text2 = … : stepText`, a plain
+    //    overwrite with `experimental_continueSteps` off). A helper that
+    //    narrates "reauthorize at <url>" on step 4 and then makes one more tool
+    //    call on step 5 returns `''`, narration discarded. The siblings are
+    //    immune because `appendActivitySummary` reconstructs from
+    //    `result.steps`, which no overwrite touches.
+    // 2. **Nothing downstream could see it as a failure.** `''.startsWith(
+    //    'Error')` is false, so `detectResultFailure` (`tool-result-shape.ts`)
+    //    reads the empty return as SUCCESS — `augment.ts` then logs
+    //    `status: 'ok'`, registers an empty-preview pointer as citable
+    //    evidence, and bumps `successCount`. That is the #363 failure mode one
+    //    layer up, on the tool that IS the main agent's whole MCP surface when
+    //    `BERNARD_MCP_DELEGATION` is on.
+    //
+    // `meta` (#370) is threaded so a helper cut off at its step ceiling says so
+    // instead of "produced no text summary", which reads as a choice.
+    return capSubagentResult(
+      appendActivitySummary(
+        result.text,
+        result.steps as unknown[],
+        `"${input.server}" delegate helper`,
+        meta,
+      ),
+    );
   },
 };
 
