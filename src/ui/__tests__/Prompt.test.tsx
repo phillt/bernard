@@ -1,7 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
+import stripAnsi from 'strip-ansi';
 import { Prompt } from '../Prompt.js';
+import { PlanPanel } from '../PlanPanel.js';
+import { PlanStore } from '../../plan-store.js';
+import type { Agent } from '../../agent.js';
+import { FALLBACK_DIMENSIONS } from '../useDimensions.js';
+import { planPanelMaxRows } from '../plan-window.js';
 import {
   ENTER,
   ESC,
@@ -526,5 +532,85 @@ describe('<Prompt> dynamic slash commands (routines/tasks)', () => {
       // 30 rows, cap 8 → 22 hidden above, cursor pinned to the last row.
       expect(frame).toMatch(/▲ 22 more lines/);
     });
+  });
+});
+
+/**
+ * The composed box (#358). `Prompt` had never been rendered with `renderAbove`
+ * in a test, so the plan-inside-the-border path — the one place both unbounded
+ * children share a frame — had no coverage whatsoever.
+ */
+describe('<Prompt> with a pinned plan inside the border', () => {
+  const LONG = 'x'.repeat(400);
+
+  function planAgent(store: PlanStore): Agent {
+    return {
+      getPlanSnapshot: () => store.view(),
+      subscribeToPlanStore: (cb: () => void) => store.subscribe(cb),
+    } as unknown as Agent;
+  }
+
+  function mountWithPlan(stepCount: number) {
+    const store = new PlanStore();
+    store.create(
+      Array.from({ length: stepCount }, (_, i) => ({
+        description: `${i}-${LONG}`,
+        verification: 'v',
+      })),
+    );
+    store.update(stepCount, 'in_progress');
+    return render(
+      createElement(Prompt, {
+        onSubmit: () => {},
+        renderAbove: ({ maxRows, reserveColumns }) =>
+          createElement(PlanPanel, { agent: planAgent(store), maxRows, reserveColumns }),
+      }),
+    );
+  }
+
+  const frameRows = (frame: string | undefined) => stripAnsi(frame ?? '').split('\n').length;
+
+  it('renders the plan and the input inside one box', async () => {
+    const { stdin, lastFrame } = mountWithPlan(3);
+    await tick();
+    stdin.write('typing');
+    await tick();
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('plan');
+    expect(frame).toContain('typing');
+  });
+
+  /**
+   * Worst case on both axes at once: a 12-step plan of maximal descriptions
+   * above a 30-line pasted buffer. Unbounded the plan alone was ~87 rows.
+   *
+   * The budget is the sum of the two INDEPENDENT caps plus this component's own
+   * chrome, which is the readable expression the render-prop exists to make
+   * possible. Without a `DimensionsProvider` the context falls back to 24 rows
+   * (the same assumption the #355 block above states), so the plan gets
+   * `planPanelMaxRows(24)` and the input `max(3, min(10, floor(24 / 3))) = 8`
+   * content rows plus its two `▲/▼` affordance rows.
+   */
+  it('bounds the whole box when both children are over-long', async () => {
+    const { stdin, lastFrame } = mountWithPlan(12);
+    await tick();
+    for (let i = 0; i < 30; i++) {
+      stdin.write(`line${i}`);
+      await tick(2);
+      if (i < 29) {
+        stdin.write(CTRL_J);
+        await tick(2);
+      }
+    }
+    const frame = lastFrame() ?? '';
+    const inputRows = 8 + 2;
+    const chrome = 1 /* marginTop */ + 2; /* the rounded border */
+    expect(frameRows(frame)).toBeLessThanOrEqual(
+      planPanelMaxRows(FALLBACK_DIMENSIONS.rows) + inputRows + chrome,
+    );
+    // Both children are still doing their job inside that budget: the line
+    // being typed is on screen, and so is the step in progress.
+    expect(frame).toContain('line29');
+    expect(frame).toContain('11-');
   });
 });

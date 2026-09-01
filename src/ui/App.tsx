@@ -3527,7 +3527,9 @@ export function App({
         history={inputHistory}
         onRecordInput={recordInput}
         dynamicCommands={getDynamicCommands}
-        renderAbove={<PlanPanel agent={agent} />}
+        renderAbove={({ maxRows, reserveColumns }) => (
+          <PlanPanel agent={agent} maxRows={maxRows} reserveColumns={reserveColumns} />
+        )}
       />
       <Box justifyContent="space-between">
         <HintBar
