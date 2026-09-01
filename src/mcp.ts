@@ -5,6 +5,7 @@ import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
 import { jsonSchema } from 'ai';
 import { printInfo, printError } from './output.js';
 import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
+import { openSessionSidecarFd } from './logger.js';
 import { attachMeta } from './framework/tools/adapter.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
@@ -58,6 +59,24 @@ function mcpConnectTimeoutMs(): number {
 /** Sentinel rejection used to distinguish a connect/listing timeout from a real error. */
 class MCPHandshakeTimeout extends Error {}
 
+/**
+ * Where a spawned MCP server's stderr goes. Never `'inherit'`, which is what
+ * {@link Experimental_StdioMCPTransport} defaults to: an MCP server is a
+ * third-party process writing to a stream that has no Bernard surface — its
+ * connection failures are already reported through `serverStatuses` and
+ * `mcp_verify` — so inheriting only lets it scribble over the Ink frame.
+ *
+ * Never `'pipe'` either, and that one would be the worse bug: the transport
+ * keeps its child private, so nothing can drain the pipe and a chatty server
+ * blocks for good once the ~64 KB kernel buffer fills. It has to be a real
+ * descriptor, which needs no reader.
+ *
+ * See the MCP server stderr entry in CLAUDE.md for the full account.
+ */
+function mcpStderrTarget(): 'ignore' | number {
+  return openSessionSidecarFd('mcp-stderr.log') ?? 'ignore';
+}
+
 function handshakeTimeoutMessage(timeoutMs: number): string {
   return `Timed out after ${timeoutMs}ms — the server didn't connect and list its tools in time. Common causes: it's an HTTP/SSE server started as a stdio command (configure it as a "url" server instead), or a stdio flag such as "--stdio" is missing.`;
 }
@@ -92,6 +111,7 @@ function startConnect(serverConfig: MCPServerConfig): {
     env: serverConfig.env
       ? { ...(process.env as Record<string, string>), ...serverConfig.env }
       : undefined,
+    stderr: mcpStderrTarget(),
   });
   return { clientPromise: createMCPClient({ transport }), transport };
 }

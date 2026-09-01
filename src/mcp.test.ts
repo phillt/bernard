@@ -439,3 +439,45 @@ describe('MCPManager.getLiveRegistration', () => {
     expect(reg.missing).toEqual(['x', 'y']);
   });
 });
+
+describe('MCP stdio stderr capture', () => {
+  let manager: InstanceType<typeof MCPManager>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager = new MCPManager();
+    mockCreateMCPClient.mockResolvedValue(makeMockClient({ aTool: makeDynamicTool(vi.fn()) }));
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { noisy: { command: 'npx', args: ['@browsermcp/mcp@latest'] } },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // The AI SDK's transport defaults stderr to 'inherit', which puts a
+  // third-party server's output straight onto the terminal — into the
+  // alternate screen buffer Ink owns in full-screen mode. Never leave it
+  // unset.
+  it('never lets a spawned server inherit the terminal', async () => {
+    vi.stubEnv('BERNARD_DEBUG', '');
+
+    await manager.connect();
+
+    const config = mockStdioTransport.mock.calls.at(-1)?.[0];
+    expect(config.stderr).toBe('ignore');
+  });
+
+  // 'pipe' would be a hang, not a fix: the transport keeps its child private,
+  // so nothing drains the pipe and the server blocks once the kernel buffer
+  // fills. Debug capture has to be a descriptor.
+  it('captures to a file descriptor under BERNARD_DEBUG, never a pipe', async () => {
+    vi.stubEnv('BERNARD_DEBUG', '1');
+
+    await manager.connect();
+
+    const config = mockStdioTransport.mock.calls.at(-1)?.[0];
+    expect(typeof config.stderr).toBe('number');
+  });
+});
