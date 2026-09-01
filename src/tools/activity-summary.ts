@@ -1,5 +1,23 @@
+import type { FormatMeta } from '../framework/agents/types.js';
+
 const ARG_PREVIEW = 200;
 const RESULT_PREVIEW = 400;
+
+/**
+ * Per-entry preview budgets. Callers tune these because what the log is FOR
+ * differs by dispatch (#367).
+ *
+ * A sub-agent's log is read by a human in the terminal, where a generous result
+ * preview is the point. A delegate helper's log is read by the MAIN AGENT, on
+ * every MCP call, and lands in the context per dispatch — so it is bounded much
+ * harder there. The two observed #367 failures need only the tool name plus a
+ * short result snippet ("Pressed Enter on combobox element: …" is ~55 chars) to
+ * be caught, so a tight budget loses no verification value.
+ */
+export interface ActivityBudgets {
+  args?: number;
+  result?: number;
+}
 
 interface ToolCallEntry {
   toolName: string;
@@ -30,14 +48,17 @@ function previewValue(v: unknown, limit: number): string {
  * what a sub-agent or specialist actually did, even when the model's prose
  * output is empty or under-reports the side effects.
  */
-export function buildActivitySummary(steps: unknown[] | undefined): string {
+export function buildActivitySummary(
+  steps: unknown[] | undefined,
+  budgets?: ActivityBudgets,
+): string {
   const log = extractToolCallLog((steps ?? []) as Parameters<typeof extractToolCallLog>[0]);
   if (log.length === 0) {
     return '## Activity Log\n(no tool calls)';
   }
   const lines = log.map(
     (e, i) =>
-      `${i + 1}. ${e.toolName}(${previewValue(e.args, ARG_PREVIEW)})\n   → ${previewValue(e.result, RESULT_PREVIEW)}`,
+      `${i + 1}. ${e.toolName}(${previewValue(e.args, budgets?.args ?? ARG_PREVIEW)})\n   → ${previewValue(e.result, budgets?.result ?? RESULT_PREVIEW)}`,
   );
   return ['## Activity Log', `${log.length} tool call(s):`, ...lines].join('\n');
 }
@@ -53,16 +74,18 @@ export function buildActivitySummary(steps: unknown[] | undefined): string {
  * summary" reads as a model that chose to say nothing; a dispatch cut off at
  * its `maxSteps` ceiling never got to the turn where it would have summarized,
  * which is a different fact and the one that explains the failure. The runner
- * knows which it was, so the preamble stops guessing. Absent `meta` keeps the
- * original wording — that is the honest message for a run that finished.
+ * knows which it was, so the preamble stops guessing. Absent `meta` means the
+ * caller did not pass it — not that the run finished; a run that finished passes
+ * `{stepLimitHit: false}` and lands in the same branch. Only tests reach that.
  */
 export function appendActivitySummary(
   text: string,
   steps: unknown[] | undefined,
   agentLabel: string,
-  meta?: { stepLimitHit: boolean; steps: number },
+  meta?: FormatMeta,
+  budgets?: ActivityBudgets,
 ): string {
-  const summary = buildActivitySummary(steps);
+  const summary = buildActivitySummary(steps, budgets);
   if (!text.trim()) {
     const preamble = meta?.stepLimitHit
       ? `(${agentLabel} ran out of steps (${meta.steps}) before producing a text summary; activity reconstructed from tool-call log)`

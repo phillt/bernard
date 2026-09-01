@@ -481,7 +481,7 @@ function extractUserInput(messages: CoreMessage[]): string {
 /**
  * The ONLY call site of `def.formatResult`, and therefore the one place the
  * dispatch-level {@link FormatMeta} has to be threaded (#370). `stepLimitHit`
- * is in lexical scope nine lines above the call — it was computed, returned to
+ * is already in lexical scope here — it was computed, returned to
  * the dispatch caller, and then discarded here, which is what forced
  * `tool-wrapper-run` to re-derive it from the formatted payload's own error
  * string. See {@link FormatMeta} for why that inference was unsound.

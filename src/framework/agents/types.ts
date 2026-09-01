@@ -282,10 +282,26 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
    * Defaults to `result.text` when omitted.
    *
    * `meta` carries the dispatch-level facts a formatter cannot recover from
-   * `AgentResult` alone — see {@link FormatMeta}. It is optional so the nine
-   * existing implementations keep compiling unchanged: TypeScript's method
-   * parameter check is bivariant, so a shorter implementation still satisfies
-   * a longer declaration.
+   * `AgentResult` alone — see {@link FormatMeta}. Adding it required no edits to
+   * the nine existing implementations, because a function of fewer parameters is
+   * assignable to a signature of more — plain arity assignability, nothing to do
+   * with bivariance (an earlier version of this comment said otherwise).
+   *
+   * It is marked optional only for callers outside `applyFormat`: the tests that
+   * invoke a definition's `formatResult` directly. `applyFormat` types it as
+   * required and always passes it, so no production path reaches the `undefined`
+   * branch. Callers that destructure it should read `meta?.stepLimitHit` and
+   * treat absence as "unknown", never as "the run finished".
+   *
+   * **Where the verdict lands is deliberately not uniform, and #351 should know
+   * it.** `task` and `tool-wrapper` mint `status: 'error'` envelopes, which
+   * `detectResultFailure` reads as failures; `sub`, `specialist`, `pac-actor`
+   * and `mcp-delegate` return prose with a preamble, which it reads as SUCCESS.
+   * So a step-limited run is a failure at two of six formatters and a success at
+   * four. `RunDefinitionResult.stepLimitHit` is still returned to all five
+   * dispatch tools, so a pass centralizing the error path there will find this
+   * fact already folded into the payload one layer below and must either
+   * special-case it or re-derive it.
    */
   formatResult?(
     result: AgentResult,
