@@ -9,7 +9,7 @@ import { registerBuiltinDefinitions } from '../framework/agents/index.js';
 import type { SubAgentInput } from '../framework/agents/sub.js';
 import { runPAC } from '../framework/pac/run-pac.js';
 import { withSlot, _resetPool, getMaxConcurrentAgents } from './agent-pool.js';
-import { isDispatchCancellation } from '../error-taxonomy.js';
+import { runDispatchOrFail } from './dispatch-failure.js';
 
 /**
  * Resets the shared concurrency pool state.
@@ -67,44 +67,53 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
           const id = slot.id;
           printSubAgentStart(id, task);
 
-          try {
-            const runOpts = {
-              abortSignal: execOptions.abortSignal,
-              // Forward only the user-supplied provider/model so resolveSiteModel
-              // can fall through to the modelMode tier table when neither is set.
-              overrides: { provider, model },
-            };
-            let formatted: string;
-            if (ctx.config.subagentPac) {
-              // `runPAC` owns the final cap (and reserves space for the FAIL
-              // footer); re-capping here would risk truncating that footer away.
-              const pacResult = await runPAC(ctx, { task, context, slotId: id }, runOpts);
-              formatted = pacResult.formatted;
-              // Snapshot the verdict for the Agent Status overlay (#140). Last
-              // write wins across nested / parallel sub-agents — fine, this is a
-              // user-facing peek, not a log.
-              ctx.verification.setLast({
-                verdict: pacResult.verdict,
-                reason: pacResult.reason,
-                source: task.slice(0, 80),
-              });
-            } else {
-              const def = definitions.get<SubAgentInput, string>('sub');
-              const result = await runDefinition(ctx, def, { task, context, slotId: id }, runOpts);
-              formatted = result.formatted;
-            }
-            printSubAgentEnd(id);
-            return formatted;
-          } catch (err: unknown) {
-            printSubAgentEnd(id);
-            // A cancelled dispatch unwinds; a failed one is a tool result (#327).
+          // A cancelled dispatch unwinds; a failed one is a tool result (#327,
+          // #351 — the try/catch/re-throw is `runDispatchOrFail`'s).
+          return runDispatchOrFail(
+            async () => {
+              try {
+                const runOpts = {
+                  abortSignal: execOptions.abortSignal,
+                  // Forward only the user-supplied provider/model so resolveSiteModel
+                  // can fall through to the modelMode tier table when neither is set.
+                  overrides: { provider, model },
+                };
+                let formatted: string;
+                if (ctx.config.subagentPac) {
+                  // `runPAC` owns the final cap (and reserves space for the FAIL
+                  // footer); re-capping here would risk truncating that footer away.
+                  const pacResult = await runPAC(ctx, { task, context, slotId: id }, runOpts);
+                  formatted = pacResult.formatted;
+                  // Snapshot the verdict for the Agent Status overlay (#140). Last
+                  // write wins across nested / parallel sub-agents — fine, this is a
+                  // user-facing peek, not a log.
+                  ctx.verification.setLast({
+                    verdict: pacResult.verdict,
+                    reason: pacResult.reason,
+                    source: task.slice(0, 80),
+                  });
+                } else {
+                  const def = definitions.get<SubAgentInput, string>('sub');
+                  const result = await runDefinition(
+                    ctx,
+                    def,
+                    { task, context, slotId: id },
+                    runOpts,
+                  );
+                  formatted = result.formatted;
+                }
+                return formatted;
+              } finally {
+                // Every exit path, cancellation included — which is what the
+                // success/catch pair it replaces already did, by duplication.
+                printSubAgentEnd(id);
+              }
+            },
             // The `Error:` prefix is load-bearing, not decoration: it is what
-            // `detectResultFailure` reads (#364). Without it the failure below
+            // `detectResultFailure` reads (#364). Without it this failure
             // registers as citable evidence and bumps this tool's successCount.
-            if (isDispatchCancellation(err)) throw err;
-            const message = err instanceof Error ? err.message : String(err);
-            return `Error: Sub-agent failed: ${message}`;
-          }
+            (message) => `Error: Sub-agent failed: ${message}`,
+          );
         },
         () =>
           `Error: Maximum concurrent sub-agents (${getMaxConcurrentAgents()}) reached. Wait for existing sub-agents to finish.`,

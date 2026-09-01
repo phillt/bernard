@@ -13,5 +13,3 @@ export * from './tools/registry.js';
 export * from './tools/mcp.js';
 export * from './strategies/index.js';
 export * from './agents/index.js';
-export { createDispatchTool } from './dispatch.js';
-export type { DispatchToolOpts, AllowedOverride } from './dispatch.js';

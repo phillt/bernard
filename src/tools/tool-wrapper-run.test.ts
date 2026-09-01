@@ -112,7 +112,7 @@ import {
 } from './tool-wrapper-run.js';
 import { relabelStepLimit } from '../framework/agents/tool-wrapper.js';
 import { WRAPPER_PARSE_FAILURE_RESULT } from '../structured-output.js';
-import { _resetPool } from './agent-pool.js';
+import { _resetPool, getActiveCount } from './agent-pool.js';
 import { classifyError } from '../error-taxonomy.js';
 import { DEFAULT_SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 import type { AgentContext } from '../framework/context.js';
@@ -857,6 +857,47 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
     expect(parsed.status).toBe('error');
     expect(parsed.error).toBe('runtime_error');
     expect(parsed.result).toContain('network timeout');
+  });
+
+  it('re-throws a cancellation instead of handing it back as a result (#327, #351)', async () => {
+    // `tool_wrapper_run` is the other site #327's first pass missed. It passes
+    // `abortSignal` like the three it patched, so an Esc used to come back as a
+    // *successful* `{status:'error', error:'runtime_error'}` envelope the parent
+    // reads as data and loops on. `withSlot` is mocked in this file, so the
+    // non-vacuous half of the guard is below: a cancellation is not a run, and
+    // must not be written to the reasoning log as one.
+    specialistStore.get.mockReturnValue(makeToolWrapperSpecialist());
+    vi.mocked(generateText).mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+
+    const toolDef = createToolWrapperRunTool(
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
+    );
+    await expect(
+      toolDef.execute(
+        { specialistId: 'shell-wrapper', input: 'do something' },
+        DEFAULT_EXEC_OPTIONS,
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(vi.mocked(appendReasoningLog)).not.toHaveBeenCalled();
+    expect(getActiveCount()).toBe(0);
+  });
+
+  it('re-throws an abort the runner fired itself', async () => {
+    specialistStore.get.mockReturnValue(makeToolWrapperSpecialist());
+    const own = new Error('Provider stream timed out — no data received for 120000 ms');
+    own.name = 'DispatchAbortError';
+    vi.mocked(generateText).mockRejectedValue(own);
+
+    const toolDef = createToolWrapperRunTool(
+      makeCtx(config, options, memoryStore, specialistStore, correctionStore),
+    );
+    await expect(
+      toolDef.execute(
+        { specialistId: 'shell-wrapper', input: 'do something' },
+        DEFAULT_EXEC_OPTIONS,
+      ),
+    ).rejects.toThrow(/timed out/);
   });
 
   it('logs the runtime error to the reasoning log', async () => {
