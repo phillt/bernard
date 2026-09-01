@@ -172,6 +172,7 @@ import { MessageStore } from './message-store.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers, type MenuResult } from './ink-handlers.js';
 import { injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
+import { parseMCPToolName } from '../mcp-names.js';
 import {
   VoiceService,
   resolveBackend,
@@ -1285,10 +1286,16 @@ export function App({
           ? { text: `  ✓ ${s.name} (${s.toolCount} tools)` }
           : { text: `  ✗ ${s.name} — ${s.error}` },
       );
-      const toolNames = Object.keys(stores.mcp.getTools());
-      if (toolNames.length > 0) {
+      // Grouped by server and shown as the tool's own name. Since #413 the
+      // registry key is `<server>_<hash>__<tool>`, so one flat comma-joined
+      // list would repeat the same prefix on every entry and bury the part the
+      // user is actually looking for.
+      const perServer = stores.mcp.getServerTools();
+      for (const [server, tools] of Object.entries(perServer)) {
+        const names = Object.keys(tools).map((k) => parseMCPToolName(k)?.tool ?? k);
+        if (names.length === 0) continue;
         lines.push({ text: '' });
-        lines.push({ text: `MCP tools: ${toolNames.join(', ')}`, dim: true });
+        lines.push({ text: `${server}: ${names.join(', ')}`, dim: true });
       }
       showInfo('MCP servers', lines);
       return;
