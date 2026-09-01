@@ -50,6 +50,12 @@ import { runDefinition } from '../framework/agents/run.js';
 import { runPAC } from '../framework/pac/run-pac.js';
 import { withUncappedSlot } from './agent-pool.js';
 import { detectResultFailure } from '../tool-result-shape.js';
+import { flattenServerTools } from '../mcp-names.js';
+
+const SERVER_TOOLS: Record<string, Record<string, any>> = {
+  google: { google__list: { g: 1 }, google__get: { g: 2 } },
+  slack: { slack__post: { s: 1 } },
+};
 
 function makeCtx(over: Record<string, any> = {}): any {
   return {
@@ -57,16 +63,11 @@ function makeCtx(over: Record<string, any> = {}): any {
     toolOptions: { askUser: vi.fn() },
     policyDecision: { toolMode: { mode: 'read-only' } },
     mcp: {
-      tools: {
-        google__list: { g: 1 },
-        google__get: { g: 2 },
-        slack__post: { s: 1 },
-      },
+      // Derived exactly as `MCPManager.snapshot()` does, so the fixture cannot
+      // encode a flat bag and a per-server map that disagree (#413).
+      tools: flattenServerTools(SERVER_TOOLS),
       serverNames: ['google', 'slack'],
-      serverTools: {
-        google: ['google__list', 'google__get'],
-        slack: ['slack__post'],
-      },
+      serverTools: SERVER_TOOLS,
     },
     ...over,
   };

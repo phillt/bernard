@@ -7,6 +7,7 @@ import { subAgentDefinition } from '../sub.js';
 import { taskDefinition } from '../task.js';
 import { specialistDefinition } from '../specialist.js';
 import { pacActorDefinition } from '../pac-actor.js';
+import { flattenServerTools } from '../../../mcp-names.js';
 
 /**
  * Shared fixture for the per-server MCP delegation assertions (#296, #305).
@@ -34,6 +35,15 @@ export const RAW_MCP_TOOLS = [
 /** The delegate tools that should replace them when delegation is on. */
 export const DELEGATE_TOOLS = ['delegate_google', 'delegate_slack'] as const;
 
+/** Per-server registry; `mcp.tools` is derived from it, never written twice. */
+export const FIXTURE_SERVER_TOOLS: Record<string, Record<string, any>> = {
+  google: {
+    google__gmail_list: { description: 'list gmail' },
+    google__gmail_get: { description: 'get email' },
+  },
+  slack: { slack__post_message: { description: 'post to slack' } },
+};
+
 export function makeCtx(
   mcpDelegation: boolean,
   overrides: Partial<AgentContext> = {},
@@ -43,16 +53,12 @@ export function makeCtx(
     config: baseConfig(mcpDelegation),
     toolOptions: {},
     mcp: {
-      tools: {
-        google__gmail_list: { description: 'list gmail' },
-        google__gmail_get: { description: 'get email' },
-        slack__post_message: { description: 'post to slack' },
-      },
+      // `tools` is DERIVED here exactly as `MCPManager.snapshot()` derives it,
+      // so this fixture cannot encode a state the real assembler could never
+      // produce — a flat bag and a per-server map that disagree (#413).
+      tools: flattenServerTools(FIXTURE_SERVER_TOOLS),
       serverNames: ['google', 'slack'],
-      serverTools: {
-        google: ['google__gmail_list', 'google__gmail_get'],
-        slack: ['slack__post_message'],
-      },
+      serverTools: FIXTURE_SERVER_TOOLS,
     },
     stores: {
       memory: { clearScratch: () => {} },

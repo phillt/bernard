@@ -18,7 +18,20 @@ import type { AgentContext } from '../framework/context.js';
  * Exported for `delegate-dispatch.ts`, which scopes a helper to the same set.
  */
 export function serverToolNames(ctx: AgentContext, server: string): string[] {
-  return ctx.mcp.serverTools?.[server] ?? [];
+  return Object.keys(serverToolMap(ctx, server));
+}
+
+/**
+ * The tools routed to `server`, as a ready-to-use registry.
+ *
+ * Returned straight from the per-server map rather than assembled by looking
+ * each name up in the flat bag (#413). That lookup was a join between two
+ * independently-authored structures, and `if (t)` silently dropped anything
+ * they disagreed about — so a mismatch produced a helper with no tools whose
+ * system prompt still listed them, the #305 failure shape.
+ */
+export function serverToolMap(ctx: AgentContext, server: string): Record<string, Tool> {
+  return (ctx.mcp.serverTools?.[server] ?? {}) as Record<string, Tool>;
 }
 
 /** Tool-name-safe form of a server name (AI-SDK tool names: `[a-zA-Z0-9_-]`). */

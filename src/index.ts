@@ -325,7 +325,11 @@ async function runInkRepl(args: {
     mode: config.mcpResultShaping,
     maxChars: config.mcpResultShapingMaxChars,
   });
-  const { tools: mcpTools, serverNames: mcpServerNames, serverTools: mcpServerTools } = mcpSnapshot;
+  // Deliberately NOT destructured and re-composed. `snapshot()` exists so an
+  // `AgentContextMCP` is assembled in exactly one place; splitting it into
+  // locals and rebuilding the literal below reintroduced the trap it closes —
+  // a field added to the type would simply be dropped here, silently, which is
+  // how the cron runner ended up with no `serverTools` (#305).
 
   const sessionToolAllowlist = new Set<string>();
 
@@ -453,7 +457,7 @@ async function runInkRepl(args: {
   const agentCtx = assembleContext({
     config,
     toolOptions,
-    mcp: { tools: mcpTools, serverNames: mcpServerNames, serverTools: mcpServerTools },
+    mcp: mcpSnapshot,
     rag: ragStore,
     stores: {
       memory: memoryStore,

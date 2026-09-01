@@ -24,21 +24,35 @@ export interface AgentContextStores {
 }
 
 export interface AgentContextMCP {
+  /**
+   * Flat, name-keyed bag of every MCP tool.
+   *
+   * **Derived from {@link AgentContextMCP.serverTools}, never authored.**
+   * `MCPManager.snapshot()` produces it with `flattenServerTools`, so the two
+   * share key strings and object identities by construction and cannot
+   * disagree about a name (#413).
+   */
   tools: Record<string, any>;
   serverNames: string[];
   /**
-   * Per-server tool-name map (`{ server: [toolName, …] }`), populated at
-   * bootstrap from `MCPManager.getServerToolMap()`. Lets per-server delegation
+   * Per-server registry (`{ server: { toolName: tool } }`), populated at
+   * bootstrap from `MCPManager.getServerTools()`. Lets per-server delegation
    * (#296) scope a helper sub-agent to one server's tools without reaching for
    * the process-global `getActiveMCPManager()`. `{}` when no MCP servers are
    * connected or in test contexts.
+   *
+   * Carries the tool OBJECTS, not just names (#413). The name-only shape made
+   * every consumer re-look-up each name in `tools`, and that join is what let
+   * the two structures disagree — silently, because `dispatchServerDelegate`
+   * guarded the lookup with `if (t)` and so degraded to a helper with no tools
+   * while still advertising them in its system prompt.
    *
    * Required, not optional: an origin that populates `tools` + `serverNames`
    * but forgets this reduces every `delegate_<server>` to zero tools, which is
    * exactly the bug the cron runner shipped (#305). Build this type via
    * `MCPManager.snapshot()` rather than by hand.
    */
-  serverTools: Record<string, string[]>;
+  serverTools: Record<string, Record<string, any>>;
 }
 
 export interface AgentContext {

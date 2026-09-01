@@ -218,3 +218,27 @@ export function resolveMCPName(
   if (live.has(stored)) return stored;
   return index.get(stored) ?? null;
 }
+
+/**
+ * Flattens the per-server registry into one name-keyed bag.
+ *
+ * The flat form is genuinely needed in three places — a delegation-off
+ * dispatch, the tool-wrapper's `targetTools` registry, and `augmentTools`'
+ * iteration — but it is always DERIVED here, never authored. That is what makes
+ * it impossible for the flat bag and the per-server map to disagree about a
+ * key: there is only one place a key is written.
+ *
+ * Lives in this leaf rather than beside `MCPManager` because it is a pure
+ * operation on plain objects that test fixtures also need, and importing
+ * `mcp.ts` for it drags in `@ai-sdk/mcp`, `node:fs` and the whole `config`
+ * chain — the edge `tool-bytes.ts` and `tool-result-shape.ts` exist to refuse.
+ * Fixtures deriving `tools` through this same function is what stops them
+ * encoding a state the real assembler could never produce.
+ */
+export function flattenServerTools<T>(
+  serverTools: Record<string, Record<string, T>>,
+): Record<string, T> {
+  const flat: Record<string, T> = {};
+  for (const tools of Object.values(serverTools)) Object.assign(flat, tools);
+  return flat;
+}

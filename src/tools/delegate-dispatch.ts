@@ -8,7 +8,7 @@ import {
 } from '../framework/agents/mcp-delegate.js';
 import { withUncappedSlot } from './agent-pool.js';
 import { createAskUserTool } from './ask-user.js';
-import { serverToolNames } from './delegate.js';
+import { serverToolMap } from './delegate.js';
 import { debugLog } from '../logger.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
 
@@ -45,12 +45,13 @@ export async function dispatchServerDelegate(
     // `runPAC` throw is still shaped into a result rather than escaping raw.
     return runDispatchOrFail(
       async () => {
-        const toolNames = serverToolNames(ctx, server);
-        const childTools: Record<string, Tool> = {};
-        for (const name of toolNames) {
-          const t = ctx.mcp.tools[name];
-          if (t) childTools[name] = t;
-        }
+        // Straight from the per-server map: no name lookup, so there is no
+        // join to go wrong (#413). The previous form pulled each name out of
+        // the flat bag behind an `if (t)`, which meant any disagreement
+        // between the two structures produced a helper with only `ask_user`
+        // while `buildDelegateSystemPrompt` still advertised the real tools.
+        const childTools: Record<string, Tool> = { ...serverToolMap(ctx, server) };
+        const toolNames = Object.keys(childTools);
         // Give the helper a direct line to the user for mid-task disambiguation
         // (suspend-ask-resume through the live REPL popup). The tool-wrapper
         // registry omits `ask_user`; delegation needs it because MCP tasks

@@ -481,3 +481,75 @@ describe('MCP stdio stderr capture', () => {
     expect(typeof config.stderr).toBe('number');
   });
 });
+
+// #413: the flat registry was last-writer-wins, so a server exporting a name
+// another server already owned silently lost that tool from its OWN per-server
+// list — measured, `playwright` kept 17 of its 24 tools. The per-server map is
+// the fix, and these pin the property rather than the mechanism.
+describe('MCPManager per-server registry (#413)', () => {
+  let manager: InstanceType<typeof MCPManager>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager = new MCPManager();
+  });
+
+  async function connectTwoSharing(): Promise<void> {
+    const a = makeMockClient({
+      shared: makeDynamicTool(vi.fn()),
+      onlyA: makeDynamicTool(vi.fn()),
+    });
+    const b = makeMockClient({
+      shared: makeDynamicTool(vi.fn()),
+      onlyB: makeDynamicTool(vi.fn()),
+    });
+    mockCreateMCPClient.mockImplementation((opts: any) =>
+      Promise.resolve(opts.transport?.url === 'http://a' ? a : b),
+    );
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { serverA: { url: 'http://a' }, serverB: { url: 'http://b' } },
+    });
+    await manager.connect();
+  }
+
+  it('both servers keep every tool they export, collision included', async () => {
+    await connectTwoSharing();
+
+    const perServer = manager.getServerTools();
+    expect(Object.keys(perServer.serverA).sort()).toEqual(['onlyA', 'shared']);
+    expect(Object.keys(perServer.serverB).sort()).toEqual(['onlyB', 'shared']);
+  });
+
+  // The regression that started the issue: a server's advertised tool count and
+  // the tools a delegate helper can actually reach must agree.
+  it("each server's tool count matches what it actually kept", async () => {
+    await connectTwoSharing();
+
+    const perServer = manager.getServerTools();
+    for (const status of manager.getServerStatuses()) {
+      expect(Object.keys(perServer[status.name])).toHaveLength(status.toolCount);
+    }
+  });
+
+  it('snapshot derives the flat bag from the per-server map, sharing identities', async () => {
+    await connectTwoSharing();
+
+    const snap = manager.snapshot();
+    expect(snap.tools.onlyA).toBe(snap.serverTools.serverA.onlyA);
+    expect(snap.tools.onlyB).toBe(snap.serverTools.serverB.onlyB);
+  });
+
+  // A dead server used to keep its tools registered, so its stale entry went on
+  // occupying a name a healthy server also exported — with no way to fall back.
+  it('a failed reconnect drops only that server, leaving the other callable', async () => {
+    await connectTwoSharing();
+
+    mockCreateMCPClient.mockRejectedValue(new Error('down'));
+    expect(await manager.reconnectServer('serverB')).toBe(false);
+
+    const perServer = manager.getServerTools();
+    expect(perServer.serverB).toBeUndefined();
+    expect(Object.keys(perServer.serverA).sort()).toEqual(['onlyA', 'shared']);
+    expect(manager.getTools().shared).toBeDefined();
+  });
+});
