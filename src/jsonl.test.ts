@@ -8,6 +8,7 @@ import {
   rotateJsonlByCount,
   listFilesByMtime,
   pruneFilesByMtime,
+  pruneFileGroupsByMtime,
 } from './jsonl.js';
 
 let dir: string;
@@ -106,5 +107,51 @@ describe('pruneFilesByMtime', () => {
     expect(fs.existsSync(other)).toBe(true);
 
     expect(() => pruneFilesByMtime(path.join(dir, 'missing'), 2, '.jsonl')).not.toThrow();
+  });
+});
+
+describe('pruneFileGroupsByMtime', () => {
+  // A session writes `<id>.jsonl` plus a sidecar per subsystem that needed a
+  // descriptor. Ranking those files individually spends several retention
+  // slots on one run and orphans sidecars whose transcript was pruned.
+  const groupOf = (name: string) => name.match(/^(s\d+)/)?.[1] ?? null;
+
+  function writeAt(name: string, t: number): string {
+    const f = path.join(dir, name);
+    fs.writeFileSync(f, '');
+    fs.utimesSync(f, new Date(1000 * t), new Date(1000 * t));
+    return f;
+  }
+
+  it('keeps whole groups, ranked by their newest member', () => {
+    for (let i = 0; i < 4; i++) {
+      writeAt(`s${i}.jsonl`, i + 1);
+      writeAt(`s${i}-mcp-stderr.log`, i + 1);
+    }
+    // s0 has the oldest .jsonl but its sidecar was just appended to. A group
+    // ranks by its NEWEST member, so s0 is retained whole — including a
+    // transcript that a per-file pass would have pruned out from under it.
+    fs.utimesSync(path.join(dir, 's0-mcp-stderr.log'), new Date(99_000), new Date(99_000));
+
+    pruneFileGroupsByMtime(dir, 2, groupOf);
+
+    expect(listFilesByMtime(dir).map((f) => f.name).sort()).toEqual([
+      's0-mcp-stderr.log',
+      's0.jsonl',
+      's3-mcp-stderr.log',
+      's3.jsonl',
+    ]);
+  });
+
+  it('leaves ungrouped files alone and never throws on a missing dir', () => {
+    writeAt('s0.jsonl', 1);
+    writeAt('s1.jsonl', 2);
+    const foreign = writeAt('not-a-session.txt', 3);
+
+    pruneFileGroupsByMtime(dir, 1, groupOf);
+
+    expect(fs.existsSync(foreign)).toBe(true);
+    expect(fs.existsSync(path.join(dir, 's0.jsonl'))).toBe(false);
+    expect(() => pruneFileGroupsByMtime(path.join(dir, 'missing'), 1, groupOf)).not.toThrow();
   });
 });

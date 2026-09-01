@@ -2,13 +2,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { SESSION_LOGS_DIR } from './paths.js';
-import { pruneFilesByMtime } from './jsonl.js';
+import { pruneFileGroupsByMtime } from './jsonl.js';
 
-const MAX_SESSION_FILES = 50;
+const MAX_SESSIONS = 50;
+
+/**
+ * A session's id as it appears at the head of every file the session writes:
+ * `YYYY-MM-DD-<8 hex>`, per {@link getSessionId}. Anchored, so it matches both
+ * `<id>.jsonl` and a `<id>-<suffix>` sidecar and nothing else in the directory.
+ */
+const SESSION_FILE_RE = /^(\d{4}-\d{2}-\d{2}-[0-9a-f]{8})/;
 
 let SESSION_ID: string | null = null;
 let dirCreated = false;
 let rotated = false;
+/** Open sidecar descriptors, keyed by suffix — one per suffix per process. */
+const sidecarFds = new Map<string, number>();
 
 /** Returns true when BERNARD_DEBUG is on. Central gate — prefer this over inline env reads. */
 export function isDebugEnabled(): boolean {
@@ -33,6 +42,13 @@ export function getSessionLogPath(): string {
   return path.join(SESSION_LOGS_DIR, `${getSessionId()}.jsonl`);
 }
 
+/** Create the session-log directory once per process. */
+function ensureLogDir(): void {
+  if (dirCreated) return;
+  fs.mkdirSync(SESSION_LOGS_DIR, { recursive: true });
+  dirCreated = true;
+}
+
 /**
  * Append a JSONL record to the per-session debug log when `BERNARD_DEBUG`
  * is enabled. No-ops silently when debug mode is off.
@@ -44,10 +60,7 @@ export function getSessionLogPath(): string {
 export function debugLog(label: string, data: unknown): void {
   if (!isDebugEnabled()) return;
 
-  if (!dirCreated) {
-    fs.mkdirSync(SESSION_LOGS_DIR, { recursive: true });
-    dirCreated = true;
-  }
+  ensureLogDir();
   if (!rotated) {
     rotated = true;
     try {
@@ -93,14 +106,56 @@ export async function traceLlm<T>(site: string, model: string, fn: () => Promise
 }
 
 /**
- * Keep the N most recent session logs by mtime; delete the rest.
+ * Keep the N most recent sessions; delete the rest.
  *
- * Pruned per extension, not once over the directory: a session that spawns
- * MCP servers drops a sibling `<sessionId>-mcp-stderr.log` beside its
- * `.jsonl`, and a single mixed prune would let a run's two files compete for
- * the same budget — halving the number of sessions actually retained.
+ * Retention is per SESSION, not per file: a session writes its `<id>.jsonl`
+ * plus one sidecar per subsystem that needed a descriptor (see
+ * {@link openSessionSidecarFd}), and those files are one unit — ranking them
+ * individually would let a single run consume several slots, retain a sidecar
+ * whose transcript was already deleted, and quietly redefine `MAX_SESSIONS` as
+ * a per-extension budget. Grouping also means a new sidecar is covered the day
+ * it is added, with no list here to keep in sync.
  */
 function rotateSessionLogs(): void {
-  pruneFilesByMtime(SESSION_LOGS_DIR, MAX_SESSION_FILES, '.jsonl');
-  pruneFilesByMtime(SESSION_LOGS_DIR, MAX_SESSION_FILES, '.log');
+  pruneFileGroupsByMtime(SESSION_LOGS_DIR, MAX_SESSIONS, (name) => {
+    const m = SESSION_FILE_RE.exec(name);
+    // Not a session file — leave it alone rather than sweep the directory.
+    return m ? m[1] : null;
+  });
+}
+
+/**
+ * An append descriptor for a per-session sidecar file named
+ * `<sessionId>-<suffix>`, or `null` when debug logging is off or the file
+ * cannot be opened.
+ *
+ * For output Bernard does not produce and cannot interleave into its own
+ * stream: a spawned child's stderr, which has to go *somewhere* that needs no
+ * reader draining it (see `mcpStderrTarget` in `src/mcp.ts`). Handing out a
+ * descriptor rather than a path is the point — the kernel writes to it
+ * directly, so nothing here is on the hot path once it is open.
+ *
+ * Lives beside {@link debugLog} because the session id, the directory latch
+ * and the retention budget are all owned here; a caller that opened its own
+ * file would re-derive the naming convention and then have to be remembered
+ * separately by {@link rotateSessionLogs}.
+ *
+ * One descriptor per suffix per process, never closed — it is append-only and
+ * released at exit. Note the file is unbounded *within* a session: rotation
+ * counts sessions and runs once at startup, so a long-lived daemon with a
+ * chatty child accumulates a single large sidecar until it next restarts.
+ */
+export function openSessionSidecarFd(suffix: string): number | null {
+  if (!isDebugEnabled()) return null;
+  const open = sidecarFds.get(suffix);
+  if (open !== undefined) return open;
+  try {
+    ensureLogDir();
+    const fd = fs.openSync(path.join(SESSION_LOGS_DIR, `${getSessionId()}-${suffix}`), 'a');
+    sidecarFds.set(suffix, fd);
+    return fd;
+  } catch {
+    // Never let a logging failure stop the caller's real work.
+    return null;
+  }
 }

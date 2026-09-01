@@ -133,3 +133,46 @@ export function pruneFilesByMtime(dir: string, keep: number, ext?: string): void
     }
   }
 }
+
+/**
+ * Delete all but the `keep` most-recent file *groups* in `dir`, where `groupOf`
+ * maps a filename to the key its files share (returning `null` to exclude a
+ * file from retention entirely). A group ranks by its newest member, and is
+ * deleted whole.
+ *
+ * The sibling of {@link pruneFilesByMtime}, for a directory where one logical
+ * unit spans several files — a debug session that writes `<id>.jsonl` plus a
+ * sidecar per spawned subsystem. Ranking those files individually is wrong in
+ * three ways that all read as correct locally: a per-extension pass has to be
+ * hand-extended for every new sidecar (one that is forgotten is simply never
+ * pruned, silently), the passes rank independently so the Nth-newest `.jsonl`
+ * and the Nth-newest sidecar belong to different sessions and each retains
+ * orphans of the other, and `keep` silently means "keep × extensions" rather
+ * than the session count it is written as. Grouping makes the retention unit
+ * the thing the budget is actually about.
+ */
+export function pruneFileGroupsByMtime(
+  dir: string,
+  keep: number,
+  groupOf: (name: string) => string | null,
+): void {
+  // Newest-first input, so the first sighting of a key is that group's newest
+  // member and insertion order is already the group ranking.
+  const groups = new Map<string, string[]>();
+  for (const f of listFilesByMtime(dir)) {
+    const key = groupOf(f.name);
+    if (key === null) continue;
+    const existing = groups.get(key);
+    if (existing) existing.push(f.path);
+    else groups.set(key, [f.path]);
+  }
+  for (const paths of [...groups.values()].slice(keep)) {
+    for (const p of paths) {
+      try {
+        fs.unlinkSync(p);
+      } catch {
+        // already gone or unreadable — ignore
+      }
+    }
+  }
+}
