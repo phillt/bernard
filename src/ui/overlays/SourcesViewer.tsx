@@ -5,6 +5,7 @@ import { useDimensionsCtx } from '../DimensionsContext.js';
 import type { SourceItem } from '../../provenance.js';
 import { getThemeColors, type ThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
+import { formatElapsed, formatFriendlyTimestamp } from '../../output.js';
 import { ViewerShell, viewerViewport } from './ViewerShell.js';
 import type { KeyHint } from '../hints.js';
 import { MenuRow, MENU_MARKER } from './MenuRow.js';
@@ -339,17 +340,29 @@ function buildCitationDetail(
     titleLines[MAX_TITLE_LINES - 1] = truncate(titleLines[MAX_TITLE_LINES - 1] + '…', w);
   }
 
+  // Budget for the timestamp is what the row has left after the two labels and
+  // the ` · ` that joins them — computed, not truncated, because `truncate`
+  // would cut mid-`ago)` and read as corrupt rather than as absent.
+  const meta = `${source.kind} · ${cited ? 'cited' : 'not cited'}`;
+  const when = sourceWhen(source.timestamp, w - meta.length - 3);
+
   const header: ReactNode[] = [
     ...titleLines.map((line, i) => (
       <Text key={`title-${i}`} color={colors.accent} bold>
         {line}
       </Text>
     )),
-    <Text key="kind">
-      <Text dimColor>{source.kind}</Text>
-      <Text color={cited ? colors.success : undefined} dimColor={!cited}>
+    // Kind, citation status and WHEN share one row (#248). The card's height is
+    // already spent on a border, a wrapped title and a `rawRef`, and every row
+    // taken here is a row of the excerpt that isn't shown — so the timestamp
+    // rides the shortest existing line instead of claiming its own. Themed
+    // muted, not Ink's raw `dimColor`, which ignores the active theme (#320).
+    <Text key="kind" wrap="truncate-end">
+      <Text color={colors.muted}>{source.kind}</Text>
+      <Text color={cited ? colors.success : colors.muted}>
         {cited ? ' · cited' : ' · not cited'}
       </Text>
+      {when && <Text color={colors.muted}>{` · ${when}`}</Text>}
     </Text>,
   ];
   if (source.rawRef && source.rawRef !== source.label) {
@@ -365,6 +378,30 @@ function buildCitationDetail(
     ? buildPreviewLines(source.contentPreview, w)
     : [[{ text: '(no content preview)', role: 'muted' }]];
   return { header, lines };
+}
+
+/**
+ * `2:41 PM (3m5s ago)` — when a source was registered, plus how long ago, when
+ * both fit `budget`; the clock alone when only that fits; `''` when neither does
+ * or the record carries no usable stamp.
+ *
+ * `SourceItem.timestamp` has always been recorded and never rendered, which is
+ * what made "is this citation from this turn or an hour ago?" unanswerable from
+ * the viewer. Absolute AND relative because each answers a different question —
+ * the clock places it against the transcript, the age places it against now —
+ * and the pair is short enough to share a row.
+ *
+ * A non-positive or non-finite stamp yields nothing rather than 1970: a record
+ * predating the field (or a hand-edited one) must not render a confident lie.
+ */
+function sourceWhen(timestamp: number, budget: number): string {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
+  const clock = formatFriendlyTimestamp(new Date(timestamp));
+  const age = Date.now() - timestamp;
+  // A future stamp means clock skew, not a negative age — show the time only.
+  const full = age >= 0 ? `${clock} (${formatElapsed(age)} ago)` : clock;
+  if (full.length <= budget) return full;
+  return clock.length <= budget ? clock : '';
 }
 
 /** Resolve a {@link SpanRole} against the active theme — never Ink's raw

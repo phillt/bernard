@@ -6,6 +6,7 @@ import { SourcesViewer } from '../overlays/SourcesViewer.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
 import type { Agent } from '../../agent.js';
 import type { TurnProvenance } from '../../provenance.js';
+import { formatFriendlyTimestamp } from '../../output.js';
 
 function makeAgent(turns: TurnProvenance[]): Agent {
   return { getTurnProvenance: () => turns } as unknown as Agent;
@@ -496,5 +497,52 @@ describe('<SourcesViewer> array-of-objects tool results (#248)', () => {
   it('falls back to pretty-printed JSON for an array of scalars', async () => {
     const frame = await drill('issues: ["alpha","beta"]');
     expect(frame).toContain('"alpha"');
+  });
+});
+
+describe('<SourcesViewer> citation timestamp (#248)', () => {
+  function timedTurn(timestamp: number): TurnProvenance[] {
+    return [
+      {
+        turnIndex: 0,
+        userInput: 'timed turn',
+        sources: [
+          {
+            id: 'S1',
+            kind: 'web',
+            label: 'example.com',
+            contentPreview: 'body',
+            rawRef: 'https://example.com',
+            timestamp,
+          },
+        ],
+        citedIds: ['S1'],
+        timestamp,
+      },
+    ];
+  }
+
+  async function drill(turns: TurnProvenance[]): Promise<string> {
+    const { stdin, lastFrame } = renderViewer(makeAgent(turns));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    return lastFrame() ?? '';
+  }
+
+  it('shows when the source was registered, and how long ago', async () => {
+    const fiveMinutesAgo = Date.now() - 5 * 60_000;
+    const frame = await drill(timedTurn(fiveMinutesAgo));
+    expect(frame).toContain(formatFriendlyTimestamp(new Date(fiveMinutesAgo)));
+    expect(frame).toContain('(5m0s ago)');
+    // It rides the existing kind/cited row rather than claiming one of its own.
+    expect(frame).toMatch(/web · cited · .+ago\)/);
+  });
+
+  it('renders nothing at all for a record with no usable stamp', async () => {
+    const frame = await drill(timedTurn(0));
+    expect(frame).toContain('web · cited');
+    expect(frame).not.toContain('ago)');
+    expect(frame).not.toContain('1970');
   });
 });
