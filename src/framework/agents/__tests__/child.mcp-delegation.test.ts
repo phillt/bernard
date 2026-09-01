@@ -43,16 +43,16 @@ describe('delegation edge cases (#305)', () => {
   it('a caller-scoped registry still wins for the PAC actor', async () => {
     // How MCP delegation escalation scopes an actor to one server; if the
     // delegation gate overrode it, the escalated run would regain the full bag.
-    const childTools = { google__gmail_list: {}, ask_user: {} };
+    const childTools = { [RAW_MCP_TOOLS[0]]: {}, ask_user: {} };
     const names = Object.keys(await toolsOf(pacActorDefinition, makeCtx(true), { childTools }));
-    expect(names.sort()).toEqual(['ask_user', 'google__gmail_list']);
+    expect(names.sort()).toEqual(['ask_user', RAW_MCP_TOOLS[0]]);
   });
 
   it('the delegate helper carries no delegate tool, so recursion is bounded at depth 1', async () => {
     // `dispatchServerDelegate` scopes the helper to one server's tools plus
     // `ask_user`. Because that registry can never contain a `delegate_*` tool,
     // a helper cannot spawn another helper — no runtime depth guard needed.
-    const childTools = { google__gmail_list: {}, google__gmail_get: {}, ask_user: {} };
+    const childTools = { [RAW_MCP_TOOLS[0]]: {}, [RAW_MCP_TOOLS[1]]: {}, ask_user: {} };
     const names = Object.keys(await toolsOf(mcpDelegateDefinition, makeCtx(true), { childTools }));
     expect(names.filter((n) => n.startsWith('delegate_'))).toEqual([]);
   });
@@ -76,10 +76,10 @@ describe('delegation edge cases (#305)', () => {
     // A caller that drops `serverNames`/`serverTools` would otherwise get
     // neither delegates nor raw tools — total loss of MCP, not a reduction.
     const ctx = makeCtx(true, {
-      mcp: { tools: { google__gmail_list: {} }, serverNames: [], serverTools: {} },
+      mcp: { tools: { [RAW_MCP_TOOLS[0]]: {} }, serverNames: [], serverTools: {} },
     });
     const names = Object.keys(await toolsOf(subAgentDefinition, ctx, anyInput));
-    expect(names).toContain('google__gmail_list');
+    expect(names).toContain(RAW_MCP_TOOLS[0]);
     expect(names.filter((n) => n.startsWith('delegate_'))).toEqual([]);
   });
 });

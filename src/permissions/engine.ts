@@ -13,6 +13,11 @@
  */
 
 import type { PermissionRule } from '../tool-permissions.js';
+// Declared in the leaf every consumer already imports; re-exported here for the
+// permission-layer callers that reach for it from this module. Injected rather
+// than resolved internally so this stays a pure function of its inputs.
+import type { ToolNameAliasResolver } from '../mcp-names.js';
+export type { ToolNameAliasResolver };
 import { parseShellCommand, type ParsedShell } from './shell-ast.js';
 import {
   matchShellSpecifier,
@@ -31,9 +36,33 @@ function ruleMatchesShell(rule: PermissionRule, command: string): boolean {
   return rule.specifier === undefined || matchShellSpecifier(rule.specifier, command);
 }
 
+/**
+ * Does a rule's `tool` field name this call?
+ *
+ * Exact match first. Otherwise the rule may predate MCP tool namespacing
+ * (#413), where a grant was persisted under a bare MCP tool name that is now
+ * registered as `<server>_<hash>__<tool>`; `resolveAlias` maps such a name
+ * forward, and returns `null` when two servers export it — in which case the
+ * rule does not match and the user is asked again, rather than a grant being
+ * honoured against a tool they may never have meant.
+ */
+function ruleNamesTool(
+  rule: PermissionRule,
+  toolName: string,
+  resolveAlias?: ToolNameAliasResolver,
+): boolean {
+  if (rule.tool === toolName) return true;
+  return resolveAlias ? resolveAlias(rule.tool) === toolName : false;
+}
+
 /** Does a rule cover a non-shell (toolName, args) call? */
-function ruleMatchesNonShell(rule: PermissionRule, toolName: string, args: unknown): boolean {
-  if (rule.tool !== toolName) return false;
+function ruleMatchesNonShell(
+  rule: PermissionRule,
+  toolName: string,
+  args: unknown,
+  resolveAlias?: ToolNameAliasResolver,
+): boolean {
+  if (!ruleNamesTool(rule, toolName, resolveAlias)) return false;
   if (rule.specifier === undefined) return true; // matches any invocation of the tool
   if (FILE_TOOLS.has(toolName)) {
     const p = (args as Record<string, unknown> | undefined)?.path;
@@ -96,9 +125,10 @@ export function resolveGrant(
   args: unknown,
   rules: PermissionRule[],
   isDangerousShell: boolean,
+  resolveAlias?: ToolNameAliasResolver,
 ): GrantDecision {
   if (toolName !== 'shell') {
-    return scanRules(rules, (rule) => ruleMatchesNonShell(rule, toolName, args));
+    return scanRules(rules, (rule) => ruleMatchesNonShell(rule, toolName, args, resolveAlias));
   }
 
   // Invariant: dangerous shell always re-prompts, no rule can override it.

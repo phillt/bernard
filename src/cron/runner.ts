@@ -163,7 +163,12 @@ export async function runJob(job: CronJob, log: (msg: string) => void): Promise<
   }
 
   const mcpManager = new MCPManager();
-  let mcpSnapshot: AgentContextMCP = { tools: {}, serverNames: [], serverTools: {} };
+  let mcpSnapshot: AgentContextMCP = {
+    tools: {},
+    serverNames: [],
+    serverTools: {},
+    resolveAlias: () => null,
+  };
 
   try {
     await mcpManager.connect();

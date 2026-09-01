@@ -126,7 +126,17 @@ export function buildMainSystemPrompt(
   if (stylePrompt) {
     systemPrompt += '\n\n' + stylePrompt;
   }
-  const profilesBlock = buildToolProfilesPrompt(ctx.stores.toolProfiles);
+  // Filter orphaned MCP profiles out of the block. After #413 renamed MCP tool
+  // keys, a profile written under the old bare key names a tool the model can
+  // no longer call — and since the block sorts by `errorCount` descending, a
+  // high-error orphan would outrank live tools and crowd them out of the
+  // budget. `ctx.mcp.tools` is the whole live MCP surface, not this dispatch's
+  // registry, so a delegation-on turn does not read as "every MCP tool is
+  // gone". The docstring that said the registry was not in scope here was
+  // stale: it plainly is.
+  const profilesBlock = buildToolProfilesPrompt(ctx.stores.toolProfiles, {
+    liveKeys: new Set(Object.keys(ctx.mcp?.tools ?? {})),
+  });
   if (profilesBlock) {
     systemPrompt += '\n\n' + profilesBlock;
   }

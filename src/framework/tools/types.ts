@@ -33,6 +33,16 @@ export interface ToolMeta {
   name: string;
   kind: 'read' | 'write' | 'dangerous' | 'inert';
   category?: string;
+  /**
+   * For an MCP tool, the name the server itself exports it under (#413).
+   *
+   * `name` is the namespaced registry key, which at the truncation ladder's
+   * last rung is not invertible and is lossy at every rung (`sanitize` rewrites
+   * `.` to `_`). Consumers that need the tool's own name — the `/mcp` listing,
+   * the tool-profile carry-forward — must read it from here rather than
+   * re-deriving it from the key.
+   */
+  rawName?: string;
   /** Same args always produce the same result. Required for caching. */
   deterministic?: boolean;
   /** What the tool touches when it runs. */

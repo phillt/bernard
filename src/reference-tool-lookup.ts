@@ -4,6 +4,7 @@ import { debugLog, traceLlm } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
+import { parseMCPToolName, type ToolNameAliasResolver } from './mcp-names.js';
 import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
 
 /**
@@ -49,11 +50,23 @@ const ALWAYS_ALLOWED_BUILTINS = new Set(['web_search', 'web_read']);
  * tools are restricted to {@link ALWAYS_ALLOWED_BUILTINS} unless explicitly
  * extended via `extraAllowed` (sourced from `BERNARD_LOOKUP_TOOLS`).
  */
-export function isAllowedLookupTool(name: string, extraAllowed: string[] = []): boolean {
-  if (extraAllowed.includes(name)) return true;
+export function isAllowedLookupTool(
+  name: string,
+  extraAllowed: string[] = [],
+  resolveAlias?: (storedName: string) => string | null,
+): boolean {
+  // `BERNARD_LOOKUP_TOOLS` is user-authored and may predate MCP tool
+  // namespacing (#413), so an entry naming a bare MCP tool is resolved
+  // forward. `null` (unknown, or exported by more than one server) simply
+  // fails the check, as before.
+  if (extraAllowed.some((e) => e === name || resolveAlias?.(e) === name)) return true;
   if (ALWAYS_ALLOWED_BUILTINS.has(name)) return true;
-  if (name.includes('__')) {
-    return isReadOnlyMCPSuffix(name);
+  const parsed = parseMCPToolName(name);
+  if (parsed) {
+    // Classify on the tool half only. The server prefix is not part of the
+    // verb, and `isReadOnlyMCPSuffix` is end-anchored so it would happen to
+    // work either way — but not once a long name is middle-truncated.
+    return isReadOnlyMCPSuffix(parsed.tool);
   }
   return false;
 }
@@ -90,11 +103,15 @@ function isReadKindTool(tool: unknown): boolean {
   return readToolMeta(tool)?.kind === 'read';
 }
 
-function collectAllowedTools(tools: Record<string, any>, extraAllowed: string[]): ToolDescriptor[] {
+function collectAllowedTools(
+  tools: Record<string, any>,
+  extraAllowed: string[],
+  resolveAlias?: ToolNameAliasResolver,
+): ToolDescriptor[] {
   const out: ToolDescriptor[] = [];
   for (const [name, tool] of Object.entries(tools)) {
     if (!tool || typeof tool.execute !== 'function') continue;
-    if (!isAllowedLookupTool(name, extraAllowed) && !isReadKindTool(tool)) continue;
+    if (!isAllowedLookupTool(name, extraAllowed, resolveAlias) && !isReadKindTool(tool)) continue;
     out.push(describeTool(name, tool));
   }
   return out;
@@ -385,11 +402,18 @@ export async function runReferenceLookup(
   tools: Record<string, any>,
   config: BernardConfig,
   abortSignal?: AbortSignal,
+  /**
+   * Resolves a `BERNARD_LOOKUP_TOOLS` entry naming a pre-#413 bare MCP tool
+   * onto its live namespaced name. Supply `ctx.mcp.resolveAlias`; omitting it
+   * silently reduces the allowlist to exact matches, which is how the first cut
+   * of #413 shipped this parameter unused.
+   */
+  resolveAlias?: ToolNameAliasResolver,
 ): Promise<ReferenceLookupResult> {
   if (!config.referenceLookup) {
     return { status: 'none' };
   }
-  const candidates = collectAllowedTools(tools, config.referenceLookupTools);
+  const candidates = collectAllowedTools(tools, config.referenceLookupTools, resolveAlias);
   debugLog('reference-tool-lookup:candidates', {
     reference,
     count: candidates.length,

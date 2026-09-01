@@ -216,3 +216,41 @@ describe('stableArgsString totality', () => {
     expect(matchMCPSpecifier('null', { a: 1 })).toBe(false);
   });
 });
+
+// #413: MCP tools are namespaced per server, but grants persisted before that
+// name a bare tool. The engine stays pure — the resolver is injected.
+describe('resolveGrant with an alias resolver', () => {
+  const stored: PermissionRule[] = [{ effect: 'allow', tool: 'browser_click', _v: 2 }];
+
+  it('honors a bare-name grant when it resolves to the live tool', () => {
+    const resolve = (n: string) =>
+      n === 'browser_click' ? 'playwright_ab12cd__browser_click' : null;
+    expect(resolveGrant('playwright_ab12cd__browser_click', {}, stored, false, resolve)).toBe(
+      'allow',
+    );
+  });
+
+  // Fail closed: two servers export the name, so which one the user meant is
+  // unknowable. Asking again is the only safe answer.
+  it('does not honor it when the resolver reports ambiguity', () => {
+    const resolve = () => null;
+    expect(resolveGrant('playwright_ab12cd__browser_click', {}, stored, false, resolve)).toBe(
+      'ask',
+    );
+  });
+
+  it('without a resolver, behaves exactly as before (exact match only)', () => {
+    expect(resolveGrant('playwright_ab12cd__browser_click', {}, stored, false)).toBe('ask');
+    expect(resolveGrant('browser_click', {}, stored, false)).toBe('allow');
+  });
+
+  // A `deny` must not become reachable-but-skippable through an alias miss.
+  it('an aliased deny still wins over an exact allow', () => {
+    const rules: PermissionRule[] = [
+      { effect: 'allow', tool: 'srv_aaa111__x', _v: 2 },
+      { effect: 'deny', tool: 'x', _v: 2 },
+    ];
+    const resolve = (n: string) => (n === 'x' ? 'srv_aaa111__x' : null);
+    expect(resolveGrant('srv_aaa111__x', {}, rules, false, resolve)).toBe('deny');
+  });
+});

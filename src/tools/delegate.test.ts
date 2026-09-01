@@ -43,13 +43,22 @@ vi.mock('../logger.js', () => ({
   debugLog: vi.fn(),
 }));
 
-import { createDelegateTool, createDelegateTools, sanitizeServerToolName } from './delegate.js';
+import { createDelegateTool, createDelegateTools } from './delegate.js';
 import { dispatchServerDelegate } from './delegate-dispatch.js';
 import { buildDelegateSystemPrompt } from '../framework/agents/mcp-delegate.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { runPAC } from '../framework/pac/run-pac.js';
 import { withUncappedSlot } from './agent-pool.js';
 import { detectResultFailure } from '../tool-result-shape.js';
+import { flattenServerTools, mcpServerSegment } from '../mcp-names.js';
+
+const DG = `delegate_${mcpServerSegment('google')}`;
+const DS = `delegate_${mcpServerSegment('slack')}`;
+
+const SERVER_TOOLS: Record<string, Record<string, any>> = {
+  google: { google__list: { g: 1 }, google__get: { g: 2 } },
+  slack: { slack__post: { s: 1 } },
+};
 
 function makeCtx(over: Record<string, any> = {}): any {
   return {
@@ -57,16 +66,11 @@ function makeCtx(over: Record<string, any> = {}): any {
     toolOptions: { askUser: vi.fn() },
     policyDecision: { toolMode: { mode: 'read-only' } },
     mcp: {
-      tools: {
-        google__list: { g: 1 },
-        google__get: { g: 2 },
-        slack__post: { s: 1 },
-      },
+      // Derived exactly as `MCPManager.snapshot()` does, so the fixture cannot
+      // encode a flat bag and a per-server map that disagree (#413).
+      tools: flattenServerTools(SERVER_TOOLS),
       serverNames: ['google', 'slack'],
-      serverTools: {
-        google: ['google__list', 'google__get'],
-        slack: ['slack__post'],
-      },
+      serverTools: SERVER_TOOLS,
     },
     ...over,
   };
@@ -90,19 +94,6 @@ beforeEach(() => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('sanitizeServerToolName', () => {
-  it('keeps valid tool-name characters intact', () => {
-    expect(sanitizeServerToolName('google')).toBe('google');
-    expect(sanitizeServerToolName('google-calendar')).toBe('google-calendar');
-    expect(sanitizeServerToolName('my_server')).toBe('my_server');
-  });
-
-  it('replaces invalid characters with underscores', () => {
-    expect(sanitizeServerToolName('my server!')).toBe('my_server_');
-    expect(sanitizeServerToolName('a.b/c')).toBe('a_b_c');
-  });
-});
-
 describe('buildDelegateSystemPrompt', () => {
   it('names the server, lists tools, and forbids raw dumps', () => {
     const p = buildDelegateSystemPrompt('google', ['google__list', 'google__get']);
@@ -121,7 +112,7 @@ describe('buildDelegateSystemPrompt', () => {
 describe('createDelegateTools', () => {
   it('creates one delegate tool per connected server that has tools', () => {
     const tools = createDelegateTools(makeCtx());
-    expect(Object.keys(tools).sort()).toEqual(['delegate_google', 'delegate_slack']);
+    expect(Object.keys(tools).sort()).toEqual([DG, DS]);
   });
 
   it('skips servers with no tools', () => {
@@ -132,21 +123,41 @@ describe('createDelegateTools', () => {
     expect(Object.keys(tools)).not.toContain('delegate_ghost');
   });
 
-  it('disambiguates delegate-name collisions with a numeric suffix', () => {
-    const ctx = makeCtx();
-    // Two distinct server names that sanitize to the same token.
-    ctx.mcp.serverNames = ['a.b', 'a/b'];
-    ctx.mcp.serverTools = { 'a.b': ['a.b__x'], 'a/b': ['a/b__y'] };
-    ctx.mcp.tools = { 'a.b__x': {}, 'a/b__y': {} };
-    const tools = createDelegateTools(ctx);
-    expect(Object.keys(tools).sort()).toEqual(['delegate_a_b', 'delegate_a_b_2']);
+  // #413 inverted this test's premise. `a.b` and `a/b` both sanitize to `a_b`,
+  // which used to collide and be separated by an iteration-order numeric
+  // suffix — so editing `mcp.json` could renumber a DIFFERENT server's key,
+  // and that key is persisted in permission grants. The hash separates them by
+  // construction, and the suffix loop is gone.
+  it('separates servers whose names sanitize alike, without a positional suffix', () => {
+    const ctx = makeCtx({
+      mcp: {
+        tools: { x: {}, y: {} },
+        serverNames: ['a.b', 'a/b'],
+        serverTools: { 'a.b': { x: {} }, 'a/b': { y: {} } },
+      },
+    });
+
+    const keys = Object.keys(createDelegateTools(ctx));
+
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+    expect(keys).not.toContain('delegate_a_b_2');
+    // Order-independent: each key depends only on its own server's name.
+    const reversed = makeCtx({
+      mcp: {
+        tools: { x: {}, y: {} },
+        serverNames: ['a/b', 'a.b'],
+        serverTools: { 'a.b': { x: {} }, 'a/b': { y: {} } },
+      },
+    });
+    expect(Object.keys(createDelegateTools(reversed)).sort()).toEqual(keys.sort());
   });
 });
 
 describe('createDelegateTool', () => {
   it('names the tool delegate_<sanitized-server> and describes the server', () => {
     const t: any = createDelegateTool(makeCtx(), 'google');
-    expect(t.meta.name).toBe('delegate_google');
+    expect(t.meta.name).toBe(DG);
     expect(t.meta.kind).toBe('read');
     expect(t.description).toContain('google');
   });
@@ -306,7 +317,7 @@ describe('delegate tools bind to the live context (#332)', () => {
     const ctx = makeCtx({ policyDecision: { toolMode: { mode: 'read-only' } } });
     const tools: any = createDelegateTools(ctx);
 
-    await tools.delegate_google.execute({ task: 'x' }, {});
+    await tools[DG].execute({ task: 'x' }, {});
 
     const forwarded = vi.mocked(runDefinition).mock.calls[0][0] as any;
     expect(forwarded.policyDecision).toEqual({ toolMode: { mode: 'read-only' } });
@@ -323,9 +334,9 @@ describe('delegate tools bind to the live context (#332)', () => {
 
     const tools1: any = createDelegateTools(turn1);
     const tools2: any = createDelegateTools(turn2);
-    expect(tools2.delegate_google).not.toBe(tools1.delegate_google);
+    expect(tools2[DG]).not.toBe(tools1[DG]);
 
-    await tools2.delegate_google.execute({ task: 'x' }, {});
+    await tools2[DG].execute({ task: 'x' }, {});
 
     const forwarded = vi.mocked(runDefinition).mock.calls[0][0] as any;
     expect(forwarded).toBe(turn2);

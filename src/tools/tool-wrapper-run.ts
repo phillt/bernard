@@ -261,7 +261,7 @@ export async function dispatchToolWrapper(
               specialist_run: createSpecialistRunTool(ctx),
               tool_wrapper_run: createToolWrapperRunTool(ctx),
             };
-            const childTools = buildChildTools(specialist, fullRegistry);
+            const childTools = buildChildTools(specialist, fullRegistry, ctx.mcp.resolveAlias);
             const wantStructured = specialist.structuredOutput ?? kind === 'tool-wrapper';
 
             const def = definitions.get<ToolWrapperInput, WrapperResult>('tool-wrapper');

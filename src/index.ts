@@ -325,7 +325,6 @@ async function runInkRepl(args: {
     mode: config.mcpResultShaping,
     maxChars: config.mcpResultShapingMaxChars,
   });
-  const { tools: mcpTools, serverNames: mcpServerNames, serverTools: mcpServerTools } = mcpSnapshot;
 
   const sessionToolAllowlist = new Set<string>();
 
@@ -453,7 +452,9 @@ async function runInkRepl(args: {
   const agentCtx = assembleContext({
     config,
     toolOptions,
-    mcp: { tools: mcpTools, serverNames: mcpServerNames, serverTools: mcpServerTools },
+    // Passed whole: `snapshot()` is the single assembler, so a field added to
+    // `AgentContextMCP` can never be silently dropped here (#305).
+    mcp: mcpSnapshot,
     rag: ragStore,
     stores: {
       memory: memoryStore,

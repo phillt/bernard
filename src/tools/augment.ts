@@ -14,7 +14,8 @@ import type { ProvenanceStore } from '../provenance.js';
 import type { ToolMeta } from '../framework/tools/types.js';
 import { isDangerous, isSafelisted } from './shell.js';
 import { permissionKeyFor } from '../tool-permissions.js';
-import { resolveGrant } from '../permissions/engine.js';
+import { mcpProfileKey, parseMCPToolName } from '../mcp-names.js';
+import { resolveGrant, type ToolNameAliasResolver } from '../permissions/engine.js';
 import { breadthOptionsFor, type BreadthOption } from '../permissions/breadth.js';
 
 /**
@@ -31,6 +32,14 @@ function stripFailureHint(snippet: string): string {
 /**
  * Returns the profile key for a given tool invocation. Shell commands are
  * classified into sub-categories; MCP tools are prefixed with `mcp.`.
+ *
+ * The MCP branch used to test `toolName.includes('__')` against the
+ * `@ai-sdk/mcp` convention Bernard did not actually follow — it registered
+ * bare names, so the branch never fired and MCP profiles were written
+ * indistinguishably from built-ins. Since #413 the registry key really is
+ * namespaced, so the branch is live and the key is honest about which server a
+ * profile belongs to. Existing bare-keyed profiles are carried forward by
+ * `getOrCreate`'s `seedFrom`, not rewritten.
  */
 function resolveProfileKey(toolName: string, args: unknown): string {
   if (toolName === 'shell' && args && typeof args === 'object') {
@@ -39,11 +48,23 @@ function resolveProfileKey(toolName: string, args: unknown): string {
       return `shell.${classifyShellCommand(cmd)}`;
     }
   }
-  // MCP tools follow the @ai-sdk/mcp naming convention: serverName__toolName
-  if (toolName.includes('__')) {
-    return `mcp.${toolName}`;
+  if (parseMCPToolName(toolName)) {
+    return mcpProfileKey(toolName);
   }
   return toolName;
+}
+
+/**
+ * The legacy profile key this call's history would have been stored under
+ * before #413 — the server's own name for the tool — or `undefined` for a tool
+ * whose key did not change.
+ *
+ * Read from `meta.rawName` rather than parsed back out of the namespaced key:
+ * `sanitize` rewrites `.` to `_` at every rung and the last rung truncates, so
+ * the key is not a reliable inverse.
+ */
+function legacyProfileKey(meta: ToolMeta | undefined): string | undefined {
+  return meta?.rawName;
 }
 
 function safeSerialize(args: unknown): string {
@@ -65,8 +86,25 @@ function recordOutcome(
   profileKey: string,
   argsSnippet: string,
   errorSnippet: string | undefined,
+  meta?: ToolMeta,
 ): void {
   try {
+    // Carry a pre-#413 bare-keyed history forward on first write under the new
+    // namespaced key. No-op for every non-MCP tool and after the first record.
+    //
+    // Its own try: seeding is a best-effort migration, recording is the actual
+    // job. Sharing the outer catch meant any failure here — including a store
+    // that predates the method — silently skipped the record that followed.
+    try {
+      // Stamps `category` (`mcp.<server>`) as well as carrying history forward.
+      // The field has been declared on `ToolProfile` since it was written and
+      // never assigned by anything — it is what lets the prompt filter tell an
+      // orphaned MCP profile from a built-in, and it is the tool -> server link
+      // #377 needs in order to cascade profile deletion on server removal.
+      profileStore.ensureSeeded?.(profileKey, legacyProfileKey(meta), meta?.category);
+    } catch {
+      // A carried-over history is a nicety; never lose the outcome over it.
+    }
     if (errorSnippet !== undefined) {
       // Strip the wrapper-shim's `[failure: <category>] ...` hint before
       // classification + storage. Otherwise the recorded bad-example bytes
@@ -156,6 +194,16 @@ export interface AugmentOptions {
    * exactly as before #212.
    */
   getToolPermissions?: ToolOptions['getToolPermissions'];
+  /**
+   * Maps a persisted tool name onto the live name it refers to, for grants
+   * stored before MCP tools were namespaced per server (#413).
+   *
+   * Injected, never derived from `tools` — see `AgentContextMCP.resolveAlias`
+   * for why the scope has to be the whole live surface. Pass
+   * `ctx.mcp.resolveAlias`; omitting it leaves both gates on exact matching,
+   * which is the pre-#413 behaviour.
+   */
+  resolveToolAlias?: ToolNameAliasResolver;
   /**
    * Deterministic tool result cache toggle (#171). When omitted or `true`,
    * tools whose `ToolMeta` passes `isCacheable` (deterministic + no side
@@ -388,7 +436,7 @@ export function augmentTools(
   ): 'allow' | 'deny' | 'ask' => {
     const rules = opts.getToolPermissions?.() ?? [];
     if (rules.length === 0) return 'ask';
-    const decision = resolveGrant(toolName, args, rules, isDangerousShell);
+    const decision = resolveGrant(toolName, args, rules, isDangerousShell, opts.resolveToolAlias);
     if (decision === 'deny') debugLog(`augment:${toolName}:${gate}:profile-deny`, {});
     return decision;
   };
@@ -560,6 +608,7 @@ export function augmentTools(
                     resolveProfileKey(toolName, args),
                     safeSerialize(args),
                     undefined,
+                    readToolMeta(toolDef),
                   ),
                 );
                 // Evidence pointer (#141) for cache hits: without this, a
@@ -615,7 +664,14 @@ export function augmentTools(
                   )
                 : undefined;
             setImmediate(() =>
-              recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet),
+              recordOutcome(
+                profileStore,
+                toolName,
+                profileKey,
+                argsSnippet,
+                errSnippet,
+                readToolMeta(toolDef),
+              ),
             );
 
             const serialized = source.serializeForModel(envelope);
@@ -717,7 +773,14 @@ export function augmentTools(
             try {
               const errorInfo = detectToolError(toolName, capturedResult);
               const errSnippet = errorInfo.isError ? errorInfo.snippet : undefined;
-              recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet);
+              recordOutcome(
+                profileStore,
+                toolName,
+                profileKey,
+                argsSnippet,
+                errSnippet,
+                readToolMeta(toolDef),
+              );
             } catch {
               // detectToolError throws are swallowed; recording must never propagate.
             }

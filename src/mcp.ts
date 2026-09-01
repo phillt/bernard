@@ -6,6 +6,12 @@ import { jsonSchema } from 'ai';
 import { printInfo, printError } from './output.js';
 import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
 import { openSessionSidecarFd } from './logger.js';
+import {
+  flattenServerTools,
+  makeAliasResolver,
+  mcpServerSegment,
+  mcpToolName,
+} from './mcp-names.js';
 import { attachMeta } from './framework/tools/adapter.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
@@ -134,25 +140,69 @@ function startConnect(serverConfig: MCPServerConfig): {
  *   expected state and a restart is the ordinary next step; a server present at
  *   launch that is still not connected actually failed, and `error` says why.
  * - `live` — routed to this server right now, callable.
- * - `shadowed` — another server exported the same name and won the
- *   last-writer-wins race in {@link MCPManager.connect}, so calls go elsewhere.
  * - `missing` — not in the live tool set at all.
+ *
+ * There is no `shadowed`: since #413 each server's tools are registered under
+ * a key carrying that server's own hash, so one server's tool can no longer be
+ * routed to another. The field could only ever have been `[]`, and keeping it
+ * would have left user-facing copy describing a mechanism that no longer
+ * exists. Both lists carry the RAW names the server reports, which is what the
+ * user recognises and what {@link MCPManager.getLiveRegistration} maps forward.
  */
 export interface LiveRegistration {
   connected: boolean;
   knownAtStartup: boolean;
   error?: string;
   live: string[];
-  shadowed: { tool: string; owner: string }[];
   missing: string[];
+}
+
+/**
+ * One registered MCP tool: the raw tool object plus the name the server itself
+ * used for it.
+ *
+ * The raw name is retained rather than re-derived from the namespaced key
+ * because it cannot always be re-derived — `mcpToolName`'s R2 rung truncates a
+ * long tool name through the middle. Risk classification in particular must
+ * read the server's own name (`isReadOnlyMCPSuffix` looks for a trailing verb),
+ * and `mcp_verify` reports raw names back to the user, so guessing them from
+ * the key would be wrong in exactly the cases that are hardest to notice.
+ */
+interface RegisteredTool {
+  raw: string;
+  tool: any;
+}
+
+/** Re-keys a server's freshly-listed tools under their namespaced names. */
+function namespaceTools(
+  server: string,
+  tools: Record<string, any>,
+): Record<string, RegisteredTool> {
+  const out: Record<string, RegisteredTool> = {};
+  for (const [raw, tool] of Object.entries(tools)) {
+    out[mcpToolName(server, raw)] = { raw, tool };
+  }
+  return out;
 }
 
 export class MCPManager {
   private clients: Map<string, MCPClient> = new Map();
   private serverStatuses: ServerStatus[] = [];
-  private tools: Record<string, any> = {};
+  /**
+   * The one authored registry: `server -> { toolName -> rawTool }`.
+   *
+   * Replaces a flat `tools` bag plus a parallel `toolName -> server` map,
+   * which were both last-writer-wins, so two servers exporting the same tool
+   * name could not coexist — the loser did not merely lose priority, it
+   * vanished from its own per-server list, because that list was built by
+   * INVERTING the collapsed map (#413).
+   *
+   * Everything flat is derived from this by {@link flattenServerTools}, so the
+   * two can never disagree about a key. That is the structural fix, not a
+   * discipline: there is no second place to author a name.
+   */
+  private serverTools: Map<string, Record<string, RegisteredTool>> = new Map();
   private serverConfigs: Map<string, MCPServerConfig> = new Map();
-  private toolServerMap: Map<string, string> = new Map();
   // Per-server reconnection lock to coalesce concurrent reconnect attempts
   private reconnectPromises: Map<string, Promise<boolean>> = new Map();
 
@@ -255,14 +305,11 @@ export class MCPManager {
         this.clients.set(name, client);
 
         const toolNames = Object.keys(serverTools);
-
-        for (const toolName of toolNames) {
-          if (this.tools[toolName]) {
-            printInfo(`  Warning: MCP tool "${toolName}" from "${name}" overrides existing tool`);
-          }
-          this.tools[toolName] = serverTools[toolName];
-          this.toolServerMap.set(toolName, name);
-        }
+        // No collision warning any more: a server's tools live under its own
+        // key, so another server exporting the same name costs this one
+        // nothing. The warning existed to report a loss that can no longer
+        // happen.
+        this.serverTools.set(name, namespaceTools(name, serverTools));
 
         this.serverStatuses.push({
           name,
@@ -331,21 +378,9 @@ export class MCPManager {
       this.clients.set(name, client);
 
       const toolNames = Object.keys(serverTools);
-
-      // Remove old tools from this server.
-      // Deleting Map entries during iteration is safe per the JS Map spec.
-      for (const [toolName, serverName] of this.toolServerMap.entries()) {
-        if (serverName === name) {
-          delete this.tools[toolName];
-          this.toolServerMap.delete(toolName);
-        }
-      }
-
-      // Register fresh tools
-      for (const toolName of toolNames) {
-        this.tools[toolName] = serverTools[toolName];
-        this.toolServerMap.set(toolName, name);
-      }
+      // One assignment replaces this server's whole entry; no other server's
+      // tools are reachable from here to disturb.
+      this.serverTools.set(name, namespaceTools(name, serverTools));
 
       // Update server status
       const statusIndex = this.serverStatuses.findIndex((s) => s.name === name);
@@ -360,6 +395,13 @@ export class MCPManager {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(`MCP reconnection to "${name}" failed: ${message}`);
+
+      // Drop the dead server's tools. The client was closed before the retry,
+      // so leaving them registered offers the model tools that can only fail —
+      // and while names were flat it was worse than useless: a dead server's
+      // stale entry kept occupying a name a HEALTHY server also exported, with
+      // no way to fall back to the live one (#413).
+      this.serverTools.delete(name);
 
       const statusIndex = this.serverStatuses.findIndex((s) => s.name === name);
       const newStatus: ServerStatus = { name, connected: false, toolCount: 0, error: message };
@@ -389,12 +431,19 @@ export class MCPManager {
   }
 
   /**
-   * Returns all MCP tools, converted for AI SDK v4 compatibility.
+   * Returns `{ server: { namespacedName: tool } }`, converted for AI SDK v4
+   * compatibility.
    *
    * Each tool's `execute` method is wrapped with automatic reconnect-and-retry:
    * if a call fails, the owning server is reconnected and the call retried once.
+   *
+   * This is the conversion; {@link MCPManager.getTools} is a flatten of it.
+   * Carries the tool OBJECTS, not just names (#413) — the name-only shape made
+   * every consumer re-look-up each name in the flat bag, and that join is what
+   * let the two structures disagree, silently, because
+   * `dispatchServerDelegate` guarded the lookup with `if (t)`.
    */
-  getTools(shaping?: MCPResultShapingConfig): Record<string, any> {
+  getServerTools(shaping?: MCPResultShapingConfig): Record<string, Record<string, any>> {
     // Structure-aware result shaping (#297): bound over-budget MCP results
     // before they enter an agent's context so a large list/body doesn't re-bill
     // on every subsequent step. `off` (or unset) is a pass-through.
@@ -405,51 +454,68 @@ export class MCPManager {
     // @ai-sdk/provider-utils@4.x, but ai@4.x expects type:undefined and
     // parameters wrapped with @ai-sdk/ui-utils's jsonSchema (which includes
     // the validatorSymbol needed for argument validation).
-    const converted: Record<string, any> = {};
-    for (const [name, tool] of Object.entries(this.tools)) {
-      const baseTool = this.convertTool(name, tool);
-      const originalExecute = baseTool.execute;
-      const serverName = this.toolServerMap.get(name);
+    const converted: Record<string, Record<string, any>> = {};
+    // Converted straight into per-server buckets, so the owning server is the
+    // position rather than a lookup. `getTools()` then FLATTENS this — the same
+    // derive-don't-author rule the registry itself follows, and the reason
+    // there is no re-grouping pass that could silently drop a key.
+    for (const [serverName, serverTools] of this.serverTools.entries()) {
+      converted[serverName] = {};
+      for (const [name, { raw, tool }] of Object.entries(serverTools)) {
+        const baseTool = this.convertTool(name, tool);
+        const originalExecute = baseTool.execute;
 
-      const wrapped = {
-        ...baseTool,
-        // Retry wrapper: on failure, reconnect the server and retry once.
-        // If the retry also fails, the *retry* error is thrown (not the original)
-        // so the caller sees the most recent failure reason.
-        execute: async (args: unknown) => {
-          try {
-            const result = await originalExecute(args);
-            return shape(normalizeToolResult(result));
-          } catch (error) {
-            if (serverName) {
-              printInfo(`MCP tool "${name}" failed, reconnecting to "${serverName}"...`);
+        const wrapped = {
+          ...baseTool,
+          // Retry wrapper: on failure, reconnect the server and retry once.
+          // If the retry also fails, the *retry* error is thrown (not the original)
+          // so the caller sees the most recent failure reason.
+          execute: async (args: unknown) => {
+            try {
+              const result = await originalExecute(args);
+              return shape(normalizeToolResult(result));
+            } catch (error) {
+              // The RAW name: this line is for the user, and the raw name is
+              // the one they see in the server's own docs and in `mcp_verify`.
+              printInfo(`MCP tool "${raw}" failed, reconnecting to "${serverName}"...`);
               const reconnected = await this.reconnectServer(serverName);
-              if (reconnected && this.tools[name]) {
-                const freshTool = this.convertTool(name, this.tools[name]);
+              const fresh = this.serverTools.get(serverName)?.[name];
+              if (reconnected && fresh) {
+                const freshTool = this.convertTool(name, fresh.tool);
                 const retryResult = await freshTool.execute(args);
                 return shape(normalizeToolResult(retryResult));
               }
+              throw error;
             }
-            throw error;
-          }
-        },
-      };
+          },
+        };
 
-      // Risk-based confirmation gate (#144): tag every MCP tool with metadata
-      // so the augment layer can route it through `confirmAction` at the right
-      // threshold. Names ending in a read-only verb → `kind: 'read'` (low risk,
-      // never prompts). Everything else → `kind: 'write'` with `sideEffect:
-      // 'local'` (medium risk, prompts only in `strict` mode). Users can
-      // promote a tool to high via a future `mcp.json` override (out of scope).
-      const isRead = isReadOnlyMCPSuffix(name);
-      const meta: ToolMeta = {
-        name,
-        kind: isRead ? 'read' : 'write',
-        category: serverName ? `mcp.${serverName}` : 'mcp',
-        deterministic: false,
-        sideEffect: isRead ? 'network' : 'local',
-      };
-      converted[name] = attachMeta(wrapped, meta);
+        // Risk-based confirmation gate (#144): tag every MCP tool with metadata
+        // so the augment layer can route it through `confirmAction` at the right
+        // threshold. Names ending in a read-only verb → `kind: 'read'` (low risk,
+        // never prompts). Everything else → `kind: 'write'` with `sideEffect:
+        // 'local'` (medium risk, prompts only in `strict` mode). Users can
+        // promote a tool to high via a future `mcp.json` override (out of scope).
+        // Classified on the RAW name. The prefix happens to be transparent to
+        // this end-anchored check, but an R2-truncated key is not — its
+        // trailing characters are the tool's tail, not its verb.
+        const isRead = isReadOnlyMCPSuffix(raw);
+        const meta: ToolMeta = {
+          // Kept in lockstep with the registry key: the permission and block
+          // gates key on the registry key while `result-cache.ts` keys on
+          // `meta.name`, so a divergence would silently split them.
+          name,
+          // The server's own name for this tool, and the owning server. Both
+          // are authored here and would otherwise be trapped inside the
+          // manager, forcing every consumer into a lossy re-parse of the key.
+          rawName: raw,
+          kind: isRead ? 'read' : 'write',
+          category: `mcp.${serverName}`,
+          deterministic: false,
+          sideEffect: isRead ? 'network' : 'local',
+        };
+        converted[serverName][name] = attachMeta(wrapped, meta);
+      }
     }
     return converted;
   }
@@ -465,18 +531,32 @@ export class MCPManager {
   }
 
   /**
-   * Returns a `{ server: [toolName, …] }` map over every connected server (an
-   * inversion of `toolServerMap`) — the per-server view threaded into
-   * `AgentContextMCP.serverTools` at bootstrap so per-server MCP delegation
-   * (#296) can scope each helper sub-agent to that server's real tools while the
-   * main agent carries only one `delegate_<server>` tool.
+   * Every MCP tool in one name-keyed bag.
+   *
+   * Derived from {@link MCPManager.getServerTools}, never assembled separately:
+   * the flat form is what a delegation-off dispatch and the tool-wrapper
+   * registry need, but authoring it independently is what allowed the two
+   * shapes to disagree in the first place (#413).
    */
-  getServerToolMap(): Record<string, string[]> {
-    const map: Record<string, string[]> = {};
-    for (const [toolName, serverName] of this.toolServerMap.entries()) {
-      (map[serverName] ??= []).push(toolName);
+  getTools(shaping?: MCPResultShapingConfig): Record<string, any> {
+    return flattenServerTools(this.getServerTools(shaping));
+  }
+
+  /**
+   * `{ server: [rawToolName, …] }` — the names the servers themselves use, for
+   * display.
+   *
+   * The registry key is namespaced and, at the truncation ladder's last rung,
+   * not invertible; `mcpToolName`'s docstring says plainly that nothing
+   * downstream may recover the raw name from it. So the UI gets the
+   * authoritative value from here rather than re-deriving a lossy one.
+   */
+  getServerToolNames(): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    for (const [server, tools] of this.serverTools.entries()) {
+      out[server] = Object.values(tools).map((t) => t.raw);
     }
-    return map;
+    return out;
   }
 
   /**
@@ -489,10 +569,22 @@ export class MCPManager {
    * tools (#305). One call makes that unrepresentable.
    */
   snapshot(shaping?: MCPResultShapingConfig): AgentContextMCP {
+    // One authored structure, one derived — see `flattenServerTools`.
+    const serverTools = this.getServerTools(shaping);
+    const tools = flattenServerTools(serverTools);
     return {
-      tools: this.getTools(shaping),
+      tools,
       serverNames: this.getConnectedServerNames(),
-      serverTools: this.getServerToolMap(),
+      serverTools,
+      // Built here, over the whole live surface, because this is the single
+      // assembler — a consumer building its own would only see its dispatch's
+      // registry and could call an ambiguous name unambiguous. Delegate keys
+      // are included: they are exposed to the model and were hashed too, so a
+      // grant stored against `delegate_playwright` must still resolve.
+      resolveAlias: makeAliasResolver([
+        ...Object.keys(tools),
+        ...this.getConnectedServerNames().map((s) => `delegate_${mcpServerSegment(s)}`),
+      ]),
     };
   }
 
@@ -507,13 +599,17 @@ export class MCPManager {
   getLiveRegistration(name: string, probeToolNames: string[]): LiveRegistration {
     const status = this.serverStatuses.find((s) => s.name === name);
     const live: string[] = [];
-    const shadowed: { tool: string; owner: string }[] = [];
     const missing: string[] = [];
+    const own = this.serverTools.get(name) ?? {};
+    // Map each probed name FORWARD into the key this server would register it
+    // under, rather than reverse-parsing live keys. `verifyMCPServer` spawns
+    // the server in isolation and reports the RAW names it exports, so the two
+    // sides speak different alphabets; comparing them directly would report
+    // every tool of every healthy server as `missing` — and `mcp_verify` turns
+    // that into a ⚠ verdict, which the `mcp-manager` specialist has previously
+    // answered by deleting a correct config.
     for (const t of probeToolNames) {
-      const owner = this.toolServerMap.get(t);
-      if (owner === name) live.push(t);
-      else if (owner) shadowed.push({ tool: t, owner });
-      else missing.push(t);
+      (own[mcpToolName(name, t)] ? live : missing).push(t);
     }
     return {
       connected: status?.connected ?? false,
@@ -525,7 +621,6 @@ export class MCPManager {
       knownAtStartup: this.serverConfigs.has(name),
       error: status?.error,
       live,
-      shadowed,
       missing,
     };
   }

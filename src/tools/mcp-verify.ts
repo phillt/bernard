@@ -35,7 +35,7 @@ function liveStateReport(
         }, so its tools are not callable here.`,
       );
     }
-  } else if (reg.shadowed.length > 0 || reg.missing.length > 0) {
+  } else if (reg.missing.length > 0) {
     lines.push(
       `   Live: only ${reg.live.length} of ${probeToolNames.length} probed tool(s) route to "${key}" in this session.`,
     );
@@ -43,14 +43,6 @@ function liveStateReport(
     lines.push(`   Live: all ${reg.live.length} tool(s) are active in this session.`);
   }
 
-  if (reg.shadowed.length > 0) {
-    lines.push(
-      `   Name collision: ${reg.shadowed.length} of its tool name(s) are also exported by another server — ${nameList(
-        reg.shadowed.map((t) => `${t.tool} → "${t.owner}"`),
-        8,
-      )}. MCP tool registration is last-writer-wins, so only one server can own a given name.`,
-    );
-  }
   if (reg.connected && reg.missing.length > 0) {
     lines.push(
       `   ${reg.missing.length} not in this session's tool set (restart to refresh): ${nameList(reg.missing, 8)}.`,
@@ -58,11 +50,13 @@ function liveStateReport(
   }
 
   // One place that says what "needs attention" means. A pending restart does
-  // not: the caller has nothing to decide. A startup failure and a name
-  // collision both do — the latter in either registration case, since
-  // last-writer-wins means one of the two servers is silently shadowed.
-  const actionNeeded =
-    reg.shadowed.length > 0 || (reg.connected ? reg.missing.length > 0 : reg.knownAtStartup);
+  // not: the caller has nothing to decide. A startup failure does.
+  //
+  // Name collisions used to count here too. Since #413 each server registers
+  // its tools under a key carrying that server's own hash, so one server's
+  // tool can no longer be routed to another and there is nothing left to
+  // report — the case is unrepresentable rather than merely rare.
+  const actionNeeded = reg.connected ? reg.missing.length > 0 : reg.knownAtStartup;
   return { actionNeeded, lines };
 }
 
@@ -105,7 +99,7 @@ export function createMCPVerifyTool() {
   return attachMeta(
     tool({
       description:
-        "Test-connect a configured MCP server WITHOUT restarting Bernard. Spawns/connects it with a timeout, lists its tools, and reconciles the probe against THIS running session (loaded or not; tools callable, shadowed by another server, or missing). Always run this after adding or editing an MCP server. READ THE FIRST LINE: every result opens with a single 'VERDICT:' line and that line alone decides the outcome — '\u2713 VERDICT' means the server is correctly configured and you must NOT re-add or remove it, '\u26a0 VERDICT' means it works but something needs a decision (a startup failure, or a tool-name collision with another server), '\u2717 VERDICT' means it genuinely could not connect. The indented lines below are supporting detail, never a second verdict. A server you just added is normally not loaded in the current session yet; that is expected and is NOT a failure \u2014 it only needs a Bernard restart.",
+        "Test-connect a configured MCP server WITHOUT restarting Bernard. Spawns/connects it with a timeout, lists its tools, and reconciles the probe against THIS running session (loaded or not; tools callable or missing). Always run this after adding or editing an MCP server. READ THE FIRST LINE: every result opens with a single 'VERDICT:' line and that line alone decides the outcome — '\u2713 VERDICT' means the server is correctly configured and you must NOT re-add or remove it, '\u26a0 VERDICT' means it works but something needs a decision (such as a startup failure), '\u2717 VERDICT' means it genuinely could not connect. The indented lines below are supporting detail, never a second verdict. A server you just added is normally not loaded in the current session yet; that is expected and is NOT a failure \u2014 it only needs a Bernard restart.",
       parameters: z.object({
         key: z
           .string()

@@ -13,6 +13,7 @@ import { ProvenanceStore } from '../provenance.js';
 import { VerificationStore } from '../agent-status.js';
 import { VerificationTracker } from '../verification-tracker.js';
 import type { Check } from '../rubric.js';
+import type { ToolNameAliasResolver } from '../mcp-names.js';
 
 export interface AgentContextStores {
   memory: MemoryStore;
@@ -24,21 +25,53 @@ export interface AgentContextStores {
 }
 
 export interface AgentContextMCP {
+  /**
+   * Flat, name-keyed bag of every MCP tool.
+   *
+   * **Derived from {@link AgentContextMCP.serverTools}, never authored.**
+   * `MCPManager.snapshot()` produces it with `flattenServerTools`, so the two
+   * share key strings and object identities by construction and cannot
+   * disagree about a name (#413).
+   */
   tools: Record<string, any>;
   serverNames: string[];
   /**
-   * Per-server tool-name map (`{ server: [toolName, …] }`), populated at
-   * bootstrap from `MCPManager.getServerToolMap()`. Lets per-server delegation
+   * Per-server registry (`{ server: { toolName: tool } }`), populated at
+   * bootstrap from `MCPManager.getServerTools()`. Lets per-server delegation
    * (#296) scope a helper sub-agent to one server's tools without reaching for
    * the process-global `getActiveMCPManager()`. `{}` when no MCP servers are
    * connected or in test contexts.
+   *
+   * Carries the tool OBJECTS, not just names (#413). The name-only shape made
+   * every consumer re-look-up each name in `tools`, and that join is what let
+   * the two structures disagree — silently, because `dispatchServerDelegate`
+   * guarded the lookup with `if (t)` and so degraded to a helper with no tools
+   * while still advertising them in its system prompt.
    *
    * Required, not optional: an origin that populates `tools` + `serverNames`
    * but forgets this reduces every `delegate_<server>` to zero tools, which is
    * exactly the bug the cron runner shipped (#305). Build this type via
    * `MCPManager.snapshot()` rather than by hand.
    */
-  serverTools: Record<string, string[]>;
+  serverTools: Record<string, Record<string, any>>;
+  /**
+   * Resolves a tool name persisted before MCP tools were namespaced per server
+   * onto the live name it refers to, or `null` when it resolves to nothing or
+   * to more than one server's tool (#413).
+   *
+   * Assembled by `MCPManager.snapshot()` over the WHOLE live surface, which is
+   * the point of putting it here rather than letting each consumer build one:
+   * inside a `delegate_<server>` helper the dispatch's own registry holds a
+   * single server, so a locally-built resolver would find a stored bare
+   * `browser_click` unambiguous and honour a grant the user made while a
+   * different server owned that name. Building it wrongly is unrepresentable
+   * when there is only one assembler.
+   *
+   * Required, for the same reason as `serverTools`. `assembleContext` defaults
+   * it to exact-match-only so a context built without MCP behaves exactly as
+   * it did before #413.
+   */
+  resolveAlias: ToolNameAliasResolver;
 }
 
 export interface AgentContext {
@@ -125,6 +158,9 @@ export function assembleContext(input: AssembleContextInput): AgentContext {
       tools: input.mcp?.tools ?? {},
       serverNames: input.mcp?.serverNames ?? [],
       serverTools: input.mcp?.serverTools ?? {},
+      // Exact-match-only default: a context built without MCP behaves exactly
+      // as it did before #413.
+      resolveAlias: input.mcp?.resolveAlias ?? (() => null),
     },
     rag: input.rag,
     toolOptions: input.toolOptions,
