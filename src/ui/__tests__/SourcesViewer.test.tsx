@@ -6,6 +6,7 @@ import { SourcesViewer } from '../overlays/SourcesViewer.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
 import type { Agent } from '../../agent.js';
 import type { TurnProvenance } from '../../provenance.js';
+import { formatFriendlyTimestamp } from '../../output.js';
 
 function makeAgent(turns: TurnProvenance[]): Agent {
   return { getTurnProvenance: () => turns } as unknown as Agent;
@@ -97,6 +98,8 @@ describe('<SourcesViewer> two-panel browser', () => {
       createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS) }),
     );
     await tick();
+    stdin.write('g'); // recent-first (#248): walk back to turn 1, this fixture's rich turn.
+    await tick();
     stdin.write(ENTER);
     await tick();
     const frame = lastFrame() ?? '';
@@ -116,6 +119,8 @@ describe('<SourcesViewer> two-panel browser', () => {
     const { stdin, lastFrame } = render(
       createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS) }),
     );
+    await tick();
+    stdin.write('g'); // recent-first (#248): walk back to turn 1, this fixture's rich turn.
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -182,6 +187,8 @@ describe('<SourcesViewer> two-panel browser', () => {
     const { stdin, lastFrame } = render(
       createElement(SourcesViewer, { agent: makeAgent(REGRESSION_TURNS) }),
     );
+    await tick();
+    stdin.write('g'); // recent-first (#248): walk back to turn 1, this fixture's rich turn.
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -394,7 +401,7 @@ describe('<SourcesViewer> two-panel browser', () => {
     expect(frame).not.toContain('not cited');
   });
 
-  it('windows a long turn history and scrolls to reveal later turns', async () => {
+  it('opens on the newest turn, with the window scrolled to show it (#248)', async () => {
     const turns: TurnProvenance[] = Array.from({ length: 30 }, (_, i) => ({
       turnIndex: i,
       userInput: `req-${i}`,
@@ -406,12 +413,136 @@ describe('<SourcesViewer> two-panel browser', () => {
     }));
     const { stdin, lastFrame } = renderViewer(makeAgent(turns));
     let frame = lastFrame() ?? '';
-    expect(frame).toContain('Turn 1 ·');
-    expect(frame).not.toContain('Turn 30 ·');
+    // Turn 30 is both rendered (the window scrolled to it) and highlighted (the
+    // cursor is on it) — an unscrolled window would satisfy neither.
+    expect(frame).toContain('Turn 30 ·');
+    expect(frame).toMatch(/> Turn 30 ·/);
+    expect(frame).not.toContain('Turn 1 ·');
+    // ...and `g` still walks back to the oldest turn.
     await tick();
-    stdin.write('G'); // jump to last turn
+    stdin.write('g');
     await tick();
     frame = lastFrame() ?? '';
-    expect(frame).toContain('Turn 30 ·');
+    expect(frame).toContain('Turn 1 ·');
+    expect(frame).not.toContain('Turn 30 ·');
+  });
+
+  it('drills into the newest turn on a single Enter (#248)', async () => {
+    const { stdin, lastFrame } = renderViewer(makeAgent(REGRESSION_TURNS));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    // Turn 2's only source — reached with one keystroke, no `G` first.
+    expect(lastFrame() ?? '').toContain('shell:cargo --version');
+  });
+});
+
+/** One turn holding a single tool-result citation with `preview` as its body. */
+function toolResultTurn(preview: string): TurnProvenance[] {
+  return [
+    {
+      turnIndex: 0,
+      userInput: 'list turn',
+      sources: [
+        {
+          id: 'S1',
+          kind: 'tool-result',
+          label: 'issues',
+          contentPreview: preview,
+          rawRef: 'tool:issues',
+          timestamp: 0,
+        },
+      ],
+      citedIds: [],
+      timestamp: 0,
+    },
+  ];
+}
+
+describe('<SourcesViewer> array-of-objects tool results (#248)', () => {
+  async function drill(preview: string): Promise<string> {
+    const { stdin, lastFrame } = renderViewer(makeAgent(toolResultTurn(preview)));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    return lastFrame() ?? '';
+  }
+
+  it('renders an array of flat objects as a column table', async () => {
+    const frame = await drill(
+      'issues: [{"id":"1","title":"Fix the parser","state":"open"},' +
+        '{"id":"2","title":"Ship the viewer","state":"closed"}]',
+    );
+    // Header row names the auto-selected columns...
+    expect(frame).toContain('title');
+    expect(frame).toContain('state');
+    // ...and each element is one row, not a pretty-printed object.
+    expect(frame).toContain('Fix the parser');
+    expect(frame).toContain('Ship the viewer');
+    expect(frame).not.toContain('{"id"');
+    expect(frame).not.toContain('"title":');
+  });
+
+  it('falls back to pretty-printed JSON for a ragged array', async () => {
+    const frame = await drill('issues: [{"a":1},{"b":2},{"c":3}]');
+    expect(frame).toContain('"a": 1');
+  });
+
+  it('falls back to pretty-printed JSON for an array of nested objects', async () => {
+    const frame = await drill('issues: [{"meta":{"x":1}},{"meta":{"y":2}}]');
+    expect(frame).toContain('"meta"');
+    expect(frame).toContain('"x": 1');
+  });
+
+  it('falls back to pretty-printed JSON for an array of scalars', async () => {
+    const frame = await drill('issues: ["alpha","beta"]');
+    expect(frame).toContain('"alpha"');
+  });
+});
+
+describe('<SourcesViewer> citation timestamp (#248)', () => {
+  function timedTurn(timestamp: number): TurnProvenance[] {
+    return [
+      {
+        turnIndex: 0,
+        userInput: 'timed turn',
+        sources: [
+          {
+            id: 'S1',
+            kind: 'web',
+            label: 'example.com',
+            contentPreview: 'body',
+            rawRef: 'https://example.com',
+            timestamp,
+          },
+        ],
+        citedIds: ['S1'],
+        timestamp,
+      },
+    ];
+  }
+
+  async function drill(turns: TurnProvenance[]): Promise<string> {
+    const { stdin, lastFrame } = renderViewer(makeAgent(turns));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    return lastFrame() ?? '';
+  }
+
+  it('shows when the source was registered, and how long ago', async () => {
+    const fiveMinutesAgo = Date.now() - 5 * 60_000;
+    const frame = await drill(timedTurn(fiveMinutesAgo));
+    expect(frame).toContain(formatFriendlyTimestamp(new Date(fiveMinutesAgo)));
+    expect(frame).toContain('(5m0s ago)');
+    // It rides the existing kind/cited row rather than claiming one of its own.
+    expect(frame).toMatch(/web · cited · .+ago\)/);
+  });
+
+  it('renders nothing at all for a record with no usable stamp', async () => {
+    const frame = await drill(timedTurn(0));
+    expect(frame).toContain('web · cited');
+    expect(frame).not.toContain('ago)');
+    expect(frame).not.toContain('1970');
   });
 });

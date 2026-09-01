@@ -17,6 +17,7 @@ import { toolFailureFor, type ToolFailure } from '../tool-failure.js';
 import { getThemeColors } from '../theme.js';
 import { truncate } from '../text.js';
 import { formatCostSuffix } from '../usage-report.js';
+import { formatFriendlyTimestamp } from '../output.js';
 import { renderMarkdown } from './markdown.js';
 import { ErrorPanel } from './ErrorPanel.js';
 import type { ErrorPanelData } from './error-format.js';
@@ -708,24 +709,6 @@ export function formatDuration(ms: number): string {
   const m = Math.floor(wholeSeconds / 60);
   const s = wholeSeconds - m * 60;
   return `${m}m ${s}s`;
-}
-
-function formatFriendlyTimestamp(date: Date): string {
-  const now = new Date();
-  const sameDay =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
-  const time = date.toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-  if (sameDay) return time;
-  const day = date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-  });
-  return `${day} · ${time}`;
 }
 
 function extractUserText(message: CoreUserMessage): string {

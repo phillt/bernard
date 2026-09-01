@@ -5,11 +5,21 @@ import { useDimensionsCtx } from '../DimensionsContext.js';
 import type { SourceItem } from '../../provenance.js';
 import { getThemeColors, type ThemeColors } from '../../theme.js';
 import { truncate } from '../../text.js';
+import { formatElapsed, formatFriendlyTimestamp } from '../../output.js';
 import { ViewerShell, viewerViewport } from './ViewerShell.js';
 import type { KeyHint } from '../hints.js';
 import { MenuRow, MENU_MARKER } from './MenuRow.js';
 import { VIEWER_TABS } from './viewer-tabs.js';
-import { navDelta, clamp, clampOffset, listPosition, wrapText } from './viewer-util.js';
+import {
+  navDelta,
+  clamp,
+  clampOffset,
+  listPosition,
+  wrapText,
+  openAtNewest,
+} from './viewer-util.js';
+import { type RichLine, type SpanRole } from './table.js';
+import { buildPreviewLines } from './preview-lines.js';
 import {
   KEY,
   HINT_MOVE,
@@ -48,6 +58,14 @@ const GUTTER = MENU_MARKER.length;
  * the live viewport height, so the frame can never exceed the terminal (which
  * previously made the list look endless and the right card render blank).
  *
+ * The turn list opens on the NEWEST turn (`openAtNewest`, #248). It deliberately
+ * does NOT auto-drill into it: the level-1 list is the only place the session's
+ * shape is visible, and drilling on open would spend the viewer's first Esc on
+ * "back to the list" (`escClosesViewer={false}` while drilled) — so Shift+Tab
+ * followed by Esc, the reflex for "I opened the wrong tab", would no longer
+ * close anything. Recent-first already reduces "sources for the last answer" to
+ * a single Enter, which is what the cost of an extra keystroke was buying.
+ *
  * The shell owns Shift-Tab always and Esc only at the turn list
  * (`escClosesViewer`); the inner handlers own Esc everywhere deeper.
  */
@@ -59,8 +77,13 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
 
   // `null` = turn list; a number = the index into `turns` we've drilled into.
   const [drillTarget, setDrillTarget] = useState<number | null>(null);
-  const [turnCursor, setTurnCursor] = useState(0);
-  const [turnOffset, setTurnOffset] = useState(0);
+  // Recent-first (#248). `useState`'s initializer runs once, at mount, which is
+  // exactly the intent: it is a DEFAULT, not a pin — every later cursor move
+  // goes through `moveTurn`. Recomputing the seed each render is free, and the
+  // viewer is modal over an idle agent, so `turns` cannot grow underneath it.
+  const firstTurn = openAtNewest(turns.length, viewport);
+  const [turnCursor, setTurnCursor] = useState(firstTurn.cursor);
+  const [turnOffset, setTurnOffset] = useState(firstTurn.offset);
   const [srcCursor, setSrcCursor] = useState(0);
   const [srcOffset, setSrcOffset] = useState(0);
   // When drilled in: 'list' navigates citations, 'content' scrolls the card.
@@ -266,8 +289,14 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
             {detail.lines
               .slice(clampedContentOffset, clampedContentOffset + previewBudget)
               .map((line, i) => (
-                <Text key={`p-${i}`} dimColor={!selected!.contentPreview}>
-                  {line || ' '}
+                <Text key={`p-${i}`}>
+                  {line.length === 0
+                    ? ' ' /* Ink collapses a truly empty Text — keep the row. */
+                    : line.map((span, j) => (
+                        <Text key={`s-${j}`} color={spanColor(span.role, colors)}>
+                          {span.text}
+                        </Text>
+                      ))}
                 </Text>
               ))}
             {contentOverflows && (
@@ -295,12 +324,17 @@ const MAX_TITLE_LINES = 3;
  * to the available height and lets the navigation handler clamp the scroll
  * offset against the real wrapped-line count.
  */
+/** Joins the fields that share the card's `kind · cited · when` row. Measured
+ *  and rendered from the same constant so the budget cannot drift from the
+ *  row it is budgeting for. */
+const SEP = ' · ';
+
 function buildCitationDetail(
   source: SourceItem,
   cited: boolean,
   innerWidth: number,
   colors: ThemeColors,
-): { header: ReactNode[]; lines: string[] } {
+): { header: ReactNode[]; lines: RichLine[] } {
   const w = Math.max(8, innerWidth);
 
   // Wrap the title onto new lines rather than cutting it off with an ellipsis.
@@ -312,17 +346,32 @@ function buildCitationDetail(
     titleLines[MAX_TITLE_LINES - 1] = truncate(titleLines[MAX_TITLE_LINES - 1] + '…', w);
   }
 
+  // Budget for the timestamp is what the row has left after the two labels and
+  // the ` · ` that joins them — computed, not truncated, because `truncate`
+  // would cut mid-`ago)` and read as corrupt rather than as absent.
+  //
+  // The labels are built once and both measured and rendered from the same
+  // values: a budget that restates the row's wording is a budget that goes
+  // quietly wrong the first time someone edits one and not the other.
+  const citedLabel = cited ? 'cited' : 'not cited';
+  const meta = [source.kind, citedLabel].join(SEP);
+  const when = sourceWhen(source.timestamp, w - meta.length - SEP.length);
+
   const header: ReactNode[] = [
     ...titleLines.map((line, i) => (
       <Text key={`title-${i}`} color={colors.accent} bold>
         {line}
       </Text>
     )),
-    <Text key="kind">
-      <Text dimColor>{source.kind}</Text>
-      <Text color={cited ? colors.success : undefined} dimColor={!cited}>
-        {cited ? ' · cited' : ' · not cited'}
-      </Text>
+    // Kind, citation status and WHEN share one row (#248). The card's height is
+    // already spent on a border, a wrapped title and a `rawRef`, and every row
+    // taken here is a row of the excerpt that isn't shown — so the timestamp
+    // rides the shortest existing line instead of claiming its own. Themed
+    // muted, not Ink's raw `dimColor`, which ignores the active theme (#320).
+    <Text key="kind" wrap="truncate-end">
+      <Text color={colors.muted}>{source.kind}</Text>
+      <Text color={cited ? colors.success : colors.muted}>{`${SEP}${citedLabel}`}</Text>
+      {when && <Text color={colors.muted}>{`${SEP}${when}`}</Text>}
     </Text>,
   ];
   if (source.rawRef && source.rawRef !== source.label) {
@@ -334,57 +383,39 @@ function buildCitationDetail(
   }
   header.push(<Text key="gap"> </Text>);
 
-  const lines = source.contentPreview
-    ? wrapText(humanizeContent(source.contentPreview), w)
-    : ['(no content preview)'];
+  const lines: RichLine[] = source.contentPreview
+    ? buildPreviewLines(source.contentPreview, w)
+    : [[{ text: '(no content preview)', role: 'muted' }]];
   return { header, lines };
 }
 
 /**
- * Make machine-y content human-readable. Tool-result previews are typically
- * `<tool>: <json>` — detect the embedded JSON, parse it, and render it as an
- * aligned key/value table (flat objects) or 2-space-indented JSON (nested /
- * arrays). Falls back to the raw string when there's no JSON or the preview was
- * truncated mid-object (so it won't parse).
+ * `2:41 PM (3m5s ago)` — when a source was registered, plus how long ago, when
+ * both fit `budget`; the clock alone when only that fits; `''` when neither does
+ * or the record carries no usable stamp.
+ *
+ * `SourceItem.timestamp` has always been recorded and never rendered, which is
+ * what made "is this citation from this turn or an hour ago?" unanswerable from
+ * the viewer. Absolute AND relative because each answers a different question —
+ * the clock places it against the transcript, the age places it against now —
+ * and the pair is short enough to share a row.
+ *
+ * A non-positive or non-finite stamp yields nothing rather than 1970: a record
+ * predating the field (or a hand-edited one) must not render a confident lie.
  */
-function humanizeContent(content: string): string {
-  const m = content.match(/^([A-Za-z0-9_.\- ]{1,40}?):\s*([[{][\s\S]*)$/);
-  const prefix = m ? m[1].trim() : null;
-  const body = (m ? m[2] : content).trim();
-  if (body[0] === '{' || body[0] === '[') {
-    const cleaned = body.replace(/[\s…]*$/, ''); // drop a trailing ellipsis from truncation.
-    const parsed = tryParseJson(cleaned);
-    if (parsed !== undefined) {
-      const rendered = renderJsonValue(parsed);
-      return prefix ? `${prefix}:\n${rendered}` : rendered;
-    }
-  }
-  return content;
+function sourceWhen(timestamp: number, budget: number): string {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
+  const clock = formatFriendlyTimestamp(new Date(timestamp));
+  const age = Date.now() - timestamp;
+  // A future stamp means clock skew, not a negative age — show the time only.
+  const full = age >= 0 ? `${clock} (${formatElapsed(age)} ago)` : clock;
+  if (full.length <= budget) return full;
+  return clock.length <= budget ? clock : '';
 }
 
-function tryParseJson(s: string): unknown {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return undefined;
-  }
-}
-
-/** Aligned key/value lines for a flat object; pretty-printed JSON otherwise. */
-function renderJsonValue(v: unknown): string {
-  if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
-    const entries = Object.entries(v as Record<string, unknown>);
-    const allScalar =
-      entries.length > 0 && entries.every(([, val]) => val === null || typeof val !== 'object');
-    if (allScalar) {
-      const keyW = Math.min(18, Math.max(...entries.map(([k]) => k.length)));
-      return entries.map(([k, val]) => `${k.padEnd(keyW)}  ${scalarString(val)}`).join('\n');
-    }
-  }
-  return JSON.stringify(v, null, 2);
-}
-
-function scalarString(v: unknown): string {
-  if (v === null) return 'null';
-  return typeof v === 'string' ? v : String(v);
+/** Resolve a {@link SpanRole} against the active theme — never Ink's raw
+ *  `dimColor`, which ignores the theme the colorblind/high-contrast palettes
+ *  exist to override (#320). */
+function spanColor(role: SpanRole, colors: ThemeColors): string {
+  return role === 'accent' ? colors.accent : role === 'muted' ? colors.muted : colors.text;
 }

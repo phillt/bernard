@@ -135,9 +135,46 @@ export function formatTokenCount(n: number): string {
 export function formatElapsed(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   if (totalSeconds < 60) return `${totalSeconds}s`;
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}m${seconds}s`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m${totalSeconds % 60}s`;
+  // Past an hour this used to keep counting minutes, so a citation carried
+  // over from two days ago read `2880m0s ago` and a long session's duration
+  // read `120m0s`. Both callers ask "how long ago / how long for", and neither
+  // wants an unbounded minute count, so the unit rolls over twice more. Only
+  // the two leading units are shown at every scale: seconds stop mattering
+  // once there are hours of them.
+  const totalHours = Math.floor(totalMinutes / 60);
+  if (totalHours < 24) return `${totalHours}h${totalMinutes % 60}m`;
+  return `${Math.floor(totalHours / 24)}d${totalHours % 24}h`;
+}
+
+/**
+ * A wall-clock stamp for a past event: the time alone when it happened today,
+ * `Mon D · time` otherwise. Locale-formatted, so it reads the way the user's
+ * system writes times.
+ *
+ * Lives here rather than beside its first caller (`Thread.tsx`, which private-
+ * scoped it) because the citation card in `SourcesViewer` needs the same stamp
+ * for `SourceItem.timestamp` (#248) — and a second copy is how a transcript
+ * footer and a citation header start disagreeing about what "today" means.
+ * Sibling of {@link formatElapsed}, which answers the other half — how long ago.
+ */
+export function formatFriendlyTimestamp(date: Date): string {
+  const now = new Date();
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  const time = date.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  if (sameDay) return time;
+  const day = date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+  return `${day} · ${time}`;
 }
 
 export function buildSpinnerMessage(stats: SpinnerStats): string {

@@ -53,6 +53,8 @@ describe('ContextViewer', () => {
   it('drills into a turn and shows the section list', async () => {
     const { stdin, lastFrame } = renderViewer(makeAgent(TURNS));
     await tick();
+    stdin.write('g'); // recent-first (#248): walk back to turn 1, the populated one.
+    await tick();
     stdin.write(ENTER);
     await tick();
     const frame = lastFrame() ?? '';
@@ -68,6 +70,8 @@ describe('ContextViewer', () => {
   it('shows resolved references and recalled facts in their section bodies', async () => {
     const { stdin, lastFrame } = renderViewer(makeAgent(TURNS));
     await tick();
+    stdin.write('g'); // recent-first (#248): walk back to turn 1, the populated one.
+    await tick();
     stdin.write(ENTER); // drill into turn 1
     await tick();
     stdin.write(ARROW_DOWN); // → Rewritten prompt
@@ -78,6 +82,12 @@ describe('ContextViewer', () => {
     stdin.write(ARROW_DOWN); // → Recalled facts
     await tick();
     expect(lastFrame() ?? '').toContain('Mia was born 2018-03-04');
+  });
+
+  it('opens the turn list on the newest turn (#248)', () => {
+    const { lastFrame } = renderViewer(makeAgent(TURNS));
+    // The cursor marker sits on turn 2, not turn 1.
+    expect(lastFrame() ?? '').toMatch(/> Turn 2 · thanks/);
   });
 
   it('left arrow returns from sections to the turn list', async () => {
@@ -103,6 +113,10 @@ describe('ContextViewer — injected persistent memory (#307)', () => {
    */
   async function memorySection(turns: TurnContextRecord[]): Promise<string> {
     const { stdin, lastFrame } = renderViewer(makeAgent(turns));
+    await tick();
+    // Recent-first (#248): the turn list opens on the newest turn, so walk back
+    // to turn 1 — the fixture's populated one — before drilling in.
+    stdin.write('g');
     await tick();
     stdin.write(ENTER);
     await tick();
