@@ -92,7 +92,15 @@ export async function traceLlm<T>(site: string, model: string, fn: () => Promise
   }
 }
 
-/** Keep the N most recent session logs by mtime; delete the rest. */
+/**
+ * Keep the N most recent session logs by mtime; delete the rest.
+ *
+ * Pruned per extension, not once over the directory: a session that spawns
+ * MCP servers drops a sibling `<sessionId>-mcp-stderr.log` beside its
+ * `.jsonl`, and a single mixed prune would let a run's two files compete for
+ * the same budget — halving the number of sessions actually retained.
+ */
 function rotateSessionLogs(): void {
   pruneFilesByMtime(SESSION_LOGS_DIR, MAX_SESSION_FILES, '.jsonl');
+  pruneFilesByMtime(SESSION_LOGS_DIR, MAX_SESSION_FILES, '.log');
 }

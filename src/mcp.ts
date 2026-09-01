@@ -4,7 +4,8 @@ import { createMCPClient, type MCPClient } from '@ai-sdk/mcp';
 import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
 import { jsonSchema } from 'ai';
 import { printInfo, printError } from './output.js';
-import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
+import { MCP_CONFIG_PATH as CONFIG_PATH, SESSION_LOGS_DIR } from './paths.js';
+import { isDebugEnabled, getSessionId } from './logger.js';
 import { attachMeta } from './framework/tools/adapter.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
@@ -58,6 +59,48 @@ function mcpConnectTimeoutMs(): number {
 /** Sentinel rejection used to distinguish a connect/listing timeout from a real error. */
 class MCPHandshakeTimeout extends Error {}
 
+/** Lazily-opened append fd for the per-session MCP stderr capture file. */
+let mcpStderrFd: number | null = null;
+
+/**
+ * Where a spawned MCP server's stderr goes.
+ *
+ * MCP servers are third-party processes that write to stderr whenever they
+ * like, and the AI SDK's stdio transport defaults `stderr` to `'inherit'` —
+ * so their output lands on Bernard's terminal directly, outside Ink. In
+ * full-screen mode (`BERNARD_FULLSCREEN`, the default) that writes into the
+ * alternate screen buffer Ink believes it owns and corrupts the frame; even
+ * inline it interleaves with the transcript. None of it reaches a Bernard
+ * surface: connection failures are already reported through `serverStatuses`
+ * and `mcp_verify`, so the leaked bytes are noise at best, and at worst a
+ * crashing server's stack trace scrolling over the REPL (observed with
+ * `@browsermcp/mcp@0.1.3`, whose `server.close` recurses into itself on stdin
+ * close and dumps a `RangeError` on the way out).
+ *
+ * `'pipe'` is not an option: {@link Experimental_StdioMCPTransport} keeps its
+ * child private, so nothing could drain the pipe and a chatty server would
+ * block for good once the ~64 KB kernel buffer filled — trading a cosmetic
+ * bug for a hang. A real file descriptor needs no reader, so the kernel
+ * writes straight to disk.
+ *
+ * Under `BERNARD_DEBUG` that descriptor is a per-session file beside the
+ * session JSONL (one fd shared by every server, since they are already
+ * distinguishable by what they print and interleaving is what a terminal
+ * would have done anyway); otherwise stderr is discarded.
+ */
+function mcpStderrTarget(): 'ignore' | number {
+  if (!isDebugEnabled()) return 'ignore';
+  if (mcpStderrFd !== null) return mcpStderrFd;
+  try {
+    fs.mkdirSync(SESSION_LOGS_DIR, { recursive: true });
+    mcpStderrFd = fs.openSync(path.join(SESSION_LOGS_DIR, `${getSessionId()}-mcp-stderr.log`), 'a');
+    return mcpStderrFd;
+  } catch {
+    // Never let a logging failure stop a server from starting.
+    return 'ignore';
+  }
+}
+
 function handshakeTimeoutMessage(timeoutMs: number): string {
   return `Timed out after ${timeoutMs}ms — the server didn't connect and list its tools in time. Common causes: it's an HTTP/SSE server started as a stdio command (configure it as a "url" server instead), or a stdio flag such as "--stdio" is missing.`;
 }
@@ -92,6 +135,7 @@ function startConnect(serverConfig: MCPServerConfig): {
     env: serverConfig.env
       ? { ...(process.env as Record<string, string>), ...serverConfig.env }
       : undefined,
+    stderr: mcpStderrTarget(),
   });
   return { clientPromise: createMCPClient({ transport }), transport };
 }
