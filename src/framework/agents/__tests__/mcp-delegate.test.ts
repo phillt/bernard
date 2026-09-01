@@ -138,6 +138,18 @@ describe('buildDelegateSystemPrompt (#296)', () => {
     expect(p).toContain('ask_user');
     expect(p).toContain('Stay strictly within this server');
   });
+
+  it('constrains reporting to what tool results confirm (#367)', () => {
+    // Advisory, and known to leak — the Activity Log appended by
+    // `formatResult` is the mechanism. Pinned anyway because the two observed
+    // failures (reporting a type that the result said was an Enter press; a
+    // closed tab omitted from the report) are what these clauses name, and a
+    // silent deletion would leave only the log.
+    const p = buildDelegateSystemPrompt('browser-control', ['browser_type']);
+    expect(p).toContain('Report only what a tool result CONFIRMS');
+    expect(p).toContain('Always report resource-lifecycle actions');
+    expect(p).toContain('Never close, delete, or discard a resource you did not create');
+  });
 });
 
 describe('pacActorDefinition scoped-tools override (#296 Phase 2E)', () => {
