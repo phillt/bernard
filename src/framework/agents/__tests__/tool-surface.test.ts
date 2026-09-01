@@ -5,7 +5,14 @@ import { mcpDelegateDefinition } from '../mcp-delegate.js';
 import { mainAgentDefinition } from '../main.js';
 import { resolveToolSurface } from '../tool-surface.js';
 import type { AgentDefinition } from '../types.js';
-import { makeCtx, toolsOf, CREATE_TOOLS_DEFINITIONS, inputFor } from './_mcp-delegation-fixture.js';
+import {
+  makeCtx,
+  toolsOf,
+  CREATE_TOOLS_DEFINITIONS,
+  inputFor,
+  DELEGATE_TOOLS,
+  RAW_MCP_TOOLS,
+} from './_mcp-delegation-fixture.js';
 
 /**
  * #315 / #322: the built-in registry scope and the MCP bag are resolved once by
@@ -136,15 +143,15 @@ describe('cron participates in MCP delegation (#315)', () => {
   it('with delegation ON, carries delegate_<server> tools and no raw MCP schemas', async () => {
     const names = Object.keys(await toolsOf(cronDefinition, makeCtx(true), cronInput));
     expect(names.filter((n) => n.startsWith('delegate_')).sort()).toEqual([
-      'delegate_google',
-      'delegate_slack',
+      DELEGATE_TOOLS[0],
+      DELEGATE_TOOLS[1],
     ]);
-    expect(names).not.toContain('google__gmail_list');
+    expect(names).not.toContain(RAW_MCP_TOOLS[0]);
   });
 
   it('with delegation OFF, carries the raw MCP tools', async () => {
     const names = Object.keys(await toolsOf(cronDefinition, makeCtx(false), cronInput));
-    expect(names).toContain('google__gmail_list');
+    expect(names).toContain(RAW_MCP_TOOLS[0]);
     expect(names.filter((n) => n.startsWith('delegate_'))).toEqual([]);
   });
 

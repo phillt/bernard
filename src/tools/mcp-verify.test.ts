@@ -113,7 +113,6 @@ describe('mcp_verify tool', () => {
             connected: false,
             knownAtStartup: false, // never attempted — added after launch
             live: [],
-            shadowed: [],
             missing: ['browser_navigate', 'browser_click'],
           },
         }),
@@ -135,7 +134,6 @@ describe('mcp_verify tool', () => {
             knownAtStartup: true, // was in the config at launch and did not connect
             error: 'handshake timeout',
             live: [],
-            shadowed: [],
             missing: ['browser_navigate', 'browser_click'],
           },
         }),
@@ -146,26 +144,6 @@ describe('mcp_verify tool', () => {
       expect(out).toContain('failed to connect (handshake timeout)');
     });
 
-    it('a name collision needs attention even on a just-added server', async () => {
-      probeOk(['browser_navigate', 'browser_click'], 800);
-      mockActiveManager.mockReturnValue(
-        fakeManager({
-          registration: {
-            connected: false,
-            knownAtStartup: false,
-            live: [],
-            shadowed: [{ tool: 'browser_navigate', owner: 'playwright' }],
-            missing: ['browser_click'],
-          },
-        }),
-      );
-      const out = await run({ key: 'browsermcp' });
-      expect(out).toContain('⚠ VERDICT:');
-      expect(out).toContain('Name collision');
-      expect(out).toContain('browser_navigate → "playwright"');
-      expect(out).toContain('last-writer-wins');
-    });
-
     it('confirms all tools are active when the server is live and unshadowed', async () => {
       probeOk(['browser_navigate', 'browser_click'], 90);
       mockActiveManager.mockReturnValue(
@@ -174,7 +152,6 @@ describe('mcp_verify tool', () => {
             connected: true,
             knownAtStartup: true,
             live: ['browser_navigate', 'browser_click'],
-            shadowed: [],
             missing: [],
           },
         }),
@@ -183,7 +160,12 @@ describe('mcp_verify tool', () => {
       expect(out).toContain('Live: all 2 tool(s) are active');
     });
 
-    it('reports tools shadowed by another server', async () => {
+    // Replaced the old "reports tools shadowed by another server" case. Since
+    // #413 each server registers under a key carrying its own hash, so one
+    // server's tool can no longer be routed to another and `shadowed` is gone.
+    // What remains reachable is a partial registration: the live session
+    // predates a tool the server now exports.
+    it('reports a partial registration when the session is missing some tools', async () => {
       probeOk(['browser_navigate', 'browser_click'], 90);
       mockActiveManager.mockReturnValue(
         fakeManager({
@@ -191,15 +173,14 @@ describe('mcp_verify tool', () => {
             connected: true,
             knownAtStartup: true,
             live: ['browser_click'],
-            shadowed: [{ tool: 'browser_navigate', owner: 'other-server' }],
-            missing: [],
+            missing: ['browser_navigate'],
           },
         }),
       );
       const out = await run({ key: 'playwright' });
       expect(out).toContain('only 1 of 2');
-      expect(out).toContain('Name collision');
-      expect(out).toContain('browser_navigate → "other-server"');
+      expect(out).toContain('restart to refresh');
+      expect(out).toContain('⚠ VERDICT:');
     });
 
     it('on probe failure, notes the server IS loaded live (slow cold-start)', async () => {

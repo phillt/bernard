@@ -6,7 +6,7 @@ import { jsonSchema } from 'ai';
 import { printInfo, printError } from './output.js';
 import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
 import { openSessionSidecarFd } from './logger.js';
-import { flattenServerTools } from './mcp-names.js';
+import { flattenServerTools, mcpToolName } from './mcp-names.js';
 import { attachMeta } from './framework/tools/adapter.js';
 import { isReadOnlyMCPSuffix } from './risk.js';
 import type { ToolMeta } from './framework/tools/types.js';
@@ -135,17 +135,49 @@ function startConnect(serverConfig: MCPServerConfig): {
  *   expected state and a restart is the ordinary next step; a server present at
  *   launch that is still not connected actually failed, and `error` says why.
  * - `live` — routed to this server right now, callable.
- * - `shadowed` — another server exported the same name and won the
- *   last-writer-wins race in {@link MCPManager.connect}, so calls go elsewhere.
  * - `missing` — not in the live tool set at all.
+ *
+ * There is no `shadowed`: since #413 each server's tools are registered under
+ * a key carrying that server's own hash, so one server's tool can no longer be
+ * routed to another. The field could only ever have been `[]`, and keeping it
+ * would have left user-facing copy describing a mechanism that no longer
+ * exists. Both lists carry the RAW names the server reports, which is what the
+ * user recognises and what {@link MCPManager.getLiveRegistration} maps forward.
  */
 export interface LiveRegistration {
   connected: boolean;
   knownAtStartup: boolean;
   error?: string;
   live: string[];
-  shadowed: { tool: string; owner: string }[];
   missing: string[];
+}
+
+/**
+ * One registered MCP tool: the raw tool object plus the name the server itself
+ * used for it.
+ *
+ * The raw name is retained rather than re-derived from the namespaced key
+ * because it cannot always be re-derived — `mcpToolName`'s R2 rung truncates a
+ * long tool name through the middle. Risk classification in particular must
+ * read the server's own name (`isReadOnlyMCPSuffix` looks for a trailing verb),
+ * and `mcp_verify` reports raw names back to the user, so guessing them from
+ * the key would be wrong in exactly the cases that are hardest to notice.
+ */
+interface RegisteredTool {
+  raw: string;
+  tool: any;
+}
+
+/** Re-keys a server's freshly-listed tools under their namespaced names. */
+function namespaceTools(
+  server: string,
+  tools: Record<string, any>,
+): Record<string, RegisteredTool> {
+  const out: Record<string, RegisteredTool> = {};
+  for (const [raw, tool] of Object.entries(tools)) {
+    out[mcpToolName(server, raw)] = { raw, tool };
+  }
+  return out;
 }
 
 export class MCPManager {
@@ -164,7 +196,7 @@ export class MCPManager {
    * two can never disagree about a key. That is the structural fix, not a
    * discipline: there is no second place to author a name.
    */
-  private serverTools: Map<string, Record<string, any>> = new Map();
+  private serverTools: Map<string, Record<string, RegisteredTool>> = new Map();
   private serverConfigs: Map<string, MCPServerConfig> = new Map();
   // Per-server reconnection lock to coalesce concurrent reconnect attempts
   private reconnectPromises: Map<string, Promise<boolean>> = new Map();
@@ -272,7 +304,7 @@ export class MCPManager {
         // key, so another server exporting the same name costs this one
         // nothing. The warning existed to report a loss that can no longer
         // happen.
-        this.serverTools.set(name, { ...serverTools });
+        this.serverTools.set(name, namespaceTools(name, serverTools));
 
         this.serverStatuses.push({
           name,
@@ -343,7 +375,7 @@ export class MCPManager {
       const toolNames = Object.keys(serverTools);
       // One assignment replaces this server's whole entry; no other server's
       // tools are reachable from here to disturb.
-      this.serverTools.set(name, { ...serverTools });
+      this.serverTools.set(name, namespaceTools(name, serverTools));
 
       // Update server status
       const statusIndex = this.serverStatuses.findIndex((s) => s.name === name);
@@ -414,7 +446,7 @@ export class MCPManager {
     // Two levels, so the owning server is the position rather than a lookup in
     // a second map that could disagree with this one.
     for (const [serverName, serverTools] of this.serverTools.entries()) {
-      for (const [name, tool] of Object.entries(serverTools)) {
+      for (const [name, { raw, tool }] of Object.entries(serverTools)) {
         const baseTool = this.convertTool(name, tool);
         const originalExecute = baseTool.execute;
 
@@ -428,11 +460,13 @@ export class MCPManager {
               const result = await originalExecute(args);
               return shape(normalizeToolResult(result));
             } catch (error) {
-              printInfo(`MCP tool "${name}" failed, reconnecting to "${serverName}"...`);
+              // The RAW name: this line is for the user, and the raw name is
+              // the one they see in the server's own docs and in `mcp_verify`.
+              printInfo(`MCP tool "${raw}" failed, reconnecting to "${serverName}"...`);
               const reconnected = await this.reconnectServer(serverName);
               const fresh = this.serverTools.get(serverName)?.[name];
               if (reconnected && fresh) {
-                const freshTool = this.convertTool(name, fresh);
+                const freshTool = this.convertTool(name, fresh.tool);
                 const retryResult = await freshTool.execute(args);
                 return shape(normalizeToolResult(retryResult));
               }
@@ -447,8 +481,14 @@ export class MCPManager {
         // never prompts). Everything else → `kind: 'write'` with `sideEffect:
         // 'local'` (medium risk, prompts only in `strict` mode). Users can
         // promote a tool to high via a future `mcp.json` override (out of scope).
-        const isRead = isReadOnlyMCPSuffix(name);
+        // Classified on the RAW name. The prefix happens to be transparent to
+        // this end-anchored check, but an R2-truncated key is not — its
+        // trailing characters are the tool's tail, not its verb.
+        const isRead = isReadOnlyMCPSuffix(raw);
         const meta: ToolMeta = {
+          // Kept in lockstep with the registry key: the permission and block
+          // gates key on the registry key while `result-cache.ts` keys on
+          // `meta.name`, so a divergence would silently split them.
           name,
           kind: isRead ? 'read' : 'write',
           category: `mcp.${serverName}`,
@@ -527,21 +567,17 @@ export class MCPManager {
   getLiveRegistration(name: string, probeToolNames: string[]): LiveRegistration {
     const status = this.serverStatuses.find((s) => s.name === name);
     const live: string[] = [];
-    const shadowed: { tool: string; owner: string }[] = [];
     const missing: string[] = [];
     const own = this.serverTools.get(name) ?? {};
-    // The flat bag is still what a delegation-off dispatch and the tool-wrapper
-    // registry see, and while names are bare it is still last-writer-wins — so
-    // a tool this server exports can still be routed elsewhere. Ownership there
-    // is decided by flatten order, which is `serverTools` insertion order.
-    const flatOwner = new Map<string, string>();
-    for (const [server, tools] of this.serverTools.entries()) {
-      for (const t of Object.keys(tools)) flatOwner.set(t, server);
-    }
+    // Map each probed name FORWARD into the key this server would register it
+    // under, rather than reverse-parsing live keys. `verifyMCPServer` spawns
+    // the server in isolation and reports the RAW names it exports, so the two
+    // sides speak different alphabets; comparing them directly would report
+    // every tool of every healthy server as `missing` — and `mcp_verify` turns
+    // that into a ⚠ verdict, which the `mcp-manager` specialist has previously
+    // answered by deleting a correct config.
     for (const t of probeToolNames) {
-      if (!own[t]) missing.push(t);
-      else if (flatOwner.get(t) === name) live.push(t);
-      else shadowed.push({ tool: t, owner: flatOwner.get(t) as string });
+      (own[mcpToolName(name, t)] ? live : missing).push(t);
     }
     return {
       connected: status?.connected ?? false,
@@ -553,7 +589,6 @@ export class MCPManager {
       knownAtStartup: this.serverConfigs.has(name),
       error: status?.error,
       live,
-      shadowed,
       missing,
     };
   }

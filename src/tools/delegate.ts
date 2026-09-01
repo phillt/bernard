@@ -2,6 +2,7 @@ import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { AgentContext } from '../framework/context.js';
+import { mcpServerSegment } from '../mcp-names.js';
 
 /**
  * Per-server MCP delegation (#296). The main agent sees one thin
@@ -34,11 +35,6 @@ export function serverToolMap(ctx: AgentContext, server: string): Record<string,
   return (ctx.mcp.serverTools?.[server] ?? {}) as Record<string, Tool>;
 }
 
-/** Tool-name-safe form of a server name (AI-SDK tool names: `[a-zA-Z0-9_-]`). */
-export function sanitizeServerToolName(server: string): string {
-  return server.replace(/[^a-zA-Z0-9_-]/g, '_');
-}
-
 /**
  * Builds one `delegate_<server>` tool. The tool's description names the server
  * and a few of its tools so the main agent routes intent to the right door on
@@ -55,7 +51,7 @@ export function sanitizeServerToolName(server: string): string {
 export function createDelegateTool(
   ctx: AgentContext,
   server: string,
-  toolName: string = `delegate_${sanitizeServerToolName(server)}`,
+  toolName: string = `delegate_${mcpServerSegment(server)}`,
 ): Tool {
   const toolNames = serverToolNames(ctx, server);
   const preview = toolNames.slice(0, 8).join(', ');
@@ -143,12 +139,13 @@ export function createDelegateTools(ctx: AgentContext): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
   for (const server of ctx.mcp.serverNames) {
     if (serverToolNames(ctx, server).length === 0) continue; // nothing to delegate
-    let key = `delegate_${sanitizeServerToolName(server)}`;
-    if (tools[key]) {
-      let n = 2;
-      while (tools[`${key}_${n}`]) n++;
-      key = `${key}_${n}`;
-    }
+    // `mcpServerSegment` carries a hash of the raw server name, so two servers
+    // whose names sanitize alike can no longer collide and the numeric-suffix
+    // loop that used to disambiguate them is gone. That loop assigned suffixes
+    // in iteration order, which meant editing `mcp.json` could renumber a
+    // DIFFERENT server's key — and this key is persisted, in permission grants
+    // and tool-profile filenames (#413).
+    const key = `delegate_${mcpServerSegment(server)}`;
     tools[key] = createDelegateTool(ctx, server, key);
   }
   return tools;

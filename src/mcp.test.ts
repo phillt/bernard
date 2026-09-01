@@ -23,6 +23,10 @@ vi.mock('ai', () => ({
 const { createMCPClient } = await import('@ai-sdk/mcp');
 const { printInfo, printError } = await import('./output.js');
 const { MCPManager, verifyMCPServer } = await import('./mcp.js');
+const { mcpToolName } = await import('./mcp-names.js');
+const { readToolMeta } = await import('./framework/tools/adapter.js');
+const readMeta = (t: any) => readToolMeta(t) as any;
+const readMetaName = (t: any) => readMeta(t)?.name;
 const { Experimental_StdioMCPTransport } = await import('@ai-sdk/mcp/mcp-stdio');
 const mockStdioTransport = Experimental_StdioMCPTransport as unknown as ReturnType<typeof vi.fn>;
 
@@ -80,7 +84,7 @@ describe('MCPManager reconnection', () => {
     await setupWithServer('test-server', { myTool: makeDynamicTool(executeFn) });
 
     const tools = manager.getTools();
-    const result = await tools.myTool.execute({ query: 'hello' });
+    const result = await tools[mcpToolName('test-server', 'myTool')].execute({ query: 'hello' });
 
     expect(result).toBe('success');
     expect(executeFn).toHaveBeenCalledWith({ query: 'hello' });
@@ -99,7 +103,7 @@ describe('MCPManager reconnection', () => {
     const newClient = makeMockClient({ myTool: makeDynamicTool(successExecute) });
     mockCreateMCPClient.mockResolvedValue(newClient);
 
-    const result = await tools.myTool.execute({ query: 'retry' });
+    const result = await tools[mcpToolName('test-server', 'myTool')].execute({ query: 'retry' });
 
     expect(result).toBe('reconnected-result');
     expect(failExecute).toHaveBeenCalledTimes(1);
@@ -118,9 +122,9 @@ describe('MCPManager reconnection', () => {
     // Reconnection itself fails
     mockCreateMCPClient.mockRejectedValue(new Error('connection refused'));
 
-    await expect(tools.myTool.execute({ query: 'fail' })).rejects.toThrow(
-      'SSE stream disconnected',
-    );
+    await expect(
+      tools[mcpToolName('test-server', 'myTool')].execute({ query: 'fail' }),
+    ).rejects.toThrow('SSE stream disconnected');
     expect(mockPrintError).toHaveBeenCalledWith(
       'MCP reconnection to "test-server" failed: connection refused',
     );
@@ -137,7 +141,9 @@ describe('MCPManager reconnection', () => {
     const newClient = makeMockClient({ myTool: makeDynamicTool(retryFailExecute) });
     mockCreateMCPClient.mockResolvedValue(newClient);
 
-    await expect(tools.myTool.execute({ query: 'fail' })).rejects.toThrow('retry also failed');
+    await expect(
+      tools[mcpToolName('test-server', 'myTool')].execute({ query: 'fail' }),
+    ).rejects.toThrow('retry also failed');
   });
 
   it('tracks tool-to-server mapping correctly', async () => {
@@ -168,12 +174,14 @@ describe('MCPManager reconnection', () => {
     await manager.connect();
 
     const tools = manager.getTools();
-    expect(tools.toolA).toBeDefined();
-    expect(tools.toolB).toBeDefined();
+    const a = tools[mcpToolName('server1', 'toolA')];
+    const b = tools[mcpToolName('server2', 'toolB')];
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
 
     // Both work normally
-    expect(await tools.toolA.execute({})).toBe('r1');
-    expect(await tools.toolB.execute({})).toBe('r2');
+    expect(await a.execute({})).toBe('r1');
+    expect(await b.execute({})).toBe('r2');
   });
 
   it('reconnectServer returns false for unknown server', async () => {
@@ -236,7 +244,9 @@ describe('MCPManager schema pass-through', () => {
     await manager.connect();
 
     const out = manager.getTools();
-    expect(out.richTool.parameters).toEqual({ _jsonSchema: richSchema });
+    expect(out[mcpToolName('rich-server', 'richTool')].parameters).toEqual({
+      _jsonSchema: richSchema,
+    });
   });
 });
 
@@ -298,7 +308,7 @@ describe('MCPManager connect timeout (#254)', () => {
       toolCount: 1,
     });
     expect(statuses.find((s) => s.name === 'hung')?.connected).toBe(false);
-    expect(manager.getTools().goodTool).toBeDefined();
+    expect(manager.getTools()[mcpToolName('healthy', 'goodTool')]).toBeDefined();
   });
 
   it('a hung tools() listing also trips the timeout and closes the client', async () => {
@@ -396,9 +406,11 @@ describe('MCPManager.getLiveRegistration', () => {
     manager = new MCPManager();
   });
 
-  it('classifies probe tools as live / shadowed / missing against the running session', async () => {
-    // serverA registers first (shared, onlyA); serverB registers second and its
-    // `shared` overrides A's (last-writer-wins in connect()).
+  // Rewritten for #413. This test used to pin last-writer-wins as INTENDED
+  // behaviour: A's `shared` was reported shadowed by B. Namespacing makes that
+  // unrepresentable, so the property to pin is the opposite one — a name two
+  // servers export is live for both.
+  it('reports a name both servers export as live for each of them', async () => {
     const clientA = makeMockClient({
       shared: makeDynamicTool(vi.fn()),
       onlyA: makeDynamicTool(vi.fn()),
@@ -416,14 +428,34 @@ describe('MCPManager.getLiveRegistration', () => {
 
     const regA = manager.getLiveRegistration('serverA', ['shared', 'onlyA', 'ghost']);
     expect(regA.connected).toBe(true);
-    expect(regA.live).toEqual(['onlyA']); // still owned by A
-    expect(regA.shadowed).toEqual([{ tool: 'shared', owner: 'serverB' }]); // taken by B
+    expect(regA.live.sort()).toEqual(['onlyA', 'shared']);
     expect(regA.missing).toEqual(['ghost']); // registered by nobody
 
     const regB = manager.getLiveRegistration('serverB', ['shared', 'onlyB']);
-    expect(regB.live).toEqual(['shared', 'onlyB']);
-    expect(regB.shadowed).toEqual([]);
+    expect(regB.live.sort()).toEqual(['onlyB', 'shared']);
     expect(regB.missing).toEqual([]);
+  });
+
+  // The regression this phase was most likely to ship silently. `verifyMCPServer`
+  // probes a server in isolation and reports the RAW names it exports, while the
+  // registry is keyed by namespaced names — compare them directly and every tool
+  // of every healthy server reads as `missing`, which `mcp_verify` renders as a
+  // ⚠ verdict. `mcp-verify.test.ts` mocks `getLiveRegistration`, so it cannot
+  // catch this; only driving the real one with real probe names can.
+  it('maps raw probe names forward, so a healthy server reports nothing missing', async () => {
+    const raw = ['browser_click', 'browser_type', 'browser_navigate'];
+    mockCreateMCPClient.mockResolvedValue(
+      makeMockClient(Object.fromEntries(raw.map((n) => [n, makeDynamicTool(vi.fn())]))),
+    );
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { playwright: { url: 'http://p' } },
+    });
+    await manager.connect();
+
+    const reg = manager.getLiveRegistration('playwright', raw);
+
+    expect(reg.missing).toEqual([]);
+    expect(reg.live.sort()).toEqual([...raw].sort());
   });
 
   it('reports connected:false and all-missing for a server that failed to connect', async () => {
@@ -516,8 +548,12 @@ describe('MCPManager per-server registry (#413)', () => {
     await connectTwoSharing();
 
     const perServer = manager.getServerTools();
-    expect(Object.keys(perServer.serverA).sort()).toEqual(['onlyA', 'shared']);
-    expect(Object.keys(perServer.serverB).sort()).toEqual(['onlyB', 'shared']);
+    expect(Object.keys(perServer.serverA).sort()).toEqual(
+      [mcpToolName('serverA', 'onlyA'), mcpToolName('serverA', 'shared')].sort(),
+    );
+    expect(Object.keys(perServer.serverB).sort()).toEqual(
+      [mcpToolName('serverB', 'onlyB'), mcpToolName('serverB', 'shared')].sort(),
+    );
   });
 
   // The regression that started the issue: a server's advertised tool count and
@@ -535,8 +571,10 @@ describe('MCPManager per-server registry (#413)', () => {
     await connectTwoSharing();
 
     const snap = manager.snapshot();
-    expect(snap.tools.onlyA).toBe(snap.serverTools.serverA.onlyA);
-    expect(snap.tools.onlyB).toBe(snap.serverTools.serverB.onlyB);
+    const aKey = mcpToolName('serverA', 'onlyA');
+    const bKey = mcpToolName('serverB', 'onlyB');
+    expect(snap.tools[aKey]).toBe(snap.serverTools.serverA[aKey]);
+    expect(snap.tools[bKey]).toBe(snap.serverTools.serverB[bKey]);
   });
 
   // A dead server used to keep its tools registered, so its stale entry went on
@@ -549,7 +587,93 @@ describe('MCPManager per-server registry (#413)', () => {
 
     const perServer = manager.getServerTools();
     expect(perServer.serverB).toBeUndefined();
-    expect(Object.keys(perServer.serverA).sort()).toEqual(['onlyA', 'shared']);
-    expect(manager.getTools().shared).toBeDefined();
+    expect(Object.keys(perServer.serverA).sort()).toEqual(
+      [mcpToolName('serverA', 'onlyA'), mcpToolName('serverA', 'shared')].sort(),
+    );
+    expect(manager.getTools()[mcpToolName('serverA', 'shared')]).toBeDefined();
+  });
+});
+
+describe('MCPManager namespaced names (#413)', () => {
+  let manager: InstanceType<typeof MCPManager>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager = new MCPManager();
+  });
+
+  async function connectTwoSharing() {
+    const a = makeMockClient({ browser_click: makeDynamicTool(vi.fn().mockResolvedValue('A')) });
+    const b = makeMockClient({ browser_click: makeDynamicTool(vi.fn().mockResolvedValue('B')) });
+    mockCreateMCPClient.mockImplementation((opts: any) =>
+      Promise.resolve(opts.transport?.url === 'http://pw' ? a : b),
+    );
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { playwright: { url: 'http://pw' }, browsermcp: { url: 'http://bm' } },
+    });
+    await manager.connect();
+  }
+
+  // The exact regression from the issue: both servers keep the name, and each
+  // routes to its own client.
+  it('registers both servers browser_click and routes each to its own client', async () => {
+    await connectTwoSharing();
+
+    const tools = manager.getTools();
+    const pw = tools[mcpToolName('playwright', 'browser_click')];
+    const bm = tools[mcpToolName('browsermcp', 'browser_click')];
+    expect(pw).toBeDefined();
+    expect(bm).toBeDefined();
+    expect(await pw.execute({})).toBe('A');
+    expect(await bm.execute({})).toBe('B');
+  });
+
+  // The permission and block gates key on the registry key; the deterministic
+  // result cache keys on `meta.name`. If those ever diverge the two silently
+  // stop describing the same tool.
+  it('keeps meta.name in lockstep with the registry key', async () => {
+    await connectTwoSharing();
+
+    for (const [key, tool] of Object.entries(manager.getTools())) {
+      expect((tool as any).meta?.name ?? readMetaName(tool)).toBe(key);
+    }
+  });
+
+  // Risk is classified from the RAW name, not the key — the prefix is
+  // transparent to the end-anchored check today, but an R2-truncated key's tail
+  // is the tool's tail, not its verb.
+  it('classifies read vs write from the raw tool name', async () => {
+    mockCreateMCPClient.mockResolvedValue(
+      makeMockClient({
+        brave_search: makeDynamicTool(vi.fn()),
+        browser_click: makeDynamicTool(vi.fn()),
+      }),
+    );
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({ mcpServers: { srv: { url: 'http://s' } } });
+    await manager.connect();
+
+    const tools = manager.getTools();
+    expect(readMeta(tools[mcpToolName('srv', 'brave_search')]).kind).toBe('read');
+    expect(readMeta(tools[mcpToolName('srv', 'browser_click')]).kind).toBe('write');
+  });
+
+  // A name must depend only on its own server, never on config order — the
+  // whole reason the segment carries a content hash rather than a suffix.
+  it('produces identical keys regardless of server order in the config', async () => {
+    await connectTwoSharing();
+    const first = Object.keys(manager.getTools()).sort();
+
+    const m2 = new MCPManager();
+    const a = makeMockClient({ browser_click: makeDynamicTool(vi.fn()) });
+    const b = makeMockClient({ browser_click: makeDynamicTool(vi.fn()) });
+    mockCreateMCPClient.mockImplementation((opts: any) =>
+      Promise.resolve(opts.transport?.url === 'http://pw' ? a : b),
+    );
+    vi.spyOn(m2, 'loadConfig').mockReturnValue({
+      mcpServers: { browsermcp: { url: 'http://bm' }, playwright: { url: 'http://pw' } },
+    });
+    await m2.connect();
+
+    expect(Object.keys(m2.getTools()).sort()).toEqual(first);
   });
 });

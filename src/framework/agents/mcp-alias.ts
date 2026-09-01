@@ -23,7 +23,7 @@
  * the same bag yields the same index without rebuilding it per dispatch.
  */
 
-import { buildMCPAliasIndex, resolveMCPName } from '../../mcp-names.js';
+import { buildMCPAliasIndex, mcpServerSegment, resolveMCPName } from '../../mcp-names.js';
 import type { ToolNameAliasResolver } from '../../permissions/engine.js';
 import type { AgentContext } from '../context.js';
 
@@ -43,7 +43,14 @@ const cache = new WeakMap<object, Cached>();
 export function mcpAliasResolverFor(ctx: AgentContext): ToolNameAliasResolver | undefined {
   const bag = ctx.mcp?.tools;
   if (!bag) return undefined;
-  const names = Object.keys(bag);
+  // Delegate keys are not in the MCP bag — they are derived from server names —
+  // but they are exposed to the model and so can carry persisted grants of
+  // their own, and #413 hashed them too. Include them so a grant stored against
+  // `delegate_playwright` still resolves.
+  const names = [
+    ...Object.keys(bag),
+    ...(ctx.mcp.serverNames ?? []).map((s) => `delegate_${mcpServerSegment(s)}`),
+  ];
   if (names.length === 0) return undefined;
 
   const hit = cache.get(bag);
