@@ -12,8 +12,8 @@ import {
 import { sortedAggEntries, type TelemetryAgg } from '../../session-telemetry.js';
 import { getProviderRequestCount } from '../../providers/request-counter.js';
 import { getThemeColors } from '../../theme.js';
-import { truncate } from '../../text.js';
 import { ScrollableOverlay, type OverlayLine } from './ScrollableOverlay.js';
+import { cell } from './table.js';
 import { VIEWER_TABS } from './viewer-tabs.js';
 
 interface UsageViewerProps {
@@ -56,11 +56,6 @@ export function UsageViewer({ agent, onClose, onCycleTab }: UsageViewerProps) {
       onCycleTab={onCycleTab}
     />
   );
-}
-
-function cell(value: string, width: number, align: 'left' | 'right' = 'left'): string {
-  const v = value.length > width ? truncate(value, width) : value;
-  return align === 'right' ? v.padStart(width) : v.padEnd(width);
 }
 
 interface RowCells {

@@ -17,6 +17,7 @@ import {
   wrapText,
   openAtNewest,
 } from './viewer-util.js';
+import { renderRecordTable, type RichLine, type SpanRole } from './table.js';
 import {
   KEY,
   HINT_MOVE,
@@ -286,8 +287,14 @@ export function SourcesViewer({ agent, onClose, onCycleTab }: SourcesViewerProps
             {detail.lines
               .slice(clampedContentOffset, clampedContentOffset + previewBudget)
               .map((line, i) => (
-                <Text key={`p-${i}`} dimColor={!selected!.contentPreview}>
-                  {line || ' '}
+                <Text key={`p-${i}`}>
+                  {line.length === 0
+                    ? ' ' /* Ink collapses a truly empty Text — keep the row. */
+                    : line.map((span, j) => (
+                        <Text key={`s-${j}`} color={spanColor(span.role, colors)}>
+                          {span.text}
+                        </Text>
+                      ))}
                 </Text>
               ))}
             {contentOverflows && (
@@ -320,7 +327,7 @@ function buildCitationDetail(
   cited: boolean,
   innerWidth: number,
   colors: ThemeColors,
-): { header: ReactNode[]; lines: string[] } {
+): { header: ReactNode[]; lines: RichLine[] } {
   const w = Math.max(8, innerWidth);
 
   // Wrap the title onto new lines rather than cutting it off with an ellipsis.
@@ -354,20 +361,39 @@ function buildCitationDetail(
   }
   header.push(<Text key="gap"> </Text>);
 
-  const lines = source.contentPreview
-    ? wrapText(humanizeContent(source.contentPreview), w)
-    : ['(no content preview)'];
+  const lines: RichLine[] = source.contentPreview
+    ? buildPreviewLines(source.contentPreview, w)
+    : [[{ text: '(no content preview)', role: 'muted' }]];
   return { header, lines };
+}
+
+/** Resolve a {@link SpanRole} against the active theme — never Ink's raw
+ *  `dimColor`, which ignores the theme the colorblind/high-contrast palettes
+ *  exist to override (#320). */
+function spanColor(role: SpanRole, colors: ThemeColors): string {
+  return role === 'accent' ? colors.accent : role === 'muted' ? colors.muted : colors.text;
+}
+
+/** Word-wrapped prose as single-span lines. A blank line becomes an empty
+ *  `RichLine`, which the renderer paints as one blank row. */
+function plainLines(s: string, width: number): RichLine[] {
+  return wrapText(s, width).map((line) => (line === '' ? [] : [{ text: line, role: 'text' }]));
 }
 
 /**
  * Make machine-y content human-readable. Tool-result previews are typically
  * `<tool>: <json>` — detect the embedded JSON, parse it, and render it as an
- * aligned key/value table (flat objects) or 2-space-indented JSON (nested /
- * arrays). Falls back to the raw string when there's no JSON or the preview was
- * truncated mid-object (so it won't parse).
+ * auto-columned table (an array of flat-ish objects — the common shape of an MCP
+ * list result, #248), an aligned key/value table (a flat object), or
+ * 2-space-indented JSON (anything else). Falls back to the raw string when
+ * there's no JSON or the preview was truncated mid-object (so it won't parse).
+ *
+ * Returns styled lines rather than a string because the table needs per-cell
+ * color AND must not be word-wrapped afterwards: its columns are already fitted
+ * to the width, and `wrapText` would re-flow them into a shape the one-row-per-
+ * entry windowing no longer describes.
  */
-function humanizeContent(content: string): string {
+function buildPreviewLines(content: string, width: number): RichLine[] {
   const m = content.match(/^([A-Za-z0-9_.\- ]{1,40}?):\s*([[{][\s\S]*)$/);
   const prefix = m ? m[1].trim() : null;
   const body = (m ? m[2] : content).trim();
@@ -375,11 +401,17 @@ function humanizeContent(content: string): string {
     const cleaned = body.replace(/[\s…]*$/, ''); // drop a trailing ellipsis from truncation.
     const parsed = tryParseJson(cleaned);
     if (parsed !== undefined) {
+      const header: RichLine[] = prefix ? [[{ text: `${prefix}:`, role: 'accent' }]] : [];
+      // `null` from the table renderer means "this shape isn't a table" — empty
+      // arrays, arrays of scalars, arrays of nested objects, and arrays too
+      // ragged to grid. Those keep the pretty-printed JSON they already had.
+      const table = renderRecordTable(parsed, width);
+      if (table) return [...header, ...table];
       const rendered = renderJsonValue(parsed);
-      return prefix ? `${prefix}:\n${rendered}` : rendered;
+      return plainLines(prefix ? `${prefix}:\n${rendered}` : rendered, width);
     }
   }
-  return content;
+  return plainLines(content, width);
 }
 
 function tryParseJson(s: string): unknown {

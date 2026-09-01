@@ -435,3 +435,66 @@ describe('<SourcesViewer> two-panel browser', () => {
     expect(lastFrame() ?? '').toContain('shell:cargo --version');
   });
 });
+
+/** One turn holding a single tool-result citation with `preview` as its body. */
+function toolResultTurn(preview: string): TurnProvenance[] {
+  return [
+    {
+      turnIndex: 0,
+      userInput: 'list turn',
+      sources: [
+        {
+          id: 'S1',
+          kind: 'tool-result',
+          label: 'issues',
+          contentPreview: preview,
+          rawRef: 'tool:issues',
+          timestamp: 0,
+        },
+      ],
+      citedIds: [],
+      timestamp: 0,
+    },
+  ];
+}
+
+describe('<SourcesViewer> array-of-objects tool results (#248)', () => {
+  async function drill(preview: string): Promise<string> {
+    const { stdin, lastFrame } = renderViewer(makeAgent(toolResultTurn(preview)));
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    return lastFrame() ?? '';
+  }
+
+  it('renders an array of flat objects as a column table', async () => {
+    const frame = await drill(
+      'issues: [{"id":"1","title":"Fix the parser","state":"open"},' +
+        '{"id":"2","title":"Ship the viewer","state":"closed"}]',
+    );
+    // Header row names the auto-selected columns...
+    expect(frame).toContain('title');
+    expect(frame).toContain('state');
+    // ...and each element is one row, not a pretty-printed object.
+    expect(frame).toContain('Fix the parser');
+    expect(frame).toContain('Ship the viewer');
+    expect(frame).not.toContain('{"id"');
+    expect(frame).not.toContain('"title":');
+  });
+
+  it('falls back to pretty-printed JSON for a ragged array', async () => {
+    const frame = await drill('issues: [{"a":1},{"b":2},{"c":3}]');
+    expect(frame).toContain('"a": 1');
+  });
+
+  it('falls back to pretty-printed JSON for an array of nested objects', async () => {
+    const frame = await drill('issues: [{"meta":{"x":1}},{"meta":{"y":2}}]');
+    expect(frame).toContain('"meta"');
+    expect(frame).toContain('"x": 1');
+  });
+
+  it('falls back to pretty-printed JSON for an array of scalars', async () => {
+    const frame = await drill('issues: ["alpha","beta"]');
+    expect(frame).toContain('"alpha"');
+  });
+});
