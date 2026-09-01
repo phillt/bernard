@@ -116,12 +116,12 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
     return makeLastStepTextOnly(maxSteps);
   },
 
-  formatResult(result) {
+  formatResult(result, _input, _ctx, meta) {
     // No cap here — `runPAC` owns the final cap so it can reserve room for the
     // optional `## Critic Verdict: FAIL` footer. The full actor output is also
     // what the Critic phase needs to verify against the plan's success
     // criteria.
-    return appendActivitySummary(result.text, result.steps as unknown[], 'subagent');
+    return appendActivitySummary(result.text, result.steps as unknown[], 'subagent', meta);
   },
 };
 

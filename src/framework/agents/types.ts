@@ -9,6 +9,36 @@ import type { ExecutionStrategy } from '../strategies/types.js';
 import type { CreateToolsOptions } from '../../tools/index.js';
 
 /**
+ * Dispatch-level facts handed to {@link AgentDefinition.formatResult} (#370).
+ *
+ * `stepLimitHit` is computed by the runner — it is the one party that knows
+ * both the finish reason and the step budget the call was given — and was
+ * previously discarded at the format boundary and then *reverse-engineered*
+ * downstream by pattern-matching the formatted payload. That inference was
+ * wrong in both directions, which is why the fact travels now instead:
+ *
+ *  - **False positive.** `reclassifyStepLimit` (deleted with this change) read
+ *    the `parse_failed` sentinel out of `WrapperResult.error` — a free-form
+ *    field `STRUCTURED_OUTPUT_RULES` explicitly tells the model to fill in. A
+ *    specialist reporting a *downstream* parse failure as
+ *    `{"status":"error","error":"parse_failed"}` was silently relabelled
+ *    `step_limit` whenever the run also happened to exhaust its budget.
+ *  - **False negative, symmetrically.** It *wrote* `error: 'step_limit'` back
+ *    into that same model-written field, and `step_limit` is a real
+ *    `ToolErrorType`. A model that writes it produces a taxonomy-valid
+ *    classification with no dispatch-level fact behind it at all.
+ *
+ * `steps` is the number of steps actually completed, so a formatter can say
+ * how large the budget it exhausted was rather than just that it ran out.
+ */
+export interface FormatMeta {
+  /** The dispatch ended at its `maxSteps` ceiling while still calling tools. */
+  stepLimitHit: boolean;
+  /** Steps actually completed by the run. */
+  steps: number;
+}
+
+/**
  * Whether the caller persists conversation history across runs (main agent) or
  * rebuilds the seed messages fresh each call (subagent, specialist, task,
  * tool-wrapper, cron). Correction runs route through `tool_wrapper_run` and
@@ -250,11 +280,18 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
    * Post-processing applied to the final `AgentResult`. Receives the raw result
    * and may return any payload (string, JSON envelope, structured object).
    * Defaults to `result.text` when omitted.
+   *
+   * `meta` carries the dispatch-level facts a formatter cannot recover from
+   * `AgentResult` alone — see {@link FormatMeta}. It is optional so the nine
+   * existing implementations keep compiling unchanged: TypeScript's method
+   * parameter check is bivariant, so a shorter implementation still satisfies
+   * a longer declaration.
    */
   formatResult?(
     result: AgentResult,
     input: TInput,
     ctx: AgentContext,
+    meta?: FormatMeta,
   ): TFormatted | Promise<TFormatted>;
 
   /**

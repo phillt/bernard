@@ -147,6 +147,38 @@ describe('wrapTaskResult', () => {
     });
   });
 
+  it('says it ran out of steps, not that its JSON was invalid (#370)', () => {
+    // A task cut off at `maxSteps` never reaches the turn where it writes its
+    // envelope, so it lands in the same fallback as a model that wrote prose.
+    // Reporting the output format blames the wrong thing: the budget is the
+    // fact that explains the failure, and the runner is the only party that
+    // knows it.
+    expect(wrapTaskResult('', { stepLimitHit: true, steps: 10 })).toEqual({
+      status: 'error',
+      output: 'Task ran out of steps (10) before producing a final answer',
+      details: '',
+    });
+  });
+
+  it('keeps the invalid-output sentinel when the limit was not hit (#370)', () => {
+    // The sibling of the case above, and the reason `meta` is consulted rather
+    // than assumed: prose from a task that finished is genuinely an output-format
+    // failure, and that is what the caller should be told.
+    expect(wrapTaskResult('Just some plain text', { stepLimitHit: false, steps: 3 })).toEqual({
+      status: 'error',
+      output: 'Task did not produce valid structured output',
+      details: 'Just some plain text',
+    });
+  });
+
+  it('leaves a valid envelope alone even when the limit was hit (#370)', () => {
+    // A run may wrap up on its last step. Overriding a substantive answer with
+    // a budget error would discard work that did happen.
+    expect(
+      wrapTaskResult('{"status":"success","output":"done"}', { stepLimitHit: true, steps: 10 }),
+    ).toEqual({ status: 'success', output: 'done' });
+  });
+
   it('returns error for JSON with invalid status value', () => {
     const input = '{"status": "partial", "output": "some data"}';
     expect(wrapTaskResult(input)).toEqual({

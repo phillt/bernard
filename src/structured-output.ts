@@ -131,6 +131,34 @@ export const WrapperResultSchema = z.object({
 });
 
 /**
+ * The `result` text {@link wrapWrapperResult} mints when it could not parse the
+ * specialist's final message.
+ *
+ * Named rather than inlined because a downstream consumer has to be able to
+ * tell *our* parse failure from a `parse_failed` the **model** wrote (#370).
+ * `error` is free-form — {@link STRUCTURED_OUTPUT_RULES} explicitly instructs
+ * the specialist to "put the cause in `error`" — so a specialist reporting a
+ * downstream parse failure legitimately emits
+ * `{"status":"error","error":"parse_failed"}` with its own prose in `result`.
+ * Matching on `error` alone conflated the two.
+ */
+export const WRAPPER_PARSE_FAILURE_RESULT = 'Specialist did not produce valid structured output';
+
+/**
+ * Whether this envelope is the one {@link wrapWrapperResult} mints on a parse
+ * failure of its own, as opposed to one the model authored (#370).
+ *
+ * Both fields are required, and that is the whole point: `error` is a field the
+ * model writes, `result` here is a constant we write. A model-authored
+ * `parse_failed` carries its own `result` and so does not match.
+ */
+export function isWrapperParseFailure(w: WrapperResult): boolean {
+  return (
+    w.status === 'error' && w.error === 'parse_failed' && w.result === WRAPPER_PARSE_FAILURE_RESULT
+  );
+}
+
+/**
  * Wraps raw specialist text output into a {@link WrapperResult}. Missing or
  * malformed JSON becomes a structured error (not silent success).
  */
@@ -147,7 +175,7 @@ export function wrapWrapperResult(text: string): WrapperResult {
   }
   return {
     status: 'error',
-    result: 'Specialist did not produce valid structured output',
+    result: WRAPPER_PARSE_FAILURE_RESULT,
     error: 'parse_failed',
     reasoning: [text.trim().slice(0, REASONING_MAX_CHARS)],
   };

@@ -48,19 +48,26 @@ export function buildActivitySummary(steps: unknown[] | undefined): string {
  * reconstructed from the tool-call log.
  *
  * `agentLabel` identifies the caller in the empty-text preamble (e.g. "specialist", "subagent").
+ *
+ * `meta` separates the two reasons the text is empty (#370). "Produced no text
+ * summary" reads as a model that chose to say nothing; a dispatch cut off at
+ * its `maxSteps` ceiling never got to the turn where it would have summarized,
+ * which is a different fact and the one that explains the failure. The runner
+ * knows which it was, so the preamble stops guessing. Absent `meta` keeps the
+ * original wording — that is the honest message for a run that finished.
  */
 export function appendActivitySummary(
   text: string,
   steps: unknown[] | undefined,
   agentLabel: string,
+  meta?: { stepLimitHit: boolean; steps: number },
 ): string {
   const summary = buildActivitySummary(steps);
   if (!text.trim()) {
-    return [
-      `(${agentLabel} produced no text summary; activity reconstructed from tool-call log)`,
-      '',
-      summary,
-    ].join('\n');
+    const preamble = meta?.stepLimitHit
+      ? `(${agentLabel} ran out of steps (${meta.steps}) before producing a text summary; activity reconstructed from tool-call log)`
+      : `(${agentLabel} produced no text summary; activity reconstructed from tool-call log)`;
+    return [preamble, '', summary].join('\n');
   }
   return `${text.trimEnd()}\n\n${summary}`;
 }
