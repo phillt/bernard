@@ -1191,14 +1191,21 @@ export class Agent {
         turnAborted = true;
         const partial = truncateToolResults(this.partialStepMessages);
         const text = this.partialText.trim();
+        // The marker lands unconditionally (#403). It used to be gated on
+        // `partial.length > 0`, so an Esc that arrived before the first step
+        // completed left the model's history holding a user message with no
+        // reply at all — the same turn reads on a later resume as one the model
+        // simply never answered, and "please continue" has nothing to continue
+        // from. `processInput` pushes the user message synchronously before its
+        // first await, so history here always ends with that message (or with
+        // this turn's tool results), and an assistant message after either is
+        // API-valid.
         if (text) {
           partial.push({ role: 'assistant', content: `${text}\n\n[interrupted by user]` });
-        } else if (partial.length > 0) {
+        } else {
           partial.push({ role: 'assistant', content: '[interrupted by user]' });
         }
-        if (partial.length > 0) {
-          this.history.push(...partial);
-        }
+        this.history.push(...partial);
         // The clean-exit path below assigns `lastPromptTokens`, and this branch
         // returns before it. Without this, Esc-ing out of large turns grows the
         // history while the compression trigger stays frozen at the last
