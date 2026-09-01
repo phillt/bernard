@@ -101,9 +101,9 @@ export const subAgentDefinition: AgentDefinition<SubAgentInput, string> = {
     return makeLastStepTextOnly(maxSteps);
   },
 
-  formatResult(result) {
+  formatResult(result, _input, _ctx, meta) {
     return capSubagentResult(
-      appendActivitySummary(result.text, result.steps as unknown[], 'subagent'),
+      appendActivitySummary(result.text, result.steps as unknown[], 'subagent', meta),
     );
   },
 };

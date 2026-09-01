@@ -1,14 +1,16 @@
 import type { CoreMessage, Tool } from 'ai';
+import { classifyError } from '../../error-taxonomy.js';
 import { resolveSiteModel } from '../../model-policy.js';
 import { osPromptBlock } from '../../os-info.js';
 import {
+  isWrapperParseFailure,
   STRUCTURED_OUTPUT_RULES,
   wrapWrapperResult,
   type WrapperResult,
 } from '../../structured-output.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
-import type { AgentDefinition, ResolvedModel } from './types.js';
+import type { AgentDefinition, FormatMeta, ResolvedModel } from './types.js';
 import { makeLastStepTextOnly } from './task.js';
 
 /** Fraction of `config.maxSteps` allocated to a tool-wrapper run. */
@@ -128,12 +130,86 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
     };
   },
 
-  formatResult(result, input): WrapperResult {
-    return input.wantStructured
+  formatResult(result, input, _ctx, meta): WrapperResult {
+    const wrapped: WrapperResult = input.wantStructured
       ? wrapWrapperResult(result.text)
       : { status: 'ok' as const, result: result.text };
+    return relabelStepLimit(wrapped, meta);
   },
 };
+
+/**
+ * Re-labels a wrapper result whose real failure was **running out of steps**.
+ *
+ * A dispatch that exhausts `maxSteps` is cut off mid-work, so the model never
+ * reaches the final turn where it would write its JSON. `wrapWrapperResult`
+ * then sees empty text and reports `parse_failed` — "did not produce valid
+ * structured output" — which is true and useless: it points at the output
+ * format when the actual problem is the budget. Observed on a real run where a
+ * specialist spent all 13 steps thrashing and the parent was told its JSON was
+ * malformed, so neither the log nor the parent agent recorded the one fact
+ * that explained the failure.
+ *
+ * This lives here, on the definition, because the definition is where both
+ * facts arrive (#370). Its predecessor `reclassifyStepLimit` sat in
+ * `tool-wrapper-run.ts`, one layer up, where it had access to neither and so
+ * inferred both from the formatted payload:
+ *
+ *  - It read the cutoff from a `stepLimitHit` the dispatch had to remember to
+ *    forward; the runner now hands it to the formatter as {@link FormatMeta},
+ *    which is also what let `sub` / `specialist` / `task` stop guessing.
+ *  - It read "the parse failed" off `WrapperResult.error === 'parse_failed'` —
+ *    a field {@link STRUCTURED_OUTPUT_RULES} explicitly tells the specialist to
+ *    fill in ("put the cause in `error`"). A specialist reporting a
+ *    *downstream* parse failure emits exactly that string with its own prose in
+ *    `result`, and was silently relabelled `step_limit` whenever the run also
+ *    exhausted its budget — the model's own diagnosis replaced by a wrong one.
+ *    {@link isWrapperParseFailure} matches the envelope `wrapWrapperResult`
+ *    mints instead, `result` constant included, so only OUR parse failure
+ *    counts.
+ *
+ * The symmetric hazard is worth naming because it is not fully closable here:
+ * `step_limit` is a real `ToolErrorType` (`error-taxonomy.ts`), so a model that
+ * writes `"error": "step_limit"` mints a taxonomy-valid classification with no
+ * dispatch behind it. What this change buys is that nothing downstream reads
+ * that string back to *decide* anything — the verdict is now settled once, here,
+ * from the dispatch fact.
+ *
+ * Two shapes are re-labelled, both of which mean "cut off with nothing to say":
+ * our own parse failure, and — for `wantStructured: false` specialists, which
+ * never parse — an `ok` whose result text is empty. That second one is worse
+ * than a wrong label: it hands the parent an empty **success**.
+ *
+ * A run that hit the limit but still returned real content is left alone. The
+ * model may have wrapped up on its last step, and overriding a substantive
+ * answer with an error would discard work that did happen.
+ */
+export function relabelStepLimit(wrapped: WrapperResult, meta?: FormatMeta): WrapperResult {
+  if (!meta?.stepLimitHit) return wrapped;
+
+  // Only an *absent* result counts as empty. Testing `typeof !== 'string'`
+  // would sweep up every successfully-parsed structured result, which is an
+  // object — discarding exactly the work this guard is meant to preserve.
+  const emptyOk =
+    wrapped.status === 'ok' &&
+    (wrapped.result === null ||
+      wrapped.result === undefined ||
+      (typeof wrapped.result === 'string' && wrapped.result.trim().length === 0));
+  if (!emptyOk && !isWrapperParseFailure(wrapped)) return wrapped;
+
+  return {
+    ...wrapped,
+    status: 'error',
+    // `step_limit` is a real taxonomy category, deliberately: adding the label
+    // without the entry would have downgraded the `parse_failed` it replaces
+    // (`retryable: true`, concrete advice) to `unknown` ("did not match any
+    // known pattern"). The recovery text is read from that playbook rather
+    // than hand-written a second time, so every surface rendering `step_limit`
+    // agrees.
+    result: `Specialist ran out of steps (${meta.steps}) before producing a final answer. ${classifyError({ message: 'step_limit' }).playbook.model}`,
+    error: 'step_limit',
+  };
+}
 
 /** Formats good/bad examples as a markdown block appended to the child's system prompt. */
 export function formatExamples(specialist: {

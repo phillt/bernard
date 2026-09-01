@@ -871,6 +871,65 @@ describe('<App> plain-text turn', () => {
   });
 });
 
+describe('<App> interrupted turn leaves a durable record (#403)', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /**
+   * Submits, presses Esc mid-turn, then lets `processInput` settle — the shape
+   * a real Esc takes, where the abort lands while the turn promise is pending.
+   */
+  async function interruptedTurn(history: CoreMessage[] = []) {
+    let release: (() => void) | undefined;
+    const processInput = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const harness = renderApp({ history, agent: { processInput } });
+    await tick();
+    harness.stdin.write('a long question');
+    await tick();
+    harness.stdin.write(ENTER);
+    await tick(40);
+    harness.stdin.write(ESC);
+    await tick();
+    release?.();
+    await tick(40);
+    return harness;
+  }
+
+  it('commits an interrupt entry that survives the next submit', async () => {
+    // The `⏹ you interrupted` chrome renders off a boolean and is never pushed
+    // into `staticItems`; `runAgentTurn` then clears that boolean at the top of
+    // the submit path, so before #403 the next keystroke erased the only trace
+    // the turn left behind.
+    const { stdin, lastFrame, unmount } = await interruptedTurn();
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Turn interrupted after');
+
+    await submit(stdin, 'a second question');
+    await tick(40);
+    const after = stripAnsi(lastFrame() ?? '');
+    // The live chrome is gone (the flag was cleared); the transcript entry is not.
+    expect(after).not.toContain('you interrupted');
+    expect(after).toContain('Turn interrupted after');
+    unmount();
+  });
+
+  it('keeps the live chrome as well — it is the right idle affordance', async () => {
+    // #403 adds a record, it does not replace the affordance: the chrome is
+    // what tells the user the turn is dead in the moment, before they type.
+    const { lastFrame, unmount } = await interruptedTurn();
+    expect(stripAnsi(lastFrame() ?? '')).toContain('you interrupted');
+    unmount();
+  });
+});
+
 describe('<App> requestAskUser "Other" dedup (#230)', () => {
   beforeEach(() => {
     process.env.BERNARD_HOME = TMP_HOME;

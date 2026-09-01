@@ -697,7 +697,7 @@ function parseUserMessage(raw: string): { body: string; timestamp: Date | null }
  * a developer would scan for in the corner of a chat client — exact under a
  * second, one decimal under ten, whole seconds up to a minute, then `m s`.
  */
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   const seconds = ms / 1000;
   if (seconds < 10) return `${seconds.toFixed(1)}s`;

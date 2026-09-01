@@ -22,7 +22,13 @@ import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
-import type { AgentDefinition, HistoryMode, ModelOverrides, ResolvedModel } from './types.js';
+import type {
+  AgentDefinition,
+  FormatMeta,
+  HistoryMode,
+  ModelOverrides,
+  ResolvedModel,
+} from './types.js';
 
 export interface RunDefinitionOpts {
   abortSignal?: AbortSignal;
@@ -385,7 +391,10 @@ export async function runDefinition<TInput, TFormatted>(
   };
 
   const result = await strategy.run(strategyCtx);
-  const formatted = await applyFormat(def, result, input, ctx);
+  const formatted = await applyFormat(def, result, input, ctx, {
+    stepLimitHit,
+    steps: result.steps?.length ?? 0,
+  });
   return { result, formatted, resolved, stepLimitHit, toolBytes };
 }
 
@@ -469,14 +478,23 @@ function extractUserInput(messages: CoreMessage[]): string {
   return '';
 }
 
+/**
+ * The ONLY call site of `def.formatResult`, and therefore the one place the
+ * dispatch-level {@link FormatMeta} has to be threaded (#370). `stepLimitHit`
+ * is already in lexical scope here — it was computed, returned to
+ * the dispatch caller, and then discarded here, which is what forced
+ * `tool-wrapper-run` to re-derive it from the formatted payload's own error
+ * string. See {@link FormatMeta} for why that inference was unsound.
+ */
 async function applyFormat<TInput, TFormatted>(
   def: AgentDefinition<TInput, TFormatted>,
   result: AgentResult,
   input: TInput,
   ctx: AgentContext,
+  meta: FormatMeta,
 ): Promise<TFormatted> {
   if (def.formatResult) {
-    return Promise.resolve(def.formatResult(result, input, ctx));
+    return Promise.resolve(def.formatResult(result, input, ctx, meta));
   }
   // Default: return result.text (typed as TFormatted by the caller's choice).
   return result.text as unknown as TFormatted;

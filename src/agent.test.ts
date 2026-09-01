@@ -2353,13 +2353,19 @@ describe('partial history preserved on abort (Esc)', () => {
     await agent.processInput('second');
 
     const history = agent.getHistory();
-    // Only the new user message was added — no stale turn-1 partials, no note.
-    expect(history.length).toBe(lenBefore + 1);
-    expect(history[history.length - 1].role).toBe('user');
-    expect(JSON.stringify(history.slice(lenBefore))).not.toContain('[interrupted by user]');
+    // The new user message plus this turn's own interrupt marker — and nothing
+    // from turn 1. The recorder-clearing guarantee is that `slice(lenBefore)`
+    // holds no turn-1 content, not that it is empty (#403).
+    expect(history.length).toBe(lenBefore + 2);
+    expect(history[lenBefore].role).toBe('user');
+    expect(JSON.stringify(history.slice(lenBefore))).not.toContain('turn one answer');
   });
 
-  it('abort with nothing captured keeps current behavior (user message only)', async () => {
+  it('records the interrupt even when the abort beat the first step (#403)', async () => {
+    // Was "keeps current behavior (user message only)". That behavior left the
+    // model's history with a user message and no reply — indistinguishable on a
+    // later resume from a turn it simply never answered, and "please continue"
+    // has nothing to continue from.
     const agent = makeAgent(makeConfig(), toolOptions, store);
     mockGenerateText.mockImplementation(async () => {
       agent.abort();
@@ -2368,8 +2374,10 @@ describe('partial history preserved on abort (Esc)', () => {
     await agent.processInput('Hello');
 
     const history = agent.getHistory();
-    expect(history).toHaveLength(1);
+    expect(history).toHaveLength(2);
     expect(history[0].role).toBe('user');
+    expect(history[1].role).toBe('assistant');
+    expect(history[1].content).toBe('[interrupted by user]');
   });
 
   it('carries the aborted turn prompt size into the compression headroom', async () => {

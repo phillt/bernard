@@ -9,6 +9,36 @@ import type { ExecutionStrategy } from '../strategies/types.js';
 import type { CreateToolsOptions } from '../../tools/index.js';
 
 /**
+ * Dispatch-level facts handed to {@link AgentDefinition.formatResult} (#370).
+ *
+ * `stepLimitHit` is computed by the runner — it is the one party that knows
+ * both the finish reason and the step budget the call was given — and was
+ * previously discarded at the format boundary and then *reverse-engineered*
+ * downstream by pattern-matching the formatted payload. That inference was
+ * wrong in both directions, which is why the fact travels now instead:
+ *
+ *  - **False positive.** `reclassifyStepLimit` (deleted with this change) read
+ *    the `parse_failed` sentinel out of `WrapperResult.error` — a free-form
+ *    field `STRUCTURED_OUTPUT_RULES` explicitly tells the model to fill in. A
+ *    specialist reporting a *downstream* parse failure as
+ *    `{"status":"error","error":"parse_failed"}` was silently relabelled
+ *    `step_limit` whenever the run also happened to exhaust its budget.
+ *  - **False negative, symmetrically.** It *wrote* `error: 'step_limit'` back
+ *    into that same model-written field, and `step_limit` is a real
+ *    `ToolErrorType`. A model that writes it produces a taxonomy-valid
+ *    classification with no dispatch-level fact behind it at all.
+ *
+ * `steps` is the number of steps actually completed, so a formatter can say
+ * how large the budget it exhausted was rather than just that it ran out.
+ */
+export interface FormatMeta {
+  /** The dispatch ended at its `maxSteps` ceiling while still calling tools. */
+  stepLimitHit: boolean;
+  /** Steps actually completed by the run. */
+  steps: number;
+}
+
+/**
  * Whether the caller persists conversation history across runs (main agent) or
  * rebuilds the seed messages fresh each call (subagent, specialist, task,
  * tool-wrapper, cron). Correction runs route through `tool_wrapper_run` and
@@ -250,11 +280,34 @@ export interface AgentDefinition<TInput = unknown, TFormatted = unknown> {
    * Post-processing applied to the final `AgentResult`. Receives the raw result
    * and may return any payload (string, JSON envelope, structured object).
    * Defaults to `result.text` when omitted.
+   *
+   * `meta` carries the dispatch-level facts a formatter cannot recover from
+   * `AgentResult` alone — see {@link FormatMeta}. Adding it required no edits to
+   * the nine existing implementations, because a function of fewer parameters is
+   * assignable to a signature of more — plain arity assignability, nothing to do
+   * with bivariance (an earlier version of this comment said otherwise).
+   *
+   * It is marked optional only for callers outside `applyFormat`: the tests that
+   * invoke a definition's `formatResult` directly. `applyFormat` types it as
+   * required and always passes it, so no production path reaches the `undefined`
+   * branch. Callers that destructure it should read `meta?.stepLimitHit` and
+   * treat absence as "unknown", never as "the run finished".
+   *
+   * **Where the verdict lands is deliberately not uniform, and #351 should know
+   * it.** `task` and `tool-wrapper` mint `status: 'error'` envelopes, which
+   * `detectResultFailure` reads as failures; `sub`, `specialist`, `pac-actor`
+   * and `mcp-delegate` return prose with a preamble, which it reads as SUCCESS.
+   * So a step-limited run is a failure at two of six formatters and a success at
+   * four. `RunDefinitionResult.stepLimitHit` is still returned to all five
+   * dispatch tools, so a pass centralizing the error path there will find this
+   * fact already folded into the payload one layer below and must either
+   * special-case it or re-derive it.
    */
   formatResult?(
     result: AgentResult,
     input: TInput,
     ctx: AgentContext,
+    meta?: FormatMeta,
   ): TFormatted | Promise<TFormatted>;
 
   /**

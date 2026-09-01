@@ -9,6 +9,7 @@ import {
 import { pacActorDefinition, type PacActorInput } from '../pac-actor.js';
 import { NormalStrategy } from '../../strategies/normal.js';
 import { SUBAGENT_RESULT_MAX_CHARS } from '../../../tools/result-cap.js';
+import { detectResultFailure } from '../../../tool-result-shape.js';
 import type { BernardConfig } from '../../../config.js';
 import type { AgentContext } from '../../context.js';
 
@@ -72,7 +73,59 @@ describe('mcpDelegateDefinition (#296)', () => {
       input(),
       {} as AgentContext,
     );
-    expect(small).toBe('short summary');
+    expect(small).toContain('short summary');
+  });
+
+  it('never returns an empty summary for an empty run (#395)', () => {
+    // `capSubagentResult('')` is `''` — no floor — and this was the only
+    // text-returning definition with no empty guard. Empty is a routine
+    // outcome, not a pathological one: AI SDK v4 keeps only the last step's
+    // text, so a helper that narrates on step 4 and calls one more tool on
+    // step 5 returns ''.
+    const out = mcpDelegateDefinition.formatResult(
+      { text: '', steps: [{ toolCalls: [], toolResults: [] }] } as never,
+      input(),
+      {} as AgentContext,
+    );
+    expect(out.trim()).not.toBe('');
+    expect(out).toContain('"google" delegate helper produced no text summary');
+    expect(out).toContain('## Activity Log');
+  });
+
+  it('an empty run no longer reads as a clean success (#395/#363)', () => {
+    // The cost of the missing guard was not only a blank summary. `''
+    // .startsWith('Error')` is false, so `detectResultFailure` read the empty
+    // return as SUCCESS — augment then logged `status: 'ok'`, registered an
+    // empty-preview pointer as citable evidence, and bumped successCount.
+    expect(detectResultFailure('')).toBeUndefined();
+
+    const out = mcpDelegateDefinition.formatResult(
+      {
+        text: '',
+        steps: [
+          {
+            toolCalls: [{ toolName: 'google__list', args: { q: 'from:Jody' } }],
+            toolResults: [{ result: { isError: true, content: [{ text: 'token expired' }] } }],
+          },
+        ],
+      } as never,
+      input(),
+      {} as AgentContext,
+    );
+    // The reconstructed log carries the failing call the model dropped, so the
+    // parent can see what actually happened rather than an empty string.
+    expect(out).toContain('google__list');
+    expect(out).toContain('token expired');
+  });
+
+  it('says it ran out of steps rather than "produced no text" (#370)', () => {
+    const out = mcpDelegateDefinition.formatResult(
+      { text: '', steps: [] } as never,
+      input(),
+      {} as AgentContext,
+      { stepLimitHit: true, steps: 13 },
+    );
+    expect(out).toContain('"google" delegate helper ran out of steps (13)');
   });
 });
 
@@ -84,6 +137,18 @@ describe('buildDelegateSystemPrompt (#296)', () => {
     expect(p).toContain('NEVER dump raw');
     expect(p).toContain('ask_user');
     expect(p).toContain('Stay strictly within this server');
+  });
+
+  it('constrains reporting to what tool results confirm (#367)', () => {
+    // Advisory, and known to leak — the Activity Log appended by
+    // `formatResult` is the mechanism. Pinned anyway because the two observed
+    // failures (reporting a type that the result said was an Enter press; a
+    // closed tab omitted from the report) are what these clauses name, and a
+    // silent deletion would leave only the log.
+    const p = buildDelegateSystemPrompt('browser-control', ['browser_type']);
+    expect(p).toContain('Report only what a tool result CONFIRMS');
+    expect(p).toContain('Always report resource-lifecycle actions');
+    expect(p).toContain('Never close, delete, or discard a resource you did not create');
   });
 });
 

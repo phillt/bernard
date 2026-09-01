@@ -140,9 +140,9 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
     };
   },
 
-  formatResult(result) {
+  formatResult(result, _input, _ctx, meta) {
     return capSubagentResult(
-      appendActivitySummary(result.text, result.steps as unknown[], 'specialist'),
+      appendActivitySummary(result.text, result.steps as unknown[], 'specialist', meta),
     );
   },
 };

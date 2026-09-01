@@ -109,8 +109,9 @@ import {
   captureToolCalls,
   createToolWrapperRunTool,
   renderWrapperParentView,
-  reclassifyStepLimit,
 } from './tool-wrapper-run.js';
+import { relabelStepLimit } from '../framework/agents/tool-wrapper.js';
+import { WRAPPER_PARSE_FAILURE_RESULT } from '../structured-output.js';
 import { _resetPool } from './agent-pool.js';
 import { classifyError } from '../error-taxonomy.js';
 import { DEFAULT_SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
@@ -922,16 +923,24 @@ describe('createToolWrapperRunTool – execute guard branches', () => {
   });
 });
 
-describe('reclassifyStepLimit', () => {
-  // See `reclassifyStepLimit` for why this exists.
+describe('relabelStepLimit', () => {
+  // See `relabelStepLimit` (src/framework/agents/tool-wrapper.ts) for why this
+  // exists. It moved off this dispatch and onto the definition in #370: the
+  // dispatch could only *infer* the cutoff from `WrapperResult.error`, a field
+  // the model writes, so a specialist reporting a downstream `parse_failed`
+  // was relabelled whenever its run also happened to exhaust the budget.
+  const hit = { stepLimitHit: true, steps: 13 };
+  // Shaped exactly as `wrapWrapperResult` mints it — the `result` constant is
+  // load-bearing now, since that is what distinguishes our parse failure from
+  // one the model wrote.
   const parseFailed = {
     status: 'error' as const,
-    result: 'Specialist did not produce valid structured output',
+    result: WRAPPER_PARSE_FAILURE_RESULT,
     error: 'parse_failed',
   };
 
   it('re-labels a parse_failed that was really a step-limit cutoff', () => {
-    const out = reclassifyStepLimit(parseFailed, true, 13);
+    const out = relabelStepLimit(parseFailed, hit);
     expect(out.status).toBe('error');
     expect(out.error).toBe('step_limit');
     expect(out.result).toContain('ran out of steps (13)');
@@ -945,18 +954,25 @@ describe('reclassifyStepLimit', () => {
     // resolve. An unmapped label would be *worse* than the `parse_failed` it
     // replaces — that one is `retryable: true` with a concrete playbook, and
     // `unknown` is `retryable: false` / "did not match any known pattern".
-    const cls = classifyError({ message: reclassifyStepLimit(parseFailed, true, 13).error! });
+    const cls = classifyError({ message: relabelStepLimit(parseFailed, hit).error! });
     expect(cls.category).toBe('step_limit');
     expect(cls.retryable).toBe(true);
     expect(cls.correctable).toBe(false); // a budget is not a call-shape mistake
   });
 
   it('leaves parse_failed alone when the limit was not hit', () => {
-    expect(reclassifyStepLimit(parseFailed, false, 5)).toBe(parseFailed);
+    expect(relabelStepLimit(parseFailed, { stepLimitHit: false, steps: 5 })).toBe(parseFailed);
+  });
+
+  it('leaves parse_failed alone when no dispatch meta was supplied', () => {
+    // The formatter is declared with an optional `meta`, so an absent one must
+    // mean "no cutoff known" and never "assume a cutoff" — otherwise a caller
+    // that forgot to thread it would relabel every genuine parse failure.
+    expect(relabelStepLimit(parseFailed)).toBe(parseFailed);
   });
 
   it('re-labels an empty `ok` — an unstructured wrapper cut off mid-work', () => {
-    const out = reclassifyStepLimit({ status: 'ok', result: '   ' }, true, 13);
+    const out = relabelStepLimit({ status: 'ok', result: '   ' }, hit);
     expect(out.status).toBe('error');
     expect(out.error).toBe('step_limit');
   });
@@ -964,16 +980,31 @@ describe('reclassifyStepLimit', () => {
   it('preserves a structured object result even when the limit was hit', () => {
     // Testing `typeof !== 'string'` here would discard every parsed result.
     const ok = { status: 'ok' as const, result: { added: 'browsermcp', tools: 12 } };
-    expect(reclassifyStepLimit(ok, true, 13)).toBe(ok);
+    expect(relabelStepLimit(ok, hit)).toBe(ok);
   });
 
   it('preserves substantive text output even when the limit was hit', () => {
     const ok = { status: 'ok' as const, result: 'Server added and verified.' };
-    expect(reclassifyStepLimit(ok, true, 13)).toBe(ok);
+    expect(relabelStepLimit(ok, hit)).toBe(ok);
   });
 
   it('leaves a genuine non-parse error untouched', () => {
     const err = { status: 'error' as const, result: 'boom', error: 'exec_failed' };
-    expect(reclassifyStepLimit(err, true, 13)).toBe(err);
+    expect(relabelStepLimit(err, hit)).toBe(err);
+  });
+
+  it('does not relabel a model-authored `parse_failed` (#370)', () => {
+    // The false positive the move removes, exercised on the exact input that
+    // used to trip it: the limit WAS hit, and the specialist independently
+    // wrote `error: "parse_failed"` about a *downstream* parse it attempted —
+    // which `STRUCTURED_OUTPUT_RULES` tells it to do. The old inference matched
+    // on that field alone and replaced the model's own diagnosis with a wrong
+    // one; matching our minted envelope (`result` constant included) does not.
+    const modelAuthored = {
+      status: 'error' as const,
+      result: 'jq could not parse the API response',
+      error: 'parse_failed',
+    };
+    expect(relabelStepLimit(modelAuthored, hit)).toBe(modelAuthored);
   });
 });

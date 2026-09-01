@@ -7,7 +7,7 @@ import { createTools } from '../../tools/index.js';
 import type { AgentContext } from '../context.js';
 import { outputHook } from '../hooks/output.js';
 import { NormalStrategy } from '../strategies/normal.js';
-import type { AgentDefinition } from './types.js';
+import type { AgentDefinition, FormatMeta } from './types.js';
 
 export const TASK_SYSTEM_PROMPT = `You are a task executor for Bernard, a CLI AI assistant. You have been given a focused, isolated task.
 
@@ -73,8 +73,20 @@ function validateTaskResult(parsed: unknown): TaskResult | undefined {
  * Wraps raw text output into a structured TaskResult.
  * Extracts JSON from the text and validates it against TaskResultSchema.
  * Invalid or missing JSON → error result (not silent success).
+ *
+ * `meta` distinguishes the two ways "no valid JSON" happens (#370). A task cut
+ * off at `maxSteps` never reaches the turn where it writes its envelope, so it
+ * lands in the same fallback as a model that wrote prose — and the parent was
+ * told the output format was wrong when the actual problem was the budget.
+ * That sentinel is byte-identical to the one `structured-output.ts` emits for
+ * tool-wrappers, and it was misleading here for exactly the same reason; the
+ * fact now travels from the runner rather than being guessed from the payload.
+ *
+ * The plain-prose case keeps its original sentinel verbatim: it is the honest
+ * message when a task genuinely finished and wrote the wrong thing, and
+ * callers assert on it.
  */
-export function wrapTaskResult(text: string): TaskResult {
+export function wrapTaskResult(text: string, meta?: FormatMeta): TaskResult {
   const trimmed = text.trim();
 
   try {
@@ -99,6 +111,14 @@ export function wrapTaskResult(text: string): TaskResult {
         i += block.length - 1;
       }
     }
+  }
+
+  if (meta?.stepLimitHit) {
+    return {
+      status: 'error',
+      output: `Task ran out of steps (${meta.steps}) before producing a final answer`,
+      details: trimmed,
+    };
   }
 
   return {
@@ -187,8 +207,8 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
     return makeLastStepTextOnly(maxSteps);
   },
 
-  formatResult(result) {
-    return wrapTaskResult(result.text);
+  formatResult(result, _input, _ctx, meta) {
+    return wrapTaskResult(result.text, meta);
   },
 };
 
