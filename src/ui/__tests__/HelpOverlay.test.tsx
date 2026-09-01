@@ -30,6 +30,7 @@ import {
   ALT_RIGHT,
   META_ENTER,
   tick,
+  frameRows,
 } from './_keys.js';
 import stripAnsi from 'strip-ansi';
 
@@ -44,8 +45,6 @@ import stripAnsi from 'strip-ansi';
 function mountHelp(onClose: () => void = () => {}) {
   return render(createElement(DimensionsProvider, null, createElement(HelpOverlay, { onClose })));
 }
-
-const frameRows = (frame: string | undefined) => stripAnsi(frame ?? '').split('\n').length;
 
 describe('helpLines()', () => {
   /**

@@ -4,6 +4,27 @@ import { getThemeColors } from '../theme.js';
 import { SlashHints, matchSlashCommands, type SlashCommand } from './SlashHints.js';
 import { useLineEditor } from './use-line-editor.js';
 import { BoundedLine, PROMPT_RESERVED_COLUMNS } from './BoundedLine.js';
+import { useDimensionsCtx } from './DimensionsContext.js';
+import { planPanelMaxRows } from './plan-window.js';
+
+/**
+ * Columns the rounded box costs its children — one border cell each side.
+ * Handed to `renderAbove` rather than assumed by it, on the same contract as
+ * `BoundedLine`'s `reserveColumns`: the border belongs to this component, so
+ * the child must not be guessing at it.
+ */
+export const PROMPT_BORDER_COLUMNS = 2;
+
+/**
+ * The row/column budget `Prompt` grants whatever renders inside its border
+ * above the input line (today: the pinned `<PlanPanel>`).
+ */
+export interface PromptAboveBudget {
+  /** Total rows the pinned content may occupy, its own chrome included. */
+  maxRows: number;
+  /** Columns of this box's chrome to subtract from the terminal width. */
+  reserveColumns: number;
+}
 
 interface PromptProps {
   /** When true, suppress key handling — used while an overlay is open. */
@@ -39,9 +60,17 @@ interface PromptProps {
    * Optional content rendered inside the input box, above the input line —
    * the pinned `<PlanPanel>` slots in here so the plan + input share one
    * rounded border (the plan reads as an extension of the input box). When
-   * absent (or `null`), the box collapses to a plain single-line input.
+   * absent (or returning `null`), the box collapses to a plain single-line
+   * input.
+   *
+   * A render prop, not a `ReactNode` (#358), so the height budget can flow
+   * DOWN. Both children of this box are unbounded by nature — a pasted answer
+   * on the input line, an unbounded step list above it — and this is the one
+   * component that sees both plus the border, so the box's total height should
+   * read as an expression here rather than as an emergent sum of two files'
+   * private constants.
    */
-  renderAbove?: ReactNode;
+  renderAbove?: (budget: PromptAboveBudget) => ReactNode;
 }
 
 /**
@@ -74,6 +103,15 @@ export function Prompt({
   // buffer (not on the history rail).
   const [historyCursor, setHistoryCursor] = useState<number | null>(null);
   const colors = getThemeColors();
+  // Read here rather than inside the child so the whole box's height is one
+  // readable expression: `planPanelMaxRows(rows)` above + `BoundedLine`'s
+  // `max(3, min(10, floor(rows / 3)))` below, PLUS its two `▲/▼` affordance
+  // rows, which sit outside its own cap — plus this border and the marginTop,
+  // which is `PROMPT_CHROME_ROWS`. The two caps stay INDEPENDENT — see
+  // `plan-window.ts` for why a shared pool would need both children to lift
+  // their demand up here — but they are jointly bounded there, because the
+  // fractions alone are not a bound once both floors are counted.
+  const { rows } = useDimensionsCtx();
 
   // Computed every render rather than memoized: `dynamicCommands` is a stable
   // getter whose *returned* list changes when routines/tasks are added/removed,
@@ -221,7 +259,10 @@ export function Prompt({
         borderStyle="round"
         borderColor={disabled ? colors.muted : colors.accent}
       >
-        {renderAbove}
+        {renderAbove?.({
+          maxRows: planPanelMaxRows(rows),
+          reserveColumns: PROMPT_BORDER_COLUMNS,
+        })}
         <Box flexDirection="column" paddingX={1}>
           <BoundedLine
             buffer={buffer}
