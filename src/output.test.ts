@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   formatTokenCount,
+  formatElapsed,
   buildSpinnerMessage,
   setToolDetailsVisible,
   isToolDetailsVisible,
@@ -151,5 +152,37 @@ describe('tool-details visibility', () => {
     expect(isToolDetailsVisible()).toBe(true);
     setToolDetailsVisible(false);
     expect(isToolDetailsVisible()).toBe(false);
+  });
+});
+
+describe('formatElapsed', () => {
+  const s = (n: number) => n * 1000;
+  const m = (n: number) => s(n * 60);
+  const h = (n: number) => m(n * 60);
+
+  it('shows seconds under a minute', () => {
+    expect(formatElapsed(0)).toBe('0s');
+    expect(formatElapsed(s(59))).toBe('59s');
+  });
+
+  it('shows minutes and seconds under an hour', () => {
+    expect(formatElapsed(m(1))).toBe('1m0s');
+    expect(formatElapsed(m(59) + s(59))).toBe('59m59s');
+  });
+
+  it('rolls over to hours and days rather than counting minutes forever', () => {
+    // The defect: a citation carried over from two days ago read `2880m0s ago`,
+    // and a long session's duration read `120m0s`.
+    expect(formatElapsed(h(1))).toBe('1h0m');
+    expect(formatElapsed(h(2))).toBe('2h0m');
+    expect(formatElapsed(h(23) + m(59))).toBe('23h59m');
+    expect(formatElapsed(h(48))).toBe('2d0h');
+    expect(formatElapsed(h(49) + m(30))).toBe('2d1h');
+  });
+
+  it('shows exactly the two leading units at every scale', () => {
+    for (const ms of [s(30), m(5), h(5), h(50)]) {
+      expect(formatElapsed(ms)).toMatch(/^\d+[smhd]\d*[smh]?$/);
+    }
   });
 });

@@ -86,7 +86,7 @@ function isScalar(v: unknown): v is Scalar {
 }
 
 /** How a scalar prints in a cell. `undefined` = the row simply lacks the key. */
-function cellText(v: unknown): string {
+export function cellText(v: unknown): string {
   if (v === undefined) return '';
   if (v === null) return 'null';
   return typeof v === 'string' ? v : String(v);
@@ -133,7 +133,7 @@ function tabularRows(value: unknown): Record<string, unknown>[] | null {
  */
 export function renderRecordTable(value: unknown, width: number): RichLine[] | null {
   const rows = tabularRows(value);
-  if (!rows || width < MIN_COL_W) return null;
+  if (!rows) return null;
 
   // One pass over every cell: frequency, natural width, alignment, and the
   // disqualification of any field that is ever non-scalar.
@@ -175,6 +175,9 @@ export function renderRecordTable(value: unknown, width: number): RichLine[] | n
     used += need;
     shown.push({ ...c, width: w });
   }
+  // The single "nothing fits" exit. A `width < MIN_COL_W` guard up front would
+  // be dead: the first column always needs at least MIN_COL_W, so any width
+  // below it breaks on the first iteration and lands here anyway.
   if (shown.length === 0) return null;
 
   const omitted = [...candidates.slice(shown.length).map((c) => c.key), ...nested];

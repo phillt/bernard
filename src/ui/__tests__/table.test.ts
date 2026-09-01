@@ -41,7 +41,12 @@ describe('renderRecordTable — shapes it refuses', () => {
   });
 
   it('returns null when not even one column fits the width', () => {
+    // Both sides of MIN_COL_W (4): a width that cannot seat the narrowest
+    // possible column, and one that is exactly it but still too small for the
+    // first candidate. One exit covers both.
     expect(renderRecordTable(ISSUES, 3)).toBeNull();
+    expect(renderRecordTable(ISSUES, 0)).toBeNull();
+    expect(renderRecordTable(ISSUES, -1)).toBeNull();
   });
 });
 

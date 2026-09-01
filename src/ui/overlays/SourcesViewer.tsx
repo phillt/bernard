@@ -18,7 +18,8 @@ import {
   wrapText,
   openAtNewest,
 } from './viewer-util.js';
-import { renderRecordTable, type RichLine, type SpanRole } from './table.js';
+import { type RichLine, type SpanRole } from './table.js';
+import { buildPreviewLines } from './preview-lines.js';
 import {
   KEY,
   HINT_MOVE,
@@ -323,6 +324,11 @@ const MAX_TITLE_LINES = 3;
  * to the available height and lets the navigation handler clamp the scroll
  * offset against the real wrapped-line count.
  */
+/** Joins the fields that share the card's `kind · cited · when` row. Measured
+ *  and rendered from the same constant so the budget cannot drift from the
+ *  row it is budgeting for. */
+const SEP = ' · ';
+
 function buildCitationDetail(
   source: SourceItem,
   cited: boolean,
@@ -343,8 +349,13 @@ function buildCitationDetail(
   // Budget for the timestamp is what the row has left after the two labels and
   // the ` · ` that joins them — computed, not truncated, because `truncate`
   // would cut mid-`ago)` and read as corrupt rather than as absent.
-  const meta = `${source.kind} · ${cited ? 'cited' : 'not cited'}`;
-  const when = sourceWhen(source.timestamp, w - meta.length - 3);
+  //
+  // The labels are built once and both measured and rendered from the same
+  // values: a budget that restates the row's wording is a budget that goes
+  // quietly wrong the first time someone edits one and not the other.
+  const citedLabel = cited ? 'cited' : 'not cited';
+  const meta = [source.kind, citedLabel].join(SEP);
+  const when = sourceWhen(source.timestamp, w - meta.length - SEP.length);
 
   const header: ReactNode[] = [
     ...titleLines.map((line, i) => (
@@ -359,10 +370,8 @@ function buildCitationDetail(
     // muted, not Ink's raw `dimColor`, which ignores the active theme (#320).
     <Text key="kind" wrap="truncate-end">
       <Text color={colors.muted}>{source.kind}</Text>
-      <Text color={cited ? colors.success : colors.muted}>
-        {cited ? ' · cited' : ' · not cited'}
-      </Text>
-      {when && <Text color={colors.muted}>{` · ${when}`}</Text>}
+      <Text color={cited ? colors.success : colors.muted}>{`${SEP}${citedLabel}`}</Text>
+      {when && <Text color={colors.muted}>{`${SEP}${when}`}</Text>}
     </Text>,
   ];
   if (source.rawRef && source.rawRef !== source.label) {
@@ -409,71 +418,4 @@ function sourceWhen(timestamp: number, budget: number): string {
  *  exist to override (#320). */
 function spanColor(role: SpanRole, colors: ThemeColors): string {
   return role === 'accent' ? colors.accent : role === 'muted' ? colors.muted : colors.text;
-}
-
-/** Word-wrapped prose as single-span lines. A blank line becomes an empty
- *  `RichLine`, which the renderer paints as one blank row. */
-function plainLines(s: string, width: number): RichLine[] {
-  return wrapText(s, width).map((line) => (line === '' ? [] : [{ text: line, role: 'text' }]));
-}
-
-/**
- * Make machine-y content human-readable. Tool-result previews are typically
- * `<tool>: <json>` — detect the embedded JSON, parse it, and render it as an
- * auto-columned table (an array of flat-ish objects — the common shape of an MCP
- * list result, #248), an aligned key/value table (a flat object), or
- * 2-space-indented JSON (anything else). Falls back to the raw string when
- * there's no JSON or the preview was truncated mid-object (so it won't parse).
- *
- * Returns styled lines rather than a string because the table needs per-cell
- * color AND must not be word-wrapped afterwards: its columns are already fitted
- * to the width, and `wrapText` would re-flow them into a shape the one-row-per-
- * entry windowing no longer describes.
- */
-function buildPreviewLines(content: string, width: number): RichLine[] {
-  const m = content.match(/^([A-Za-z0-9_.\- ]{1,40}?):\s*([[{][\s\S]*)$/);
-  const prefix = m ? m[1].trim() : null;
-  const body = (m ? m[2] : content).trim();
-  if (body[0] === '{' || body[0] === '[') {
-    const cleaned = body.replace(/[\s…]*$/, ''); // drop a trailing ellipsis from truncation.
-    const parsed = tryParseJson(cleaned);
-    if (parsed !== undefined) {
-      const header: RichLine[] = prefix ? [[{ text: `${prefix}:`, role: 'accent' }]] : [];
-      // `null` from the table renderer means "this shape isn't a table" — empty
-      // arrays, arrays of scalars, arrays of nested objects, and arrays too
-      // ragged to grid. Those keep the pretty-printed JSON they already had.
-      const table = renderRecordTable(parsed, width);
-      if (table) return [...header, ...table];
-      const rendered = renderJsonValue(parsed);
-      return plainLines(prefix ? `${prefix}:\n${rendered}` : rendered, width);
-    }
-  }
-  return plainLines(content, width);
-}
-
-function tryParseJson(s: string): unknown {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return undefined;
-  }
-}
-
-/** Aligned key/value lines for a flat object; pretty-printed JSON otherwise. */
-function renderJsonValue(v: unknown): string {
-  if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
-    const entries = Object.entries(v as Record<string, unknown>);
-    const allScalar =
-      entries.length > 0 && entries.every(([, val]) => val === null || typeof val !== 'object');
-    if (allScalar) {
-      const keyW = Math.min(18, Math.max(...entries.map(([k]) => k.length)));
-      return entries.map(([k, val]) => `${k.padEnd(keyW)}  ${scalarString(val)}`).join('\n');
-    }
-  }
-  return JSON.stringify(v, null, 2);
-}
-
-function scalarString(v: unknown): string {
-  if (v === null) return 'null';
-  return typeof v === 'string' ? v : String(v);
 }
