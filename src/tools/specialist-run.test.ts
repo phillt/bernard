@@ -62,7 +62,7 @@ vi.mock('ai', async (importOriginal) => {
 
 import { createSpecialistRunTool } from './specialist-run.js';
 import { detectResultFailure } from '../tool-result-shape.js';
-import { _resetPool } from './agent-pool.js';
+import { _resetPool, getActiveCount } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 import { SpecialistStore } from '../specialists.js';
 import { assembleContext } from '../framework/context.js';
@@ -238,6 +238,27 @@ describe('specialist-run tool', () => {
     expect(result).toContain('Specialist "email-triage" failed:');
     expect(result).toContain('API rate limit');
     expect(detectResultFailure(result)).toBeDefined();
+  });
+
+  it('re-throws a cancellation instead of handing it back as a result (#327, #351)', async () => {
+    // A returned string is a *successful* tool result — right for the API
+    // failure above, wrong for an Esc, which the parent then reads as data and
+    // keeps looping on. This site carried the re-throw since #327 but nothing
+    // pinned it; the combinator (#351) is now the one place it can regress from.
+    mockGenerateText.mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+    vi.spyOn(specialistStore, 'get').mockReturnValue(mockSpecialist);
+
+    const tool = createSpecialistRunTool(
+      makeCtx(makeConfig(), toolOptions, memoryStore, specialistStore),
+    );
+    await expect(
+      tool.execute!(
+        { specialistId: 'email-triage', task: 'Triage emails' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    // The unwind must not strand the pool slot it was holding.
+    expect(getActiveCount()).toBe(0);
   });
 
   it('returns error string when concurrent limit exceeded', async () => {

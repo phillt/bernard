@@ -10,11 +10,12 @@ import { createSpecialistRunTool } from './specialist-run.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
 import { withSlot, getMaxConcurrentAgents } from './agent-pool.js';
+import { runDispatchOrFail } from './dispatch-failure.js';
 import type { AgentContext } from '../framework/context.js';
 import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
-import { classifyError, isDispatchCancellation } from '../error-taxonomy.js';
+import { classifyError } from '../error-taxonomy.js';
 import {
   definitions,
   registerBuiltinDefinitions,
@@ -274,136 +275,150 @@ export async function dispatchToolWrapper(
       const label = runLabel ?? `[${kind}] ${specialist.name}`;
       printSpecialistStart(id, label, input);
 
-      try {
-        // The FULL surface, read from the definition's own `toolSurface`
-        // declaration rather than hardcoded (#253, #322) — so the reason lives in
-        // one place and this call can't drift from it. Wrapper specialists are
-        // scoped by `targetTools`, and three bundled ones target tools the worker
-        // surface removes: `mcp-manager` needs `mcp_config` / `mcp_add_url` /
-        // `mcp_verify`, and `correction-agent` / `specialist-creator` need
-        // `specialist`. Narrowing here would break them.
-        //
-        // MCP stays the RAW bag, deliberately, and is the one dispatch that does
-        // not take `surface.mcpTools`: `buildChildTools` filters this registry by
-        // `specialist.targetTools`, which names real MCP tools, and delegates would
-        // make those names unresolvable. Safe since #331, because an unscoped
-        // specialist now gets NO tools rather than all of them.
-        const baseTools = createTools(
-          options,
-          stores.memory,
-          ctx.mcp.tools,
-          stores.routines,
-          specialistStore,
-          stores.candidates,
-          config,
-          ctx.provenance,
-          { surface: toolWrapperDefinition.toolSurface },
-        );
-        const fullRegistry: Record<string, Tool> = {
-          ...baseTools,
-          agent: createSubAgentTool(ctx),
-          task: toolToAISDK(createTaskTool(ctx)),
-          specialist_run: createSpecialistRunTool(ctx),
-          tool_wrapper_run: createToolWrapperRunTool(ctx),
-        };
-        const childTools = buildChildTools(specialist, fullRegistry);
-        const wantStructured = specialist.structuredOutput ?? kind === 'tool-wrapper';
-
-        const def = definitions.get<ToolWrapperInput, WrapperResult>('tool-wrapper');
-        const defInput: ToolWrapperInput = context
-          ? {
-              specialistId,
-              input,
-              context,
-              slotId: id,
-              childTools,
-              wantStructured,
-            }
-          : {
-              specialistId,
-              input,
-              slotId: id,
-              childTools,
-              wantStructured,
-            };
-        const {
-          result,
-          formatted: rawWrapped,
-          stepLimitHit,
-        } = await runDefinition(ctx, def, defInput, {
-          abortSignal,
-          overrides: { provider, model },
-          // Attribute this dispatch's spend to its own per-target site (#299) so it
-          // stops folding into the `main` layer. (Per-server MCP delegation has its
-          // own dispatch in `src/tools/delegate.ts` and labels `mcp:<server>` there.)
-          telemetrySite: `tool-wrapper:${specialistId}`,
-        });
-
-        const wrapped = reclassifyStepLimit(rawWrapped, stepLimitHit, result.steps?.length ?? 0);
-
-        printSpecialistEnd(id);
-
-        appendReasoningLog({
-          ts: new Date().toISOString(),
-          specialistId,
-          input,
-          toolCalls: captureToolCalls(result.steps as any[], childTools),
-          finalOutput: wrapped.result,
-          // Mirrors `error` rather than re-deriving it per label — a ternary
-          // per label is an edit here for every new one.
-          status: wrapped.status === 'ok' ? 'ok' : (wrapped.error ?? 'error'),
-          ...(wrapped.error !== undefined ? { error: wrapped.error } : {}),
-          ...(wrapped.reasoning !== undefined ? { reasoning: wrapped.reasoning } : {}),
-        });
-
-        if (wrapped.status === 'error' && kind === 'tool-wrapper' && !skipCorrectionEnqueue) {
+      // A cancelled dispatch unwinds; a failed one is a tool result (#327,
+      // #351 — the try/catch/re-throw is `runDispatchOrFail`'s).
+      return runDispatchOrFail(
+        async (): Promise<WrapperResult> => {
           try {
-            const errorMessage = wrapped.error ?? String(wrapped.result);
-            const attemptedCall = captureLastToolCall(result.steps as any[]);
-            // The first targetTool is the canonical tool this wrapper fronts;
-            // it lets the classifier distinguish shell "command not found"
-            // (correctable) from web 404 (not).
-            const wrappedToolName = specialist.targetTools?.[0];
-            const cls = classifyError({ message: errorMessage, toolName: wrappedToolName });
-            if (cls.correctable) {
-              correctionStore.enqueue({
-                specialistId,
-                input,
-                attemptedCall,
-                error: errorMessage,
-                category: cls.category,
-              });
-            } else {
-              debugLog('tool-wrapper:correction-dismiss', {
-                specialistId,
-                category: cls.category,
-              });
-            }
-          } catch (err) {
-            debugLog(
-              'tool-wrapper:correction-enqueue:error',
-              err instanceof Error ? err.message : String(err),
+            // The FULL surface, read from the definition's own `toolSurface`
+            // declaration rather than hardcoded (#253, #322) — so the reason lives in
+            // one place and this call can't drift from it. Wrapper specialists are
+            // scoped by `targetTools`, and three bundled ones target tools the worker
+            // surface removes: `mcp-manager` needs `mcp_config` / `mcp_add_url` /
+            // `mcp_verify`, and `correction-agent` / `specialist-creator` need
+            // `specialist`. Narrowing here would break them.
+            //
+            // MCP stays the RAW bag, deliberately, and is the one dispatch that does
+            // not take `surface.mcpTools`: `buildChildTools` filters this registry by
+            // `specialist.targetTools`, which names real MCP tools, and delegates would
+            // make those names unresolvable. Safe since #331, because an unscoped
+            // specialist now gets NO tools rather than all of them.
+            const baseTools = createTools(
+              options,
+              stores.memory,
+              ctx.mcp.tools,
+              stores.routines,
+              specialistStore,
+              stores.candidates,
+              config,
+              ctx.provenance,
+              { surface: toolWrapperDefinition.toolSurface },
             );
-          }
-        }
+            const fullRegistry: Record<string, Tool> = {
+              ...baseTools,
+              agent: createSubAgentTool(ctx),
+              task: toolToAISDK(createTaskTool(ctx)),
+              specialist_run: createSpecialistRunTool(ctx),
+              tool_wrapper_run: createToolWrapperRunTool(ctx),
+            };
+            const childTools = buildChildTools(specialist, fullRegistry);
+            const wantStructured = specialist.structuredOutput ?? kind === 'tool-wrapper';
 
-        return wrapped;
-      } catch (err: unknown) {
-        printSpecialistEnd(id);
-        // A cancelled dispatch unwinds; a failed one is a tool result (#327).
-        if (isDispatchCancellation(err)) throw err;
-        const message = err instanceof Error ? err.message : String(err);
-        appendReasoningLog({
-          ts: new Date().toISOString(),
-          specialistId,
-          input,
-          toolCalls: [],
-          finalOutput: message,
-          status: 'error',
-          error: 'runtime_error',
-        });
-        return { status: 'error', result: message, error: 'runtime_error' };
-      }
+            const def = definitions.get<ToolWrapperInput, WrapperResult>('tool-wrapper');
+            const defInput: ToolWrapperInput = context
+              ? {
+                  specialistId,
+                  input,
+                  context,
+                  slotId: id,
+                  childTools,
+                  wantStructured,
+                }
+              : {
+                  specialistId,
+                  input,
+                  slotId: id,
+                  childTools,
+                  wantStructured,
+                };
+            const {
+              result,
+              formatted: rawWrapped,
+              stepLimitHit,
+            } = await runDefinition(ctx, def, defInput, {
+              abortSignal,
+              overrides: { provider, model },
+              // Attribute this dispatch's spend to its own per-target site (#299) so it
+              // stops folding into the `main` layer. (Per-server MCP delegation has its
+              // own dispatch in `src/tools/delegate.ts` and labels `mcp:<server>` there.)
+              telemetrySite: `tool-wrapper:${specialistId}`,
+            });
+
+            const wrapped = reclassifyStepLimit(
+              rawWrapped,
+              stepLimitHit,
+              result.steps?.length ?? 0,
+            );
+
+            appendReasoningLog({
+              ts: new Date().toISOString(),
+              specialistId,
+              input,
+              toolCalls: captureToolCalls(result.steps as any[], childTools),
+              finalOutput: wrapped.result,
+              // Mirrors `error` rather than re-deriving it per label — a ternary
+              // per label is an edit here for every new one.
+              status: wrapped.status === 'ok' ? 'ok' : (wrapped.error ?? 'error'),
+              ...(wrapped.error !== undefined ? { error: wrapped.error } : {}),
+              ...(wrapped.reasoning !== undefined ? { reasoning: wrapped.reasoning } : {}),
+            });
+
+            if (wrapped.status === 'error' && kind === 'tool-wrapper' && !skipCorrectionEnqueue) {
+              try {
+                const errorMessage = wrapped.error ?? String(wrapped.result);
+                const attemptedCall = captureLastToolCall(result.steps as any[]);
+                // The first targetTool is the canonical tool this wrapper fronts;
+                // it lets the classifier distinguish shell "command not found"
+                // (correctable) from web 404 (not).
+                const wrappedToolName = specialist.targetTools?.[0];
+                const cls = classifyError({ message: errorMessage, toolName: wrappedToolName });
+                if (cls.correctable) {
+                  correctionStore.enqueue({
+                    specialistId,
+                    input,
+                    attemptedCall,
+                    error: errorMessage,
+                    category: cls.category,
+                  });
+                } else {
+                  debugLog('tool-wrapper:correction-dismiss', {
+                    specialistId,
+                    category: cls.category,
+                  });
+                }
+              } catch (err) {
+                debugLog(
+                  'tool-wrapper:correction-enqueue:error',
+                  err instanceof Error ? err.message : String(err),
+                );
+              }
+            }
+
+            return wrapped;
+          } finally {
+            // Every exit path, cancellation included — which is what the
+            // success/catch pair it replaces already did, by duplication. It
+            // now trails `appendReasoningLog` rather than leading it; both are
+            // bookkeeping and `printSpecialistEnd` is a no-op under Ink.
+            printSpecialistEnd(id);
+          }
+        },
+        // A `WrapperResult`, not a string: this tool's contract is the
+        // `{status, result, error}` envelope the parent agent parses, which is
+        // why the shaper is a callback rather than a shared return type.
+        (message): WrapperResult => {
+          appendReasoningLog({
+            ts: new Date().toISOString(),
+            specialistId,
+            input,
+            toolCalls: [],
+            finalOutput: message,
+            status: 'error',
+            error: 'runtime_error',
+          });
+          return { status: 'error', result: message, error: 'runtime_error' };
+        },
+      );
     },
     (): WrapperResult => ({
       status: 'error',

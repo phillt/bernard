@@ -58,7 +58,7 @@ import {
   getTaskMaxSteps,
   makeLastStepTextOnly,
 } from './task.js';
-import { _resetPool } from './agent-pool.js';
+import { _resetPool, getActiveCount } from './agent-pool.js';
 import { MemoryStore } from '../memory.js';
 import { RoutineStore } from '../routines.js';
 import { assembleContext } from '../framework/context.js';
@@ -291,6 +291,37 @@ describe('task tool', () => {
     const parsed = JSON.parse(taskTool.serializeForModel(envelope) as string);
     expect(parsed.status).toBe('error');
     expect(parsed.output).toContain('API rate limit');
+  });
+
+  it('re-throws a cancellation instead of handing it back as a result (#327, #351)', async () => {
+    // `task` is one of the two sites #327's first pass missed — it passes
+    // `abortSignal` like the three it patched, so an Esc used to arrive at the
+    // parent as a *successful* `{status:'error'}` envelope it reads as data and
+    // loops on. Covered here only once the catch became `runDispatchOrFail`.
+    mockGenerateText.mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
+    await expect(
+      taskTool.execute(
+        { task: 'test' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    // The unwind must not strand the pool slot it was holding.
+    expect(getActiveCount()).toBe(0);
+  });
+
+  it('re-throws an abort the runner fired itself', async () => {
+    const own = new Error('Provider stream timed out — no data received for 120000 ms');
+    own.name = 'DispatchAbortError';
+    mockGenerateText.mockRejectedValue(own);
+    const taskTool = createTaskTool(makeCtx(makeConfig(), toolOptions, memoryStore));
+    await expect(
+      taskTool.execute(
+        { task: 'test' },
+        { toolCallId: '1', messages: [], abortSignal: undefined as any },
+      ),
+    ).rejects.toThrow(/timed out/);
+    expect(getActiveCount()).toBe(0);
   });
 
   it('returns error JSON when concurrent limit exceeded', async () => {

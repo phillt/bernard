@@ -13,7 +13,7 @@ import {
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { withSlot, getMaxConcurrentAgents } from './agent-pool.js';
-import { isDispatchCancellation } from '../error-taxonomy.js';
+import { runDispatchOrFail } from './dispatch-failure.js';
 
 // Re-export helpers + types that other modules (repl.ts, sub.ts, tests) already
 // import from this path. The implementations live in `framework/agents/task.ts`.
@@ -99,13 +99,15 @@ function serializeTaskForModel(r: ToolResult<TaskPayload>): string {
  * Creates the task execution tool for focused, isolated sub-tasks with
  * structured JSON output.
  *
- * The dispatch wrapper here owns three things the generic
- * `createDispatchTool` factory cannot: the saved-task lookup via
- * `routineStore.get(taskId)` (which can short-circuit with a friendly error
- * before any LLM call), the concurrency-pool slot dance (slot id is also the
- * log prefix), and the start/end terminal markers. Everything else — system
- * prompt, tool set, step budget, `prepareStep`, hook chain, JSON wrapping —
- * lives on `taskDefinition` and is exercised through `runDefinition`.
+ * The dispatch wrapper here owns three things no generic dispatch factory
+ * could: the saved-task lookup via `routineStore.get(taskId)` (which can
+ * short-circuit with a friendly error before any LLM call), the
+ * concurrency-pool slot dance (slot id is also the log prefix), and the
+ * start/end terminal markers. Everything else — system prompt, tool set, step
+ * budget, `prepareStep`, hook chain, JSON wrapping — lives on `taskDefinition`
+ * and is exercised through `runDefinition`. What IS shared across the five
+ * dispatch boundaries is the catch, and that lives in `runDispatchOrFail`
+ * (#351); the abandoned `createDispatchTool` factory it replaces is gone.
  */
 export function createTaskTool(ctx: AgentContext): BernardTool<TaskArgs, TaskPayload> {
   registerBuiltinDefinitions();
@@ -151,37 +153,44 @@ export function createTaskTool(ctx: AgentContext): BernardTool<TaskArgs, TaskPay
           const id = slot.id;
           printTaskStart(resolvedTask);
 
-          try {
-            const def = definitions.get<TaskInput, TaskResult>('task');
-            const input: TaskInput = context
-              ? { task: resolvedTask, context, slotId: id }
-              : { task: resolvedTask, slotId: id };
-            const { formatted: taskResult } = await runDefinition(ctx, def, input, {
-              abortSignal: execOptions.abortSignal,
-              // Forward only the user-supplied provider/model so resolveSiteModel
-              // can fall through to the modelMode tier table when neither is set.
-              overrides: { provider, model },
-            });
+          // A cancelled dispatch unwinds; a failed one is a tool result (#327,
+          // #351 — the try/catch/re-throw is `runDispatchOrFail`'s). Unlike the
+          // three string-returning siblings this one owes the model a
+          // `ToolResult` envelope, which is why the shaper is a callback.
+          return runDispatchOrFail(
+            async () => {
+              const def = definitions.get<TaskInput, TaskResult>('task');
+              const input: TaskInput = context
+                ? { task: resolvedTask, context, slotId: id }
+                : { task: resolvedTask, slotId: id };
+              const { formatted: taskResult } = await runDefinition(ctx, def, input, {
+                abortSignal: execOptions.abortSignal,
+                // Forward only the user-supplied provider/model so resolveSiteModel
+                // can fall through to the modelMode tier table when neither is set.
+                overrides: { provider, model },
+              });
 
-            const envelope = ok<TaskPayload>(
-              taskResult.details !== undefined
-                ? {
-                    innerStatus: taskResult.status,
-                    output: taskResult.output,
-                    details: taskResult.details,
-                  }
-                : { innerStatus: taskResult.status, output: taskResult.output },
-            );
-            printTaskEnd(serializeTaskForModel(envelope));
-            return envelope;
-          } catch (e: unknown) {
-            // A cancelled dispatch unwinds; a failed one is a tool result (#327).
-            if (isDispatchCancellation(e)) throw e;
-            const message = e instanceof Error ? e.message : String(e);
-            const errEnvelope = err<TaskPayload>({ type: 'exec_failed', message });
-            printTaskEnd(serializeTaskForModel(errEnvelope));
-            return errEnvelope;
-          }
+              const envelope = ok<TaskPayload>(
+                taskResult.details !== undefined
+                  ? {
+                      innerStatus: taskResult.status,
+                      output: taskResult.output,
+                      details: taskResult.details,
+                    }
+                  : { innerStatus: taskResult.status, output: taskResult.output },
+              );
+              printTaskEnd(serializeTaskForModel(envelope));
+              return envelope;
+            },
+            (message) => {
+              const errEnvelope = err<TaskPayload>({ type: 'exec_failed', message });
+              // The end marker carries the envelope, so it can only be written
+              // once the failure has been shaped — it stays off the cancellation
+              // path here exactly as it was before.
+              printTaskEnd(serializeTaskForModel(errEnvelope));
+              return errEnvelope;
+            },
+          );
         },
         () =>
           err<TaskPayload>({

@@ -12,22 +12,24 @@ import {
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { withSlot, getMaxConcurrentAgents } from './agent-pool.js';
-import { isDispatchCancellation } from '../error-taxonomy.js';
+import { runDispatchOrFail } from './dispatch-failure.js';
 
 /**
  * Creates the specialist execution tool for running tasks through a saved
  * specialist profile.
  *
- * The dispatch wrapper owns the four concerns the generic `createDispatchTool`
- * factory cannot: (1) the specialist-existence check (so a missing id returns
- * a friendly error before any LLM call), (2) provider/model resolution that
- * honours the specialist record's `provider`/`model` (used here for the
- * pre-flight key check; `specialistDefinition.resolveModel` re-runs the same
- * resolution inside `runDefinition`), (3) the concurrency-pool slot dance,
- * and (4) construction of the per-call `PlanStore` shared between the `plan`
- * tool and the ReAct enforcement loop's strategy context. Everything else —
- * persona composition, tool set, step budget, hooks, ReAct strategy — lives
- * on `specialistDefinition`.
+ * The dispatch wrapper owns four concerns no generic dispatch factory could:
+ * (1) the specialist-existence check (so a missing id returns a friendly error
+ * before any LLM call), (2) provider/model resolution that honours the
+ * specialist record's `provider`/`model` (used here for the pre-flight key
+ * check; `specialistDefinition.resolveModel` re-runs the same resolution inside
+ * `runDefinition`), (3) the concurrency-pool slot dance, and (4) construction of
+ * the per-call `PlanStore` shared between the `plan` tool and the ReAct
+ * enforcement loop's strategy context. Everything else — persona composition,
+ * tool set, step budget, hooks, ReAct strategy — lives on
+ * `specialistDefinition`. The one thing all five dispatch boundaries DO share is
+ * the catch, and that lives in `runDispatchOrFail` (#351); the abandoned,
+ * never-called `createDispatchTool` factory it replaces is gone.
  *
  * @param ctx - Assembled AgentContext (config, stores, mcp, toolOptions, optional RAG).
  */
@@ -88,28 +90,32 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
           // mounts and the strategy context the ReAct enforcement loop reads.
           const planStore = new PlanStore();
 
-          try {
-            const def = definitions.get<SpecialistInput, string>('specialist');
-            const input: SpecialistInput = context
-              ? { specialistId, task, context, slotId: id, planStore }
-              : { specialistId, task, slotId: id, planStore };
-            const { formatted } = await runDefinition(ctx, def, input, {
-              abortSignal: execOptions.abortSignal,
-              overrides: { provider, model },
-              planStore,
-            });
-            printSpecialistEnd(id);
-            return formatted;
-          } catch (err: unknown) {
-            printSpecialistEnd(id);
-            // A cancelled dispatch unwinds; a failed one is a tool result (#327).
+          // A cancelled dispatch unwinds; a failed one is a tool result (#327,
+          // #351 — the try/catch/re-throw is `runDispatchOrFail`'s).
+          return runDispatchOrFail(
+            async () => {
+              try {
+                const def = definitions.get<SpecialistInput, string>('specialist');
+                const input: SpecialistInput = context
+                  ? { specialistId, task, context, slotId: id, planStore }
+                  : { specialistId, task, slotId: id, planStore };
+                const { formatted } = await runDefinition(ctx, def, input, {
+                  abortSignal: execOptions.abortSignal,
+                  overrides: { provider, model },
+                  planStore,
+                });
+                return formatted;
+              } finally {
+                // Every exit path, cancellation included — which is what the
+                // success/catch pair it replaces already did, by duplication.
+                printSpecialistEnd(id);
+              }
+            },
             // The `Error:` prefix is load-bearing, not decoration: it is what
-            // `detectResultFailure` reads (#364). Without it the failure below
+            // `detectResultFailure` reads (#364). Without it this failure
             // registers as citable evidence and bumps this tool's successCount.
-            if (isDispatchCancellation(err)) throw err;
-            const message = err instanceof Error ? err.message : String(err);
-            return `Error: Specialist "${specialistId}" failed: ${message}`;
-          }
+            (message) => `Error: Specialist "${specialistId}" failed: ${message}`,
+          );
         },
         () =>
           `Error: Maximum concurrent agents (${getMaxConcurrentAgents()}) reached. Wait for existing agents to finish.`,
