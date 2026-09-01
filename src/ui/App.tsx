@@ -129,7 +129,7 @@ import {
 } from '../providers/model-params.js';
 import { debugLog, getSessionId, getSessionLogPath, isDebugEnabled } from '../logger.js';
 import { SessionTelemetry } from '../session-telemetry.js';
-import { withSlot, getMaxConcurrentAgents } from '../tools/agent-pool.js';
+import { withSlot, getMaxConcurrentAgents, getActiveCount } from '../tools/agent-pool.js';
 import type {
   AskUserQuestion,
   AskUserBatchResult,
@@ -144,7 +144,7 @@ import type {
   ValuePromptOptions,
   ValueResult,
 } from './menu-types.js';
-import { Thread, REWRITE_ICON, type StaticItem } from './Thread.js';
+import { Thread, REWRITE_ICON, formatDuration, type StaticItem } from './Thread.js';
 import { TranscriptViewport } from './TranscriptViewport.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 import { formatAgentError, type ErrorPanelData } from './error-format.js';
@@ -660,6 +660,12 @@ export function App({
   const [toast, setToast] = useState<ToastState | null>(null);
   const [bannerVisible, setBannerVisible] = useState<boolean>(!!alertBanner);
   const [interrupted, setInterrupted] = useState(false);
+  // Sub-dispatches alive at the moment Esc was pressed (#403). Sampled in the
+  // key handler, not in the turn's `finally`: by the time the abort has
+  // unwound, every `withSlot` / `withUncappedSlot` has run its release in a
+  // `finally` and the count reads 0 — so the one place the number is true is
+  // the keystroke that killed them.
+  const interruptInFlightRef = useRef(0);
   const [slashActive, setSlashActive] = useState(false);
   const colors = getThemeColors();
 
@@ -751,6 +757,7 @@ export function App({
         // owns its own Esc-to-close via its own useInput.
         debugLog('app:esc', { busy, hasTurnAbort: !!turnAbortRef.current });
         if (busy) {
+          interruptInFlightRef.current = getActiveCount();
           setInterrupted(true);
           turnAbortRef.current?.abort();
           agent.abort();
@@ -3047,6 +3054,35 @@ export function App({
           noCacheWarnedRef.current = true;
           flashToast(hint, 'warning');
         }
+      }
+      // Durable record of an interrupted turn (#403). The `⏹ you interrupted`
+      // chrome in <Thread>/<TranscriptViewport> renders off the `interrupted`
+      // boolean and is never pushed into `staticItems`, so it is not part of
+      // the transcript — and `runAgentTurn` clears the flag at the top of the
+      // submit path, which means the next keystroke erased the only trace the
+      // turn ever left. Scrolling back through a session showed a user message
+      // followed by nothing, indistinguishable from a turn that answered and
+      // produced no text.
+      //
+      // This is deliberately a UI-only notice, the same channel the startup
+      // lineup-correction and `provider-wiped` notices use: it never enters
+      // `agent.history`, because the model's record of the interrupt is the
+      // `[interrupted by user]` marker `Agent.processInput` pushes (which,
+      // since #403, lands even when the abort beat the first step). Two
+      // records, one per audience — duplicating the UI text into history would
+      // make the model read its own transcript furniture as content.
+      //
+      // The chrome stays: it is the right affordance while the turn is dead but
+      // before the user types. The bug was that it was the ONLY record.
+      if (controller.signal.aborted) {
+        const inFlight = interruptInFlightRef.current;
+        interruptInFlightRef.current = 0;
+        pushAssistantNotice(
+          `⏹ Turn interrupted after ${formatDuration(endedAt - turnStartedAt)}.` +
+            (inFlight > 0
+              ? ` ${inFlight} sub-dispatch${inFlight === 1 ? '' : 'es'} cancelled with it.`
+              : ''),
+        );
       }
       // Append the error panel after the turn's committed output so it reads
       // as the turn's outcome (in the same batch as the commit above).

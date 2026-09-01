@@ -117,4 +117,25 @@ describe('appendActivitySummary', () => {
     const out = appendActivitySummary('', sampleSteps, 'subagent');
     expect(out).toContain('(subagent produced no text summary');
   });
+
+  it('says it ran out of steps rather than "produced no text" (#370)', () => {
+    // Two different facts wearing one sentence. "Produced no text summary"
+    // reads as a model that chose to say nothing; a dispatch cut off at its
+    // ceiling never reached the turn where it would have summarized, and that
+    // is the fact that explains the empty result.
+    const out = appendActivitySummary('', sampleSteps, 'subagent', {
+      stepLimitHit: true,
+      steps: 12,
+    });
+    expect(out).toContain('(subagent ran out of steps (12) before producing a text summary');
+    expect(out).not.toContain('produced no text summary');
+  });
+
+  it('keeps the original preamble for a run that finished (#370)', () => {
+    const out = appendActivitySummary('', sampleSteps, 'subagent', {
+      stepLimitHit: false,
+      steps: 3,
+    });
+    expect(out).toContain('(subagent produced no text summary');
+  });
 });

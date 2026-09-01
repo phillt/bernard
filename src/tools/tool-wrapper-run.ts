@@ -51,56 +51,6 @@ export function captureLastToolCall(steps: any[] | undefined): string {
   return '(no tool call)';
 }
 
-/**
- * Re-labels a wrapper result whose real failure was **running out of steps**.
- *
- * A dispatch that exhausts `maxSteps` is cut off mid-work, so the model never
- * reaches the final turn where it would write its JSON. `wrapWrapperResult`
- * then sees empty text and reports `parse_failed` — "did not produce valid
- * structured output" — which is true and useless: it points at the output
- * format when the actual problem is the budget. Observed on a real run where a
- * specialist spent all 13 steps thrashing and the parent was told its JSON was
- * malformed, so neither the log nor the parent agent recorded the one fact that
- * explained the failure.
- *
- * `runDefinition` already computes `stepLimitHit` (it is how MCP delegation
- * decides to escalate); this just stops `tool-wrapper-run` from discarding it.
- *
- * Two shapes are re-labelled, both of which mean "cut off with nothing to say":
- * a `parse_failed` error, and — for `wantStructured: false` specialists, which
- * never parse — an `ok` whose result text is empty. That second one is worse
- * than a wrong label: it hands the parent an empty **success**.
- *
- * A run that hit the limit but still returned real content is left alone. The
- * model may have wrapped up on its last step, and overriding a substantive
- * answer with an error would discard work that did happen.
- */
-export function reclassifyStepLimit(
-  wrapped: WrapperResult,
-  stepLimitHit: boolean,
-  steps: number,
-): WrapperResult {
-  if (!stepLimitHit) return wrapped;
-
-  // Only an *absent* result counts as empty. Testing `typeof !== 'string'`
-  // would sweep up every successfully-parsed structured result, which is an
-  // object — discarding exactly the work this guard is meant to preserve.
-  const emptyOk =
-    wrapped.status === 'ok' &&
-    (wrapped.result === null ||
-      wrapped.result === undefined ||
-      (typeof wrapped.result === 'string' && wrapped.result.trim().length === 0));
-  const parseFailed = wrapped.status === 'error' && wrapped.error === 'parse_failed';
-  if (!emptyOk && !parseFailed) return wrapped;
-
-  return {
-    ...wrapped,
-    status: 'error',
-    result: `Specialist ran out of steps (${steps}) before producing a final answer. ${classifyError({ message: 'step_limit' }).playbook.model}`,
-    error: 'step_limit',
-  };
-}
-
 /** Max characters of a tool result retained in the reasoning log. */
 const RESULT_PREVIEW_MAX_CHARS = 300;
 
@@ -331,11 +281,13 @@ export async function dispatchToolWrapper(
                   childTools,
                   wantStructured,
                 };
-            const {
-              result,
-              formatted: rawWrapped,
-              stepLimitHit,
-            } = await runDefinition(ctx, def, defInput, {
+            // `stepLimitHit` is no longer consumed here: `toolWrapperDefinition`
+            // receives it directly as `FormatMeta` and does the re-label itself
+            // (#370), so `formatted` already carries the right verdict. Reading it
+            // back out of the payload — which is what the deleted
+            // `reclassifyStepLimit` did — meant inferring a dispatch fact from a
+            // model-written error string.
+            const { result, formatted: wrapped } = await runDefinition(ctx, def, defInput, {
               abortSignal,
               overrides: { provider, model },
               // Attribute this dispatch's spend to its own per-target site (#299) so it
@@ -343,12 +295,6 @@ export async function dispatchToolWrapper(
               // own dispatch in `src/tools/delegate.ts` and labels `mcp:<server>` there.)
               telemetrySite: `tool-wrapper:${specialistId}`,
             });
-
-            const wrapped = reclassifyStepLimit(
-              rawWrapped,
-              stepLimitHit,
-              result.steps?.length ?? 0,
-            );
 
             appendReasoningLog({
               ts: new Date().toISOString(),
