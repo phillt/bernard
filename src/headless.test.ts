@@ -92,15 +92,16 @@ beforeEach(() => {
 
 describe('resolvePosture', () => {
   it('maps confirmMode onto the canonical threshold', () => {
-    expect(resolvePosture({ toolMode: 'write', confirmMode: 'auto', writeScope: null }).confirmThreshold).toBe(
-      'high',
-    );
-    expect(resolvePosture({ toolMode: 'write', confirmMode: 'strict', writeScope: null }).confirmThreshold).toBe(
-      'medium',
-    );
-    expect(resolvePosture({ toolMode: 'write', confirmMode: 'off', writeScope: null }).confirmThreshold).toBe(
-      'never',
-    );
+    expect(
+      resolvePosture({ toolMode: 'write', confirmMode: 'auto', writeScope: null }).confirmThreshold,
+    ).toBe('high');
+    expect(
+      resolvePosture({ toolMode: 'write', confirmMode: 'strict', writeScope: null })
+        .confirmThreshold,
+    ).toBe('medium');
+    expect(
+      resolvePosture({ toolMode: 'write', confirmMode: 'off', writeScope: null }).confirmThreshold,
+    ).toBe('never');
   });
 
   it('collapses to write + off under skipPermissions, overriding both axes', () => {
@@ -141,7 +142,11 @@ describe('resolvePosture', () => {
   });
 
   it('auto-denies a high-risk call and passes a low-risk one under the default posture', async () => {
-    const { confirmAction } = resolvePosture({ toolMode: 'write', confirmMode: 'auto', writeScope: null });
+    const { confirmAction } = resolvePosture({
+      toolMode: 'write',
+      confirmMode: 'auto',
+      writeScope: null,
+    });
     await expect(confirmAction({ risk: 'high' } as any)).resolves.toBe(false);
     await expect(confirmAction({ risk: 'low' } as any)).resolves.toBe(true);
   });
@@ -220,7 +225,9 @@ describe('runHeadless', () => {
 
   it('wires the posture into ctx.policyDecision so both gates see it', async () => {
     await runHeadless(
-      opts({ posture: resolvePosture({ toolMode: 'read-only', confirmMode: 'strict', writeScope: null }) }),
+      opts({
+        posture: resolvePosture({ toolMode: 'read-only', confirmMode: 'strict', writeScope: null }),
+      }),
     );
     const ctx = mockRunDefinition.mock.calls[0][0];
     expect(ctx.policyDecision.toolMode).toEqual({

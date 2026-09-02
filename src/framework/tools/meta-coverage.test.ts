@@ -207,7 +207,8 @@ describe('tool meta coverage', () => {
       if (!meta || (meta.kind !== 'write' && meta.kind !== 'dangerous')) continue;
       // `parameters` is the zod schema the model is shown; a `path` key on it
       // is what the gate reads off `args`.
-      const shape = (def as { parameters?: { shape?: Record<string, unknown> } })?.parameters?.shape;
+      const shape = (def as { parameters?: { shape?: Record<string, unknown> } })?.parameters
+        ?.shape;
       if (!shape || !('path' in shape)) continue;
       if (!WRITE_PATH_TOOLS.has(name)) unscoped.push(name);
     }
