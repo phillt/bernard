@@ -9,7 +9,7 @@ import { redactArgs, REDACTED } from '../framework/tools/redact.js';
 import { createSpecialistRunTool } from './specialist-run.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
-import { withSlot, getMaxConcurrentAgents } from './agent-pool.js';
+import { withSlot, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
 import type { AgentContext } from '../framework/context.js';
 import { type WrapperResult } from '../structured-output.js';
@@ -452,6 +452,7 @@ export async function dispatchToolWrapper(
 export function renderWrapperParentView(
   wrapped: WrapperResult,
   maxChars: number = SUBAGENT_RESULT_MAX_CHARS,
+  agentSlots?: string,
 ): string {
   const errorLen = wrapped.error?.length ?? 0;
   const resultBudget = Math.max(256, maxChars - errorLen - 80);
@@ -473,7 +474,7 @@ export function renderWrapperParentView(
           result: cappedResult,
           ...(wrapped.error !== undefined ? { error: wrapped.error } : {}),
         };
-  return JSON.stringify(parentView);
+  return JSON.stringify(agentSlots ? { ...parentView, agentSlots } : parentView);
 }
 
 /**
@@ -484,7 +485,7 @@ export function createToolWrapperRunTool(ctx: AgentContext) {
   return attachMeta(
     tool({
       description:
-        'Dispatch to a saved tool-wrapper specialist that handles a concrete tool or CLI (e.g. shell-wrapper, file-wrapper). Returns JSON {status, result, error?}. Use this for tool-heavy operations where domain-specific examples and error handling reduce misuse. Also used to invoke meta specialists (specialist-creator, correction-agent).',
+        'Dispatch to a saved tool-wrapper specialist that handles a concrete tool or CLI (e.g. shell-wrapper, file-wrapper). Returns JSON {status, result, error?}. Use this for tool-heavy operations where domain-specific examples and error handling reduce misuse. Also used to invoke meta specialists (specialist-creator, correction-agent). Call multiple times in one response to run independent dispatches in parallel — each result reports how many agent slots remain free.',
       parameters: z.object({
         specialistId: z
           .string()
@@ -515,7 +516,11 @@ export function createToolWrapperRunTool(ctx: AgentContext) {
           },
           ctx,
         );
-        return renderWrapperParentView(wrapped);
+        // Slot accounting goes INSIDE the envelope, not after it: this tool
+        // advertises "Returns JSON {status, result, error?}", and a trailing
+        // prose line would make that JSON unparseable for every caller that
+        // takes the contract at its word.
+        return renderWrapperParentView(wrapped, SUBAGENT_RESULT_MAX_CHARS, slotStatusLine());
       },
     }),
     {

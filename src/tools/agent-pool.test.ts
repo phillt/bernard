@@ -5,6 +5,7 @@ import {
   getActiveCount,
   getMaxConcurrentAgents,
   setMaxConcurrentAgents,
+  slotStatusLine,
   _resetPool,
   DEFAULT_MAX_CONCURRENT_AGENTS,
   MAX_CONCURRENT_AGENTS_LIMIT,
@@ -212,5 +213,47 @@ describe('agent-pool concurrency configuration', () => {
     expect(await tryAcquire(async () => 1)).toBe(1);
     held.forEach((h) => h.release());
     await Promise.all(held.map((h) => h.released));
+  });
+});
+
+// The model has no other way to know what the concurrency budget is: `withSlot`
+// returns `pool_exhausted` rather than queueing, so a fan-out wider than the cap
+// silently loses work, and the cap is user-configurable so it cannot live in the
+// (prompt-cached) system prompt.
+describe('slotStatusLine', () => {
+  beforeEach(() => {
+    _resetPool();
+    setMaxConcurrentAgents(4);
+  });
+
+  it('reports the free count and invites more work when slots remain', () => {
+    expect(slotStatusLine()).toContain('4 of 4 free');
+    expect(slotStatusLine()).toContain('dispatch more');
+  });
+
+  it('reports the state after the dispatch released its slot', async () => {
+    let inside = '';
+    await withSlot(async () => {
+      inside = slotStatusLine();
+      return null;
+    });
+    // Held during: one slot is in use.
+    expect(inside).toContain('3 of 4 free');
+    // Released after: the number the next decision should be made on.
+    expect(slotStatusLine()).toContain('4 of 4 free');
+  });
+
+  it('tells the model to wait rather than to fan out when full', async () => {
+    setMaxConcurrentAgents(1);
+    await withSlot(async () => {
+      expect(slotStatusLine()).toContain('0 of 1 free');
+      expect(slotStatusLine()).toContain('wait');
+      return null;
+    });
+  });
+
+  it('tracks a cap changed mid-session', () => {
+    setMaxConcurrentAgents(2);
+    expect(slotStatusLine()).toContain('2 of 2 free');
   });
 });

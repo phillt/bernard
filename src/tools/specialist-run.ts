@@ -11,7 +11,7 @@ import {
   type SpecialistInput,
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
-import { withSlot, getMaxConcurrentAgents } from './agent-pool.js';
+import { withSlot, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
 
 /**
@@ -104,7 +104,9 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
                   overrides: { provider, model },
                   planStore,
                 });
-                return formatted;
+                // Tell the model what the pool looks like now, so a fan-out is a
+                // decision rather than a guess. See `slotStatusLine`.
+                return `${formatted}\n${slotStatusLine()}`;
               } finally {
                 // Every exit path, cancellation included — which is what the
                 // success/catch pair it replaces already did, by duplication.

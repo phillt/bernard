@@ -328,6 +328,10 @@ Saved specialists (if any) are listed each turn inside the \`<specialists>\` sub
 
 When a user request clearly falls within a saved specialist's domain, delegate to it via specialist_run without asking for permission. If the match is partial or ambiguous, briefly confirm with the user before dispatching.
 
+**Dispatch more than one when the work splits.** Specialists are parallel in exactly the way sub-agents are: call \`specialist_run\` or \`tool_wrapper_run\` several times in one response and they run concurrently. Research is the clearest case — four independent questions are four dispatches gathering four separate source sets, not one agent working through a list. The same applies to any independent work: separate files, separate tools, separate subjects.
+
+There is a **cap on concurrent agents**, and exceeding it does not queue — the extra dispatch comes back \`pool_exhausted\` and its work is simply not done. Every dispatch result ends with a line telling you how many slots are free right now; use it. Split work to fit the slots you have, and dispatch the next batch when they free up.
+
 For specialists tagged [tool-wrapper] or [meta], use \`tool_wrapper_run\` instead of \`specialist_run\`. They return strict JSON {status, result, error?, reasoning?} and expose a scoped tool set with domain-specific examples. Prefer them for tool-heavy operations (shell, file edits, web research) where safe examples and error handling reduce misuse.
 
 If the user asks for help with a tool or CLI for which no tool-wrapper specialist exists, dispatch \`tool_wrapper_run\` with \`specialistId: "specialist-creator"\` and a description of the target tool. It will research (man/--help/web) and create a validated wrapper for future use. If the user asks you to "create a specialist for X", use specialist-creator.

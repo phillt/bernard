@@ -117,6 +117,29 @@ export async function withUncappedSlot<T>(fn: (slot: { id: number }) => Promise<
  * Returns the number of currently active agents/tasks.
  * @internal Exported for testing only.
  */
+/**
+ * A one-line statement of how much of the concurrency budget is in use, for
+ * appending to a dispatch's result.
+ *
+ * The model has no other way to know. `withSlot` returns `pool_exhausted`
+ * rather than queueing, so a fan-out wider than the cap silently loses work —
+ * and nothing in the tool schema or the system prompt says what the cap is.
+ * Telling it at the point of use, every time, is the only place the number is
+ * both accurate and relevant: the cap is user-configurable and can change
+ * mid-session (`/agent-options`, profile switch), so a figure baked into the
+ * prompt would be a guess that also breaks the prompt-cache prefix.
+ *
+ * Deliberately reports the state AFTER this dispatch released its slot, which
+ * is what the model needs to decide whether to dispatch again.
+ */
+export function slotStatusLine(): string {
+  const max = getMaxConcurrentAgents();
+  const free = Math.max(0, max - getActiveCount());
+  return free > 0
+    ? `[agent slots: ${free} of ${max} free — dispatch more in one response when the work is independent]`
+    : `[agent slots: 0 of ${max} free — wait for one to finish before dispatching another]`;
+}
+
 export function getActiveCount(): number {
   return activeAgentCount;
 }

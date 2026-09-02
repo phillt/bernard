@@ -8,7 +8,7 @@ import { runDefinition } from '../framework/agents/run.js';
 import { registerBuiltinDefinitions } from '../framework/agents/index.js';
 import type { SubAgentInput } from '../framework/agents/sub.js';
 import { runPAC } from '../framework/pac/run-pac.js';
-import { withSlot, _resetPool, getMaxConcurrentAgents } from './agent-pool.js';
+import { withSlot, _resetPool, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
 
 /**
@@ -102,7 +102,9 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
                   );
                   formatted = result.formatted;
                 }
-                return formatted;
+                // Tell the model what the pool looks like now, so a fan-out is a
+                // decision rather than a guess. See `slotStatusLine`.
+                return `${formatted}\n${slotStatusLine()}`;
               } finally {
                 // Every exit path, cancellation included — which is what the
                 // success/catch pair it replaces already did, by duplication.
