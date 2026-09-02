@@ -344,23 +344,53 @@ bernard voice-test "Custom phrase here"
 
 ### REPL `/voice` command
 
-| Command                 | Description                             |
-| ----------------------- | --------------------------------------- |
-| `/voice` or `/voice on` | Enable TTS for assistant responses      |
-| `/voice off`            | Disable TTS and stop any current speech |
-| `/voice status`         | Show on/off state and resolved backend  |
-| `/voice test [text]`    | Speak a phrase immediately              |
+| Command              | Description                                                                |
+| -------------------- | -------------------------------------------------------------------------- |
+| `/voice`             | Open the voice settings menu — state, backend, voice, rate, natural speech |
+| `/voice on` / `off`  | Enable / disable TTS (`off` also stops any current speech)                 |
+| `/voice status`      | Show state, natural-speech setting, and the resolved backend               |
+| `/voice test [text]` | Speak a phrase immediately, exactly as typed                               |
 
-The on/off state is persisted to the active profile so it survives restarts.
+`/voice` opens one screen over every voice setting; each row shows its current
+value and changing one takes effect immediately. Everything is persisted to the
+active profile, so it survives restarts. Esc closes the menu — and, anywhere in
+the REPL, silences speech in progress.
+
+### Natural speech
+
+By default Bernard reads a **spoken** rendering of each reply rather than the
+literal text on screen. Without it a TTS engine reads markdown aloud verbatim:
+
+| On screen                                     | Spoken                                                 |
+| --------------------------------------------- | ------------------------------------------------------ |
+| `Call **206-555-0198**`                       | "Call two oh six, five five five, zero one nine eight" |
+| `See https://www.macrumors.com/guide/m5-max/` | "See the Mac Rumors guide to the M5 Max"               |
+| `$12.50`                                      | "twelve dollars and fifty cents"                       |
+| a markdown table                              | one sentence per row                                   |
+| a fenced code block                           | "a bash code block, omitted"                           |
+
+**The transcript and your saved history are never affected** — this applies only
+to what reaches the speaker. Turn it off from `/voice → Natural speech`, with
+`BERNARD_VOICE_NORMALIZER=false`, or for one session with
+`bernard --no-voice-normalize`; markdown is still stripped either way.
+
+Two halves do the work. Markup, phone numbers, currency, units and ISO dates are
+handled in code — free, deterministic, always on. The judgement calls that need
+context — is `2026` a year or a quantity, what is that link actually _to_, which
+rows of the table matter — go to one cheap-tier model call, which fails open to
+the deterministic reading if it is unavailable. Short replies with nothing
+ambiguous in them skip the call entirely.
 
 ### Environment variables
 
-| Variable                  | Description                                                                                                                                                   | Default           |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| `BERNARD_VOICE`           | Enable TTS (`true` or `1`)                                                                                                                                    | `false`           |
-| `BERNARD_VOICE_BACKEND`   | Backend override (`auto`, `macos-say`, `spd-say`, `espeak-ng`, `espeak`, `windows-speech`)                                                                    | `auto`            |
-| `BERNARD_VOICE_RATE`      | Speech rate in words-per-minute                                                                                                                               | (backend default) |
-| `BERNARD_VOICE_WARMUP_MS` | Silence played to wake a suspended audio sink before speaking, so the first words aren't clipped (Linux-only; needs `pw-play`/`paplay`/`aplay`; `0` disables) | `400`             |
+| Variable                   | Description                                                                                                                                                   | Default           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `BERNARD_VOICE`            | Enable TTS (`true` or `1`)                                                                                                                                    | `false`           |
+| `BERNARD_VOICE_BACKEND`    | Backend override (`auto`, `macos-say`, `spd-say`, `espeak-ng`, `espeak`, `windows-speech`)                                                                    | `auto`            |
+| `BERNARD_VOICE_VOICE`      | Named voice passed to the backend (`Daniel`, `en-us+f3`, …)                                                                                                   | (backend default) |
+| `BERNARD_VOICE_NORMALIZER` | Speak a natural spoken rendering rather than the literal text (see above)                                                                                     | `true`            |
+| `BERNARD_VOICE_RATE`       | Speech rate in words-per-minute                                                                                                                               | (backend default) |
+| `BERNARD_VOICE_WARMUP_MS`  | Silence played to wake a suspended audio sink before speaking, so the first words aren't clipped (Linux-only; needs `pw-play`/`paplay`/`aplay`; `0` disables) | `400`             |
 
 > **First words getting clipped?** On Linux, PipeWire/PulseAudio suspends idle audio sinks (HDMI outputs especially take a few hundred ms to wake), so the first syllables play into a device that isn't ready yet. Bernard mitigates this by playing a brief silence to wake the sink before each utterance — tune or disable it with `BERNARD_VOICE_WARMUP_MS`. The deeper fix is to stop the sink suspending at all (e.g. set `session.suspend-timeout-seconds = 0` for your output in WirePlumber).
 

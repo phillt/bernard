@@ -123,6 +123,34 @@ describe('buildSpeakCommand', () => {
   });
 });
 
+describe('argv safety (#432)', () => {
+  // The property the speech pipeline depends on. `buildSpeakCommand`'s
+  // windows-speech branch interpolates the whole text into a PowerShell
+  // `-Command` argument, and Windows caps a command line at 32,767 characters —
+  // nothing bounded an assistant reply before `clampForSpeech`.
+  it('bounds an unbounded reply well under the Windows command-line cap', () => {
+    // Asserted on buildSpeakCommand ITSELF, not on a composition the caller has
+    // to remember: the bound has to be a property of the function that does the
+    // interpolating, or the next `speak()` call site re-opens the hole.
+    const huge = 'A very long sentence about the model catalog. '.repeat(5000);
+    const resolved: ResolvedBackend = { backend: 'windows-speech', bin: 'powershell' };
+    const { args } = buildSpeakCommand(resolved, huge);
+    const command = args.join(' ');
+    expect(huge.length).toBeGreaterThan(32767);
+    expect(command.length).toBeLessThan(32000);
+  });
+
+  it('never hands a backend a newline', () => {
+    // Every backend takes the text as one argv element; a multi-line payload is
+    // at best read oddly and at worst reshapes the PowerShell command.
+    const { args } = buildSpeakCommand(
+      { backend: 'espeak', bin: 'espeak' },
+      'First line.\nSecond line.\n\nThird.',
+    );
+    expect(args.every((a) => !a.includes('\n'))).toBe(true);
+  });
+});
+
 describe('resolveWarmupPlayer', () => {
   it('returns null on darwin and win32 (no idle-suspend problem)', () => {
     expect(resolveWarmupPlayer('darwin', () => true)).toBeNull();

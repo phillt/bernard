@@ -1,6 +1,7 @@
 import type { SpinnerStats, TurnUsageEntry, UsageBucket } from '../../output.js';
 import type { ModelTier } from '../../model-policy.js';
 import type { AgentHook, CacheMetadata } from './types.js';
+import { telemetryFromUsageRecord } from '../../session-telemetry.js';
 
 /**
  * Single home for the "a model with no tier is bucketed as `pinned`" rule
@@ -213,6 +214,48 @@ export function recordTurnUsage(stats: SpinnerStats, rec: UsageRecord): void {
 export function makeUsageRecorder(target: { spinnerStats: SpinnerStats | null }): UsageRecorder {
   return (rec) => {
     if (target.spinnerStats) recordTurnUsage(target.spinnerStats, rec);
+  };
+}
+
+/**
+ * A {@link UsageRecorder} for LLM spend that happens **outside** a turn's stats
+ * window — after `finalizeTurnStats()` has priced and closed the ledger, or
+ * between turns entirely.
+ *
+ * The per-turn ledger is the wrong destination for that spend: the next
+ * `beginTurnStats()` clears it, so a late row is not merely mis-attributed, it
+ * is silently dropped — and with it the cost, out of the session total the
+ * status bar reports. So this recorder bypasses the ledger and writes the two
+ * things that survive a turn boundary: the durable telemetry sink (which powers
+ * the per-layer `bernard usage` breakdown and the JSONL) and the cumulative
+ * `sessionCostUsd`.
+ *
+ * Two callers, and they arrived from opposite directions: `compactHistory`,
+ * where manual `/compact` runs *between* turns, and the post-turn speech
+ * normalizer (#432), whose readback must stay fire-and-forget so the transcript
+ * commit isn't held behind an LLM round trip. It is shared rather than copied
+ * for the reason `atomicWrite` is — the copy drifted on first use.
+ *
+ * Pricing is minted **once** here, so the number folded into the session total
+ * and the number recorded in the sink cannot disagree. An unpriced row still
+ * sets `sessionCostPartial`, because spend we could not price must make the
+ * session total read as a floor rather than vanish into a clean `$0.00`.
+ */
+export function makeOutOfTurnUsageRecorder(target: {
+  spinnerStats: SpinnerStats | null;
+}): UsageRecorder {
+  return (rec) => {
+    const stats = target.spinnerStats;
+    if (!stats) return;
+    try {
+      const sink = stats.sessionTelemetry;
+      const tel = telemetryFromUsageRecord(sink?.sessionId ?? '', sink?.turn ?? 0, rec);
+      if (tel.costUsd != null) stats.sessionCostUsd += tel.costUsd;
+      else stats.sessionCostPartial = true;
+      sink?.record(tel);
+    } catch {
+      // Accounting must never break the call it is observing.
+    }
   };
 }
 

@@ -29,7 +29,8 @@ export type ModelSite =
   | 'recall-filter'
   | 'compressor'
   | 'specialist-detector'
-  | 'claim-verifier';
+  | 'claim-verifier'
+  | 'speech-normalizer';
 
 /**
  * Three-value runtime mode (#170, redesigned). The legacy `'off'` value is
@@ -344,6 +345,16 @@ const TEMPERATURE_ZERO_SITES: ReadonlySet<ModelSite> = new Set([
   // Entailment is a judgement that must not drift between two runs over the
   // same claim and the same source text.
   'claim-verifier',
+  // The same reply must not be spoken two different ways on a re-listen — and
+  // the LLM subcall cache keys on determinism.
+  //
+  // Note this entry is the first that is NOT here for the historical reason the
+  // docstring above gives: `speech-normalizer` is new and has no pre-#286
+  // behaviour to preserve byte-for-byte. The set now means "sites whose output
+  // must be deterministic", which as of today is exactly every `classifier`-role
+  // site — kept explicit rather than derived from `SITE_ROLE`, since the two
+  // policies are independent and the overlap may not survive the next site.
+  'speech-normalizer',
 ]);
 
 /**

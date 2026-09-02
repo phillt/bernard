@@ -771,6 +771,71 @@ describe('loadConfig promptRewriter', () => {
   });
 });
 
+describe('loadConfig voiceNormalizer (#432)', () => {
+  beforeEach(() => {
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    vi.stubEnv('OPENAI_API_KEY', '');
+    vi.stubEnv('XAI_API_KEY', '');
+    vi.stubEnv('BERNARD_PROVIDER', '');
+    vi.stubEnv('BERNARD_MODEL', '');
+    vi.stubEnv('BERNARD_VOICE_NORMALIZER', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('defaults to true when env var is unset', () => {
+    // Default-ON is the whole point, and is a deliberate divergence from #432's
+    // original acceptance criteria — see the module docs on speech-text.ts.
+    vi.unstubAllEnvs();
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    expect(loadConfig().voiceNormalizer).toBe(true);
+  });
+
+  it('disables when BERNARD_VOICE_NORMALIZER is "false"', () => {
+    vi.stubEnv('BERNARD_VOICE_NORMALIZER', 'false');
+    expect(loadConfig().voiceNormalizer).toBe(false);
+  });
+
+  it('disables when BERNARD_VOICE_NORMALIZER is "0"', () => {
+    vi.stubEnv('BERNARD_VOICE_NORMALIZER', '0');
+    expect(loadConfig().voiceNormalizer).toBe(false);
+  });
+
+  it('is not disabled by an unrelated truthy-looking value', () => {
+    // Guards against copying voiceTts's default-FALSE `=== 'true' | '1'` shape.
+    vi.stubEnv('BERNARD_VOICE_NORMALIZER', 'yes');
+    expect(loadConfig().voiceNormalizer).toBe(true);
+  });
+
+  it('prefs.voiceNormalizer takes precedence over env var', () => {
+    vi.stubEnv('BERNARD_VOICE_NORMALIZER', 'false');
+    let callCount = 0;
+    fsMock.readFileSync.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 1) throw new Error('ENOENT');
+      return profilesFile({ provider: 'anthropic', model: 'test', voiceNormalizer: true });
+    });
+    expect(loadConfig().voiceNormalizer).toBe(true);
+  });
+
+  it('a CLI override beats the stored preference', () => {
+    let callCount = 0;
+    fsMock.readFileSync.mockImplementation(() => {
+      callCount++;
+      if (callCount <= 1) throw new Error('ENOENT');
+      return profilesFile({ provider: 'anthropic', model: 'test', voiceNormalizer: true });
+    });
+    expect(loadConfig({ voiceNormalizer: false }).voiceNormalizer).toBe(false);
+  });
+});
+
 describe('loadConfig confirmMode (#144)', () => {
   beforeEach(() => {
     fsMock.existsSync.mockReturnValue(false);

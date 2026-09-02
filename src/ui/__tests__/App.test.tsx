@@ -53,6 +53,30 @@ vi.mock('../../specialist-detector.js', () => ({
   detectSpecialistCandidate: vi.fn(async () => null),
 }));
 
+// The `/voice` menu builds its annotations off a live VoiceService, which would
+// otherwise `which`-probe PATH on every render. Stub the resolution and the
+// class; keep VOICE_BACKEND_VALUES real so the backend picker is the real list.
+const voiceSpeakMock = vi.fn(async () => {});
+const voiceStopMock = vi.fn();
+vi.mock('../../voice-service.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../voice-service.js')>();
+  return {
+    ...actual,
+    resolveBackend: () => ({ backend: 'espeak-ng', bin: 'espeak-ng' }),
+    resolveWarmupPlayer: () => null,
+    VoiceService: class {
+      get backend() {
+        return { backend: 'espeak-ng', bin: 'espeak-ng' };
+      }
+      get warmupPlayer() {
+        return null;
+      }
+      speak = voiceSpeakMock;
+      stop = voiceStopMock;
+    },
+  };
+});
+
 // Mock extractDomainFacts (but keep serializeMessages, SUMMARIZATION_PROMPT, etc. real).
 const mockExtractDomainFacts = vi.fn(async () => []);
 vi.mock('../../context.js', async (importActual) => {
@@ -132,6 +156,10 @@ function makeConfig(overrides: Partial<BernardConfig> = {}): BernardConfig {
     ragEnabled: false,
     theme: 'bernard',
     customProviders: {},
+    voiceTts: false,
+    voiceBackend: 'auto',
+    voiceWarmupMs: 0,
+    voiceNormalizer: true,
     ...overrides,
   } as unknown as BernardConfig;
 }
@@ -555,6 +583,87 @@ describe('<App> /help overlay', () => {
     expect(frame).toContain('Commands');
     expect(frame).toContain('/help');
     expect(stripAnsi(frame)).toContain('↵/esc/q close');
+    unmount();
+  });
+});
+
+describe('<App> /voice menu (#432)', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+    voiceSpeakMock.mockClear();
+    voiceStopMock.mockClear();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('bare /voice opens one settings screen over every voice setting', async () => {
+    // The deliverable: what used to be a two-step on/off → backend wizard, with
+    // three of the five settings unreachable from any menu at all.
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/voice');
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('Voice —');
+    for (const row of ['Speech', 'Backend', 'Voice', 'Rate', 'Sink warmup', 'Natural speech']) {
+      expect(frame).toContain(row);
+    }
+    unmount();
+  });
+
+  it('shows Natural speech on by default', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/voice');
+    expect(stripAnsi(lastFrame() ?? '')).toMatch(/Natural speech\s+= on/);
+    unmount();
+  });
+
+  it('reflects the setting when it is off', async () => {
+    const { stdin, lastFrame, unmount } = renderApp({ config: { voiceNormalizer: false } });
+    await tick();
+    await submit(stdin, '/voice');
+    expect(stripAnsi(lastFrame() ?? '')).toMatch(/Natural speech\s+= off/);
+    unmount();
+  });
+
+  it('Esc closes the menu and returns to the prompt without wedging the loop', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/voice');
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Natural speech');
+    stdin.write(ESC);
+    await tick(40);
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('Natural speech');
+    unmount();
+  });
+
+  it('/voice status reports the natural-speech state', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/voice status');
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Natural speech: on');
+    unmount();
+  });
+
+  it('/voice off still works straight from the prompt', async () => {
+    // The argument forms are documented and in muscle memory; the menu is
+    // additive, not a replacement.
+    const { stdin, lastFrame, unmount } = renderApp({ config: { voiceTts: true } });
+    await tick();
+    await submit(stdin, '/voice off');
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Voice TTS disabled');
+    unmount();
+  });
+
+  it('/voice test speaks the literal phrase, not a normalized one', async () => {
+    const { stdin, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/voice test hello there');
+    expect(voiceSpeakMock).toHaveBeenCalledWith(
+      'hello there',
+      expect.objectContaining({ voice: undefined }),
+    );
     unmount();
   });
 });

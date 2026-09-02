@@ -189,4 +189,8 @@ export const SITE_ROLE: Record<ModelSite, RoleId> = {
   // "Does this text support this claim?" is a classification, not generation —
   // and the role's cheap/mid tiers are what keep a per-claim check affordable.
   'claim-verifier': 'classifier',
+  // Speech normalization IS classification: assign each token its semiotic
+  // class, then verbalize per class. The cheap tier is what keeps a pass that
+  // runs after every spoken turn affordable.
+  'speech-normalizer': 'classifier',
 };

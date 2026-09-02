@@ -53,6 +53,7 @@ export function makePolicyInput(overrides?: {
     voiceTts: false,
     voiceBackend: 'auto',
     voiceWarmupMs: 0,
+    voiceNormalizer: true,
     fullScreen: false,
     mouse: true,
   };
