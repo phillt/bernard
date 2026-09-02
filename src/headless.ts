@@ -157,9 +157,20 @@ export interface HeadlessTimings {
    *
    * Reported rather than merely logged because it is the number that decides
    * whether a per-invocation cold start is acceptable for an interactive
-   * caller. A warm, long-lived manager is the alternative, and it needs the
-   * per-user host service from #428 to own the process — building it before
-   * that exists means building it twice.
+   * caller — `debugLog` is a no-op unless someone already suspected a problem.
+   *
+   * **Measured: ~1.1–1.6 s** across four stdio servers (google-mcp,
+   * brave-search, playwright, browsermcp), against ~9–10 s for the whole
+   * invocation. Roughly an eighth of a run that is dominated by model latency,
+   * so a per-invocation connect is tolerable for a button press and the warm
+   * path is genuinely deferrable rather than merely deferred.
+   *
+   * The warm path, when it is built: a long-lived `MCPManager` owned by the
+   * per-user host service (#428), handed in as a pre-built `AgentContextMCP`
+   * instead of being constructed here. Deliberately NOT built now — a "warm"
+   * manager inside a per-invocation CLI process is a cache with a lifetime of
+   * one call, and the process that could hold it does not exist yet. The
+   * option shape is additive when it arrives.
    */
   mcpConnectMs: number;
   /** Wall time from entry to exit. */
