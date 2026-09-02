@@ -2708,29 +2708,87 @@
             </thead>
             <tbody>
               <tr>
-                <td><code>/voice</code> or <code>/voice on</code></td>
-                <td>Enable TTS — Bernard speaks assistant responses</td>
+                <td><code>/voice</code></td>
+                <td>
+                  Open the voice settings menu — state, backend, voice, rate, sink warmup and
+                  natural speech, each showing its current value
+                </td>
               </tr>
               <tr>
-                <td><code>/voice off</code></td>
-                <td>Disable TTS and stop any current speech</td>
+                <td><code>/voice on</code> / <code>/voice off</code></td>
+                <td>Enable / disable TTS (<code>off</code> also stops any current speech)</td>
               </tr>
               <tr>
                 <td><code>/voice status</code></td>
-                <td>Show on/off state and resolved backend</td>
+                <td>Show state, the natural-speech setting, and the resolved backend</td>
               </tr>
               <tr>
                 <td><code>/voice test [text]</code></td>
-                <td>Speak a phrase immediately (defaults to a greeting)</td>
+                <td>Speak a phrase immediately, exactly as typed (defaults to a greeting)</td>
               </tr>
             </tbody>
           </table>
         </div>
         <p>
-          The on/off state is persisted to the active profile so it survives session restarts.
-          Environment variables: <code>BERNARD_VOICE=true</code>,
-          <code>BERNARD_VOICE_BACKEND</code>, <code>BERNARD_VOICE_RATE</code>,
-          <code>BERNARD_VOICE_WARMUP_MS</code>.
+          Every setting is persisted to the active profile so it survives session restarts. Esc
+          closes the menu — and, anywhere in the REPL, silences speech in progress. Environment
+          variables: <code>BERNARD_VOICE=true</code>, <code>BERNARD_VOICE_BACKEND</code>,
+          <code>BERNARD_VOICE_VOICE</code>, <code>BERNARD_VOICE_RATE</code>,
+          <code>BERNARD_VOICE_WARMUP_MS</code>, <code>BERNARD_VOICE_NORMALIZER</code>.
+        </p>
+
+        <h3 id="voice-natural-speech">Natural Speech <span class="vtag">v1.0.0+</span></h3>
+        <p>
+          By default Bernard speaks a <em>spoken</em> rendering of each reply rather than the
+          literal text on screen. Without it a TTS engine reads markdown aloud verbatim — asterisks,
+          code fences, citation markers, URLs spelled character by character, tables recited cell by
+          cell, and a phone number as one enormous number.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>On screen</th>
+                <th>Spoken</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>Call **206-555-0198**</code></td>
+                <td>“Call two oh six, five five five, zero one nine eight”</td>
+              </tr>
+              <tr>
+                <td><code>https://www.macrumors.com/guide/m5-max/</code></td>
+                <td>“the Mac Rumors guide to the M5 Max”</td>
+              </tr>
+              <tr>
+                <td><code>$12.50</code></td>
+                <td>“twelve dollars and fifty cents”</td>
+              </tr>
+              <tr>
+                <td>a markdown table</td>
+                <td>one sentence per row</td>
+              </tr>
+              <tr>
+                <td>a fenced code block</td>
+                <td>“a bash code block, omitted”</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>
+          <strong>Your transcript and saved history are never affected</strong> — this applies only
+          to what reaches the speaker. Turn it off from <code>/voice → Natural speech</code>, with
+          <code>BERNARD_VOICE_NORMALIZER=false</code>, or for a single session with
+          <code>bernard --no-voice-normalize</code>; markdown is still stripped either way.
+        </p>
+        <p>
+          Two halves do the work. Markup, phone numbers, currency, units and ISO dates are handled
+          in code — free, deterministic, always on. The judgement calls that need context — whether
+          <code>2026</code> is a year or a quantity, what a link actually points at, which rows of a
+          table matter — go to a single cheap-tier model call, which falls back to the deterministic
+          reading whenever it is unavailable. Short replies with nothing ambiguous in them skip the
+          call entirely, so most turns speak with no added latency.
         </p>
         <p>
           <strong>First words getting clipped?</strong> On Linux, PipeWire/PulseAudio suspends idle

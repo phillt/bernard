@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
-import { tokenStatsHook, tokenTotalsHook, type TokenStatsTarget } from '../token-stats.js';
+import {
+  tokenStatsHook,
+  tokenTotalsHook,
+  makeOutOfTurnUsageRecorder,
+  type TokenStatsTarget,
+  type UsageRecord,
+} from '../token-stats.js';
 import type { SpinnerStats } from '../../../output.js';
 
 beforeEach(() => {});
@@ -108,5 +114,67 @@ describe('tokenTotalsHook', () => {
     await hook.onStepFinish!({ text: '', toolCalls: [], toolResults: [] });
     expect(target.spinnerStats!.turnPromptTokens).toBe(7);
     expect(target.spinnerStats!.turnCompletionTokens).toBe(3);
+  });
+});
+
+describe('makeOutOfTurnUsageRecorder (#432)', () => {
+  // Spend that lands after `finalizeTurnStats()` has closed the ledger — a
+  // between-turn `/compact`, or the post-turn speech normalizer. Writing it to
+  // the per-turn ledger would not merely mis-attribute it: the next
+  // `beginTurnStats()` clears that ledger, so the cost would vanish from the
+  // session total entirely.
+  const priced: UsageRecord = {
+    bucket: 'cheap',
+    site: 'speech-normalizer',
+    provider: 'anthropic',
+    modelName: 'claude-haiku-4-5-20251001',
+    promptTokens: 100,
+    completionTokens: 50,
+  };
+
+  function makeSink() {
+    const records: unknown[] = [];
+    return {
+      sessionId: 's1',
+      turn: 3,
+      records,
+      record: (t: unknown) => void records.push(t),
+    };
+  }
+
+  it('is a no-op when no stats are mounted', () => {
+    const target = { spinnerStats: null };
+    expect(() => makeOutOfTurnUsageRecorder(target)(priced)).not.toThrow();
+  });
+
+  it('never touches the per-turn ledger', () => {
+    const stats = makeStats({ sessionCostUsd: 0, turnLedger: new Map() });
+    makeOutOfTurnUsageRecorder({ spinnerStats: stats })(priced);
+    expect(stats.turnLedger!.size).toBe(0);
+    expect(stats.turnPromptTokens).toBe(0);
+  });
+
+  it('records into the durable sink so the per-layer breakdown sees it', () => {
+    const sink = makeSink();
+    const stats = makeStats({
+      sessionCostUsd: 0,
+      sessionTelemetry: sink as unknown as SpinnerStats['sessionTelemetry'],
+    });
+    makeOutOfTurnUsageRecorder({ spinnerStats: stats })(priced);
+    expect(sink.records).toHaveLength(1);
+    expect(sink.records[0]).toMatchObject({ site: 'speech-normalizer', sessionId: 's1', turn: 3 });
+  });
+
+  it('marks the session total as partial when a row could not be priced', () => {
+    // An unpriced row must make the session figure read as a floor rather than
+    // vanish into a clean $0.00.
+    const stats = makeStats({ sessionCostUsd: 0, sessionCostPartial: false });
+    makeOutOfTurnUsageRecorder({ spinnerStats: stats })({
+      ...priced,
+      modelName: 'not-in-any-catalog',
+      provider: 'nowhere',
+    });
+    expect(stats.sessionCostPartial).toBe(true);
+    expect(stats.sessionCostUsd).toBe(0);
   });
 });

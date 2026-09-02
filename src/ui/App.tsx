@@ -86,7 +86,7 @@ import type { BreadthOption } from '../permissions/breadth.js';
 import { applyProfileToConfig } from '../config.js';
 import { setToolDetailsVisible } from '../output.js';
 import { noPromptCacheHint } from '../cost-guardrail.js';
-import { makeUsageRecorder } from '../framework/hooks/token-stats.js';
+import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
 import {
@@ -179,6 +179,8 @@ import {
   VOICE_BACKEND_VALUES,
   type VoiceBackend,
 } from '../voice-service.js';
+import { toSpokenForm } from '../speech-normalizer.js';
+import { toLiteralSpeech } from '../speech-text.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -361,7 +363,33 @@ function getVoiceService(cfg: import('../config.js').BernardConfig): VoiceServic
   return _voiceService;
 }
 
+/**
+ * Cancels a readback that is still inside its speech-normalization LLM pass
+ * (#432).
+ *
+ * `VoiceService`'s own `_epoch` guard covers only the warmup window *inside*
+ * `speak()`; it cannot touch work that has not reached `speak()` yet. Without
+ * this, starting a new turn — or `/voice off`, or a profile switch — while the
+ * previous reply is still being normalized speaks that previous reply
+ * afterwards.
+ *
+ * An `AbortController` rather than a generation counter, because the signal has
+ * to reach `generateText` to actually stop the round trip rather than merely
+ * make us discard its result.
+ */
+let _speechAbort: AbortController | null = null;
+
+/** Aborts a pending normalization. Deliberately does NOT tear down the service. */
+function cancelPendingSpeech(): void {
+  _speechAbort?.abort();
+  _speechAbort = null;
+}
+
 function resetVoiceService(): void {
+  // Kept separate from `cancelPendingSpeech` so a new turn can supersede a
+  // pending readback without also paying for backend re-resolution (`which`
+  // probes) on the next utterance.
+  cancelPendingSpeech();
   if (_voiceService) {
     _voiceService.stop();
     _voiceService = null;
@@ -699,6 +727,11 @@ export function App({
   // Cost guardrail (#298): latches true the first time we warn about a large
   // prefix re-billed on a non-caching provider, so the hint fires once/session.
   const noCacheWarnedRef = useRef(false);
+  // Speech normalization (#432) is on by default, so the first time it actually
+  // changes what a listener hears, say so — once per session. Latched on a real
+  // `'normalized'` outcome rather than on the setting, so nobody who wouldn't
+  // notice a difference gets told.
+  const speechNoticeShownRef = useRef(false);
   // Synchronous guard against double-Enter: setBusy schedules a re-render but
   // a second submit can land before Prompt sees `disabled={busy}` flip.
   const submittingRef = useRef(false);
@@ -756,6 +789,12 @@ export function App({
         // Esc here can only mean "interrupt the in-flight turn". Each overlay
         // owns its own Esc-to-close via its own useInput.
         debugLog('app:esc', { busy, hasTurnAbort: !!turnAbortRef.current });
+        // Esc silences the voice, busy or not (#432). Previously it aborted the
+        // turn and left the utterance playing — and the readback itself starts
+        // *after* `busy` clears, so the not-busy branch is the one that matters.
+        // Both are no-ops when nothing is speaking or pending.
+        cancelPendingSpeech();
+        if (config.voiceTts) getVoiceService(config).stop();
         if (busy) {
           interruptInFlightRef.current = getActiveCount();
           setInterrupted(true);
@@ -1522,19 +1561,13 @@ export function App({
     }
 
     if (is(text, '/voice') || startsWithCmd(text, '/voice')) {
-      // Persist the current voice fields onto the active profile.
-      const persistVoice = () =>
-        saveActiveSettings({
-          voiceTts: config.voiceTts,
-          voiceBackend: config.voiceBackend,
-          voiceVoice: config.voiceVoice,
-          voiceRate: config.voiceRate,
-          voiceWarmupMs: config.voiceWarmupMs,
-        });
-
       const arg = text.slice('/voice'.length).trim();
 
       // `/voice test [text]` — speak a phrase immediately, regardless of on/off.
+      // Deliberately literal: the user typed these words and is checking that
+      // audio works at all. Routing it through the normalizer would turn a
+      // one-subsystem check into a two-subsystem, non-deterministic one. The
+      // deterministic pass still runs — it is free and bounds the length.
       if (arg === 'test' || arg.startsWith('test ')) {
         const phrase = arg.slice('test'.length).trim() || 'Hello from Bernard.';
         const svc = getVoiceService(config);
@@ -1542,40 +1575,17 @@ export function App({
           flashToast('No TTS backend available on this system.', 'error');
           return;
         }
-        void svc.speak(phrase, { voice: config.voiceVoice, rate: config.voiceRate }).catch(() => {
-          // Fail silently — TTS errors must never crash the REPL.
-        });
+        void svc
+          .speak(toLiteralSpeech(phrase), { voice: config.voiceVoice, rate: config.voiceRate })
+          .catch(() => {
+            // Fail silently — TTS errors must never crash the REPL.
+          });
         flashToast(`Speaking: "${phrase}"`, 'info');
         return;
       }
 
-      // `/voice status` — show on/off state and the resolved backend.
       if (arg === 'status') {
-        // Read both the backend and the warmup player off the (cached) service
-        // so we don't re-probe PATH with synchronous `which` calls on every
-        // status invocation.
-        const svc = getVoiceService(config);
-        const resolved = svc.backend;
-        const warmupPlayer = svc.warmupPlayer;
-        showInfo('Voice TTS', [
-          { text: `State: ${config.voiceTts ? 'ON' : 'OFF'}`, bold: true },
-          { text: `Configured backend: ${config.voiceBackend}` },
-          {
-            text: `Resolved backend: ${resolved ? `${resolved.backend} (${resolved.bin})` : 'none available'}`,
-            dim: !resolved,
-          },
-          {
-            text: config.voiceRate ? `Rate: ${config.voiceRate} wpm` : 'Rate: backend default',
-            dim: true,
-          },
-          {
-            text:
-              config.voiceWarmupMs > 0
-                ? `Sink warmup: ${config.voiceWarmupMs} ms${warmupPlayer ? ` (${warmupPlayer})` : ' (no player — inactive)'}`
-                : 'Sink warmup: off',
-            dim: true,
-          },
-        ]);
+        showVoiceStatus();
         return;
       }
 
@@ -1592,48 +1602,8 @@ export function App({
         return;
       }
 
-      // Bare `/voice` (or any unrecognized argument) — interactive menu.
-      // Step 1: on/off toggle
-      const onOffEntries: MenuEntry[] = [
-        { label: 'On', active: config.voiceTts === true, value: true },
-        { label: 'Off', active: config.voiceTts === false, value: false },
-      ];
-      const onOffResult = await requestMenu(onOffEntries, {
-        title: `Voice TTS: ${config.voiceTts ? 'ON' : 'OFF'}`,
-      });
-      if (onOffResult.cancelled) return;
-      const newVoiceTts = onOffResult.item.value as boolean;
-      config.voiceTts = newVoiceTts;
-
-      // Step 2: backend picker — only relevant when enabling voice
-      if (newVoiceTts) {
-        const backendEntries: MenuEntry[] = (VOICE_BACKEND_VALUES as readonly string[]).map(
-          (b) => ({
-            label: b,
-            active: config.voiceBackend === b,
-            value: b,
-          }),
-        );
-        const backendResult = await requestMenu(backendEntries, {
-          title: `Voice backend: ${config.voiceBackend}`,
-        });
-        if (!backendResult.cancelled) {
-          const newBackend = backendResult.item.value as VoiceBackend;
-          config.voiceBackend = newBackend;
-        }
-        // Re-resolve the singleton against the (possibly new) backend setting.
-        resetVoiceService();
-      } else {
-        // Turning off via the menu should also stop any in-flight speech.
-        resetVoiceService();
-      }
-
-      // Persist only the voice fields — saveActiveSettings merges onto the profile.
-      persistVoice();
-      flashToast(
-        `Voice TTS ${config.voiceTts ? 'enabled' : 'disabled'} (backend: ${config.voiceBackend}).`,
-        'success',
-      );
+      // Bare `/voice` (or any unrecognized argument) — the settings menu.
+      await runVoiceMenu();
       return;
     }
 
@@ -2487,11 +2457,27 @@ export function App({
   /** An entry list paired with the per-item actions (sections excluded). */
   type SettingsMenu = { entries: MenuEntry[]; actions: Array<() => void | Promise<void>> };
 
-  function buildAgentOptionsMenu(): SettingsMenu {
-    type MenuRow =
-      | { kind: 'section'; title: string }
-      | { kind: 'item'; item: MenuItem; action: () => void | Promise<void> };
+  /**
+   * One row of a settings-style menu, paired with what selecting it does.
+   * Lifted out of `buildAgentOptionsMenu` once `buildVoiceMenu` needed the same
+   * shape — the `entries`/`actions` split has to stay in lockstep, so the two
+   * builders should be describing it with the same type.
+   */
+  type MenuRow =
+    | { kind: 'section'; title: string }
+    | { kind: 'item'; item: MenuItem; action: () => void | Promise<void> };
 
+  /** Splits rows into the parallel arrays `SettingsMenu` and `runVoiceMenu` consume. */
+  function splitRows(rows: MenuRow[]): SettingsMenu {
+    return {
+      entries: rows.map((r) =>
+        r.kind === 'section' ? { type: 'section', title: r.title } : r.item,
+      ),
+      actions: rows.flatMap((r) => (r.kind === 'item' ? [r.action] : [])),
+    };
+  }
+
+  function buildAgentOptionsMenu(): SettingsMenu {
     const toggleRow = (
       key: BooleanPrefKey,
       label: string,
@@ -2649,12 +2635,7 @@ export function App({
       },
     ];
 
-    return {
-      entries: rows.map((r) =>
-        r.kind === 'section' ? { type: 'section', title: r.title } : r.item,
-      ),
-      actions: rows.flatMap((r) => (r.kind === 'item' ? [r.action] : [])),
-    };
+    return splitRows(rows);
   }
 
   /**
@@ -2730,6 +2711,329 @@ export function App({
       index = res.index;
       const action = (tab === 'options' ? optionsMenu.actions : agentMenu.actions)[res.index];
       if (action) await action();
+    }
+  }
+
+  /** Persists every voice field onto the active profile. */
+  function persistVoice(): void {
+    saveActiveSettings({
+      voiceTts: config.voiceTts,
+      voiceBackend: config.voiceBackend,
+      voiceVoice: config.voiceVoice,
+      voiceRate: config.voiceRate,
+      voiceWarmupMs: config.voiceWarmupMs,
+      voiceNormalizer: config.voiceNormalizer,
+    });
+  }
+
+  /**
+   * `/voice status` — the read-only view, also reachable as the menu's last row.
+   * Reads the backend and warmup player off the cached service rather than
+   * re-probing PATH with synchronous `which` calls on every invocation.
+   */
+  function showVoiceStatus(): void {
+    const svc = getVoiceService(config);
+    const resolved = svc.backend;
+    const warmupPlayer = svc.warmupPlayer;
+    showInfo('Voice TTS', [
+      { text: `State: ${config.voiceTts ? 'ON' : 'OFF'}`, bold: true },
+      {
+        text: config.voiceNormalizer
+          ? 'Natural speech: on'
+          : 'Natural speech: off (speaking literal text)',
+      },
+      { text: `Configured backend: ${config.voiceBackend}` },
+      {
+        text: `Resolved backend: ${resolved ? `${resolved.backend} (${resolved.bin})` : 'none available'}`,
+        dim: !resolved,
+      },
+      { text: `Voice: ${config.voiceVoice ?? 'backend default'}`, dim: true },
+      {
+        text: config.voiceRate ? `Rate: ${config.voiceRate} wpm` : 'Rate: backend default',
+        dim: true,
+      },
+      {
+        text:
+          config.voiceWarmupMs > 0
+            ? `Sink warmup: ${config.voiceWarmupMs} ms${warmupPlayer ? ` (${warmupPlayer})` : ' (no player — inactive)'}`
+            : 'Sink warmup: off',
+        dim: true,
+      },
+    ]);
+  }
+
+  /**
+   * Carries a URL, a phone number and a small table, so toggling "Natural
+   * speech" and pressing Preview again is audibly different. That is the only
+   * way a user can hear what the setting does — `/voice test` is deliberately
+   * literal, being an "is my audio working" check over text they typed.
+   */
+  const VOICE_SAMPLE = [
+    'Bernard finished the catalog refresh in 4200ms.',
+    '',
+    '| Provider | Models |',
+    '| --- | --- |',
+    '| anthropic | 12 |',
+    '| openai | 34 |',
+    '',
+    'Full pricing is at https://www.anthropic.com/pricing — questions to 206-555-0198.',
+  ].join('\n');
+
+  /** Speaks the sample through every current setting, including the normalizer. */
+  async function speakVoiceSample(): Promise<void> {
+    const svc = getVoiceService(config);
+    if (!svc.backend) {
+      flashToast('No TTS backend available on this system.', 'error');
+      return;
+    }
+    const spoken = await toSpokenForm(
+      VOICE_SAMPLE,
+      config,
+      undefined,
+      makeOutOfTurnUsageRecorder(agent),
+    );
+    try {
+      await svc.speak(spoken.text, { voice: config.voiceVoice, rate: config.voiceRate });
+    } catch (err) {
+      // Surfaced rather than swallowed: the menu is the first place `voiceVoice`
+      // is reachable, and a typo'd voice name makes the backend exit non-zero
+      // with no other signal that anything went wrong.
+      flashToast(
+        `TTS failed: ${err instanceof Error ? err.message : String(err)}. Check the voice name.`,
+        'error',
+      );
+    }
+  }
+
+  function voiceMenuTitle(): string {
+    const resolved = getVoiceService(config).backend;
+    const state = config.voiceTts ? 'ON' : 'OFF';
+    // "On but silent" — a configured backend that isn't installed — was
+    // previously invisible outside `/voice status`.
+    const engine = resolved ? `${resolved.backend} (${resolved.bin})` : 'no backend available';
+    return `Voice — ${state} · ${engine}`;
+  }
+
+  /**
+   * The `/voice` screen. A plain `requestMenu` loop rather than a third
+   * `SettingsOverlay` tab: `SettingsTab` is a closed union threaded through
+   * `SETTINGS_TABS`, `requestSettings`'s resolve shape and the overlay's
+   * `optionsEntries`/`agentEntries` props, so a third tab is a refactor of the
+   * overlay contract — and it would be wrong even if it were free, since a third
+   * tab is reachable by Shift+Tab from `/options`, which would put an
+   * audio-device panel in the general-settings rotation.
+   *
+   * Every row stays enabled regardless of `voiceTts`: configuring a backend
+   * while voice is off is legitimate, and hiding rows makes the list jump under
+   * the cursor.
+   */
+  function buildVoiceMenu(): SettingsMenu {
+    const svc = getVoiceService(config);
+    const resolved = svc.backend;
+    const backendAnnotation =
+      config.voiceBackend === 'auto'
+        ? `= auto → ${resolved ? `${resolved.backend} (${resolved.bin})` : 'none available'}`
+        : `= ${config.voiceBackend}`;
+
+    const rows: MenuRow[] = [
+      { kind: 'section', title: 'Playback' },
+      {
+        kind: 'item',
+        item: {
+          label: 'Speech',
+          annotation: `= ${config.voiceTts ? 'on' : 'off'}`,
+          description: 'Speak each assistant reply aloud after the turn completes.',
+        },
+        action: async () => {
+          const res = await requestMenu(
+            [
+              { label: 'On', active: config.voiceTts === true, value: true },
+              { label: 'Off', active: config.voiceTts === false, value: false },
+            ],
+            { title: `Speech: ${config.voiceTts ? 'ON' : 'OFF'}` },
+          );
+          if (res.cancelled) return;
+          config.voiceTts = res.item.value as boolean;
+          if (!config.voiceTts) resetVoiceService();
+          persistVoice();
+          flashToast(`Speech ${config.voiceTts ? 'on' : 'off'}.`, 'success');
+        },
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Backend',
+          annotation: backendAnnotation,
+          description: 'Which TTS engine speaks. Auto detects one for this platform.',
+        },
+        action: async () => {
+          const res = await requestMenu(
+            (VOICE_BACKEND_VALUES as readonly string[]).map((b) => ({
+              label: b,
+              active: config.voiceBackend === b,
+              value: b,
+            })),
+            { title: `Backend: ${config.voiceBackend}` },
+          );
+          if (res.cancelled) return;
+          config.voiceBackend = res.item.value as VoiceBackend;
+          // Re-resolve the singleton against the new backend setting.
+          resetVoiceService();
+          persistVoice();
+          flashToast(`Backend: ${config.voiceBackend}.`, 'success');
+        },
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Voice',
+          annotation: `= ${config.voiceVoice ?? '(backend default)'}`,
+          description:
+            'Named voice passed to the backend — "Daniel" on macOS, "en-us+f3" on espeak. Blank uses the backend’s own.',
+        },
+        action: async () => {
+          // `cancelOnEmpty: false` is required, or the field could never be
+          // cleared back to the backend default once set.
+          const res = await requestTextInput({
+            label: 'Voice name',
+            initialValue: config.voiceVoice ?? '',
+            cancelOnEmpty: false,
+          });
+          if (res.cancelled) return;
+          const name = res.raw.trim();
+          config.voiceVoice = name.length > 0 ? name : undefined;
+          resetVoiceService();
+          persistVoice();
+          flashToast(`Voice: ${config.voiceVoice ?? 'backend default'}.`, 'success');
+        },
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Rate',
+          annotation: `= ${config.voiceRate ? `${config.voiceRate} wpm` : '(backend default)'}`,
+          description: 'Words per minute. Blank uses the backend default.',
+        },
+        action: async () => {
+          const res = await requestTextInput({
+            label: 'Rate (words per minute)',
+            initialValue: config.voiceRate ? String(config.voiceRate) : '',
+            cancelOnEmpty: false,
+          });
+          if (res.cancelled) return;
+          const raw = res.raw.trim();
+          if (raw.length === 0) {
+            config.voiceRate = undefined;
+          } else {
+            const n = parseInt(raw, 10);
+            if (!Number.isFinite(n) || n <= 0) {
+              flashToast('Invalid rate. Must be a positive integer.', 'error');
+              return;
+            }
+            config.voiceRate = n;
+          }
+          persistVoice();
+          flashToast(`Rate: ${config.voiceRate ?? 'backend default'}.`, 'success');
+        },
+      },
+      {
+        kind: 'item',
+        item: {
+          label: 'Sink warmup',
+          annotation: `= ${config.voiceWarmupMs > 0 ? `${config.voiceWarmupMs} ms${svc.warmupPlayer ? ` (${svc.warmupPlayer})` : ' (no player)'}` : 'off'}`,
+          description:
+            "Silence played to wake a suspended audio sink so the first words aren't clipped. Linux only; 0 disables.",
+        },
+        action: async () => {
+          const res = await requestTextInput({
+            label: 'Sink warmup (ms, 0 disables)',
+            initialValue: String(config.voiceWarmupMs),
+            cancelOnEmpty: false,
+          });
+          if (res.cancelled) return;
+          const n = parseInt(res.raw.trim(), 10);
+          if (!Number.isFinite(n) || n < 0) {
+            flashToast('Invalid warmup. Must be 0 or a positive integer.', 'error');
+            return;
+          }
+          config.voiceWarmupMs = n;
+          // The warmup config is captured at construction, so re-resolve.
+          resetVoiceService();
+          persistVoice();
+          flashToast(`Sink warmup: ${n > 0 ? `${n} ms` : 'off'}.`, 'success');
+        },
+      },
+
+      { kind: 'section', title: 'Spoken form' },
+      {
+        kind: 'item',
+        item: {
+          label: 'Natural speech',
+          annotation: `= ${config.voiceNormalizer ? 'on' : 'off'}`,
+          description:
+            'Read the reply the way a person would say it: phone numbers as digit groups, links named instead of spelled, tables as sentences. The transcript and saved history stay literal.',
+        },
+        action: async () => {
+          const res = await requestMenu(
+            [
+              { label: 'On', active: config.voiceNormalizer === true, value: true },
+              { label: 'Off', active: config.voiceNormalizer === false, value: false },
+            ],
+            { title: `Natural speech: ${config.voiceNormalizer ? 'ON' : 'OFF'}` },
+          );
+          if (res.cancelled) return;
+          config.voiceNormalizer = res.item.value as boolean;
+          // Not `resetVoiceService()` — the backend did not change; only a
+          // pending normalization is now running under the wrong setting.
+          cancelPendingSpeech();
+          persistVoice();
+          flashToast(`Natural speech ${config.voiceNormalizer ? 'on' : 'off'}.`, 'success');
+        },
+      },
+
+      { kind: 'section', title: 'Try it' },
+      {
+        kind: 'item',
+        item: {
+          label: 'Speak a test phrase',
+          description:
+            'Speak a sample containing a table, a link and a phone number, using every setting above.',
+        },
+        action: speakVoiceSample,
+      },
+      {
+        kind: 'item',
+        item: { label: 'Stop speaking', description: 'Kill any utterance in flight.' },
+        action: () => {
+          getVoiceService(config).stop();
+          cancelPendingSpeech();
+        },
+      },
+      {
+        kind: 'item',
+        item: { label: 'Diagnostics', description: 'Resolved backend, warmup player, settings.' },
+        action: showVoiceStatus,
+      },
+    ];
+
+    return splitRows(rows);
+  }
+
+  /**
+   * Drives the `/voice` screen. Entries are rebuilt each pass so annotations
+   * refresh from the mutated config, and `initialIndex` restores the cursor onto
+   * the row just changed — `MenuOptions.initialIndex` is item-indexed with
+   * sections excluded, which is exactly what `res.index` is. Same shape as
+   * {@link runSettings}.
+   */
+  async function runVoiceMenu(): Promise<void> {
+    let index = 0;
+    for (;;) {
+      const { entries, actions } = buildVoiceMenu();
+      const res = await requestMenu(entries, { title: voiceMenuTitle(), initialIndex: index });
+      if (res.cancelled) return;
+      index = res.index;
+      await actions[res.index]?.();
     }
   }
 
@@ -2932,6 +3236,48 @@ export function App({
     setStaticItems((prev) => [...prev, ...appended]);
   }
 
+  /**
+   * Speaks one assistant reply (#432). Fire-and-forget by design — see the call
+   * site in `runAgentTurn`.
+   *
+   * The re-checks after the await are the whole point: an LLM round trip sits
+   * between "the turn ended" and "audio starts", and the user can begin a new
+   * turn, hit Esc, run `/voice off` or switch profile inside that window.
+   */
+  async function speakAssistantReply(writtenForm: string): Promise<void> {
+    cancelPendingSpeech();
+    const ac = new AbortController();
+    _speechAbort = ac;
+    try {
+      const spoken = await toSpokenForm(
+        writtenForm,
+        config,
+        ac.signal,
+        makeOutOfTurnUsageRecorder(agent),
+      );
+      // `_speechAbort !== ac` sits beside `aborted` deliberately: it makes "a
+      // newer readback started" true without depending on abort-propagation
+      // ordering.
+      if (ac.signal.aborted || _speechAbort !== ac) return;
+      if (!config.voiceTts || !spoken.text) return;
+      if (spoken.outcome === 'normalized' && !speechNoticeShownRef.current) {
+        speechNoticeShownRef.current = true;
+        flashToast(
+          'Natural speech is on — Bernard reads a listener-friendly version of each reply. /voice to turn it off.',
+          'info',
+        );
+      }
+      await getVoiceService(config).speak(spoken.text, {
+        voice: config.voiceVoice,
+        rate: config.voiceRate,
+      });
+    } catch {
+      // Fail silently — TTS errors must never crash the REPL.
+    } finally {
+      if (_speechAbort === ac) _speechAbort = null;
+    }
+  }
+
   async function runAgentTurn(input: string, images?: ImageAttachment[]): Promise<void> {
     // Drop a second Enter that arrives before the busy re-render has propagated
     // to <Prompt disabled={busy}>. Without this, two turns can run concurrently.
@@ -2940,6 +3286,9 @@ export function App({
     // Clear the previous turn's stream events so the in-flight
     // <StreamingAssistantMessage> renders only this turn's deltas.
     messageStore.reset();
+    // A new turn supersedes the previous turn's unspoken readback (#432) — the
+    // case that motivates the guard at all.
+    cancelPendingSpeech();
     setInterrupted(false);
     setBusy(true);
     const turnStartedAt = Date.now();
@@ -3000,13 +3349,13 @@ export function App({
           }
         }
         const ttsText = lastMsg ? extractTextFromContent(lastMsg.content) : '';
-        if (ttsText.trim()) {
-          void getVoiceService(config)
-            .speak(ttsText, { voice: config.voiceVoice, rate: config.voiceRate })
-            .catch(() => {
-              // Fail silently — TTS errors must never crash the REPL.
-            });
-        }
+        // Deliberately NOT awaited. The `finally` below calls
+        // `finalizeTurnStats()` + `commitNewHistory()` + `setBusy(false)`, so
+        // awaiting a normalization round trip here would hold the spinner and
+        // delay the transcript commit by ~1 s on every voiced turn — for work
+        // nobody is waiting on. That is also why the usage recorder is the
+        // out-of-turn one: this spend lands after the ledger has closed.
+        if (ttsText.trim()) void speakAssistantReply(ttsText);
       }
     } catch (err) {
       // AbortError on user-cancel is expected; don't dump it to the console.

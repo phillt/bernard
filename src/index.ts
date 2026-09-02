@@ -53,6 +53,7 @@ import {
   VoiceService,
   type VoiceBackend,
 } from './voice-service.js';
+import { toLiteralSpeech } from './speech-text.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
@@ -161,6 +162,10 @@ program
     'TTS backend: auto | macos-say | spd-say | espeak-ng | espeak | windows-speech',
   )
   .option('--voice-rate <n>', 'Speech rate in words per minute', parseInt)
+  .option(
+    '--no-voice-normalize',
+    'Speak the literal response text instead of a natural spoken rendering (#432)',
+  )
   .action(async (opts) => {
     try {
       // Detect a fresh install BEFORE any module touches preferences/profiles
@@ -179,6 +184,10 @@ program
         voiceTts: opts.voice ? true : undefined,
         voiceBackend: opts.voiceBackend,
         voiceRate: opts.voiceRate,
+        // Commander sets a `--no-x` option to `true` when the flag is ABSENT, so
+        // this must test `=== false`. A truthiness test would pin the field to
+        // the CLI on every run and make the profile setting unreachable.
+        voiceNormalizer: opts.voiceNormalize === false ? false : undefined,
       });
 
       // `loadConfig` runs dotenv, so BERNARD_DEBUG from `.env` is in scope by
@@ -1206,7 +1215,10 @@ program
       ms: voiceWarmupMs,
     });
     try {
-      await svc.speak(message, { voice: voiceVoice, rate: voiceRate });
+      // Deterministic normalization only — this path deliberately constructs no
+      // provider or model (it must work with no API key configured), and the
+      // message is text the user typed themselves.
+      await svc.speak(toLiteralSpeech(message), { voice: voiceVoice, rate: voiceRate });
       printInfo('Done.');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

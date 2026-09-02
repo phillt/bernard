@@ -100,6 +100,12 @@ export interface ProfileSettings {
   voiceRate?: number;
   /** Ms of silence played to wake a suspended sink before speaking (0 = off). */
   voiceWarmupMs?: number;
+  /**
+   * Run the LLM speech-normalization pass before speaking (#432). On by default;
+   * gates only the LLM half — the deterministic markup/number handling is
+   * unconditional. Speech path only; the transcript stays literal.
+   */
+  voiceNormalizer?: boolean;
 }
 
 /** A single named profile entry. */

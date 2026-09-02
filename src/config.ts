@@ -242,6 +242,19 @@ export interface BernardConfig {
    */
   voiceWarmupMs: number;
   /**
+   * Run the LLM speech-normalization pass before speaking an assistant reply
+   * (#432) — the written form is rendered into the spoken form a person would
+   * say aloud (links named rather than spelled, ambiguous numbers read as their
+   * actual semiotic class, tables read as sentences). **On by default**; opt out
+   * with `BERNARD_VOICE_NORMALIZER=false`.
+   *
+   * It gates only the LLM half. The deterministic half (`src/speech-text.ts` —
+   * markup stripping, phone numbers, currency, units) is unconditional, because
+   * it is free and cannot be wrong. The transcript and persisted history are
+   * never affected either way; this is the speech path only.
+   */
+  voiceNormalizer: boolean;
+  /**
    * Render the REPL in the terminal's alternate screen buffer (full-screen,
    * vim/htop style). On by default; set `BERNARD_FULLSCREEN=false` to fall back
    * to the legacy inline-scrollback rendering (e.g. dumb terminals / CI).
@@ -457,6 +470,7 @@ export function savePreferences(prefs: {
   voiceVoice?: string;
   voiceRate?: number;
   voiceWarmupMs?: number;
+  voiceNormalizer?: boolean;
 }): void {
   // Patch shape matches ProfileSettings exactly — keys present in `prefs`
   // (including explicit `undefined`s from resetOption / resetAllOptions) are
@@ -510,6 +524,7 @@ export function loadPreferences(): {
   voiceVoice?: string;
   voiceRate?: number;
   voiceWarmupMs?: number;
+  voiceNormalizer?: boolean;
 } {
   // Routes through the active profile in profiles.json (#207). Each field is
   // type-checked here so a malformed stored value falls through to undefined
@@ -566,6 +581,8 @@ export function loadPreferences(): {
     voiceVoice: typeof parsed.voiceVoice === 'string' ? parsed.voiceVoice : undefined,
     voiceRate: typeof parsed.voiceRate === 'number' ? parsed.voiceRate : undefined,
     voiceWarmupMs: typeof parsed.voiceWarmupMs === 'number' ? parsed.voiceWarmupMs : undefined,
+    voiceNormalizer:
+      typeof parsed.voiceNormalizer === 'boolean' ? parsed.voiceNormalizer : undefined,
   };
 }
 
@@ -978,6 +995,7 @@ export function loadConfig(overrides?: {
   voiceVoice?: string;
   voiceRate?: number;
   voiceWarmupMs?: number;
+  voiceNormalizer?: boolean;
 }): BernardConfig {
   // Load .env from cwd first, then XDG config dir, then legacy ~/.bernard/
   const cwdEnv = path.join(process.cwd(), '.env');
@@ -1251,6 +1269,17 @@ export function loadConfig(overrides?: {
       : undefined;
   const voiceWarmupMs = resolveVoiceWarmupMs(overrides?.voiceWarmupMs, prefs.voiceWarmupMs);
 
+  // Speech normalization runs by default; opt out with BERNARD_VOICE_NORMALIZER=false.
+  // Default-TRUE, so it copies promptRewriter's shape — NOT voiceTts's
+  // `=== 'true' | '1'`, which is a default-false test.
+  const rawVoiceNormalizer = process.env.BERNARD_VOICE_NORMALIZER;
+  const voiceNormalizer =
+    overrides?.voiceNormalizer ??
+    prefs.voiceNormalizer ??
+    (rawVoiceNormalizer === undefined
+      ? true
+      : !(rawVoiceNormalizer === 'false' || rawVoiceNormalizer === '0'));
+
   const config: BernardConfig = {
     provider,
     model,
@@ -1299,6 +1328,7 @@ export function loadConfig(overrides?: {
     voiceVoice,
     voiceRate,
     voiceWarmupMs,
+    voiceNormalizer,
     fullScreen,
     mouse,
   };
@@ -1381,6 +1411,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'voiceVoice',
   'voiceRate',
   'voiceWarmupMs',
+  'voiceNormalizer',
 ];
 
 /**

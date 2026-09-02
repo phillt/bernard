@@ -29,7 +29,8 @@ export type ModelSite =
   | 'recall-filter'
   | 'compressor'
   | 'specialist-detector'
-  | 'claim-verifier';
+  | 'claim-verifier'
+  | 'speech-normalizer';
 
 /**
  * Three-value runtime mode (#170, redesigned). The legacy `'off'` value is
@@ -344,6 +345,9 @@ const TEMPERATURE_ZERO_SITES: ReadonlySet<ModelSite> = new Set([
   // Entailment is a judgement that must not drift between two runs over the
   // same claim and the same source text.
   'claim-verifier',
+  // The same reply must not be spoken two different ways on a re-listen — and
+  // the LLM subcall cache keys on determinism.
+  'speech-normalizer',
 ]);
 
 /**

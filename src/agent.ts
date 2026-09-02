@@ -48,8 +48,7 @@ import { type ImageAttachment, IMAGE_TOKEN_ESTIMATE } from './image.js';
 import { PlanStore } from './plan-store.js';
 import { type ResolvedEntry } from './reference-resolver.js';
 import type { AgentContext } from './framework/context.js';
-import { recordTurnUsage } from './framework/hooks/token-stats.js';
-import { telemetryFromUsageRecord } from './session-telemetry.js';
+import { recordTurnUsage, makeOutOfTurnUsageRecorder } from './framework/hooks/token-stats.js';
 import { computeTurnUsageReport } from './usage-report.js';
 import { CONTINUATION_PREFIX } from './session-markers.js';
 import { DefaultPolicyEngine, isReactEffective } from './policy/index.js';
@@ -1252,35 +1251,18 @@ export class Agent {
     const tokensBefore = estimateHistoryTokens(this.history);
     // Manual /compact runs between turns, so its summarizer + domain-extraction
     // LLM spend can't ride a turn's ledger (the next `beginTurnStats()` would
-    // clear it). Price it here and fold it straight into the session total so the
-    // footer's "session ~$" doesn't silently undercount (#258), AND record it into
-    // the durable session-telemetry sink directly (bypassing the turn ledger) so
-    // it also shows up in the per-layer `bernard usage` breakdown under
-    // `compressor` — otherwise the breakdown would under-attribute vs. the total.
-    let compactionCostUsd = 0;
+    // clear it). `makeOutOfTurnUsageRecorder` prices it once, folds the cost into
+    // the session total so the footer's "session ~$" doesn't silently undercount
+    // (#258), and records it into the durable telemetry sink so it also shows up
+    // in the per-layer `bernard usage` breakdown under `compressor` — otherwise
+    // the breakdown would under-attribute vs. the total.
     const stats = this.spinnerStats;
     const compressed = await compressHistory(
       this.history,
       this.config,
       this.ragStore,
-      stats
-        ? (rec) => {
-            // Mint the record once (the single pricing path): read its cost for
-            // the between-turn session-total tally, and record it into the sink
-            // for the per-layer breakdown. Works with no sink attached too
-            // (still tallies the scalar cost; just doesn't record).
-            const sink = stats.sessionTelemetry;
-            const tel = telemetryFromUsageRecord(sink?.sessionId ?? '', sink?.turn ?? 0, rec);
-            if (tel.costUsd != null) compactionCostUsd += tel.costUsd;
-            // Unpriced compaction spend still counts against the session total's
-            // completeness — otherwise it silently vanishes into a clean $0.00.
-            // Second of two writers; rationale on `SpinnerStats.sessionCostPartial`.
-            else stats.sessionCostPartial = true;
-            sink?.record(tel);
-          }
-        : undefined,
+      stats ? makeOutOfTurnUsageRecorder(this) : undefined,
     );
-    if (stats) stats.sessionCostUsd += compactionCostUsd;
     const compacted = compressed !== this.history;
     if (compacted) {
       this.history = compressed;
