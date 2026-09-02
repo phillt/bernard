@@ -43,6 +43,8 @@ export const CRON_DIR = path.join(DATA_DIR, 'cron');
 export const CRON_JOBS_FILE = path.join(CRON_DIR, 'jobs.json');
 export const CRON_ALERTS_DIR = path.join(CRON_DIR, 'alerts');
 export const CRON_NOTES_DIR = path.join(CRON_DIR, 'notes');
+/** Per-job default workspace an unattended run may always write to (#340). */
+export const CRON_WORKSPACE_DIR = path.join(CRON_DIR, 'workspace');
 export const ROUTINES_DIR = path.join(DATA_DIR, 'routines');
 export const SPECIALISTS_DIR = path.join(DATA_DIR, 'specialists');
 /** One `<appId>.json` manifest per applet-style app (#419). */

@@ -1,5 +1,6 @@
 import type { RiskLevel } from '../risk.js';
 import type { PermissionRule } from '../tool-permissions.js';
+import type { WriteScope } from '../permissions/write-scope.js';
 import type { BreadthOption } from '../permissions/breadth.js';
 
 /**
@@ -149,6 +150,20 @@ export interface ToolOptions {
    * immediately. Omitted by cron — headless runs never honor profile grants.
    */
   getToolPermissions?: () => PermissionRule[] | undefined;
+  /**
+   * Live reader for this dispatch's write scope (#340). When present, a
+   * path-bearing write tool may only write inside the workspace or an
+   * explicit grant; when absent there is no restriction.
+   *
+   * Absent is the interactive default on purpose — scoping writes the user is
+   * watching themselves make would be obstruction, not safety. It is the
+   * *unattended* writers that need a `where`: cron today, applet actions
+   * (#445) next.
+   *
+   * A reader rather than a value so a mid-session grant applies immediately,
+   * matching {@link ToolOptions.getToolPermissions}.
+   */
+  getWriteScope?: () => WriteScope | undefined;
 }
 
 /** Outcome of a shell tool invocation. */

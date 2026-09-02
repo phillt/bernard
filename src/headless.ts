@@ -1,4 +1,5 @@
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
 import { loadConfig } from './config.js';
 import { assembleContext } from './framework/context.js';
 import type { AgentContext, AgentContextMCP, AgentContextStores } from './framework/context.js';
@@ -12,6 +13,7 @@ import type { ConfirmActionInput } from './tools/types.js';
 import type { ConfirmThreshold } from './risk.js';
 import { shouldConfirm } from './risk.js';
 import { thresholdForMode } from './policy/tool-mode.js';
+import type { WriteScope } from './permissions/write-scope.js';
 
 /**
  * Resolved permission posture for one headless run.
@@ -146,6 +148,15 @@ export interface RunHeadlessOpts<TInput, TFormatted> {
   /** Namespaces this run's `debugLog` lines, e.g. `'cron'` / `'script'`. */
   debugLabel: string;
   /**
+   * Path scope for this run's writes (#340). Omit for no restriction.
+   *
+   * Per-dispatch rather than per-caller-record on purpose: cron jobs and
+   * applet actions (#445) are two unattended writers of one mechanism, and
+   * attaching the grant to a `CronJob` would mean building it twice. The
+   * workspace directory is created here so a run never has to check.
+   */
+  writeScope?: WriteScope;
+  /**
    * Correlation id for this run. Supply one when the caller already mints an
    * id it persists in its own records — otherwise this function mints a fresh
    * one and the caller's log rows and these `debugLog` lines name different
@@ -241,6 +252,19 @@ export async function runHeadless<TInput, TFormatted>(
   // (see `toolOptions` below). So the load was ~14 ms and ~1.6 MB of WASM,
   // retained for the process lifetime, on a path that cannot consult it.
   const runId = opts.runId ?? crypto.randomUUID();
+
+  // Created here rather than by each caller: a workspace that may not exist is
+  // one every unattended writer has to remember to check, and forgetting reads
+  // as "the grant did not work".
+  if (opts.writeScope) {
+    try {
+      fs.mkdirSync(opts.writeScope.workspace, { recursive: true });
+    } catch (err) {
+      log(
+        `Could not create the run workspace: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
   const startedAt = new Date().toISOString();
   const startMs = Date.now();
 
@@ -310,6 +334,9 @@ export async function runHeadless<TInput, TFormatted>(
         // HeadlessPosture.confirmAction for why wiring confirmAction retires it.
         confirmDangerous: async () => false,
         confirmAction: posture.confirmAction,
+        // Path scoping for writes (#340). A live reader for parity with
+        // `getToolPermissions`, though a headless run's scope is fixed at entry.
+        ...(opts.writeScope ? { getWriteScope: () => opts.writeScope } : {}),
         // blockAction is intentionally omitted — this is headless and the augment
         // layer's fail-closed default (auto-deny when toolMode:'read-only' and no
         // blockAction is provided) is the correct behavior. When the policy

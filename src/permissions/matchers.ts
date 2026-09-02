@@ -13,6 +13,21 @@ import * as os from 'node:os';
 
 /** Tools whose breadth/scope is a filesystem path (gitignore-glob matched). */
 export const FILE_TOOLS = new Set(['file_read_lines', 'file_edit_lines', 'file_write']);
+
+/**
+ * The subset of {@link FILE_TOOLS} that WRITES through a `path` argument, and
+ * is therefore subject to the write-scope gate (#340).
+ *
+ * Declared beside `FILE_TOOLS` so the two cannot drift apart unnoticed: a new
+ * path-taking write tool has to be added here as well, and the adjacency is
+ * the reminder. Deliberately excludes `file_read_lines` — this bounds writes,
+ * not reads. Read scoping is a separate decision (#340 leaves it open).
+ *
+ * `shell` is absent on purpose: its target is an arbitrary command line, not a
+ * `path` argument, and see the gate's own comment for why a partial extraction
+ * would be worse than none.
+ */
+export const WRITE_PATH_TOOLS = new Set(['file_edit_lines', 'file_write']);
 /**
  * Tools whose breadth/scope is a URL (exact or `domain:` matched). Only
  * `web_read` takes a `url`; `web_search` (`{query, limit}`) is intentionally

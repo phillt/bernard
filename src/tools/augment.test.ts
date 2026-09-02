@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import { z } from 'zod';
 import { augmentTools } from './augment.js';
 import { attachMeta, toolToAISDK } from '../framework/tools/adapter.js';
@@ -1134,6 +1136,116 @@ describe('augmentTools', () => {
       const r = await augmented.t.execute({ action: 'write' }, {});
       expect(blockAction).toHaveBeenCalledTimes(1);
       expect(r).toEqual(DENIED);
+    });
+  });
+
+  describe('write-scope gate (#340)', () => {
+    const workspace = path.join(os.tmpdir(), 'bernard-scope-test', 'ws');
+
+    /** `file_write`-shaped: a write tool taking a `path` argument. */
+    function makeWriteTool(name: string) {
+      const execute = vi.fn(async () => ({ ok: true }));
+      const t: any = { execute, description: 't', parameters: {} };
+      attachMeta(t, {
+        name,
+        kind: 'write',
+        deterministic: false,
+        sideEffect: 'local',
+        cacheable: false,
+      });
+      return { t, execute };
+    }
+
+    it('no scope configured → no restriction (the interactive default)', async () => {
+      const { t, execute } = makeWriteTool('file_write');
+      const augmented = augmentTools({ file_write: t }, { profileStore: store });
+      await augmented.file_write.execute({ path: '/etc/passwd' }, {});
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('allows a write inside the workspace', async () => {
+      const { t, execute } = makeWriteTool('file_write');
+      const augmented = augmentTools(
+        { file_write: t },
+        { profileStore: store, getWriteScope: () => ({ workspace }) },
+      );
+      await augmented.file_write.execute({ path: path.join(workspace, 'a.txt') }, {});
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('refuses a write outside it, without invoking the tool', async () => {
+      const { t, execute } = makeWriteTool('file_write');
+      const augmented = augmentTools(
+        { file_write: t },
+        { profileStore: store, getWriteScope: () => ({ workspace }) },
+      );
+      const out = await augmented.file_write.execute({ path: '/etc/passwd' }, {});
+      expect(execute).not.toHaveBeenCalled();
+      expect(String(out)).toContain('refused');
+    });
+
+    // The caller is generated code with no operator watching, so a bare
+    // refusal gets retried against the same path forever.
+    it('names the workspace in the refusal it hands the model', async () => {
+      const { t } = makeWriteTool('file_write');
+      const augmented = augmentTools(
+        { file_write: t },
+        { profileStore: store, getWriteScope: () => ({ workspace }) },
+      );
+      const out = await augmented.file_write.execute({ path: '/etc/passwd' }, {});
+      expect(String(out)).toContain(workspace);
+    });
+
+    it('honours an explicit grant', async () => {
+      const { t, execute } = makeWriteTool('file_edit_lines');
+      const granted = path.join(os.tmpdir(), 'bernard-scope-test', 'granted');
+      const augmented = augmentTools(
+        { file_edit_lines: t },
+        { profileStore: store, getWriteScope: () => ({ workspace, grants: [granted] }) },
+      );
+      await augmented.file_edit_lines.execute({ path: path.join(granted, 'x.txt') }, {});
+      expect(execute).toHaveBeenCalled();
+    });
+
+    // This gate bounds writes, not reads — read scoping is a separate decision.
+    it('does not gate a read tool, even one taking a path', async () => {
+      const { t, execute } = makeWriteTool('file_read_lines');
+      const augmented = augmentTools(
+        { file_read_lines: t },
+        { profileStore: store, getWriteScope: () => ({ workspace }) },
+      );
+      await augmented.file_read_lines.execute({ path: '/etc/passwd' }, {});
+      expect(execute).toHaveBeenCalled();
+    });
+
+    // Extracting write targets from an arbitrary command line is not reliably
+    // possible, and a containment check that is sometimes wrong is worse than
+    // none. `shell` keeps its existing dangerous-command denial instead.
+    it('does not gate shell — deliberately out of scope', async () => {
+      const { t, execute } = makeWriteTool('shell');
+      const augmented = augmentTools(
+        { shell: t },
+        { profileStore: store, getWriteScope: () => ({ workspace }) },
+      );
+      await augmented.shell.execute({ command: 'echo hi > /etc/passwd' }, {});
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('runs before the block gate, so an out-of-scope write is never prompted', async () => {
+      const { t, execute } = makeWriteTool('file_write');
+      const blockAction = vi.fn(async () => 'allow-once' as const);
+      const augmented = augmentTools(
+        { file_write: t },
+        {
+          profileStore: store,
+          toolMode: 'read-only',
+          blockAction,
+          getWriteScope: () => ({ workspace }),
+        },
+      );
+      await augmented.file_write.execute({ path: '/etc/passwd' }, {});
+      expect(blockAction).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
     });
   });
 
