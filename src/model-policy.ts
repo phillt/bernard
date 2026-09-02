@@ -28,7 +28,8 @@ export type ModelSite =
   | 'reference-lookup'
   | 'recall-filter'
   | 'compressor'
-  | 'specialist-detector';
+  | 'specialist-detector'
+  | 'claim-verifier';
 
 /**
  * Three-value runtime mode (#170, redesigned). The legacy `'off'` value is
@@ -117,6 +118,7 @@ const ALL_MODEL_SITES: readonly ModelSite[] = [
   'recall-filter',
   'compressor',
   'specialist-detector',
+  'claim-verifier',
 ];
 
 /**
@@ -342,6 +344,9 @@ const TEMPERATURE_ZERO_SITES: ReadonlySet<ModelSite> = new Set([
   'reference-lookup',
   'recall-filter',
   'specialist-detector',
+  // Entailment is a judgement that must not drift between two runs over the
+  // same claim and the same source text.
+  'claim-verifier',
 ]);
 
 /**
