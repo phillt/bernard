@@ -43,11 +43,31 @@ export interface SourceItem {
    * retrieval time presented as a publication date is a wrong answer.
    */
   publishedAt?: string;
+  /**
+   * The retrieved text in full, for checking a quoted span against its source.
+   *
+   * **Deliberately separate from {@link SourceItem.contentPreview}, and never
+   * rendered into the context message.** `contentPreview` is capped at
+   * {@link MAX_PREVIEW} precisely because `<available_sources>` re-sends every
+   * source's preview to the model on every turn; raising that cap would
+   * multiply per-turn context cost across every source in the store.
+   *
+   * Without this field a containment check is not merely expensive but
+   * impossible: `web_read` returns up to 20,000 characters, history keeps
+   * 10,000, and the only copy addressable by source id was the 2,000-character
+   * preview — so a quote from the middle of a page could not be checked against
+   * anything Bernard still held, and would read as fabricated.
+   *
+   * Capped at {@link MAX_VERIFY_TEXT} so one enormous page cannot dominate the
+   * store, and undefined for sources whose full text is not retained.
+   */
+  verifyText?: string;
 }
 
 /**
  * What a caller may supply. `id` and `timestamp` are minted by the store —
- * `publishedAt` is not, because only the retrieving tool can know it.
+ * `publishedAt` and `verifyText` are not, because only the retrieving tool
+ * knows them.
  */
 export type SourceItemInput = Omit<SourceItem, 'id' | 'timestamp'>;
 
@@ -73,6 +93,22 @@ export interface TurnProvenance {
 // The dedup/upgrade path in `add()` replaces a shorter stored preview with a
 // longer one, so raising this only ever retains MORE of what tools already pass.
 const MAX_PREVIEW = 2000;
+
+/**
+ * Cap on {@link SourceItem.verifyText}. Sized to hold a whole `web_read`
+ * return (`MAX_OUTPUT_CHARS`, 20,000) so the text a quote could have come from
+ * is the same text a check runs against — a smaller cap would reintroduce the
+ * gap this field exists to close, just further down the page.
+ *
+ * This never enters the context message, so it costs memory rather than
+ * tokens.
+ */
+const MAX_VERIFY_TEXT = 20_000;
+
+function truncateVerifyText(s: string | undefined): string | undefined {
+  if (!s) return undefined;
+  return s.length > MAX_VERIFY_TEXT ? s.slice(0, MAX_VERIFY_TEXT) : s;
+}
 
 function truncatePreview(s: string): string {
   return s.length > MAX_PREVIEW ? s.slice(0, MAX_PREVIEW) + '…' : s;
@@ -116,6 +152,12 @@ export class ProvenanceStore {
         if (item.publishedAt && !stored.publishedAt) {
           stored.publishedAt = item.publishedAt;
         }
+        // Same upgrade rule: a `web_read` of a URL a `web_search` already
+        // registered brings the full text the snippet never had.
+        const incoming = truncateVerifyText(item.verifyText);
+        if (incoming && incoming.length > (stored.verifyText?.length ?? 0)) {
+          stored.verifyText = incoming;
+        }
       }
       return existing;
     }
@@ -129,6 +171,7 @@ export class ProvenanceStore {
       rawRef: item.rawRef,
       timestamp: Date.now(),
       ...(item.publishedAt ? { publishedAt: item.publishedAt } : {}),
+      ...(item.verifyText ? { verifyText: truncateVerifyText(item.verifyText) } : {}),
     });
     this.byRef.set(key, id);
     return id;

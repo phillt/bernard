@@ -175,3 +175,64 @@ describe('publication dates', () => {
     expect(store.get(id)!.publishedAt).toBe('2026-01-05');
   });
 });
+
+// #417: the quote check needs the text a quote could have come from. Before
+// this, the only copy addressable by source id was the 2,000-char preview, so a
+// quote from the middle of a page read as fabricated.
+describe('verifyText retention', () => {
+  const long = 'A'.repeat(5000) + 'NEEDLE' + 'B'.repeat(5000);
+
+  it('retains far more than the context preview', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({
+      kind: 'web',
+      label: 'x',
+      contentPreview: long,
+      rawRef: 'u',
+      verifyText: long,
+    });
+    const item = store.get(id)!;
+    // The preview is capped because it is re-sent every turn; verifyText is not.
+    expect(item.contentPreview.length).toBeLessThanOrEqual(2001);
+    expect(item.verifyText).toContain('NEEDLE');
+  });
+
+  // The case that was impossible before: a span past the preview cap.
+  it('can answer whether a quote past the preview cap appears in the source', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({
+      kind: 'web',
+      label: 'x',
+      contentPreview: long,
+      rawRef: 'u',
+      verifyText: long,
+    });
+    expect(store.get(id)!.verifyText!.includes('NEEDLE')).toBe(true);
+    expect(store.get(id)!.contentPreview.includes('NEEDLE')).toBe(false);
+  });
+
+  it('caps one enormous page rather than storing it whole', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({
+      kind: 'web',
+      label: 'x',
+      contentPreview: 'p',
+      rawRef: 'u',
+      verifyText: 'C'.repeat(50_000),
+    });
+    expect(store.get(id)!.verifyText!.length).toBe(20_000);
+  });
+
+  it('upgrades a snippet-only source when the full read arrives', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({ kind: 'web', label: 'x', contentPreview: 'snip', rawRef: 'u' });
+    store.add({ kind: 'web', label: 'x', contentPreview: long, rawRef: 'u', verifyText: long });
+    expect(store.get(id)!.verifyText).toContain('NEEDLE');
+  });
+
+  it('is undefined for sources whose full text is not retained', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({ kind: 'memory', label: 'k', contentPreview: 'v', rawRef: 'memory:k' });
+    expect(store.get(id)!.verifyText).toBeUndefined();
+  });
+});

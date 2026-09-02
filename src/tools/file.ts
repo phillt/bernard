@@ -334,6 +334,9 @@ export function createFileTools(provenance?: ProvenanceStore) {
                 contentPreview: preview,
                 rawRef: `${absPath}:${startLine}-${endLine}`,
                 publishedAt,
+                // The whole read span, not the 40-line preview — a quote from
+                // line 300 of a 400-line read has to be checkable.
+                verifyText: lines.map((l) => l.content).join('\n'),
               });
             }
 

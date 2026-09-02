@@ -1083,7 +1083,11 @@ export class Agent {
         this.turnProvenance.push({
           turnIndex: userTurnIndex,
           userInput: userInput,
-          sources: this.lastSources.map((s) => ({ ...s })),
+          // `verifyText` is dropped: this snapshot is persisted to
+          // `provenance-history.json` and reloaded on resume, and the field can
+          // be 20k per source. Verification runs in the turn that retrieved the
+          // text, so nothing downstream of the snapshot needs it.
+          sources: this.lastSources.map(({ verifyText: _verifyText, ...s }) => ({ ...s })),
           citedIds: [...citedIds],
           timestamp: Date.now(),
         });
