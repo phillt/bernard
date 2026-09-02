@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 
 // --- Hoisted mocks ---
 
@@ -91,11 +91,21 @@ function errorMessages(): string[] {
 // --- Tests ---
 
 describe('cron CLI commands', () => {
+  // `cronRun` signals a failed job through `process.exitCode`, so it has to be
+  // saved and restored — leaking a 1 out of this suite would fail the whole
+  // vitest worker for a test that passed.
+  const originalExitCode = process.exitCode;
+
   beforeEach(() => {
     vi.clearAllMocks();
     confirmAnswer = 'y';
     mockStore.loadJobs.mockReturnValue([]);
     mockClient.isDaemonRunning.mockReturnValue(false);
+    process.exitCode = originalExitCode;
+  });
+
+  afterEach(() => {
+    process.exitCode = originalExitCode;
   });
 
   // ==================== cron-list ====================
@@ -209,6 +219,17 @@ describe('cron CLI commands', () => {
         }),
       );
       expect(errorMessages().some((m) => m.includes('failed'))).toBe(true);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('leaves the exit code alone on success', async () => {
+      const job = makeJob();
+      mockStore.getJob.mockReturnValue(job);
+      mockRunJob.mockResolvedValue({ success: true, output: 'All done!' });
+
+      await cronRun('job-1');
+
+      expect(process.exitCode).toBeUndefined();
     });
 
     it('prints running message with job name', async () => {
@@ -240,6 +261,7 @@ describe('cron CLI commands', () => {
       expect(
         errorMessages().some((m) => m.includes('threw') && m.includes('config load failed')),
       ).toBe(true);
+      expect(process.exitCode).toBe(1);
     });
 
     it('exits with error when job is already running', async () => {

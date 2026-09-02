@@ -102,6 +102,12 @@ export async function cronRun(id: string): Promise<void> {
     } else {
       printError(`Job "${job.name}" failed.`);
       printError(result.output);
+      // A failed job must exit non-zero. Both this branch and the catch below
+      // used to report the failure and then return normally, so `bernard
+      // cron-run <id>` exited 0 for a job that did not run — invisible to any
+      // script or CI step checking `$?`. `process.exitCode` rather than
+      // `process.exit()` so the messages just written are flushed first.
+      process.exitCode = 1;
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
@@ -110,6 +116,7 @@ export async function cronRun(id: string): Promise<void> {
       lastResult: message.slice(0, 2000),
     });
     printError(`Job "${job.name}" threw: ${message}`);
+    process.exitCode = 1;
   }
 }
 
