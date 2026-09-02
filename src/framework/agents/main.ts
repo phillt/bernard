@@ -21,7 +21,6 @@ import { debugLog } from '../../logger.js';
 import { buildSystemPrompt } from '../../agent-prompt.js';
 import {
   SHARE_REASONING_PROMPT,
-  REASONING_FAMILIES,
   CITATIONS_PROMPT,
   allowsInlineMarkers,
   CONCISE_PROMPT,
