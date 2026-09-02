@@ -1,4 +1,5 @@
 import { debugLog } from '../logger.js';
+import { runWorkspace } from '../paths.js';
 import { CronStore } from './store.js';
 import { CronLogStore, type CronLogStep } from './log-store.js';
 import { CronNotesStore } from './notes-store.js';
@@ -52,6 +53,13 @@ export function resolveCronJobPosture(job: CronJob): CronJobPermissionPosture {
     toolMode: job.toolMode ?? 'write',
     confirmMode: job.confirmMode ?? 'auto',
     skipPermissions: job.skipPermissions,
+    // Path-scoped writes (#340). Every job gets its own workspace with no
+    // configuration; `writePaths` adds locations the user named via
+    // `bernard cron-grant`. This is what lets cron have the write-capable
+    // file tools back at all — before it they were withheld wholesale (#337),
+    // because a `medium`-risk arbitrary local write passed unprompted where a
+    // write-shaped `shell` command was denied.
+    writeScope: { workspace: runWorkspace('cron', job.id), grants: job.writePaths },
   });
 }
 

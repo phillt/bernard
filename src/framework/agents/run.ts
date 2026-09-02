@@ -174,6 +174,13 @@ export async function runDefinition<TInput, TFormatted>(
     // Profile-persisted grants (#212). Live reader so mid-session grants and
     // profile switches apply immediately. Cron's toolOptions omit it.
     getToolPermissions: ctx.toolOptions.getToolPermissions,
+    // Path scoping for writes (#340). Absent for the interactive REPL, which
+    // is what leaves a user's own writes unrestricted; supplied by
+    // `runHeadless` for every unattended dispatch. Forwarding it here is what
+    // makes the gate real — `augmentTools` reads it from ITS options, not from
+    // `ctx`, so a scope set on `toolOptions` and not passed on is a scope that
+    // silently never applies.
+    writeScope: ctx.toolOptions.writeScope,
     // Grants persisted before MCP tools were namespaced (#413) name a bare
     // tool. Built from the whole live MCP surface, never from `rawTools` —
     // see `mcpAliasResolverFor`.

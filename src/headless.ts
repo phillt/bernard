@@ -1,4 +1,5 @@
 import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
 import { loadConfig } from './config.js';
 import { assembleContext } from './framework/context.js';
 import type { AgentContext, AgentContextMCP, AgentContextStores } from './framework/context.js';
@@ -12,6 +13,7 @@ import type { ConfirmActionInput } from './tools/types.js';
 import type { ConfirmThreshold } from './risk.js';
 import { shouldConfirm } from './risk.js';
 import { thresholdForMode } from './policy/tool-mode.js';
+import type { WriteScope } from './permissions/write-scope.js';
 
 /**
  * Resolved permission posture for one headless run.
@@ -27,6 +29,8 @@ export interface HeadlessPosture {
   confirmMode: 'off' | 'auto' | 'strict';
   /** Resolved confirm threshold — drives the confirm gate in `augmentTools`. */
   confirmThreshold: ConfirmThreshold;
+  /** Resolved write scope — drives the write-scope gate. `null` = unrestricted. */
+  writeScope: WriteScope | null;
   /**
    * Headless confirm action callback: auto-approves or auto-denies based on
    * `confirmThreshold` without ever prompting the user.
@@ -57,6 +61,16 @@ export interface HeadlessPosture {
 export interface HeadlessPostureInput {
   toolMode: 'read-only' | 'write';
   confirmMode: 'off' | 'auto' | 'strict';
+  /**
+   * Where this run may write (#340), or `null` for no restriction.
+   *
+   * **Required, like the other two axes and for the same reason.** An optional
+   * field would let a caller inherit "unrestricted" by omission — which is
+   * exactly what happened: applet actions (`src/apps/dispatch.ts`) shipped
+   * with no scope while being the *less* trusted origin. Stating `null` is a
+   * decision; omitting a field is an accident.
+   */
+  writeScope: WriteScope | null;
   skipPermissions?: boolean;
 }
 
@@ -82,6 +96,13 @@ export function resolvePosture(input: HeadlessPostureInput): HeadlessPosture {
 
   const confirmMode: 'off' | 'auto' | 'strict' = input.skipPermissions ? 'off' : input.confirmMode;
 
+  // `skipPermissions` dissolves ALL gates, this one included. Leaving the
+  // write scope in place would make a job the user explicitly marked
+  // unrestricted still refuse `file_write` outside its workspace — while
+  // `shell` in that same job stayed wide open, because shell DOES dissolve.
+  // The net effect would be pushing the model toward the less safe tool.
+  const writeScope: WriteScope | null = input.skipPermissions ? null : input.writeScope;
+
   const confirmThreshold: ConfirmThreshold = thresholdForMode(confirmMode);
 
   // Headless decision: approve unless the risk crosses the resolved threshold.
@@ -90,7 +111,7 @@ export function resolvePosture(input: HeadlessPostureInput): HeadlessPosture {
   const confirmAction = async (i: ConfirmActionInput): Promise<boolean> =>
     !shouldConfirm(i.risk, confirmThreshold);
 
-  return { toolMode, confirmMode, confirmThreshold, confirmAction };
+  return { toolMode, confirmMode, confirmThreshold, confirmAction, writeScope };
 }
 
 /**
@@ -241,6 +262,19 @@ export async function runHeadless<TInput, TFormatted>(
   // (see `toolOptions` below). So the load was ~14 ms and ~1.6 MB of WASM,
   // retained for the process lifetime, on a path that cannot consult it.
   const runId = opts.runId ?? crypto.randomUUID();
+
+  // Created here rather than by each caller: a workspace that may not exist is
+  // one every unattended writer has to remember to check, and forgetting reads
+  // as "the grant did not work".
+  if (posture.writeScope) {
+    try {
+      fs.mkdirSync(posture.writeScope.workspace, { recursive: true });
+    } catch (err) {
+      log(
+        `Could not create the run workspace: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
   const startedAt = new Date().toISOString();
   const startMs = Date.now();
 
@@ -310,6 +344,9 @@ export async function runHeadless<TInput, TFormatted>(
         // HeadlessPosture.confirmAction for why wiring confirmAction retires it.
         confirmDangerous: async () => false,
         confirmAction: posture.confirmAction,
+        // Path scoping for writes (#340), resolved by `resolvePosture`
+        // alongside the other two axes — so `skipPermissions` dissolves it too.
+        ...(posture.writeScope ? { writeScope: posture.writeScope } : {}),
         // blockAction is intentionally omitted — this is headless and the augment
         // layer's fail-closed default (auto-deny when toolMode:'read-only' and no
         // blockAction is provided) is the correct behavior. When the policy

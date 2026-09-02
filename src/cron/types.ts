@@ -62,6 +62,20 @@ export interface CronJob {
    * operator present.
    */
   timeoutMs?: number;
+  /**
+   * Extra locations this job may write to, beyond its own workspace (#340).
+   *
+   * Absolute paths; a directory grants its whole subtree. Every job always
+   * gets `<CRON_WORKSPACE_DIR>/<job id>` with no configuration, so this is
+   * only for writes that must land somewhere the user names — the case the
+   * workspace deliberately does not cover.
+   *
+   * The grant is enforced per *dispatch* rather than per job record, because
+   * cron is not the only unattended writer: an applet action (#445) is
+   * triggered from a browser with a caller supplying the arguments. This field
+   * is cron's way of populating a general mechanism, not a cron-specific one.
+   */
+  writePaths?: string[];
 }
 
 /** A notification generated when a cron job completes and produces output. */

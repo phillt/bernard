@@ -180,6 +180,46 @@ describe('tool meta coverage', () => {
     );
   });
 
+  /**
+   * `WRITE_PATH_TOOLS` (#340) is a hand-maintained name set, and its
+   * incompleteness is silent and **fail-open**: a fourth path-taking write
+   * tool, or `file_write`'s `path` argument being renamed, ships unscoped with
+   * every other test green — including the integration test, which proves the
+   * two listed names work but nothing about the set being closed.
+   *
+   * `FILE_TOOLS`' incompleteness is at least user-visible (a missing entry
+   * loses path-scoped grants and the user sees an unexpected prompt). This one
+   * would only ever be noticed by the write it failed to stop, so the
+   * "declared beside `FILE_TOOLS` so the two cannot drift" comment gets a test
+   * rather than a reader's good intentions.
+   */
+  it('every write tool taking a `path` argument is in WRITE_PATH_TOOLS', async () => {
+    const { createTools } = await import('../../tools/index.js');
+    const { WRITE_PATH_TOOLS } = await import('../../permissions/matchers.js');
+    const tools = createTools(
+      { shellTimeout: 10_000, confirmDangerous: async () => false },
+      new (await import('../../memory.js')).MemoryStore() as any,
+    );
+
+    const unscoped: string[] = [];
+    for (const [name, def] of Object.entries(tools)) {
+      const meta = readToolMeta(def);
+      if (!meta || (meta.kind !== 'write' && meta.kind !== 'dangerous')) continue;
+      // `parameters` is the zod schema the model is shown; a `path` key on it
+      // is what the gate reads off `args`.
+      const shape = (def as { parameters?: { shape?: Record<string, unknown> } })?.parameters
+        ?.shape;
+      if (!shape || !('path' in shape)) continue;
+      if (!WRITE_PATH_TOOLS.has(name)) unscoped.push(name);
+    }
+
+    expect(
+      unscoped,
+      `Write tools with a \`path\` argument missing from WRITE_PATH_TOOLS (they would write ` +
+        `anywhere in an unattended run): ${unscoped.join(', ')}`,
+    ).toEqual([]);
+  });
+
   it('meta survives augmentTools — non-enumerable __bernardMeta is re-attached after the spread', async () => {
     const { createTools } = await import('../../tools/index.js');
     const { augmentTools } = await import('../../tools/augment.js');

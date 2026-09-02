@@ -43,6 +43,21 @@ export const CRON_DIR = path.join(DATA_DIR, 'cron');
 export const CRON_JOBS_FILE = path.join(CRON_DIR, 'jobs.json');
 export const CRON_ALERTS_DIR = path.join(CRON_DIR, 'alerts');
 export const CRON_NOTES_DIR = path.join(CRON_DIR, 'notes');
+/** Root for the per-run workspaces unattended writers may always write to (#340). */
+export const WORKSPACES_DIR = path.join(DATA_DIR, 'workspaces');
+
+/**
+ * The workspace a scoped run may always write to.
+ *
+ * One convention in one place: `<namespace>/<stable id>`. Keyed on a *stable*
+ * id (a cron job id, an app id) rather than a run id, because the point of a
+ * workspace is that a job's output is still there on its next run. Each new
+ * unattended writer inherits the layout instead of re-deriving it — and
+ * retention, when it arrives, has one shape to prune rather than N.
+ */
+export function runWorkspace(namespace: string, id: string): string {
+  return path.join(WORKSPACES_DIR, namespace, id);
+}
 export const ROUTINES_DIR = path.join(DATA_DIR, 'routines');
 export const SPECIALISTS_DIR = path.join(DATA_DIR, 'specialists');
 /** One `<appId>.json` manifest per applet-style app (#419). */

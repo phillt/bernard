@@ -1,8 +1,8 @@
 import { tool, type CoreMessage, type Tool } from 'ai';
 import { z } from 'zod';
 import { createTools } from '../../tools/index.js';
-import { FILE_TOOLS } from '../../permissions/matchers.js';
 import { formatCurrentDateTime } from '../../tools/datetime.js';
+import { writeScopePrompt } from '../../permissions/write-scope.js';
 import { attachMeta } from '../tools/adapter.js';
 import { CronStore } from '../../cron/store.js';
 import { type CronLogStep } from '../../cron/log-store.js';
@@ -109,9 +109,17 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     const names = Object.keys(tools ?? {})
       .sort()
       .join(', ');
+    // The workspace is stated, not discovered. A job that is refused a write
+    // and has to guess where it MAY write will retry the same path — there is
+    // no operator to tell it otherwise (#340). The wording lives beside the
+    // refusal it prevents, so the two cannot drift.
+    const scope = ctx.toolOptions.writeScope;
+    const workspaceBlock = scope ? writeScopePrompt(scope) : null;
+
     return [
       DAEMON_SYSTEM_PROMPT,
       `## Available Tools\n${names}`,
+      ...(workspaceBlock ? [workspaceBlock] : []),
       `Your step budget for this run is ${ctx.config.maxSteps} steps.`,
       `Current date and time: ${formatCurrentDateTime()}`,
     ].join('\n\n');
@@ -220,27 +228,21 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
       surface,
     );
 
-    // Withhold the write-capable file tools, for a gate asymmetry rather than a
-    // judgement about unattended writes: a default job runs `toolMode: 'write'`
-    // / `confirmThreshold: 'high'`, where `shell` (`kind: 'dangerous'` → high)
-    // has its write-shaped invocations DENIED headlessly, while a file tool
-    // (`kind: 'write'` + `sideEffect: 'local'` → medium) would pass unprompted.
-    // Handing them over gives every existing job an unbounded filesystem write
-    // through the one door that isn't gated. The asymmetry is the real defect
-    // (#338), likely superseded by path-scoped writes (#340).
+    // Write-capable file tools are handed back (#340). They were withheld
+    // wholesale by #337 because of a risk-tier asymmetry: `shell`
+    // (`kind: 'dangerous'` → high) had its write-shaped invocations denied
+    // headlessly, while `file_edit_lines` (`kind: 'write'` + `sideEffect:
+    // 'local'` → medium) would have passed unprompted — an unbounded
+    // filesystem write through the one door that was not gated.
     //
-    // Derived from `FILE_TOOLS` — the set the permission engine already routes
-    // through `matchPathSpecifier(specifier, args.path)` — rather than a second
-    // hand-maintained name list that could disagree with it. A fourth
-    // path-scoped write tool is withheld automatically; reads are kept.
-    const safeBaseTools = Object.fromEntries(
-      Object.entries(baseTools).filter(
-        ([name]) => !FILE_TOOLS.has(name) || name === 'file_read_lines',
-      ),
-    );
+    // Path scoping answers that properly, by reframing the question from
+    // *what* to *where*: the runner gives every job a `writeScope`, so a write
+    // now lands in the job's own workspace or a location the user named, and
+    // is refused with the workspace named otherwise. The tool's risk tier is
+    // no longer the only thing standing between a job and `~/.ssh`.
 
     const registry: Record<string, Tool> = {
-      ...safeBaseTools,
+      ...baseTools,
       // Cron-only tools, spread last so they win any name collision.
       notify: notifyTool,
       cron_self_disable: selfDisableTool,
