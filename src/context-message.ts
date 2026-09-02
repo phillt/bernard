@@ -372,8 +372,12 @@ function renderAvailableSources(provenance?: ProvenanceStore): string | null {
   const lines = [intro];
   for (const s of provenance.list()) {
     const preview = s.contentPreview ? ` — ${escapeXml(s.contentPreview)}` : '';
+    // Publication date, only when the source actually reported one. Absent
+    // means unknown, and unknown is left visibly unstated rather than filled in
+    // with the retrieval time, which would make an old page look current.
+    const published = s.publishedAt ? ` (published ${escapeXml(s.publishedAt)})` : '';
     lines.push(
-      `- [^${s.id}] (${escapeXml(s.kind)}) ${escapeXml(s.label)} <${escapeXml(s.rawRef)}>${preview}`,
+      `- [^${s.id}] (${escapeXml(s.kind)}) ${escapeXml(s.label)} <${escapeXml(s.rawRef)}>${published}${preview}`,
     );
   }
   return lines.join('\n');

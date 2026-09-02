@@ -122,3 +122,56 @@ describe('extractCitationMarkers', () => {
     expect(extractCitationMarkers(text, s)).toEqual(['S1']);
   });
 });
+
+// #417: an evidence item's age is part of the claim, and "when we fetched it"
+// is not the same fact as "when it was written".
+describe('publication dates', () => {
+  it('keeps publishedAt distinct from the retrieval timestamp', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({
+      kind: 'web',
+      label: 'Old Post',
+      contentPreview: 'x',
+      rawRef: 'https://example.com/a',
+      publishedAt: '2019-03-01T00:00:00.000Z',
+    });
+    const item = store.get(id)!;
+    expect(item.publishedAt).toBe('2019-03-01T00:00:00.000Z');
+    expect(item.timestamp).toBeGreaterThan(Date.parse('2020-01-01'));
+  });
+
+  it('leaves publishedAt undefined rather than falling back to retrieval time', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({ kind: 'web', label: 'x', contentPreview: 'x', rawRef: 'u' });
+    expect(store.get(id)!.publishedAt).toBeUndefined();
+  });
+
+  // The common case: web_search registers a URL from a provider that reports no
+  // date, then web_read of the same URL registers one. Dedup must not lose it.
+  it('upgrades an unknown date when a later registration knows it', () => {
+    const store = new ProvenanceStore();
+    const first = store.add({ kind: 'web', label: 'x', contentPreview: 'snip', rawRef: 'u' });
+    const second = store.add({
+      kind: 'web',
+      label: 'x',
+      contentPreview: 'full page',
+      rawRef: 'u',
+      publishedAt: '2026-01-05',
+    });
+    expect(second).toBe(first);
+    expect(store.get(first)!.publishedAt).toBe('2026-01-05');
+  });
+
+  it('never overwrites a known date with an unknown one', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({
+      kind: 'web',
+      label: 'x',
+      contentPreview: 'a',
+      rawRef: 'u',
+      publishedAt: '2026-01-05',
+    });
+    store.add({ kind: 'web', label: 'x', contentPreview: 'a longer preview', rawRef: 'u' });
+    expect(store.get(id)!.publishedAt).toBe('2026-01-05');
+  });
+});

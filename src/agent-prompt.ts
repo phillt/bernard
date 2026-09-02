@@ -118,7 +118,7 @@ Rules:
 - One marker per claim is enough; don't spam multiple ids on the same sentence.`;
 
 export const EVIDENCE_PROMPT = `## Evidence Pointers
-Every successful tool call this turn (\`shell\`, \`file_*\`, \`web_*\`, MCP, etc.) is registered as a \`kind: 'tool-result'\` source in the same per-turn store as retrieval citations. Each entry captures **what was checked** (tool + args), **the key result snippet**, and **when** (timestamp). The ids appear in \`<available_sources>\` alongside \`web\` / \`file\` / \`memory\` sources.
+Every successful tool call this turn (\`shell\`, \`file_*\`, \`web_*\`, MCP, etc.) is registered as a \`kind: 'tool-result'\` source in the same per-turn store as retrieval citations. Each entry captures **what was checked** (tool + args), **the key result snippet**, and **when Bernard ran it** (retrieval timestamp \u2014 not the age of the underlying content). The ids appear in \`<available_sources>\` alongside \`web\` / \`file\` / \`memory\` sources.
 
 When you assert that something is **verified**, **confirmed**, **checked**, or otherwise grounded in a tool result you ran this turn, END that sentence with the \`[^Sn]\` marker for the tool call that proves it. Examples:
 - "Verified the commit landed on main. [^S3]"

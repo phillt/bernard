@@ -318,11 +318,22 @@ export function createFileTools(provenance?: ProvenanceStore) {
                 .slice(0, 40)
                 .map((l) => l.content)
                 .join('\n');
+              // A file's mtime is the closest thing it has to a publication
+              // date, and it is already on disk — reading it costs one stat and
+              // makes "is this stale?" answerable about local sources too.
+              let publishedAt: string | undefined;
+              try {
+                publishedAt = fs.statSync(absPath).mtime.toISOString();
+              } catch {
+                // The read succeeded, so a failing stat is a race or a
+                // permission quirk — a missing date, not a failed read.
+              }
               sourceId = provenance.add({
                 kind: 'file',
                 label: `${absPath}:${startLine}-${endLine}`,
                 contentPreview: preview,
                 rawRef: `${absPath}:${startLine}-${endLine}`,
+                publishedAt,
               });
             }
 

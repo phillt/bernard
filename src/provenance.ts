@@ -25,10 +25,30 @@ export interface SourceItem {
   contentPreview: string;
   /** Pointer the user can act on: URL, file path with line range, memory key, tool-call id. */
   rawRef: string;
-  /** Wall-clock when the item was added. */
+  /**
+   * Wall-clock when Bernard RETRIEVED this — not when the content was written
+   * or published. Always present, because it is a fact about our own fetch.
+   *
+   * Kept distinct from {@link SourceItem.publishedAt} on purpose: conflating
+   * "when we looked" with "how old this is" is the mistake that makes a
+   * decade-old page look fresh.
+   */
   timestamp: number;
+  /**
+   * When the underlying content was published or last modified, as reported by
+   * the source itself, or `undefined` when unknown.
+   *
+   * Unknown is a real and common answer — treat it as such rather than falling
+   * back to {@link SourceItem.timestamp}. A missing date is a known gap; a
+   * retrieval time presented as a publication date is a wrong answer.
+   */
+  publishedAt?: string;
 }
 
+/**
+ * What a caller may supply. `id` and `timestamp` are minted by the store —
+ * `publishedAt` is not, because only the retrieving tool can know it.
+ */
 export type SourceItemInput = Omit<SourceItem, 'id' | 'timestamp'>;
 
 /**
@@ -90,6 +110,12 @@ export class ProvenanceStore {
         if (item.label && item.label.length > stored.label.length) {
           stored.label = item.label;
         }
+        // A later registration may know the date when the first did not — a
+        // `web_search` snippet upgraded by a `web_read` of the same URL is the
+        // common case. Never overwrite a known date with an unknown one.
+        if (item.publishedAt && !stored.publishedAt) {
+          stored.publishedAt = item.publishedAt;
+        }
       }
       return existing;
     }
@@ -102,6 +128,7 @@ export class ProvenanceStore {
       contentPreview: preview,
       rawRef: item.rawRef,
       timestamp: Date.now(),
+      ...(item.publishedAt ? { publishedAt: item.publishedAt } : {}),
     });
     this.byRef.set(key, id);
     return id;
