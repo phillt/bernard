@@ -28,7 +28,8 @@ export type ModelSite =
   | 'reference-lookup'
   | 'recall-filter'
   | 'compressor'
-  | 'specialist-detector';
+  | 'specialist-detector'
+  | 'claim-verifier';
 
 /**
  * Three-value runtime mode (#170, redesigned). The legacy `'off'` value is
@@ -106,18 +107,16 @@ export interface SiteModel {
 /** Per-session dedupe of `model-policy:resolve` debug log lines. */
 const RESOLVE_LOG_SEEN = new Set<string>();
 
-/** Canonical list of every site whose model is policy-resolved. */
-const ALL_MODEL_SITES: readonly ModelSite[] = [
-  'main',
-  'specialist',
-  'tool-wrapper',
-  'rewriter',
-  'reference-resolver',
-  'reference-lookup',
-  'recall-filter',
-  'compressor',
-  'specialist-detector',
-];
+/**
+ * Canonical list of every site whose model is policy-resolved.
+ *
+ * Derived from `SITE_ROLE`, which is `Record<ModelSite, RoleId>` and therefore
+ * exhaustive — omitting a site there is a compile error. Hand-maintaining a
+ * parallel array was not: a new site could compile while missing from the
+ * `model-policy:snapshot` diagnostics, which is exactly the tool used to work
+ * out why a site resolved to an unexpected model.
+ */
+const ALL_MODEL_SITES: readonly ModelSite[] = Object.keys(SITE_ROLE) as ModelSite[];
 
 /**
  * Resolves the effective (provider, model) for a given LLM call site.
@@ -342,6 +341,9 @@ const TEMPERATURE_ZERO_SITES: ReadonlySet<ModelSite> = new Set([
   'reference-lookup',
   'recall-filter',
   'specialist-detector',
+  // Entailment is a judgement that must not drift between two runs over the
+  // same claim and the same source text.
+  'claim-verifier',
 ]);
 
 /**

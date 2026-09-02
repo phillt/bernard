@@ -11,7 +11,7 @@ import {
   type SpecialistInput,
 } from '../framework/agents/index.js';
 import { runDefinition } from '../framework/agents/run.js';
-import { withSlot, getMaxConcurrentAgents } from './agent-pool.js';
+import { withSlot, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
 
 /**
@@ -81,7 +81,10 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
         return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom)}`;
       }
 
-      return withSlot(
+      // Slot status is appended AFTER `withSlot` resolves, so this dispatch's
+      // own slot is already released and the count describes what the model can
+      // do next rather than what it could do mid-flight.
+      const out = await withSlot(
         async (slot) => {
           const id = slot.id;
           printSpecialistStart(id, specialist.name, task);
@@ -120,6 +123,7 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
         () =>
           `Error: Maximum concurrent agents (${getMaxConcurrentAgents()}) reached. Wait for existing agents to finish.`,
       );
+      return `${out}\n${slotStatusLine()}`;
     },
   });
 }

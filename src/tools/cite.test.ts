@@ -64,3 +64,44 @@ describe('cite tool', () => {
     expect(parsed.error).toMatch(/No source registered/i);
   });
 });
+
+// #417: verifyText exists so a quote can be checked against the full page
+// WITHOUT paying to put that page into the model's context. Returning it from
+// `cite get` would defeat exactly that — up to 20k chars per call.
+describe('cite does not leak verification text', () => {
+  it('omits verifyText from a get, while keeping the rest of the item', async () => {
+    const store = new ProvenanceStore();
+    const id = store.add({
+      kind: 'web',
+      label: 'Page',
+      contentPreview: 'preview',
+      rawRef: 'https://e.com/a',
+      publishedAt: '2026-01-01',
+      verifyText: 'X'.repeat(9000),
+    });
+    const tool = createCiteTool(store);
+
+    const parsed = JSON.parse(
+      (await tool.execute!({ action: 'get', id } as any, {} as any)) as string,
+    );
+
+    expect(parsed.source.verifyText).toBeUndefined();
+    expect(parsed.source.id).toBe(id);
+    expect(parsed.source.rawRef).toBe('https://e.com/a');
+    expect(parsed.source.publishedAt).toBe('2026-01-01');
+    expect(JSON.stringify(parsed).length).toBeLessThan(1000);
+  });
+
+  it('leaves the stored item intact', async () => {
+    const store = new ProvenanceStore();
+    const id = store.add({
+      kind: 'web',
+      label: 'Page',
+      contentPreview: 'p',
+      rawRef: 'u',
+      verifyText: 'kept',
+    });
+    await createCiteTool(store).execute!({ action: 'get', id } as any, {} as any);
+    expect(store.get(id)!.verifyText).toBe('kept');
+  });
+});

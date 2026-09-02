@@ -9,6 +9,17 @@ export interface SearchResult {
   title: string;
   url: string;
   snippet: string;
+  /**
+   * Publication date as the provider reported it, when it reported one.
+   *
+   * Brave and Tavily both return this and it was previously discarded in the
+   * mappers below — recovering it is a mapper change, not new infrastructure.
+   * Formats differ per provider and are passed through verbatim rather than
+   * normalised: a date we cannot parse is still information a reader can use,
+   * and guessing at an ambiguous format is worse than showing what was said.
+   * DuckDuckGo's scrape has no date to recover.
+   */
+  publishedAt?: string;
 }
 
 const DEFAULT_LIMIT = 5;
@@ -39,6 +50,9 @@ async function searchBrave(query: string, limit: number): Promise<SearchResult[]
       title: String(r.title ?? ''),
       url: String(r.url ?? ''),
       snippet: String(r.description ?? ''),
+      // Brave reports `page_age` as an ISO timestamp and `age` as prose
+      // ("2 days ago"); prefer the machine-readable one.
+      ...(r.page_age || r.age ? { publishedAt: String(r.page_age ?? r.age) } : {}),
     }));
   } catch {
     return undefined;
@@ -68,6 +82,7 @@ async function searchTavily(query: string, limit: number): Promise<SearchResult[
       title: String(r.title ?? ''),
       url: String(r.url ?? ''),
       snippet: String(r.content ?? r.snippet ?? ''),
+      ...(r.published_date ? { publishedAt: String(r.published_date) } : {}),
     }));
   } catch {
     return undefined;
@@ -121,7 +136,10 @@ function formatResults(results: SearchResult[], ids?: string[]): string {
   return results
     .map((r, i) => {
       const idTag = ids?.[i] ? `[${ids[i]}] ` : '';
-      return `${i + 1}. ${idTag}${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet.slice(0, 300)}` : ''}`;
+      // The date is on the URL line rather than its own, so a result stays
+      // three lines whether or not the provider reported one.
+      const dated = r.publishedAt ? `${r.url} (published ${r.publishedAt})` : r.url;
+      return `${i + 1}. ${idTag}${r.title}\n   ${dated}${r.snippet ? `\n   ${r.snippet.slice(0, 300)}` : ''}`;
     })
     .join('\n\n');
 }
@@ -174,6 +192,7 @@ export function createWebSearchTool(provenance?: ProvenanceStore) {
                     label: r.title || r.url,
                     contentPreview: r.snippet,
                     rawRef: r.url,
+                    publishedAt: r.publishedAt,
                   }),
                 )
               : undefined;

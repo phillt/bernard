@@ -40,7 +40,12 @@ export function createCiteTool(provenance: ProvenanceStore) {
         if (!item) {
           return JSON.stringify({ error: `No source registered with id "${id}".` });
         }
-        return JSON.stringify({ source: item });
+        // `verifyText` is deliberately withheld. It exists so a quote can be
+        // checked against the full page WITHOUT paying to put that page in the
+        // model's context; returning it here would defeat exactly that. The
+        // model already saw this text when the tool ran.
+        const { verifyText: _verifyText, ...source } = item;
+        return JSON.stringify({ source });
       },
     }),
     {

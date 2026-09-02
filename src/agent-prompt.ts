@@ -15,6 +15,17 @@ Call the \`think\` tool to publish 1-3 sentences of your reasoning whenever you'
 export const REASONING_FAMILIES = new Set(['openai-reasoning', 'xai-grok-reasoning']);
 
 /**
+ * May this model family be told to emit inline `[^Sn]` markers?
+ *
+ * One predicate rather than four inline `REASONING_FAMILIES.has(...)` tests
+ * (three in `agents/main.ts`, one in `agents/tool-wrapper.ts`), so adding a
+ * family to the carve-out is one edit and greps to one place.
+ */
+export function allowsInlineMarkers(family: string): boolean {
+  return !REASONING_FAMILIES.has(family);
+}
+
+/**
  * Citation policy injected when {@link PolicyDecision.citations.requireForFactualClaims}
  * is true. Tells the model how to attach `[^Sn]` markers to factual claims
  * derived from registered sources (web/RAG/memory/file). Skipped for
@@ -118,7 +129,7 @@ Rules:
 - One marker per claim is enough; don't spam multiple ids on the same sentence.`;
 
 export const EVIDENCE_PROMPT = `## Evidence Pointers
-Every successful tool call this turn (\`shell\`, \`file_*\`, \`web_*\`, MCP, etc.) is registered as a \`kind: 'tool-result'\` source in the same per-turn store as retrieval citations. Each entry captures **what was checked** (tool + args), **the key result snippet**, and **when** (timestamp). The ids appear in \`<available_sources>\` alongside \`web\` / \`file\` / \`memory\` sources.
+Every successful tool call this turn (\`shell\`, \`file_*\`, \`web_*\`, MCP, etc.) is registered as a \`kind: 'tool-result'\` source in the same per-turn store as retrieval citations. Each entry captures **what was checked** (tool + args), **the key result snippet**, and **when Bernard ran it** (retrieval timestamp \u2014 not the age of the underlying content). The ids appear in \`<available_sources>\` alongside \`web\` / \`file\` / \`memory\` sources.
 
 When you assert that something is **verified**, **confirmed**, **checked**, or otherwise grounded in a tool result you ran this turn, END that sentence with the \`[^Sn]\` marker for the tool call that proves it. Examples:
 - "Verified the commit landed on main. [^S3]"
@@ -327,6 +338,10 @@ Saved routines and tasks (if any) are listed each turn inside the \`<routines>\`
 Saved specialists (if any) are listed each turn inside the \`<specialists>\` subsection of the \`<system_provided_context>\` message, together with an optional \`<specialist_match_advisory>\` scoring how well any of them match the current user input.
 
 When a user request clearly falls within a saved specialist's domain, delegate to it via specialist_run without asking for permission. If the match is partial or ambiguous, briefly confirm with the user before dispatching.
+
+**Dispatch more than one when the work splits.** Specialists are parallel in exactly the way sub-agents are: call \`specialist_run\` or \`tool_wrapper_run\` several times in one response and they run concurrently. Research is the clearest case — four independent questions are four dispatches gathering four separate source sets, not one agent working through a list. The same applies to any independent work: separate files, separate tools, separate subjects.
+
+There is a **cap on concurrent agents**, and exceeding it does not queue — the extra dispatch comes back \`pool_exhausted\` and its work is simply not done. Results from \`agent\`, \`specialist_run\` and \`tool_wrapper_run\` report how many slots are free at that moment; use it. Split work to fit the slots you have, and dispatch the next batch when they free up.
 
 For specialists tagged [tool-wrapper] or [meta], use \`tool_wrapper_run\` instead of \`specialist_run\`. They return strict JSON {status, result, error?, reasoning?} and expose a scoped tool set with domain-specific examples. Prefer them for tool-heavy operations (shell, file edits, web research) where safe examples and error handling reduce misuse.
 

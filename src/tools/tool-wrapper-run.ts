@@ -9,13 +9,16 @@ import { redactArgs, REDACTED } from '../framework/tools/redact.js';
 import { createSpecialistRunTool } from './specialist-run.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
-import { withSlot, getMaxConcurrentAgents } from './agent-pool.js';
+import { withSlot, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
 import type { AgentContext } from '../framework/context.js';
 import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 import { classifyError } from '../error-taxonomy.js';
+import { verifyClaims, ClaimSchema } from '../claim-verifier.js';
+import { verdictOf } from '../rubric.js';
+import { makeUsageRecorder } from '../framework/hooks/token-stats.js';
 import {
   definitions,
   registerBuiltinDefinitions,
@@ -126,6 +129,75 @@ export function captureToolCalls(
     }
   }
   return out;
+}
+
+/**
+ * Runs claim verification when a wrapper's `result` reports claims, and
+ * converts an unsupported claim into a failed run.
+ *
+ * Opt-in by shape rather than by a flag on the record: a specialist declares
+ * `claims` in its result because its prompt told it to, and a wrapper that
+ * reports none is untouched and pays nothing. That keeps this off the path of
+ * every existing wrapper without a second place to register intent.
+ *
+ * Returns the replacement result, or `null` when there was nothing to verify.
+ *
+ * Exported for tests, following `relabelStepLimit`: the interesting behaviour
+ * is the conversion of an unsupported claim into a failed run, and reaching it
+ * through a full dispatch would test the mock harness rather than this.
+ */
+export async function verifyWrapperClaims(
+  wrapped: WrapperResult,
+  ctx: AgentContext,
+  abortSignal?: AbortSignal,
+): Promise<WrapperResult | null> {
+  if (wrapped.status !== 'ok') return null;
+  const result = wrapped.result as { claims?: unknown } | null;
+  if (!result || typeof result !== 'object' || !Array.isArray(result.claims)) return null;
+
+  // Validated with the schema rather than a hand-rolled guard, so the ELEMENTS
+  // of `sourceIds` are checked too: `sourceIds: [{}, 42]` would otherwise pass,
+  // resolve to no source, and be reported as "cited ids no source registered" —
+  // a shape error wearing an unsupported-claim failure's clothes.
+  const claims = result.claims
+    .map((c) => ClaimSchema.safeParse(c))
+    .flatMap((r) => (r.success ? [r.data] : []));
+
+  // ANY unusable entry fails the run, not just an entirely unusable array.
+  // Checking "did the filter eat everything" would let three claims with one
+  // malformed entry through as fully verified.
+  if (claims.length < result.claims.length) {
+    return {
+      status: 'error',
+      result: wrapped.result,
+      error: 'Claims were reported in a shape that could not be verified.',
+    };
+  }
+  if (claims.length === 0) return null; // `claims: []` — nothing was asserted.
+
+  const checks = await verifyClaims(claims, ctx.provenance, ctx.config, {
+    abortSignal,
+    // Attribute the per-claim calls to the turn, like every other standalone
+    // `generateText` subcall. Omitting it hides a per-sentence cost behind a
+    // single dispatch's line in the ledger.
+    onUsage: ctx.statsTarget ? makeUsageRecorder(ctx.statsTarget) : undefined,
+  });
+  // Publish per-claim results into the turn rubric alongside plan and
+  // post-write checks, so the user sees them through the existing surface.
+  ctx.postWriteChecks.push(...checks);
+  if (verdictOf(checks) !== 'fail') return null;
+
+  const failed = checks.filter((c) => c.status === 'fail');
+  return {
+    status: 'error',
+    result: wrapped.result,
+    error: capSubagentResult(
+      `Unsupported claims (${failed.length}/${checks.length}): ${failed
+        .map((c) => `${c.label} — ${c.evidence ?? 'unsupported'}`)
+        .join('; ')}`,
+      800,
+    ),
+  };
 }
 
 /** Per-call inputs to a tool-wrapper dispatch. */
@@ -296,6 +368,11 @@ export async function dispatchToolWrapper(
               telemetrySite: `tool-wrapper:${specialistId}`,
             });
 
+            // Claim verification (#417). Only for a specialist that reports
+            // claims — the shape is opt-in via the prompt, so a wrapper that
+            // does not produce one is unaffected and pays nothing.
+            const verified = await verifyWrapperClaims(wrapped, ctx, abortSignal);
+
             appendReasoningLog({
               ts: new Date().toISOString(),
               specialistId,
@@ -308,6 +385,8 @@ export async function dispatchToolWrapper(
               ...(wrapped.error !== undefined ? { error: wrapped.error } : {}),
               ...(wrapped.reasoning !== undefined ? { reasoning: wrapped.reasoning } : {}),
             });
+
+            if (verified) return verified;
 
             if (wrapped.status === 'error' && kind === 'tool-wrapper' && !skipCorrectionEnqueue) {
               try {
@@ -382,6 +461,7 @@ export async function dispatchToolWrapper(
 export function renderWrapperParentView(
   wrapped: WrapperResult,
   maxChars: number = SUBAGENT_RESULT_MAX_CHARS,
+  agentSlots?: string,
 ): string {
   const errorLen = wrapped.error?.length ?? 0;
   const resultBudget = Math.max(256, maxChars - errorLen - 80);
@@ -403,7 +483,7 @@ export function renderWrapperParentView(
           result: cappedResult,
           ...(wrapped.error !== undefined ? { error: wrapped.error } : {}),
         };
-  return JSON.stringify(parentView);
+  return JSON.stringify(agentSlots ? { ...parentView, agentSlots } : parentView);
 }
 
 /**
@@ -414,7 +494,7 @@ export function createToolWrapperRunTool(ctx: AgentContext) {
   return attachMeta(
     tool({
       description:
-        'Dispatch to a saved tool-wrapper specialist that handles a concrete tool or CLI (e.g. shell-wrapper, file-wrapper). Returns JSON {status, result, error?}. Use this for tool-heavy operations where domain-specific examples and error handling reduce misuse. Also used to invoke meta specialists (specialist-creator, correction-agent).',
+        'Dispatch to a saved tool-wrapper specialist that handles a concrete tool or CLI (e.g. shell-wrapper, file-wrapper). Returns JSON {status, result, error?}. Use this for tool-heavy operations where domain-specific examples and error handling reduce misuse. Also used to invoke meta specialists (specialist-creator, correction-agent). Call multiple times in one response to run independent dispatches in parallel — each result reports how many agent slots remain free.',
       parameters: z.object({
         specialistId: z
           .string()
@@ -445,7 +525,11 @@ export function createToolWrapperRunTool(ctx: AgentContext) {
           },
           ctx,
         );
-        return renderWrapperParentView(wrapped);
+        // Slot accounting goes INSIDE the envelope, not after it: this tool
+        // advertises "Returns JSON {status, result, error?}", and a trailing
+        // prose line would make that JSON unparseable for every caller that
+        // takes the contract at its word.
+        return renderWrapperParentView(wrapped, SUBAGENT_RESULT_MAX_CHARS, slotStatusLine());
       },
     }),
     {

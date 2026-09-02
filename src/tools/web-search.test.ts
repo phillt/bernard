@@ -880,3 +880,95 @@ describe('createWebSearchTool', () => {
     });
   });
 });
+
+// #417: both providers report a publication date and both mappers used to drop
+// it, so "how old is this source?" was unanswerable for reasons that were pure
+// omission rather than absence.
+describe('publication dates', () => {
+  it('recovers Brave page_age and shows it on the result', async () => {
+    vi.stubEnv('BRAVE_API_KEY', 'k');
+    vi.stubGlobal(
+      'fetch',
+      createMockFetch({
+        'api.search.brave.com': () =>
+          jsonResponse({
+            web: {
+              results: [
+                { title: 'T', url: 'https://e.com/a', description: 'd', page_age: '2026-02-01' },
+              ],
+            },
+          }),
+      }),
+    );
+
+    const out = await createWebSearchTool().execute({ query: 'q' });
+
+    expect(out).toContain('published 2026-02-01');
+  });
+
+  it('prefers Brave page_age over the prose age field', async () => {
+    vi.stubEnv('BRAVE_API_KEY', 'k');
+    vi.stubGlobal(
+      'fetch',
+      createMockFetch({
+        'api.search.brave.com': () =>
+          jsonResponse({
+            web: {
+              results: [
+                {
+                  title: 'T',
+                  url: 'https://e.com/a',
+                  description: 'd',
+                  page_age: '2026-02-01',
+                  age: '2 days ago',
+                },
+              ],
+            },
+          }),
+      }),
+    );
+
+    const out = await createWebSearchTool().execute({ query: 'q' });
+
+    expect(out).toContain('published 2026-02-01');
+    expect(out).not.toContain('2 days ago');
+  });
+
+  it('recovers Tavily published_date', async () => {
+    vi.stubEnv('TAVILY_API_KEY', 'k');
+    vi.stubGlobal(
+      'fetch',
+      createMockFetch({
+        'api.tavily.com': () =>
+          jsonResponse({
+            results: [
+              { title: 'T', url: 'https://e.com/a', content: 'c', published_date: '2026-03-04' },
+            ],
+          }),
+      }),
+    );
+
+    const out = await createWebSearchTool().execute({ query: 'q' });
+
+    expect(out).toContain('published 2026-03-04');
+  });
+
+  // A provider that reports no date must not gain one — an absent date is a
+  // known gap, and inventing one from the fetch time is a wrong answer.
+  it('says nothing about a date when the provider reported none', async () => {
+    vi.stubEnv('BRAVE_API_KEY', 'k');
+    vi.stubGlobal(
+      'fetch',
+      createMockFetch({
+        'api.search.brave.com': () =>
+          jsonResponse({
+            web: { results: [{ title: 'T', url: 'https://e.com/a', description: 'd' }] },
+          }),
+      }),
+    );
+
+    const out = await createWebSearchTool().execute({ query: 'q' });
+
+    expect(out).not.toContain('published');
+  });
+});

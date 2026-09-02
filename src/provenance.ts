@@ -25,10 +25,50 @@ export interface SourceItem {
   contentPreview: string;
   /** Pointer the user can act on: URL, file path with line range, memory key, tool-call id. */
   rawRef: string;
-  /** Wall-clock when the item was added. */
+  /**
+   * Wall-clock when Bernard RETRIEVED this — not when the content was written
+   * or published. Always present, because it is a fact about our own fetch.
+   *
+   * Kept distinct from {@link SourceItem.publishedAt} on purpose: conflating
+   * "when we looked" with "how old this is" is the mistake that makes a
+   * decade-old page look fresh.
+   */
   timestamp: number;
+  /**
+   * When the underlying content was published or last modified, as reported by
+   * the source itself, or `undefined` when unknown.
+   *
+   * Unknown is a real and common answer — treat it as such rather than falling
+   * back to {@link SourceItem.timestamp}. A missing date is a known gap; a
+   * retrieval time presented as a publication date is a wrong answer.
+   */
+  publishedAt?: string;
+  /**
+   * The retrieved text in full, for checking a quoted span against its source.
+   *
+   * **Deliberately separate from {@link SourceItem.contentPreview}, and never
+   * rendered into the context message.** `contentPreview` is capped at
+   * {@link MAX_PREVIEW} precisely because `<available_sources>` re-sends every
+   * source's preview to the model on every turn; raising that cap would
+   * multiply per-turn context cost across every source in the store.
+   *
+   * Without this field a containment check is not merely expensive but
+   * impossible: `web_read` returns up to 20,000 characters, history keeps
+   * 10,000, and the only copy addressable by source id was the 2,000-character
+   * preview — so a quote from the middle of a page could not be checked against
+   * anything Bernard still held, and would read as fabricated.
+   *
+   * Capped at {@link MAX_VERIFY_TEXT} so one enormous page cannot dominate the
+   * store, and undefined for sources whose full text is not retained.
+   */
+  verifyText?: string;
 }
 
+/**
+ * What a caller may supply. `id` and `timestamp` are minted by the store —
+ * `publishedAt` and `verifyText` are not, because only the retrieving tool
+ * knows them.
+ */
 export type SourceItemInput = Omit<SourceItem, 'id' | 'timestamp'>;
 
 /**
@@ -53,6 +93,23 @@ export interface TurnProvenance {
 // The dedup/upgrade path in `add()` replaces a shorter stored preview with a
 // longer one, so raising this only ever retains MORE of what tools already pass.
 const MAX_PREVIEW = 2000;
+
+/**
+ * Cap on {@link SourceItem.verifyText}. Sized to hold a whole `web_read`
+ * return (`MAX_OUTPUT_CHARS`, 20,000) so the text a quote could have come from
+ * is the same text a check runs against — a smaller cap would reintroduce the
+ * gap this field exists to close, just further down the page.
+ *
+ * This never enters the context message, so it costs memory rather than
+ * tokens.
+ */
+export const MAX_VERIFY_TEXT = 20_000;
+
+// `slice` already no-ops on a short string, so no length branch is needed —
+// unlike `truncatePreview`, which appends an ellipsis and must know. A marker
+// would be wrong here anyway: `quoteAppearsIn` matches against this text, and
+// an injected marker is text a quote could spuriously match.
+const truncateVerifyText = (s: string): string => s.slice(0, MAX_VERIFY_TEXT);
 
 function truncatePreview(s: string): string {
   return s.length > MAX_PREVIEW ? s.slice(0, MAX_PREVIEW) + '…' : s;
@@ -90,6 +147,18 @@ export class ProvenanceStore {
         if (item.label && item.label.length > stored.label.length) {
           stored.label = item.label;
         }
+        // A later registration may know the date when the first did not — a
+        // `web_search` snippet upgraded by a `web_read` of the same URL is the
+        // common case. Never overwrite a known date with an unknown one.
+        if (item.publishedAt && !stored.publishedAt) {
+          stored.publishedAt = item.publishedAt;
+        }
+        // Same upgrade rule: a `web_read` of a URL a `web_search` already
+        // registered brings the full text the snippet never had.
+        if (item.verifyText) {
+          const incoming = truncateVerifyText(item.verifyText);
+          if (incoming.length > (stored.verifyText?.length ?? 0)) stored.verifyText = incoming;
+        }
       }
       return existing;
     }
@@ -102,6 +171,8 @@ export class ProvenanceStore {
       contentPreview: preview,
       rawRef: item.rawRef,
       timestamp: Date.now(),
+      ...(item.publishedAt ? { publishedAt: item.publishedAt } : {}),
+      ...(item.verifyText ? { verifyText: truncateVerifyText(item.verifyText) } : {}),
     });
     this.byRef.set(key, id);
     return id;

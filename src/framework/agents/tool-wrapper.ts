@@ -1,5 +1,9 @@
 import type { CoreMessage, Tool } from 'ai';
 import { classifyError } from '../../error-taxonomy.js';
+import { CITATIONS_PROMPT, allowsInlineMarkers } from '../../agent-prompt.js';
+import { getModelProfile } from '../../providers/index.js';
+import type { AgentContext } from '../context.js';
+import type { Specialist } from '../../specialists.js';
 import { debugLog } from '../../logger.js';
 import type { ToolNameAliasResolver } from '../../mcp-names.js';
 import { resolveSiteModel } from '../../model-policy.js';
@@ -43,6 +47,23 @@ export interface ToolWrapperInput {
 }
 
 /**
+ * True when the model this wrapper will actually run on is one whose
+ * `systemSuffix` already forbids narrating inline annotations, so telling it to
+ * emit `[^Sn]` markers would conflict with its own guidance (#173).
+ *
+ * Resolves the site rather than reading `ctx.config` directly: a wrapper's model
+ * comes from `resolveSiteModel(..., 'tool-wrapper', {specialist})`, so a pinned
+ * specialist or a non-default `modelMode` can put it on a different family than
+ * the session's configured one — and the gate has to describe the model that
+ * will read the prompt.
+ */
+function suppressesInlineMarkers(ctx: AgentContext, specialist: Specialist): boolean {
+  const site = resolveSiteModel(ctx.config, 'tool-wrapper', { specialist });
+  const sdk = ctx.config.customProviders?.[site.provider]?.sdk;
+  return !allowsInlineMarkers(getModelProfile(site.provider, site.modelName, sdk).family);
+}
+
+/**
  * Tool-wrapper definition: ephemeral history, persona + examples + OS block +
  * (optional) structured-output rules + memory context as system prompt;
  * `childTools` as the tool set; 50% of the main step budget; final-step JSON
@@ -78,6 +99,28 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
     systemPrompt += formatExamples(specialist);
     if (input.wantStructured) {
       systemPrompt += STRUCTURED_OUTPUT_RULES;
+    }
+    // Citation conventions, for specialists that deal in sources (#417).
+    //
+    // Gated on `cite` having actually RESOLVED into this run's tools, not on
+    // `specialist.targetTools` naming it: `cite` is only constructed when a
+    // provenance store exists (`tools/index.ts`), so a specialist that asks for
+    // it in a context without one would otherwise be told to use a tool it does
+    // not have. Deriving the gate from the resolved registry also avoids a new
+    // `Specialist` field — a wrapper that can call `cite` is by definition one
+    // that works in source ids.
+    //
+    // `CITATIONS_PROMPT` attached only to the main agent before this
+    // (`agents/main.ts`), so a dispatched specialist registered sources into
+    // the shared store and was never told the convention for citing them.
+    //
+    // Note the marker instruction is best-effort, not the contract: the
+    // `REASONING_FAMILIES` carve-out means some model families are never told
+    // to emit `[^Sn]` at all. A specialist that needs its citations to be
+    // machine-readable must carry them in its structured `result`, which is
+    // what the bundled research agent does.
+    if ('cite' in input.childTools && !suppressesInlineMarkers(ctx, specialist)) {
+      systemPrompt += '\n\n' + CITATIONS_PROMPT;
     }
     if (Object.keys(input.childTools).length > 0) {
       systemPrompt += `\n\nAvailable tools for this run: ${Object.keys(input.childTools).join(', ')}`;

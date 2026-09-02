@@ -8,7 +8,7 @@ import { runDefinition } from '../framework/agents/run.js';
 import { registerBuiltinDefinitions } from '../framework/agents/index.js';
 import type { SubAgentInput } from '../framework/agents/sub.js';
 import { runPAC } from '../framework/pac/run-pac.js';
-import { withSlot, _resetPool, getMaxConcurrentAgents } from './agent-pool.js';
+import { withSlot, _resetPool, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
 
 /**
@@ -62,7 +62,10 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
         return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom)}`;
       }
 
-      return withSlot(
+      // Slot status is appended AFTER `withSlot` resolves, so this dispatch's
+      // own slot is already released and the count describes what the model can
+      // do next rather than what it could do mid-flight.
+      const out = await withSlot(
         async (slot) => {
           const id = slot.id;
           printSubAgentStart(id, task);
@@ -118,6 +121,7 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
         () =>
           `Error: Maximum concurrent sub-agents (${getMaxConcurrentAgents()}) reached. Wait for existing sub-agents to finish.`,
       );
+      return `${out}\n${slotStatusLine()}`;
     },
   });
 }

@@ -1,5 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import { MAX_VERIFY_TEXT } from '../provenance.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 import type { VerifyOutcome } from '../framework/tools/types.js';
 import * as fs from 'node:fs';
@@ -10,6 +11,25 @@ import type { ProvenanceStore } from '../provenance.js';
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
 
 /** SHA-256 of content, first 16 hex chars. */
+/**
+ * Joins line contents with newlines, stopping once `max` characters are
+ * reached.
+ *
+ * Accumulating with an early stop rather than `join('\n').slice(0, max)`:
+ * `MAX_FILE_SIZE` is 50 MB, so the join-then-slice form builds the entire file
+ * as one transient string in order to keep the first 20 KB of it.
+ */
+function joinUpTo(lines: { content: string }[], max: number): string {
+  const parts: string[] = [];
+  let len = 0;
+  for (const l of lines) {
+    parts.push(l.content);
+    len += l.content.length + 1;
+    if (len >= max) break;
+  }
+  return parts.join('\n').slice(0, max);
+}
+
 export function hashContent(content: string): string {
   return createHash('sha256').update(content).digest('hex').slice(0, 16);
 }
@@ -318,11 +338,23 @@ export function createFileTools(provenance?: ProvenanceStore) {
                 .slice(0, 40)
                 .map((l) => l.content)
                 .join('\n');
+              // A file's mtime is the closest thing it has to a publication
+              // date. Reuses the `stat` this function already took for the
+              // exists/size checks rather than issuing a second syscall on the
+              // same path — and since that one succeeded, there is no failure
+              // left here to guard against.
               sourceId = provenance.add({
                 kind: 'file',
                 label: `${absPath}:${startLine}-${endLine}`,
                 contentPreview: preview,
                 rawRef: `${absPath}:${startLine}-${endLine}`,
+                publishedAt: stat.mtime.toISOString(),
+                // The whole read span, not the 40-line preview — a quote from
+                // line 300 of a 400-line read has to be checkable. Accumulated
+                // with an early stop rather than joining first and slicing
+                // after: `MAX_FILE_SIZE` is 50 MB, so a minified bundle would
+                // otherwise build a 50 MB transient to keep 20 KB of it.
+                verifyText: joinUpTo(lines, MAX_VERIFY_TEXT),
               });
             }
 

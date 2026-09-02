@@ -122,3 +122,107 @@ describe('extractCitationMarkers', () => {
     expect(extractCitationMarkers(text, s)).toEqual(['S1']);
   });
 });
+
+// #417: an evidence item's age is part of the claim, and "when we fetched it"
+// is not the same fact as "when it was written".
+describe('publication dates', () => {
+  it('keeps publishedAt distinct from the retrieval timestamp', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({
+      kind: 'web',
+      label: 'Old Post',
+      contentPreview: 'x',
+      rawRef: 'https://example.com/a',
+      publishedAt: '2019-03-01T00:00:00.000Z',
+    });
+    const item = store.get(id)!;
+    expect(item.publishedAt).toBe('2019-03-01T00:00:00.000Z');
+    expect(item.timestamp).toBeGreaterThan(Date.parse('2020-01-01'));
+  });
+
+  it('leaves publishedAt undefined rather than falling back to retrieval time', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({ kind: 'web', label: 'x', contentPreview: 'x', rawRef: 'u' });
+    expect(store.get(id)!.publishedAt).toBeUndefined();
+  });
+
+  // The common case: web_search registers a URL from a provider that reports no
+  // date, then web_read of the same URL registers one. Dedup must not lose it.
+  it('upgrades an unknown date when a later registration knows it', () => {
+    const store = new ProvenanceStore();
+    const first = store.add({ kind: 'web', label: 'x', contentPreview: 'snip', rawRef: 'u' });
+    const second = store.add({
+      kind: 'web',
+      label: 'x',
+      contentPreview: 'full page',
+      rawRef: 'u',
+      publishedAt: '2026-01-05',
+    });
+    expect(second).toBe(first);
+    expect(store.get(first)!.publishedAt).toBe('2026-01-05');
+  });
+
+  it('never overwrites a known date with an unknown one', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({
+      kind: 'web',
+      label: 'x',
+      contentPreview: 'a',
+      rawRef: 'u',
+      publishedAt: '2026-01-05',
+    });
+    store.add({ kind: 'web', label: 'x', contentPreview: 'a longer preview', rawRef: 'u' });
+    expect(store.get(id)!.publishedAt).toBe('2026-01-05');
+  });
+});
+
+// #417: the quote check needs the text a quote could have come from. Before
+// this, the only copy addressable by source id was the 2,000-char preview, so a
+// quote from the middle of a page read as fabricated.
+describe('verifyText retention', () => {
+  const long = 'A'.repeat(5000) + 'NEEDLE' + 'B'.repeat(5000);
+
+  // One test, because the two facts are the same fact: the preview is capped
+  // (it is re-sent every turn) and verifyText is not (it never enters context),
+  // which is exactly what makes a quote past the cap checkable.
+  it('retains past the preview cap, which is what makes a mid-page quote checkable', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({
+      kind: 'web',
+      label: 'x',
+      contentPreview: long,
+      rawRef: 'u',
+      verifyText: long,
+    });
+    const item = store.get(id)!;
+
+    expect(item.contentPreview.length).toBeLessThanOrEqual(2001);
+    expect(item.contentPreview.includes('NEEDLE')).toBe(false);
+    expect(item.verifyText!.includes('NEEDLE')).toBe(true);
+  });
+
+  it('caps one enormous page rather than storing it whole', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({
+      kind: 'web',
+      label: 'x',
+      contentPreview: 'p',
+      rawRef: 'u',
+      verifyText: 'C'.repeat(50_000),
+    });
+    expect(store.get(id)!.verifyText!.length).toBe(20_000);
+  });
+
+  it('upgrades a snippet-only source when the full read arrives', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({ kind: 'web', label: 'x', contentPreview: 'snip', rawRef: 'u' });
+    store.add({ kind: 'web', label: 'x', contentPreview: long, rawRef: 'u', verifyText: long });
+    expect(store.get(id)!.verifyText).toContain('NEEDLE');
+  });
+
+  it('is undefined for sources whose full text is not retained', () => {
+    const store = new ProvenanceStore();
+    const id = store.add({ kind: 'memory', label: 'k', contentPreview: 'v', rawRef: 'memory:k' });
+    expect(store.get(id)!.verifyText).toBeUndefined();
+  });
+});

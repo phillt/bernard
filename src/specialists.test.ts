@@ -751,3 +751,74 @@ describe('SpecialistStore', () => {
     });
   });
 });
+
+// #417: a new bundled specialist reaches EXISTING installs only if its filename
+// is in `POST_V1_BUNDLED`. `.seeded-v1` short-circuits the v1 loop, so dropping
+// a JSON file into the manifest directory alone reaches nobody who already ran
+// Bernard once — which is nearly everyone.
+describe('post-v1 bundled seeding', () => {
+  /**
+   * An install that has already run once: `.seeded-v1` present, so the v1 loop
+   * is skipped, and no per-file post-v1 markers yet.
+   */
+  function existingInstall(bundledFiles: string[]): void {
+    vi.mocked(fs.statSync).mockReturnValue({ isDirectory: () => true } as any);
+    vi.mocked(fs.readdirSync).mockReturnValue(bundledFiles as any);
+    vi.mocked(fs.existsSync).mockImplementation((p: any) => String(p).endsWith('.seeded-v1'));
+    vi.mocked(fs.readFileSync).mockImplementation((p: any) =>
+      JSON.stringify({ id: String(p).split('/').pop()?.replace('.json', '') }),
+    );
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetBuiltinSpecialistCache();
+  });
+
+  it('seeds research-agent onto an install that already has .seeded-v1', () => {
+    existingInstall(['web-wrapper.json', 'research-agent.json']);
+
+    new SpecialistStore();
+
+    const written = vi.mocked(fsUtils.atomicWriteFileSync).mock.calls.map((c) => String(c[0]));
+    expect(written.some((p) => p.endsWith('research-agent.json'))).toBe(true);
+    // The v1 set is NOT re-seeded — that is what the marker is for, and
+    // re-seeding would resurrect specialists the user deleted on purpose.
+    expect(written.some((p) => p.endsWith('web-wrapper.json'))).toBe(false);
+  });
+
+  it('does not resurrect it once its own marker exists', () => {
+    existingInstall(['research-agent.json']);
+    vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+      const s = String(p);
+      return s.endsWith('.seeded-v1') || s.endsWith('.seeded-research-agent');
+    });
+
+    new SpecialistStore();
+
+    expect(
+      vi
+        .mocked(fsUtils.atomicWriteFileSync)
+        .mock.calls.some((c) => String(c[0]).endsWith('research-agent.json')),
+    ).toBe(false);
+  });
+
+  it('never overwrites a copy the user has already edited', () => {
+    existingInstall(['research-agent.json']);
+    // Marker absent (so seeding is attempted) but the destination file exists.
+    // `paths.js` is not mocked in this file, so the destination is the real
+    // per-test-home path — match on the leaf rather than a hardcoded dir.
+    vi.mocked(fs.existsSync).mockImplementation((p: any) => {
+      const s = String(p);
+      return s.endsWith('.seeded-v1') || s.endsWith('/specialists/research-agent.json');
+    });
+
+    new SpecialistStore();
+
+    expect(
+      vi
+        .mocked(fsUtils.atomicWriteFileSync)
+        .mock.calls.some((c) => String(c[0]).endsWith('research-agent.json')),
+    ).toBe(false);
+  });
+});

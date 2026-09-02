@@ -21,8 +21,8 @@ import { debugLog } from '../../logger.js';
 import { buildSystemPrompt } from '../../agent-prompt.js';
 import {
   SHARE_REASONING_PROMPT,
-  REASONING_FAMILIES,
   CITATIONS_PROMPT,
+  allowsInlineMarkers,
   CONCISE_PROMPT,
   EVIDENCE_PROMPT,
   RESPONSE_STYLE_PROMPTS,
@@ -94,7 +94,7 @@ export function buildMainSystemPrompt(
   if (profile.systemSuffix) {
     systemPrompt += '\n\n' + profile.systemSuffix;
   }
-  if (!REASONING_FAMILIES.has(profile.family)) {
+  if (allowsInlineMarkers(profile.family)) {
     systemPrompt += '\n\n' + SHARE_REASONING_PROMPT;
   }
   // Citations are ALWAYS on for the main agent — grounding factual claims in
@@ -103,7 +103,7 @@ export function buildMainSystemPrompt(
   // `policyDecision.citations`. The only carve-out is `REASONING_FAMILIES`
   // (OpenAI/xAI reasoning models), whose systemSuffix already forbids narrating
   // inline markers — forcing `[^Sn]` there would conflict with that guidance.
-  if (!REASONING_FAMILIES.has(profile.family)) {
+  if (allowsInlineMarkers(profile.family)) {
     systemPrompt += '\n\n' + CITATIONS_PROMPT;
   }
   // Evidence-pointer policy: append the `## Evidence Pointers` block when the
@@ -111,7 +111,7 @@ export function buildMainSystemPrompt(
   // active model family does not forbid inline annotations. Issue #141.
   if (
     ctx.policyDecision?.evidence?.requireForVerifiedClaims &&
-    !REASONING_FAMILIES.has(profile.family)
+    allowsInlineMarkers(profile.family)
   ) {
     systemPrompt += '\n\n' + EVIDENCE_PROMPT;
   }

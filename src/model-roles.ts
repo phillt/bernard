@@ -186,4 +186,7 @@ export const SITE_ROLE: Record<ModelSite, RoleId> = {
   'reference-lookup': 'classifier',
   'recall-filter': 'classifier',
   'specialist-detector': 'classifier',
+  // "Does this text support this claim?" is a classification, not generation —
+  // and the role's cheap/mid tiers are what keep a per-claim check affordable.
+  'claim-verifier': 'classifier',
 };

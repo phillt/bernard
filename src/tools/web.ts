@@ -142,6 +142,11 @@ export function createWebReadTool(provenance?: ProvenanceStore) {
             label: title || url,
             contentPreview: markdown,
             rawRef: url,
+            // The same text, retained in full for quote checking. The preview
+            // is capped at 2,000 chars because it is re-sent to the model every
+            // turn; this is not sent at all, so a quote from the middle of the
+            // page can still be checked against what the page actually said.
+            verifyText: markdown,
           });
           markdown = `[Source: ${id} — ${url}]\n\n${markdown}`;
         }
