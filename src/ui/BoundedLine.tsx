@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react';
 import { Text } from 'ink';
 import { getThemeColors } from '../theme.js';
-import { plural } from '../text.js';
-import { windowBuffer } from './line-geometry.js';
+import { moreRowsLabel, windowBuffer } from './line-geometry.js';
 import { LineWithCursor } from './use-line-editor.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 
@@ -60,7 +59,7 @@ export function BoundedLine({
 
   return (
     <>
-      <MoreLines n={view.above} glyph="▲" color={colors.muted} />
+      <MoreRows n={view.above} glyph="▲" color={colors.muted} />
       <Text>
         {prefix}
         <LineWithCursor
@@ -71,15 +70,27 @@ export function BoundedLine({
           cursorGlyph={cursorGlyph}
         />
       </Text>
-      <MoreLines n={view.below} glyph="▼" color={colors.muted} />
+      <MoreRows n={view.below} glyph="▼" color={colors.muted} />
     </>
   );
 }
 
-/** One component so the two affordances can't drift in wording. */
-function MoreLines({ n, glyph, color }: { n: number; glyph: string; color: string }) {
+/**
+ * The prompt's own `▲`/`▼` rows.
+ *
+ * Conditional, deliberately, against `OverlayFooter`'s reserve-it-always rule.
+ * That rule exists because a conditional row makes a component's height depend
+ * on the budget deciding its own contents — true for `PlanPanel`, whose row
+ * lives inside a panel that is absent unless there is a plan. These two sit in
+ * the always-visible prompt box, and `plan-window.ts` already budgets both
+ * unconditionally, so rendering nothing makes the box SMALLER than budgeted and
+ * can never overflow. Reserving would buy stability at the price of two
+ * permanently blank rows inside the border whenever the prompt is short, which
+ * is nearly always.
+ */
+function MoreRows({ n, glyph, color }: { n: number; glyph: string; color: string }) {
   if (n <= 0) return null;
-  return <Text color={color}>{`${glyph} ${n} more ${plural(n, 'line', 'lines')}`}</Text>;
+  return <Text color={color}>{moreRowsLabel(n, glyph)}</Text>;
 }
 
 /** Exported for the Box-less callers that need the same chrome budget. */

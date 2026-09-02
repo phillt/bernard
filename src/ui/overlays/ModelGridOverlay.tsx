@@ -4,7 +4,7 @@ import { KEY, HINT_SELECT } from '../hints.js';
 import { isDismissKeyWithQ } from './overlay-contract.js';
 import { useListCursor, useListWindow } from './use-list-cursor.js';
 import { chromeRows, overlayViewport } from './menu-geometry.js';
-import { listPosition } from './viewer-util.js';
+import { formatPosition, listPosition } from './viewer-util.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 import { truncate } from '../../text.js';
 import { MenuRow } from './MenuRow.js';
@@ -161,7 +161,7 @@ export function ModelGridOverlay({
         ))}
       </Box>
       <OverlayFooter
-        position={position ? `rows ${position.first}–${position.last} of ${position.total}` : null}
+        position={formatPosition(position, 'rows')}
         hints={[
           { key: KEY.arrowsAll, label: 'move' },
           HINT_SELECT,

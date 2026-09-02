@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Step, StepStatus } from '../../plan-store.js';
 import {
+  MIN_TRANSCRIPT_ROWS,
   NOTE_MAX_WIDTH,
   NOTE_SEPARATOR,
   PLAN_CHROME_ROWS,
@@ -34,6 +35,14 @@ function steps(statuses: StepStatus[]): Step[] {
 const pending = (n: number) => steps(Array.from({ length: n }, () => 'pending' as StepStatus));
 
 describe('planPanelMaxRows', () => {
+  /**
+   * `BoundedLine`'s vertical budget plus its two affordance rows, spelled out by
+   * hand rather than imported. Both bounds below depend on it, and restating it
+   * is what makes them catch a drift in `BoundedLine` — but restating it twice
+   * is just a second copy to keep in sync.
+   */
+  const inputRegion = (rows: number) => Math.max(3, Math.min(10, Math.floor(rows / 3))) + 2;
+
   it('grants a quarter of the frame, less than the input line gets', () => {
     // The input's own budget, `BoundedLine`: max(3, min(10, floor(rows / 3))).
     for (const rows of [24, 40, 60]) {
@@ -74,9 +83,32 @@ describe('planPanelMaxRows', () => {
     // That floor is `BoundedLine`'s (#355) and predates this change; an 8-row
     // terminal is broken either way and is not what #358 is about.
     for (let rows = 8; rows <= 200; rows++) {
-      const input = Math.max(3, Math.min(10, Math.floor(rows / 3))) + 2; // affordances
-      const box = planPanelMaxRows(rows) + input + PROMPT_CHROME_ROWS;
+      const box = planPanelMaxRows(rows) + inputRegion(rows) + PROMPT_CHROME_ROWS;
       expect(box).toBeLessThanOrEqual(rows);
+    }
+  });
+
+  it('leaves the transcript its declared floor, busy chrome included', () => {
+    // The bound above proves only that the PROMPT BOX fits the frame. It said
+    // nothing about what is left over for the transcript, and the rest of the
+    // frame is not empty: the hint/status row is unconditional in full-screen
+    // and the spinner is on for the whole of every turn. Omitting them is what
+    // let the transcript reach 2 rows at 24 and 1 at 20 with a plan panel open
+    // (#435) — below the floor this budget claims to hold.
+    // Restated, not imported — the point of the sibling test above, and the
+    // reason it spells out `BoundedLine`'s formula by hand. Importing
+    // `FRAME_CHROME_ROWS` would make the assertion self-consistent with whatever
+    // that constant happens to say, so lowering it back to 0 would still pass.
+    // These are the rows `App.tsx` actually renders outside the prompt box.
+    const frameChrome = 1 /* HintBar/StatusBar row */ + 2; /* busy spinner + its marginTop */
+    for (let rows = 8; rows <= 200; rows++) {
+      const panel = planPanelMaxRows(rows);
+      // Only meaningful where a panel is drawn at all: below that the input's
+      // own floor already exceeds the frame and there is nothing to give back,
+      // which is the carve-out the bound above documents.
+      if (panel === 0) continue;
+      const claimed = panel + inputRegion(rows) + PROMPT_CHROME_ROWS + frameChrome;
+      expect(rows - claimed).toBeGreaterThanOrEqual(MIN_TRANSCRIPT_ROWS);
     }
   });
 

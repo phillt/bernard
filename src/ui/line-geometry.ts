@@ -1,3 +1,5 @@
+import { plural } from '../text.js';
+
 /**
  * Pure geometry for the REPL's text inputs — no React, no Ink.
  *
@@ -6,6 +8,25 @@
  * math that wants unit tests, and keeping it in a `.tsx` dragged React and Ink
  * into a test suite that needs neither.
  */
+
+/**
+ * `▲ 3 more rows` — the one spelling of a hidden-row affordance.
+ *
+ * **Rows, not lines.** What is hidden is soft-wrapped rows of the buffer, and
+ * the buffer is frequently a SINGLE logical line — the message that prompted
+ * #435 was 901 characters with no newline in it, wrapping to ~13 rows at 80
+ * columns. "3 more lines" for one line is the kind of wrong that makes a
+ * correct affordance read as a bug report.
+ *
+ * A string, not a component, because the transcript's position row
+ * composes it into a longer sentence (`▲ 45 more rows above · 46–60 of 60`)
+ * rather than rendering it alone. Three affordances, one spelling: the noun
+ * change above had to be made in two files before this existed, and each is
+ * pinned by its own regex in a different test file.
+ */
+export function moreRowsLabel(n: number, glyph: string): string {
+  return `${glyph} ${n} more ${plural(n, 'row', 'rows')}`;
+}
 
 /**
  * Boundary math for the readline-style bindings, exported as pure functions so

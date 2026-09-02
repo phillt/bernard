@@ -58,7 +58,13 @@ describe('<PlanPanel>', () => {
     seedPending(store, ['first step', 'second step', 'third step']);
     store.update(1, 'done', { signoff: 'verified thoroughly' });
     store.update(2, 'in_progress');
-    const { lastFrame } = mountPanel(store);
+    // An explicit budget with room for all three, not the production number for
+    // one terminal size: this test is about the status icons, and since the
+    // frame budget started charging for the chrome outside the prompt box
+    // (#435) a 24-row terminal windows a 3-step plan to two rows — which is
+    // `planPanelMaxRows` working, and would fail this assertion for a reason
+    // that has nothing to do with what it is checking.
+    const { lastFrame } = mountPanel(store, PLAN_CHROME_ROWS + 3);
     const frame = lastFrame() ?? '';
     expect(frame).toContain('✔ 1. first step');
     expect(frame).toContain('▸ 2. second step');

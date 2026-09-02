@@ -96,15 +96,17 @@ const MAX_PANEL_ROWS = PLAN_CHROME_ROWS + 6;
  * can be absent without breaking the REPL — a user can still type. Below the
  * height where a minimum panel plus the input plus chrome plus a usable
  * transcript all fit, this returns **0** and `PlanPanel` renders nothing. That
- * is a real behaviour change at ≤ ~14 rows, and the honest one: a plan panel
+ * is a real behaviour change below 22 rows, and the honest one: a plan panel
  * that squeezes the transcript to zero is worse than no plan panel.
  */
 export function planPanelMaxRows(termRows: number): number {
   const quarter = Math.max(MIN_PANEL_ROWS, Math.min(MAX_PANEL_ROWS, Math.floor(termRows / 4)));
   // What the rest of the frame has already claimed: the input at its own cap
-  // plus its two affordance rows, the box border, `Prompt`'s marginTop, and a
-  // floor under the transcript so it never reaches zero.
-  const spoken = inputRegionRows(termRows) + PROMPT_CHROME_ROWS + MIN_TRANSCRIPT_ROWS;
+  // plus its two affordance rows, the box border, `Prompt`'s marginTop, the
+  // chrome that lives OUTSIDE the prompt box, and a floor under the transcript
+  // so it never reaches zero.
+  const spoken =
+    inputRegionRows(termRows) + PROMPT_CHROME_ROWS + FRAME_CHROME_ROWS + MIN_TRANSCRIPT_ROWS;
   const room = termRows - spoken;
   return room >= MIN_PANEL_ROWS ? Math.min(quarter, room) : 0;
 }
@@ -123,8 +125,63 @@ function inputRegionRows(termRows: number): number {
 const BOUNDED_LINE_AFFORDANCE_ROWS = 2;
 /** The round border's two rows plus `Prompt`'s `marginTop={1}`. */
 export const PROMPT_CHROME_ROWS = 3;
-/** Below this the transcript is not worth calling one. */
-const MIN_TRANSCRIPT_ROWS = 3;
+
+/**
+ * Frame rows claimed by chrome that sits OUTSIDE the prompt box, and that this
+ * budget forgot: the `HintBar`/`StatusBar` row, which is unconditional in
+ * full-screen, plus the busy spinner (its `marginTop` and its line).
+ *
+ * Omitting them is what let `planPanelMaxRows`' stated intent — "a plan panel
+ * that squeezes the transcript to zero is worse than no plan panel" — fail to
+ * hold.
+ * Measured with a plan panel present, the transcript got 4 rows idle and **2
+ * while busy** at 24 rows, and 3 / **1** at 20; a toast on top reached zero.
+ *
+ * The spinner is the transient worth reserving for, because it is present for
+ * exactly the span in which the transcript is growing. A toast is deliberately
+ * NOT reserved for, and that is a **trade, not a free win**: it inverts this
+ * module's own priority ordering for the two seconds a toast is up, since the
+ * plan does not yield and the transcript absorbs the rows instead — the case
+ * the measurement above records as reaching zero. What it buys is the absence
+ * of a much worse artifact. The concern only bites where `room < quarter`, i.e.
+ * short terminals, and there a toast does not merely resize the panel: at 24
+ * rows it drops `room` below `MIN_PANEL_ROWS`, so the panel would vanish and
+ * reappear. Flicker on every toast is worse than a briefly shorter transcript.
+ * `LEGACY_INLINE_CHROME_ROWS` (`App.tsx`) documents the same call — deliberately
+ * generous, because under-reserving overflows the screen while over-reserving
+ * costs one row.
+ *
+ * A constant rather than live rows threaded down from `App` (the shape
+ * `overlayReserveRows` uses) on purpose: the precise instrument would resize
+ * the plan panel whenever an unrelated toast appeared, which is a worse
+ * artifact than one row of over-reservation.
+ */
+const FRAME_CHROME_ROWS = 1 /* hint + status row */ + 2; /* busy spinner */
+
+/**
+ * Rows the transcript REGION keeps, below which it is not worth calling one.
+ *
+ * **Region, not content.** `TranscriptViewport` spends one of these on its own
+ * unconditionally-reserved scroll-position row (`▲ 45 more rows above · …`), so
+ * the content floor is one lower — three here buys two rows of actual
+ * transcript. Charging the extra row to this budget was tried and rejected: it
+ * pushes the plan panel to a single step at 24 rows, and `MIN_PANEL_ROWS`
+ * exists precisely because a panel that small is barely above "a header with
+ * nothing under it". The plan is the wrong consumer to bill for it — the input,
+ * which takes a frame-unaware third plus two affordance rows, is where those
+ * rows actually go. See the note on the cap below.
+ *
+ * **Not a floor the system enforces — a term this budget subtracts.** It bounds
+ * only the PLAN panel: nothing bounds `BoundedLine`'s own vertical cap, which
+ * is frame-unaware (`max(3, min(10, floor(rows / 3)))`), so at very short
+ * heights the input alone can still take the transcript below this and even to
+ * zero, with the plan already yielded. What #435 changed is the failure mode,
+ * not that guarantee: the transcript now collapses first and the prompt stays
+ * intact, instead of the deficit being split and the prompt being squashed.
+ * Closing it properly means making that cap caller-supplied, which is a
+ * contract change shared with `TextInputOverlay` — see the #435 notes.
+ */
+export const MIN_TRANSCRIPT_ROWS = 3;
 
 /** Step rows left over once {@link PLAN_CHROME_ROWS} is paid. */
 export function planListRows(maxRows: number): number {

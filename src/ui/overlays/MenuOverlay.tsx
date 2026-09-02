@@ -13,7 +13,7 @@ import {
   overlayViewport,
   pullBackSection,
 } from './menu-geometry.js';
-import { listPosition } from './viewer-util.js';
+import { formatPosition, listPosition } from './viewer-util.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 import type { MenuEntry, MenuItem, MenuOptions } from '../menu-types.js';
 import { MenuRow } from './MenuRow.js';
@@ -207,7 +207,7 @@ export function MenuOverlay({
   const itemsBefore = countItemsBefore(entries, offset);
   const visibleItemCount = itemsOf(visibleEntries).length;
   const pos = listPosition(itemsBefore, visibleItemCount, items.length);
-  const position = pos ? `items ${pos.first}–${pos.last} of ${pos.total}` : null;
+  const position = formatPosition(pos, 'items');
 
   return (
     <Box flexDirection="column" marginTop={1}>

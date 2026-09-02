@@ -24,6 +24,7 @@ export interface OverlayTab {
  * Re-exported here so the three existing importers keep their import path.
  */
 export { viewerFrameHeight, viewerViewport } from './viewer-util.js';
+import { formatPosition } from './viewer-util.js';
 
 interface ViewerShellProps {
   /** Shift-Tab tab menu rendered at the bottom. */
@@ -115,9 +116,7 @@ export function ViewerShell({
       <Box flexDirection="column" flexGrow={1}>
         {children}
       </Box>
-      <Text color={colors.muted}>
-        {position ? `rows ${position.first}–${position.last} of ${position.total}` : ' '}
-      </Text>
+      <Text color={colors.muted}>{formatPosition(position, 'rows') ?? ' '}</Text>
       <Text color={colors.muted}>{rule}</Text>
       {tabs.length > 0 && (
         <>
