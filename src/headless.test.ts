@@ -153,9 +153,20 @@ describe('runHeadless', () => {
     expect(env.runId).toEqual(expect.any(String));
   });
 
-  it('skips retrieval entirely when no ragQuery is given', async () => {
+  // Not merely "does not search": the RAGStore constructor reads and parses the
+  // whole embedding file (~190 ms / ~128 MB on a real store) and then stays
+  // resident via the returned env. A caller that never retrieves must not pay it.
+  it('never even constructs the RAG store when no ragQuery is given', async () => {
     await runHeadless(opts());
     expect(mockRagSearch).not.toHaveBeenCalled();
+    expect(mockRagStoreCtor).not.toHaveBeenCalled();
+  });
+
+  it('uses a caller-supplied runId so its debug lines join the caller records', async () => {
+    const buildInput = vi.fn().mockReturnValue({});
+    const res = await runHeadless(opts({ buildInput, runId: 'caller-minted' }));
+    expect(buildInput.mock.calls[0][0].runId).toBe('caller-minted');
+    expect(res.env.runId).toBe('caller-minted');
   });
 
   it('is fail-soft when the RAG search throws', async () => {

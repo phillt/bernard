@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
+import { useTempHome } from '../__tests__/temp-home.js';
 
 const mockDispatchAction = vi.hoisted(() =>
   vi.fn().mockResolvedValue({
@@ -14,9 +14,7 @@ const mockDispatchAction = vi.hoisted(() =>
   }),
 );
 
-const mockSpecialistGet = vi.hoisted(() =>
-  vi.fn().mockReturnValue({ id: 'web-wrapper', targetTools: ['web_search'] }),
-);
+const mockSpecialistExists = vi.hoisted(() => vi.fn().mockReturnValue(true));
 
 vi.mock('../apps/dispatch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../apps/dispatch.js')>();
@@ -24,7 +22,7 @@ vi.mock('../apps/dispatch.js', async (importOriginal) => {
 });
 
 vi.mock('../specialists.js', () => ({
-  SpecialistStore: vi.fn(() => ({ get: mockSpecialistGet })),
+  SpecialistStore: vi.fn(() => ({ exists: mockSpecialistExists })),
 }));
 
 vi.mock('../logger.js', () => ({ debugLog: vi.fn(), isDebugEnabled: () => false }));
@@ -45,8 +43,7 @@ const VALID_APP = {
 };
 
 describe('scriptRun', () => {
-  let tmpDir: string;
-  let origHome: string | undefined;
+  useTempHome('bernard-script');
   let stdout: string[];
   let stderr: string[];
   let stdoutSpy: ReturnType<typeof vi.spyOn>;
@@ -66,9 +63,6 @@ describe('scriptRun', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-script-'));
-    origHome = process.env.BERNARD_HOME;
-    process.env.BERNARD_HOME = tmpDir;
     stdout = [];
     stderr = [];
     stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
@@ -87,15 +81,12 @@ describe('scriptRun', () => {
       timings: { mcpConnectMs: 12, totalMs: 34 },
       stepLimitHit: false,
     });
-    mockSpecialistGet.mockReturnValue({ id: 'web-wrapper', targetTools: ['web_search'] });
+    mockSpecialistExists.mockReturnValue(true);
   });
 
   afterEach(() => {
     stdoutSpy.mockRestore();
     stderrSpy.mockRestore();
-    if (origHome === undefined) delete process.env.BERNARD_HOME;
-    else process.env.BERNARD_HOME = origHome;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   /** The contract: stdout parses as exactly one JSON object. */
@@ -156,7 +147,7 @@ describe('scriptRun', () => {
   it('exits 2 when the action names a specialist that does not exist', async () => {
     const m = await load();
     writeApp(m.APPS_DIR);
-    mockSpecialistGet.mockReturnValue(undefined);
+    mockSpecialistExists.mockReturnValue(false);
     const code = await m.scriptRun({ app: 'demo', action: 'ask', argsJson: '{"q":"hi"}' });
     expect(code).toBe(2);
     expect(soleStdoutObject()).toMatchObject({ error: { code: 'unknown_specialist' } });

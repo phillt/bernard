@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APPS_DIR } from '../paths.js';
-import { atomicWriteFileSync, seedOnce } from '../fs-utils.js';
+import { seedBundledJsonDir } from '../fs-utils.js';
 import { parseAppManifest, type AppAction, type AppManifest } from './manifest.js';
 
 /** Marker gating the one-time seed of the bundled example app. */
@@ -53,26 +53,7 @@ export class AppRegistry {
    * produced a first-run write race.
    */
   private seed(): void {
-    try {
-      fs.mkdirSync(APPS_DIR, { recursive: true });
-      seedOnce(path.join(APPS_DIR, SEED_MARKER), () => {
-        const src = bundledAppsDir();
-        if (!fs.existsSync(src)) return;
-        for (const file of fs.readdirSync(src).filter((f) => f.endsWith('.json'))) {
-          const dest = path.join(APPS_DIR, file);
-          if (fs.existsSync(dest)) continue; // never overwrite a user-edited copy
-          try {
-            const raw = fs.readFileSync(path.join(src, file), 'utf-8');
-            JSON.parse(raw); // catch an obviously corrupt bundle file before seeding
-            atomicWriteFileSync(dest, raw);
-          } catch {
-            // skip individual bad files; continue seeding the rest
-          }
-        }
-      });
-    } catch {
-      // seeding is best-effort and must never block an invocation
-    }
+    seedBundledJsonDir(bundledAppsDir(), APPS_DIR, path.join(APPS_DIR, SEED_MARKER));
   }
 
   /** App ids present on disk, sorted. Does not parse the manifests. */

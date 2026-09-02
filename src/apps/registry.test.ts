@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
+import { useTempHome } from '../__tests__/temp-home.js';
 
 async function loadModule() {
   vi.resetModules();
@@ -28,21 +28,8 @@ const VALID = {
 };
 
 describe('AppRegistry', () => {
-  let tmpDir: string;
+  useTempHome('bernard-apps');
   let appsDir: string;
-  let origHome: string | undefined;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bernard-apps-'));
-    origHome = process.env.BERNARD_HOME;
-    process.env.BERNARD_HOME = tmpDir;
-  });
-
-  afterEach(() => {
-    if (origHome === undefined) delete process.env.BERNARD_HOME;
-    else process.env.BERNARD_HOME = origHome;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
 
   function write(appId: string, body: unknown): void {
     fs.mkdirSync(appsDir, { recursive: true });

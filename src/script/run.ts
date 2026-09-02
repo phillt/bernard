@@ -1,12 +1,9 @@
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import { AppRegistry } from '../apps/registry.js';
-import {
-  dispatchAction,
-  resolveFromManifest,
-  type InvocationFailure,
-  type ResolvedInvocation,
-} from '../apps/dispatch.js';
+import { resolveFromManifest, type ResolvedInvocation } from '../apps/invocation.js';
+import { dispatchAction } from '../apps/dispatch.js';
+import type { ParseResult } from '../apps/manifest.js';
 import { SpecialistStore } from '../specialists.js';
 import { classifyError } from '../error-taxonomy.js';
 import { appendJsonl, rotateJsonlByCount } from '../jsonl.js';
@@ -35,6 +32,33 @@ export const EXIT_RUN_FAILED = 1;
 /** The request was malformed — nothing was dispatched. */
 export const EXIT_BAD_REQUEST = 2;
 
+/**
+ * Every way an invocation can fail, and the exit code each maps to.
+ *
+ * A table rather than a comparison, so adding a code is a compile error until
+ * its exit status is decided. The predecessor tested
+ * `code === 'run_failed' || code === 'timeout'` inside the pre-dispatch
+ * helper — where neither value can occur — so the arm that looked like the
+ * classification rule was dead, and a new failure kind would have silently
+ * inherited exit 2. #420 explicitly plans more producers of these kinds.
+ *
+ * The 1/2 split is the contract: `1` means the work failed and a retry might
+ * help; `2` means the request was wrong and retrying it cannot.
+ */
+const EXIT_FOR = {
+  unknown_app: EXIT_BAD_REQUEST,
+  unknown_action: EXIT_BAD_REQUEST,
+  invalid_manifest: EXIT_BAD_REQUEST,
+  invalid_args: EXIT_BAD_REQUEST,
+  unknown_specialist: EXIT_BAD_REQUEST,
+  invalid_request: EXIT_BAD_REQUEST,
+  internal_error: EXIT_BAD_REQUEST,
+  run_failed: EXIT_RUN_FAILED,
+  timeout: EXIT_RUN_FAILED,
+} as const;
+
+export type ScriptErrorCode = keyof typeof EXIT_FOR;
+
 export interface ScriptRunOptions {
   app: string;
   action: string;
@@ -45,7 +69,26 @@ export interface ScriptRunOptions {
   timeoutMs?: number;
 }
 
-/** One JSON object, written to stdout, and nothing else ever is. */
+/** The CLI's whole option surface, so `src/index.ts` stays a declaration shim. */
+export interface ScriptCliOptions {
+  app?: string;
+  action?: string;
+  args?: string;
+  argsFile?: string;
+  timeout?: number;
+  describe?: boolean;
+}
+
+/**
+ * The one JSON object written to stdout, and nothing else ever is.
+ *
+ * Every producer goes through {@link emit} / {@link emitError}. They used to be
+ * hand-rolled at five sites across two modules, and had already drifted: the
+ * two in `src/index.ts` omitted `invocationId` and `durationMs`, so a caller
+ * reading either field off a failure got `undefined` for exactly the two
+ * failures it did not cause. `schemaVersion` exists to be bumped, which only
+ * works while one module owns the shape.
+ */
 type ScriptResult =
   | {
       schemaVersion: 1;
@@ -65,7 +108,7 @@ type ScriptResult =
       app: string;
       action: string;
       durationMs: number;
-      error: { code: string; category?: string; message: string };
+      error: { code: ScriptErrorCode; category?: string; message: string };
     };
 
 function emit(result: ScriptResult): void {
@@ -75,6 +118,23 @@ function emit(result: ScriptResult): void {
 /** Diagnostics go to stderr so the stdout stream stays parseable. */
 function diag(msg: string): void {
   process.stderr.write(`${msg}\n`);
+}
+
+/**
+ * Emits a failure envelope for a request that never reached an invocation —
+ * a missing flag, or a throw out of the command itself.
+ */
+export function emitError(code: ScriptErrorCode, message: string): number {
+  emit({
+    schemaVersion: 1,
+    ok: false,
+    invocationId: crypto.randomUUID(),
+    app: '',
+    action: '',
+    durationMs: 0,
+    error: { code, message },
+  });
+  return EXIT_FOR[code];
 }
 
 function recordInvocation(entry: Record<string, unknown>): void {
@@ -103,13 +163,11 @@ export function effectiveTimeoutMs(
 }
 
 /** Reads `--args` / `--args-file` into a JSON value. `-` means stdin. */
-function readRawArgs(
-  opts: ScriptRunOptions,
-): { ok: true; value: unknown } | { ok: false; message: string } {
+function readRawArgs(opts: ScriptRunOptions): ParseResult<unknown> {
   let text = opts.argsJson;
   if (opts.argsFile !== undefined) {
     if (opts.argsJson !== undefined) {
-      return { ok: false, message: 'Pass either --args or --args-file, not both.' };
+      return { ok: false, error: 'Pass either --args or --args-file, not both.' };
     }
     try {
       // `-` reads stdin, which keeps long values out of `ps` and off ARG_MAX.
@@ -117,7 +175,7 @@ function readRawArgs(
     } catch (err) {
       return {
         ok: false,
-        message: `Could not read --args-file: ${err instanceof Error ? err.message : String(err)}`,
+        error: `Could not read --args-file: ${err instanceof Error ? err.message : String(err)}`,
       };
     }
   }
@@ -127,7 +185,7 @@ function readRawArgs(
   } catch (err) {
     return {
       ok: false,
-      message: `--args is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+      error: `--args is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }
@@ -140,14 +198,46 @@ export function scriptDescribe(appId?: string): number {
     return EXIT_OK;
   }
   const app = registry.get(appId);
-  if (!app.ok) {
-    process.stdout.write(
-      `${JSON.stringify({ schemaVersion: 1, ok: false, error: { code: app.failure.kind, message: app.failure.message } })}\n`,
-    );
-    return EXIT_BAD_REQUEST;
-  }
+  if (!app.ok) return emitError(app.failure.kind, app.failure.message);
   process.stdout.write(`${JSON.stringify({ schemaVersion: 1, app: app.manifest })}\n`);
   return EXIT_OK;
+}
+
+/**
+ * The whole `bernard script` command: flag validation, describe-vs-run, and
+ * the catch-all. `src/index.ts` declares the options and sets the exit code.
+ *
+ * Lives here rather than inlined in the CLI because this module owns the
+ * stdout contract, and the neighbouring subcommands in `index.ts` are all
+ * thin shims over a module.
+ */
+export async function scriptMain(options: ScriptCliOptions): Promise<number> {
+  try {
+    if (options.describe) {
+      // `--describe` with no `--app` lists the registered apps; with one, it
+      // prints that app's action schemas. This is what an applet host reads to
+      // build its buttons, and it is what makes the closed registry
+      // inspectable rather than something a caller has to guess at.
+      return scriptDescribe(options.app);
+    }
+    if (!options.app || !options.action) {
+      return emitError(
+        'invalid_request',
+        '--app and --action are required unless --describe is given.',
+      );
+    }
+    return await scriptRun({
+      app: options.app,
+      action: options.action,
+      argsJson: options.args,
+      argsFile: options.argsFile,
+      timeoutMs: options.timeout,
+    });
+  } catch (err: unknown) {
+    // `scriptRun` answers every outcome with JSON, so reaching here means the
+    // command itself broke. Keep stdout parseable even then.
+    return emitError('internal_error', err instanceof Error ? err.message : String(err));
+  }
 }
 
 /**
@@ -161,14 +251,35 @@ export async function scriptRun(opts: ScriptRunOptions): Promise<number> {
   const startedAt = new Date().toISOString();
   const startMs = Date.now();
 
-  const fail = (code: string, message: string, category?: string): number => {
+  /**
+   * The single failure path. Every branch emits the same envelope and writes
+   * the same record, differing only in the extra fields a post-dispatch
+   * failure can supply.
+   *
+   * Written once because the three hand-rolled copies it replaces had already
+   * diverged: one classified the wrapper error twice, against two different
+   * strings, so the category in the log could disagree with the category
+   * handed to the caller for the same failure.
+   */
+  const fail = (
+    code: ScriptErrorCode,
+    message: string,
+    extra: Record<string, unknown> = {},
+  ): number => {
+    const durationMs = Date.now() - startMs;
+    // Only a failure that actually RAN gets a taxonomy category. Classifying
+    // "No such app: nope" yields `unknown`, which is noise dressed as a
+    // diagnosis — the request-shaped failures already say precisely what was
+    // wrong in `code`.
+    const category =
+      code === 'run_failed' || code === 'timeout' ? classifyError({ message }).category : undefined;
     emit({
       schemaVersion: 1,
       ok: false,
       invocationId,
       app: opts.app,
       action: opts.action,
-      durationMs: Date.now() - startMs,
+      durationMs,
       error: { code, category, message },
     });
     recordInvocation({
@@ -177,32 +288,37 @@ export async function scriptRun(opts: ScriptRunOptions): Promise<number> {
       action: opts.action,
       startedAt,
       completedAt: new Date().toISOString(),
-      durationMs: Date.now() - startMs,
+      durationMs,
       ok: false,
       errorCode: code,
       errorCategory: category,
+      ...extra,
       // Reserved for #420: the capability handle this invocation was minted
       // from. Always null here, so correlating mint with invoke is a value
-      // fill rather than a schema migration (#420 R9).
+      // fill rather than a schema migration (R9).
       capabilityId: null,
     });
-    return code === 'run_failed' || code === 'timeout' ? EXIT_RUN_FAILED : EXIT_BAD_REQUEST;
+    return EXIT_FOR[code];
   };
 
   const raw = readRawArgs(opts);
-  if (!raw.ok) return fail('invalid_args', raw.message);
+  if (!raw.ok) return fail('invalid_args', raw.error);
 
   const registry = new AppRegistry();
   const resolved = resolveFromManifest(registry, opts.app, opts.action, raw.value);
-  if (!resolved.ok) return fail(failureCode(resolved.failure), resolved.failure.message);
+  if (!resolved.ok) return fail(resolved.failure.kind, resolved.failure.message);
 
   const { invocation } = resolved;
+  // The action DECLARED these; recorded so a log reader can see the scope.
+  const toolsGranted = invocation.action.toolAllowlist;
+  const argKeys = Object.keys(invocation.frozenArgs);
 
   // Pre-flight: an action naming a specialist that does not exist is a broken
   // manifest, not a failed run — the caller should see exit 2, and no model
-  // call should be billed for it.
-  const specialist = new SpecialistStore().get(invocation.action.specialistId);
-  if (!specialist) {
+  // call should be billed for it. `exists` rather than `get`, which reads and
+  // parses the record only for its truthiness; `runHeadless` reads it properly
+  // a moment later.
+  if (!new SpecialistStore().exists(invocation.action.specialistId)) {
     return fail(
       'unknown_specialist',
       `Action "${opts.action}" names specialist "${invocation.action.specialistId}", which does not exist.`,
@@ -213,97 +329,63 @@ export async function scriptRun(opts: ScriptRunOptions): Promise<number> {
 
   debugLog('script:invoke', {
     invocationId,
-    appId: opts.app,
-    action: opts.action,
+    appId: invocation.appId,
+    action: invocation.actionName,
     // Names only, never values: args carry the caller's data and the debug log
     // is not the place for it.
-    argKeys: Object.keys(invocation.frozenArgs),
+    argKeys,
     specialistId: invocation.action.specialistId,
     toolMode: invocation.action.toolMode,
     timeoutMs,
   });
 
   const run = await withStdoutRedirectedToStderr(() =>
-    dispatchAction({ invocation, timeoutMs, log: diag }),
+    // The same id `runHeadless` will namespace its debug lines with, so
+    // `script:mcp:ready` joins the invocation record rather than naming a run
+    // that appears nowhere else.
+    dispatchAction({ invocation, timeoutMs, log: diag, runId: invocationId }),
   );
 
-  const completedAt = new Date().toISOString();
-  const durationMs = Date.now() - startMs;
+  const dispatched = { argKeys, specialistId: invocation.action.specialistId, toolsGranted };
 
   if (!run.ok) {
-    const message = run.timedOut ? `Action timed out after ${run.timeoutMs} ms` : run.error;
-    // Classified here, at the site that knows what the message means — the
-    // same rule cron follows. `runHeadless` deliberately does not classify.
-    const cls = classifyError({ message });
-    emit({
-      schemaVersion: 1,
-      ok: false,
-      invocationId,
-      app: opts.app,
-      action: opts.action,
-      durationMs,
-      error: { code: run.timedOut ? 'timeout' : 'run_failed', category: cls.category, message },
-    });
-    recordInvocation({
-      invocationId,
-      appId: opts.app,
-      action: opts.action,
-      argKeys: Object.keys(invocation.frozenArgs),
-      specialistId: invocation.action.specialistId,
-      toolsGranted: grantedToolNames(invocation),
-      startedAt,
-      completedAt,
-      durationMs,
-      ok: false,
-      errorCode: run.timedOut ? 'timeout' : 'run_failed',
-      errorCategory: cls.category,
-      mcpConnectMs: run.timings.mcpConnectMs,
-      capabilityId: null,
-    });
-    return EXIT_RUN_FAILED;
+    return fail(
+      run.timedOut ? 'timeout' : 'run_failed',
+      run.timedOut ? `Action timed out after ${run.timeoutMs} ms` : run.error,
+      { ...dispatched, mcpConnectMs: run.timings.mcpConnectMs },
+    );
   }
 
   const wrapper = run.formatted;
-  const ok = wrapper.status === 'ok';
+  if (wrapper.status !== 'ok') {
+    return fail('run_failed', wrapper.error ?? 'The action reported a failure with no message.', {
+      ...dispatched,
+      mcpConnectMs: run.timings.mcpConnectMs,
+      stepLimitHit: run.stepLimitHit,
+    });
+  }
 
+  const durationMs = Date.now() - startMs;
   recordInvocation({
     invocationId,
-    appId: opts.app,
-    action: opts.action,
-    argKeys: Object.keys(invocation.frozenArgs),
-    specialistId: invocation.action.specialistId,
-    toolsGranted: grantedToolNames(invocation),
+    appId: invocation.appId,
+    action: invocation.actionName,
+    ...dispatched,
     startedAt,
-    completedAt,
+    completedAt: new Date().toISOString(),
     durationMs,
-    ok,
-    errorCode: ok ? undefined : 'run_failed',
-    errorCategory: ok ? undefined : classifyError({ message: wrapper.error ?? '' }).category,
+    ok: true,
     mcpConnectMs: run.timings.mcpConnectMs,
     stepLimitHit: run.stepLimitHit,
     capabilityId: null,
   });
 
-  if (!ok) {
-    const message = wrapper.error ?? 'The action reported a failure with no message.';
-    emit({
-      schemaVersion: 1,
-      ok: false,
-      invocationId,
-      app: opts.app,
-      action: opts.action,
-      durationMs,
-      error: { code: 'run_failed', category: classifyError({ message }).category, message },
-    });
-    return EXIT_RUN_FAILED;
-  }
-
   emit({
     schemaVersion: 1,
     ok: true,
     invocationId,
-    app: opts.app,
-    action: opts.action,
+    app: invocation.appId,
+    action: invocation.actionName,
     startedAt,
     durationMs,
     result: wrapper.result,
@@ -316,11 +398,5 @@ export async function scriptRun(opts: ScriptRunOptions): Promise<number> {
   return EXIT_OK;
 }
 
-/** The tools the action DECLARED. Recorded so a log reader can see the scope. */
-function grantedToolNames(invocation: ResolvedInvocation): string[] {
-  return invocation.action.toolAllowlist;
-}
-
-function failureCode(failure: InvocationFailure): string {
-  return failure.kind;
-}
+/** Referenced for its type only; kept so the resolved record is the log's source. */
+export type { ResolvedInvocation };

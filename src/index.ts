@@ -57,6 +57,7 @@ import { toLiteralSpeech } from './speech-text.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
+import type { ScriptCliOptions } from './script/run.js';
 import { listMCPServers, removeMCPServer, MCPManager, setActiveMCPManager } from './mcp.js';
 import { ToolProfileStore } from './tool-profiles.js';
 import { runFirstTimeSetup } from './setup.js';
@@ -1025,51 +1026,18 @@ program
   .option('--args-file <path>', "Read --args from a file; '-' reads stdin")
   .option('--timeout <ms>', "Lower the action's wall clock (never raises it)", parseInt)
   .option('--describe', 'Print the app and its action schemas, then exit without dispatching')
-  .action(
-    async (options: {
-      app?: string;
-      action?: string;
-      args?: string;
-      argsFile?: string;
-      timeout?: number;
-      describe?: boolean;
-    }) => {
-      // Deliberately no --provider / --model: the issue requires the active
-      // profile's model be honoured, and a caller choosing a vendor per
-      // invocation is a decision that belongs to the user, not to the app.
-      const { scriptRun, scriptDescribe, EXIT_BAD_REQUEST } = await import('./script/run.js');
-      try {
-        if (options.describe) {
-          // `--describe` with no --app lists the registered apps; with one, it
-          // prints that app's action schemas. This is what an applet host reads
-          // to build its buttons, and it is what makes the closed registry
-          // inspectable rather than something a caller has to guess at.
-          process.exitCode = scriptDescribe(options.app);
-        } else if (!options.app || !options.action) {
-          process.stdout.write(
-            `${JSON.stringify({ schemaVersion: 1, ok: false, error: { code: 'invalid_request', message: '--app and --action are required unless --describe is given.' } })}\n`,
-          );
-          process.exitCode = EXIT_BAD_REQUEST;
-        } else {
-          process.exitCode = await scriptRun({
-            app: options.app,
-            action: options.action,
-            argsJson: options.args,
-            argsFile: options.argsFile,
-            timeoutMs: options.timeout,
-          });
-        }
-      } catch (err: unknown) {
-        // scriptRun answers every outcome with JSON, so reaching here means the
-        // command itself broke. Keep stdout parseable even then.
-        const message = err instanceof Error ? err.message : String(err);
-        process.stdout.write(
-          `${JSON.stringify({ schemaVersion: 1, ok: false, error: { code: 'internal_error', message } })}\n`,
-        );
-        process.exitCode = EXIT_BAD_REQUEST;
-      }
-    },
-  );
+  .action(async (options: ScriptCliOptions) => {
+    // Deliberately no --provider / --model: the active profile decides the
+    // model, and a caller choosing a vendor per invocation is the user's
+    // decision, not the app's.
+    //
+    // A thin shim like every neighbouring subcommand. `scriptMain` owns the
+    // branching, the flag rule and the catch-all, because it also owns the
+    // "exactly one JSON object on stdout" contract — which had drifted while
+    // this file hand-rolled two envelopes of its own.
+    const { scriptMain } = await import('./script/run.js');
+    process.exitCode = await scriptMain(options);
+  });
 
 program
   .command('cron-delete <ids...>')

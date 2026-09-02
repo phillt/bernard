@@ -20,11 +20,39 @@ vi.mock('node:fs', () => ({
 
 vi.mock('./fs-utils.js', async () => {
   const fsMock = await import('node:fs');
+  const atomicWrite = vi.fn();
+  // Mirrors the real `copyBundledJsonIfAbsent`, INCLUDING its JSON.parse probe
+  // — with `readFileSync` stubbed to '' the probe throws and the copy is
+  // skipped, which is what keeps "a protected specialist is never written"
+  // observable through the shared `atomicWriteFileSync` spy.
+  const copyIfAbsent = (bundledDir: string, destDir: string, file: string): void => {
+    const dest = `${destDir}/${file}`;
+    if (fsMock.existsSync(dest)) return;
+    try {
+      const raw = fsMock.readFileSync(`${bundledDir}/${file}`, 'utf-8') as unknown as string;
+      JSON.parse(raw);
+      atomicWrite(dest, raw);
+    } catch {
+      // skip individual bad files
+    }
+  };
   return {
-    atomicWriteFileSync: vi.fn(),
+    atomicWriteFileSync: atomicWrite,
     seedOnce: vi.fn((markerPath: string, seedFn: () => void) => {
       if (fsMock.existsSync(markerPath)) return;
       seedFn();
+      fsMock.writeFileSync(markerPath, new Date().toISOString(), 'utf-8');
+    }),
+    // Mirrors the real implementations closely enough to keep the seeding
+    // assertions meaningful: the copy still routes through the mocked
+    // `atomicWriteFileSync`, which is what the POST_V1 additive-seed test
+    // inspects, and the directory seed still respects its marker.
+    copyBundledJsonIfAbsent: vi.fn(copyIfAbsent),
+    seedBundledJsonDir: vi.fn((bundledDir: string, destDir: string, markerPath: string) => {
+      if (fsMock.existsSync(markerPath)) return;
+      for (const file of fsMock.readdirSync(bundledDir) as unknown as string[]) {
+        if (String(file).endsWith('.json')) copyIfAbsent(bundledDir, destDir, String(file));
+      }
       fsMock.writeFileSync(markerPath, new Date().toISOString(), 'utf-8');
     }),
   };

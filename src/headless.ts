@@ -1,7 +1,5 @@
 import * as crypto from 'node:crypto';
 import { loadConfig } from './config.js';
-import type { BernardConfig } from './config.js';
-import { initShellParser } from './permissions/shell-ast.js';
 import { assembleContext } from './framework/context.js';
 import type { AgentContext, AgentContextMCP, AgentContextStores } from './framework/context.js';
 import { RAGStore, type RAGSearchResult } from './rag.js';
@@ -104,7 +102,6 @@ export function resolvePosture(input: HeadlessPostureInput): HeadlessPosture {
  * failure branches.
  */
 export interface HeadlessEnv {
-  config: BernardConfig;
   ctx: AgentContext;
   mcp: AgentContextMCP;
   ragResults?: RAGSearchResult[];
@@ -148,6 +145,13 @@ export interface RunHeadlessOpts<TInput, TFormatted> {
   log: (msg: string) => void;
   /** Namespaces this run's `debugLog` lines, e.g. `'cron'` / `'script'`. */
   debugLabel: string;
+  /**
+   * Correlation id for this run. Supply one when the caller already mints an
+   * id it persists in its own records — otherwise this function mints a fresh
+   * one and the caller's log rows and these `debugLog` lines name different
+   * runs, which is precisely the join a cold-start measurement needs.
+   */
+  runId?: string;
 }
 
 /** Timings every headless run reports, success or failure. */
@@ -228,24 +232,42 @@ export async function runHeadless<TInput, TFormatted>(
   const { buildInput, posture, ragQuery, timeoutMs, log, debugLabel } = opts;
 
   registerBuiltinDefinitions();
-  // Warm the bash parser in the background (#261). A headless run carries no
-  // profile rules so the parser isn't consulted for matching, and
-  // dangerous-command detection uses regex — so this never needs to block.
-  void initShellParser();
   const config = loadConfig();
 
-  const runId = crypto.randomUUID();
+  // Deliberately NOT warming the bash parser (#261) the way the REPL does.
+  // The parser is reached only through `resolveGrant`, and `augmentTools`
+  // returns 'ask' before ever calling it when `getToolPermissions()` yields no
+  // rules — which a headless run guarantees by omitting the callback entirely
+  // (see `toolOptions` below). So the load was ~14 ms and ~1.6 MB of WASM,
+  // retained for the process lifetime, on a path that cannot consult it.
+  const runId = opts.runId ?? crypto.randomUUID();
   const startedAt = new Date().toISOString();
   const startMs = Date.now();
 
+  // Gated on `ragQuery`, not on `config.ragEnabled` alone. The constructor is
+  // not a lazy handle: it reads and parses the whole embedding file, writes the
+  // session date, prunes expired records and stats the temp dir — measured at
+  // ~190 ms and ~128 MB on a 31 MB / 3,660-record store. A caller that never
+  // retrieves (every `bernard script` action) paid all of it, and then held the
+  // embeddings resident for the whole invocation via the returned `env`.
   let ragStore: RAGStore | undefined;
-  if (config.ragEnabled) {
+  let ragSearch: Promise<RAGSearchResult[] | undefined> | undefined;
+  if (config.ragEnabled && ragQuery) {
     try {
       ragStore = new RAGStore();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log(`RAG initialization failed, continuing without RAG: ${msg}`);
     }
+    // Started BEFORE the MCP connect below rather than after it. The two are
+    // independent — the search needs only the store — and connect measures
+    // ~1.1-1.6 s against four stdio servers while the first search pays a cold
+    // MiniLM load. Awaited further down; `.catch` is attached here, at
+    // creation, so an early rejection can never surface as unhandled.
+    ragSearch = ragStore?.search(ragQuery).catch((err: unknown) => {
+      debugLog(`${debugLabel}:rag:error`, err instanceof Error ? err.message : String(err));
+      return undefined;
+    });
   }
 
   const mcpManager = new MCPManager();
@@ -284,14 +306,9 @@ export async function runHeadless<TInput, TFormatted>(
       config,
       toolOptions: {
         shellTimeout: config.shellTimeout,
-        // confirmDangerous is the fallback inside shell.ts for when confirmAction
-        // is absent. Because a headless run always wires confirmAction below,
-        // this callback is never reached — but ToolOptions requires it, so
-        // supply a safe default.
+        // Unreachable, but required by ToolOptions — see
+        // HeadlessPosture.confirmAction for why wiring confirmAction retires it.
         confirmDangerous: async () => false,
-        // Headless confirm gate. augmentTools reads the confirm threshold from
-        // ctx.policyDecision (set below) to decide whether to call this; the
-        // callback's own risk check is a defence-in-depth fallback.
         confirmAction: posture.confirmAction,
         // blockAction is intentionally omitted — this is headless and the augment
         // layer's fail-closed default (auto-deny when toolMode:'read-only' and no
@@ -324,23 +341,16 @@ export async function runHeadless<TInput, TFormatted>(
     throw err;
   }
 
-  let ragResults: RAGSearchResult[] | undefined;
-  if (ragStore && ragQuery) {
-    try {
-      ragResults = await ragStore.search(ragQuery);
-      if (ragResults.length > 0) {
-        debugLog(`${debugLabel}:rag`, {
-          runId,
-          query: ragQuery.slice(0, 100),
-          results: ragResults.length,
-        });
-      }
-    } catch (err) {
-      debugLog(`${debugLabel}:rag:error`, err instanceof Error ? err.message : String(err));
-    }
+  const ragResults = await ragSearch;
+  if (ragResults && ragResults.length > 0) {
+    debugLog(`${debugLabel}:rag`, {
+      runId,
+      query: ragQuery?.slice(0, 100),
+      results: ragResults.length,
+    });
   }
 
-  const env: HeadlessEnv = { config, ctx, mcp: mcpSnapshot, ragResults, runId };
+  const env: HeadlessEnv = { ctx, mcp: mcpSnapshot, ragResults, runId };
   const timings = (): HeadlessTimings => ({ mcpConnectMs, totalMs: Date.now() - startMs });
 
   // Wall clock (#326). Also the only `abortSignal` a headless run has, so
