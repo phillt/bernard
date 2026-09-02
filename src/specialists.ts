@@ -2,7 +2,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { SPECIALISTS_DIR } from './paths.js';
 import { RESERVED_NAMES } from './reserved-names.js';
-import { atomicWriteFileSync, seedOnce } from './fs-utils.js';
+import {
+  atomicWriteFileSync,
+  seedOnce,
+  seedBundledJsonDir,
+  copyBundledJsonIfAbsent,
+} from './fs-utils.js';
 import {
   findBuiltinSpecialistsDir,
   assertCanDeleteSpecialist,
@@ -158,27 +163,11 @@ export class SpecialistStore {
     const bundledDir = findBuiltinSpecialistsDir();
     if (!bundledDir) return;
 
-    const copyIfAbsent = (file: string): void => {
-      const dest = path.join(SPECIALISTS_DIR, file);
-      if (fs.existsSync(dest)) return; // never overwrite user-edited copies
-      try {
-        const raw = fs.readFileSync(path.join(bundledDir, file), 'utf-8');
-        // Parse once to catch obviously corrupt bundle files before seeding.
-        JSON.parse(raw);
-        atomicWriteFileSync(dest, raw);
-      } catch {
-        // skip individual bad files; continue seeding the rest
-      }
-    };
+    // First-run seed of the original bundle. Gated by `.seeded-v1` so users
+    // can freely edit OR delete these without them coming back.
+    seedBundledJsonDir(bundledDir, SPECIALISTS_DIR, path.join(SPECIALISTS_DIR, SEED_MARKER));
 
     try {
-      // First-run seed of the original bundle. Gated by `.seeded-v1` so users
-      // can freely edit OR delete these without them coming back.
-      seedOnce(path.join(SPECIALISTS_DIR, SEED_MARKER), () => {
-        for (const file of fs.readdirSync(bundledDir).filter((f) => f.endsWith('.json'))) {
-          copyIfAbsent(file);
-        }
-      });
       // Additive seed for specialists shipped AFTER `.seeded-v1`. Each gets its
       // own marker so existing installs receive the new file without the v1
       // marker bump that would resurrect a v1 specialist the user deleted on
@@ -186,7 +175,7 @@ export class SpecialistStore {
       // from returning.)
       for (const file of POST_V1_BUNDLED) {
         seedOnce(path.join(SPECIALISTS_DIR, `.seeded-${file.replace(/\.json$/, '')}`), () =>
-          copyIfAbsent(file),
+          copyBundledJsonIfAbsent(bundledDir, SPECIALISTS_DIR, file),
         );
       }
     } catch {

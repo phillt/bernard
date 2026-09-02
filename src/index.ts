@@ -57,6 +57,7 @@ import { toLiteralSpeech } from './speech-text.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
 import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
+import type { ScriptCliOptions } from './script/run.js';
 import { listMCPServers, removeMCPServer, MCPManager, setActiveMCPManager } from './mcp.js';
 import { ToolProfileStore } from './tool-profiles.js';
 import { runFirstTimeSetup } from './setup.js';
@@ -1014,6 +1015,28 @@ program
       printError(message);
       process.exit(1);
     }
+  });
+
+program
+  .command('script')
+  .description('Run a named app action programmatically; prints one JSON object on stdout')
+  .option('--app <appId>', 'App id, as registered under the apps directory')
+  .option('--action <name>', 'Action name declared by that app')
+  .option('--args <json>', "JSON object of the action's declared arguments")
+  .option('--args-file <path>', "Read --args from a file; '-' reads stdin")
+  .option('--timeout <ms>', "Lower the action's wall clock (never raises it)", parseInt)
+  .option('--describe', 'Print the app and its action schemas, then exit without dispatching')
+  .action(async (options: ScriptCliOptions) => {
+    // Deliberately no --provider / --model: the active profile decides the
+    // model, and a caller choosing a vendor per invocation is the user's
+    // decision, not the app's.
+    //
+    // A thin shim like every neighbouring subcommand. `scriptMain` owns the
+    // branching, the flag rule and the catch-all, because it also owns the
+    // "exactly one JSON object on stdout" contract — which had drifted while
+    // this file hand-rolled two envelopes of its own.
+    const { scriptMain } = await import('./script/run.js');
+    process.exitCode = await scriptMain(options);
   });
 
 program
