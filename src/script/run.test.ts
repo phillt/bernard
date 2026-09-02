@@ -264,4 +264,39 @@ describe('effectiveTimeoutMs', () => {
     expect(effectiveTimeoutMs(undefined, undefined)).toBe(5 * 60_000);
     expect(effectiveTimeoutMs(undefined, 1_000)).toBe(1_000);
   });
+
+  // `NaN` passes every ordering comparison — `NaN <= 0` is false — so it used
+  // to survive `Math.min` and reach `setTimeout`, which coerces it to 0 and
+  // fires the abort immediately.
+  it('falls back to the ceiling rather than propagating a non-finite value', async () => {
+    const { effectiveTimeoutMs } = await import('./run.js');
+    expect(effectiveTimeoutMs(60_000, NaN)).toBe(60_000);
+    expect(effectiveTimeoutMs(60_000, Infinity)).toBe(60_000);
+    expect(effectiveTimeoutMs(NaN, undefined)).toBe(5 * 60_000);
+  });
+});
+
+describe('scriptMain flag validation', () => {
+  it('rejects a non-numeric --timeout with exit 2, before dispatching anything', async () => {
+    // This block sits outside the `scriptRun` suite's beforeEach, so the
+    // dispatch spy still carries that suite's calls.
+    vi.clearAllMocks();
+    const stdout: string[] = [];
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((c: unknown) => {
+      stdout.push(String(c));
+      return true;
+    });
+    try {
+      const { scriptMain } = await import('./run.js');
+      // Commander's bare `parseInt` turns `--timeout foo` into NaN.
+      const code = await scriptMain({ app: 'demo', action: 'ask', timeout: NaN });
+      expect(code).toBe(2);
+      const out = JSON.parse(stdout.join('').trim());
+      expect(out.error.code).toBe('invalid_request');
+      expect(out.error.message).toMatch(/--timeout/);
+      expect(mockDispatchAction).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });

@@ -152,13 +152,26 @@ function recordInvocation(entry: Record<string, unknown>): void {
  * `--timeout` may only lower it. A caller cannot buy itself more time than the
  * manifest grants, which is what keeps the budget a property of the app rather
  * than of whoever is calling it.
+ *
+ * Non-finite input falls back to the ceiling rather than propagating.
+ * `Number.isFinite` rather than `<= 0` alone, because `NaN` passes every
+ * ordering comparison: `NaN <= 0` is false, so a `NaN` reached `Math.min` and
+ * came back out, then `setTimeout(cb, NaN)` — which Node coerces to `0` — fired
+ * the abort immediately and reported "timed out after NaN ms". `scriptMain`
+ * now rejects that input up front, so this is the second layer; it stays
+ * because this is an exported pure function with its own callers to come.
  */
 export function effectiveTimeoutMs(
   actionTimeoutMs: number | undefined,
   flagTimeoutMs: number | undefined,
 ): number {
-  const ceiling = actionTimeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS;
-  if (flagTimeoutMs === undefined || flagTimeoutMs <= 0) return ceiling;
+  const ceiling =
+    actionTimeoutMs !== undefined && Number.isFinite(actionTimeoutMs)
+      ? actionTimeoutMs
+      : DEFAULT_SCRIPT_TIMEOUT_MS;
+  if (flagTimeoutMs === undefined || !Number.isFinite(flagTimeoutMs) || flagTimeoutMs <= 0) {
+    return ceiling;
+  }
   return Math.min(flagTimeoutMs, ceiling);
 }
 
@@ -225,6 +238,18 @@ export async function scriptMain(options: ScriptCliOptions): Promise<number> {
         'invalid_request',
         '--app and --action are required unless --describe is given.',
       );
+    }
+    // Commander coerces `--timeout` with a bare `parseInt`, so `--timeout foo`
+    // arrives as `NaN`. Rejected here rather than absorbed: this is a
+    // machine-facing entry point, and a caller that mistyped a budget wants
+    // "your flag was wrong" (exit 2) rather than a run that is aborted
+    // instantly and reported as a timeout — which is what happened, after
+    // paying for an MCP connect first.
+    if (
+      options.timeout !== undefined &&
+      !(Number.isFinite(options.timeout) && options.timeout > 0)
+    ) {
+      return emitError('invalid_request', '--timeout must be a positive number of milliseconds.');
     }
     return await scriptRun({
       app: options.app,
