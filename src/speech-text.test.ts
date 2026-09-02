@@ -159,13 +159,11 @@ describe('toSpeechText — bounds', () => {
       const t = toSpeechText(input);
       expect(t.spokenForm).toBe('');
       expect(t.unresolved).toEqual([]);
-      expect(t.truncated).toBe(false);
     }
   });
 
   it('truncates past the cap with a spoken marker', () => {
     const t = toSpeechText('word '.repeat(2000), { maxChars: 200 });
-    expect(t.truncated).toBe(true);
     expect(t.spokenForm.length).toBeLessThanOrEqual(200);
     expect(t.spokenForm.endsWith(TRUNCATION_MARKER)).toBe(true);
   });
@@ -179,29 +177,31 @@ describe('toSpeechText — bounds', () => {
 describe('reduceUnresolved', () => {
   it('reduces a URL to its host', () => {
     const t = toSpeechText('See https://www.example.com/a/b?q=1 now.');
-    expect(reduceUnresolved(t)).toBe('See example dot com now.');
+    expect(reduceUnresolved(t.spokenForm)).toBe('See example dot com now.');
   });
 
   it('reads a table as one sentence per row', () => {
     const t = toSpeechText('| Provider | Models |\n| --- | --- |\n| anthropic | 12 |\n| xai | 8 |');
-    expect(reduceUnresolved(t)).toBe('Provider: anthropic, Models: 12.\nProvider: xai, Models: 8.');
+    expect(reduceUnresolved(t.spokenForm)).toBe(
+      'Provider: anthropic, Models: 12.\nProvider: xai, Models: 8.',
+    );
   });
 
   it('caps a long table and says how many rows it skipped', () => {
     const rows = Array.from({ length: 15 }, (_, i) => `| r${i} | ${i} |`).join('\n');
-    const out = reduceUnresolved(toSpeechText(`| a | b |\n| --- | --- |\n${rows}`));
+    const out = reduceUnresolved(toSpeechText(`| a | b |\n| --- | --- |\n${rows}`).spokenForm);
     expect(out).toContain('…and 10 more rows.');
     expect(out).not.toContain('| r0 |');
   });
 
   it('reduces a path to its basename', () => {
     const t = toSpeechText('Edit /home/u/p/src/agent.ts now.');
-    expect(reduceUnresolved(t)).toBe('Edit agent.ts now.');
+    expect(reduceUnresolved(t.spokenForm)).toBe('Edit agent.ts now.');
   });
 
   it('leaves an unmarked number untouched', () => {
     const t = toSpeechText('It lists 1200 models.');
-    expect(reduceUnresolved(t)).toBe('It lists 1200 models.');
+    expect(reduceUnresolved(t.spokenForm)).toBe('It lists 1200 models.');
   });
 });
 
@@ -270,12 +270,12 @@ describe('URL boundaries', () => {
     // `…/pricing.` matching through the full stop would delete the period along
     // with the URL, running two sentences into one.
     const t = toSpeechText('Pricing is at https://www.example.com/pricing. Run the build.');
-    expect(reduceUnresolved(t)).toBe('Pricing is at example dot com. Run the build.');
+    expect(reduceUnresolved(t.spokenForm)).toBe('Pricing is at example dot com. Run the build.');
   });
 
   it('does not swallow a trailing comma or closing paren', () => {
     const t = toSpeechText('See https://example.com/a, then stop. (https://example.com/b)');
-    const out = reduceUnresolved(t);
+    const out = reduceUnresolved(t.spokenForm);
     expect(out).toContain('example dot com, then stop.');
     expect(out).not.toContain('https://');
   });

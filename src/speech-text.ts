@@ -55,7 +55,6 @@ export type SemioticClass =
   | 'currency'
   | 'measurement'
   | 'date'
-  | 'time'
   | 'number'
   | 'identifier'
   | 'path'
@@ -75,8 +74,6 @@ export interface SpeechText {
    * answered everything and the LLM round trip buys nothing.
    */
   unresolved: SemioticClass[];
-  /** True when the input exceeded the cap and a spoken marker was appended. */
-  truncated: boolean;
 }
 
 /**
@@ -93,13 +90,13 @@ export const SPEECH_MAX_CHARS = 3000;
  * call count down, and it already clears most turns. This one only exists so a
  * sub-sentence reply doesn't pay a round trip to name one link.
  */
-export const MIN_NORMALIZE_CHARS = 40;
+const MIN_NORMALIZE_CHARS = 40;
 
 /** Appended when the source was cut, so a listener knows they got a prefix. */
 export const TRUNCATION_MARKER = ' … message truncated.';
 
 /** Stands in for a fenced block. Its contents are never spoken. */
-export const CODE_SENTINEL = 'Code block omitted.';
+const CODE_SENTINEL = 'Code block omitted.';
 
 /** `\`\`\`bash` → "A bash code block, omitted." — the info string is free context. */
 export function codeSentinel(lang?: string): string {
@@ -111,25 +108,14 @@ export function codeSentinel(lang?: string): string {
 const MAX_SPOKEN_TABLE_ROWS = 5;
 
 /**
- * Closed-set expansions. Written form → spoken form, applied whole-word.
- * Deliberately small: every entry has exactly one correct reading.
+ * Closed-set expansions, written → spoken, applied in order. Deliberately
+ * small: every entry has exactly one correct reading, which is what makes them
+ * safe to do without a model. Units and abbreviations are one table because
+ * nothing branches on the distinction — units are digit-bound and abbreviations
+ * are word- or symbol-bound, so they cannot interact.
  */
-const ABBREVIATIONS: ReadonlyArray<[RegExp, string]> = [
-  [/\be\.g\.(?=\s|$)/gi, 'for example'],
-  [/\bi\.e\.(?=\s|$)/gi, 'that is'],
-  [/\betc\.(?=\s|$)/gi, 'et cetera'],
-  [/\bvs\.?(?=\s|$)/gi, 'versus'],
-  [/\bapprox\.(?=\s|$)/gi, 'approximately'],
-  [/≈/g, ' approximately '],
-  [/[≥]/g, ' at least '],
-  [/[≤]/g, ' at most '],
-  [/(\s)->(\s)/g, '$1to$2'],
-  [/(\s)→(\s)/g, '$1to$2'],
-  [/(\s)&(\s)/g, '$1and$2'],
-];
-
-/** Unit abbreviations, expanded only when bound to a digit. */
-const UNITS: ReadonlyArray<[RegExp, string]> = [
+const EXPANSIONS: ReadonlyArray<[RegExp, string]> = [
+  // Units — only when bound to a digit, so a stray "ms" in prose is untouched.
   [/(\d)\s?km\b/g, '$1 kilometers'],
   [/(\d)\s?cm\b/g, '$1 centimeters'],
   [/(\d)\s?mm\b/g, '$1 millimeters'],
@@ -144,6 +130,18 @@ const UNITS: ReadonlyArray<[RegExp, string]> = [
   [/(\d)\s?°C\b/g, '$1 degrees Celsius'],
   [/(\d)\s?°F\b/g, '$1 degrees Fahrenheit'],
   [/(\d)\s?%/g, '$1 percent'],
+  // Abbreviations and symbols.
+  [/\be\.g\.(?=\s|$)/gi, 'for example'],
+  [/\bi\.e\.(?=\s|$)/gi, 'that is'],
+  [/\betc\.(?=\s|$)/gi, 'et cetera'],
+  [/\bvs\.?(?=\s|$)/gi, 'versus'],
+  [/\bapprox\.(?=\s|$)/gi, 'approximately'],
+  [/≈/g, ' approximately '],
+  [/[≥]/g, ' at least '],
+  [/[≤]/g, ' at most '],
+  [/(\s)->(\s)/g, '$1to$2'],
+  [/(\s)→(\s)/g, '$1to$2'],
+  [/(\s)&(\s)/g, '$1and$2'],
 ];
 
 const MONTHS = [
@@ -296,24 +294,42 @@ function verbalizeClosedClasses(text: string): string {
     return `${month} ${Number(d)}, ${y}`;
   });
 
-  for (const [re, to] of UNITS) out = out.replace(re, to);
-  for (const [re, to] of ABBREVIATIONS) out = out.replace(re, to);
+  for (const [re, to] of EXPANSIONS) out = out.replace(re, to);
 
   return out;
 }
 
-/** Records every class that survives stage 1 and needs a semantic judgement. */
+/**
+ * Every class stage 1 can leave for the model, and the pattern that spots it.
+ *
+ * Deliberately **non-global** copies: a `g` regex carries `lastIndex` across
+ * `.test`, so scanning with the same objects the `.replace` calls use needs a
+ * reset loop that a new entry can silently forget. Only `URL_RE` and `PATH_RE`
+ * need `g` at all, and only in {@link reduceUnresolved}.
+ */
+const UNRESOLVED_TAGS: ReadonlyArray<[RegExp, SemioticClass]> = [
+  [scanner(URL_RE), 'url'],
+  [scanner(PATH_RE), 'path'],
+  [scanner(VERSION_RE), 'identifier'],
+  [scanner(SHA_RE), 'identifier'],
+  [scanner(ISSUE_RE), 'identifier'],
+  [scanner(SLASH_DATE_RE), 'date'],
+  [scanner(BARE_NUMBER_RE), 'number'],
+];
+
+/** A stateless `.test`-only twin of a `g` pattern. */
+function scanner(re: RegExp): RegExp {
+  return new RegExp(re.source, re.flags.replace('g', ''));
+}
+
+/**
+ * Records every class that survives stage 1 and needs a semantic judgement.
+ *
+ * Must run BEFORE comma stripping, or `1,200` becomes `1200` and a quantity
+ * whose cardinal reading was already correct reads as an ambiguous bare number.
+ */
 function tagUnresolved(text: string, tag: (c: SemioticClass) => void): void {
-  // Order is irrelevant (tags are a set) but the scan must run BEFORE comma
-  // stripping, or `1,200` becomes `1200` and reads as an ambiguous bare number.
-  if (URL_RE.test(text)) tag('url');
-  if (PATH_RE.test(text)) tag('path');
-  if (VERSION_RE.test(text) || SHA_RE.test(text) || ISSUE_RE.test(text)) tag('identifier');
-  if (SLASH_DATE_RE.test(text)) tag('date');
-  if (BARE_NUMBER_RE.test(text)) tag('number');
-  for (const re of [URL_RE, PATH_RE, VERSION_RE, SHA_RE, ISSUE_RE, SLASH_DATE_RE, BARE_NUMBER_RE]) {
-    re.lastIndex = 0; // `g` regexes are stateful across `.test`
-  }
+  for (const [re, cls] of UNRESOLVED_TAGS) if (re.test(text)) tag(cls);
 }
 
 /** Squeezes intra-line whitespace and blank-line runs; keeps line structure. */
@@ -349,15 +365,13 @@ export function toSpeechText(writtenForm: string, opts?: { maxChars?: number }):
     out = out.replace(/\b(\d{1,3}(?:,\d{3})+)\b/g, (m) => m.replace(/,/g, ''));
     body = tidyLines(out);
   } catch {
-    return { spokenForm: clampForSpeech(writtenForm, maxChars), unresolved: [], truncated: false };
+    return { spokenForm: clampForSpeech(writtenForm, maxChars), unresolved: [] };
   }
 
-  let truncated = false;
   if (body.length > maxChars) {
     body = cutAtWord(body, maxChars - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
-    truncated = true;
   }
-  return { spokenForm: body, unresolved: [...found], truncated };
+  return { spokenForm: body, unresolved: [...found] };
 }
 
 /** Truncates on a word boundary when there is one nearby, else hard-cuts. */
@@ -380,8 +394,8 @@ function cutAtWord(text: string, limit: number): string {
  * docs. An unmarked number's cardinal reading is the engine's default and is
  * the more likely correct one.
  */
-export function reduceUnresolved(t: SpeechText): string {
-  let out = t.spokenForm;
+export function reduceUnresolved(spokenForm: string): string {
+  let out = spokenForm;
 
   out = speakTables(out);
   out = out.replace(PATH_RE, (m, p: string) => {
@@ -497,5 +511,8 @@ export function clampForSpeech(text: string, maxChars: number = SPEECH_MAX_CHARS
  * every branch of {@link ../speech-normalizer.js}.
  */
 export function toLiteralSpeech(writtenForm: string, maxChars: number = SPEECH_MAX_CHARS): string {
-  return clampForSpeech(reduceUnresolved(toSpeechText(writtenForm, { maxChars })), maxChars);
+  return clampForSpeech(
+    reduceUnresolved(toSpeechText(writtenForm, { maxChars }).spokenForm),
+    maxChars,
+  );
 }

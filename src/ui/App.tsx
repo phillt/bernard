@@ -178,6 +178,7 @@ import {
   resolveWarmupPlayer,
   VOICE_BACKEND_VALUES,
   type VoiceBackend,
+  type ResolvedBackend,
 } from '../voice-service.js';
 import { toSpokenForm } from '../speech-normalizer.js';
 import { toLiteralSpeech } from '../speech-text.js';
@@ -378,6 +379,29 @@ function getVoiceService(cfg: import('../config.js').BernardConfig): VoiceServic
  * make us discard its result.
  */
 let _speechAbort: AbortController | null = null;
+
+/**
+ * Carries a URL, a phone number and a small table, so toggling "Natural
+ * speech" and pressing Preview again is audibly different. That is the only
+ * way a user can hear what the setting does — `/voice test` is deliberately
+ * literal, being an "is my audio working" check over text they typed.
+ */
+const VOICE_SAMPLE = [
+  'Bernard finished the catalog refresh in 4200ms.',
+  '',
+  '| Provider | Models |',
+  '| --- | --- |',
+  '| anthropic | 12 |',
+  '| openai | 34 |',
+  '',
+  'Full pricing is at https://www.anthropic.com/pricing — questions to 206-555-0198.',
+].join('\n');
+
+/** The one spelling of a resolved backend. Three call sites had already drifted
+ *  between "none available" and "no backend available". */
+function describeBackend(resolved: ResolvedBackend | null): string {
+  return resolved ? `${resolved.backend} (${resolved.bin})` : 'none available';
+}
 
 /** Aborts a pending normalization. Deliberately does NOT tear down the service. */
 function cancelPendingSpeech(): void {
@@ -794,7 +818,11 @@ export function App({
         // *after* `busy` clears, so the not-busy branch is the one that matters.
         // Both are no-ops when nothing is speaking or pending.
         cancelPendingSpeech();
-        if (config.voiceTts) getVoiceService(config).stop();
+        // The bare singleton, not `getVoiceService(config)`: that constructs on
+        // first use, forking up to six `which` probes (~8 ms) inside a keystroke
+        // handler — to stop a service that, never having been constructed,
+        // cannot be speaking.
+        _voiceService?.stop();
         if (busy) {
           interruptInFlightRef.current = getActiveCount();
           setInterrupted(true);
@@ -2199,14 +2227,24 @@ export function App({
     | 'promptRewriter'
     | 'recallFilter'
     | 'toolDetails'
-    | 'conciseMode';
+    | 'conciseMode'
+    | 'voiceTts'
+    | 'voiceNormalizer';
 
+  /**
+   * The one way to set a boolean preference from a menu. `persist` exists
+   * because the voice fields live behind `persistVoice` (`saveActiveSettings`)
+   * rather than the `savePreferences` round-trip the others use — that one line
+   * was the entire difference, and duplicating the row for it would have given
+   * the file two On/Off idioms 250 lines apart.
+   */
   async function toggleBooleanPref(
     key: BooleanPrefKey,
     label: string,
     onMsg: string,
     offMsg: string,
     onToggle?: (value: boolean) => void,
+    persist?: () => void,
   ): Promise<void> {
     const entries: MenuEntry[] = [
       { label: 'On', active: config[key] === true, value: true },
@@ -2218,12 +2256,16 @@ export function App({
     if (result.cancelled) return;
     const newVal = result.item.value as boolean;
     config[key] = newVal;
-    savePreferences({
-      ...loadPreferences(),
-      provider: config.provider,
-      model: config.model,
-      [key]: newVal,
-    });
+    if (persist) {
+      persist();
+    } else {
+      savePreferences({
+        ...loadPreferences(),
+        provider: config.provider,
+        model: config.model,
+        [key]: newVal,
+      });
+    }
     onToggle?.(newVal);
     flashToast(newVal ? onMsg : offMsg, 'success');
   }
@@ -2645,47 +2687,52 @@ export function App({
    */
   function buildOptionsMenu(): SettingsMenu {
     const optEntries = Object.entries(OPTIONS_REGISTRY);
-    const entries: MenuEntry[] = [
-      ...optEntries.map(([name, opt]) => {
-        const current = config[opt.configKey];
-        const tag = current === opt.default ? '(default)' : '(custom)';
-        return { label: name, annotation: `= ${current} ${tag}`, description: opt.description };
-      }),
-      { type: 'section', title: 'Info' },
-      { label: 'Debug report', description: 'Print a diagnostic report for troubleshooting' },
-    ];
-    const actions: Array<() => void | Promise<void>> = optEntries.map(([name, opt]) => async () => {
-      const valResult = await requestTextInput({ label: `New value for ${name}` });
-      if (valResult.cancelled) return;
-      const val = parseInt(valResult.raw, 10);
-      const minVal = opt.default === 0 ? 0 : 1;
-      if (Number.isNaN(val) || val < minVal) {
-        flashToast(
-          `Invalid value. Must be ${minVal === 0 ? 'a non-negative integer' : 'a positive integer'}.`,
-          'error',
-        );
-        return;
-      }
-      saveOption(name, val);
-      (config as unknown as Record<string, unknown>)[opt.configKey] = val;
-      if (name === 'token-window') {
-        const mainModel = resolveMainModel(config);
-        const modelWindow = getContextWindow(mainModel);
-        if (val > modelWindow) {
-          flashToast(
-            `Set ${name} = ${val} (warning: exceeds ${mainModel}'s context window ${modelWindow})`,
-            'warning',
-          );
-          return;
-        }
-      }
-      flashToast(`${name} set to ${val}`, 'success');
+    // Rows, not two independently-built arrays: `entries` and `actions` are
+    // paired by index, and building them separately is how inserting a section
+    // silently shifts every action by one.
+    const rows: MenuRow[] = optEntries.map(([name, opt]) => {
+      const current = config[opt.configKey];
+      const tag = current === opt.default ? '(default)' : '(custom)';
+      return {
+        kind: 'item',
+        item: { label: name, annotation: `= ${current} ${tag}`, description: opt.description },
+        action: async () => {
+          const valResult = await requestTextInput({ label: `New value for ${name}` });
+          if (valResult.cancelled) return;
+          const val = parseInt(valResult.raw, 10);
+          const minVal = opt.default === 0 ? 0 : 1;
+          if (Number.isNaN(val) || val < minVal) {
+            flashToast(
+              `Invalid value. Must be ${minVal === 0 ? 'a non-negative integer' : 'a positive integer'}.`,
+              'error',
+            );
+            return;
+          }
+          saveOption(name, val);
+          (config as unknown as Record<string, unknown>)[opt.configKey] = val;
+          if (name === 'token-window') {
+            const mainModel = resolveMainModel(config);
+            const modelWindow = getContextWindow(mainModel);
+            if (val > modelWindow) {
+              flashToast(
+                `Set ${name} = ${val} (warning: exceeds ${mainModel}'s context window ${modelWindow})`,
+                'warning',
+              );
+              return;
+            }
+          }
+          flashToast(`${name} set to ${val}`, 'success');
+        },
+      };
     });
-    // The trailing "Debug report" item.
-    actions.push(() =>
-      showInfo('Bernard Diagnostic Report', buildDebugReportLines(config, agent, stores)),
-    );
-    return { entries, actions };
+    rows.push({ kind: 'section', title: 'Info' });
+    rows.push({
+      kind: 'item',
+      item: { label: 'Debug report', description: 'Print a diagnostic report for troubleshooting' },
+      action: () =>
+        showInfo('Bernard Diagnostic Report', buildDebugReportLines(config, agent, stores)),
+    });
+    return splitRows(rows);
   }
 
   /**
@@ -2727,6 +2774,48 @@ export function App({
   }
 
   /**
+   * The integer rows of the `/voice` menu. Blank clears the field to
+   * `undefined` (which is how Rate returns to the backend default), so
+   * `cancelOnEmpty: false` is required — without it the field could be set but
+   * never unset.
+   *
+   * `String(n) !== raw` is the guard the older numeric prompts carry
+   * (`runMaxConcurrentPrompt`) and the registry-driven one does not: without
+   * it `parseInt` accepts `120wpm` and silently stores `120`.
+   */
+  async function promptVoiceInt(o: {
+    prompt: string;
+    initial: string;
+    min: number;
+    invalid: string;
+    /** Whether an empty entry clears the field. Off where 0 is the "disabled"
+     *  value and blank would be ambiguous. */
+    blankClears?: boolean;
+    apply: (value: number | undefined) => void;
+    describe: () => string;
+  }): Promise<void> {
+    const res = await requestTextInput({
+      label: o.prompt,
+      initialValue: o.initial,
+      cancelOnEmpty: false,
+    });
+    if (res.cancelled) return;
+    const raw = res.raw.trim();
+    if (raw.length === 0 && o.blankClears !== false) {
+      o.apply(undefined);
+    } else {
+      const n = Number.parseInt(raw, 10);
+      if (!Number.isFinite(n) || String(n) !== raw || n < o.min) {
+        flashToast(o.invalid, 'error');
+        return;
+      }
+      o.apply(n);
+    }
+    persistVoice();
+    flashToast(o.describe(), 'success');
+  }
+
+  /**
    * `/voice status` — the read-only view, also reachable as the menu's last row.
    * Reads the backend and warmup player off the cached service rather than
    * re-probing PATH with synchronous `which` calls on every invocation.
@@ -2744,7 +2833,7 @@ export function App({
       },
       { text: `Configured backend: ${config.voiceBackend}` },
       {
-        text: `Resolved backend: ${resolved ? `${resolved.backend} (${resolved.bin})` : 'none available'}`,
+        text: `Resolved backend: ${describeBackend(resolved)}`,
         dim: !resolved,
       },
       { text: `Voice: ${config.voiceVoice ?? 'backend default'}`, dim: true },
@@ -2762,47 +2851,18 @@ export function App({
     ]);
   }
 
-  /**
-   * Carries a URL, a phone number and a small table, so toggling "Natural
-   * speech" and pressing Preview again is audibly different. That is the only
-   * way a user can hear what the setting does — `/voice test` is deliberately
-   * literal, being an "is my audio working" check over text they typed.
-   */
-  const VOICE_SAMPLE = [
-    'Bernard finished the catalog refresh in 4200ms.',
-    '',
-    '| Provider | Models |',
-    '| --- | --- |',
-    '| anthropic | 12 |',
-    '| openai | 34 |',
-    '',
-    'Full pricing is at https://www.anthropic.com/pricing — questions to 206-555-0198.',
-  ].join('\n');
-
   /** Speaks the sample through every current setting, including the normalizer. */
   async function speakVoiceSample(): Promise<void> {
-    const svc = getVoiceService(config);
-    if (!svc.backend) {
+    if (!getVoiceService(config).backend) {
       flashToast('No TTS backend available on this system.', 'error');
       return;
     }
-    const spoken = await toSpokenForm(
-      VOICE_SAMPLE,
-      config,
-      undefined,
-      makeOutOfTurnUsageRecorder(agent),
-    );
-    try {
-      await svc.speak(spoken.text, { voice: config.voiceVoice, rate: config.voiceRate });
-    } catch (err) {
+    await startSpeech(VOICE_SAMPLE, {
       // Surfaced rather than swallowed: the menu is the first place `voiceVoice`
       // is reachable, and a typo'd voice name makes the backend exit non-zero
       // with no other signal that anything went wrong.
-      flashToast(
-        `TTS failed: ${err instanceof Error ? err.message : String(err)}. Check the voice name.`,
-        'error',
-      );
-    }
+      onError: (message) => flashToast(`TTS failed: ${message}. Check the voice name.`, 'error'),
+    });
   }
 
   function voiceMenuTitle(): string {
@@ -2810,7 +2870,7 @@ export function App({
     const state = config.voiceTts ? 'ON' : 'OFF';
     // "On but silent" — a configured backend that isn't installed — was
     // previously invisible outside `/voice status`.
-    const engine = resolved ? `${resolved.backend} (${resolved.bin})` : 'no backend available';
+    const engine = describeBackend(resolved);
     return `Voice — ${state} · ${engine}`;
   }
 
@@ -2832,7 +2892,7 @@ export function App({
     const resolved = svc.backend;
     const backendAnnotation =
       config.voiceBackend === 'auto'
-        ? `= auto → ${resolved ? `${resolved.backend} (${resolved.bin})` : 'none available'}`
+        ? `= auto → ${describeBackend(resolved)}`
         : `= ${config.voiceBackend}`;
 
     const rows: MenuRow[] = [
@@ -2844,20 +2904,17 @@ export function App({
           annotation: `= ${config.voiceTts ? 'on' : 'off'}`,
           description: 'Speak each assistant reply aloud after the turn completes.',
         },
-        action: async () => {
-          const res = await requestMenu(
-            [
-              { label: 'On', active: config.voiceTts === true, value: true },
-              { label: 'Off', active: config.voiceTts === false, value: false },
-            ],
-            { title: `Speech: ${config.voiceTts ? 'ON' : 'OFF'}` },
-          );
-          if (res.cancelled) return;
-          config.voiceTts = res.item.value as boolean;
-          if (!config.voiceTts) resetVoiceService();
-          persistVoice();
-          flashToast(`Speech ${config.voiceTts ? 'on' : 'off'}.`, 'success');
-        },
+        action: () =>
+          toggleBooleanPref(
+            'voiceTts',
+            'Speech',
+            'Speech on.',
+            'Speech off.',
+            (on) => {
+              if (!on) resetVoiceService();
+            },
+            persistVoice,
+          ),
       },
       {
         kind: 'item',
@@ -2914,27 +2971,18 @@ export function App({
           annotation: `= ${config.voiceRate ? `${config.voiceRate} wpm` : '(backend default)'}`,
           description: 'Words per minute. Blank uses the backend default.',
         },
-        action: async () => {
-          const res = await requestTextInput({
-            label: 'Rate (words per minute)',
-            initialValue: config.voiceRate ? String(config.voiceRate) : '',
-            cancelOnEmpty: false,
-          });
-          if (res.cancelled) return;
-          const raw = res.raw.trim();
-          if (raw.length === 0) {
-            config.voiceRate = undefined;
-          } else {
-            const n = parseInt(raw, 10);
-            if (!Number.isFinite(n) || n <= 0) {
-              flashToast('Invalid rate. Must be a positive integer.', 'error');
-              return;
-            }
-            config.voiceRate = n;
-          }
-          persistVoice();
-          flashToast(`Rate: ${config.voiceRate ?? 'backend default'}.`, 'success');
-        },
+        action: () =>
+          promptVoiceInt({
+            prompt: 'Rate (words per minute)',
+            initial: config.voiceRate ? String(config.voiceRate) : '',
+            min: 1,
+            blankClears: true,
+            invalid: 'Invalid rate. Must be a positive integer.',
+            apply: (n) => {
+              config.voiceRate = n;
+            },
+            describe: () => `Rate: ${config.voiceRate ?? 'backend default'}.`,
+          }),
       },
       {
         kind: 'item',
@@ -2944,24 +2992,21 @@ export function App({
           description:
             "Silence played to wake a suspended audio sink so the first words aren't clipped. Linux only; 0 disables.",
         },
-        action: async () => {
-          const res = await requestTextInput({
-            label: 'Sink warmup (ms, 0 disables)',
-            initialValue: String(config.voiceWarmupMs),
-            cancelOnEmpty: false,
-          });
-          if (res.cancelled) return;
-          const n = parseInt(res.raw.trim(), 10);
-          if (!Number.isFinite(n) || n < 0) {
-            flashToast('Invalid warmup. Must be 0 or a positive integer.', 'error');
-            return;
-          }
-          config.voiceWarmupMs = n;
-          // The warmup config is captured at construction, so re-resolve.
-          resetVoiceService();
-          persistVoice();
-          flashToast(`Sink warmup: ${n > 0 ? `${n} ms` : 'off'}.`, 'success');
-        },
+        action: () =>
+          promptVoiceInt({
+            prompt: 'Sink warmup (ms, 0 disables)',
+            initial: String(config.voiceWarmupMs),
+            min: 0,
+            blankClears: false,
+            invalid: 'Invalid warmup. Must be 0 or a positive integer.',
+            apply: (n) => {
+              config.voiceWarmupMs = n as number;
+              // The warmup config is captured at construction, so re-resolve.
+              resetVoiceService();
+            },
+            describe: () =>
+              `Sink warmup: ${config.voiceWarmupMs > 0 ? `${config.voiceWarmupMs} ms` : 'off'}.`,
+          }),
       },
 
       { kind: 'section', title: 'Spoken form' },
@@ -2973,22 +3018,17 @@ export function App({
           description:
             'Read the reply the way a person would say it: phone numbers as digit groups, links named instead of spelled, tables as sentences. The transcript and saved history stay literal.',
         },
-        action: async () => {
-          const res = await requestMenu(
-            [
-              { label: 'On', active: config.voiceNormalizer === true, value: true },
-              { label: 'Off', active: config.voiceNormalizer === false, value: false },
-            ],
-            { title: `Natural speech: ${config.voiceNormalizer ? 'ON' : 'OFF'}` },
-          );
-          if (res.cancelled) return;
-          config.voiceNormalizer = res.item.value as boolean;
-          // Not `resetVoiceService()` — the backend did not change; only a
-          // pending normalization is now running under the wrong setting.
-          cancelPendingSpeech();
-          persistVoice();
-          flashToast(`Natural speech ${config.voiceNormalizer ? 'on' : 'off'}.`, 'success');
-        },
+        action: () =>
+          toggleBooleanPref(
+            'voiceNormalizer',
+            'Natural speech',
+            'Natural speech on.',
+            'Natural speech off.',
+            // Not `resetVoiceService()` — the backend did not change; only a
+            // pending normalization is now running under the wrong setting.
+            cancelPendingSpeech,
+            persistVoice,
+          ),
       },
 
       { kind: 'section', title: 'Try it' },
@@ -3005,7 +3045,7 @@ export function App({
         kind: 'item',
         item: { label: 'Stop speaking', description: 'Kill any utterance in flight.' },
         action: () => {
-          getVoiceService(config).stop();
+          _voiceService?.stop();
           cancelPendingSpeech();
         },
       },
@@ -3237,18 +3277,33 @@ export function App({
   }
 
   /**
-   * Speaks one assistant reply (#432). Fire-and-forget by design — see the call
-   * site in `runAgentTurn`.
+   * Runs one normalize-then-speak cycle under the pending-speech lifecycle.
    *
-   * The re-checks after the await are the whole point: an LLM round trip sits
-   * between "the turn ended" and "audio starts", and the user can begin a new
-   * turn, hit Esc, run `/voice off` or switch profile inside that window.
+   * **Every producer must go through here.** Starting a normalization and
+   * registering it for cancellation used to be two separate acts, one of which
+   * was optional — and the menu's Preview row promptly forgot the second, so
+   * Esc, the Stop row and a new turn were all no-ops against it. Owning
+   * cancel-previous → allocate → register → clear in one place makes forgetting
+   * impossible; `_speechAbort` is written nowhere else.
+   *
+   * The re-checks after the await are the point: an LLM round trip sits between
+   * "the text is ready" and "audio starts", and the user can begin a new turn,
+   * hit Esc, run `/voice off` or switch profile inside that window.
    */
-  async function speakAssistantReply(writtenForm: string): Promise<void> {
+  async function startSpeech(
+    writtenForm: string,
+    hooks?: { onNormalized?: () => void; onError?: (message: string) => void },
+  ): Promise<void> {
     cancelPendingSpeech();
     const ac = new AbortController();
     _speechAbort = ac;
     try {
+      const svc = getVoiceService(config);
+      // Wake a suspended sink CONCURRENTLY with the round trip rather than
+      // after it. `speak()` used to be called at turn end, so its 400 ms warmup
+      // overlapped nothing; putting an LLM call in front of it would otherwise
+      // add the two together on every voiced turn.
+      svc.prewarm();
       const spoken = await toSpokenForm(
         writtenForm,
         config,
@@ -3259,23 +3314,31 @@ export function App({
       // newer readback started" true without depending on abort-propagation
       // ordering.
       if (ac.signal.aborted || _speechAbort !== ac) return;
-      if (!config.voiceTts || !spoken.text) return;
-      if (spoken.outcome === 'normalized' && !speechNoticeShownRef.current) {
+      if (!spoken.text) return;
+      if (spoken.normalized) hooks?.onNormalized?.();
+      await svc.speak(spoken.text, { voice: config.voiceVoice, rate: config.voiceRate });
+    } catch (err) {
+      // Never rethrow — TTS must not crash the REPL. A producer that wants the
+      // failure visible (the menu's Preview row) passes `onError`.
+      hooks?.onError?.(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (_speechAbort === ac) _speechAbort = null;
+    }
+  }
+
+  /** The post-turn readback. Fire-and-forget by design — see its call site. */
+  async function speakAssistantReply(writtenForm: string): Promise<void> {
+    if (!config.voiceTts) return;
+    await startSpeech(writtenForm, {
+      onNormalized: () => {
+        if (speechNoticeShownRef.current) return;
         speechNoticeShownRef.current = true;
         flashToast(
           'Natural speech is on — Bernard reads a listener-friendly version of each reply. /voice to turn it off.',
           'info',
         );
-      }
-      await getVoiceService(config).speak(spoken.text, {
-        voice: config.voiceVoice,
-        rate: config.voiceRate,
-      });
-    } catch {
-      // Fail silently — TTS errors must never crash the REPL.
-    } finally {
-      if (_speechAbort === ac) _speechAbort = null;
-    }
+      },
+    });
   }
 
   async function runAgentTurn(input: string, images?: ImageAttachment[]): Promise<void> {

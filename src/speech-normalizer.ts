@@ -104,16 +104,26 @@ function renderExamples(): string {
 }
 
 /**
- * Shape and length guards, in place of a JSON parser. Returns the accepted text
- * or `null` to fall open. The caller logs which guard fired.
+ * Constant — `SPEECH_EXAMPLES` is a module constant and the prompt derives
+ * entirely from it. Built once rather than per call, since it is also embedded
+ * in the LLM cache key and would otherwise be re-serialized on every lookup.
  */
-function acceptOutput(raw: string, inputChars: number): { text: string } | { reject: string } {
-  const text = raw.replace(PREAMBLE_RE, '').trim();
-  if (text.length === 0) return { reject: 'empty' };
-  if (MARKUP_LEAK_RE.test(text)) return { reject: 'markup' };
-  if (text.length > inputChars * MAX_OUTPUT_RATIO) return { reject: 'too-long' };
-  if (text.length < inputChars * MIN_OUTPUT_RATIO) return { reject: 'too-short' };
-  return { text };
+const SYSTEM_PROMPT = buildSystemPrompt();
+
+/**
+ * Shape and length guards, in place of a JSON parser. Returns why the output was
+ * rejected, or `null` to accept — the same idiom as `speechNormalizeSkipReason`,
+ * so "why did we bail" reads the same on both sides of the module boundary.
+ */
+function rejectReason(
+  text: string,
+  inputChars: number,
+): 'empty' | 'markup' | 'too-long' | 'too-short' | null {
+  if (text.length === 0) return 'empty';
+  if (MARKUP_LEAK_RE.test(text)) return 'markup';
+  if (text.length > inputChars * MAX_OUTPUT_RATIO) return 'too-long';
+  if (text.length < inputChars * MIN_OUTPUT_RATIO) return 'too-short';
+  return null;
 }
 
 /**
@@ -144,8 +154,16 @@ export async function normalizeSpeech(
 
   try {
     const site = resolveSiteModel(config, 'speech-normalizer');
-    const system = buildSystemPrompt();
+    const system = SYSTEM_PROMPT;
 
+    // The cache-key → getCachedLLM → abort-on-hit → traceLlm → usageRecordFromSite
+    // → setCachedLLM sequence below is the seventh copy of a block that
+    // `prompt-rewriter`, `recall-filter`, `reference-resolver`,
+    // `specialist-detector` and `reference-tool-lookup` (twice) also carry —
+    // and those have already drifted three ways (one omits the cache-hit abort
+    // guard entirely, another never forwards `abortSignal`). This copy follows
+    // `prompt-rewriter.ts` deliberately; extracting the shape is a six-file
+    // refactor that does not belong in this change.
     const cacheOn = config.cacheEnabled !== false;
     const cacheKey: LLMCacheKey | null = cacheOn
       ? {
@@ -199,29 +217,28 @@ export async function normalizeSpeech(
       if (cacheKey) setCachedLLM(cacheKey, rawText);
     }
 
-    const verdict = acceptOutput(rawText, input.length);
-    if ('reject' in verdict) {
-      debugLog(`speech-normalizer:rejected-${verdict.reject}`, {
+    const text = rawText.replace(PREAMBLE_RE, '').trim();
+    const reject = rejectReason(text, input.length);
+    if (reject) {
+      debugLog(`speech-normalizer:rejected-${reject}`, {
         inputChars: input.length,
         outputChars: rawText.length,
       });
       return { status: 'noop' };
     }
-    debugLog('speech-normalizer:normalized', { chars: verdict.text.length });
-    return { status: 'normalized', spokenForm: verdict.text };
+    debugLog('speech-normalizer:normalized', { chars: text.length });
+    return { status: 'normalized', spokenForm: text };
   } catch (err) {
     debugLog('speech-normalizer:error', err instanceof Error ? err.message : String(err));
     return { status: 'noop' };
   }
 }
 
-/** What {@link toSpokenForm} did, for the caller's one-time notice + status line. */
-export type SpokenFormOutcome = 'normalized' | 'deterministic';
-
 export interface SpokenFormResult {
   /** Argv-ready. Empty means there is nothing worth speaking. */
   text: string;
-  outcome: SpokenFormOutcome;
+  /** True when the model's rendering won — the caller's one-time notice keys on this. */
+  normalized: boolean;
 }
 
 /**
@@ -249,10 +266,10 @@ export async function toSpokenForm(
   const prepared = toSpeechText(writtenForm);
   const result = await normalizeSpeech(prepared, config, abortSignal, onUsage);
 
-  const fallback = () => reduceUnresolved(prepared);
-  const winner = result.status === 'normalized' ? result.spokenForm : fallback();
+  const normalized = result.status === 'normalized';
+  const winner = normalized ? result.spokenForm : reduceUnresolved(prepared.spokenForm);
 
   let text = clampForSpeech(winner, SPEECH_MAX_CHARS);
   if (text.length === 0) text = clampForSpeech(prepared.spokenForm, SPEECH_MAX_CHARS);
-  return { text, outcome: result.status === 'normalized' ? 'normalized' : 'deterministic' };
+  return { text, normalized };
 }

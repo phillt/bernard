@@ -189,14 +189,14 @@ describe('toSpokenForm — the fail-open chain', () => {
     generateTextMock.mockResolvedValue(reply(spoken));
     expect(await toSpokenForm(WRITTEN, makeConfig())).toEqual({
       text: spoken,
-      outcome: 'normalized',
+      normalized: true,
     });
   });
 
   it('falls open to the deterministic reduction — never to raw markdown', async () => {
     generateTextMock.mockRejectedValue(new Error('down'));
     const res = await toSpokenForm(`## Heading\n\n${WRITTEN}`, makeConfig());
-    expect(res.outcome).toBe('deterministic');
+    expect(res.normalized).toBe(false);
     expect(res.text).not.toContain('##');
     expect(res.text).not.toContain('https://');
     expect(res.text).toContain('example dot com');
@@ -208,7 +208,7 @@ describe('toSpokenForm — the fail-open chain', () => {
       '## Results\n\n- **all** green\n\n```sh\nnpm test\n```',
       makeConfig({ voiceNormalizer: false }),
     );
-    expect(res.outcome).toBe('deterministic');
+    expect(res.normalized).toBe(false);
     expect(res.text).toBe('Results. all green. A sh code block, omitted.');
     expect(generateTextMock).not.toHaveBeenCalled();
   });

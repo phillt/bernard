@@ -2,6 +2,7 @@ import { spawn, execFileSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CACHE_DIR } from './paths.js';
+import { clampForSpeech } from './speech-text.js';
 
 /** Default PATH probe: true when `which <bin>` succeeds. */
 function defaultHasBin(bin: string): boolean {
@@ -79,12 +80,24 @@ export function resolveBackend(
 }
 
 /** Build the command args for the resolved backend. */
+/**
+ * Builds the argv for one utterance.
+ *
+ * The text is passed through `clampForSpeech` here rather than by each caller,
+ * because this is the function that does the unsafe thing: the `windows-speech`
+ * branch interpolates it into a PowerShell `-Command`, and Windows caps a
+ * command line at 32,767 characters — nothing bounded an assistant reply
+ * (#432). Leaving the bound to caller etiquette meant a fourth `speak()` site
+ * would silently re-open it. `clampForSpeech` is idempotent and imports
+ * nothing, so this stays a leaf→leaf edge.
+ */
 export function buildSpeakCommand(
   resolved: ResolvedBackend,
-  text: string,
+  rawText: string,
   opts?: SpeakOptions,
 ): { bin: string; args: string[] } {
   const { backend, bin } = resolved;
+  const text = clampForSpeech(rawText);
 
   switch (backend) {
     case 'macos-say': {
@@ -135,6 +148,9 @@ export function buildSpeakCommand(
 // layer immediately before speaking wakes the sink so no words are lost. macOS
 // (CoreAudio) and Windows (WASAPI) keep output devices responsive, so this is
 // Linux-only.
+
+/** How long a `prewarm()` stays good for. Under PipeWire's ~5 s suspend timeout. */
+const WARMUP_FRESH_MS = 3000;
 
 /** Playback binaries we'll use to wake the sink, in preference order. */
 export const WARMUP_PLAYER_PRIORITY = ['pw-play', 'paplay', 'aplay'] as const;
@@ -229,6 +245,9 @@ export class VoiceService {
   /** Monotonic utterance counter; bumped by stop() so a warmup that finishes
    *  after a cancel/supersede doesn't go on to speak. */
   private _epoch = 0;
+  /** When the sink was last woken, so a `prewarm()` can stand in for `speak()`'s
+   *  own warmup instead of the two running back to back. */
+  private _warmedAt = 0;
 
   constructor(resolved: ResolvedBackend | null, warmup?: WarmupConfig | null) {
     this._resolved = resolved;
@@ -245,14 +264,43 @@ export class VoiceService {
     return this._warmup?.player ?? null;
   }
 
+  /**
+   * Wakes a suspended sink ahead of time, without speaking (#432).
+   *
+   * Speech used to start the instant a turn ended, so the warmup overlapped
+   * nothing and cost what it cost. Now a normalization round trip sits in
+   * front of it, and warming afterwards would add the two together — up to
+   * 400 ms of extra silence before the first word, every voiced turn. Calling
+   * this unawaited alongside the round trip reclaims all of it.
+   *
+   * Best-effort and fire-and-forget: it claims no epoch, so it never cancels a
+   * real utterance, and a `speak()` that arrives while it is still running just
+   * does its own warmup.
+   */
+  prewarm(): void {
+    if (!this._resolved) return;
+    void this._runWarmup()
+      .then(() => {
+        this._warmedAt = Date.now();
+      })
+      .catch(() => {
+        // Warmup is best-effort by contract; a failure just means no head start.
+      });
+  }
+
   async speak(text: string, opts?: SpeakOptions): Promise<void> {
     if (!this._resolved) return;
     this.stop();
     const epoch = ++this._epoch; // claim this utterance
 
-    await this._runWarmup();
-    // If stop() or a newer speak() ran during the warmup, abandon this one.
-    if (epoch !== this._epoch) return;
+    // A recent prewarm already woke the sink. The window is deliberately well
+    // under PipeWire's ~5 s idle-suspend timeout, so a hit means the device is
+    // still awake rather than merely recently-touched.
+    if (Date.now() - this._warmedAt > WARMUP_FRESH_MS) {
+      await this._runWarmup();
+      // If stop() or a newer speak() ran during the warmup, abandon this one.
+      if (epoch !== this._epoch) return;
+    }
 
     const { bin, args } = buildSpeakCommand(this._resolved, text, opts);
 
