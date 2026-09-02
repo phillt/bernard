@@ -1087,7 +1087,7 @@ export class Agent {
           // `provenance-history.json` and reloaded on resume, and the field can
           // be 20k per source. Verification runs in the turn that retrieved the
           // text, so nothing downstream of the snapshot needs it.
-          sources: this.lastSources.map(({ verifyText: _verifyText, ...s }) => ({ ...s })),
+          sources: this.lastSources.map(({ verifyText: _verifyText, ...s }) => s),
           citedIds: [...citedIds],
           timestamp: Date.now(),
         });

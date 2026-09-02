@@ -81,7 +81,10 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
         return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom)}`;
       }
 
-      return withSlot(
+      // Slot status is appended AFTER `withSlot` resolves, so this dispatch's
+      // own slot is already released and the count describes what the model can
+      // do next rather than what it could do mid-flight.
+      const out = await withSlot(
         async (slot) => {
           const id = slot.id;
           printSpecialistStart(id, specialist.name, task);
@@ -104,9 +107,7 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
                   overrides: { provider, model },
                   planStore,
                 });
-                // Tell the model what the pool looks like now, so a fan-out is a
-                // decision rather than a guess. See `slotStatusLine`.
-                return `${formatted}\n${slotStatusLine()}`;
+                return formatted;
               } finally {
                 // Every exit path, cancellation included — which is what the
                 // success/catch pair it replaces already did, by duplication.
@@ -122,6 +123,7 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
         () =>
           `Error: Maximum concurrent agents (${getMaxConcurrentAgents()}) reached. Wait for existing agents to finish.`,
       );
+      return `${out}\n${slotStatusLine()}`;
     },
   });
 }

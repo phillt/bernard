@@ -7,6 +7,7 @@ import { LINEUP_TIERS, type Lineup, type LineupTier } from './lineups.js';
 import type { BernardConfig } from './config.js';
 import { debugLog } from './logger.js';
 import { temperatureParam } from './providers/profiles.js';
+import { mapWithConcurrency } from './concurrency.js';
 
 /**
  * @module model-validate
@@ -182,25 +183,6 @@ function distinctPairs(
     }
   }
   return map;
-}
-
-/** Run probes with a bounded concurrency so a big lineup doesn't open 18 sockets at once. */
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (true) {
-      const i = next++;
-      if (i >= items.length) return;
-      out[i] = await fn(items[i]!);
-    }
-  });
-  await Promise.all(workers);
-  return out;
 }
 
 /**

@@ -37,30 +37,30 @@ import { generateText } from 'ai';
 import { z } from 'zod';
 import type { BernardConfig } from './config.js';
 import { debugLog, traceLlm } from './logger.js';
-import { getCachedLLM, setCachedLLM, type LLMCacheKey } from './llm-cache.js';
+import { mapWithConcurrency } from './concurrency.js';
 import { resolveSiteModel } from './model-policy.js';
 import type { ProvenanceStore, SourceItem } from './provenance.js';
-import type { Check } from './rubric.js';
+import { verdictOf, type Check } from './rubric.js';
 import { parseStructuredOutput } from './structured-output.js';
-import { usageRecordFromSite } from './framework/hooks/token-stats.js';
-import type { UsageRecord } from './framework/hooks/token-stats.js';
+import { truncate } from './text.js';
 
-/** One factual claim, as the research agent reports it. */
-export interface Claim {
-  /** The sentence being asserted. */
-  text: string;
-  /** Source ids the claim rests on. */
-  sourceIds: string[];
-  /** A span the claim says appears verbatim in one of those sources. */
-  quote?: string;
-}
+/**
+ * One factual claim, as the research agent reports it.
+ *
+ * The schema is the source of truth and {@link Claim} is derived from it, so
+ * the runtime check and the type cannot disagree. Validating the ELEMENTS of
+ * `sourceIds` matters: a hand-rolled `Array.isArray` guard admits
+ * `sourceIds: [{}, 42]`, which then looks up nothing and gets reported as
+ * "cited ids no source registered" — a shape error wearing an
+ * unsupported-claim failure's clothes.
+ */
+export const ClaimSchema = z.object({
+  text: z.string(),
+  sourceIds: z.array(z.string()),
+  quote: z.string().optional(),
+});
 
-export interface VerifyClaimsResult {
-  /** Worst-of across every claim: any fail → fail, any warn → warn, else pass. */
-  verdict: 'pass' | 'warn' | 'fail';
-  /** One entry per claim, for the turn rubric. */
-  checks: Check[];
-}
+export type Claim = z.infer<typeof ClaimSchema>;
 
 /**
  * Output cap. Enough for a short verdict and reason per claim; small enough
@@ -76,6 +76,21 @@ const CLAIM_VERIFIER_MAX_TOKENS = 400;
  * source in one run.
  */
 const SOURCE_WINDOW_CHARS = 6000;
+
+/**
+ * Most claims checked in one pass, and how many checks run at once.
+ *
+ * The fan-out width here is chosen by a MODEL — nothing caps how many claims a
+ * research answer reports — and each check is an independent HTTP request with
+ * the AI SDK's default 2 retries behind it. Unbounded, one wordy answer inside
+ * a 4-way wrapper fan-out becomes a burst of concurrent classifier requests
+ * from a process whose own declared dispatch cap is 4.
+ *
+ * The limit matches `DEFAULT_MAX_CONCURRENT_AGENTS` for the same reason it was
+ * chosen there: it is about not hammering a provider, not about throughput.
+ */
+const MAX_CLAIMS = 40;
+const VERIFY_CONCURRENCY = 4;
 
 const VerdictSchema = z.object({
   supported: z.boolean(),
@@ -101,7 +116,13 @@ function buildUserContent(claim: Claim, sources: SourceItem[]): string {
       return `[${s.id}] ${s.label}${dated}\n${body.slice(0, SOURCE_WINDOW_CHARS)}`;
     })
     .join('\n\n---\n\n');
-  return `CLAIM:\n${claim.text}\n\nSOURCE TEXT:\n${rendered}`;
+  // Source first, claim last. The source is shared across every claim citing
+  // it while the claim text is unique, so putting the claim first makes the
+  // only common prefix the system prompt — too short to reach a provider's
+  // automatic prefix-cache threshold. This ordering puts system + source in the
+  // shared prefix and costs nothing, since the claims are still checked
+  // independently.
+  return `SOURCE TEXT:\n${rendered}\n\nCLAIM:\n${claim.text}`;
 }
 
 /**
@@ -134,24 +155,18 @@ export async function verifyClaims(
   claims: Claim[],
   provenance: ProvenanceStore,
   config: BernardConfig,
-  opts: { abortSignal?: AbortSignal; onUsage?: (r: UsageRecord) => void } = {},
-): Promise<VerifyClaimsResult> {
-  if (claims.length === 0) {
-    // No claims is not a pass. An answer that asserts nothing checkable has
-    // nothing to verify, and the caller decides whether that is acceptable.
-    return { verdict: 'warn', checks: [] };
-  }
-
-  const checks = await Promise.all(
-    claims.map((claim, i) => verifyOne(claim, i, provenance, config, opts)),
+  opts: { abortSignal?: AbortSignal } = {},
+): Promise<Check[]> {
+  const bounded = claims.slice(0, MAX_CLAIMS);
+  const checks = await mapWithConcurrency(bounded, VERIFY_CONCURRENCY, (claim, i) =>
+    verifyOne(claim, i, provenance, config, opts),
   );
-  const verdict = checks.some((c) => c.status === 'fail')
-    ? 'fail'
-    : checks.some((c) => c.status === 'warn')
-      ? 'warn'
-      : 'pass';
-  debugLog('claim-verifier:result', { claims: claims.length, verdict });
-  return { verdict, checks };
+  debugLog('claim-verifier:result', {
+    claims: bounded.length,
+    dropped: claims.length - bounded.length,
+    verdict: verdictOf(checks),
+  });
+  return checks;
 }
 
 async function verifyOne(
@@ -159,10 +174,10 @@ async function verifyOne(
   index: number,
   provenance: ProvenanceStore,
   config: BernardConfig,
-  opts: { abortSignal?: AbortSignal; onUsage?: (r: UsageRecord) => void },
+  opts: { abortSignal?: AbortSignal },
 ): Promise<Check> {
   const id = `claim_${index + 1}`;
-  const label = claim.text.slice(0, 120);
+  const label = truncate(claim.text, 120);
 
   const sources = claim.sourceIds
     .map((sid) => provenance.get(sid))
@@ -189,54 +204,35 @@ async function verifyOne(
       id,
       label,
       status: 'fail',
-      evidence: `Quoted text does not appear in ${sources.map((s) => s.id).join(', ')}: "${claim.quote.slice(0, 120)}"`,
+      evidence: `Quoted text does not appear in ${sources.map((s) => s.id).join(', ')}: "${truncate(claim.quote, 120)}"`,
     };
   }
 
   const site = resolveSiteModel(config, 'claim-verifier');
   const userContent = buildUserContent(claim, sources);
-  const cacheKey: LLMCacheKey | null =
-    config.cacheEnabled !== false
-      ? {
-          siteName: 'claim-verifier',
-          modelId: site.model.modelId,
-          providerOptions: site.providerOptions,
-          params: site.params,
-          system: SYSTEM_PROMPT,
-          userContent,
-        }
-      : null;
 
+  // Deliberately NOT routed through the LLM sub-call cache. Its key embeds
+  // `userContent` verbatim, and the claim text differs on every call, so the
+  // hit rate is structurally zero — while each miss retains a multi-kilobyte
+  // key in a Map with no size cap for the life of the session. Every other
+  // user of that cache is a once-per-turn pass with a sub-kilobyte payload.
+  // Provider-side prefix caching is what makes the repeated source text cheap;
+  // see `buildUserContent` for the ordering that enables it.
   try {
-    let rawText: string;
-    const cached = cacheKey ? getCachedLLM(cacheKey) : undefined;
-    if (cached !== undefined) {
-      debugLog('cache:llm:hit', { site: 'claim-verifier' });
-      rawText = cached;
-    } else {
-      if (cacheKey) debugLog('cache:llm:miss', { site: 'claim-verifier' });
-      const t0 = Date.now();
-      const result = await traceLlm('claim-verifier', site.model.modelId, () =>
-        generateText({
-          model: site.model,
-          providerOptions: site.providerOptions,
-          // Before maxTokens so this site's cap stays authoritative (#286).
-          ...site.params,
-          system: SYSTEM_PROMPT,
-          messages: [{ role: 'user', content: userContent }],
-          maxSteps: 1,
-          maxTokens: CLAIM_VERIFIER_MAX_TOKENS,
-          abortSignal: opts.abortSignal,
-        }),
-      );
-      opts.onUsage?.(
-        usageRecordFromSite(site, 'claim-verifier', result.usage, result.providerMetadata, {
-          latencyMs: Date.now() - t0,
-        }),
-      );
-      rawText = result.text;
-      if (cacheKey && rawText) setCachedLLM(cacheKey, rawText);
-    }
+    const result = await traceLlm('claim-verifier', site.model.modelId, () =>
+      generateText({
+        model: site.model,
+        providerOptions: site.providerOptions,
+        // Before maxTokens so this site's cap stays authoritative (#286).
+        ...site.params,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: userContent }],
+        maxSteps: 1,
+        maxTokens: CLAIM_VERIFIER_MAX_TOKENS,
+        abortSignal: opts.abortSignal,
+      }),
+    );
+    const rawText = result.text;
 
     const parsed = parseStructuredOutput(rawText, VerdictSchema);
     if (!parsed) {

@@ -885,16 +885,6 @@ describe('createWebSearchTool', () => {
 // it, so "how old is this source?" was unanswerable for reasons that were pure
 // omission rather than absence.
 describe('publication dates', () => {
-  beforeEach(() => {
-    vi.unstubAllEnvs();
-    vi.unstubAllGlobals();
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.unstubAllGlobals();
-  });
-
   it('recovers Brave page_age and shows it on the result', async () => {
     vi.stubEnv('BRAVE_API_KEY', 'k');
     vi.stubGlobal(

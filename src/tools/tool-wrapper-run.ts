@@ -16,7 +16,8 @@ import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 import { classifyError } from '../error-taxonomy.js';
-import { verifyClaims, type Claim } from '../claim-verifier.js';
+import { verifyClaims, ClaimSchema } from '../claim-verifier.js';
+import { verdictOf } from '../rubric.js';
 import {
   definitions,
   registerBuiltinDefinitions,
@@ -153,41 +154,42 @@ export async function verifyWrapperClaims(
   const result = wrapped.result as { claims?: unknown } | null;
   if (!result || typeof result !== 'object' || !Array.isArray(result.claims)) return null;
 
-  const claims = result.claims.filter(
-    (c): c is Claim =>
-      !!c &&
-      typeof c === 'object' &&
-      typeof (c as Claim).text === 'string' &&
-      Array.isArray((c as Claim).sourceIds),
-  );
-  // A `claims` key that parsed but held nothing usable is not "no claims to
-  // check" — it is a malformed answer, and passing it through would present an
-  // unverified result as a verified one.
-  if (claims.length === 0 && result.claims.length > 0) {
+  // Validated with the schema rather than a hand-rolled guard, so the ELEMENTS
+  // of `sourceIds` are checked too: `sourceIds: [{}, 42]` would otherwise pass,
+  // resolve to no source, and be reported as "cited ids no source registered" —
+  // a shape error wearing an unsupported-claim failure's clothes.
+  const claims = result.claims
+    .map((c) => ClaimSchema.safeParse(c))
+    .flatMap((r) => (r.success ? [r.data] : []));
+
+  // ANY unusable entry fails the run, not just an entirely unusable array.
+  // Checking "did the filter eat everything" would let three claims with one
+  // malformed entry through as fully verified.
+  if (claims.length < result.claims.length) {
     return {
       status: 'error',
       result: wrapped.result,
       error: 'Claims were reported in a shape that could not be verified.',
     };
   }
-  if (claims.length === 0) return null;
+  if (claims.length === 0) return null; // `claims: []` — nothing was asserted.
 
-  const { verdict, checks } = await verifyClaims(claims, ctx.provenance, ctx.config, {
-    abortSignal,
-  });
+  const checks = await verifyClaims(claims, ctx.provenance, ctx.config, { abortSignal });
   // Publish per-claim results into the turn rubric alongside plan and
   // post-write checks, so the user sees them through the existing surface.
   ctx.postWriteChecks.push(...checks);
-  if (verdict !== 'fail') return null;
+  if (verdictOf(checks) !== 'fail') return null;
 
   const failed = checks.filter((c) => c.status === 'fail');
   return {
     status: 'error',
     result: wrapped.result,
-    error: `Unsupported claims (${failed.length}/${checks.length}): ${failed
-      .map((c) => `${c.label} — ${c.evidence ?? 'unsupported'}`)
-      .join('; ')
-      .slice(0, 800)}`,
+    error: capSubagentResult(
+      `Unsupported claims (${failed.length}/${checks.length}): ${failed
+        .map((c) => `${c.label} — ${c.evidence ?? 'unsupported'}`)
+        .join('; ')}`,
+      800,
+    ),
   };
 }
 

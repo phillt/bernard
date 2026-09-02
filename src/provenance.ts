@@ -103,12 +103,13 @@ const MAX_PREVIEW = 2000;
  * This never enters the context message, so it costs memory rather than
  * tokens.
  */
-const MAX_VERIFY_TEXT = 20_000;
+export const MAX_VERIFY_TEXT = 20_000;
 
-function truncateVerifyText(s: string | undefined): string | undefined {
-  if (!s) return undefined;
-  return s.length > MAX_VERIFY_TEXT ? s.slice(0, MAX_VERIFY_TEXT) : s;
-}
+// `slice` already no-ops on a short string, so no length branch is needed —
+// unlike `truncatePreview`, which appends an ellipsis and must know. A marker
+// would be wrong here anyway: `quoteAppearsIn` matches against this text, and
+// an injected marker is text a quote could spuriously match.
+const truncateVerifyText = (s: string): string => s.slice(0, MAX_VERIFY_TEXT);
 
 function truncatePreview(s: string): string {
   return s.length > MAX_PREVIEW ? s.slice(0, MAX_PREVIEW) + '…' : s;
@@ -154,9 +155,9 @@ export class ProvenanceStore {
         }
         // Same upgrade rule: a `web_read` of a URL a `web_search` already
         // registered brings the full text the snippet never had.
-        const incoming = truncateVerifyText(item.verifyText);
-        if (incoming && incoming.length > (stored.verifyText?.length ?? 0)) {
-          stored.verifyText = incoming;
+        if (item.verifyText) {
+          const incoming = truncateVerifyText(item.verifyText);
+          if (incoming.length > (stored.verifyText?.length ?? 0)) stored.verifyText = incoming;
         }
       }
       return existing;

@@ -1,6 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
 import { classifyError } from '../../error-taxonomy.js';
-import { CITATIONS_PROMPT, REASONING_FAMILIES } from '../../agent-prompt.js';
+import { CITATIONS_PROMPT, allowsInlineMarkers } from '../../agent-prompt.js';
 import { getModelProfile } from '../../providers/index.js';
 import type { AgentContext } from '../context.js';
 import type { Specialist } from '../../specialists.js';
@@ -47,15 +47,6 @@ export interface ToolWrapperInput {
 }
 
 /**
- * Tool-wrapper definition: ephemeral history, persona + examples + OS block +
- * (optional) structured-output rules + memory context as system prompt;
- * `childTools` as the tool set; 50% of the main step budget; final-step JSON
- * enforcement when `wantStructured`; result parsed into a {@link WrapperResult}.
- *
- * Model resolution honours `specialist.provider` / `specialist.model` (looked
- * up live so runtime edits are picked up).
- */
-/**
  * True when the model this wrapper will actually run on is one whose
  * `systemSuffix` already forbids narrating inline annotations, so telling it to
  * emit `[^Sn]` markers would conflict with its own guidance (#173).
@@ -69,9 +60,18 @@ export interface ToolWrapperInput {
 function suppressesInlineMarkers(ctx: AgentContext, specialist: Specialist): boolean {
   const site = resolveSiteModel(ctx.config, 'tool-wrapper', { specialist });
   const sdk = ctx.config.customProviders?.[site.provider]?.sdk;
-  return REASONING_FAMILIES.has(getModelProfile(site.provider, site.modelName, sdk).family);
+  return !allowsInlineMarkers(getModelProfile(site.provider, site.modelName, sdk).family);
 }
 
+/**
+ * Tool-wrapper definition: ephemeral history, persona + examples + OS block +
+ * (optional) structured-output rules + memory context as system prompt;
+ * `childTools` as the tool set; 50% of the main step budget; final-step JSON
+ * enforcement when `wantStructured`; result parsed into a {@link WrapperResult}.
+ *
+ * Model resolution honours `specialist.provider` / `specialist.model` (looked
+ * up live so runtime edits are picked up).
+ */
 export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperResult> = {
   id: 'tool-wrapper',
   historyMode: 'ephemeral',

@@ -182,7 +182,10 @@ describe('publication dates', () => {
 describe('verifyText retention', () => {
   const long = 'A'.repeat(5000) + 'NEEDLE' + 'B'.repeat(5000);
 
-  it('retains far more than the context preview', () => {
+  // One test, because the two facts are the same fact: the preview is capped
+  // (it is re-sent every turn) and verifyText is not (it never enters context),
+  // which is exactly what makes a quote past the cap checkable.
+  it('retains past the preview cap, which is what makes a mid-page quote checkable', () => {
     const store = new ProvenanceStore();
     const id = store.add({
       kind: 'web',
@@ -192,23 +195,10 @@ describe('verifyText retention', () => {
       verifyText: long,
     });
     const item = store.get(id)!;
-    // The preview is capped because it is re-sent every turn; verifyText is not.
-    expect(item.contentPreview.length).toBeLessThanOrEqual(2001);
-    expect(item.verifyText).toContain('NEEDLE');
-  });
 
-  // The case that was impossible before: a span past the preview cap.
-  it('can answer whether a quote past the preview cap appears in the source', () => {
-    const store = new ProvenanceStore();
-    const id = store.add({
-      kind: 'web',
-      label: 'x',
-      contentPreview: long,
-      rawRef: 'u',
-      verifyText: long,
-    });
-    expect(store.get(id)!.verifyText!.includes('NEEDLE')).toBe(true);
-    expect(store.get(id)!.contentPreview.includes('NEEDLE')).toBe(false);
+    expect(item.contentPreview.length).toBeLessThanOrEqual(2001);
+    expect(item.contentPreview.includes('NEEDLE')).toBe(false);
+    expect(item.verifyText!.includes('NEEDLE')).toBe(true);
   });
 
   it('caps one enormous page rather than storing it whole', () => {
