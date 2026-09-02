@@ -45,6 +45,8 @@ export const CRON_ALERTS_DIR = path.join(CRON_DIR, 'alerts');
 export const CRON_NOTES_DIR = path.join(CRON_DIR, 'notes');
 export const ROUTINES_DIR = path.join(DATA_DIR, 'routines');
 export const SPECIALISTS_DIR = path.join(DATA_DIR, 'specialists');
+/** One `<appId>.json` manifest per applet-style app (#419). */
+export const APPS_DIR = path.join(DATA_DIR, 'apps');
 export const SPECIALIST_CANDIDATES_DIR = path.join(DATA_DIR, 'specialist-candidates');
 export const CORRECTION_CANDIDATES_DIR = path.join(DATA_DIR, 'correction-candidates');
 export const TOOL_PROFILES_DIR = path.join(DATA_DIR, 'tool-profiles');
@@ -61,6 +63,8 @@ export const TURN_CONTEXT_FILE = path.join(STATE_DIR, 'turn-context.json');
 export const LOGS_DIR = path.join(STATE_DIR, 'logs');
 export const SESSION_LOGS_DIR = path.join(LOGS_DIR, 'sessions');
 export const TOOL_WRAPPER_LOG = path.join(LOGS_DIR, 'tool-wrappers.jsonl');
+/** Append-only record of every `bernard script` invocation (#419). */
+export const SCRIPT_LOG_FILE = path.join(LOGS_DIR, 'script-invocations.jsonl');
 /** Per-session LLM cost/usage telemetry JSONL, one file per session id. */
 export const TELEMETRY_DIR = path.join(LOGS_DIR, 'telemetry');
 export function sessionTelemetryPath(sessionId: string): string {
