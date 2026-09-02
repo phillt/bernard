@@ -43,6 +43,7 @@ import type { ProvenanceStore, SourceItem } from './provenance.js';
 import { verdictOf, type Check } from './rubric.js';
 import { parseStructuredOutput } from './structured-output.js';
 import { truncate } from './text.js';
+import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 
 /**
  * One factual claim, as the research agent reports it.
@@ -108,12 +109,68 @@ Rules:
 - Do not use outside knowledge. If the claim is true but this text does not say it, that is not supported.
 - Keep "reason" to one sentence naming the specific gap, not a summary of the source.`;
 
+/**
+ * A whitespace-flexible matcher for a quoted span.
+ *
+ * Markdown conversion rewraps lines, so a span copied faithfully from what the
+ * model saw can differ from the stored text by line breaks alone. Each run of
+ * whitespace in the quote therefore matches any run in the source; everything
+ * else is escaped and matched literally, because the check is meant to be
+ * strict about words.
+ *
+ * Returns a regex rather than a boolean so "does it appear" and "where does it
+ * appear" cannot drift apart — {@link quoteAppearsIn} and
+ * {@link windowAroundQuote} are the same search.
+ */
+function quoteMatcher(quote: string): RegExp | null {
+  const trimmed = quote.trim();
+  if (!trimmed) return null;
+  const pattern = trimmed
+    .split(/\s+/)
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('\\s+');
+  return new RegExp(pattern, 'i');
+}
+
+/** The text of a source that a check should run against. */
+function sourceBody(s: SourceItem): string {
+  return s.verifyText ?? s.contentPreview;
+}
+
+/**
+ * The slice of `body` to show the entailment model.
+ *
+ * Centred on the quoted span when there is one, rather than always taking the
+ * head. The two checks look at different amounts of text — the quote gate runs
+ * against the whole retained source (up to `MAX_VERIFY_TEXT`) while this window
+ * is a fraction of it — so a head-only window fails a correctly-sourced claim
+ * whose supporting passage sits past it: the quote gate passes, the model is
+ * shown a region that does not contain the passage, it answers `supported:
+ * false`, and because the pass fails closed the whole run is rejected. Showing
+ * the region the quote gate already located removes that whole class of false
+ * rejection.
+ */
+function windowAroundQuote(body: string, quote: string | undefined): string {
+  if (body.length <= SOURCE_WINDOW_CHARS) return body;
+  const matcher = quote ? quoteMatcher(quote) : null;
+  const at = matcher ? body.search(matcher) : -1;
+  if (at < 0) return body.slice(0, SOURCE_WINDOW_CHARS);
+  // Centre the window on the match, clamped to the ends of the text.
+  const start = Math.max(
+    0,
+    Math.min(at - Math.floor(SOURCE_WINDOW_CHARS / 2), body.length - SOURCE_WINDOW_CHARS),
+  );
+  const slice = body.slice(start, start + SOURCE_WINDOW_CHARS);
+  // Say the text is excerpted, so "the source does not mention X" is understood
+  // as being about this window rather than about the whole document.
+  return start > 0 ? `…${slice}` : slice;
+}
+
 function buildUserContent(claim: Claim, sources: SourceItem[]): string {
   const rendered = sources
     .map((s) => {
-      const body = s.verifyText ?? s.contentPreview;
       const dated = s.publishedAt ? ` (published ${s.publishedAt})` : '';
-      return `[${s.id}] ${s.label}${dated}\n${body.slice(0, SOURCE_WINDOW_CHARS)}`;
+      return `[${s.id}] ${s.label}${dated}\n${windowAroundQuote(sourceBody(s), claim.quote)}`;
     })
     .join('\n\n---\n\n');
   // Source first, claim last. The source is shared across every claim citing
@@ -122,25 +179,25 @@ function buildUserContent(claim: Claim, sources: SourceItem[]): string {
   // automatic prefix-cache threshold. This ordering puts system + source in the
   // shared prefix and costs nothing, since the claims are still checked
   // independently.
+  //
+  // Note the window is quote-dependent, so two claims citing one source share
+  // the prefix only when they quote the same region — the correctness of
+  // showing the model the right passage outranks the caching.
   return `SOURCE TEXT:\n${rendered}\n\nCLAIM:\n${claim.text}`;
 }
 
 /**
  * Checks a quoted span against the retained source text.
  *
- * Whitespace is collapsed on both sides before comparison: markdown conversion
- * rewraps lines, so a span copied faithfully from what the model saw can differ
- * from the stored text by line breaks alone. Nothing else is normalised — the
- * check is meant to be strict about words.
+ * Runs against the WHOLE retained text, not the window shown to the model:
+ * this is the deterministic half and there is no reason to limit what it can
+ * confirm. {@link windowAroundQuote} is what keeps the model's view aligned
+ * with what this found.
  */
 export function quoteAppearsIn(quote: string, sources: SourceItem[]): boolean {
-  const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
-  const needle = norm(quote);
-  if (!needle) return false;
-  return sources.some((s) => {
-    const hay = s.verifyText ?? s.contentPreview;
-    return norm(hay).includes(needle);
-  });
+  const matcher = quoteMatcher(quote);
+  if (!matcher) return false;
+  return sources.some((s) => matcher.test(sourceBody(s)));
 }
 
 /**
@@ -155,7 +212,7 @@ export async function verifyClaims(
   claims: Claim[],
   provenance: ProvenanceStore,
   config: BernardConfig,
-  opts: { abortSignal?: AbortSignal } = {},
+  opts: { abortSignal?: AbortSignal; onUsage?: UsageRecorder } = {},
 ): Promise<Check[]> {
   const bounded = claims.slice(0, MAX_CLAIMS);
   const checks = await mapWithConcurrency(bounded, VERIFY_CONCURRENCY, (claim, i) =>
@@ -174,7 +231,7 @@ async function verifyOne(
   index: number,
   provenance: ProvenanceStore,
   config: BernardConfig,
-  opts: { abortSignal?: AbortSignal },
+  opts: { abortSignal?: AbortSignal; onUsage?: UsageRecorder },
 ): Promise<Check> {
   const id = `claim_${index + 1}`;
   const label = truncate(claim.text, 120);
@@ -219,6 +276,7 @@ async function verifyOne(
   // Provider-side prefix caching is what makes the repeated source text cheap;
   // see `buildUserContent` for the ordering that enables it.
   try {
+    const t0 = Date.now();
     const result = await traceLlm('claim-verifier', site.model.modelId, () =>
       generateText({
         model: site.model,
@@ -230,6 +288,15 @@ async function verifyOne(
         maxSteps: 1,
         maxTokens: CLAIM_VERIFIER_MAX_TOKENS,
         abortSignal: opts.abortSignal,
+      }),
+    );
+    // One LLM call per factual sentence is real spend; without this it is
+    // invisible to the per-turn odometer and the session ledger, which is how a
+    // wordy research answer quietly costs more than the dispatch that produced
+    // it.
+    opts.onUsage?.(
+      usageRecordFromSite(site, 'claim-verifier', result.usage, result.providerMetadata, {
+        latencyMs: Date.now() - t0,
       }),
     );
     const rawText = result.text;

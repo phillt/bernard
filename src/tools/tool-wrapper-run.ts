@@ -18,6 +18,7 @@ import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 import { classifyError } from '../error-taxonomy.js';
 import { verifyClaims, ClaimSchema } from '../claim-verifier.js';
 import { verdictOf } from '../rubric.js';
+import { makeUsageRecorder } from '../framework/hooks/token-stats.js';
 import {
   definitions,
   registerBuiltinDefinitions,
@@ -174,7 +175,13 @@ export async function verifyWrapperClaims(
   }
   if (claims.length === 0) return null; // `claims: []` — nothing was asserted.
 
-  const checks = await verifyClaims(claims, ctx.provenance, ctx.config, { abortSignal });
+  const checks = await verifyClaims(claims, ctx.provenance, ctx.config, {
+    abortSignal,
+    // Attribute the per-claim calls to the turn, like every other standalone
+    // `generateText` subcall. Omitting it hides a per-sentence cost behind a
+    // single dispatch's line in the ledger.
+    onUsage: ctx.statsTarget ? makeUsageRecorder(ctx.statsTarget) : undefined,
+  });
   // Publish per-claim results into the turn rubric alongside plan and
   // post-write checks, so the user sees them through the existing surface.
   ctx.postWriteChecks.push(...checks);

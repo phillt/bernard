@@ -175,3 +175,117 @@ describe('verifyClaims', () => {
     expect(checks).toHaveLength(2);
   });
 });
+
+// Review #433: the quote gate runs against the whole retained source (20k) while
+// the entailment window is a fraction of it. A head-only window meant a quote
+// found at char 12,000 passed the gate, then the model was shown a region that
+// did not contain the passage, answered `supported: false`, and — because the
+// pass fails closed — rejected a correctly-sourced answer.
+describe('the entailment window follows the quote', () => {
+  const PASSAGE = 'the retry budget is three attempts';
+  const longPage = 'x'.repeat(12000) + ` ${PASSAGE} ` + 'y'.repeat(12000);
+
+  function contentSentToModel(): string {
+    const call = generateText.mock.calls.at(-1)![0];
+    return call.messages[0].content as string;
+  }
+
+  it('shows the model the region the quote gate matched, not the head', async () => {
+    const { store, id } = storeWith(longPage);
+    verdict(true);
+
+    await verifyClaims(
+      [{ text: 'Retries are capped at three.', sourceIds: [id], quote: PASSAGE }],
+      store,
+      config,
+    );
+
+    expect(contentSentToModel()).toContain(PASSAGE);
+  });
+
+  it('marks an excerpted window so "not mentioned" is scoped to it', async () => {
+    const { store, id } = storeWith(longPage);
+    verdict(true);
+
+    await verifyClaims([{ text: 'x', sourceIds: [id], quote: PASSAGE }], store, config);
+
+    expect(contentSentToModel()).toContain('…');
+  });
+
+  it('still takes the head when there is no quote to locate', async () => {
+    const { store, id } = storeWith('HEADMARK' + 'z'.repeat(20000));
+    verdict(true);
+
+    await verifyClaims([{ text: 'x', sourceIds: [id] }], store, config);
+
+    expect(contentSentToModel()).toContain('HEADMARK');
+  });
+
+  it('sends a short source whole, with no excerpt marker', async () => {
+    const { store, id } = storeWith('short and complete');
+    verdict(true);
+
+    await verifyClaims([{ text: 'x', sourceIds: [id], quote: 'complete' }], store, config);
+
+    const sent = contentSentToModel();
+    expect(sent).toContain('short and complete');
+    expect(sent).not.toContain('…');
+  });
+
+  it('matches a quote across a line break the source wraps at', async () => {
+    const { store, id } = storeWith(
+      'a'.repeat(9000) + '\nthe default\ntimeout is 30 seconds\n' + 'b'.repeat(9000),
+    );
+    verdict(true);
+
+    await verifyClaims(
+      [{ text: 'x', sourceIds: [id], quote: 'the default timeout is 30 seconds' }],
+      store,
+      config,
+    );
+
+    expect(contentSentToModel()).toContain('timeout is 30 seconds');
+  });
+});
+
+// Review #433: one LLM call per factual sentence is real spend, and was invisible
+// to the per-turn odometer and the session ledger.
+describe('usage attribution', () => {
+  it('reports a usage record per verified claim', async () => {
+    const { store, id } = storeWith('text');
+    generateText.mockResolvedValue({
+      text: '{"supported":true,"reason":"r"}',
+      usage: { promptTokens: 10, completionTokens: 2 },
+    });
+    const onUsage = vi.fn();
+
+    await verifyClaims(
+      [
+        { text: 'one', sourceIds: [id] },
+        { text: 'two', sourceIds: [id] },
+      ],
+      store,
+      config,
+      { onUsage },
+    );
+
+    expect(onUsage).toHaveBeenCalledTimes(2);
+    expect(onUsage.mock.calls[0][0].site).toBe('claim-verifier');
+  });
+
+  // The deterministic gates short-circuit before any call, so they must not
+  // report spend that did not happen.
+  it('reports nothing for a claim rejected without a model call', async () => {
+    const { store, id } = storeWith('the timeout is 30 seconds');
+    const onUsage = vi.fn();
+
+    await verifyClaims(
+      [{ text: 'x', sourceIds: [id], quote: 'the timeout is 60 seconds' }],
+      store,
+      config,
+      { onUsage },
+    );
+
+    expect(onUsage).not.toHaveBeenCalled();
+  });
+});
