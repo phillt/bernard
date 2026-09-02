@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as path from 'node:path';
+import * as os from 'node:os';
 
 vi.mock('ai', async () => {
   const actual = await vi.importActual<typeof import('ai')>('ai');
@@ -38,6 +40,7 @@ import { NormalStrategy } from '../../strategies/normal.js';
 import type { AgentContext } from '../../context.js';
 import type { BernardConfig } from '../../../config.js';
 import { buildContextMessage } from '../../../context-message.js';
+import { attachMeta } from '../../tools/adapter.js';
 
 function makeConfig(): BernardConfig {
   return {
@@ -519,5 +522,51 @@ describe('DefinitionRegistry', () => {
     definitions.register(fakeDefinition({ id }));
     expect(definitions.has(id)).toBe(true);
     definitions._clear();
+  });
+});
+
+/**
+ * The write-scope gate is only real if `runDefinition` forwards the reader
+ * (#340).
+ *
+ * `augmentTools` reads `getWriteScope` from ITS OWN options, not from `ctx`, so
+ * a scope set on `ctx.toolOptions` and never passed on is a scope that silently
+ * never applies. That is exactly what shipped in the first cut: the gate, its
+ * unit tests and its integration tests all passed while the production path
+ * enforced nothing — and cron had just had its `FILE_TOOLS` filter removed, so
+ * the net effect was unbounded unattended writes.
+ *
+ * Every other test of this feature calls `augmentTools` directly and cannot see
+ * that. This one drives a real tool through `runDefinition`.
+ */
+describe('write-scope forwarding (#340)', () => {
+  it('forwards ctx.toolOptions.getWriteScope into the augmented tools', async () => {
+    const workspace = path.join(os.tmpdir(), 'bernard-run-scope', 'ws');
+    const execute = vi.fn(async () => ({ ok: true }));
+    const writeTool: any = { execute, description: 'w', parameters: {} };
+    attachMeta(writeTool, {
+      name: 'file_write',
+      kind: 'write',
+      deterministic: false,
+      sideEffect: 'local',
+      cacheable: false,
+    });
+
+    const ctx = makeCtx();
+    ctx.toolOptions = { getWriteScope: () => ({ workspace }) } as any;
+
+    let captured: Record<string, any> = {};
+    vi.mocked(generateText).mockImplementation(async (opts: any) => {
+      captured = opts.tools ?? {};
+      return { text: 'done', response: { messages: [] }, steps: [] } as any;
+    });
+
+    const def = fakeDefinition({ tools: () => ({ file_write: writeTool }) as any });
+    await runDefinition(ctx, def, { text: 'go' });
+
+    // Drive the augmented tool the model would have called.
+    const out = await captured.file_write.execute({ path: '/etc/passwd' }, {});
+    expect(execute).not.toHaveBeenCalled();
+    expect(String(out)).toContain(workspace);
   });
 });
