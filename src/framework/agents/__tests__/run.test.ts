@@ -540,7 +540,7 @@ describe('DefinitionRegistry', () => {
  * that. This one drives a real tool through `runDefinition`.
  */
 describe('write-scope forwarding (#340)', () => {
-  it('forwards ctx.toolOptions.getWriteScope into the augmented tools', async () => {
+  it('forwards ctx.toolOptions.writeScope into the augmented tools', async () => {
     const workspace = path.join(os.tmpdir(), 'bernard-run-scope', 'ws');
     const execute = vi.fn(async () => ({ ok: true }));
     const writeTool: any = { execute, description: 'w', parameters: {} };
@@ -553,7 +553,7 @@ describe('write-scope forwarding (#340)', () => {
     });
 
     const ctx = makeCtx();
-    ctx.toolOptions = { getWriteScope: () => ({ workspace }) } as any;
+    ctx.toolOptions = { writeScope: { workspace } } as any;
 
     let captured: Record<string, any> = {};
     vi.mocked(generateText).mockImplementation(async (opts: any) => {

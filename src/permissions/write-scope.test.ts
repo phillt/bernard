@@ -35,46 +35,43 @@ describe('checkWritePath', () => {
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
   it('allows a write inside the workspace', () => {
-    expect(checkWritePath({ workspace }, path.join(workspace, 'out.txt')).allowed).toBe(true);
+    expect(checkWritePath({ workspace }, path.join(workspace, 'out.txt'))).toBeNull();
   });
 
   it('allows a write into a not-yet-existing subdirectory of the workspace', () => {
     const target = path.join(workspace, 'nested', 'deep', 'out.txt');
-    expect(checkWritePath({ workspace }, target).allowed).toBe(true);
+    expect(checkWritePath({ workspace }, target)).toBeNull();
   });
 
   it('refuses a write outside the workspace', () => {
-    const res = checkWritePath({ workspace }, path.join(root, 'elsewhere.txt'));
-    expect(res.allowed).toBe(false);
+    expect(checkWritePath({ workspace }, path.join(root, 'elsewhere.txt'))).not.toBeNull();
   });
 
   // The caller is generated code with no operator watching: a bare "denied"
   // gets retried against the same path forever.
   it('names the workspace in the refusal', () => {
-    const res = checkWritePath({ workspace }, path.join(root, 'elsewhere.txt'));
-    if (res.allowed) throw new Error('expected refusal');
-    expect(res.reason).toContain(workspace);
+    expect(checkWritePath({ workspace }, path.join(root, 'elsewhere.txt'))).toContain(workspace);
   });
 
   it('names explicit grants in the refusal too', () => {
     const granted = path.join(root, 'granted');
     fs.mkdirSync(granted);
-    const res = checkWritePath({ workspace, grants: [granted] }, path.join(root, 'nope.txt'));
-    if (res.allowed) throw new Error('expected refusal');
-    expect(res.reason).toContain(granted);
+    expect(checkWritePath({ workspace, grants: [granted] }, path.join(root, 'nope.txt'))).toContain(
+      granted,
+    );
   });
 
   it('allows a write inside an explicit grant', () => {
     const granted = path.join(root, 'granted');
     fs.mkdirSync(granted);
     expect(
-      checkWritePath({ workspace, grants: [granted] }, path.join(granted, 'a.txt')).allowed,
-    ).toBe(true);
+      checkWritePath({ workspace, grants: [granted] }, path.join(granted, 'a.txt')),
+    ).toBeNull();
   });
 
   it('refuses traversal out of the workspace via ..', () => {
     const target = path.join(workspace, '..', 'escape.txt');
-    expect(checkWritePath({ workspace }, target).allowed).toBe(false);
+    expect(checkWritePath({ workspace }, target)).not.toBeNull();
   });
 
   // Without resolving the nearest existing ancestor, a symlinked parent lets
@@ -88,7 +85,7 @@ describe('checkWritePath', () => {
     } catch {
       return; // symlinks unavailable (e.g. unprivileged Windows) — skip
     }
-    expect(checkWritePath({ workspace }, path.join(link, 'pwned.txt')).allowed).toBe(false);
+    expect(checkWritePath({ workspace }, path.join(link, 'pwned.txt'))).not.toBeNull();
   });
 
   it('allows a grant that is itself reached through a symlink', () => {
@@ -101,15 +98,13 @@ describe('checkWritePath', () => {
       return;
     }
     // Granted by its link name, written to by its real name.
-    expect(checkWritePath({ workspace, grants: [link] }, path.join(real, 'a.txt')).allowed).toBe(
-      true,
-    );
+    expect(checkWritePath({ workspace, grants: [link] }, path.join(real, 'a.txt'))).toBeNull();
   });
 
   it('refuses an empty or non-string path', () => {
-    expect(checkWritePath({ workspace }, '').allowed).toBe(false);
-    expect(checkWritePath({ workspace }, '   ').allowed).toBe(false);
-    expect(checkWritePath({ workspace }, undefined as unknown as string).allowed).toBe(false);
+    expect(checkWritePath({ workspace }, '')).not.toBeNull();
+    expect(checkWritePath({ workspace }, '   ')).not.toBeNull();
+    expect(checkWritePath({ workspace }, undefined as unknown as string)).not.toBeNull();
   });
 });
 

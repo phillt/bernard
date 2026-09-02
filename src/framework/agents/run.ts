@@ -180,7 +180,7 @@ export async function runDefinition<TInput, TFormatted>(
     // makes the gate real — `augmentTools` reads it from ITS options, not from
     // `ctx`, so a scope set on `toolOptions` and not passed on is a scope that
     // silently never applies.
-    getWriteScope: ctx.toolOptions.getWriteScope,
+    writeScope: ctx.toolOptions.writeScope,
     // Grants persisted before MCP tools were namespaced (#413) name a bare
     // tool. Built from the whole live MCP surface, never from `rawTools` —
     // see `mcpAliasResolverFor`.

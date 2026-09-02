@@ -197,10 +197,10 @@ export interface AugmentOptions {
    */
   getToolPermissions?: ToolOptions['getToolPermissions'];
   /**
-   * Live reader for this dispatch's write scope (#340). Absent → no path
-   * restriction, which is the interactive default.
+   * This dispatch's write scope (#340). Absent → no path restriction, which
+   * is the interactive default.
    */
-  getWriteScope?: ToolOptions['getWriteScope'];
+  writeScope?: ToolOptions['writeScope'];
   /**
    * Maps a persisted tool name onto the live name it refers to, for grants
    * stored before MCP tools were namespaced per server (#413).
@@ -342,7 +342,7 @@ export function augmentTools(
   // callers that haven't migrated don't have their tool calls blocked.
   const toolMode = opts.toolMode ?? 'write';
   const blockAction = opts.blockAction;
-  const getWriteScope = opts.getWriteScope;
+  const writeScope = opts.writeScope;
   // Per-tool session allowlist keyed by tool name. Prefer the shared Set
   // passed in via `opts.sessionToolAllowlist` (owned by the REPL for the
   // process lifetime) so an "allow-tool-for-session" decision survives
@@ -467,7 +467,8 @@ export function augmentTools(
 
   /**
    * Write-scope gate (#340). Returns `null` to proceed, or a refusal string
-   * naming where the write may go instead.
+   * naming where the write may go instead — the same shape `checkWritePath`
+   * returns, so the gate forwards rather than translates.
    *
    * Sits ahead of the block and confirm gates because it answers a different
    * question — *where*, not *whether the user wants to be asked*. A write into
@@ -487,18 +488,22 @@ export function augmentTools(
    * that set is not gated: this bounds writes, not reads.
    */
   const runWriteScopeGate = (toolName: string, args: unknown): string | null => {
-    const scope = getWriteScope?.();
-    if (!scope) return null;
+    if (!writeScope) return null;
     if (!WRITE_PATH_TOOLS.has(toolName)) return null;
-    const target = (args as { path?: unknown } | undefined)?.path;
-    if (typeof target !== 'string') return null;
-    const decision = checkWritePath(scope, target);
-    if (decision.allowed) return null;
+    // The type check lives in `checkWritePath`, which REFUSES a non-string
+    // path. Repeating it here — where the natural return is `null`, meaning
+    // allow — put two checks on one condition with opposite verdicts, and made
+    // the module's fail-closed branch unreachable from production.
+    const refusal = checkWritePath(
+      writeScope,
+      (args as { path?: unknown } | undefined)?.path as string,
+    );
+    if (!refusal) return null;
     debugLog(`augment:${toolName}:write-scope:refused`, {
-      workspace: scope.workspace,
-      grants: scope.grants?.length ?? 0,
+      workspace: writeScope.workspace,
+      grants: writeScope.grants?.length ?? 0,
     });
-    return decision.reason;
+    return refusal;
   };
 
   /**

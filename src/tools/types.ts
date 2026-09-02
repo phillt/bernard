@@ -151,19 +151,20 @@ export interface ToolOptions {
    */
   getToolPermissions?: () => PermissionRule[] | undefined;
   /**
-   * Live reader for this dispatch's write scope (#340). When present, a
-   * path-bearing write tool may only write inside the workspace or an
-   * explicit grant; when absent there is no restriction.
+   * This dispatch's write scope (#340). When present, a path-bearing write
+   * tool may only write inside the workspace or an explicit grant; when
+   * absent there is no restriction.
    *
    * Absent is the interactive default on purpose — scoping writes the user is
    * watching themselves make would be obstruction, not safety. It is the
-   * *unattended* writers that need a `where`: cron today, applet actions
-   * (#445) next.
+   * *unattended* writers that need a `where`.
    *
-   * A reader rather than a value so a mid-session grant applies immediately,
-   * matching {@link ToolOptions.getToolPermissions}.
+   * A plain value, not a reader. `getToolPermissions` is a thunk because the
+   * REPL mutates `config.toolPermissions` mid-session; nothing mutates a
+   * scope mid-run, and a thunk would advertise a mutability nothing
+   * implements.
    */
-  getWriteScope?: () => WriteScope | undefined;
+  writeScope?: WriteScope;
 }
 
 /** Outcome of a shell tool invocation. */

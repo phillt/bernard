@@ -56,7 +56,15 @@ import {
 import { toLiteralSpeech } from './speech-text.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
-import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
+import {
+  cronList,
+  cronRun,
+  cronGrant,
+  cronDelete,
+  cronDeleteAll,
+  cronStop,
+  cronBounce,
+} from './cron/cli.js';
 import type { ScriptCliOptions } from './script/run.js';
 import { listMCPServers, removeMCPServer, MCPManager, setActiveMCPManager } from './mcp.js';
 import { ToolProfileStore } from './tool-profiles.js';
@@ -1037,6 +1045,20 @@ program
     // this file hand-rolled two envelopes of its own.
     const { scriptMain } = await import('./script/run.js');
     process.exitCode = await scriptMain(options);
+  });
+
+program
+  .command('cron-grant <id> [paths...]')
+  .description('Show or set the folders a cron job may write to, beyond its own workspace')
+  .option('--clear', 'Remove all extra write paths, leaving only the job workspace')
+  .action(async (id: string, paths: string[], options: { clear?: boolean }) => {
+    try {
+      await cronGrant(id, paths ?? [], options);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
   });
 
 program

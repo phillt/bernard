@@ -2,6 +2,7 @@ import { tool, type CoreMessage, type Tool } from 'ai';
 import { z } from 'zod';
 import { createTools } from '../../tools/index.js';
 import { formatCurrentDateTime } from '../../tools/datetime.js';
+import { writeScopePrompt } from '../../permissions/write-scope.js';
 import { attachMeta } from '../tools/adapter.js';
 import { CronStore } from '../../cron/store.js';
 import { type CronLogStep } from '../../cron/log-store.js';
@@ -110,13 +111,10 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
       .join(', ');
     // The workspace is stated, not discovered. A job that is refused a write
     // and has to guess where it MAY write will retry the same path — there is
-    // no operator to tell it otherwise (#340).
-    const scope = ctx.toolOptions.getWriteScope?.();
-    const workspaceBlock = scope
-      ? `## Where you may write\nWrite files to \`${scope.workspace}\` — it exists and is yours for this job.${
-          scope.grants?.length ? ` You may also write to: ${scope.grants.join(', ')}.` : ''
-        }\nWrites anywhere else are refused. Do not retry a refused path; use the workspace instead.`
-      : null;
+    // no operator to tell it otherwise (#340). The wording lives beside the
+    // refusal it prevents, so the two cannot drift.
+    const scope = ctx.toolOptions.writeScope;
+    const workspaceBlock = scope ? writeScopePrompt(scope) : null;
 
     return [
       DAEMON_SYSTEM_PROMPT,
@@ -230,8 +228,6 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
       surface,
     );
 
-    // Withhold the write-capable file tools, for a gate asymmetry rather than a
-    // judgement about unattended writes: a default job runs `toolMode: 'write'`
     // Write-capable file tools are handed back (#340). They were withheld
     // wholesale by #337 because of a risk-tier asymmetry: `shell`
     // (`kind: 'dangerous'` → high) had its write-shaped invocations denied

@@ -1167,7 +1167,7 @@ describe('augmentTools', () => {
       const { t, execute } = makeWriteTool('file_write');
       const augmented = augmentTools(
         { file_write: t },
-        { profileStore: store, getWriteScope: () => ({ workspace }) },
+        { profileStore: store, writeScope: { workspace } },
       );
       await augmented.file_write.execute({ path: path.join(workspace, 'a.txt') }, {});
       expect(execute).toHaveBeenCalled();
@@ -1177,7 +1177,7 @@ describe('augmentTools', () => {
       const { t, execute } = makeWriteTool('file_write');
       const augmented = augmentTools(
         { file_write: t },
-        { profileStore: store, getWriteScope: () => ({ workspace }) },
+        { profileStore: store, writeScope: { workspace } },
       );
       const out = await augmented.file_write.execute({ path: '/etc/passwd' }, {});
       expect(execute).not.toHaveBeenCalled();
@@ -1190,7 +1190,7 @@ describe('augmentTools', () => {
       const { t } = makeWriteTool('file_write');
       const augmented = augmentTools(
         { file_write: t },
-        { profileStore: store, getWriteScope: () => ({ workspace }) },
+        { profileStore: store, writeScope: { workspace } },
       );
       const out = await augmented.file_write.execute({ path: '/etc/passwd' }, {});
       expect(String(out)).toContain(workspace);
@@ -1201,7 +1201,7 @@ describe('augmentTools', () => {
       const granted = path.join(os.tmpdir(), 'bernard-scope-test', 'granted');
       const augmented = augmentTools(
         { file_edit_lines: t },
-        { profileStore: store, getWriteScope: () => ({ workspace, grants: [granted] }) },
+        { profileStore: store, writeScope: { workspace, grants: [granted] } },
       );
       await augmented.file_edit_lines.execute({ path: path.join(granted, 'x.txt') }, {});
       expect(execute).toHaveBeenCalled();
@@ -1212,7 +1212,7 @@ describe('augmentTools', () => {
       const { t, execute } = makeWriteTool('file_read_lines');
       const augmented = augmentTools(
         { file_read_lines: t },
-        { profileStore: store, getWriteScope: () => ({ workspace }) },
+        { profileStore: store, writeScope: { workspace } },
       );
       await augmented.file_read_lines.execute({ path: '/etc/passwd' }, {});
       expect(execute).toHaveBeenCalled();
@@ -1225,7 +1225,7 @@ describe('augmentTools', () => {
       const { t, execute } = makeWriteTool('shell');
       const augmented = augmentTools(
         { shell: t },
-        { profileStore: store, getWriteScope: () => ({ workspace }) },
+        { profileStore: store, writeScope: { workspace } },
       );
       await augmented.shell.execute({ command: 'echo hi > /etc/passwd' }, {});
       expect(execute).toHaveBeenCalled();
@@ -1240,7 +1240,7 @@ describe('augmentTools', () => {
           profileStore: store,
           toolMode: 'read-only',
           blockAction,
-          getWriteScope: () => ({ workspace }),
+          writeScope: { workspace },
         },
       );
       await augmented.file_write.execute({ path: '/etc/passwd' }, {});

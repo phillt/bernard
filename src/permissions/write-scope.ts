@@ -40,20 +40,10 @@ export interface WriteScope {
   grants?: string[];
 }
 
-export type ScopeDecision =
-  | { allowed: true }
-  | {
-      allowed: false;
-      /**
-       * Model-facing refusal. **Names where the write may go instead**, because
-       * the caller is generated code with no operator watching: a bare "denied"
-       * gets retried against the same path forever.
-       */
-      reason: string;
-    };
-
 /**
  * True when `child` is `parent` or sits beneath it.
+ *
+ * @internal Exported for testing only.
  *
  * Separator-aware on purpose. A bare `startsWith` matches `/safe-dir-evil`
  * against a `/safe-dir` grant — the allowlist would read as scoped and would
@@ -68,6 +58,8 @@ export function isContainedIn(parent: string, child: string): boolean {
 /**
  * Resolves a path for comparison, following symlinks as far as the filesystem
  * actually goes.
+ *
+ * @internal Exported for testing only.
  *
  * The target of a write usually does not exist yet, so `realpathSync` on it
  * would throw. Resolving the nearest existing ancestor and re-appending the
@@ -102,22 +94,30 @@ export function resolveForComparison(target: string): string {
 /**
  * Decides whether `target` may be written under `scope`.
  *
+ * Returns `null` to allow, or a model-facing refusal that **names where the
+ * write may go instead** — the caller is generated code with no operator
+ * watching, and a bare "denied" gets retried against the same path forever.
+ *
+ * Reason-or-`null` rather than a `{allowed}` union because the only consumer
+ * flattened the union to exactly this in three lines; the two now agree
+ * instead of translating between each other.
+ *
  * Every allowed location is resolved the same way as the target, so a grant
  * that is itself a symlink compares correctly.
  */
-export function checkWritePath(scope: WriteScope, target: string): ScopeDecision {
+export function checkWritePath(scope: WriteScope, target: string): string | null {
   if (typeof target !== 'string' || target.trim() === '') {
-    return { allowed: false, reason: refusal(scope, '(empty path)') };
+    return refusal(scope, '(empty path)');
   }
 
   const resolved = resolveForComparison(target);
   const allowed = [scope.workspace, ...(scope.grants ?? [])];
 
   for (const location of allowed) {
-    if (isContainedIn(resolveForComparison(location), resolved)) return { allowed: true };
+    if (isContainedIn(resolveForComparison(location), resolved)) return null;
   }
 
-  return { allowed: false, reason: refusal(scope, resolved) };
+  return refusal(scope, resolved);
 }
 
 function refusal(scope: WriteScope, resolved: string): string {
@@ -126,4 +126,25 @@ function refusal(scope: WriteScope, resolved: string): string {
     `Write to ${resolved} refused — outside this run's allowed paths. ` +
     `Write to ${scope.workspace} instead, or ask the user to grant the location.${extra}`
   );
+}
+
+/**
+ * The instruction that keeps a scoped run from burning its step budget.
+ *
+ * Authored here, beside {@link checkWritePath}'s refusal, because the two are
+ * halves of one contract: the refusal names where the write may go, and this
+ * says the same thing before the model has to be refused at all. Split across
+ * files they drift, and the failure is silent — a job with no operator retries
+ * a rejected path until its steps run out.
+ *
+ * It lived on `cronDefinition` first, which meant any second scoped caller
+ * either re-authored it or shipped without it.
+ */
+export function writeScopePrompt(scope: WriteScope): string {
+  const also = scope.grants?.length ? ` You may also write to: ${scope.grants.join(', ')}.` : '';
+  return [
+    '## Where you may write',
+    `Write files to \`${scope.workspace}\` — it exists and is yours for this run.${also}`,
+    'Writes anywhere else are refused. Do not retry a refused path; use the workspace instead.',
+  ].join('\n');
 }

@@ -68,7 +68,7 @@ function opts(over: Partial<RunHeadlessOpts<any, string>> = {}): RunHeadlessOpts
   return {
     definition: () => fakeDefinition,
     buildInput: () => ({}),
-    posture: resolvePosture({ toolMode: 'write', confirmMode: 'auto' }),
+    posture: resolvePosture({ toolMode: 'write', confirmMode: 'auto', writeScope: null }),
     timeoutMs: null,
     log: () => {},
     debugLabel: 'test',
@@ -92,13 +92,13 @@ beforeEach(() => {
 
 describe('resolvePosture', () => {
   it('maps confirmMode onto the canonical threshold', () => {
-    expect(resolvePosture({ toolMode: 'write', confirmMode: 'auto' }).confirmThreshold).toBe(
+    expect(resolvePosture({ toolMode: 'write', confirmMode: 'auto', writeScope: null }).confirmThreshold).toBe(
       'high',
     );
-    expect(resolvePosture({ toolMode: 'write', confirmMode: 'strict' }).confirmThreshold).toBe(
+    expect(resolvePosture({ toolMode: 'write', confirmMode: 'strict', writeScope: null }).confirmThreshold).toBe(
       'medium',
     );
-    expect(resolvePosture({ toolMode: 'write', confirmMode: 'off' }).confirmThreshold).toBe(
+    expect(resolvePosture({ toolMode: 'write', confirmMode: 'off', writeScope: null }).confirmThreshold).toBe(
       'never',
     );
   });
@@ -115,13 +115,33 @@ describe('resolvePosture', () => {
   });
 
   it('keeps the two axes orthogonal — confirmMode:off does not unblock read-only', () => {
-    const p = resolvePosture({ toolMode: 'read-only', confirmMode: 'off' });
+    const p = resolvePosture({ toolMode: 'read-only', confirmMode: 'off', writeScope: null });
     expect(p.toolMode).toBe('read-only');
     expect(p.confirmThreshold).toBe('never');
   });
 
+  // `skipPermissions` is the documented "no safeguards" contract, and it has
+  // to dissolve ALL gates. Leaving the scope in place made a job the user
+  // explicitly marked unrestricted still refuse `file_write` outside its
+  // workspace — while `shell` in that same job stayed wide open, because shell
+  // DOES dissolve. That pushes the model toward the less safe tool.
+  it('dissolves the write scope under skipPermissions, like the other axes', () => {
+    const scope = { workspace: '/tmp/ws' };
+    expect(
+      resolvePosture({ toolMode: 'write', confirmMode: 'auto', writeScope: scope }).writeScope,
+    ).toBe(scope);
+    expect(
+      resolvePosture({
+        toolMode: 'write',
+        confirmMode: 'auto',
+        writeScope: scope,
+        skipPermissions: true,
+      }).writeScope,
+    ).toBeNull();
+  });
+
   it('auto-denies a high-risk call and passes a low-risk one under the default posture', async () => {
-    const { confirmAction } = resolvePosture({ toolMode: 'write', confirmMode: 'auto' });
+    const { confirmAction } = resolvePosture({ toolMode: 'write', confirmMode: 'auto', writeScope: null });
     await expect(confirmAction({ risk: 'high' } as any)).resolves.toBe(false);
     await expect(confirmAction({ risk: 'low' } as any)).resolves.toBe(true);
   });
@@ -200,7 +220,7 @@ describe('runHeadless', () => {
 
   it('wires the posture into ctx.policyDecision so both gates see it', async () => {
     await runHeadless(
-      opts({ posture: resolvePosture({ toolMode: 'read-only', confirmMode: 'strict' }) }),
+      opts({ posture: resolvePosture({ toolMode: 'read-only', confirmMode: 'strict', writeScope: null }) }),
     );
     const ctx = mockRunDefinition.mock.calls[0][0];
     expect(ctx.policyDecision.toolMode).toEqual({

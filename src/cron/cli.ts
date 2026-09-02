@@ -1,9 +1,12 @@
 import * as readline from 'node:readline';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { CronStore } from './store.js';
 import { CronLogStore } from './log-store.js';
 import { runJob } from './runner.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from './client.js';
 import { printInfo, printError } from '../output.js';
+import { runWorkspace } from '../paths.js';
 
 /** Stops the daemon automatically when no enabled jobs remain. */
 function stopIfNoEnabledJobs(store: CronStore): void {
@@ -297,4 +300,58 @@ export async function cronBounce(ids?: string[]): Promise<void> {
     startDaemon();
     printInfo('Daemon started.');
   }
+}
+
+/**
+ * Shows or sets the extra locations a job may write to (#340).
+ *
+ * **User-driven on purpose, and deliberately absent from the `cron` tool.**
+ * Every job already gets its own workspace with no configuration; this grants
+ * a location outside it. Exposing that to the model would let an agent widen
+ * its own write scope, which is the escalation the whole gate exists to
+ * prevent — a grant has to come from the person, not the process.
+ */
+export async function cronGrant(
+  id: string,
+  paths: string[],
+  opts: { clear?: boolean } = {},
+): Promise<void> {
+  const store = new CronStore();
+  const job = store.getJob(id);
+  if (!job) {
+    printError(`Job not found: ${id}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (opts.clear) {
+    store.updateJob(id, { writePaths: [] });
+    printInfo(`Cleared extra write paths for "${job.name}". It keeps its own workspace.`);
+    return;
+  }
+
+  if (paths.length === 0) {
+    const current = job.writePaths ?? [];
+    printInfo(`Job "${job.name}" (${job.id})`);
+    printInfo(`  Workspace: ${runWorkspace('cron', job.id)} (always writable)`);
+    printInfo(
+      current.length > 0
+        ? `  Also granted:\n${current.map((p) => `    ${p}`).join('\n')}`
+        : '  No extra write paths granted.',
+    );
+    return;
+  }
+
+  // Stored resolved, so a grant made from one working directory still means
+  // the same place later. A relative grant that silently re-anchors is the
+  // kind of allowlist that reads as scoped and is not.
+  const resolved = paths.map((p) => path.resolve(p));
+  const missing = resolved.filter((p) => !fs.existsSync(p));
+  for (const p of missing) {
+    printInfo(`Note: ${p} does not exist yet — the grant still applies once it does.`);
+  }
+
+  store.updateJob(id, { writePaths: resolved });
+  printInfo(`Job "${job.name}" may now also write to:`);
+  for (const p of resolved) printInfo(`  ${p}`);
 }
