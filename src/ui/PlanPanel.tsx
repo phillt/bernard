@@ -7,6 +7,7 @@ import { summarizePlan } from '../agent-status.js';
 import { truncate } from '../text.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 import { NOTE_SEPARATOR, planWindow, splitStepWidth, stepTextWidth } from './plan-window.js';
+import { formatPosition } from './overlays/viewer-util.js';
 
 interface PlanPanelProps {
   agent: Agent;
@@ -153,9 +154,7 @@ export function PlanPanel({ agent, maxRows, reserveColumns }: PlanPanelProps) {
           rule. Rendering it conditionally would make the panel's height depend
           on the budget that decides what is hidden. */}
       <Box paddingX={1}>
-        <Text color={colors.muted}>
-          {position ? `steps ${position.first}–${position.last} of ${position.total}` : ' '}
-        </Text>
+        <Text color={colors.muted}>{formatPosition(position, 'steps') ?? ' '}</Text>
       </Box>
       {/* Interior divider between the plan and the input line below it. */}
       <Box

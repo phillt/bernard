@@ -6,7 +6,7 @@ import { isAcknowledgeKey } from './overlay-contract.js';
 import { SLASH_COMMANDS } from '../slash-commands.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 import { overlayViewport } from './menu-geometry.js';
-import { clamp, listPosition, navDelta } from './viewer-util.js';
+import { clamp, formatPosition, listPosition, navDelta } from './viewer-util.js';
 import { OverlayFooter, OVERLAY_FOOTER_ROWS } from './OverlayFooter.js';
 import { truncate } from '../../text.js';
 
@@ -250,7 +250,7 @@ export function HelpOverlay({ onClose, reserveRows = 0 }: HelpOverlayProps) {
   const descWidth = descriptionWidth(usableColumns);
   const visible = lines.slice(offset, offset + viewport);
   const pos = listPosition(offset, viewport, lines.length);
-  const position = pos ? `lines ${pos.first}–${pos.last} of ${pos.total}` : null;
+  const position = formatPosition(pos, 'lines');
 
   return (
     <Box flexDirection="column" marginTop={1}>

@@ -531,7 +531,7 @@ describe('<Prompt> dynamic slash commands (routines/tasks)', () => {
       // …and the earliest ones must not be, or nothing was bounded.
       expect(frame).not.toContain('line0\n');
       // 30 rows, cap 8 → 22 hidden above, cursor pinned to the last row.
-      expect(frame).toMatch(/▲ 22 more lines/);
+      expect(frame).toMatch(/▲ 22 more rows/);
     });
   });
 });

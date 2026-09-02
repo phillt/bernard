@@ -7,6 +7,8 @@ import { Thread, type StaticItem } from '../Thread.js';
 import { TranscriptViewport } from '../TranscriptViewport.js';
 import { MessageStore } from '../message-store.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
+import { Box, Text } from 'ink';
+import { PAGE_UP, tick } from './_keys.js';
 
 /**
  * Build the append-only `staticItems` log <Thread> now renders through
@@ -691,5 +693,148 @@ describe('<TranscriptViewport> (full-screen transcript)', () => {
     const frame = stripAnsi(renderViewport({ items: errorItems }).lastFrame() ?? '');
     expect(frame).toContain('Rate limit / quota');
     expect(frame).toContain('You exceeded your current quota.');
+  });
+});
+
+/**
+ * The viewport's LAYOUT, which the suite above cannot reach (#435).
+ *
+ * Those three tests mount `<TranscriptViewport>` standalone — no fixed-height
+ * parent and no sibling competing for rows — and that is precisely why this
+ * bug had no coverage. With nothing to compete against there is no negative
+ * free space, so the flex distribution that produced the defect never happens
+ * and every offset looks correct.
+ *
+ * Here the viewport sits in a `height`-pinned frame beside a chrome sibling of
+ * known height, which is the shape `App` renders in full-screen. `measureElement`
+ * does work under ink-testing-library, but it converges through `useEffect`, so
+ * assertions about the settled state need a `tick()` — and assertions about the
+ * FIRST frame must read `frames[0]`, since the whole defect was that the wrong
+ * frame is what the user sees.
+ */
+describe('<TranscriptViewport> layout inside a fixed-height frame', () => {
+  const FRAME_ROWS = 24;
+  const CHROME_ROWS = 8;
+
+  /** One `<Text>` per row, so the sibling's height is exactly CHROME_ROWS. */
+  const chrome = createElement(
+    Box,
+    { flexDirection: 'column' },
+    ...Array.from({ length: CHROME_ROWS }, (_, i) => createElement(Text, { key: i }, `CHROME${i}`)),
+  );
+
+  /**
+   * An assistant turn of `n` individually findable rows. A markdown list, so
+   * every rendered row carries a marker: blank rows between paragraphs would
+   * make "how many content rows are visible" a lossy count, and that count is
+   * the whole point of the height-stability assertion below.
+   */
+  function tallReply(n: number): StaticItem[] {
+    return items([
+      {
+        role: 'assistant',
+        content: Array.from({ length: n }, (_, i) => `- REPLY-${i}`).join('\n'),
+      },
+    ]);
+  }
+
+  function mountFramed(props: Parameters<typeof TranscriptViewport>[0]) {
+    return render(
+      createElement(
+        DimensionsProvider,
+        null,
+        createElement(
+          Box,
+          { flexDirection: 'column', height: FRAME_ROWS },
+          createElement(TranscriptViewport, props),
+          chrome,
+        ),
+      ),
+    );
+  }
+
+  const chromeRowsIn = (frame: string) => (stripAnsi(frame).match(/^CHROME\d+$/gm) ?? []).length;
+  const contentRows = (frame: string | undefined) =>
+    (stripAnsi(frame ?? '').match(/REPLY-\d+/g) ?? []).length;
+
+  it('leaves the chrome its full height on the very first frame', async () => {
+    // The defect, stated directly. `overflow: hidden` is paint-only in Ink, so
+    // without `flexBasis={0}` the viewport's flex base size is its whole
+    // content — 60-odd rows — and the frame's negative free space is split with
+    // the chrome, which rendered at 3 of its 8 rows before this was fixed. That
+    // is a prompt box losing five rows to a transcript that mis-measured
+    // itself, and it is what the reporter's screenshot showed.
+    const { frames } = mountFramed({ items: tallReply(30) });
+    expect(chromeRowsIn(frames[0])).toBe(CHROME_ROWS);
+    await tick();
+    expect(chromeRowsIn(frames[frames.length - 1])).toBe(CHROME_ROWS);
+  });
+
+  it('settles its window in a single measure pass', async () => {
+    // The same defect seen as time rather than space: a content-dependent flex
+    // basis makes `measureElement` return a height that depends on the current
+    // offset, so the viewport walked its way to the answer over four passes
+    // (viewportH 21 → 17 → 16 → 15). Streaming restarts that on every delta, so
+    // it never settled while output was flowing. This is the guard against the
+    // basis prop being tidied away as redundant.
+    const { frames } = mountFramed({ items: tallReply(30) });
+    await tick();
+    const settled = stripAnsi(frames[frames.length - 1]);
+    expect(stripAnsi(frames[1])).toBe(settled);
+  });
+
+  it('shows the tail at rest and says how many rows are above it', async () => {
+    const { lastFrame } = mountFramed({ items: tallReply(30) });
+    await tick();
+    const frame = stripAnsi(lastFrame() ?? '');
+    // Stuck at the bottom: the newest content is on screen…
+    expect(frame).toContain('REPLY-29');
+    // …the oldest is not…
+    expect(frame).not.toContain('REPLY-0\n');
+    // …and, unlike before, the screen says so with a count. A message opening
+    // mid-thought with no marker is what made a complete answer read as a
+    // truncated one.
+    expect(frame).toMatch(/▲ \d+ more rows above/);
+  });
+
+  it('reaches the first row of an over-tall reply with PgUp', async () => {
+    // "Fully reachable" from the acceptance list, tested rather than asserted.
+    const { stdin, lastFrame } = mountFramed({ items: tallReply(30) });
+    await tick();
+    expect(stripAnsi(lastFrame() ?? '')).not.toContain('REPLY-0\n');
+    // Bounded rather than a fixed count: the test deliberately does not compute
+    // the page size, but 20 blind presses to do a 2-press job made this the
+    // slowest test in the file by 4x. The bound keeps it honest if paging breaks.
+    for (let i = 0; i < 30 && !stripAnsi(lastFrame() ?? '').includes('REPLY-0'); i++) {
+      stdin.write(PAGE_UP);
+      await tick(2);
+    }
+    expect(stripAnsi(lastFrame() ?? '')).toContain('REPLY-0');
+  });
+
+  it('shows the same number of content rows scrolled as at rest', async () => {
+    // The position row is reserved unconditionally (`OverlayFooter`'s rule).
+    // Rendering it only while scrolled made the viewport lose a content row at
+    // the moment the user scrolled — the layout height depending on the very
+    // budget that decides what is hidden.
+    //
+    // Counting CONTENT rows, not `frameRows`: the frame is pinned at
+    // FRAME_ROWS, so its total never moves and would assert nothing. What the
+    // conditional row actually cost was a row of transcript.
+    const { stdin, lastFrame } = mountFramed({ items: tallReply(30) });
+    await tick();
+    const atRest = contentRows(lastFrame());
+    expect(atRest).toBeGreaterThan(0);
+    stdin.write(PAGE_UP);
+    await tick(2);
+    expect(contentRows(lastFrame())).toBe(atRest);
+  });
+
+  it('reserves the position row as a blank when everything fits', async () => {
+    const { lastFrame } = mountFramed({ items: tallReply(2) });
+    await tick();
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('REPLY-0');
+    expect(frame).not.toMatch(/more rows (above|below)/);
   });
 });

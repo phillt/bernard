@@ -86,6 +86,29 @@ export function listPosition(
 }
 
 /**
+ * `rows 13–30 of 30` — the one spelling of a {@link listPosition} result.
+ *
+ * Six surfaces rendered this by hand before it existed (`ViewerShell`,
+ * `PlanPanel`, `MenuOverlay`, `ModelGridOverlay`, `HelpOverlay`, and the
+ * transcript), agreeing only by copy-paste on three things a reader would not
+ * think to check: the en-dash rather than a hyphen, the word `of`, and the
+ * `null` that callers turn into a reserved blank row. All three are asserted by
+ * regex in four different test files, so a drifting seventh copy would fail
+ * somewhere far from wherever it was written. Same rationale as `plural` and
+ * `truncate` in `src/text.ts`: one spelling beats several drifting ones.
+ *
+ * The noun is the caller's because only it knows what it is counting — rows,
+ * steps, items, lines.
+ */
+export function formatPosition(
+  position: { first: number; last: number; total: number } | null,
+  noun: string,
+): string | null {
+  if (!position) return null;
+  return `${noun} ${position.first}–${position.last} of ${position.total}`;
+}
+
+/**
  * Greedy word-wrap that preserves paragraph breaks, keeps each paragraph's
  * leading indentation on its continuation lines (so pretty-printed JSON stays
  * readable), and hard-splits overlong words.
