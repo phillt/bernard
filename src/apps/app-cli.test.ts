@@ -226,9 +226,52 @@ describe('app list formatting', () => {
     // terminal, which breaks mid-word and destroys the indent.
     for (const l of lines) expect(l.length).toBeLessThanOrEqual(80);
 
-    // The two action rows start their `kind` column at the same offset.
-    const actionRows = lines.filter((l) => /\bagent\b/.test(l));
+    // Both action rows put their mode column at the same offset.
+    const actionRows = lines.filter((l) => l.includes('wide/'));
     expect(actionRows).toHaveLength(2);
-    expect(new Set(actionRows.map((l) => l.indexOf('agent'))).size).toBe(1);
+    expect(new Set(actionRows.map((l) => l.indexOf('read-only'))).size).toBe(1);
+  });
+});
+
+describe('app list does not read as a list of agents', () => {
+  useTempHome('bernard-app-list-actions');
+  const lines: string[] = [];
+
+  beforeEach(() => {
+    lines.length = 0;
+    vi.resetModules();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('addresses actions as <app>/<action> and never calls them agents', async () => {
+    // A user seeing `greet  agent  read-only  datetime` under a command called
+    // `app list` tried `bernard app delete greet`. The bare name read as a
+    // top-level entry, and "agent" read as the kind of thing being listed.
+    const output = await import('../output.js');
+    vi.spyOn(output, 'printInfo').mockImplementation((m: string) => void lines.push(m));
+    const { AppRegistry } = await import('./registry.js');
+    new AppRegistry({ seed: false }).create(
+      {
+        schemaVersion: 2,
+        id: 'hello-world',
+        name: 'Hello World',
+        description: 'd',
+        actions: {
+          greet: { dispatch: { kind: 'agent', specialistId: 's', instructions: 'i' } },
+        },
+      },
+      { 'index.html': '<p>x</p>' },
+    );
+    const { appList } = await import('./app-cli.js');
+    appList();
+    const out = lines.join('\n');
+
+    // The addressable form, which is also what `app allow <app> <action>` takes.
+    expect(out).toContain('hello-world/greet');
+    // Never the bare name on its own, which is what invited `app delete greet`.
+    expect(out).not.toMatch(/^\s+greet\s/m);
+    // The dispatch kind is not the subject of this command.
+    expect(out).not.toContain('agent');
+    expect(out).toContain('actions:');
   });
 });

@@ -125,14 +125,21 @@ function printApp(registry: AppRegistry, id: string): void {
     return;
   }
 
-  // Pad to the widest name so the kind/mode columns line up, the way
-  // Commander's own option list does.
-  const width = Math.max(...entries.map(([n]) => n.length));
+  // Labelled and addressed as `<app>/<action>`, because the bare name read as
+  // a top-level entry: a user seeing `greet  agent  read-only  datetime` in a
+  // command called `app list` tried `bernard app delete greet`. The slash form
+  // is also exactly how `bernard app allow <app> <action>` addresses it, so
+  // the listing now shows the thing you would type.
+  //
+  // The dispatch kind is deliberately gone. `agent` next to an action name
+  // read as "this is an agent" in a listing that never mentions agents; how an
+  // action runs is not what `app list` is for.
+  printInfo('      actions:');
+  const width = Math.max(...entries.map(([n]) => n.length + id.length + 1));
   for (const [actionName, action] of entries) {
     const tools = action.toolAllowlist.length ? action.toolAllowlist.join(', ') : 'no tools';
     printInfo(
-      `      ${actionName.padEnd(width)}  ${action.dispatch.kind.padEnd(5)}  ` +
-        `${action.toolMode.padEnd(9)}  ${tools}`,
+      `        ${`${id}/${actionName}`.padEnd(width)}  ${action.toolMode.padEnd(9)}  ${tools}`,
     );
   }
 }
