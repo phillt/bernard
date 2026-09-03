@@ -185,7 +185,8 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
         `Applet "${created.name}" (${created.id}) created with ` +
         `${Object.keys(created.actions).length} action(s). Its actions have no tools yet — ` +
         `grant them with \`bernard app-grant ${created.id}\`.` +
-        warningsFor(issues)
+        warningsFor(issues) +
+        (await openedNote(created.id))
       );
     }
     case 'update': {
@@ -269,6 +270,33 @@ function buildManifest(
 function need<T>(value: T | undefined, field: string, action: string): T {
   if (value === undefined) throw new Error(`\`${field}\` is required for action "${action}".`);
   return value;
+}
+
+/**
+ * Opens a just-built applet, and says where it is either way.
+ *
+ * On `create` only, never `update`: an edit mid-conversation stealing window
+ * focus is worse than the defect this fixes. Best-effort by construction — the
+ * URL is in the returned string whatever happened, so a model can always tell
+ * the user where the applet is, and no failure here can turn a successful
+ * create into a failed tool call.
+ */
+async function openedNote(appId: string): Promise<string> {
+  try {
+    const { loadConfig } = await import('../config.js');
+    if (!loadConfig().autoOpenApplets) return '';
+    const { openApplet } = await import('../apps/open.js');
+    const result = await openApplet(appId);
+    if ('error' in result) return '';
+    if (result.opened) return ` Opened it at ${result.url}.`;
+    return result.note
+      ? ` It is at ${result.url} (not opened: ${result.note}).`
+      : ` It is at ${result.url}.`;
+  } catch {
+    // `loadConfig` throws with no provider key configured, and a tool action
+    // that makes no model call must not require one.
+    return '';
+  }
 }
 
 /**

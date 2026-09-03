@@ -129,24 +129,14 @@ export function appPath(appId: string): void {
  * as the user's first impression of the feature.
  */
 export async function appOpen(appId: string, opts: { open?: boolean } = {}): Promise<void> {
-  const registry = new AppRegistry();
-  if (!registry.exists(appId)) {
-    printError(`No such app: ${appId}`);
+  const { openApplet } = await import('./open.js');
+  const result = await openApplet(appId, opts);
+  if ('error' in result) {
+    printError(result.error);
     process.exitCode = 1;
     return;
   }
-  const { HostRegistry } = await import('../host/registry.js');
-  const { isHostProcessAlive } = await import('../host/client.js');
-  if (!isHostProcessAlive()) {
-    const { appletHostStart } = await import('../host/cli.js');
-    await appletHostStart();
-  }
-  const url = `http://127.0.0.1:${new HostRegistry().recordFor(appId).port}`;
-  if (opts.open === false) {
-    printInfo(url);
-    return;
-  }
-  const { openUrl } = await import('../open-url.js');
-  if (!openUrl(url)) printInfo(`Open it at ${url}`);
-  else printInfo(`Opening ${url}`);
+  if (result.started) printInfo('Started the applet host.');
+  if (result.opened) printInfo(`Opening ${result.url}`);
+  else printInfo(result.note ? `${result.note} — open it at ${result.url}` : result.url);
 }

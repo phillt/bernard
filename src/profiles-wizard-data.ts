@@ -211,6 +211,12 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         field: { kind: 'boolean' },
       },
       {
+        key: 'autoOpenApplets',
+        label: 'Open new applets',
+        description: 'Open an applet in the browser as soon as it is built.',
+        field: { kind: 'boolean' },
+      },
+      {
         key: 'autoCreateThreshold',
         label: 'Auto-create threshold',
         description: 'Confidence threshold 0-1 (e.g. 0.8).',

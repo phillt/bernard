@@ -79,7 +79,16 @@ export function unrepresentableParams(tool: unknown): string[] {
  */
 export function directInvocableRefusal(toolName: string, tool: unknown): string | null {
   if (!tool) {
-    return `Action names tool "${toolName}", which is not in this action's tool allowlist or does not exist.`;
+    // Says only what it checked. It used to add "or is not in this action's
+    // tool allowlist", which cannot be true: `buildRegistry` builds an
+    // unfiltered worker surface, and `grantedToolNames` is called only on the
+    // agent arm — so a tool action's `toolAllowlist` never narrows this
+    // lookup. Whether it SHOULD is a live question and its own change; the
+    // controls actually bounding this tier are `directInvocable` (five
+    // read-mostly tools), the write scope and the posture gates. A message
+    // naming a check that does not run is the failure the reviewer prompt was
+    // just corrected for.
+    return `Action names tool "${toolName}", which does not exist.`;
   }
   const meta = readToolMeta(tool as never);
   if (!meta?.directInvocable) {
