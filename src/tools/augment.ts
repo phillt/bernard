@@ -436,16 +436,12 @@ export function augmentTools(
    * `ask` falls through to the gate's dialog. Checked after the session
    * allowlist, before prompting.
    */
-  const resolveProfileGrant = (
-    toolName: string,
-    args: unknown,
-    gate: 'block' | 'confirm',
-    isDangerousShell: boolean,
-  ): 'allow' | 'deny' | 'ask' => {
+  const resolveProfileGrant = (toolName: string, args: unknown): 'allow' | 'deny' | 'ask' => {
     const rules = opts.getToolPermissions?.() ?? [];
     if (rules.length === 0) return 'ask';
+    const isDangerousShell = isDangerousShellCall(toolName, args);
     const decision = resolveGrant(toolName, args, rules, isDangerousShell, opts.resolveToolAlias);
-    if (decision === 'deny') debugLog(`augment:${toolName}:${gate}:profile-deny`, {});
+    if (decision === 'deny') debugLog(`augment:${toolName}:profile-deny`, {});
     return decision;
   };
 
@@ -507,6 +503,53 @@ export function augmentTools(
   };
 
   /**
+   * The gates that apply no matter what posture a dispatch runs under, plus
+   * the grant decision the later gates need.
+   *
+   * **The deny half is unconditional, and that is the whole point (#420).** A
+   * persisted `deny` rule used to be enforced only from inside the block and
+   * confirm gates, and both return early before consulting the rules: the
+   * block gate short-circuits unless `toolMode === 'read-only'` **and** the
+   * tool is classified as a write, the confirm gate unless the risk crosses
+   * the threshold. So under an applet's own posture — `read-only` with
+   * threshold `high` — a `deny` on a **low-risk read tool** (`web_search`,
+   * `web_read`, `file_read_lines`, `memory{action:'read'}`) was inert: the
+   * user's rule existed, matched, and never ran.
+   *
+   * Only `deny` is refused here. `allow` keeps meaning what it already meant —
+   * skip the prompt in the gate that would have raised one — and is handed
+   * onward, so this adds a refusal without widening anything.
+   *
+   * One function rather than three stanzas at each of the two `execute`
+   * wrappers below: both call sites already forward a refusal string verbatim,
+   * and a gate only SOME call sites run is the shape that let the write-scope
+   * gate ship unwired to `runDefinition` in #340. It also resolves the grant
+   * exactly once per call — it was being recomputed, shell parse included, in
+   * each gate that consulted it.
+   *
+   * The deny rule is checked first: "you may not use this tool" is a broader
+   * statement than "not at that path", and the more actionable refusal to hand
+   * back.
+   */
+  const runUnconditionalGates = (
+    toolName: string,
+    args: unknown,
+    toolDef: any,
+  ): { refusal: string } | { grant: 'allow' | 'ask' } => {
+    const grant = resolveProfileGrant(toolName, args);
+    if (grant === 'deny') {
+      const key = permissionKeyFor(toolName, args, readToolMeta(toolDef));
+      return {
+        refusal:
+          `\`${key ?? toolName}\` is denied for this dispatch by a permission rule. ` +
+          'Do not retry it; use a different tool or report that the capability is not granted.',
+      };
+    }
+    const outOfScope = runWriteScopeGate(toolName, args);
+    return outOfScope ? { refusal: outOfScope } : { grant };
+  };
+
+  /**
    * Block gate (#179). Returns `true` to fall through to {@link runGate},
    * `false` if the call was denied (caller returns a cancelled-shape result).
    *
@@ -520,16 +563,18 @@ export function augmentTools(
     args: unknown,
     toolDef: any,
     execOptions: unknown,
+    // Already resolved by `runUnconditionalGates`, which refuses `deny` before
+    // this runs — so only 'allow' and 'ask' can arrive, and there is no second
+    // resolution (or second shell parse) here.
+    grant: 'allow' | 'ask',
   ): Promise<boolean> => {
     if (toolMode !== 'read-only') return true;
     const meta = readToolMeta(toolDef);
     if (!shouldBlockInReadOnly(meta, args)) return true;
     if (sessionToolAllowlist.has(toolName)) return true;
+    if (grant === 'allow') return true;
     const dangerousShell = isDangerousShellCall(toolName, args);
     const permissionKey = permissionKeyFor(toolName, args, meta);
-    const grant = resolveProfileGrant(toolName, args, 'block', dangerousShell);
-    if (grant === 'allow') return true;
-    if (grant === 'deny') return false;
     if (!blockAction) {
       debugLog(`augment:${toolName}:block:fail-closed`, { toolMode });
       return false;
@@ -570,16 +615,15 @@ export function augmentTools(
     args: unknown,
     toolDef: any,
     execOptions: unknown,
+    grant: 'allow' | 'ask',
   ): Promise<boolean> => {
     if (!confirmAction) return true;
     const meta = readToolMeta(toolDef);
     const risk = riskFromMeta(meta, args);
     if (!shouldConfirm(risk, confirmThreshold)) return true;
+    if (grant === 'allow') return true;
     const dangerousShell = isDangerousShellCall(toolName, args);
     const permissionKey = permissionKeyFor(toolName, args, meta);
-    const grant = resolveProfileGrant(toolName, args, 'confirm', dangerousShell);
-    if (grant === 'allow') return true;
-    if (grant === 'deny') return false;
     const input: ConfirmActionInput = {
       toolName,
       args,
@@ -619,15 +663,15 @@ export function augmentTools(
         {
           ...toolDef,
           execute: async (args: unknown, execOptions: unknown) => {
-            const outOfScope = runWriteScopeGate(toolName, args);
-            if (outOfScope) {
+            const gates = runUnconditionalGates(toolName, args, toolDef);
+            if ('refusal' in gates) {
               const refused: ToolResult<unknown> = {
                 status: 'error',
-                error: { type: 'denied', message: outOfScope },
+                error: { type: 'denied', message: gates.refusal },
               };
               return source.serializeForModel(refused);
             }
-            if (!(await runBlockGate(toolName, args, toolDef, execOptions))) {
+            if (!(await runBlockGate(toolName, args, toolDef, execOptions, gates.grant))) {
               const denied: ToolResult<unknown> = {
                 status: 'error',
                 // Distinct from 'cancelled' so envelope consumers that branch
@@ -637,7 +681,7 @@ export function augmentTools(
               };
               return source.serializeForModel(denied);
             }
-            if (!(await runGate(toolName, args, toolDef, execOptions))) {
+            if (!(await runGate(toolName, args, toolDef, execOptions, gates.grant))) {
               const cancelled: ToolResult<unknown> = {
                 status: 'error',
                 error: { type: 'cancelled', message: 'Action cancelled by user.' },
@@ -765,12 +809,12 @@ export function augmentTools(
       {
         ...toolDef,
         execute: async (args: unknown, execOptions: unknown) => {
-          const outOfScope = runWriteScopeGate(toolName, args);
-          if (outOfScope) return `Error: ${outOfScope}`;
-          if (!(await runBlockGate(toolName, args, toolDef, execOptions))) {
+          const gates = runUnconditionalGates(toolName, args, toolDef);
+          if ('refusal' in gates) return `Error: ${gates.refusal}`;
+          if (!(await runBlockGate(toolName, args, toolDef, execOptions, gates.grant))) {
             return DENIED_LEGACY_RESULT;
           }
-          if (!(await runGate(toolName, args, toolDef, execOptions))) {
+          if (!(await runGate(toolName, args, toolDef, execOptions, gates.grant))) {
             return CANCELLED_LEGACY_RESULT;
           }
           let result: unknown;

@@ -5,9 +5,12 @@ import { buildChildTools, type ToolWrapperInput } from '../framework/agents/inde
 import { definitions } from '../framework/agents/index.js';
 import { runHeadless, resolvePosture, type RunHeadlessResult } from '../headless.js';
 import type { WrapperResult } from '../structured-output.js';
+import type { Specialist } from '../specialists.js';
+import { loadAppGrants } from './app-grants.js';
+import { createAppletStoreTool } from './store-tools.js';
 import { runWorkspace } from '../paths.js';
-import type { AppAction } from './manifest.js';
-import { renderArgsBlock, type ResolvedInvocation } from './invocation.js';
+import type { AgentDispatch, AppAction } from './manifest.js';
+import { grantedToolNames, renderArgsBlock, type ResolvedInvocation } from './invocation.js';
 
 /**
  * Builds the tool registry one action's agent runs against.
@@ -36,6 +39,7 @@ export function buildActionTools(
   ctx: AgentContext,
   action: AppAction,
   specialistTargetTools: string[] | undefined,
+  appId?: string,
 ): Record<string, Tool> {
   const base = createTools(
     ctx.toolOptions,
@@ -50,13 +54,32 @@ export function buildActionTools(
     ctx.provenance,
     { surface: 'worker' },
   );
-  const targets = specialistTargetTools ?? [];
-  const granted = action.toolAllowlist.filter((t) => targets.includes(t));
-  return buildChildTools({ targetTools: granted }, base, ctx.mcp.resolveAlias);
+  // The applet's own store (#422), folded in BEFORE the filter so a manifest
+  // still has to name it in `toolAllowlist` and a specialist still has to
+  // target it. Scoped to this app at construction, never to an argument: a
+  // store addressed by a call parameter would be ambient authority over every
+  // applet's data.
+  const withStore = appId
+    ? { ...base, applet_store: createAppletStoreTool(appId) as unknown as Tool }
+    : base;
+  return buildChildTools(
+    { targetTools: grantedToolNames(action, specialistTargetTools) },
+    withStore,
+    ctx.mcp.resolveAlias,
+  );
 }
 
 export interface DispatchActionOpts {
   invocation: ResolvedInvocation;
+  /**
+   * The specialist backing this action, already resolved.
+   *
+   * Threaded in rather than re-fetched: `invokeAction` reads the record for
+   * its pre-flight and for `grantedToolNames`, and reading it again here was a
+   * second `readFileSync` + `JSON.parse` plus a second `SpecialistStore`
+   * construction (which seeds bundled records) on every invocation.
+   */
+  specialist: Specialist | null;
   /** Effective wall clock, already floored against the action's own. */
   timeoutMs: number | null;
   log: (msg: string) => void;
@@ -79,8 +102,11 @@ export type DispatchActionResult = RunHeadlessResult<WrapperResult>;
  * adversarial caller's.
  */
 export async function dispatchAction(opts: DispatchActionOpts): Promise<DispatchActionResult> {
-  const { invocation, timeoutMs, log, runId, abortSignal } = opts;
+  const { invocation, specialist, timeoutMs, log, runId, abortSignal } = opts;
   const { action, frozenArgs } = invocation;
+  // Narrowed by the caller, which branches on `dispatch.kind` before choosing
+  // a path — a tool action never reaches an agent runtime at all (#445).
+  const agent = action.dispatch as AgentDispatch;
 
   return runHeadless<ToolWrapperInput, WrapperResult>({
     definition: () => definitions.get<ToolWrapperInput, WrapperResult>('tool-wrapper'),
@@ -95,6 +121,12 @@ export async function dispatchAction(opts: DispatchActionOpts): Promise<Dispatch
       // action whose specialist targets `file_write` could write anywhere.
       // Per-app grants beyond the workspace belong to #420's grant record.
       writeScope: { workspace: runWorkspace('apps', invocation.appId) },
+      // Persisted per-app grants (#420), read fresh on every dispatch so a
+      // revocation applies to the next invocation with no restart. **The
+      // app's own rules, never `config.toolPermissions`** — an app inheriting
+      // the user's "always allow" grants is the confused-deputy widening the
+      // capability design exists to prevent. See `src/apps/app-grants.ts`.
+      toolPermissions: loadAppGrants(invocation.appId),
       // `skipPermissions` is deliberately not passed, and deliberately not
       // reachable: `AppActionSchema` is `.strict()`, so a manifest declaring
       // the key is REJECTED at parse time rather than ignored. An app cannot
@@ -111,12 +143,16 @@ export async function dispatchAction(opts: DispatchActionOpts): Promise<Dispatch
     abortSignal,
     debugLabel: 'script',
     buildInput: (env) => {
-      const specialist = env.ctx.stores.specialists.get(action.specialistId);
-      const childTools = buildActionTools(env.ctx, action, specialist?.targetTools);
+      const childTools = buildActionTools(
+        env.ctx,
+        action,
+        specialist?.targetTools,
+        invocation.appId,
+      );
       return {
-        specialistId: action.specialistId,
+        specialistId: agent.specialistId,
         // The instruction channel: author-written, never caller bytes.
-        input: action.instructions,
+        input: agent.instructions,
         // The data channel.
         context: renderArgsBlock(frozenArgs),
         slotId: 0,

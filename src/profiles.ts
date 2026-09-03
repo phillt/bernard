@@ -85,6 +85,15 @@ export interface ProfileSettings {
    */
   toolPermissions?: ToolPermissions | ToolPermissionRules;
   /**
+   * Per-app permission rules (#420), keyed by app id — the grants a user
+   * attaches to an applet, distinct from `toolPermissions`, which are their
+   * own. An app must never inherit the user's grants: "always allow
+   * `shell rm *`" flowing into a browser-triggered dispatch is exactly the
+   * confused-deputy widening the capability design exists to prevent.
+   * Read and written through `src/apps/app-grants.ts`.
+   */
+  appToolGrants?: Record<string, ToolPermissionRules>;
+  /**
    * "Run Without Permission Checks or Safeguards" (#212). When true the
    * policy engine forces `toolMode: 'write'` + `confirmThreshold: 'never'`
    * for every turn — no block gate, no confirmation prompts.

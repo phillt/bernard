@@ -1,6 +1,6 @@
 import * as crypto from 'node:crypto';
 import { AppRegistry } from './registry.js';
-import { resolveFromManifest } from './invocation.js';
+import { grantedToolNames, resolveFromManifest } from './invocation.js';
 import { dispatchAction } from './dispatch.js';
 import { SpecialistStore } from '../specialists.js';
 import { classifyError } from '../error-taxonomy.js';
@@ -66,7 +66,17 @@ export type InvocationResult =
       startedAt: string;
       durationMs: number;
       result: unknown;
-      meta: { specialistId: string; stepLimitHit: boolean; mcpConnectMs: number };
+      meta: {
+        /** Which tier ran this action (#445): an agent, or one direct tool call. */
+        dispatch: 'agent' | 'tool';
+        /** Present on the agent arm. */
+        specialistId?: string;
+        /** Present on the tool arm. */
+        tool?: string;
+        stepLimitHit: boolean;
+        /** Always 0 on the tool arm — it never connects to MCP at all. */
+        mcpConnectMs: number;
+      };
     }
   | {
       schemaVersion: 1;
@@ -195,54 +205,134 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
     };
   };
 
+  /**
+   * The single success path, the sibling of {@link fail}.
+   *
+   * The two arms had hand-rolled this envelope and its log row, and had
+   * already diverged — one recomputed `durationMs` independently and omitted
+   * `mcpConnectMs`/`stepLimitHit` from the row while hard-coding them in the
+   * envelope. That is exactly what `fail` exists to prevent, applied to the
+   * other half of the same table.
+   */
+  const succeed = (
+    appId: string,
+    action: string,
+    result: unknown,
+    meta: Extract<InvocationResult, { ok: true }>['meta'],
+    extra: Record<string, unknown>,
+  ): InvocationResult => {
+    const durationMs = Date.now() - startMs;
+    recordInvocation({
+      invocationId,
+      appId,
+      action,
+      ...extra,
+      startedAt,
+      completedAt: new Date().toISOString(),
+      durationMs,
+      ok: true,
+      mcpConnectMs: meta.mcpConnectMs,
+      stepLimitHit: meta.stepLimitHit,
+      capabilityId,
+    });
+    return {
+      schemaVersion: 1,
+      ok: true,
+      invocationId,
+      app: appId,
+      action,
+      startedAt,
+      durationMs,
+      result,
+      meta,
+    };
+  };
+
   const registry = new AppRegistry();
   const resolved = resolveFromManifest(registry, opts.appId, opts.action, opts.args);
   if (!resolved.ok) return fail(resolved.failure.kind, resolved.failure.message);
 
   const { invocation } = resolved;
-  // The action DECLARED these; recorded so a log reader can see the scope.
-  const toolsGranted = invocation.action.toolAllowlist;
   const argKeys = Object.keys(invocation.frozenArgs);
+  const timeoutMs = effectiveTimeoutMs(invocation.action.timeoutMs, opts.timeoutMs);
+  const dispatch = invocation.action.dispatch;
 
-  // Pre-flight: an action naming a specialist that does not exist is a broken
-  // manifest, not a failed run — the caller should see a request-shaped
-  // failure, and no model call should be billed for it. `exists` rather than
-  // `get`, which reads and parses the record only for its truthiness;
-  // `runHeadless` reads it properly a moment later.
-  if (!new SpecialistStore().exists(invocation.action.specialistId)) {
-    return fail(
-      'unknown_specialist',
-      `Action "${opts.action}" names specialist "${invocation.action.specialistId}", which does not exist.`,
+  /** Everything both arms log, plus the one field that names which arm ran. */
+  const logInvoke = (arm: Record<string, string>): void =>
+    debugLog('script:invoke', {
+      invocationId,
+      appId: invocation.appId,
+      action: invocation.actionName,
+      // Names only, never values: args carry the caller's data and the debug
+      // log is not the place for it.
+      argKeys,
+      ...arm,
+      toolMode: invocation.action.toolMode,
+      timeoutMs,
+      capabilityId,
+    });
+
+  // The deterministic tier (#445). Branches before anything agent-shaped is
+  // touched — no specialist lookup, no MCP connect, no RAG store, no model —
+  // because the whole value of this arm is that it costs nothing.
+  if (dispatch.kind === 'tool') {
+    logInvoke({ tool: dispatch.tool });
+    const { dispatchToolAction } = await import('./tool-dispatch.js');
+    const run = await dispatchToolAction({
+      invocation,
+      dispatch,
+      timeoutMs,
+      abortSignal: opts.abortSignal,
+    });
+    const toolDispatched = { argKeys, tool: dispatch.tool, toolsGranted: [dispatch.tool] };
+    if (!run.ok) {
+      // `invalid` is a broken manifest — an ineligible tool, or a mapping the
+      // tool's own schema rejects — and must read as a request failure (exit
+      // 2) rather than a run that might succeed on retry.
+      return run.kind === 'invalid'
+        ? fail('invalid_manifest', run.message, toolDispatched)
+        : fail(run.timedOut ? 'timeout' : 'run_failed', run.message, toolDispatched);
+    }
+    return succeed(
+      invocation.appId,
+      invocation.actionName,
+      run.result,
+      { dispatch: 'tool', tool: dispatch.tool, stepLimitHit: false, mcpConnectMs: 0 },
+      toolDispatched,
     );
   }
 
-  const timeoutMs = effectiveTimeoutMs(invocation.action.timeoutMs, opts.timeoutMs);
+  // Pre-flight: an action naming a specialist that does not exist is a broken
+  // manifest, not a failed run — the caller should see a request-shaped
+  // failure, and no model call should be billed for it.
+  const specialist = new SpecialistStore().get(dispatch.specialistId);
+  if (!specialist) {
+    return fail(
+      'unknown_specialist',
+      `Action "${opts.action}" names specialist "${dispatch.specialistId}", which does not exist.`,
+    );
+  }
 
-  debugLog('script:invoke', {
-    invocationId,
-    appId: invocation.appId,
-    action: invocation.actionName,
-    // Names only, never values: args carry the caller's data and the debug log
-    // is not the place for it.
-    argKeys,
-    specialistId: invocation.action.specialistId,
-    toolMode: invocation.action.toolMode,
-    timeoutMs,
-    capabilityId,
-  });
+  // What the action actually gets, not what it declared. Through the same
+  // function `buildActionTools` uses, because a log that overstates the grant
+  // is worse than no log — and this is the audit trail.
+  const toolsGranted = grantedToolNames(invocation.action, specialist.targetTools);
+
+  logInvoke({ specialistId: dispatch.specialistId });
 
   // The same id `runHeadless` namespaces its debug lines with, so
   // `script:mcp:ready` joins the invocation record rather than naming a run
   // that appears nowhere else.
   const run = await dispatchAction({
     invocation,
+    specialist,
     timeoutMs,
     log,
     runId: invocationId,
     abortSignal: opts.abortSignal,
   });
 
-  const dispatched = { argKeys, specialistId: invocation.action.specialistId, toolsGranted };
+  const dispatched = { argKeys, specialistId: dispatch.specialistId, toolsGranted };
 
   if (!run.ok) {
     return fail(
@@ -261,34 +351,16 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
     });
   }
 
-  const durationMs = Date.now() - startMs;
-  recordInvocation({
-    invocationId,
-    appId: invocation.appId,
-    action: invocation.actionName,
-    ...dispatched,
-    startedAt,
-    completedAt: new Date().toISOString(),
-    durationMs,
-    ok: true,
-    mcpConnectMs: run.timings.mcpConnectMs,
-    stepLimitHit: run.stepLimitHit,
-    capabilityId,
-  });
-
-  return {
-    schemaVersion: 1,
-    ok: true,
-    invocationId,
-    app: invocation.appId,
-    action: invocation.actionName,
-    startedAt,
-    durationMs,
-    result: wrapper.result,
-    meta: {
-      specialistId: invocation.action.specialistId,
+  return succeed(
+    invocation.appId,
+    invocation.actionName,
+    wrapper.result,
+    {
+      dispatch: 'agent',
+      specialistId: dispatch.specialistId,
       stepLimitHit: run.stepLimitHit,
       mcpConnectMs: run.timings.mcpConnectMs,
     },
-  };
+    dispatched,
+  );
 }

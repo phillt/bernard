@@ -290,7 +290,8 @@ export function resolveVoiceWarmupMs(override?: number, pref?: number): number {
   return DEFAULT_VOICE_WARMUP_MS;
 }
 const DEFAULT_MAX_TOKENS = 4096;
-const DEFAULT_SHELL_TIMEOUT = 30000;
+/** Shared with `src/apps/tool-dispatch.ts`, which resolves it without `loadConfig`. */
+export const DEFAULT_SHELL_TIMEOUT = 30000;
 const DEFAULT_TOKEN_WINDOW = 0;
 const DEFAULT_MAX_STEPS = 25;
 const DEFAULT_AUTO_CREATE_SPECIALISTS = false;

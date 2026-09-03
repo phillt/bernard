@@ -376,6 +376,8 @@ export function createFileTools(provenance?: ProvenanceStore) {
       {
         name: 'file_read_lines',
         kind: 'read',
+        // Every parameter is structured — a path and line numbers (#445).
+        directInvocable: true,
         deterministic: false,
         sideEffect: 'local',
         cacheable: false,
@@ -462,6 +464,10 @@ export function createFileTools(provenance?: ProvenanceStore) {
       {
         name: 'file_write',
         kind: 'write',
+        // A path and the bytes to put at it (#445). `content` is free-form,
+        // and that is fine: it is written, never interpreted. WHERE it may
+        // be written is the write-scope gate's answer, not this flag's.
+        directInvocable: true,
         deterministic: false,
         sideEffect: 'local',
         cacheable: false,

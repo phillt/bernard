@@ -222,6 +222,9 @@ export function createWebSearchTool(provenance?: ProvenanceStore) {
     {
       name: 'web_search',
       kind: 'read',
+      // A query string and a limit (#445). The query is free-form and is
+      // sent to a search API — data, not something this machine executes.
+      directInvocable: true,
       deterministic: false,
       sideEffect: 'network',
       cacheable: false,

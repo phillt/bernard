@@ -76,10 +76,29 @@ export interface RedeemContext {
   sessionId: string;
 }
 
+/**
+ * Notified once per handle actually minted, for the audit trail (#420 R9).
+ *
+ * The **record**, never the handle: the handle is a live credential and this
+ * callback's only purpose is to write to disk. `CapabilityRecord.id` is the
+ * non-secret identity that exists precisely so a log line does not have to
+ * slice one.
+ *
+ * A constructor callback rather than an import, so this module stays a
+ * `node:crypto`-only leaf with no I/O — the same reasoning that keeps
+ * `tool-bytes.ts` and `mcp-names.ts` off the modules they measure.
+ */
+export type MintObserver = (record: CapabilityRecord) => void;
+
 export class CapabilityTable {
   private readonly entries = new Map<string, CapabilityRecord>();
   /** `appId\0action\0sessionId` → the live reusable handle for it. */
   private readonly designations = new Map<string, string>();
+  private readonly onMint?: MintObserver;
+
+  constructor(onMint?: MintObserver) {
+    this.onMint = onMint;
+  }
 
   /**
    * Mints a handle. The returned string **encodes nothing** — no app id, no
@@ -88,7 +107,7 @@ export class CapabilityTable {
    */
   mint(opts: MintOptions): string {
     const handle = crypto.randomBytes(32).toString('base64url');
-    this.entries.set(handle, {
+    const record: CapabilityRecord = {
       id: crypto.randomBytes(6).toString('hex'),
       appId: opts.appId,
       action: opts.action,
@@ -96,7 +115,18 @@ export class CapabilityTable {
       sessionId: opts.sessionId,
       expiresAt: Date.now() + (opts.ttlMs ?? DEFAULT_CAPABILITY_TTL_MS),
       usesRemaining: opts.uses ?? Number.POSITIVE_INFINITY,
-    });
+    };
+    this.entries.set(handle, record);
+    // Observed here rather than in `handleFor`, so the log records what was
+    // actually minted: a reused designation is not a new capability, and a row
+    // per page load would be noise that hid the mints that mattered.
+    // A throwing observer must not cost the caller its handle — the record is
+    // already in the table by this point.
+    try {
+      this.onMint?.(record);
+    } catch {
+      // An audit trail that takes down the thing it audits is worse than a gap.
+    }
     return handle;
   }
 

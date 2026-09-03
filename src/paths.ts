@@ -73,6 +73,20 @@ export const APPS_DIR = path.join(DATA_DIR, 'apps');
 export function appletAssetDir(appId: string): string {
   return path.join(APPS_DIR, appId);
 }
+
+/**
+ * An applet's persistent key-value store (#422): one SQLite file per app.
+ *
+ * Deliberately **neither** of the two directories it might have gone in.
+ * Not {@link appletAssetDir}, which is SERVED — the database would be
+ * fetchable over HTTP. Not `runWorkspace('apps', appId)`, which is the
+ * applet action's own write scope — `file_write` could then corrupt the
+ * database out from under the store. Access is only ever through the KV API,
+ * from either side.
+ */
+export function appletDataDir(appId: string): string {
+  return path.join(DATA_DIR, 'applet-data', appId);
+}
 export const SPECIALIST_CANDIDATES_DIR = path.join(DATA_DIR, 'specialist-candidates');
 export const CORRECTION_CANDIDATES_DIR = path.join(DATA_DIR, 'correction-candidates');
 export const TOOL_PROFILES_DIR = path.join(DATA_DIR, 'tool-profiles');
@@ -91,6 +105,16 @@ export const SESSION_LOGS_DIR = path.join(LOGS_DIR, 'sessions');
 export const TOOL_WRAPPER_LOG = path.join(LOGS_DIR, 'tool-wrappers.jsonl');
 /** Append-only record of every `bernard script` invocation (#419). */
 export const SCRIPT_LOG_FILE = path.join(LOGS_DIR, 'script-invocations.jsonl');
+/**
+ * Append-only record of every capability handle minted for an applet (#420).
+ *
+ * A **sibling** of {@link SCRIPT_LOG_FILE} rather than rows in it. That file
+ * rotates at a row count, so interleaving mints would evict them before the
+ * invokes they correlate with — under load the correlation is the first thing
+ * lost, which is the one property this log exists to provide. Two files cost a
+ * join on `capabilityId` and keep both sides intact.
+ */
+export const CAPABILITY_LOG_FILE = path.join(LOGS_DIR, 'capability-mints.jsonl');
 /** Per-session LLM cost/usage telemetry JSONL, one file per session id. */
 export const TELEMETRY_DIR = path.join(LOGS_DIR, 'telemetry');
 export function sessionTelemetryPath(sessionId: string): string {

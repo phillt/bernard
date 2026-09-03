@@ -271,4 +271,56 @@ describe('applet server', () => {
     expect(res.status).toBe(200);
     expect(((await res.json()) as { appId: string }).appId).toBe('demo');
   });
+
+  /**
+   * The store endpoint (#422). A `GET` read route would have been reachable by
+   * anything that can satisfy the origin checks, because the guard exempts
+   * `GET`/`HEAD` from the token so that an asset read works before the page
+   * holds one. Applet data is not an asset.
+   */
+  it('gates the store behind the token, reads included', async () => {
+    const m = await load();
+    writeApp(m);
+    const { app } = await start(m);
+
+    const noToken = await fetch(`${app.origin}${m.STORE_PATH}`, {
+      method: 'POST',
+      headers: { ...hostHeaders(app.port), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op: 'get', key: 'k' }),
+    });
+    expect(noToken.status).toBe(403);
+
+    // A GET is not an alternative door: the route only answers POST.
+    const asGet = await fetch(`${app.origin}${m.STORE_PATH}`, { headers: hostHeaders(app.port) });
+    expect(asGet.status).toBe(405);
+  });
+
+  it('round-trips a value through the store endpoint', async () => {
+    const m = await load();
+    writeApp(m);
+    const { app } = await start(m);
+    const call = async (body: unknown) =>
+      (
+        await fetch(`${app.origin}${m.STORE_PATH}`, {
+          method: 'POST',
+          headers: {
+            ...hostHeaders(app.port),
+            'Content-Type': 'application/json',
+            'x-bernard-token': 'tok-1',
+          },
+          body: JSON.stringify(body),
+        })
+      ).json();
+
+    expect(await call({ op: 'set', key: 'draft', value: { text: 'hi' } })).toMatchObject({
+      ok: true,
+    });
+    expect(await call({ op: 'get', key: 'draft' })).toMatchObject({
+      ok: true,
+      result: { key: 'draft', value: { text: 'hi' } },
+    });
+
+    const { closeAppletStore } = await import('./store-route.js');
+    closeAppletStore('demo');
+  });
 });

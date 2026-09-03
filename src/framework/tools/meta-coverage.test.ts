@@ -220,6 +220,49 @@ describe('tool meta coverage', () => {
     ).toEqual([]);
   });
 
+  /**
+   * `directInvocable` (#445) marks a tool an applet action may call with no
+   * model in the loop — so a browser button reaches it with caller-supplied
+   * arguments. The flag is fail-open by omission (a tool without it simply
+   * cannot be a deterministic action, which is the safe direction), but
+   * fail-OPEN by mistaken addition, and there is no other guard: adding the
+   * line to a tool's meta is one keystroke away from adding it to the wrong
+   * tool.
+   *
+   * Two invariants, both mechanical. `dangerous` is what actually keeps
+   * `shell` out — its parameters are `{command: string}`, a perfectly
+   * representable scalar, so the shape check alone would admit it.
+   */
+  it('no directInvocable tool is dangerous or takes inexpressible arguments', async () => {
+    const { createTools } = await import('../../tools/index.js');
+    const { unrepresentableParams } = await import('../../apps/direct-tool.js');
+    const tools = createTools(
+      { shellTimeout: 10_000, confirmDangerous: async () => false },
+      new (await import('../../memory.js')).MemoryStore() as any,
+    );
+
+    const dangerous: string[] = [];
+    const inexpressible: string[] = [];
+    for (const [name, def] of Object.entries(tools)) {
+      const meta = readToolMeta(def);
+      if (!meta?.directInvocable) continue;
+      if (meta.kind === 'dangerous') dangerous.push(name);
+      const bad = unrepresentableParams(def);
+      if (bad.length > 0) inexpressible.push(`${name} (${bad.join(', ')})`);
+    }
+
+    expect(
+      dangerous,
+      `Dangerous tools marked directInvocable — a web page could reach them with no ` +
+        `person in the loop: ${dangerous.join(', ')}`,
+    ).toEqual([]);
+    expect(
+      inexpressible,
+      `directInvocable tools whose arguments an app manifest cannot express, so the ` +
+        `mapping silently omits them: ${inexpressible.join('; ')}`,
+    ).toEqual([]);
+  });
+
   it('meta survives augmentTools — non-enumerable __bernardMeta is re-attached after the spread', async () => {
     const { createTools } = await import('../../tools/index.js');
     const { augmentTools } = await import('../../tools/augment.js');

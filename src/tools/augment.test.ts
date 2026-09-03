@@ -1257,6 +1257,64 @@ describe('augmentTools', () => {
       return { t, execute };
     }
 
+    // The gate that was missing (#420). Both pre-existing gates consult the
+    // rules only AFTER short-circuiting — the block gate unless the posture is
+    // read-only and the tool is a write, the confirm gate unless the risk
+    // crosses the threshold — so a `deny` on a low-risk READ tool never ran.
+    // That is exactly an applet's own posture, and exactly the tools an applet
+    // is granted.
+    it('deny grant on a low-risk read tool refuses, where both other gates short-circuit', async () => {
+      const { t, execute } = makeToolWithMeta('web_search', 'read');
+      const confirmAction = vi.fn(async () => true);
+      const blockAction = vi.fn(async () => 'deny' as const);
+      const augmented = augmentTools(
+        { web_search: t },
+        {
+          profileStore: store,
+          // read-only + threshold 'high': a low-risk read passes both gates
+          // without either one reaching the rules.
+          toolMode: 'read-only',
+          confirmThreshold: 'high',
+          confirmAction,
+          blockAction,
+          getToolPermissions: () => [{ effect: 'deny', tool: 'web_search', _v: 2 }],
+        },
+      );
+      const out = await augmented.web_search.execute({ query: 'x' }, {});
+      expect(execute).not.toHaveBeenCalled();
+      // Refused outright, not routed to a dialog: there is nobody to ask.
+      expect(confirmAction).not.toHaveBeenCalled();
+      expect(blockAction).not.toHaveBeenCalled();
+      expect(String(out)).toContain('denied');
+    });
+
+    it('no rules leaves a low-risk read untouched', async () => {
+      const { t, execute } = makeToolWithMeta('web_search', 'read');
+      const augmented = augmentTools(
+        { web_search: t },
+        { profileStore: store, toolMode: 'read-only', confirmThreshold: 'high' },
+      );
+      await augmented.web_search.execute({ query: 'x' }, {});
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    // `allow` keeps meaning "skip the prompt in the gate that would raise
+    // one" — the deny gate must not turn it into a bypass of the others.
+    it('allow grant is not widened by the deny gate', async () => {
+      const { t, execute } = makeToolWithMeta('web_search', 'read');
+      const augmented = augmentTools(
+        { web_search: t },
+        {
+          profileStore: store,
+          toolMode: 'read-only',
+          confirmThreshold: 'high',
+          getToolPermissions: () => [{ effect: 'allow', tool: 'web_search', _v: 2 }],
+        },
+      );
+      await augmented.web_search.execute({ query: 'x' }, {});
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
     it('profile allow grant skips the confirm prompt', async () => {
       const { t, execute } = makeToolWithMeta('t');
       const confirmAction = vi.fn(async () => false);
@@ -1338,7 +1396,15 @@ describe('augmentTools', () => {
       const r = await augmented.t.execute({}, {});
       expect(confirmAction).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
-      expect(r).toEqual({ output: 'Action cancelled by user.', is_error: true });
+      // A rule deny now answers with the RULE as the reason, from the
+      // unconditional gate, rather than borrowing whichever downstream gate
+      // happened to catch it — which produced 'cancelled by user' when nobody
+      // cancelled, and 'read-only mode' when the mode was not the reason.
+      // The unconditional gates answer on the legacy path with the same
+      // `Error: `-prefixed string the write-scope gate already used, which is
+      // the prefix `detectToolError` reads (#364).
+      expect(String(r)).toContain('Error: ');
+      expect(String(r)).toContain('denied for this dispatch by a permission rule');
     });
 
     it('profile allow grant bypasses the read-only block gate', async () => {
@@ -1373,11 +1439,12 @@ describe('augmentTools', () => {
       const r = await augmented.t.execute({}, {});
       expect(blockAction).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
-      expect(r).toEqual({
-        output:
-          'Action denied — read-only mode. Ask the user to allow this tool or switch toolMode to write.',
-        is_error: true,
-      });
+      // Same refusal as the confirm-gate case above: one reason, one message.
+      // The unconditional gates answer on the legacy path with the same
+      // `Error: `-prefixed string the write-scope gate already used, which is
+      // the prefix `detectToolError` reads (#364).
+      expect(String(r)).toContain('Error: ');
+      expect(String(r)).toContain('denied for this dispatch by a permission rule');
     });
 
     it("'allow-tool-for-profile' block outcome proceeds without touching the session allowlist", async () => {

@@ -4,8 +4,10 @@ import * as crypto from 'node:crypto';
 import { APPLET_HOST_PID_FILE, APPLET_HOST_LOG_FILE, APPS_DIR } from '../paths.js';
 import { AppRegistry } from '../apps/registry.js';
 import { CapabilityTable } from '../apps/capabilities.js';
+import { recordCapabilityMint } from '../apps/capability-log.js';
 import { HostRegistry } from './registry.js';
 import { startApplet, type RunningApplet } from './server.js';
+import { closeAllAppletStores, closeAppletStore } from './store-route.js';
 
 /**
  * The applet host process (#421).
@@ -47,7 +49,9 @@ function log(msg: string): void {
  * has never heard of.
  */
 const sessionId = crypto.randomUUID();
-const capabilities = new CapabilityTable();
+// Every mint is logged (#420 R9), so a handle presented later can be traced
+// back to when and for what it was issued. The host is the only minter.
+const capabilities = new CapabilityTable(recordCapabilityMint);
 const hosts = new HostRegistry();
 const running = new Map<string, RunningApplet>();
 
@@ -61,6 +65,10 @@ async function reconcile(): Promise<void> {
       // The actions a handle names may no longer exist. Revocation for an
       // in-memory table means dropping the entries, not marking them (#420).
       capabilities.revokeApp(appId);
+      // Its SQLite connection is cached for the life of the process, so an
+      // app removed and re-added would otherwise keep writing through a handle
+      // to the old file if the data directory were replaced underneath it.
+      closeAppletStore(appId);
       log(`stopped ${appId}`);
     }
   }
@@ -83,6 +91,9 @@ async function reconcile(): Promise<void> {
 async function shutdown(): Promise<void> {
   log('shutting down');
   for (const applet of running.values()) await applet.close();
+  // Closes each cached SQLite handle so WAL checkpoints, rather than leaving
+  // it to `process.exit`.
+  closeAllAppletStores();
   try {
     fs.unlinkSync(APPLET_HOST_PID_FILE);
   } catch {

@@ -64,18 +64,97 @@ export const ACTION_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 export const APP_ID_RE = /^[a-z][a-z0-9-]{1,63}$/;
 const ARG_NAME_RE = /^[a-z][a-z0-9_]{0,31}$/;
 
-export const AppActionSchema = z
+/**
+ * The manifest revisions this binary understands.
+ *
+ * A union rather than a bump, because {@link AppManifestSchema} is `.strict()`
+ * in both directions: an older binary meeting a field it does not know rejects
+ * the **whole app**, not just the field, and a newer binary must still read the
+ * v1 manifests already on disk. So a revision is added here, never replaced.
+ *
+ * v1 (#419) — an action is backed by a tool-wrapper specialist.
+ * v2 (#445) — an action may instead name a tool to call directly, with no
+ * model in the loop. The v2-only fields are rejected on a v1 manifest by
+ * {@link AppManifestSchema}'s refinement, so a manifest cannot half-declare
+ * itself: the version it states is the version it is read as.
+ */
+export const AppSchemaVersionSchema = z.union([z.literal(1), z.literal(2)]);
+export type AppSchemaVersion = z.infer<typeof AppSchemaVersionSchema>;
+
+/**
+ * How one tool parameter gets its value (#445).
+ *
+ * `$.<name>` reads a declared argument; anything else is a literal.
+ *
+ * **Arguments are mapped, never passed through.** Handing a caller's object to
+ * a tool wholesale is how an undeclared field rides along — the same reason
+ * `validateActionArgs` is `.strict()`. Naming each parameter explicitly means
+ * the manifest author decided what reaches the tool, and a caller cannot add
+ * to it.
+ */
+export const ARG_REF_PREFIX = '$.';
+
+export const ToolDispatchSchema = z
   .object({
+    kind: z.literal('tool'),
+    /**
+     * The tool to call. Eligibility is checked against the live registry, not
+     * here: `ToolMeta.directInvocable` is a tool-local fact and this module is
+     * a pure leaf. See `src/apps/direct-tool.ts`.
+     */
+    tool: z.string().min(1),
+    /** Tool parameter name → `$.<declaredArg>` or a literal value. */
+    args: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
+  })
+  .strict();
+
+export const AgentDispatchSchema = z
+  .object({
+    kind: z.literal('agent'),
+    /** The tool-wrapper specialist that backs this action. */
+    specialistId: z.string().min(1),
     /**
      * What the agent is asked to do. **Author-written and trusted** — this is
      * the instruction channel, and caller bytes never reach it. Args travel in
      * a separate, labelled data channel; see `src/apps/dispatch.ts`.
      */
     instructions: z.string().min(1).max(2000),
+  })
+  .strict();
+
+export const ActionDispatchSchema = z.discriminatedUnion('kind', [
+  ToolDispatchSchema,
+  AgentDispatchSchema,
+]);
+
+export type ToolDispatch = z.infer<typeof ToolDispatchSchema>;
+export type AgentDispatch = z.infer<typeof AgentDispatchSchema>;
+export type ActionDispatch = z.infer<typeof ActionDispatchSchema>;
+
+/**
+ * One action exactly as written on disk.
+ *
+ * Not the schema to parse with — {@link AppActionSchema} is, and it lifts. This
+ * one exists because {@link AppManifestSchema} needs the pre-lift shape to
+ * decide whether a v1 manifest declared a v2 field, a question the lifted form
+ * can no longer answer.
+ */
+const RawAppActionSchema = z
+  .object({
+    /**
+     * v1's flat agent fields. Lifted into {@link AppAction.dispatch} on read,
+     * so nothing downstream branches on the schema version — every action,
+     * whatever it was written as, arrives as a discriminated union.
+     */
+    instructions: z.string().min(1).max(2000).optional(),
+    specialistId: z.string().min(1).optional(),
+    /**
+     * How this action runs (v2, #445). Absent on a v1 manifest, where the two
+     * flat fields above say the same thing.
+     */
+    dispatch: ActionDispatchSchema.optional(),
     /** Human-facing summary, surfaced by `bernard script --describe`. */
     description: z.string().max(400).optional(),
-    /** The tool-wrapper specialist that backs this action. */
-    specialistId: z.string().min(1),
     /** Declared args, by name. An undeclared key in a call is rejected. */
     args: z.record(z.string().regex(ARG_NAME_RE), ArgSpecSchema).default({}),
     /**
@@ -102,24 +181,138 @@ export const AppActionSchema = z
   })
   .strict();
 
-export type AppAction = z.infer<typeof AppActionSchema>;
+export type RawAppAction = z.infer<typeof RawAppActionSchema>;
+
+/**
+ * One action as the rest of Bernard sees it: `dispatch` resolved, so nothing
+ * downstream branches on the schema version.
+ */
+export type AppAction = Omit<RawAppAction, 'instructions' | 'specialistId' | 'dispatch'> & {
+  dispatch: ActionDispatch;
+};
+
+/**
+ * The rules that hold within one action, whatever manifest it came from.
+ *
+ * Shared rather than written into {@link AppManifestSchema} alone, because
+ * {@link AppActionSchema} is exported and parsed directly. When these lived on
+ * the manifest only, parsing a bare action skipped every one of them AND the
+ * lift, yielding an object with `dispatch: undefined` typed as `AppAction` —
+ * the exact shape the codebase says cannot exist. Tests are excluded from
+ * `tsc`, so nothing caught it.
+ */
+function intraActionRules(action: RawAppAction, ctx: z.RefinementCtx, at: string[] = []): void {
+  const path = (field: string) => [...at, field];
+  const flat = action.instructions !== undefined || action.specialistId !== undefined;
+
+  // Both forms at once is ambiguous, not redundant: they can disagree.
+  if (action.dispatch && flat) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: path('dispatch'),
+      message: 'declare either `dispatch` or `instructions`/`specialistId`, not both',
+    });
+  }
+  if (!action.dispatch) {
+    for (const field of ['instructions', 'specialistId'] as const) {
+      if (action[field] === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: path(field),
+          message: 'required unless `dispatch` is declared',
+        });
+      }
+    }
+  }
+  // Every `$.<name>` must name a declared arg. Caught here rather than at call
+  // time so a typo is a broken manifest — loud, and costing nothing — instead
+  // of a parameter that silently arrives as the literal `$.dset`.
+  if (action.dispatch?.kind === 'tool') {
+    for (const [param, value] of Object.entries(action.dispatch.args)) {
+      if (typeof value !== 'string' || !value.startsWith(ARG_REF_PREFIX)) continue;
+      const ref = value.slice(ARG_REF_PREFIX.length);
+      if (!(ref in action.args)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [...path('dispatch'), 'args', param],
+          message: `references undeclared argument "${ref}"`,
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Lifts a v1 action's flat fields into the v2 union.
+ *
+ * The lift happens on **read** rather than by rewriting files, because the
+ * manifests on disk are the user's and a schema bump is not a reason to
+ * rewrite them. Downstream code sees one shape either way, which is the whole
+ * point — a `schemaVersion` check outside this module would be the version
+ * leaking into logic.
+ */
+function liftAction(raw: RawAppAction): AppAction {
+  const { instructions, specialistId, dispatch, ...rest } = raw;
+  return {
+    ...rest,
+    dispatch: dispatch ?? {
+      kind: 'agent',
+      // Non-null by `intraActionRules`: an action with no `dispatch` must
+      // carry both flat fields.
+      specialistId: specialistId as string,
+      instructions: instructions as string,
+    },
+  };
+}
+
+/**
+ * The action schema everything parses with: validated, then lifted.
+ *
+ * Its output is {@link AppAction} — `dispatch` always present, the flat v1
+ * fields gone — so there is no way to hold a half-resolved action.
+ */
+export const AppActionSchema = RawAppActionSchema.superRefine((action, ctx) =>
+  intraActionRules(action, ctx),
+).transform(liftAction);
 
 export const AppManifestSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: AppSchemaVersionSchema,
     id: z.string().regex(APP_ID_RE),
     name: z.string().min(1).max(80),
     description: z.string().max(400).optional(),
-    actions: z.record(z.string().regex(ACTION_NAME_RE), AppActionSchema),
+    actions: z.record(z.string().regex(ACTION_NAME_RE), RawAppActionSchema),
   })
   .strict()
   .superRefine((m, ctx) => {
     if (Object.keys(m.actions).length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'manifest declares no actions' });
     }
-  });
+    for (const [name, action] of Object.entries(m.actions)) {
+      intraActionRules(action, ctx, ['actions', name]);
+      // The one rule that needs manifest context, and the reason the record
+      // above holds the RAW action schema: a manifest is read as the version it
+      // states, and `dispatch` on a v1 manifest would make it half-v2 —
+      // readable here and rejected wholesale by an older binary, which is the
+      // failure the version union exists to avoid rather than to hide. After
+      // the lift every action has a `dispatch`, so the question is unanswerable.
+      if (action.dispatch && m.schemaVersion < 2) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['actions', name, 'dispatch'],
+          message: '`dispatch` requires schemaVersion 2',
+        });
+      }
+    }
+  })
+  .transform((m) => ({
+    ...m,
+    actions: Object.fromEntries(
+      Object.entries(m.actions).map(([name, action]) => [name, liftAction(action)]),
+    ),
+  }));
 
-export type AppManifest = z.infer<typeof AppManifestSchema>;
+export type AppManifest = z.output<typeof AppManifestSchema>;
 
 /**
  * `.strict()` on every object above is load-bearing rather than tidiness.
@@ -132,7 +325,7 @@ export type AppManifest = z.infer<typeof AppManifestSchema>;
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
 /** Formats a Zod failure into one line naming the offending path. */
-function formatZodError(err: z.ZodError): string {
+export function formatZodError(err: z.ZodError): string {
   return err.issues
     .map((i) => {
       const at = i.path.length > 0 ? i.path.join('.') : '(root)';

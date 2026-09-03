@@ -103,3 +103,26 @@ export function resolveFromManifest(
     },
   };
 }
+
+/**
+ * The tools an action actually gets: its declared allowlist intersected with
+ * the specialist's `targetTools`.
+ *
+ * Two consumers, and they must be the same computation — `buildActionTools`
+ * builds the registry from it, and the invocation log records it. They
+ * previously were not: the log wrote the DECLARED allowlist, which overstates
+ * the grant whenever a manifest names a tool the specialist does not target,
+ * in the one record that exists to be an audit trail.
+ *
+ * Here rather than beside `buildActionTools` for the reason this module was
+ * split off at all: it is a pure question about a manifest, and asking it
+ * through `dispatch.ts` costs the whole agent runtime — which is also what
+ * made it unmockable from a test that never runs a dispatch.
+ */
+export function grantedToolNames(
+  action: AppAction,
+  specialistTargetTools: string[] | undefined,
+): string[] {
+  const targets = specialistTargetTools ?? [];
+  return action.toolAllowlist.filter((t) => targets.includes(t));
+}
