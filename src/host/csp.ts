@@ -75,6 +75,11 @@ export function cspFor(): string {
     "style-src 'self'",
     "connect-src 'self'",
     "img-src 'self' data:",
+    // Without this a `<link rel="manifest">` falls through to
+    // `default-src 'none'` and the manifest is never fetched, so PWA install
+    // cannot even be offered (#429). Same-origin only — the manifest is a
+    // generated route on this applet's own server.
+    "manifest-src 'self'",
     "font-src 'self'",
     "form-action 'none'",
     "base-uri 'none'",

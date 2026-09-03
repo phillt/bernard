@@ -78,8 +78,10 @@ describe('applet server', () => {
     vi.resetModules();
     const paths = await import('../paths.js');
     const server = await import('./server.js');
+    const webmanifest = await import('./webmanifest.js');
+    const tokens = await import('./tokens.js');
     const caps = await import('../apps/capabilities.js');
-    return { ...server, ...caps, ...paths };
+    return { ...server, ...caps, ...paths, ...webmanifest, ...tokens };
   }
 
   function writeApp(m: typeof import('../paths.js'), appId = 'demo', body: unknown = APP): string {
@@ -322,5 +324,48 @@ describe('applet server', () => {
 
     const { closeAppletStore } = await import('./store-route.js');
     closeAppletStore('demo');
+  });
+
+  // #429. Whether a browser OFFERS install is unverified — the `sandbox`
+  // header may refuse a top-level install and is not being relaxed on a guess
+  // — but serving a correct manifest is the half that can be checked here.
+  it('serves a web app manifest naming its own port', async () => {
+    const m = await load();
+    writeApp(m);
+    const { app } = await start(m);
+    const res = await fetch(`${app.origin}${m.MANIFEST_PATH}`, { headers: hostHeaders(app.port) });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/manifest+json');
+    const body = (await res.json()) as { start_url: string; icons: unknown[] };
+    expect(body.start_url).toBe(`http://127.0.0.1:${app.port}/`);
+    expect(body.icons.length).toBeGreaterThan(0);
+  });
+
+  it('serves the icon the manifest points at', async () => {
+    const m = await load();
+    writeApp(m);
+    const { app } = await start(m);
+    const res = await fetch(`${app.origin}${m.ICON_PATH}`, { headers: hostHeaders(app.port) });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('image/svg+xml');
+  });
+
+  // Without `manifest-src` the link falls through to `default-src 'none'` and
+  // the manifest is never fetched, so install cannot even be offered.
+  it('permits the manifest in its own CSP', async () => {
+    const m = await load();
+    writeApp(m);
+    const { app } = await start(m);
+    const res = await fetch(app.origin, { headers: hostHeaders(app.port) });
+    expect(res.headers.get('content-security-policy')).toContain("manifest-src 'self'");
+  });
+
+  it('serves the shared token stylesheet', async () => {
+    const m = await load();
+    writeApp(m);
+    const { app } = await start(m);
+    const res = await fetch(`${app.origin}${m.TOKENS_PATH}`, { headers: hostHeaders(app.port) });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/css');
   });
 });

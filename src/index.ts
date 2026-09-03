@@ -1088,7 +1088,8 @@ program
 
 program
   .command('app [action] [appId] [actionName]')
-  .description('List, inspect, permit or delete applets (list | allow | delete | path)')
+  .description('Manage applets: list | open | allow | delete | path')
+  .option('--no-open', 'Print the URL instead of opening a browser')
   .option('--tools <names>', 'Comma-separated tool names for `allow` (empty clears)')
   .option('--write', 'Let this action write, rather than read-only')
   .option('--confirm <mode>', 'Confirmation mode for this action: off | auto | strict')
@@ -1097,7 +1098,7 @@ program
       action: string | undefined,
       appId: string | undefined,
       actionName: string | undefined,
-      options: { tools?: string; write?: boolean; confirm?: string },
+      options: { tools?: string; write?: boolean; confirm?: string; open?: boolean },
     ) => {
       try {
         const cli = await import('./apps/app-cli.js');
@@ -1112,6 +1113,10 @@ program
           case 'delete':
             if (!appId) throw new Error('Usage: bernard app delete <appId>');
             cli.appDelete(appId);
+            return;
+          case 'open':
+            if (!appId) throw new Error('Usage: bernard app open <appId> [--no-open]');
+            await cli.appOpen(appId, { open: options.open !== false });
             return;
           case 'allow': {
             if (!appId || !actionName) {
@@ -1128,7 +1133,7 @@ program
             return;
           }
           default:
-            throw new Error(`Unknown action "${action}". Use list, allow, delete or path.`);
+            throw new Error(`Unknown action "${action}". Use list, open, allow, delete or path.`);
         }
       } catch (err: unknown) {
         printError(err instanceof Error ? err.message : String(err));

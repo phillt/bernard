@@ -8,6 +8,7 @@ import { checkRequest } from './guard.js';
 import { securityHeaders, originFor } from './csp.js';
 import { resolveAsset } from './assets.js';
 import { TOKENS_PATH, tokensStylesheet } from './tokens.js';
+import { ICON_PATH, MANIFEST_PATH, appletIcon, webManifest } from './webmanifest.js';
 import { handleStoreRequest } from './store-route.js';
 
 /**
@@ -214,6 +215,39 @@ function createHandler(
       // every applet references one artifact rather than carrying a copy that
       // drifts — which is what happened to the four `docs/*.html` this is
       // lifted from. `style-src 'self'` already permits it.
+      /**
+       * The web app manifest (#429), generated rather than shipped.
+       *
+       * A static `manifest.webmanifest` in the asset directory cannot know its
+       * own `start_url`: the port is assigned at runtime by `HostRegistry` and
+       * lives in `APPLET_HOSTS_FILE`, not beside the page. So it is a route,
+       * like `BOOTSTRAP_PATH`, built from the manifest the registry holds and
+       * the port this server actually bound.
+       *
+       * Whether a browser will OFFER to install it is not settled: the
+       * `sandbox` header (#421) may refuse a top-level install, and that
+       * header is not being relaxed on a guess. Serving a correct manifest
+       * costs nothing either way and is the half that can be verified here.
+       */
+      if (url === MANIFEST_PATH) {
+        const app = new AppRegistry().get(appId);
+        if (!app.ok) {
+          sendJson(res, 500, { ok: false, error: app.failure.message });
+          return;
+        }
+        send(res, 200, JSON.stringify(webManifest(app.manifest, port), null, 2), {
+          'Content-Type': 'application/manifest+json; charset=utf-8',
+        });
+        return;
+      }
+
+      if (url === ICON_PATH) {
+        const app = new AppRegistry().get(appId);
+        const label = app.ok ? app.manifest.name : appId;
+        send(res, 200, appletIcon(label), { 'Content-Type': 'image/svg+xml; charset=utf-8' });
+        return;
+      }
+
       if (url === TOKENS_PATH) {
         send(res, 200, tokensStylesheet(), { 'Content-Type': 'text/css; charset=utf-8' });
         return;
