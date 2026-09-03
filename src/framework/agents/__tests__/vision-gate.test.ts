@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import type { CoreMessage } from 'ai';
-import { seedHasAttachment, visionRefusal } from '../vision-gate.js';
+import { visionRefusal } from '../vision-gate.js';
+import { hasImagePart } from '../../../image.js';
 
-describe('seedHasAttachment', () => {
+describe('hasImagePart', () => {
   // The whole gate hangs off this, so a false positive would put every
   // text-only dispatch through a capability check it does not need.
   it('is false for string content and for text-only parts', () => {
@@ -10,7 +11,7 @@ describe('seedHasAttachment', () => {
       { role: 'user', content: 'Task: hi' },
       { role: 'user', content: [{ type: 'text', text: 'Task: hi' }] },
     ];
-    expect(seedHasAttachment(msgs)).toBe(false);
+    expect(hasImagePart(msgs)).toBe(false);
   });
 
   it('is true when any message carries a non-text part', () => {
@@ -24,12 +25,28 @@ describe('seedHasAttachment', () => {
         ],
       },
     ];
-    expect(seedHasAttachment(msgs)).toBe(true);
+    expect(hasImagePart(msgs)).toBe(true);
   });
 
-  it('ignores non-user messages with array content', () => {
-    const msgs: CoreMessage[] = [{ role: 'assistant', content: [{ type: 'text', text: 'ok' }] }];
-    expect(seedHasAttachment(msgs)).toBe(false);
+  /**
+   * The shape that actually occurs in production, and the one an earlier cut of
+   * this predicate got wrong: `agent.ts` pushes tool results into history, so a
+   * `{role:'tool', content:[{type:'tool-result'}]}` message is present from the
+   * first tool call onward. A predicate testing "any non-text part" reported
+   * TRUE for every tool-using turn, sending each one through a capability
+   * lookup and a full sanitize pass it did not need.
+   */
+  it('ignores tool and assistant messages, which carry non-text parts routinely', () => {
+    const msgs: CoreMessage[] = [
+      { role: 'assistant', content: [{ type: 'text', text: 'ok' }] },
+      {
+        role: 'tool',
+        content: [
+          { type: 'tool-result', toolCallId: 'c1', toolName: 'shell', result: { output: 'x' } },
+        ],
+      },
+    ];
+    expect(hasImagePart(msgs)).toBe(false);
   });
 });
 

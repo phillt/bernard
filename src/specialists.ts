@@ -173,22 +173,6 @@ const SEED_MARKER = '.seeded-v1';
  * additively (each via its own marker) so existing installs pick them up
  * without a v1-marker bump that would resurrect user-deleted v1 specialists.
  */
-/**
- * The records seeded by the original `.seeded-v1` pass.
- *
- * Written down so `bundled-manifest.test.ts` can tell a v1 record from one
- * that still needs a `POST_V1_BUNDLED` entry. It existed only historically
- * before — as "whatever was in the directory on that day" — which is why the
- * two-edit rule had no test.
- */
-export const V1_BUNDLED = [
-  'correction-agent.json',
-  'file-wrapper.json',
-  'shell-wrapper.json',
-  'specialist-creator.json',
-  'web-wrapper.json',
-];
-
 export const POST_V1_BUNDLED = ['mcp-manager.json', 'research-agent.json', 'agent-builder.json'];
 
 /**

@@ -23,8 +23,8 @@ import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
-import { seedHasAttachment, visionRefusal } from './vision-gate.js';
-import { isVisionCapableModel, stripImagesFromHistory } from '../../image.js';
+import { visionRefusal } from './vision-gate.js';
+import { hasImagePart, isVisionCapableModel, stripImagesFromHistory } from '../../image.js';
 import type {
   AgentDefinition,
   FormatMeta,
@@ -288,23 +288,32 @@ export async function runDefinition<TInput, TFormatted>(
    * Applied to the MATERIALIZED seed, not to `input`: the function form of
    * `seedMessages` is the main agent's live history, and only the messages
    * themselves say whether bytes are actually present.
+   *
+   * The capability verdict is memoized because it is loop-invariant —
+   * `resolved` is fixed for the dispatch — while `getSeed` is called at three
+   * sites and up to five times per main-agent turn. The catalog miss path
+   * (any custom provider) costs ~8 µs a call, which is the case this lookup
+   * was widened to handle in the first place.
    */
-  const getSeed = (): CoreMessage[] => {
-    const seed = rawSeed();
-    if (!seedHasAttachment(seed)) return seed;
-    const capable = isVisionCapableModel(resolved.provider, resolved.modelName);
-    debugLog('agent:vision-gate', {
-      historyMode: def.historyMode,
-      provider: resolved.provider,
-      model: resolved.modelName,
-      capable,
-    });
-    if (capable) return seed;
+  let visionCapable: boolean | undefined;
+  const gateSeed = (seed: CoreMessage[]): CoreMessage[] => {
+    if (!hasImagePart(seed)) return seed;
+    if (visionCapable === undefined) {
+      visionCapable = isVisionCapableModel(resolved.provider, resolved.modelName);
+      debugLog('agent:vision-gate', {
+        historyMode: def.historyMode,
+        provider: resolved.provider,
+        model: resolved.modelName,
+        capable: visionCapable,
+      });
+    }
+    if (visionCapable) return seed;
     // Persistent history: sanitize, never throw. A `/model` switch must not
     // brick every later turn of a conversation that once held a screenshot.
     if (def.historyMode === 'persistent') return stripImagesFromHistory(seed);
     throw new Error(visionRefusal(resolved.provider, resolved.modelName));
   };
+  const getSeed = (): CoreMessage[] => gateSeed(rawSeed());
 
   // Per-turn lower-privilege context (issue #172 + #143). The framework
   // ALWAYS wraps `memoryStore` + `includeScratch: true` by default so a new

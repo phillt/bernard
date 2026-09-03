@@ -58,11 +58,27 @@ function expandHome(filePath: string): string {
   return filePath;
 }
 
+/** A path that passed every check except being read. */
+export interface ValidatedImagePath {
+  path: string;
+  mimeType: string;
+}
+
 /**
- * Loads and validates an image file from disk.
- * @throws {Error} If the file does not exist, is a directory, exceeds 10 MB, or has an unsupported extension.
+ * Validates an image path without reading it.
+ *
+ * Split from {@link loadImage} because the two halves cost wildly different
+ * amounts: the checks are a `statSync` and an extension lookup — microseconds
+ * — while the read is up to 10 MB of **synchronous** I/O, which in this
+ * process blocks the Ink render loop and every concurrent dispatch. A caller
+ * that may still refuse the work (a saturated agent pool, a disabled
+ * specialist, an unknown provider) wants the cheap half up front and the
+ * expensive half only once the work is actually going to happen.
+ *
+ * @throws {Error} If the file does not exist, is a directory, exceeds 10 MB,
+ *   or has an unsupported extension.
  */
-export function loadImage(filePath: string): ImageAttachment {
+export function validateImagePath(filePath: string): ValidatedImagePath {
   const resolved = path.resolve(expandHome(filePath));
 
   let stat: fs.Stats;
@@ -89,9 +105,20 @@ export function loadImage(filePath: string): ImageAttachment {
     );
   }
 
-  const data = fs.readFileSync(resolved);
+  return { path: resolved, mimeType };
+}
 
-  return { path: resolved, mimeType, data };
+/** Reads a path {@link validateImagePath} already approved. */
+export function readValidatedImage(validated: ValidatedImagePath): ImageAttachment {
+  return { ...validated, data: fs.readFileSync(validated.path) };
+}
+
+/**
+ * Loads and validates an image file from disk.
+ * @throws {Error} If the file does not exist, is a directory, exceeds 10 MB, or has an unsupported extension.
+ */
+export function loadImage(filePath: string): ImageAttachment {
+  return readValidatedImage(validateImagePath(filePath));
 }
 
 /**
@@ -201,12 +228,17 @@ export function estimateContentPartTokens(part: unknown): number {
 }
 
 /**
- * Returns a new history array where `ImagePart` entries in user messages are replaced
- * with a `[Image attached]` text placeholder. Does not mutate the original.
- * Used before persisting history to disk to avoid writing base64 data.
+ * True when any user message carries an image part.
+ *
+ * One predicate, two consumers: {@link stripImagesFromHistory} and the
+ * dispatch vision gate (#427). They were briefly separate and had already
+ * disagreed — the gate matched any NON-TEXT part while the sanitizer replaced
+ * only `image` ones, so a part kind only one of them knew about would trip the
+ * gate and then survive the sanitize, reaching a model that cannot read it.
+ * Sharing the predicate makes that disagreement unrepresentable.
  */
-export function stripImagesFromHistory(history: CoreMessage[]): CoreMessage[] {
-  const hasImages = history.some(
+export function hasImagePart(messages: CoreMessage[]): boolean {
+  return messages.some(
     (msg) =>
       msg.role === 'user' &&
       Array.isArray(msg.content) &&
@@ -214,7 +246,15 @@ export function stripImagesFromHistory(history: CoreMessage[]): CoreMessage[] {
         (p) => typeof p === 'object' && p !== null && 'type' in p && p.type === 'image',
       ),
   );
-  if (!hasImages) return history;
+}
+
+/**
+ * Returns a new history array where `ImagePart` entries in user messages are replaced
+ * with a `[Image attached]` text placeholder. Does not mutate the original.
+ * Used before persisting history to disk to avoid writing base64 data.
+ */
+export function stripImagesFromHistory(history: CoreMessage[]): CoreMessage[] {
+  if (!hasImagePart(history)) return history;
 
   return history.map((msg) => {
     if (msg.role !== 'user' || typeof msg.content === 'string' || !Array.isArray(msg.content)) {

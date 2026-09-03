@@ -1,6 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
 import { attachTo } from './user-message.js';
-import type { DispatchAttachment } from './user-message.js';
+import type { WithAttachments } from './user-message.js';
 import { createDateTimeTool } from '../../tools/datetime.js';
 import { createFileTools } from '../../tools/file.js';
 import { createThinkTool } from '../../tools/think.js';
@@ -52,20 +52,12 @@ PLAN COMPLETE`;
  * populated on a re-plan (after a Critic FAIL with retry budget remaining) so
  * the Planner can revise rather than start from scratch.
  */
-export interface PacPlannerInput {
+export interface PacPlannerInput extends WithAttachments {
   task: string;
   context?: string;
   slotId: number;
   priorPlan?: string;
-  criticFeedback?: string; /**
-   * Files travelling with this dispatch (#427).
-   *
-   * Opt-in per definition: a definition that never declares this field cannot
-   * receive bytes, which is the same fail-closed-by-omission shape as
-   * `headlessToolOptions`. Resolved from paths by the dispatch tool, never
-   * loaded here — the framework must not reach the filesystem.
-   */
-  attachments?: DispatchAttachment[];
+  criticFeedback?: string;
 }
 
 function buildPlannerTools(ctx: import('../context.js').AgentContext): Record<string, Tool> {

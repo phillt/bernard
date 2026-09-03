@@ -13,6 +13,7 @@ import { serializeModelParams, type ModelParams } from './providers/model-params
 import { loadLineups, resolveActiveLineup, type Lineup } from './lineups.js';
 import { ALL_ROLE_IDS, DEFAULT_ROLE_TIERS, SITE_ROLE, type RoleId } from './model-roles.js';
 import { debugLog } from './logger.js';
+import { isVisionCapableModel } from './image.js';
 
 /**
  * Logical LLM call sites whose model can be tiered independently when
@@ -317,6 +318,21 @@ export function resolveSiteModel(
  */
 export function resolveMainModel(config: BernardConfig): string {
   return resolveSiteModel(config, 'main').modelName;
+}
+
+/**
+ * Whether the model the MAIN agent will actually run on accepts images.
+ *
+ * The provider matters as well as the name — `isVisionCapableModel` scopes its
+ * catalog lookup by provider so a custom-provider model cannot inherit a
+ * built-in's tags — and both come from the lineup, not from `config`. The UI
+ * gated on `config.provider`/`config.model` (#427), which is the same staleness
+ * #233 fixed for the context-window math: on a lineup that re-tiers `main`,
+ * images were silently dropped at attach time for a model that could read them.
+ */
+export function mainVisionCapable(config: BernardConfig): boolean {
+  const site = resolveSiteModel(config, 'main');
+  return isVisionCapableModel(site.provider, site.modelName);
 }
 
 /**

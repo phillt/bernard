@@ -10,11 +10,7 @@ import type { SubAgentInput } from '../framework/agents/sub.js';
 import { runPAC } from '../framework/pac/run-pac.js';
 import { withSlot, _resetPool, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
-import {
-  ATTACHMENTS_DESCRIPTION,
-  MAX_DISPATCH_ATTACHMENTS,
-  resolveAttachments,
-} from './attachment-args.js';
+import { attachmentsArg, resolveAttachments } from './attachment-args.js';
 
 /**
  * Resets the shared concurrency pool state.
@@ -48,11 +44,7 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
           'A detailed, self-contained task description. Include: (1) specific objective and expected output format, (2) exact file paths, commands, or URLs, (3) edge cases and what to do if something fails, (4) what "done" looks like. The sub-agent has zero prior context.',
         ),
       context: z.string().optional().describe('Optional additional context to help the sub-agent'),
-      attachments: z
-        .array(z.string())
-        .max(MAX_DISPATCH_ATTACHMENTS)
-        .optional()
-        .describe(ATTACHMENTS_DESCRIPTION),
+      attachments: attachmentsArg,
 
       provider: z
         .string()
@@ -103,7 +95,7 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
                   // footer); re-capping here would risk truncating that footer away.
                   const pacResult = await runPAC(
                     ctx,
-                    { task, context, slotId: id, attachments: loaded.attachments },
+                    { task, context, slotId: id, attachments: loaded.read() },
                     runOpts,
                   );
                   formatted = pacResult.formatted;
@@ -120,7 +112,7 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
                   const result = await runDefinition(
                     ctx,
                     def,
-                    { task, context, slotId: id, attachments: loaded.attachments },
+                    { task, context, slotId: id, attachments: loaded.read() },
                     runOpts,
                   );
                   formatted = result.formatted;

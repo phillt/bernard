@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { resolveAttachments, MAX_DISPATCH_ATTACHMENTS } from './attachment-args.js';
+import { resolveAttachments } from './attachment-args.js';
 import { buildTaskUserMessage } from '../framework/agents/user-message.js';
 
 // A 1x1 PNG. `loadImage` sniffs the extension, so the bytes only have to exist.
@@ -22,19 +22,36 @@ describe('resolveAttachments', () => {
   });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
-  it('returns undefined for no paths, so nothing changes shape', () => {
-    expect(resolveAttachments(undefined)).toEqual({ ok: true, attachments: undefined });
-    expect(resolveAttachments([])).toEqual({ ok: true, attachments: undefined });
+  it('yields an empty list for no paths, so nothing changes shape', () => {
+    const a = resolveAttachments(undefined);
+    const b = resolveAttachments([]);
+    expect(a.ok && a.read()).toEqual([]);
+    expect(b.ok && b.read()).toEqual([]);
   });
 
   it('loads a real file into bytes the dispatch can carry', () => {
     const res = resolveAttachments([img]);
     expect(res.ok).toBe(true);
-    if (res.ok && res.attachments) {
-      expect(res.attachments).toHaveLength(1);
-      expect(res.attachments[0].mimeType).toBe('image/png');
-      expect(res.attachments[0].data.equals(PNG)).toBe(true);
+    if (res.ok) {
+      const loaded = res.read();
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0].mimeType).toBe('image/png');
+      expect(loaded[0].data.equals(PNG)).toBe(true);
     }
+  });
+
+  /**
+   * Two-phase, and this is the property that matters: a bad path is rejected
+   * for microseconds, while up to 40 MB of synchronous reading waits until the
+   * caller has cleared its own refusals and taken a pool slot.
+   */
+  it('validates without reading, so a refused dispatch pays no I/O', () => {
+    const res = resolveAttachments([img]);
+    expect(res.ok).toBe(true);
+    // Deleting the file after validation but before `read()` proves the bytes
+    // had not been touched yet.
+    fs.rmSync(img);
+    if (res.ok) expect(() => res.read()).toThrow();
   });
 
   // A bad path is a model mistake: request-shaped, fixable, and it must cost
@@ -45,8 +62,12 @@ describe('resolveAttachments', () => {
     if (!res.ok) expect(res.error).toBeTruthy();
   });
 
-  it('caps the count', () => {
-    const res = resolveAttachments(new Array(MAX_DISPATCH_ATTACHMENTS + 1).fill(img));
+  // The cap is enforced in one place rather than also as a schema `.max()` on
+  // four tools, so the message can name the count it actually got. The number
+  // is restated here rather than imported, so lowering it silently would fail.
+  it('caps the count at four', () => {
+    expect(resolveAttachments(new Array(4).fill(img)).ok).toBe(true);
+    const res = resolveAttachments(new Array(5).fill(img));
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain('At most');
   });
@@ -56,7 +77,7 @@ describe('resolveAttachments', () => {
   it('reaches the dispatched agent as an image part', () => {
     const res = resolveAttachments([img]);
     if (!res.ok) throw new Error('setup');
-    const msg = buildTaskUserMessage({ task: 'describe it', attachments: res.attachments });
+    const msg = buildTaskUserMessage({ task: 'describe it', attachments: res.read() });
     expect(Array.isArray(msg.content)).toBe(true);
     const parts = msg.content as { type: string }[];
     expect(parts[0].type).toBe('text');

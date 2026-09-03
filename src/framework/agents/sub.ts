@@ -1,6 +1,6 @@
 import type { CoreMessage } from 'ai';
 import { buildTaskUserMessage } from './user-message.js';
-import type { DispatchAttachment } from './user-message.js';
+import type { WithAttachments } from './user-message.js';
 import { debugLog } from '../../logger.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
@@ -39,18 +39,10 @@ Rules:
  * wrapper. The `slotId` is acquired by the dispatch tool (see
  * `src/tools/subagent.ts`) and used for log prefixing.
  */
-export interface SubAgentInput {
+export interface SubAgentInput extends WithAttachments {
   task: string;
   context?: string;
-  slotId: number; /**
-   * Files travelling with this dispatch (#427).
-   *
-   * Opt-in per definition: a definition that never declares this field cannot
-   * receive bytes, which is the same fail-closed-by-omission shape as
-   * `headlessToolOptions`. Resolved from paths by the dispatch tool, never
-   * loaded here — the framework must not reach the filesystem.
-   */
-  attachments?: DispatchAttachment[];
+  slotId: number;
 }
 
 /**

@@ -47,6 +47,7 @@ const EXIT_FOR: Record<ScriptErrorCode, number> = {
   invalid_args: EXIT_BAD_REQUEST,
   unknown_specialist: EXIT_BAD_REQUEST,
   specialist_not_bound: EXIT_BAD_REQUEST,
+  specialist_unavailable: EXIT_BAD_REQUEST,
   invalid_request: EXIT_BAD_REQUEST,
   internal_error: EXIT_BAD_REQUEST,
   run_failed: EXIT_RUN_FAILED,

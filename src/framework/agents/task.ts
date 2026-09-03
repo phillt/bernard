@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { CoreMessage } from 'ai';
 import { buildTaskUserMessage } from './user-message.js';
-import type { DispatchAttachment } from './user-message.js';
+import type { WithAttachments } from './user-message.js';
 import type { BernardConfig } from '../../config.js';
 import { debugLog } from '../../logger.js';
 import { extractJsonBlock, nullableOptional } from '../../structured-output.js';
@@ -136,18 +136,10 @@ export function wrapTaskResult(text: string, meta?: FormatMeta): TaskResult {
  * used for log prefixing; `task` carries the fully-resolved task content
  * (after any `taskId` routine lookup the wrapper performs).
  */
-export interface TaskInput {
+export interface TaskInput extends WithAttachments {
   task: string;
   context?: string;
-  slotId: number; /**
-   * Files travelling with this dispatch (#427).
-   *
-   * Opt-in per definition: a definition that never declares this field cannot
-   * receive bytes, which is the same fail-closed-by-omission shape as
-   * `headlessToolOptions`. Resolved from paths by the dispatch tool, never
-   * loaded here — the framework must not reach the filesystem.
-   */
-  attachments?: DispatchAttachment[];
+  slotId: number;
 }
 
 /**

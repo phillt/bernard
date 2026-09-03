@@ -27,13 +27,29 @@ import type { CoreMessage } from 'ai';
  * question (`file-input`, not `vision`) with thinner per-provider support.
  * `estimateContentPartTokens` already has a `'file'` arm that nothing
  * produces; leaving it unproduced is the honest state.
+ *
+ * Structural, not nominal, so `src/image.ts`'s `ImageAttachment` satisfies it
+ * as-is and the main agent shares {@link attachTo} rather than hand-building
+ * the same parts. The AI SDK's image-part shape (`image` vs `data`,
+ * `mimeType` vs `mediaType`) is then encoded once — a provider fix or an SDK
+ * bump lands in one place instead of silently missing the main-agent path.
  */
 export interface DispatchAttachment {
-  kind: 'image';
   mimeType: string;
   data: Buffer;
-  /** Where it came from. For diagnostics and for what the model is told. */
-  path: string;
+}
+
+/**
+ * Opt-in to receiving files (#427).
+ *
+ * Declared once and `extends`-ed rather than pasted into each dispatch input,
+ * but the opt-in property is unchanged: a definition that does not extend this
+ * cannot receive bytes, which is the same fail-closed-by-omission shape as
+ * `headlessToolOptions`. Attachments are resolved from paths by the dispatch
+ * TOOL, never here — the framework must not reach the filesystem.
+ */
+export interface WithAttachments {
+  attachments?: DispatchAttachment[];
 }
 
 export interface TaskMessageInput {

@@ -1,6 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
 import { attachTo } from './user-message.js';
-import type { DispatchAttachment } from './user-message.js';
+import type { WithAttachments } from './user-message.js';
 import { debugLog } from '../../logger.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
@@ -39,7 +39,7 @@ Rules:
  * Planner; the Actor receives it in its user message so the plan and the
  * Actor's reasoning live in a single ephemeral history.
  */
-export interface PacActorInput {
+export interface PacActorInput extends WithAttachments {
   task: string;
   context?: string;
   plan: string;
@@ -51,15 +51,7 @@ export interface PacActorInput {
    * consumer: MCP delegation self-escalation (#296 Phase 2E), which passes the
    * delegated server's tools so MCP schemas stay contained (epic finding #5).
    */
-  childTools?: Record<string, Tool>; /**
-   * Files travelling with this dispatch (#427).
-   *
-   * Opt-in per definition: a definition that never declares this field cannot
-   * receive bytes, which is the same fail-closed-by-omission shape as
-   * `headlessToolOptions`. Resolved from paths by the dispatch tool, never
-   * loaded here — the framework must not reach the filesystem.
-   */
-  attachments?: DispatchAttachment[];
+  childTools?: Record<string, Tool>;
 }
 
 export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {

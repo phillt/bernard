@@ -89,18 +89,17 @@ import { noPromptCacheHint } from '../cost-guardrail.js';
 import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
-import {
-  loadImage,
-  tryLoadImage,
-  extractImagePaths,
-  isVisionCapableModel,
-  type ImageAttachment,
-} from '../image.js';
+import { loadImage, tryLoadImage, extractImagePaths, type ImageAttachment } from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
 import { renderTaskText } from '../framework/agents/user-message.js';
 import type { CoreMessage } from 'ai';
-import { resolveMainModel, logSiteModelSnapshot, providersInUse } from '../model-policy.js';
+import {
+  resolveMainModel,
+  mainVisionCapable,
+  logSiteModelSnapshot,
+  providersInUse,
+} from '../model-policy.js';
 import {
   serializeMessages,
   extractDomainFacts,
@@ -2153,9 +2152,12 @@ export function App({
             ? 'Describe this image.'
             : argsText.slice(spaceIdx + 1).trim() || 'Describe this image.';
       }
-      if (!isVisionCapableModel(config.provider, config.model)) {
+      // The model the turn will actually RUN on, not `config.model` — under a
+      // lineup those differ, and this refused images for a model that could
+      // read them. Same staleness #233 fixed for the context-window math.
+      if (!mainVisionCapable(config)) {
         flashToast(
-          `Model "${config.model}" does not support image input. Switch with /model.`,
+          `Model "${resolveMainModel(config)}" does not support image input. Switch with /model.`,
           'error',
         );
         return;
@@ -2200,7 +2202,7 @@ export function App({
     let inlineImages: ImageAttachment[] | undefined;
     const candidatePaths = extractImagePaths(text);
     if (candidatePaths.length > 0) {
-      if (isVisionCapableModel(config.provider, config.model)) {
+      if (mainVisionCapable(config)) {
         const loaded: ImageAttachment[] = [];
         for (const p of candidatePaths) {
           const img = tryLoadImage(p);

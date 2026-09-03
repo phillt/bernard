@@ -1,4 +1,5 @@
 import { tool, type Tool } from 'ai';
+import { invocationRefusal } from '../specialist-authority.js';
 import { z } from 'zod';
 import { createTools } from './index.js';
 import { resolveProviderAndModel } from '../config.js';
@@ -11,11 +12,7 @@ import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
 import { withSlot, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
-import {
-  ATTACHMENTS_DESCRIPTION,
-  MAX_DISPATCH_ATTACHMENTS,
-  resolveAttachments,
-} from './attachment-args.js';
+import { attachmentsArg, resolveAttachments } from './attachment-args.js';
 import type { DispatchAttachment } from '../framework/agents/user-message.js';
 import type { AgentContext } from '../framework/context.js';
 import { type WrapperResult } from '../structured-output.js';
@@ -211,8 +208,15 @@ export interface DispatchToolWrapperArgs {
   specialistId: string;
   input: string;
   context?: string;
-  /** Files this wrapper should be able to see (#427), already loaded. */
-  attachments?: DispatchAttachment[];
+  /**
+   * Files this wrapper should be able to see (#427).
+   *
+   * A thunk, not an array: this function's own refusals — unknown specialist,
+   * disabled, bound, wrong kind — and the agent-pool slot all come AFTER it,
+   * and `withSlot` does not queue. Reading up to 40 MB synchronously for a
+   * dispatch that is then refused blocks the render loop for nothing.
+   */
+  attachments?: () => DispatchAttachment[];
   provider?: string;
   model?: string;
   abortSignal?: AbortSignal;
@@ -266,19 +270,9 @@ export async function dispatchToolWrapper(
       error: 'not_found',
     };
   }
-  if (specialist.disabled) {
-    return {
-      status: 'error',
-      result: `Specialist "${specialistId}" is disabled. Re-enable it from the /specialists menu before invoking it.`,
-      error: 'disabled',
-    };
-  }
-  if (specialist.boundTo) {
-    return {
-      status: 'error',
-      result: `Specialist "${specialistId}" is bound to applet action "${specialist.boundTo.appId}/${specialist.boundTo.action}" and can only be invoked through it.`,
-      error: 'bound',
-    };
+  const refusal = invocationRefusal(specialist, { kind: 'tool' });
+  if (refusal) {
+    return { status: 'error', result: refusal.message, error: refusal.code };
   }
   const kind = specialist.kind ?? 'persona';
   if (kind === 'persona') {
@@ -357,7 +351,7 @@ export async function dispatchToolWrapper(
               specialistId,
               input,
               ...(context ? { context } : {}),
-              ...(attachments ? { attachments } : {}),
+              ...(attachments ? { attachments: attachments() } : {}),
               slotId: id,
               childTools,
               wantStructured,
@@ -519,11 +513,7 @@ export function createToolWrapperRunTool(ctx: AgentContext) {
           .string()
           .optional()
           .describe('Optional additional context (file paths, prior findings, constraints).'),
-        attachments: z
-          .array(z.string())
-          .max(MAX_DISPATCH_ATTACHMENTS)
-          .optional()
-          .describe(ATTACHMENTS_DESCRIPTION),
+        attachments: attachmentsArg,
         provider: z.string().optional().describe('Optional provider override for this invocation.'),
         model: z.string().optional().describe('Optional model override for this invocation.'),
       }),
@@ -547,7 +537,7 @@ export function createToolWrapperRunTool(ctx: AgentContext) {
             specialistId,
             input,
             context,
-            attachments: loaded.attachments,
+            attachments: loaded.read,
             provider,
             model,
             abortSignal: execOptions.abortSignal,

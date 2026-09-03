@@ -1,6 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
 import { buildTaskUserMessage } from './user-message.js';
-import type { DispatchAttachment } from './user-message.js';
+import type { WithAttachments } from './user-message.js';
 import { classifyError } from '../../error-taxonomy.js';
 import { CITATIONS_PROMPT, allowsInlineMarkers } from '../../agent-prompt.js';
 import { getModelProfile } from '../../providers/index.js';
@@ -37,7 +37,7 @@ export const TOOL_WRAPPER_STEP_RATIO = 0.5;
  * through {@link wrapWrapperResult}; otherwise the raw text is wrapped as
  * `{ status: 'ok', result: text }`.
  */
-export interface ToolWrapperInput {
+export interface ToolWrapperInput extends WithAttachments {
   specialistId: string;
   input: string;
   context?: string;
@@ -45,15 +45,7 @@ export interface ToolWrapperInput {
   /** Pre-assembled child registry (already filtered by `specialist.targetTools`). */
   childTools: Record<string, Tool>;
   /** Whether to enforce JSON last-step + parse output through `wrapWrapperResult`. */
-  wantStructured: boolean; /**
-   * Files travelling with this dispatch (#427).
-   *
-   * Opt-in per definition: a definition that never declares this field cannot
-   * receive bytes, which is the same fail-closed-by-omission shape as
-   * `headlessToolOptions`. Resolved from paths by the dispatch tool, never
-   * loaded here — the framework must not reach the filesystem.
-   */
-  attachments?: DispatchAttachment[];
+  wantStructured: boolean;
 }
 
 /**

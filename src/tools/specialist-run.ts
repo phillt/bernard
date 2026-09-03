@@ -1,9 +1,6 @@
 import { tool, type Tool } from 'ai';
-import {
-  ATTACHMENTS_DESCRIPTION,
-  MAX_DISPATCH_ATTACHMENTS,
-  resolveAttachments,
-} from './attachment-args.js';
+import { invocationRefusal } from '../specialist-authority.js';
+import { attachmentsArg, resolveAttachments } from './attachment-args.js';
 import { z } from 'zod';
 import { resolveProviderAndModel, defaultProviderErrorMessage } from '../config.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
@@ -53,11 +50,7 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
           'A detailed, self-contained task description. Include: (1) specific objective and expected output format, (2) exact file paths, commands, or URLs, (3) edge cases and what to do if something fails. The specialist has zero prior context beyond its own profile.',
         ),
       context: z.string().optional().describe('Optional additional context to help the specialist'),
-      attachments: z
-        .array(z.string())
-        .max(MAX_DISPATCH_ATTACHMENTS)
-        .optional()
-        .describe(ATTACHMENTS_DESCRIPTION),
+      attachments: attachmentsArg,
 
       provider: z
         .string()
@@ -79,14 +72,10 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
       if (!specialist) {
         return `Error: No specialist found with id "${specialistId}". Use the specialist tool to list or create specialists.`;
       }
-      if (specialist.disabled) {
-        return `Error: Specialist "${specialistId}" is disabled. Re-enable it from the /specialists menu before invoking it.`;
-      }
-      // Bound to one applet action (#423), so it is reachable only through
-      // that capability. Same shape and same place as the `disabled` refusal.
-      if (specialist.boundTo) {
-        return `Error: Specialist "${specialistId}" is bound to applet action "${specialist.boundTo.appId}/${specialist.boundTo.action}" and can only be invoked through it.`;
-      }
+      // Disabled, or bound to an applet action — one decision, in
+      // `specialist-authority.ts`; only the error SHAPE is this tool's.
+      const refusal = invocationRefusal(specialist, { kind: 'tool' });
+      if (refusal) return `Error: ${refusal.message}`;
 
       const resolution = resolveProviderAndModel({
         provider,
@@ -121,7 +110,7 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
                   specialistId,
                   task,
                   ...(context ? { context } : {}),
-                  ...(loaded.attachments ? { attachments: loaded.attachments } : {}),
+                  attachments: loaded.read(),
                   slotId: id,
                   planStore,
                 };

@@ -1,6 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
 import { buildTaskUserMessage } from './user-message.js';
-import type { DispatchAttachment } from './user-message.js';
+import type { WithAttachments } from './user-message.js';
 import { resolveSiteModel } from '../../model-policy.js';
 import { debugLog } from '../../logger.js';
 import { PlanStore } from '../../plan-store.js';
@@ -40,20 +40,12 @@ Rules:
  * creates the `PlanStore` so the `plan` tool the definition mounts shares the
  * same instance the ReAct enforcement loop reads from.
  */
-export interface SpecialistInput {
+export interface SpecialistInput extends WithAttachments {
   specialistId: string;
   task: string;
   context?: string;
   slotId: number;
-  planStore: PlanStore; /**
-   * Files travelling with this dispatch (#427).
-   *
-   * Opt-in per definition: a definition that never declares this field cannot
-   * receive bytes, which is the same fail-closed-by-omission shape as
-   * `headlessToolOptions`. Resolved from paths by the dispatch tool, never
-   * loaded here — the framework must not reach the filesystem.
-   */
-  attachments?: DispatchAttachment[];
+  planStore: PlanStore;
 }
 
 /**

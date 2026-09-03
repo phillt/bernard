@@ -1,5 +1,3 @@
-import type { CoreMessage } from 'ai';
-
 /**
  * Refuses, or defuses, a dispatch carrying an image to a model that cannot
  * read one (#427).
@@ -20,33 +18,6 @@ import type { CoreMessage } from 'ai';
  * than one function with a branch, because the persistent arm's guarantee is
  * that it *cannot* throw — and that is not something a type can state.
  */
-
-/** What the gate decided, for the debug log. */
-export interface VisionVerdict {
-  /** True when the seed actually carried a non-text part. */
-  hadAttachment: boolean;
-  capable: boolean;
-}
-
-/**
- * True when any message carries a part that is not text.
- *
- * The whole gate hangs off this, computed with one shallow scan, so a session
- * that never touches an image pays a `typeof` per message and nothing else —
- * which is what makes "no regression for everyone else" mechanical rather than
- * argued.
- */
-export function seedHasAttachment(messages: CoreMessage[]): boolean {
-  for (const m of messages) {
-    if (!Array.isArray(m.content)) continue;
-    for (const part of m.content) {
-      if (typeof part === 'object' && part !== null && 'type' in part && part.type !== 'text') {
-        return true;
-      }
-    }
-  }
-  return false;
-}
 
 /**
  * The refusal an ephemeral dispatch throws.

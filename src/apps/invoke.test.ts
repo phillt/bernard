@@ -168,6 +168,27 @@ describe('invokeAction', () => {
     expect(mockDispatchAction).toHaveBeenCalled();
   });
 
+  /**
+   * A pre-existing hole this closes. An applet action dispatches through
+   * `runHeadless`, not `dispatchToolWrapper`, so the `disabled` refusal that
+   * guards `specialist_run` and `tool_wrapper_run` never covered it — a
+   * specialist the user disabled in `/specialists` kept running behind every
+   * applet button. Sharing one `invocationRefusal` brought it here.
+   */
+  it('refuses a disabled specialist, which applet dispatch never checked', async () => {
+    const m = await load();
+    writeApp();
+    mockSpecialistGet.mockReturnValue({
+      id: 'web-wrapper',
+      targetTools: ['web_search'],
+      disabled: true,
+    });
+    const res = await m.invokeAction({ appId: 'demo', action: 'ask', args: { q: 'hi' } });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('specialist_unavailable');
+    expect(mockDispatchAction).not.toHaveBeenCalled();
+  });
+
   it('refuses a bound specialist reached from another action', async () => {
     const m = await load();
     writeApp();

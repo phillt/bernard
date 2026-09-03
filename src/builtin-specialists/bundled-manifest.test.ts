@@ -2,7 +2,24 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { POST_V1_BUNDLED, V1_BUNDLED } from '../specialists.js';
+import { POST_V1_BUNDLED } from '../specialists.js';
+
+/**
+ * What the original `.seeded-v1` pass shipped.
+ *
+ * A test fixture, not production state: `seedBundledJsonDir` copies the whole
+ * directory under one marker, so this set only ever existed as "whatever was
+ * there that day". It is frozen by definition — no future edit can change what
+ * v1 shipped — so it has no business being importable by production code, and
+ * `SpecialistStore` should not export a field about the past.
+ */
+const V1_BUNDLED = [
+  'correction-agent.json',
+  'file-wrapper.json',
+  'shell-wrapper.json',
+  'specialist-creator.json',
+  'web-wrapper.json',
+];
 
 /**
  * The two-edit rule, as an invariant rather than a per-record test.

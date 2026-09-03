@@ -1,4 +1,5 @@
 import * as crypto from 'node:crypto';
+import { invocationRefusal } from '../specialist-authority.js';
 import { AppRegistry } from './registry.js';
 import { grantedToolNames, resolveFromManifest } from './invocation.js';
 import { dispatchAction } from './dispatch.js';
@@ -51,6 +52,8 @@ export type InvocationErrorCode =
    * saying it is missing would send an integrator looking for the wrong bug.
    */
   | 'specialist_not_bound'
+  /** The named specialist exists but the user disabled it. */
+  | 'specialist_unavailable'
   | 'run_failed'
   | 'timeout';
 
@@ -312,15 +315,26 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
   // manifest, not a failed run — the caller should see a request-shaped
   // failure, and no model call should be billed for it.
   const specialist = new SpecialistStore().get(dispatch.specialistId);
-  // Permit the MATCHING pair, refuse every other caller — the inverse of the
-  // `specialist_run` / `tool_wrapper_run` refusals, and the whole point of the
-  // field. An unbound specialist is untouched: `boundTo` is absent on every
-  // record that existed before #423, so the guard keys on presence.
-  const bound = specialist?.boundTo;
-  if (bound && (bound.appId !== invocation.appId || bound.action !== invocation.actionName)) {
+  // The INVERTED case: permits the specialist bound to exactly this
+  // (appId, action) and refuses everyone else. Shared with the two tool
+  // dispatches so the inversion is expressed once as data — an inverted
+  // duplicate of a rule is precisely where two copies drift apart.
+  //
+  // It also brings `disabled` to this path for the first time: an applet
+  // action dispatches through `runHeadless`, not `dispatchToolWrapper`, so a
+  // specialist the user disabled in `/specialists` was still running behind
+  // every applet button.
+  const refusal = specialist
+    ? invocationRefusal(specialist, {
+        kind: 'app',
+        appId: invocation.appId,
+        action: invocation.actionName,
+      })
+    : null;
+  if (refusal) {
     return fail(
-      'specialist_not_bound',
-      `Action "${opts.action}" names specialist "${dispatch.specialistId}", which is bound to "${bound.appId}/${bound.action}".`,
+      refusal.code === 'disabled' ? 'specialist_unavailable' : 'specialist_not_bound',
+      refusal.message,
     );
   }
   if (!specialist) {

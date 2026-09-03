@@ -1,9 +1,5 @@
 import { z } from 'zod';
-import {
-  ATTACHMENTS_DESCRIPTION,
-  MAX_DISPATCH_ATTACHMENTS,
-  resolveAttachments,
-} from './attachment-args.js';
+import { attachmentsArg, resolveAttachments } from './attachment-args.js';
 import { resolveProviderAndModel } from '../config.js';
 import { printTaskStart, printTaskEnd } from '../output.js';
 import type { AgentContext } from '../framework/context.js';
@@ -64,11 +60,7 @@ const TASK_PARAMETERS = z
         'ID of a saved task (task-prefixed routine) to execute. Loads stored task content as the primary description.',
       ),
     context: z.string().optional().describe('Optional additional context for the task'),
-    attachments: z
-      .array(z.string())
-      .max(MAX_DISPATCH_ATTACHMENTS)
-      .optional()
-      .describe(ATTACHMENTS_DESCRIPTION),
+    attachments: attachmentsArg,
 
     provider: z
       .string()
@@ -178,7 +170,7 @@ export function createTaskTool(ctx: AgentContext): BernardTool<TaskArgs, TaskPay
               const input: TaskInput = {
                 task: resolvedTask,
                 ...(context ? { context } : {}),
-                ...(loaded.attachments ? { attachments: loaded.attachments } : {}),
+                attachments: loaded.read(),
                 slotId: id,
               };
               const { formatted: taskResult } = await runDefinition(ctx, def, input, {
