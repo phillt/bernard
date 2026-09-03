@@ -121,7 +121,27 @@ describe('dispatchToolAction', () => {
       timeoutMs: null,
     });
     expect(fs.existsSync(outside)).toBe(false);
-    expect(JSON.stringify(res)).toContain('refused');
+    // And it reports as a FAILURE. Both gate refusals are non-throwing — the
+    // augment layer returns an `Error: `-prefixed string — so without a shape
+    // check a denial would come back as `ok: true` with the refusal as the
+    // result, and the caller would read it as success (#363).
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.message).toContain('refused');
+  });
+
+  it('reports a permission-rule denial as a failure, not a success', async () => {
+    const m = await load();
+    const { saveAppGrants } = await import('./app-grants.js');
+    saveAppGrants('demo', [{ effect: 'deny', tool: 'file_write', _v: 2 }]);
+    const target = path.join(m.runWorkspace('apps', 'demo'), 'blocked.txt');
+    const res = await m.dispatchToolAction({
+      invocation: invocation({ dest: target, body: 'x' }),
+      dispatch: { kind: 'tool', tool: 'file_write', args: { path: '$.dest', content: '$.body' } },
+      timeoutMs: null,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.message).toContain('permission rule');
+    expect(fs.existsSync(target)).toBe(false);
   });
 
   it('refuses an ineligible tool as a request failure, not a run failure', async () => {

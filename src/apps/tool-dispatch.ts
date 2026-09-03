@@ -9,6 +9,7 @@ import { runWorkspace } from '../paths.js';
 import { resolvePosture } from '../headless.js';
 import { loadAppGrants } from './app-grants.js';
 import { directInvocableRefusal } from './direct-tool.js';
+import { detectResultFailure } from '../tool-result-shape.js';
 import { ARG_REF_PREFIX, type ToolDispatch } from './manifest.js';
 import type { ResolvedInvocation } from './invocation.js';
 import * as fs from 'node:fs';
@@ -141,6 +142,17 @@ export async function dispatchToolAction(opts: DispatchToolActionOpts): Promise<
       abortSignal: signal,
       messages: [],
     });
+    // A tool fails in two ways: it throws, or it RETURNS a value whose
+    // contents say the work did not happen (#363). Both of a direct call's
+    // refusals are the second kind — the deny and write-scope gates return an
+    // `Error: `-prefixed string rather than throwing — so without this a
+    // refused action reports `ok: true` with the refusal as its result and the
+    // caller reads a denial as a success. `detectResultFailure` is the one
+    // shape-based answer the rest of Bernard already uses.
+    const failure = detectResultFailure(raw);
+    if (failure !== undefined) {
+      return { ok: false, kind: 'failed', message: failure, timedOut: false };
+    }
     return { ok: true, result: raw };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
