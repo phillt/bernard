@@ -1,4 +1,4 @@
-import { type CoreMessage, type UserContent } from 'ai';
+import { type CoreMessage } from 'ai';
 import { getModelProfile } from './providers/index.js';
 import { getProviderRequestCount } from './providers/request-counter.js';
 import {
@@ -44,6 +44,7 @@ import {
   applyStickiness,
 } from './rag-query.js';
 import { timestampUserMessage } from './tools/datetime.js';
+import { attachTo } from './framework/agents/user-message.js';
 import { type ImageAttachment, IMAGE_TOKEN_ESTIMATE } from './image.js';
 import { PlanStore } from './plan-store.js';
 import { type ResolvedEntry } from './reference-resolver.js';
@@ -520,19 +521,11 @@ export class Agent {
     // the timestamp prefix lives inside the wrapper.
     const wrappedInput = profile.wrapUserMessage(timestampUserMessage(userInput));
 
-    if (images && images.length > 0) {
-      const contentParts: UserContent = [
-        { type: 'text', text: wrappedInput },
-        ...images.map((img) => ({
-          type: 'image' as const,
-          image: img.data,
-          mimeType: img.mimeType,
-        })),
-      ];
-      this.history.push({ role: 'user', content: contentParts });
-    } else {
-      this.history.push({ role: 'user', content: wrappedInput });
-    }
+    // The same builder every dispatched agent uses (#427). It was hand-rolled
+    // here and duplicated in the framework, which encoded the SDK's image-part
+    // shape in two files — and this is the one consumer whose messages
+    // PERSIST, so an SDK bump would have silently missed it.
+    this.history.push(attachTo(wrappedInput, images));
 
     // Snapshot the conversation turn position NOW, before the run — the
     // maxTokens-continuation and empty-answer-retry loops in `wrapIterate` push

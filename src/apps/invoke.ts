@@ -1,4 +1,5 @@
 import * as crypto from 'node:crypto';
+import { invocationRefusal } from '../specialist-authority.js';
 import { AppRegistry } from './registry.js';
 import { grantedToolNames, resolveFromManifest } from './invocation.js';
 import { dispatchAction } from './dispatch.js';
@@ -45,6 +46,14 @@ export type InvocationErrorCode =
   | 'invalid_manifest'
   | 'invalid_args'
   | 'unknown_specialist'
+  /**
+   * The named specialist exists but is bound to a different applet action
+   * (#423). Distinct from `unknown_specialist` — the record is there, and
+   * saying it is missing would send an integrator looking for the wrong bug.
+   */
+  | 'specialist_not_bound'
+  /** The named specialist exists but the user disabled it. */
+  | 'specialist_unavailable'
   | 'run_failed'
   | 'timeout';
 
@@ -306,6 +315,28 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
   // manifest, not a failed run — the caller should see a request-shaped
   // failure, and no model call should be billed for it.
   const specialist = new SpecialistStore().get(dispatch.specialistId);
+  // The INVERTED case: permits the specialist bound to exactly this
+  // (appId, action) and refuses everyone else. Shared with the two tool
+  // dispatches so the inversion is expressed once as data — an inverted
+  // duplicate of a rule is precisely where two copies drift apart.
+  //
+  // It also brings `disabled` to this path for the first time: an applet
+  // action dispatches through `runHeadless`, not `dispatchToolWrapper`, so a
+  // specialist the user disabled in `/specialists` was still running behind
+  // every applet button.
+  const refusal = specialist
+    ? invocationRefusal(specialist, {
+        kind: 'app',
+        appId: invocation.appId,
+        action: invocation.actionName,
+      })
+    : null;
+  if (refusal) {
+    return fail(
+      refusal.code === 'disabled' ? 'specialist_unavailable' : 'specialist_not_bound',
+      refusal.message,
+    );
+  }
   if (!specialist) {
     return fail(
       'unknown_specialist',

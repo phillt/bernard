@@ -1,4 +1,6 @@
 import type { CoreMessage } from 'ai';
+import { buildTaskUserMessage } from './user-message.js';
+import type { WithAttachments } from './user-message.js';
 import { debugLog } from '../../logger.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
@@ -37,7 +39,7 @@ Rules:
  * wrapper. The `slotId` is acquired by the dispatch tool (see
  * `src/tools/subagent.ts`) and used for log prefixing.
  */
-export interface SubAgentInput {
+export interface SubAgentInput extends WithAttachments {
   task: string;
   context?: string;
   slotId: number;
@@ -87,10 +89,7 @@ export const subAgentDefinition: AgentDefinition<SubAgentInput, string> = {
   },
 
   buildUserMessage(input): CoreMessage {
-    const content = input.context
-      ? `Task: ${input.task}\n\nContext: ${input.context}`
-      : `Task: ${input.task}`;
-    return { role: 'user', content };
+    return buildTaskUserMessage(input);
   },
 
   hooks(_ctx, input) {

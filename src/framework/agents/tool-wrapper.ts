@@ -1,4 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
+import { buildTaskUserMessage } from './user-message.js';
+import type { WithAttachments } from './user-message.js';
 import { classifyError } from '../../error-taxonomy.js';
 import { CITATIONS_PROMPT, allowsInlineMarkers } from '../../agent-prompt.js';
 import { getModelProfile } from '../../providers/index.js';
@@ -35,7 +37,7 @@ export const TOOL_WRAPPER_STEP_RATIO = 0.5;
  * through {@link wrapWrapperResult}; otherwise the raw text is wrapped as
  * `{ status: 'ok', result: text }`.
  */
-export interface ToolWrapperInput {
+export interface ToolWrapperInput extends WithAttachments {
   specialistId: string;
   input: string;
   context?: string;
@@ -146,10 +148,13 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
   },
 
   buildUserMessage(input): CoreMessage {
-    const content = input.context
-      ? `Request: ${input.input}\n\nContext: ${input.context}`
-      : `Request: ${input.input}`;
-    return { role: 'user', content };
+    return buildTaskUserMessage({
+      task: input.input,
+      context: input.context,
+      attachments: input.attachments,
+      // Not `Task:` — some tool-wrapper prompts and tests read this verbatim.
+      label: 'Request',
+    });
   },
 
   hooks(_ctx, input) {

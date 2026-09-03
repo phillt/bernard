@@ -149,6 +149,62 @@ describe('invokeAction', () => {
     expect(mockDispatchAction).not.toHaveBeenCalled();
   });
 
+  /**
+   * The binding check is INVERTED relative to the `specialist_run` /
+   * `tool_wrapper_run` refusals — it permits the matching pair and refuses
+   * everyone else. That asymmetry is the whole point of the field and the one
+   * place it is easy to write backwards, so the PERMIT case is tested first.
+   */
+  it('permits a bound specialist invoked through its own action', async () => {
+    const m = await load();
+    writeApp();
+    mockSpecialistGet.mockReturnValue({
+      id: 'web-wrapper',
+      targetTools: ['web_search'],
+      boundTo: { appId: 'demo', action: 'ask' },
+    });
+    const res = await m.invokeAction({ appId: 'demo', action: 'ask', args: { q: 'hi' } });
+    expect(res.ok).toBe(true);
+    expect(mockDispatchAction).toHaveBeenCalled();
+  });
+
+  /**
+   * A pre-existing hole this closes. An applet action dispatches through
+   * `runHeadless`, not `dispatchToolWrapper`, so the `disabled` refusal that
+   * guards `specialist_run` and `tool_wrapper_run` never covered it — a
+   * specialist the user disabled in `/specialists` kept running behind every
+   * applet button. Sharing one `invocationRefusal` brought it here.
+   */
+  it('refuses a disabled specialist, which applet dispatch never checked', async () => {
+    const m = await load();
+    writeApp();
+    mockSpecialistGet.mockReturnValue({
+      id: 'web-wrapper',
+      targetTools: ['web_search'],
+      disabled: true,
+    });
+    const res = await m.invokeAction({ appId: 'demo', action: 'ask', args: { q: 'hi' } });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('specialist_unavailable');
+    expect(mockDispatchAction).not.toHaveBeenCalled();
+  });
+
+  it('refuses a bound specialist reached from another action', async () => {
+    const m = await load();
+    writeApp();
+    mockSpecialistGet.mockReturnValue({
+      id: 'web-wrapper',
+      targetTools: ['web_search'],
+      boundTo: { appId: 'other', action: 'elsewhere' },
+    });
+    const res = await m.invokeAction({ appId: 'demo', action: 'ask', args: { q: 'hi' } });
+    expect(res.ok).toBe(false);
+    // Not `unknown_specialist` — the record exists, and saying it is missing
+    // would send an integrator looking for the wrong bug.
+    if (!res.ok) expect(res.error.code).toBe('specialist_not_bound');
+    expect(mockDispatchAction).not.toHaveBeenCalled();
+  });
+
   it('classifies a timeout, and only a failure that actually ran', async () => {
     const m = await load();
     writeApp();

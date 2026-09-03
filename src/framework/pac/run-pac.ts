@@ -1,4 +1,5 @@
 import type { Tool } from 'ai';
+import type { DispatchAttachment } from '../agents/user-message.js';
 import { definitions } from '../agents/registry.js';
 import { runDefinition, type RunDefinitionOpts } from '../agents/run.js';
 import type { AgentContext } from '../context.js';
@@ -27,6 +28,24 @@ export interface PacRunInput {
    * self-escalation (#296 Phase 2E), which passes the delegated server's tools.
    */
   childTools?: Record<string, Tool>;
+  /**
+   * Files travelling with this pipeline (#427).
+   *
+   * Forwarded to the **Planner and the Actor, deliberately not the Critic.**
+   * The Actor does the work — an image task with no image at the Actor is
+   * undoable. The Planner gets it because blind planning mis-specifies (an OCR
+   * shell step for a screenshot the Actor could simply look at), and it is
+   * cheap. The Critic is omitted because its message already stacks task +
+   * context + plan + actor output, and with `PAC_MAX_RETRIES = 1` including it
+   * would send the bytes up to six times for one dispatch — it is already the
+   * phase given deliberately less (`contextInputs` returns `null` on purpose).
+   *
+   * Forwarding at all is not optional: `runPAC` is reached from `subagent`
+   * behind a config toggle, so a pipeline that dropped attachments would make
+   * `BERNARD_SUBAGENT_PAC` silently decide whether a sub-agent can see an
+   * image, with no error anywhere.
+   */
+  attachments?: DispatchAttachment[];
 }
 
 /** Outcome of one PAC pipeline invocation. */
@@ -71,7 +90,12 @@ export async function runPAC(
     await runDefinition(
       ctx,
       plannerDef,
-      { task: input.task, context: input.context, slotId: input.slotId },
+      {
+        task: input.task,
+        context: input.context,
+        slotId: input.slotId,
+        attachments: input.attachments,
+      },
       opts,
     )
   ).formatted;
@@ -94,6 +118,7 @@ export async function runPAC(
           plan,
           slotId: input.slotId,
           childTools: input.childTools,
+          attachments: input.attachments,
         },
         opts,
       )
@@ -148,6 +173,7 @@ export async function runPAC(
             slotId: input.slotId,
             priorPlan: plan,
             criticFeedback: verdict.reason,
+            attachments: input.attachments,
           },
           opts,
         )

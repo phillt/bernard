@@ -376,6 +376,195 @@ describe('createSpecialistTool', () => {
     });
   });
 
+  describe('role selection (#423)', () => {
+    /**
+     * The constraint the whole feature rests on. `create` mints a pin from the
+     * current policy when neither provider nor model is given — which is
+     * precisely the stale pin the off-lineup guard exists to drop, and the most
+     * confusing kind because nobody chose it. A declared role supersedes it.
+     */
+    it('a create declaring a role persists no provider/model pin', async () => {
+      const config = {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5-20250929',
+        modelMode: 'balanced',
+      } as unknown as BernardConfig;
+      const withConfig = createSpecialistTool(undefined, undefined, config);
+      const result = await withConfig.execute(
+        {
+          action: 'create',
+          id: 'summarise-notes',
+          name: 'Summarise Notes',
+          description: 'Summarise text',
+          systemPrompt: 'You summarise.',
+          role: 'summarizer',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+      expect(written.role).toBe('summarizer');
+      expect(written.provider).toBeUndefined();
+      expect(written.model).toBeUndefined();
+    });
+
+    /**
+     * The other half of the same rule. This asserts only that a create
+     * declaring neither writes no role — NOT that the policy pin fires, which
+     * it cannot here: this file mocks `node:fs`, so there is no lineup on disk
+     * and no provider key, and `resolveSiteModel` returns `fallback` rather
+     * than `policy`. The auto-pin path itself is exercised in
+     * `model-policy.test.ts`, which uses a real temp home.
+     *
+     * "Existing callers unaffected" is really pinned by the 62 pre-existing
+     * tests in this file passing untouched.
+     */
+    it('a create declaring neither role nor pin is unchanged', async () => {
+      const config = {
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5-20250929',
+        modelMode: 'balanced',
+      } as unknown as BernardConfig;
+      const withConfig = createSpecialistTool(undefined, undefined, config);
+      const result = await withConfig.execute(
+        {
+          action: 'create',
+          id: 'no-role',
+          name: 'No Role',
+          description: 'x',
+          systemPrompt: 'y',
+        },
+        {} as any,
+      );
+      expect(result).toContain('created');
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+      expect(written.role).toBeUndefined();
+    });
+
+    // Not merged, not "pin wins": a record carrying both would behave
+    // according to resolveSiteModel's internal ordering rather than anything
+    // anyone declared.
+    it('refuses a create declaring both a role and a pin', async () => {
+      const result = await tool.execute(
+        {
+          action: 'create',
+          id: 'both',
+          name: 'Both',
+          description: 'x',
+          systemPrompt: 'y',
+          role: 'summarizer',
+          provider: 'anthropic',
+        },
+        {} as any,
+      );
+      expect(result).toContain('not both');
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // The back door: without this, `create` refuses the both-state and
+    // `update` walks straight into it.
+    it('setting a role on update clears an existing pin', async () => {
+      const specialist = {
+        id: 'pinned',
+        name: 'Pinned',
+        description: 'd',
+        systemPrompt: 'p',
+        guidelines: [],
+        provider: 'anthropic',
+        model: 'claude-opus-4-6',
+        createdAt: 'x',
+        updatedAt: 'x',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+      await tool.execute({ action: 'update', id: 'pinned', role: 'classifier' }, {} as any);
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+      expect(written.role).toBe('classifier');
+      expect(written.provider).toBeUndefined();
+      expect(written.model).toBeUndefined();
+    });
+
+    // Binding is ONE-WAY: bind an unbound record, never re-bind. The property
+    // is that a model cannot steal a specialist from the applet it belongs to
+    // — not that it can never bind, which made the builder's own loop
+    // impossible (validation goes through a gate that refuses bound records).
+    it('binds an unbound specialist on update', async () => {
+      const specialist = {
+        id: 'u',
+        name: 'U',
+        description: 'd',
+        systemPrompt: 'p',
+        guidelines: [],
+        createdAt: 'x',
+        updatedAt: 'x',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+      const res = await tool.execute(
+        { action: 'update', id: 'u', boundTo: { appId: 'notes', action: 'go' } },
+        {} as any,
+      );
+      expect(res).toContain('updated');
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+      expect(written.boundTo).toEqual({ appId: 'notes', action: 'go' });
+    });
+
+    it('refuses to re-bind one that is already bound', async () => {
+      const specialist = {
+        id: 'b',
+        name: 'B',
+        description: 'd',
+        systemPrompt: 'p',
+        guidelines: [],
+        boundTo: { appId: 'notes', action: 'go' },
+        createdAt: 'x',
+        updatedAt: 'x',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+      await expect(
+        tool.execute(
+          { action: 'update', id: 'b', boundTo: { appId: 'evil', action: 'steal' } },
+          {} as any,
+        ),
+      ).rejects.toThrow(/cannot be changed/);
+    });
+
+    it('lists the role catalogue with what each is for', async () => {
+      const result = await tool.execute({ action: 'roles' }, {} as any);
+      for (const id of [
+        'orchestrator',
+        'executor',
+        'function-caller',
+        'summarizer',
+        'classifier',
+        'coder',
+      ]) {
+        expect(result).toContain(id);
+      }
+      // `lookFor` is the part that makes a choice grounded rather than guessed.
+      expect(result).toContain('structured-output');
+    });
+
+    it('clears a role with an empty string, like provider/model', async () => {
+      const specialist = {
+        id: 'r',
+        name: 'R',
+        description: 'd',
+        systemPrompt: 'p',
+        guidelines: [],
+        role: 'classifier',
+        createdAt: 'x',
+        updatedAt: 'x',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+      await tool.execute({ action: 'update', id: 'r', role: '' }, {} as any);
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+      expect(written.role).toBeUndefined();
+    });
+  });
+
   describe('provider/model support', () => {
     it('creates specialist with provider and model', async () => {
       const result = await tool.execute(

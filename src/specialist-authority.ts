@@ -151,3 +151,60 @@ export function assertCanDeleteSpecialist(id: string): void {
 export function assertCanEditSpecialist(id: string): void {
   if (!permissionsFor(id).canEditDefinition) throw new ProtectedSpecialistError(id, 'edit');
 }
+
+/**
+ * Where a specialist is being invoked FROM.
+ *
+ * An applet dispatch is the inverted case: it permits the specialist bound to
+ * exactly this `(appId, action)` and refuses everyone else, where a tool
+ * dispatch refuses any bound specialist.
+ */
+export type InvocationVia = { kind: 'tool' } | { kind: 'app'; appId: string; action: string };
+
+/** A refusal reason, or `null` to proceed. */
+export interface InvocationRefusal {
+  code: 'disabled' | 'bound';
+  message: string;
+}
+
+/**
+ * Whether this specialist may be invoked from here — the invocation
+ * counterpart to {@link permissionsFor}, which answers the same question for
+ * editing.
+ *
+ * **Written once because it was already drifting.** The `disabled` refusal
+ * lived in `specialist_run` and `tool_wrapper_run` only, and an applet action
+ * dispatches through `runHeadless` rather than `dispatchToolWrapper` — so a
+ * specialist the user disabled in `/specialists` kept running behind every
+ * applet button. Adding the `boundTo` gate beside a check that was already
+ * missing a door is how three copies become four.
+ *
+ * The three call sites keep their own error contracts — a prefixed string, a
+ * `WrapperResult` envelope, an `InvocationResult` — which is the only thing
+ * that legitimately differs between them. The DECISION is here.
+ *
+ * The discovery half already worked this way: `getSummaries()` filters
+ * `disabled` and `boundTo` together at one point.
+ */
+export function invocationRefusal(
+  specialist: {
+    id: string;
+    disabled?: boolean;
+    boundTo?: { appId: string; action: string };
+  },
+  via: InvocationVia,
+): InvocationRefusal | null {
+  if (specialist.disabled) {
+    return {
+      code: 'disabled',
+      message: `Specialist "${specialist.id}" is disabled. Re-enable it from the /specialists menu before invoking it.`,
+    };
+  }
+  const bound = specialist.boundTo;
+  if (!bound) return null;
+  if (via.kind === 'app' && bound.appId === via.appId && bound.action === via.action) return null;
+  return {
+    code: 'bound',
+    message: `Specialist "${specialist.id}" is bound to applet action "${bound.appId}/${bound.action}" and can only be invoked through it.`,
+  };
+}

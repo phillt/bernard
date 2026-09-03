@@ -1,4 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
+import { attachTo } from './user-message.js';
+import type { WithAttachments } from './user-message.js';
 import { debugLog } from '../../logger.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 import { createTools } from '../../tools/index.js';
@@ -37,7 +39,7 @@ Rules:
  * Planner; the Actor receives it in its user message so the plan and the
  * Actor's reasoning live in a single ephemeral history.
  */
-export interface PacActorInput {
+export interface PacActorInput extends WithAttachments {
   task: string;
   context?: string;
   plan: string;
@@ -105,7 +107,7 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
     const parts: string[] = [`Task: ${input.task}`];
     if (input.context) parts.push(`Context: ${input.context}`);
     parts.push(`Plan to execute:\n${input.plan}`);
-    return { role: 'user', content: parts.join('\n\n') };
+    return attachTo(parts.join('\n\n'), input.attachments);
   },
 
   hooks(_ctx, input) {

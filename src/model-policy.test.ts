@@ -459,6 +459,89 @@ describe('resolveSiteModel — fallbacks', () => {
   });
 });
 
+describe('resolveSiteModel — specialist role (#423)', () => {
+  // The rung: override > pin > record role > SITE_ROLE[site]. `specialist` maps
+  // to `executor` (mid in balanced); `classifier` is cheap, so a role that
+  // displaces the site default is visible in the resolved model.
+  it("a record's role displaces the dispatching site's default", async () => {
+    const { resolveSiteModel } = await loadModule();
+    const config = makeConfig({ modelMode: 'balanced' });
+    expect(resolveSiteModel(config, 'specialist').modelName).toBe('claude-sonnet-4-5-20250929');
+    const specialist = { role: 'classifier' } as Specialist;
+    const r = resolveSiteModel(config, 'specialist', { specialist });
+    expect(r.modelName).toBe('claude-haiku-4-5-20251001');
+    expect(r.source).toBe('policy');
+    expect(r.tier).toBe('cheap');
+  });
+
+  // A user who explicitly pinned a model keeps it. The pin short-circuits
+  // before the role rung is ever reached.
+  it('an explicit pin outranks a role', async () => {
+    const { resolveSiteModel } = await loadModule();
+    const specialist = { provider: 'anthropic', model: 'claude-opus-4-6', role: 'classifier' };
+    const r = resolveSiteModel(makeConfig({ modelMode: 'balanced' }), 'specialist', {
+      specialist: specialist as Specialist,
+    });
+    expect(r.source).toBe('specialist');
+    expect(r.modelName).toBe('claude-opus-4-6');
+  });
+
+  it('an invocation override outranks both', async () => {
+    const { resolveSiteModel } = await loadModule();
+    const specialist = { role: 'classifier' } as Specialist;
+    const r = resolveSiteModel(makeConfig({ modelMode: 'balanced' }), 'specialist', {
+      specialist,
+      overrides: { provider: 'anthropic', model: 'claude-opus-4-6' },
+    });
+    expect(r.source).toBe('override');
+  });
+
+  // The consequence worth having on purpose: the pin guard clears a stale
+  // provider/model and falls through, and with a role that lands on what the
+  // record says it is FOR rather than on the generic site default.
+  it('a dropped off-lineup pin falls through to the role, not the site default', async () => {
+    const { resolveSiteModel } = await loadModule();
+    const config = makeConfig({
+      provider: 'xai',
+      model: 'grok-4-fast-non-reasoning',
+      modelMode: 'balanced',
+      activeLineupId: 'xai',
+    });
+    const specialist = {
+      provider: 'openai',
+      model: 'gpt-5.2',
+      role: 'classifier',
+    } as Specialist;
+    const r = resolveSiteModel(config, 'tool-wrapper', { specialist });
+    expect(r.provider).toBe('xai');
+    // `tool-wrapper` alone would be function-caller → mid → grok-4-fast.
+    expect(r.modelName).toBe('grok-3-mini');
+    expect(r.tier).toBe('cheap');
+  });
+
+  // The record is a user-editable JSON file. `lineup.roles[<garbage>]` is
+  // `undefined`, so an unvalidated id would throw inside the function every
+  // dispatch calls — falling back is the `isKnownMode` idiom two lines above.
+  it('falls back to the site role on an unknown id rather than throwing', async () => {
+    const m = await loadModule();
+    const logger = await import('./logger.js');
+    const spy = logger.debugLog as unknown as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+    const config = makeConfig({ modelMode: 'balanced' });
+    const specialist = { role: 'not-a-role' } as unknown as Specialist;
+    const r = m.resolveSiteModel(config, 'specialist', { specialist });
+    expect(r.modelName).toBe('claude-sonnet-4-5-20250929');
+    expect(spy.mock.calls.filter((c) => c[0] === 'model-policy:unknown-role')).toHaveLength(1);
+  });
+
+  it('no role leaves resolution exactly as it was', async () => {
+    const { resolveSiteModel } = await loadModule();
+    const config = makeConfig({ modelMode: 'balanced' });
+    const withEmpty = resolveSiteModel(config, 'specialist', { specialist: {} as Specialist });
+    expect(withEmpty.modelName).toBe(resolveSiteModel(config, 'specialist').modelName);
+  });
+});
+
 describe('resolveSiteModel — off-lineup specialist pin guard', () => {
   it('drops a specialist pin whose provider is not in the active lineup', async () => {
     const m = await loadModule();

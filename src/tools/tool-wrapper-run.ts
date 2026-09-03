@@ -1,4 +1,5 @@
 import { tool, type Tool } from 'ai';
+import { invocationRefusal } from '../specialist-authority.js';
 import { z } from 'zod';
 import { createTools } from './index.js';
 import { resolveProviderAndModel } from '../config.js';
@@ -11,6 +12,8 @@ import { printSpecialistStart, printSpecialistEnd } from '../output.js';
 import { debugLog } from '../logger.js';
 import { withSlot, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
+import { attachmentsArg, resolveAttachments } from './attachment-args.js';
+import type { DispatchAttachment } from '../framework/agents/user-message.js';
 import type { AgentContext } from '../framework/context.js';
 import { type WrapperResult } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
@@ -205,6 +208,15 @@ export interface DispatchToolWrapperArgs {
   specialistId: string;
   input: string;
   context?: string;
+  /**
+   * Files this wrapper should be able to see (#427).
+   *
+   * A thunk, not an array: this function's own refusals — unknown specialist,
+   * disabled, bound, wrong kind — and the agent-pool slot all come AFTER it,
+   * and `withSlot` does not queue. Reading up to 40 MB synchronously for a
+   * dispatch that is then refused blocks the render loop for nothing.
+   */
+  attachments?: () => DispatchAttachment[];
   provider?: string;
   model?: string;
   abortSignal?: AbortSignal;
@@ -240,6 +252,7 @@ export async function dispatchToolWrapper(
     specialistId,
     input,
     context,
+    attachments,
     provider,
     model,
     abortSignal,
@@ -257,12 +270,9 @@ export async function dispatchToolWrapper(
       error: 'not_found',
     };
   }
-  if (specialist.disabled) {
-    return {
-      status: 'error',
-      result: `Specialist "${specialistId}" is disabled. Re-enable it from the /specialists menu before invoking it.`,
-      error: 'disabled',
-    };
+  const refusal = invocationRefusal(specialist, { kind: 'tool' });
+  if (refusal) {
+    return { status: 'error', result: refusal.message, error: refusal.code };
   }
   const kind = specialist.kind ?? 'persona';
   if (kind === 'persona') {
@@ -337,22 +347,15 @@ export async function dispatchToolWrapper(
             const wantStructured = specialist.structuredOutput ?? kind === 'tool-wrapper';
 
             const def = definitions.get<ToolWrapperInput, WrapperResult>('tool-wrapper');
-            const defInput: ToolWrapperInput = context
-              ? {
-                  specialistId,
-                  input,
-                  context,
-                  slotId: id,
-                  childTools,
-                  wantStructured,
-                }
-              : {
-                  specialistId,
-                  input,
-                  slotId: id,
-                  childTools,
-                  wantStructured,
-                };
+            const defInput: ToolWrapperInput = {
+              specialistId,
+              input,
+              ...(context ? { context } : {}),
+              ...(attachments ? { attachments: attachments() } : {}),
+              slotId: id,
+              childTools,
+              wantStructured,
+            };
             // `stepLimitHit` is no longer consumed here: `toolWrapperDefinition`
             // receives it directly as `FormatMeta` and does the re-label itself
             // (#370), so `formatted` already carries the right verdict. Reading it
@@ -510,15 +513,31 @@ export function createToolWrapperRunTool(ctx: AgentContext) {
           .string()
           .optional()
           .describe('Optional additional context (file paths, prior findings, constraints).'),
+        attachments: attachmentsArg,
         provider: z.string().optional().describe('Optional provider override for this invocation.'),
         model: z.string().optional().describe('Optional model override for this invocation.'),
       }),
-      execute: async ({ specialistId, input, context, provider, model }, execOptions) => {
+      execute: async (
+        { specialistId, input, context, attachments, provider, model },
+        execOptions,
+      ) => {
+        const loaded = resolveAttachments(attachments);
+        if (!loaded.ok) {
+          // This tool advertises a JSON envelope, so a bad path answers in one
+          // rather than as a prefixed string — each of the four dispatch tools
+          // reports it in its own contract.
+          return renderWrapperParentView(
+            { status: 'error', result: loaded.error, error: 'invalid_args' },
+            SUBAGENT_RESULT_MAX_CHARS,
+            slotStatusLine(),
+          );
+        }
         const wrapped = await dispatchToolWrapper(
           {
             specialistId,
             input,
             context,
+            attachments: loaded.read,
             provider,
             model,
             abortSignal: execOptions.abortSignal,

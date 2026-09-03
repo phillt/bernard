@@ -132,9 +132,9 @@ export const MODEL_ROLES: readonly ModelRole[] = [
   {
     id: 'coder',
     label: 'Coder',
-    description: 'Reserved for a future dedicated code-generation role (no call site yet).',
+    description: 'Code generation and editing — specialists that write or modify code.',
     lookFor:
-      'A model strong at code generation and editing. Reserved — no call site uses this role yet, but it is fully configurable.',
+      'A model strong at code generation and editing. No SITE resolves to this role; it is reached by a specialist that declares `role: "coder"` on its record (#423).',
     defaultTiers: {
       'optimize-tokens': 'cheap',
       balanced: 'mid',

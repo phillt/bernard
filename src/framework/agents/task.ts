@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import type { CoreMessage } from 'ai';
+import { buildTaskUserMessage } from './user-message.js';
+import type { WithAttachments } from './user-message.js';
 import type { BernardConfig } from '../../config.js';
 import { debugLog } from '../../logger.js';
 import { extractJsonBlock, nullableOptional } from '../../structured-output.js';
@@ -134,7 +136,7 @@ export function wrapTaskResult(text: string, meta?: FormatMeta): TaskResult {
  * used for log prefixing; `task` carries the fully-resolved task content
  * (after any `taskId` routine lookup the wrapper performs).
  */
-export interface TaskInput {
+export interface TaskInput extends WithAttachments {
   task: string;
   context?: string;
   slotId: number;
@@ -193,10 +195,7 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
   },
 
   buildUserMessage(input): CoreMessage {
-    const content = input.context
-      ? `Task: ${input.task}\n\nContext: ${input.context}`
-      : `Task: ${input.task}`;
-    return { role: 'user', content };
+    return buildTaskUserMessage(input);
   },
 
   hooks(_ctx, input) {
