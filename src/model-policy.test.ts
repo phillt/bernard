@@ -519,6 +519,21 @@ describe('resolveSiteModel — specialist role (#423)', () => {
     expect(r.tier).toBe('cheap');
   });
 
+  // The record is a user-editable JSON file. `lineup.roles[<garbage>]` is
+  // `undefined`, so an unvalidated id would throw inside the function every
+  // dispatch calls — falling back is the `isKnownMode` idiom two lines above.
+  it('falls back to the site role on an unknown id rather than throwing', async () => {
+    const m = await loadModule();
+    const logger = await import('./logger.js');
+    const spy = logger.debugLog as unknown as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+    const config = makeConfig({ modelMode: 'balanced' });
+    const specialist = { role: 'not-a-role' } as unknown as Specialist;
+    const r = m.resolveSiteModel(config, 'specialist', { specialist });
+    expect(r.modelName).toBe('claude-sonnet-4-5-20250929');
+    expect(spy.mock.calls.filter((c) => c[0] === 'model-policy:unknown-role')).toHaveLength(1);
+  });
+
   it('no role leaves resolution exactly as it was', async () => {
     const { resolveSiteModel } = await loadModule();
     const config = makeConfig({ modelMode: 'balanced' });

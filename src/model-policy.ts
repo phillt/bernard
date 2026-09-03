@@ -11,7 +11,7 @@ import { getModelForConfig, getProviderOptionsForConfig } from './providers/inde
 import { modelSupportsTemperature } from './providers/profiles.js';
 import { serializeModelParams, type ModelParams } from './providers/model-params.js';
 import { loadLineups, resolveActiveLineup, type Lineup } from './lineups.js';
-import { DEFAULT_ROLE_TIERS, SITE_ROLE, type RoleId } from './model-roles.js';
+import { ALL_ROLE_IDS, DEFAULT_ROLE_TIERS, SITE_ROLE, type RoleId } from './model-roles.js';
 import { debugLog } from './logger.js';
 
 /**
@@ -255,17 +255,27 @@ export function resolveSiteModel(
   // rather than a rule imposed on it. A role says "whatever this profile
   // considers right for this kind of work", which keeps meaning that when the
   // profile changes; a pin does not.
-  const role = specialist.role ?? SITE_ROLE[site];
+  // Validated, not trusted: `role` comes off a user-editable JSON file, and
+  // `lineup.roles[<garbage>]` is `undefined`, so `undefined[tier]` would throw
+  // inside the function every dispatch calls. Falls back rather than throwing,
+  // copying the `isKnownMode` idiom two lines above — "so resolution never
+  // crashes" applies with equal force here.
+  const declaredRole = specialist.role;
+  const roleIsKnown = declaredRole !== undefined && ALL_ROLE_IDS.includes(declaredRole);
+  if (declaredRole !== undefined && !roleIsKnown) {
+    debugLog('model-policy:unknown-role', { site, role: declaredRole });
+  }
+  const role = roleIsKnown ? (declaredRole as RoleId) : SITE_ROLE[site];
   // Logged only when the record's role actually displaced the site's, which is
   // the one case a reader would be trying to explain. `buildSiteModel`'s
   // `model-policy:resolve` line carries `site` and `tier` but cannot
   // distinguish a record role from a site role, and threading a ninth
   // parameter through it to say so would cost every call site for this one.
-  if (specialist.role && specialist.role !== SITE_ROLE[site]) {
+  if (roleIsKnown && role !== SITE_ROLE[site]) {
     debugLog('model-policy:specialist-role', {
       site,
       siteRole: SITE_ROLE[site],
-      specialistRole: specialist.role,
+      specialistRole: role,
     });
   }
   const tier = tierForRole(mode, role);

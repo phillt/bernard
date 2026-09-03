@@ -15,6 +15,7 @@ import {
   blankToUndefined,
 } from '../config.js';
 import { resolveSiteModel } from '../model-policy.js';
+import { ALL_ROLE_IDS, MODEL_ROLES, type RoleId } from '../model-roles.js';
 import { validateModelParams, PARAM_IDS, type ModelParams } from '../providers/model-params.js';
 import { attachMeta } from '../framework/tools/adapter.js';
 
@@ -83,8 +84,11 @@ export function createSpecialistTool(
         'Manage reusable expert profiles (specialists). Specialists are persistent personas with custom instructions and behavioral guidelines that shape how a sub-agent approaches work. Unlike routines (step-by-step procedures), specialists define expertise and behavioral rules for recurring task patterns. Bundled specialists (those that ship with Bernard, e.g. shell-wrapper, specialist-creator) are protected: update and delete are refused on them.',
       parameters: z.object({
         action: z
-          .enum(['create', 'update', 'list', 'read', 'delete'])
-          .describe('The action to perform'),
+          .enum(['create', 'update', 'list', 'read', 'delete', 'roles'])
+          .describe(
+            'The action to perform. "roles" lists the model roles a specialist may declare, ' +
+              'with what each is for — read it before choosing one.',
+          ),
         id: z
           .string()
           .optional()
@@ -121,6 +125,16 @@ export function createSpecialistTool(
               '"temperature"/"topP"/"maxOutputTokens" (numbers), "reasoningEffort" (e.g. "low"/"high"), ' +
               '"thinkingBudget" (Anthropic tokens). Capability-gated against the pinned (provider, model) — ' +
               'rejected params are dropped. Requires a provider/model pin. Used with create/update.',
+          ),
+        role: z
+          .enum(ALL_ROLE_IDS as unknown as [RoleId, ...RoleId[]])
+          .optional()
+          .describe(
+            'What this specialist is FOR, in model-selection terms — NOT a vendor or a model. ' +
+              'The active profile resolves it to an actual model, and keeps doing so when the ' +
+              'profile changes. Prefer this over provider/model: a pin you chose yourself is the ' +
+              'kind most likely to go stale. Call action:"roles" to see the options. ' +
+              'Pass "" to clear. Used with create/update.',
           ),
         kind: z
           .enum(['persona', 'tool-wrapper', 'meta'])
@@ -162,6 +176,7 @@ export function createSpecialistTool(
         guidelines,
         provider,
         model,
+        role,
         params,
         kind,
         targetTools,
@@ -200,6 +215,11 @@ export function createSpecialistTool(
             }
             if (specialist.provider || specialist.model) {
               output += `\n\n## Model Override\nProvider: ${specialist.provider ?? 'default'}\nModel: ${specialist.model ?? 'default'}`;
+            } else if (specialist.role) {
+              // Shown INSTEAD of the override block, not beside it: a pin
+              // short-circuits resolution, so a record with both would be
+              // reporting a role that never decides anything.
+              output += `\n\nRole: ${specialist.role} (resolved against the active profile)`;
             }
             output += `\n\n## System Prompt\n${specialist.systemPrompt}`;
             if (specialist.guidelines.length > 0) {
@@ -222,6 +242,21 @@ export function createSpecialistTool(
             return output;
           }
 
+          case 'roles': {
+            // The catalogue, rendered for a model rather than for the lineup
+            // editor. `lookFor` is the part that makes a choice grounded — it
+            // says what the role is optimised for, which is the actual
+            // question being asked.
+            const lines = MODEL_ROLES.map((r) => `- ${r.id} — ${r.description}\n  ${r.lookFor}`);
+            return (
+              'Model roles a specialist may declare.\n\n' +
+              `${lines.join('\n')}\n\n` +
+              'Declare one as `role`. It resolves against the active profile, so it keeps ' +
+              'meaning the right thing when the profile changes. Do not set provider/model ' +
+              'unless the user named a specific one.'
+            );
+          }
+
           case 'create': {
             if (!id) return 'Error: id is required for create action.';
             if (!name) return 'Error: name is required for create action.';
@@ -231,6 +266,16 @@ export function createSpecialistTool(
             // doesn't fail validation and so policy auto-assign still fires.
             const normProvider = blankToUndefined(provider);
             const normModel = blankToUndefined(model);
+            // A create declares either a BINDING or an INTENT, never both.
+            // `provider`/`model` is a binding — a specific model was chosen.
+            // `role` is an intent — a kind of work was chosen, and the active
+            // profile picks the model, now and after every re-tier. A record
+            // carrying both would behave according to `resolveSiteModel`'s
+            // internal ordering rather than anything anyone declared, which is
+            // the shape `AppActionSchema` refuses for the same reason.
+            if (role && (normProvider !== undefined || normModel !== undefined)) {
+              return 'Error: declare either `role` or `provider`/`model`, not both. A role lets the active profile choose the model; a pin overrides it.';
+            }
             if (normProvider !== undefined) {
               if (!isValidProvider(normProvider))
                 return `Error: Unknown provider "${normProvider}". Valid providers: ${Object.keys(PROVIDER_MODELS).join(', ')}`;
@@ -242,7 +287,13 @@ export function createSpecialistTool(
             // mode is active and the user didn't specify either (#170).
             let resolvedProvider = normProvider;
             let resolvedModel = normModel;
-            if (normProvider === undefined && normModel === undefined && config) {
+            // Declaring NEITHER is the legacy third state, and it keeps
+            // today's behaviour byte for byte — a binding minted from the
+            // policy and persisted — which is what leaves existing callers
+            // (`specialist-creator` among them) unaffected. Only a declared
+            // role suppresses it, and that pin is exactly what the off-lineup
+            // guard exists to drop: one nobody chose.
+            if (normProvider === undefined && normModel === undefined && !role && config) {
               try {
                 const site = resolveSiteModel(config, 'specialist');
                 if (site.source === 'policy') {
@@ -275,6 +326,7 @@ export function createSpecialistTool(
                 guidelines: guidelines ?? [],
                 provider: resolvedProvider,
                 model: resolvedModel,
+                role,
                 params: resolvedParams,
                 kind,
                 targetTools,
@@ -319,6 +371,18 @@ export function createSpecialistTool(
             if (guidelines !== undefined) updates.guidelines = guidelines;
             if (provider !== undefined) updates.provider = provider;
             if (model !== undefined) updates.model = model;
+            if (role !== undefined) {
+              updates.role = role;
+              // Setting a role clears any pin, or the both-state `create`
+              // refuses is reachable through `update`. `params` go with it:
+              // they are capability-gated against a pin (see below), so a
+              // role-declaring specialist can never carry them.
+              if (role !== ('' as RoleId)) {
+                updates.provider = '';
+                updates.model = '';
+                updates.params = {};
+              }
+            }
             if (params !== undefined) {
               // Validate against the effective pin: the new provider/model if
               // supplied, else the specialist's existing one. An empty `params`
@@ -353,7 +417,7 @@ export function createSpecialistTool(
             // Auto-clear model when provider is cleared and model not explicitly provided
             if (provider === '' && model === undefined) updates.model = '';
             if (Object.keys(updates).length === 0)
-              return 'Error: provide at least one field to update (name, description, systemPrompt, guidelines, provider, model, kind, targetTools, goodExamples, badExamples, or structuredOutput).';
+              return 'Error: provide at least one field to update (name, description, systemPrompt, guidelines, provider, model, role, kind, targetTools, goodExamples, badExamples, or structuredOutput).';
             try {
               const updated = store.update(id, updates);
               if (!updated) return `No specialist found with id "${id}".`;
