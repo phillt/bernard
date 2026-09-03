@@ -73,6 +73,20 @@ export const APPS_DIR = path.join(DATA_DIR, 'apps');
 export function appletAssetDir(appId: string): string {
   return path.join(APPS_DIR, appId);
 }
+
+/**
+ * An applet's persistent key-value store (#422): one SQLite file per app.
+ *
+ * Deliberately **neither** of the two directories it might have gone in.
+ * Not {@link appletAssetDir}, which is SERVED — the database would be
+ * fetchable over HTTP. Not `runWorkspace('apps', appId)`, which is the
+ * applet action's own write scope — `file_write` could then corrupt the
+ * database out from under the store. Access is only ever through the KV API,
+ * from either side.
+ */
+export function appletDataDir(appId: string): string {
+  return path.join(DATA_DIR, 'applet-data', appId);
+}
 export const SPECIALIST_CANDIDATES_DIR = path.join(DATA_DIR, 'specialist-candidates');
 export const CORRECTION_CANDIDATES_DIR = path.join(DATA_DIR, 'correction-candidates');
 export const TOOL_PROFILES_DIR = path.join(DATA_DIR, 'tool-profiles');

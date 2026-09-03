@@ -7,6 +7,7 @@ import { CapabilityTable } from '../apps/capabilities.js';
 import { recordCapabilityMint } from '../apps/capability-log.js';
 import { HostRegistry } from './registry.js';
 import { startApplet, type RunningApplet } from './server.js';
+import { closeAppletStore } from './store-route.js';
 
 /**
  * The applet host process (#421).
@@ -64,6 +65,10 @@ async function reconcile(): Promise<void> {
       // The actions a handle names may no longer exist. Revocation for an
       // in-memory table means dropping the entries, not marking them (#420).
       capabilities.revokeApp(appId);
+      // Its SQLite connection is cached for the life of the process, so an
+      // app removed and re-added would otherwise keep writing through a handle
+      // to the old file if the data directory were replaced underneath it.
+      closeAppletStore(appId);
       log(`stopped ${appId}`);
     }
   }

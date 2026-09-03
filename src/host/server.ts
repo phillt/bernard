@@ -7,6 +7,7 @@ import { AppRegistry } from '../apps/registry.js';
 import { checkRequest } from './guard.js';
 import { securityHeaders, originFor } from './csp.js';
 import { resolveAsset } from './assets.js';
+import { handleStoreRequest } from './store-route.js';
 
 /**
  * One loopback HTTP server per applet (#421).
@@ -31,6 +32,17 @@ export const INVOKE_PATH = '/__bernard/invoke';
 export const HEALTH_PATH = '/__bernard/health';
 /** What the served page reads to learn its own token and handles. */
 export const BOOTSTRAP_PATH = '/__bernard/bootstrap.json';
+/**
+ * The applet's own key-value store (#422).
+ *
+ * **POST for reads too, deliberately.** The guard requires the token only for
+ * non-`GET`/`HEAD` requests, because an asset read has to work before the page
+ * holds anything. Applet *data* is not an asset, so a `GET` read endpoint here
+ * would be reachable by anything that can satisfy the origin checks. Making
+ * every store call a POST puts it behind the token without weakening the asset
+ * path.
+ */
+export const STORE_PATH = '/__bernard/store';
 
 /** Bodies are small by construction — an action's args are scalars. */
 const MAX_BODY_BYTES = 64 * 1024;
@@ -194,6 +206,26 @@ function createHandler(
           capabilityId: record.id,
         });
         sendJson(res, result.ok ? 200 : 500, result);
+        return;
+      }
+
+      if (url === STORE_PATH) {
+        if (req.method !== 'POST') {
+          send(res, 405, 'Method Not Allowed', { Allow: 'POST' });
+          return;
+        }
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          sendJson(res, 400, { ok: false, error: 'Bad body.' });
+          return;
+        }
+        // `appId` comes from THIS server's own closure, never from the body.
+        // A store addressed by a request parameter would let any page that can
+        // reach this port read every applet's data — the same
+        // designation-from-the-caller mistake the invoke route refuses.
+        sendJson(res, 200, handleStoreRequest(appId, body));
         return;
       }
 

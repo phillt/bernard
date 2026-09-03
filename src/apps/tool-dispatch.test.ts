@@ -14,10 +14,12 @@ const dispatch = (args: Record<string, string | number | boolean>): ToolDispatch
 
 describe('mapToolArgs', () => {
   it('reads `$.<name>` from the call args and passes literals through', () => {
-    expect(mapToolArgs(dispatch({ path: '$.dest', content: 'fixed' }), { dest: '/tmp/x' })).toEqual({
-      path: '/tmp/x',
-      content: 'fixed',
-    });
+    expect(mapToolArgs(dispatch({ path: '$.dest', content: 'fixed' }), { dest: '/tmp/x' })).toEqual(
+      {
+        path: '/tmp/x',
+        content: 'fixed',
+      },
+    );
   });
 
   // An absent optional arg drops the parameter rather than passing `undefined`,

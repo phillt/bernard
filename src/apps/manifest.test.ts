@@ -213,7 +213,7 @@ describe('the dispatch union (#445)', () => {
   // Eligibility is checked against the LIVE registry, not here: this module is
   // a pure leaf and `directInvocable` is a tool-local fact. See
   // `direct-tool.test.ts` for the refusal.
-  it('does not police tool names — that is the registry\'s job', () => {
+  it("does not police tool names — that is the registry's job", () => {
     expect(v2({ dispatch: { kind: 'tool', tool: 'shell', args: {} } }).ok).toBe(true);
   });
 

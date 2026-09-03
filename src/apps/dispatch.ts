@@ -6,6 +6,7 @@ import { definitions } from '../framework/agents/index.js';
 import { runHeadless, resolvePosture, type RunHeadlessResult } from '../headless.js';
 import type { WrapperResult } from '../structured-output.js';
 import { loadAppGrants } from './app-grants.js';
+import { createAppletStoreTool } from './store-tools.js';
 import { runWorkspace } from '../paths.js';
 import type { AgentDispatch, AppAction } from './manifest.js';
 import { grantedToolNames, renderArgsBlock, type ResolvedInvocation } from './invocation.js';
@@ -37,6 +38,7 @@ export function buildActionTools(
   ctx: AgentContext,
   action: AppAction,
   specialistTargetTools: string[] | undefined,
+  appId?: string,
 ): Record<string, Tool> {
   const base = createTools(
     ctx.toolOptions,
@@ -51,9 +53,17 @@ export function buildActionTools(
     ctx.provenance,
     { surface: 'worker' },
   );
+  // The applet's own store (#422), folded in BEFORE the filter so a manifest
+  // still has to name it in `toolAllowlist` and a specialist still has to
+  // target it. Scoped to this app at construction, never to an argument: a
+  // store addressed by a call parameter would be ambient authority over every
+  // applet's data.
+  const withStore = appId
+    ? { ...base, applet_store: createAppletStoreTool(appId) as unknown as Tool }
+    : base;
   return buildChildTools(
     { targetTools: grantedToolNames(action, specialistTargetTools) },
-    base,
+    withStore,
     ctx.mcp.resolveAlias,
   );
 }
@@ -124,7 +134,12 @@ export async function dispatchAction(opts: DispatchActionOpts): Promise<Dispatch
     debugLabel: 'script',
     buildInput: (env) => {
       const specialist = env.ctx.stores.specialists.get(agent.specialistId);
-      const childTools = buildActionTools(env.ctx, action, specialist?.targetTools);
+      const childTools = buildActionTools(
+        env.ctx,
+        action,
+        specialist?.targetTools,
+        invocation.appId,
+      );
       return {
         specialistId: agent.specialistId,
         // The instruction channel: author-written, never caller bytes.
