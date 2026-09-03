@@ -68,7 +68,12 @@ function opts(over: Partial<RunHeadlessOpts<any, string>> = {}): RunHeadlessOpts
   return {
     definition: () => fakeDefinition,
     buildInput: () => ({}),
-    posture: resolvePosture({ toolMode: 'write', confirmMode: 'auto', writeScope: null }),
+    posture: resolvePosture({
+      toolMode: 'write',
+      confirmMode: 'auto',
+      writeScope: null,
+      toolPermissions: null,
+    }),
     timeoutMs: null,
     log: () => {},
     debugLabel: 'test',
@@ -93,14 +98,28 @@ beforeEach(() => {
 describe('resolvePosture', () => {
   it('maps confirmMode onto the canonical threshold', () => {
     expect(
-      resolvePosture({ toolMode: 'write', confirmMode: 'auto', writeScope: null }).confirmThreshold,
+      resolvePosture({
+        toolMode: 'write',
+        confirmMode: 'auto',
+        writeScope: null,
+        toolPermissions: null,
+      }).confirmThreshold,
     ).toBe('high');
     expect(
-      resolvePosture({ toolMode: 'write', confirmMode: 'strict', writeScope: null })
-        .confirmThreshold,
+      resolvePosture({
+        toolMode: 'write',
+        confirmMode: 'strict',
+        writeScope: null,
+        toolPermissions: null,
+      }).confirmThreshold,
     ).toBe('medium');
     expect(
-      resolvePosture({ toolMode: 'write', confirmMode: 'off', writeScope: null }).confirmThreshold,
+      resolvePosture({
+        toolMode: 'write',
+        confirmMode: 'off',
+        writeScope: null,
+        toolPermissions: null,
+      }).confirmThreshold,
     ).toBe('never');
   });
 
@@ -116,7 +135,12 @@ describe('resolvePosture', () => {
   });
 
   it('keeps the two axes orthogonal — confirmMode:off does not unblock read-only', () => {
-    const p = resolvePosture({ toolMode: 'read-only', confirmMode: 'off', writeScope: null });
+    const p = resolvePosture({
+      toolMode: 'read-only',
+      confirmMode: 'off',
+      writeScope: null,
+      toolPermissions: null,
+    });
     expect(p.toolMode).toBe('read-only');
     expect(p.confirmThreshold).toBe('never');
   });
@@ -129,13 +153,19 @@ describe('resolvePosture', () => {
   it('dissolves the write scope under skipPermissions, like the other axes', () => {
     const scope = { workspace: '/tmp/ws' };
     expect(
-      resolvePosture({ toolMode: 'write', confirmMode: 'auto', writeScope: scope }).writeScope,
+      resolvePosture({
+        toolMode: 'write',
+        confirmMode: 'auto',
+        writeScope: scope,
+        toolPermissions: null,
+      }).writeScope,
     ).toBe(scope);
     expect(
       resolvePosture({
         toolMode: 'write',
         confirmMode: 'auto',
         writeScope: scope,
+        toolPermissions: null,
         skipPermissions: true,
       }).writeScope,
     ).toBeNull();
@@ -146,6 +176,7 @@ describe('resolvePosture', () => {
       toolMode: 'write',
       confirmMode: 'auto',
       writeScope: null,
+      toolPermissions: null,
     });
     await expect(confirmAction({ risk: 'high' } as any)).resolves.toBe(false);
     await expect(confirmAction({ risk: 'low' } as any)).resolves.toBe(true);
@@ -223,10 +254,50 @@ describe('runHeadless', () => {
     expect(toolOptions).not.toHaveProperty('sessionToolAllowlist');
   });
 
+  // `getToolPermissions` stops being absent only when the caller resolved
+  // rules — cron passes `null` and keeps the shape above. A LIVE reader, not
+  // a captured array, so editing a grant changes the next invocation with no
+  // restart: #420's revocation requirement falls out of the shape.
+  it('supplies a live getToolPermissions reader when rules were resolved', async () => {
+    const rules = [{ effect: 'deny' as const, tool: 'web_read', _v: 2 as const }];
+    await runHeadless(
+      opts({
+        posture: resolvePosture({
+          toolMode: 'read-only',
+          confirmMode: 'auto',
+          writeScope: null,
+          toolPermissions: rules,
+        }),
+      }),
+    );
+    const { toolOptions } = mockAssembleContext.mock.calls[0][0];
+    expect(toolOptions.getToolPermissions()).toEqual(rules);
+  });
+
+  // `skipPermissions` dissolves every gate. Leaving the rules in place would
+  // make a run the caller marked unrestricted still refuse a denied tool —
+  // the same steer-toward-the-ungated-tool asymmetry the write scope had.
+  it('skipPermissions dissolves the rules with the other axes', () => {
+    const p = resolvePosture({
+      toolMode: 'read-only',
+      confirmMode: 'strict',
+      writeScope: { workspace: '/w' },
+      toolPermissions: [{ effect: 'deny', tool: 'web_read', _v: 2 }],
+      skipPermissions: true,
+    });
+    expect(p.toolPermissions).toBeNull();
+    expect(p.writeScope).toBeNull();
+  });
+
   it('wires the posture into ctx.policyDecision so both gates see it', async () => {
     await runHeadless(
       opts({
-        posture: resolvePosture({ toolMode: 'read-only', confirmMode: 'strict', writeScope: null }),
+        posture: resolvePosture({
+          toolMode: 'read-only',
+          confirmMode: 'strict',
+          writeScope: null,
+          toolPermissions: null,
+        }),
       }),
     );
     const ctx = mockRunDefinition.mock.calls[0][0];

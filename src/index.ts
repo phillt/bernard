@@ -1081,6 +1081,21 @@ program
   });
 
 program
+  .command('app-grant <appId> [tools...]')
+  .description('Show or set the permission rules an applet runs under')
+  .option('--deny', 'Write the named tools as deny rules instead of allow')
+  .option('--clear', 'Remove every rule for this app')
+  .action(async (appId: string, tools: string[], options: { deny?: boolean; clear?: boolean }) => {
+    try {
+      const { appGrant } = await import('./apps/grant-cli.js');
+      await appGrant(appId, tools ?? [], options);
+    } catch (err: unknown) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
+
+program
   .command('cron-delete <ids...>')
   .description('Delete specific cron jobs by ID')
   .action(async (ids: string[]) => {

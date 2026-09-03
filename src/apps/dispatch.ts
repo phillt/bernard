@@ -5,6 +5,7 @@ import { buildChildTools, type ToolWrapperInput } from '../framework/agents/inde
 import { definitions } from '../framework/agents/index.js';
 import { runHeadless, resolvePosture, type RunHeadlessResult } from '../headless.js';
 import type { WrapperResult } from '../structured-output.js';
+import { loadAppGrants } from './app-grants.js';
 import { runWorkspace } from '../paths.js';
 import type { AppAction } from './manifest.js';
 import { renderArgsBlock, type ResolvedInvocation } from './invocation.js';
@@ -95,6 +96,12 @@ export async function dispatchAction(opts: DispatchActionOpts): Promise<Dispatch
       // action whose specialist targets `file_write` could write anywhere.
       // Per-app grants beyond the workspace belong to #420's grant record.
       writeScope: { workspace: runWorkspace('apps', invocation.appId) },
+      // Persisted per-app grants (#420), read fresh on every dispatch so a
+      // revocation applies to the next invocation with no restart. **The
+      // app's own rules, never `config.toolPermissions`** — an app inheriting
+      // the user's "always allow" grants is the confused-deputy widening the
+      // capability design exists to prevent. See `src/apps/app-grants.ts`.
+      toolPermissions: loadAppGrants(invocation.appId),
       // `skipPermissions` is deliberately not passed, and deliberately not
       // reachable: `AppActionSchema` is `.strict()`, so a manifest declaring
       // the key is REJECTED at parse time rather than ignored. An app cannot

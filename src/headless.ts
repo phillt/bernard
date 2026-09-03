@@ -14,6 +14,8 @@ import type { ConfirmThreshold } from './risk.js';
 import { shouldConfirm } from './risk.js';
 import { thresholdForMode } from './policy/tool-mode.js';
 import type { WriteScope } from './permissions/write-scope.js';
+import type { PermissionRule } from './tool-permissions.js';
+import { initShellParser } from './permissions/shell-ast.js';
 
 /**
  * Resolved permission posture for one headless run.
@@ -31,6 +33,11 @@ export interface HeadlessPosture {
   confirmThreshold: ConfirmThreshold;
   /** Resolved write scope — drives the write-scope gate. `null` = unrestricted. */
   writeScope: WriteScope | null;
+  /**
+   * Resolved permission rules — drive the deny gate (#420). `null` = none
+   * apply, which is what every headless run did before apps existed.
+   */
+  toolPermissions: PermissionRule[] | null;
   /**
    * Headless confirm action callback: auto-approves or auto-denies based on
    * `confirmThreshold` without ever prompting the user.
@@ -71,6 +78,20 @@ export interface HeadlessPostureInput {
    * decision; omitting a field is an accident.
    */
   writeScope: WriteScope | null;
+  /**
+   * Persisted permission rules this dispatch runs under (#420), or `null`.
+   *
+   * **Required, for the same reason as `writeScope`.** The rules an app runs
+   * under are the app's own, granted by the user through `bernard app-grant`
+   * — never `config.toolPermissions`, which holds the *user's* grants. An app
+   * inheriting "always allow `shell rm *`" because a caller omitted a field is
+   * precisely the confused-deputy widening #420 exists to prevent, so the
+   * field cannot be omitted.
+   *
+   * Cron passes `null`: its jobs have never honoured profile grants, and that
+   * stays true by being stated rather than by being the default.
+   */
+  toolPermissions: PermissionRule[] | null;
   skipPermissions?: boolean;
 }
 
@@ -103,6 +124,13 @@ export function resolvePosture(input: HeadlessPostureInput): HeadlessPosture {
   // The net effect would be pushing the model toward the less safe tool.
   const writeScope: WriteScope | null = input.skipPermissions ? null : input.writeScope;
 
+  // Dissolved by `skipPermissions` like every other gate — a run marked
+  // unrestricted that still refused a denied tool would be the same
+  // steer-toward-the-ungated-tool asymmetry the write scope had.
+  const toolPermissions: PermissionRule[] | null = input.skipPermissions
+    ? null
+    : input.toolPermissions;
+
   const confirmThreshold: ConfirmThreshold = thresholdForMode(confirmMode);
 
   // Headless decision: approve unless the risk crosses the resolved threshold.
@@ -111,7 +139,7 @@ export function resolvePosture(input: HeadlessPostureInput): HeadlessPosture {
   const confirmAction = async (i: ConfirmActionInput): Promise<boolean> =>
     !shouldConfirm(i.risk, confirmThreshold);
 
-  return { toolMode, confirmMode, confirmThreshold, confirmAction, writeScope };
+  return { toolMode, confirmMode, confirmThreshold, confirmAction, writeScope, toolPermissions };
 }
 
 /**
@@ -255,12 +283,23 @@ export async function runHeadless<TInput, TFormatted>(
   registerBuiltinDefinitions();
   const config = loadConfig();
 
-  // Deliberately NOT warming the bash parser (#261) the way the REPL does.
-  // The parser is reached only through `resolveGrant`, and `augmentTools`
-  // returns 'ask' before ever calling it when `getToolPermissions()` yields no
-  // rules — which a headless run guarantees by omitting the callback entirely
-  // (see `toolOptions` below). So the load was ~14 ms and ~1.6 MB of WASM,
-  // retained for the process lifetime, on a path that cannot consult it.
+  // The bash parser (#261) is warmed only when this run actually carries
+  // permission rules. It is reached solely through `resolveGrant`, and
+  // `augmentTools` returns 'ask' before calling it when `getToolPermissions()`
+  // yields none — so for a run with no rules the load is ~14 ms and ~1.6 MB of
+  // WASM, retained for the process lifetime, on a path that cannot consult it.
+  //
+  // With rules it is not optional. Uninitialised, `parseShellCommand` falls
+  // back to a regex that reports a compound command as `parse-error`, and
+  // `resolveGrant` then matches only a no-specifier `shell` rule — so a
+  // `deny shell:rm` would miss `ls && rm -rf /`. The degradation is safe for
+  // `allow` and fail-OPEN for `deny`, which is the direction that matters here.
+  // Awaited rather than fired off: a rule must not be evaluated against the
+  // regex fallback because the WASM had not finished loading yet.
+  if (posture.toolPermissions?.length) {
+    await initShellParser();
+  }
+
   const runId = opts.runId ?? crypto.randomUUID();
 
   // Created here rather than by each caller: a workspace that may not exist is
@@ -352,8 +391,17 @@ export async function runHeadless<TInput, TFormatted>(
         // blockAction is provided) is the correct behavior. When the policy
         // decision below sets mode:'read-only', write tool calls are auto-denied.
         // askUser intentionally omitted — no interactive user; the ask_user tool returns {unavailable}.
-        // getToolPermissions and sessionToolAllowlist intentionally omitted —
-        // a headless run never honours profile grants or per-session unlocks.
+        // sessionToolAllowlist intentionally omitted — there is no session to
+        // unlock a tool for.
+        //
+        // `getToolPermissions` is supplied only when the caller resolved rules
+        // (#420). A live reader rather than a captured array, matching the
+        // REPL, so an edit to a grant applies to the next dispatch with no
+        // restart. `null` — cron — omits it, and `augmentTools` then reads no
+        // rules at all, exactly as before apps existed.
+        ...(posture.toolPermissions
+          ? { getToolPermissions: () => posture.toolPermissions ?? [] }
+          : {}),
       },
       mcp: mcpSnapshot,
       rag: ragStore,

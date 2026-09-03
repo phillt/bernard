@@ -53,6 +53,10 @@ export function resolveCronJobPosture(job: CronJob): CronJobPermissionPosture {
     toolMode: job.toolMode ?? 'write',
     confirmMode: job.confirmMode ?? 'auto',
     skipPermissions: job.skipPermissions,
+    // Cron has never honoured persisted profile grants, and `null` says so
+    // rather than leaving it to a default. The user's own grants must not
+    // apply to an unattended run they are not watching.
+    toolPermissions: null,
     // Path-scoped writes (#340). Every job gets its own workspace with no
     // configuration; `writePaths` adds locations the user named via
     // `bernard cron-grant`. This is what lets cron have the write-capable

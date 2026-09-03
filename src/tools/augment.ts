@@ -439,7 +439,7 @@ export function augmentTools(
   const resolveProfileGrant = (
     toolName: string,
     args: unknown,
-    gate: 'block' | 'confirm',
+    gate: 'deny' | 'block' | 'confirm',
     isDangerousShell: boolean,
   ): 'allow' | 'deny' | 'ask' => {
     const rules = opts.getToolPermissions?.() ?? [];
@@ -505,6 +505,51 @@ export function augmentTools(
     });
     return refusal;
   };
+
+  /**
+   * Deny gate (#420). Returns `null` to proceed, or a refusal string.
+   *
+   * **Unconditional, and that is the whole point.** A persisted `deny` rule
+   * was previously enforced only from inside the block and confirm gates, and
+   * both of those return early before ever consulting the rules: the block
+   * gate short-circuits unless `toolMode === 'read-only'` **and** the tool is
+   * classified as a write, and the confirm gate short-circuits unless the risk
+   * crosses the threshold. So under an applet's own posture — `read-only` with
+   * threshold `high` — a `deny` on a **low-risk read tool** (`web_search`,
+   * `web_read`, `file_read_lines`, `memory{action:'read'}`) was inert: the
+   * user's rule existed, matched, and never ran.
+   *
+   * Only `deny` is acted on here. `allow` keeps meaning what it already means
+   * — skip the prompt in the gate that would have raised one — and is left to
+   * those gates, so this adds a refusal without widening anything.
+   *
+   * Shaped like {@link runWriteScopeGate} (refusal string, not a boolean)
+   * because the two answer the same kind of question and share a call site.
+   */
+  const runDenyGate = (toolName: string, args: unknown, toolDef: any): string | null => {
+    const grant = resolveProfileGrant(toolName, args, 'deny', isDangerousShellCall(toolName, args));
+    if (grant !== 'deny') return null;
+    const key = permissionKeyFor(toolName, args, readToolMeta(toolDef));
+    return (
+      `\`${key ?? toolName}\` is denied for this dispatch by a permission rule. ` +
+      'Do not retry it; use a different tool or report that the capability is not granted.'
+    );
+  };
+
+  /**
+   * The refusals that apply no matter what posture a dispatch runs under.
+   *
+   * One function rather than a third near-identical stanza at each of the two
+   * `execute` wrappers below: both call sites already forward a refusal string
+   * verbatim, and a gate that only *some* of them run is the shape that let
+   * the write-scope gate ship unwired to `runDefinition` in #340.
+   *
+   * The deny rule runs first — "you may not use this tool" is a broader
+   * statement than "not at that path", and its refusal is the more actionable
+   * one to hand back.
+   */
+  const runUnconditionalGates = (toolName: string, args: unknown, toolDef: any): string | null =>
+    runDenyGate(toolName, args, toolDef) ?? runWriteScopeGate(toolName, args);
 
   /**
    * Block gate (#179). Returns `true` to fall through to {@link runGate},
@@ -619,7 +664,7 @@ export function augmentTools(
         {
           ...toolDef,
           execute: async (args: unknown, execOptions: unknown) => {
-            const outOfScope = runWriteScopeGate(toolName, args);
+            const outOfScope = runUnconditionalGates(toolName, args, toolDef);
             if (outOfScope) {
               const refused: ToolResult<unknown> = {
                 status: 'error',
@@ -765,8 +810,8 @@ export function augmentTools(
       {
         ...toolDef,
         execute: async (args: unknown, execOptions: unknown) => {
-          const outOfScope = runWriteScopeGate(toolName, args);
-          if (outOfScope) return `Error: ${outOfScope}`;
+          const refused = runUnconditionalGates(toolName, args, toolDef);
+          if (refused) return `Error: ${refused}`;
           if (!(await runBlockGate(toolName, args, toolDef, execOptions))) {
             return DENIED_LEGACY_RESULT;
           }
