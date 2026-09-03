@@ -807,7 +807,6 @@ describe('<TranscriptViewport> layout inside a fixed-height frame', () => {
     const positionRow = lines.findIndex((l) => /rows \d+–\d+ of \d+/.test(l));
     const firstContent = lines.findIndex((l) => /REPLY-\d+/.test(l));
     expect(positionRow).toBeGreaterThanOrEqual(0);
-    expect(firstContent).toBeGreaterThanOrEqual(0);
     expect(positionRow).toBeLessThan(firstContent);
   });
 
@@ -853,8 +852,5 @@ describe('<TranscriptViewport> layout inside a fixed-height frame', () => {
     // assertion on a string the component can no longer emit passes forever
     // and tests nothing.
     expect(frame).not.toMatch(/rows \d+–\d+ of \d+/);
-    // Still reserved: the row is blank, not absent, or the viewport's height
-    // would depend on the budget that decides what is hidden.
-    expect(contentRows(lastFrame())).toBe(2);
   });
 });

@@ -18,11 +18,13 @@ import { plural } from '../text.js';
  * columns. "3 more lines" for one line is the kind of wrong that makes a
  * correct affordance read as a bug report.
  *
- * A string, not a component, because the transcript's position row
- * composes it into a longer sentence (`▲ 45 more rows above · 46–60 of 60`)
- * rather than rendering it alone. Three affordances, one spelling: the noun
- * change above had to be made in two files before this existed, and each is
- * pinned by its own regex in a different test file.
+ * A string, not a component, because this module is deliberately React- and
+ * Ink-free so its geometry can be unit-tested without rendering (see the header
+ * above). It had a second reason until #470 — the transcript's position row
+ * composed it into a longer sentence — but that row now renders `formatPosition`
+ * alone, so `BoundedLine`'s `MoreRows` is the only caller left and the two
+ * affordances it draws (▲ and ▼) are the only things this spelling still
+ * guards. Pinned by `Prompt.test.tsx`.
  */
 export function moreRowsLabel(n: number, glyph: string): string {
   return `${glyph} ${n} more ${plural(n, 'row', 'rows')}`;

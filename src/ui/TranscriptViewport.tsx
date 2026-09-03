@@ -42,7 +42,7 @@ const MemoMessageBlock = memo(MessageBlock);
  *
  * Scrolling is implemented with the standard Ink technique: render the full
  * content in an inner column shifted up by `marginTop={-offset}` inside an
- * `overflow="hidden"` viewport box. This reuses the existing `<MessageBlock>` /
+ * `overflowY="hidden"` viewport box. This reuses the existing `<MessageBlock>` /
  * `<StreamingAssistantMessage>` components verbatim (no second rendering path to
  * drift from), and `measureElement` gives the real content + viewport heights so
  * the offset is clamped exactly and "stick to bottom" tracks streaming growth.
@@ -129,20 +129,13 @@ export function TranscriptViewport({
     }
   });
 
-  // Rows hidden below the window. Also the old `scrolledUp`: when `stick`,
-  // `effectiveOffset === maxOffset`, so it is 0 and the "new output" marker is
-  // gated exactly as it was. No `Math.max` guard — `effectiveOffset` is
-  // `<= maxOffset` by construction (see above). The rows hidden ABOVE are no
-  // longer computed here: they are `effectiveOffset`, which is exactly
-  // `listPosition`'s `first - 1`, so the position row already carries them.
-  const below = maxOffset - effectiveOffset;
-  // ONE fact, in the spelling every other windowed surface uses (`ViewerShell`,
-  // `MenuOverlay`, `ModelGridOverlay`, `PlanPanel`, `HelpOverlay`). This used to
-  // read `▲ 923 more rows above · rows 924–958 of 958`, which is the same number
-  // three times: `listPosition` returns `first = offset + 1`, so the count above
-  // is always `first - 1`, and at rest (`stick`) `last === total`. Forty-three
-  // characters carrying `(first, size, total)` — and under `wrap="truncate"` a
-  // narrow terminal loses the right half, i.e. the half that is not redundant.
+  // Not stuck at the bottom. When `stick`, `effectiveOffset === maxOffset`, so
+  // the "new output" marker is gated exactly as it was when this was a row
+  // count — nothing counts rows here any more, so it is named for what it is.
+  const scrolledUp = effectiveOffset < maxOffset;
+  // ONE fact, in the spelling every other windowed surface uses. It used to
+  // prepend `▲ N more rows above`, which is `first - 1` — the same number again
+  // (#470). Why that mattered: CLAUDE.md → TranscriptViewport.
   const position = formatPosition(listPosition(effectiveOffset, viewportH, contentH), 'rows');
   return (
     <Box flexDirection="column" flexGrow={1}>
@@ -168,9 +161,9 @@ export function TranscriptViewport({
           See CLAUDE.md (#435, #470). */}
       <Box justifyContent="space-between">
         <Text color={colors.muted} wrap="truncate">
-          {position || ' '}
+          {position ?? ' '}
         </Text>
-        {busy && below > 0 && <Text color={colors.accent}>↓ new output</Text>}
+        {busy && scrolledUp && <Text color={colors.accent}>↓ new output</Text>}
       </Box>
       {/* `flexBasis={0}` is load-bearing and NOT removable, however redundant it
           looks beside `flexGrow`. Ink 5 never maps `overflow` onto Yoga — it is
@@ -187,24 +180,14 @@ export function TranscriptViewport({
           Measurements and the full history: CLAUDE.md → TranscriptViewport
           (#435). Pinned by `Thread.test.tsx`.
 
-          `overflowY`, NOT `overflow` — the difference is a user-visible bug
-          (#464). `overflow: 'hidden'` sets BOTH clip axes, and Ink's horizontal
-          clip runs every line through `sliceAnsi(line, from, stringWidth(line))`
-          (`ink/build/output.js`). `slice-ansi@7` cannot parse OSC 8: its
-          `parseAnsiCode` reads at most 19 bytes looking for a terminating `m`,
-          so for a hyperlink it swallows `\x1b]8;;https://phone` as "an ANSI
-          code" and then counts the rest of the URL — and the BEL — as VISIBLE
-          characters. Its count reaches the true width after ~13 real
-          characters and it stops, which is how a Zoom link rendered as
-          `https://phone`. Different URLs cut at different points, so it recurs
-          unpredictably.
-
-          This box only ever wanted to clip the scroll window VERTICALLY.
-          Dropping the horizontal clip fixes the whole class rather than the one
-          escape, and keeps hyperlinks clickable instead of removing them as
-          collateral. Nothing bleeds: Ink's own `<Text>` wrapping already bounds
-          every line to the box width, so the horizontal clip was redundant work
-          that could only cause harm. */}
+          `overflowY`, NOT `overflow` (#464). `overflow: 'hidden'` sets BOTH
+          clip axes, and Ink's horizontal clip mis-slices OSC 8 hyperlinks — a
+          Zoom URL rendered as `https://phone`. This box only ever wanted to clip
+          VERTICALLY, and Ink's own `<Text>` wrapping already bounds every line
+          to the box width, so the horizontal clip was redundant work that could
+          only cause harm. Mechanism, measurements and the false lead that hid
+          it: CLAUDE.md → TranscriptViewport (#464). Pinned by
+          `TranscriptViewport.hyperlink.test.tsx`. */}
       <Box ref={outerRef} flexDirection="column" flexGrow={1} flexBasis={0} overflowY="hidden">
         <Box ref={innerRef} flexDirection="column" marginTop={-effectiveOffset} flexShrink={0}>
           {header}

@@ -162,7 +162,7 @@ const FRAME_CHROME_ROWS = 1 /* hint + status row */ + 2; /* busy spinner */
  * Rows the transcript REGION keeps, below which it is not worth calling one.
  *
  * **Region, not content.** `TranscriptViewport` spends one of these on its own
- * unconditionally-reserved scroll-position row (`▲ 45 more rows above · …`), so
+ * unconditionally-reserved scroll-position row (`rows 46–60 of 60`), so
  * the content floor is one lower — three here buys two rows of actual
  * transcript. Charging the extra row to this budget was tried and rejected: it
  * pushes the plan panel to a single step at 24 rows, and `MIN_PANEL_ROWS`

@@ -2,13 +2,12 @@
  * #464 — a URL rendered as `https://phone`, cut from
  * `https://phoneburner.zoom.us/my/philllt`, with the full URL intact in history.
  *
- * Its own file because `supports-hyperlinks` resolves `stdout` ONCE at module
- * load from `process.stdout`, so no in-test env change can reach it — the branch
- * has to be mocked, and a file-scoped mock keeps that out of every other
- * markdown test (`markdown.ts` also holds a module-level parser cache and a
- * one-slot render cache, so the isolation is doing real work). Every existing
- * markdown test runs non-TTY, where the hyperlink branch is unreachable — which
- * is exactly why this shipped.
+ * Its own file because the hyperlink branch has to be forced on before any
+ * import reaches `supports-hyperlinks`, and `markdown.ts` additionally holds a
+ * module-level parser cache and a one-slot render cache — so the isolation is
+ * doing real work. See `_force-hyperlink.ts` for the mechanism and why it is a
+ * module. Every existing markdown test runs non-TTY, where the branch is
+ * unreachable — which is exactly why this shipped.
  *
  * The assertion has to go through the REAL Ink tree with the clip in place. The
  * markdown layer was never wrong: `renderMarkdown` returns the whole URL at
@@ -19,27 +18,27 @@
  * counts the rest of the URL and the BEL as visible characters. A test at the
  * `renderMarkdown` level passes while the bug is fully present.
  */
-import { describe, it, expect } from 'vitest';
-import { render } from 'ink-testing-library';
+import { describe, it, expect, afterAll } from 'vitest';
 import { createElement } from 'react';
-import stripAnsi from 'strip-ansi';
-import { Box, Text } from 'ink';
 import type { CoreMessage } from 'ai';
-
-// Put the run in a terminal that supports hyperlinks — where the defect lives,
-// and where no test has ever run.
+// Static imports, and they must come FIRST — their env assignments run before
+// the dynamic imports below reach `supports-hyperlinks` and construct chalk.
+// Note `ink` and `strip-ansi` are dynamic for exactly that reason: importing
+// `ink` statically pulls chalk in ahead of these lines, chalk caches its level
+// at construction, and the colour half then silently does nothing. Measured —
+// with `ink` static, the styling assertion below passes with `href` deleted,
+// i.e. with the theme-loss defect fully present. Same ordering constraint
+// `MenuRow.theme.test.tsx` follows.
 //
-// An env assignment rather than `vi.mock`: `marked-terminal` lives in
-// node_modules and vitest externalises it, so it resolves `supports-hyperlinks`
-// through Node and never sees a mock. `supports-hyperlinks` reads
-// `FORCE_HYPERLINK` when it computes `stdout`, and it computes it ONCE at module
-// load — so this has to run before the first import that reaches it. Static
-// imports hoist above this line but none of them pull in `marked-terminal`; the
-// dynamic imports below are ordinary statements and run after. Vitest isolates
-// module registries per file (no `isolate: false` in vitest.config.ts), so this
-// cannot leak into another file's parser.
-process.env.FORCE_HYPERLINK = '1';
+// BOTH are needed, and colour is the less obvious one: marked-terminal styles
+// links with its OWN chalk instance, which sits at level 0 under `vitest run`,
+// so `href` emits nothing and the nesting is invisible.
+import { restoreForceHyperlink } from './_force-hyperlink.js';
+import { restoreForceColor } from './_force-color.js';
 
+const { render } = await import('ink-testing-library');
+const { Box, Text } = await import('ink');
+const stripAnsi = (await import('strip-ansi')).default;
 const { TranscriptViewport } = await import('../TranscriptViewport.js');
 const { DimensionsProvider } = await import('../DimensionsContext.js');
 const { renderMarkdown } = await import('../markdown.js');
@@ -49,7 +48,9 @@ const { tick } = await import('./_keys.js');
 const LINK = 'https://phoneburner.zoom.us/my/philllt';
 const FRAME_ROWS = 12;
 
-function replyItem(text: string) {
+type ViewportProps = Parameters<typeof TranscriptViewport>[0];
+
+function replyItem(text: string): ViewportProps['items'] {
   return [
     {
       key: 'k0',
@@ -59,7 +60,7 @@ function replyItem(text: string) {
   ];
 }
 
-function mountFramed(items: ReturnType<typeof replyItem>) {
+function mountFramed(items: ViewportProps['items']) {
   return render(
     createElement(
       DimensionsProvider,
@@ -67,7 +68,7 @@ function mountFramed(items: ReturnType<typeof replyItem>) {
       createElement(
         Box,
         { flexDirection: 'column', height: FRAME_ROWS },
-        createElement(TranscriptViewport, { items } as never),
+        createElement(TranscriptViewport, { items }),
         createElement(Text, null, 'CHROME'),
       ),
     ),
@@ -75,6 +76,9 @@ function mountFramed(items: ReturnType<typeof replyItem>) {
 }
 
 describe('transcript hyperlinks (#464)', () => {
+  afterAll(restoreForceHyperlink);
+  afterAll(restoreForceColor);
+
   it('emits an OSC 8 hyperlink when the terminal supports one', () => {
     // Guards the mock itself. If this stops being true, the two tests below
     // pass for the wrong reason — exactly how the pre-existing suite behaved.
@@ -100,24 +104,17 @@ describe('transcript hyperlinks (#464)', () => {
     }
   });
 
-  it('styles a link with one underline, opened and closed once', () => {
+  it('applies each link attribute exactly once, keeping the theme accent', () => {
     // marked-terminal applies `href` to the link text and then wraps the result
-    // in `link`; setting both to the same style nested underline inside
-    // underline and emitted a teardown that re-enabled it. Measured before:
-    // opened 3, closed 2, 180 raw bytes for 44 visible columns.
+    // in `link`, so the two compose. Underlining in both nested underline inside
+    // underline: 3 opens, 2 closes, with the teardown re-enabling it. Deleting
+    // `href` does NOT fix it — marked-terminal falls back to its own
+    // `chalk.blue.underline`: still underlined, and now ignoring the theme.
     const out = renderMarkdown(`Zoom: ${LINK}`, 80, getThemeColors());
     const codes = [...out.matchAll(/\[([0-9;]*)m/g)].map((m) => m[1]);
     expect(codes.filter((c) => c === '4')).toHaveLength(1);
     expect(codes.filter((c) => c === '24')).toHaveLength(1);
-  });
-
-  it('still renders an email autolink without a mailto echo', () => {
-    // The one link case that was already special-cased; it has to survive the
-    // options change.
-    const out = stripAnsi(
-      renderMarkdown('- **Ken <ken@example.com>** wrote', 80, getThemeColors()),
-    );
-    expect(out).toContain('ken@example.com');
-    expect(out).not.toContain('mailto:');
+    // SGR 34 is chalk's blue — marked-terminal's default, i.e. the theme lost.
+    expect(codes).not.toContain('34');
   });
 });

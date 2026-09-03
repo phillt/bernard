@@ -67,13 +67,22 @@ function buildTerminalOptions(
   return {
     heading: accent.bold,
     firstHeading: accent.bold.underline,
-    // `link` only. marked-terminal applies `this.o.href(...)` to the link text
-    // and then wraps the whole thing in `this.o.link(...)`, so setting both to
-    // the same style nests underline inside underline: measured, one link
-    // opened underline THREE times and closed it twice, with the teardown
-    // re-enabling it mid-close — 180 raw bytes for 44 visible columns. `href`
-    // is left at marked-terminal's default so the style is applied once.
+    // marked-terminal applies `href` to the link TEXT and then wraps the result
+    // in `link` (`Renderer.prototype.link`), so the two compose. Underlining in
+    // both nests underline inside underline; measured in a real terminal, one
+    // link opened underline three times and closed it twice, with the teardown
+    // re-enabling it mid-close.
+    //
+    // Deleting `href` is NOT the fix, though it looks like one: marked-terminal
+    // then falls back to its own `chalk.blue.underline`, which underlines just
+    // the same AND hard-codes blue, losing the theme — the exact TTY-and-theme
+    // blindness `normalizeColor` and the forced-level chalk above exist to
+    // avoid. Measured, `FORCE_COLOR=3`: before 3 opens / 2 closes with the
+    // accent kept; `href` deleted 3 / 2 with links blue; colour-only 1 / 1 with
+    // the accent kept. So `href` carries the colour and `link` carries the
+    // underline, and each attribute is applied exactly once.
     link: accent.underline,
+    href: accent,
     code,
     codespan: code,
     blockquote: muted.italic,
