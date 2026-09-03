@@ -143,3 +143,21 @@ describe('the bundled demo', () => {
     expect(validateAppletPage(html, ['search', 'web_answer'])).toEqual([]);
   });
 });
+
+describe('the client-script check is exact but not brittle', () => {
+  const withSrc = (src: string) =>
+    OK.replace('<script src="/__bernard/applet.js"></script>', `<script src="${src}"></script>`);
+
+  it('accepts a cache-busted load', () => {
+    // `server.ts` resolves its routes on `url.split('?')[0]`, so `?v=2` is a
+    // legitimate load. Requiring a quote immediately after `.js` refuses it.
+    expect(refusals(withSrc('/__bernard/applet.js?v=2'))).toEqual([]);
+  });
+
+  it('does not treat the dot as a wildcard', () => {
+    // An unescaped `.` in the path matched any character, so a page loading
+    // `appletXjs` — or nothing like the client at all — passed.
+    expect(refusals(withSrc('/__bernard/appletXjs'))).toHaveLength(1);
+    expect(refusals(withSrc('/__bernard/applet.js.evil'))).toHaveLength(1);
+  });
+});

@@ -94,7 +94,14 @@ export function validateAppletPage(html: string, actions: string[]): PageIssue[]
 
   // Only when there is something to invoke. A page with no actions is a static
   // page, and requiring a client it never calls would be ceremony.
-  if (actions.length > 0 && !new RegExp(`src=["']${escapeForRegExp(SDK_PATH)}["']`).test(html)) {
+  // The path is escaped — an unescaped `.` is a wildcard, so `appletXjs`
+  // matched. A trailing quote is NOT required: `server.ts` resolves its route
+  // on `url.split('?')[0]`, so `applet.js?v=2` is a legitimate cache-busted
+  // load, and demanding the quote refuses it.
+  if (
+    actions.length > 0 &&
+    !new RegExp(`src=["']${escapeForRegExp(SDK_PATH)}(?:[?#][^"']*)?["']`).test(html)
+  ) {
     refuse(
       `The page must load the applet client: <script src="${SDK_PATH}"></script> in <head>. ` +
         'Use a plain <script>, never type="module" — a module is deferred, so an inline script ' +
