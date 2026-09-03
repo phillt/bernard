@@ -8,7 +8,7 @@ import type { WrapperResult } from '../structured-output.js';
 import { loadAppGrants } from './app-grants.js';
 import { runWorkspace } from '../paths.js';
 import type { AppAction } from './manifest.js';
-import { renderArgsBlock, type ResolvedInvocation } from './invocation.js';
+import { grantedToolNames, renderArgsBlock, type ResolvedInvocation } from './invocation.js';
 
 /**
  * Builds the tool registry one action's agent runs against.
@@ -51,9 +51,11 @@ export function buildActionTools(
     ctx.provenance,
     { surface: 'worker' },
   );
-  const targets = specialistTargetTools ?? [];
-  const granted = action.toolAllowlist.filter((t) => targets.includes(t));
-  return buildChildTools({ targetTools: granted }, base, ctx.mcp.resolveAlias);
+  return buildChildTools(
+    { targetTools: grantedToolNames(action, specialistTargetTools) },
+    base,
+    ctx.mcp.resolveAlias,
+  );
 }
 
 export interface DispatchActionOpts {

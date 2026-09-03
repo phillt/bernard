@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderArgsBlock, resolveFromManifest } from './invocation.js';
+import { grantedToolNames, renderArgsBlock, resolveFromManifest } from './invocation.js';
 import { AppActionSchema } from './manifest.js';
 import type { AppRegistry } from './registry.js';
 
@@ -84,5 +84,25 @@ describe('resolveFromManifest', () => {
     );
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.failure.kind).toBe('unknown_action');
+  });
+});
+
+describe('grantedToolNames', () => {
+  const action = (allowlist: string[]) =>
+    ({ toolAllowlist: allowlist }) as unknown as Parameters<typeof grantedToolNames>[0];
+
+  // The intersection, which is the property `buildActionTools` rests on: an
+  // action can narrow what the specialist already targets, never widen it.
+  it('intersects the action allowlist with the specialist targets', () => {
+    expect(grantedToolNames(action(['web_search', 'shell']), ['web_search', 'web_read'])).toEqual([
+      'web_search',
+    ]);
+  });
+
+  // The log used to record the DECLARED allowlist, so a manifest naming a tool
+  // the specialist does not target overstated the grant in the audit trail.
+  it('grants nothing when the specialist targets nothing', () => {
+    expect(grantedToolNames(action(['web_search']), undefined)).toEqual([]);
+    expect(grantedToolNames(action(['web_search']), [])).toEqual([]);
   });
 });

@@ -4,6 +4,7 @@ import * as crypto from 'node:crypto';
 import { APPLET_HOST_PID_FILE, APPLET_HOST_LOG_FILE, APPS_DIR } from '../paths.js';
 import { AppRegistry } from '../apps/registry.js';
 import { CapabilityTable } from '../apps/capabilities.js';
+import { recordCapabilityMint } from '../apps/capability-log.js';
 import { HostRegistry } from './registry.js';
 import { startApplet, type RunningApplet } from './server.js';
 
@@ -47,7 +48,9 @@ function log(msg: string): void {
  * has never heard of.
  */
 const sessionId = crypto.randomUUID();
-const capabilities = new CapabilityTable();
+// Every mint is logged (#420 R9), so a handle presented later can be traced
+// back to when and for what it was issued. The host is the only minter.
+const capabilities = new CapabilityTable(recordCapabilityMint);
 const hosts = new HostRegistry();
 const running = new Map<string, RunningApplet>();
 

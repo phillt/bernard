@@ -14,7 +14,11 @@ const mockDispatchAction = vi.hoisted(() =>
   }),
 );
 
-const mockSpecialistExists = vi.hoisted(() => vi.fn().mockReturnValue(true));
+// Returns the RECORD, not a boolean: `invokeAction` reads `targetTools` to
+// log the post-intersection tool grant rather than the declared one.
+const mockSpecialistGet = vi.hoisted(() =>
+  vi.fn().mockReturnValue({ id: 'web-wrapper', targetTools: ['web_search', 'web_read'] }),
+);
 
 vi.mock('../apps/dispatch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../apps/dispatch.js')>();
@@ -22,7 +26,7 @@ vi.mock('../apps/dispatch.js', async (importOriginal) => {
 });
 
 vi.mock('../specialists.js', () => ({
-  SpecialistStore: vi.fn(() => ({ exists: mockSpecialistExists })),
+  SpecialistStore: vi.fn(() => ({ get: mockSpecialistGet })),
 }));
 
 vi.mock('../logger.js', () => ({ debugLog: vi.fn(), isDebugEnabled: () => false }));
@@ -81,7 +85,10 @@ describe('scriptRun', () => {
       timings: { mcpConnectMs: 12, totalMs: 34 },
       stepLimitHit: false,
     });
-    mockSpecialistExists.mockReturnValue(true);
+    mockSpecialistGet.mockReturnValue({
+      id: 'web-wrapper',
+      targetTools: ['web_search', 'web_read'],
+    });
   });
 
   afterEach(() => {
@@ -147,7 +154,7 @@ describe('scriptRun', () => {
   it('exits 2 when the action names a specialist that does not exist', async () => {
     const m = await load();
     writeApp(m.APPS_DIR);
-    mockSpecialistExists.mockReturnValue(false);
+    mockSpecialistGet.mockReturnValue(null);
     const code = await m.scriptRun({ app: 'demo', action: 'ask', argsJson: '{"q":"hi"}' });
     expect(code).toBe(2);
     expect(soleStdoutObject()).toMatchObject({ error: { code: 'unknown_specialist' } });

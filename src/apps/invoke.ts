@@ -1,6 +1,6 @@
 import * as crypto from 'node:crypto';
 import { AppRegistry } from './registry.js';
-import { resolveFromManifest } from './invocation.js';
+import { grantedToolNames, resolveFromManifest } from './invocation.js';
 import { dispatchAction } from './dispatch.js';
 import { SpecialistStore } from '../specialists.js';
 import { classifyError } from '../error-taxonomy.js';
@@ -200,21 +200,23 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
   if (!resolved.ok) return fail(resolved.failure.kind, resolved.failure.message);
 
   const { invocation } = resolved;
-  // The action DECLARED these; recorded so a log reader can see the scope.
-  const toolsGranted = invocation.action.toolAllowlist;
   const argKeys = Object.keys(invocation.frozenArgs);
 
   // Pre-flight: an action naming a specialist that does not exist is a broken
   // manifest, not a failed run — the caller should see a request-shaped
-  // failure, and no model call should be billed for it. `exists` rather than
-  // `get`, which reads and parses the record only for its truthiness;
-  // `runHeadless` reads it properly a moment later.
-  if (!new SpecialistStore().exists(invocation.action.specialistId)) {
+  // failure, and no model call should be billed for it.
+  const specialist = new SpecialistStore().get(invocation.action.specialistId);
+  if (!specialist) {
     return fail(
       'unknown_specialist',
       `Action "${opts.action}" names specialist "${invocation.action.specialistId}", which does not exist.`,
     );
   }
+
+  // What the action actually gets, not what it declared. Through the same
+  // function `buildActionTools` uses, because a log that overstates the grant
+  // is worse than no log — and this is the audit trail.
+  const toolsGranted = grantedToolNames(invocation.action, specialist.targetTools);
 
   const timeoutMs = effectiveTimeoutMs(invocation.action.timeoutMs, opts.timeoutMs);
 

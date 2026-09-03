@@ -13,11 +13,15 @@ const mockDispatchAction = vi.hoisted(() =>
     stepLimitHit: false,
   }),
 );
-const mockSpecialistExists = vi.hoisted(() => vi.fn().mockReturnValue(true));
+// Returns the RECORD now, not a boolean: the invocation log records the
+// post-intersection tool set, which needs the specialist's `targetTools`.
+const mockSpecialistGet = vi.hoisted(() =>
+  vi.fn().mockReturnValue({ id: 'web-wrapper', targetTools: ['web_search', 'web_read'] }),
+);
 
 vi.mock('./dispatch.js', () => ({ dispatchAction: mockDispatchAction }));
 vi.mock('../specialists.js', () => ({
-  SpecialistStore: vi.fn(() => ({ exists: mockSpecialistExists })),
+  SpecialistStore: vi.fn(() => ({ get: mockSpecialistGet })),
 }));
 vi.mock('../logger.js', () => ({ debugLog: vi.fn(), isDebugEnabled: () => false }));
 
@@ -55,7 +59,10 @@ describe('invokeAction', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSpecialistExists.mockReturnValue(true);
+    mockSpecialistGet.mockReturnValue({
+      id: 'web-wrapper',
+      targetTools: ['web_search', 'web_read'],
+    });
     mockDispatchAction.mockResolvedValue({
       ok: true,
       formatted: { status: 'ok', result: 'the answer' },
@@ -135,7 +142,7 @@ describe('invokeAction', () => {
   it('reports a missing specialist without billing a model call', async () => {
     const m = await load();
     writeApp();
-    mockSpecialistExists.mockReturnValue(false);
+    mockSpecialistGet.mockReturnValue(null);
     const res = await m.invokeAction({ appId: 'demo', action: 'ask', args: { q: 'hi' } });
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error.code).toBe('unknown_specialist');
