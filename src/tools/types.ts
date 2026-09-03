@@ -1,5 +1,6 @@
 import type { RiskLevel } from '../risk.js';
 import type { PermissionRule } from '../tool-permissions.js';
+import type { WriteScope } from '../permissions/write-scope.js';
 import type { BreadthOption } from '../permissions/breadth.js';
 
 /**
@@ -149,6 +150,21 @@ export interface ToolOptions {
    * immediately. Omitted by cron — headless runs never honor profile grants.
    */
   getToolPermissions?: () => PermissionRule[] | undefined;
+  /**
+   * This dispatch's write scope (#340). When present, a path-bearing write
+   * tool may only write inside the workspace or an explicit grant; when
+   * absent there is no restriction.
+   *
+   * Absent is the interactive default on purpose — scoping writes the user is
+   * watching themselves make would be obstruction, not safety. It is the
+   * *unattended* writers that need a `where`.
+   *
+   * A plain value, not a reader. `getToolPermissions` is a thunk because the
+   * REPL mutates `config.toolPermissions` mid-session; nothing mutates a
+   * scope mid-run, and a thunk would advertise a mutability nothing
+   * implements.
+   */
+  writeScope?: WriteScope;
 }
 
 /** Outcome of a shell tool invocation. */

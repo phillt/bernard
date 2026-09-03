@@ -56,7 +56,16 @@ import {
 import { toLiteralSpeech } from './speech-text.js';
 import { setTheme, DEFAULT_THEME } from './theme.js';
 import { CronStore } from './cron/store.js';
-import { cronList, cronRun, cronDelete, cronDeleteAll, cronStop, cronBounce } from './cron/cli.js';
+import {
+  cronList,
+  cronRun,
+  cronGrant,
+  cronDelete,
+  cronDeleteAll,
+  cronStop,
+  cronBounce,
+} from './cron/cli.js';
+import type { ScriptCliOptions } from './script/run.js';
 import { listMCPServers, removeMCPServer, MCPManager, setActiveMCPManager } from './mcp.js';
 import { ToolProfileStore } from './tool-profiles.js';
 import { runFirstTimeSetup } from './setup.js';
@@ -78,6 +87,8 @@ import { TurnContextStore } from './turn-context.js';
 import { assembleContext } from './framework/context.js';
 import { Agent } from './agent.js';
 import { bootstrapPendingCandidates } from './candidate-bootstrap.js';
+import { AppletCandidateStore } from './applet-candidates.js';
+import { appletSuggestionBlock } from './applet-detector.js';
 import { runCorrectionAgent } from './correction.js';
 import { debugLog, isDebugEnabled } from './logger.js';
 import { installInstrumentedFetchIfDebug } from './framework/instrumented-fetch.js';
@@ -456,6 +467,28 @@ async function runInkRepl(args: {
       `${pendingCandidates.length} specialist suggestion(s) pending. Use /candidates to review.`,
     );
     alertContext = alertContext ? alertContext + '\n\n' + contextBlock : contextBlock;
+  }
+
+  // Applet suggestions (#430). Deliberately a NOTICE plus a context block, never
+  // a build: an applet is a manifest, a page, a bound agent and an origin, and
+  // building one needs an agent turn the startup path does not have. So
+  // `autoCreateApplets` widens what the agent is TOLD — above the threshold it
+  // is instructed to offer to build the applet in this session, rather than
+  // silently authoring an app the user never asked for at a moment they are not
+  // watching. That is the same threshold `autoCreateSpecialists` uses and a
+  // deliberately weaker action, for a deliberately larger artifact.
+  {
+    const { pending: pendingApplets } = new AppletCandidateStore().pruneOld();
+    if (pendingApplets.length > 0) {
+      emitStartupNotice(
+        `${pendingApplets.length} applet suggestion(s) pending. Use /applets to review.`,
+      );
+      const eligible = config.autoCreateApplets
+        ? pendingApplets.filter((c) => c.confidence >= config.autoCreateThreshold)
+        : [];
+      const block = appletSuggestionBlock(pendingApplets, eligible);
+      alertContext = alertContext ? alertContext + '\n\n' + block : block;
+    }
   }
 
   const agentCtx = assembleContext({
@@ -991,6 +1024,31 @@ program
   });
 
 program
+  .command('applet-host <action>')
+  .description('Manage the applet host: status | start | stop | install | uninstall')
+  .action(async (action: string) => {
+    const { appletHostStatus, appletHostStart, appletHostStop } = await import('./host/cli.js');
+    try {
+      if (action === 'status') await appletHostStatus();
+      else if (action === 'start') await appletHostStart();
+      else if (action === 'stop') await appletHostStop();
+      else if (action === 'install') {
+        const { appletHostInstall } = await import('./host/service-cli.js');
+        appletHostInstall();
+      } else if (action === 'uninstall') {
+        const { appletHostUninstall } = await import('./host/service-cli.js');
+        appletHostUninstall();
+      } else {
+        printError(`Unknown action "${action}". Use status, start, stop, install or uninstall.`);
+        process.exitCode = 1;
+      }
+    } catch (err: unknown) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command('cron-list')
   .description('List all cron jobs with status')
   .action(async () => {
@@ -1012,6 +1070,125 @@ program
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('script')
+  .description('Run a named app action programmatically; prints one JSON object on stdout')
+  .option('--app <appId>', 'App id, as registered under the apps directory')
+  .option('--action <name>', 'Action name declared by that app')
+  .option('--args <json>', "JSON object of the action's declared arguments")
+  .option('--args-file <path>', "Read --args from a file; '-' reads stdin")
+  .option('--timeout <ms>', "Lower the action's wall clock (never raises it)", parseInt)
+  .option('--describe', 'Print the app and its action schemas, then exit without dispatching')
+  .action(async (options: ScriptCliOptions) => {
+    // Deliberately no --provider / --model: the active profile decides the
+    // model, and a caller choosing a vendor per invocation is the user's
+    // decision, not the app's.
+    //
+    // A thin shim like every neighbouring subcommand. `scriptMain` owns the
+    // branching, the flag rule and the catch-all, because it also owns the
+    // "exactly one JSON object on stdout" contract — which had drifted while
+    // this file hand-rolled two envelopes of its own.
+    const { scriptMain } = await import('./script/run.js');
+    process.exitCode = await scriptMain(options);
+  });
+
+program
+  .command('cron-grant <id> [paths...]')
+  .description('Show or set the folders a cron job may write to, beyond its own workspace')
+  .option('--clear', 'Remove all extra write paths, leaving only the job workspace')
+  .action(async (id: string, paths: string[], options: { clear?: boolean }) => {
+    try {
+      await cronGrant(id, paths ?? [], options);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      printError(message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('app [action] [appId] [actionName]')
+  .description('Manage applets: list | open | allow | delete | path')
+  .option('-b, --bundled', 'List only the applets Bernard ships')
+  .option('-a, --all', 'List every applet, grouped by origin')
+  .option('--no-open', 'Print the URL instead of opening a browser')
+  .option('--tools <names>', 'Comma-separated tool names for `allow` (empty clears)')
+  .option('--write', 'Let this action write, rather than read-only')
+  .option('--confirm <mode>', 'Confirmation mode for this action: off | auto | strict')
+  .action(
+    async (
+      action: string | undefined,
+      appId: string | undefined,
+      actionName: string | undefined,
+      options: {
+        tools?: string;
+        write?: boolean;
+        confirm?: string;
+        open?: boolean;
+        bundled?: boolean;
+        all?: boolean;
+      },
+    ) => {
+      try {
+        const cli = await import('./apps/app-cli.js');
+        switch (action ?? 'list') {
+          case 'list':
+            cli.appList({
+              ...(options.bundled ? { bundled: true } : {}),
+              ...(options.all ? { all: true } : {}),
+            });
+            return;
+          case 'path':
+            if (!appId) throw new Error('Usage: bernard app path <appId>');
+            cli.appPath(appId);
+            return;
+          case 'delete':
+            if (!appId) throw new Error('Usage: bernard app delete <appId>');
+            cli.appDelete(appId);
+            return;
+          case 'open':
+            if (!appId) throw new Error('Usage: bernard app open <appId> [--no-open]');
+            await cli.appOpen(appId, { open: options.open !== false });
+            return;
+          case 'allow': {
+            if (!appId || !actionName) {
+              throw new Error('Usage: bernard app allow <appId> <action> --tools a,b');
+            }
+            const tools = (options.tools ?? '')
+              .split(',')
+              .map((t) => t.trim())
+              .filter(Boolean);
+            cli.appAllow(appId, actionName, tools, {
+              ...(options.write !== undefined ? { write: options.write } : {}),
+              ...(options.confirm !== undefined ? { confirm: options.confirm } : {}),
+            });
+            return;
+          }
+          default:
+            throw new Error(`Unknown action "${action}". Use list, open, allow, delete or path.`);
+        }
+      } catch (err: unknown) {
+        printError(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    },
+  );
+
+program
+  .command('app-grant <appId> [tools...]')
+  .description('Show or set the permission rules an applet runs under')
+  .option('--deny', 'Write the named tools as deny rules instead of allow')
+  .option('--clear', 'Remove every rule for this app')
+  .action(async (appId: string, tools: string[], options: { deny?: boolean; clear?: boolean }) => {
+    try {
+      const { appGrant } = await import('./apps/grant-cli.js');
+      await appGrant(appId, tools ?? [], options);
+    } catch (err: unknown) {
+      printError(err instanceof Error ? err.message : String(err));
       process.exit(1);
     }
   });

@@ -1,0 +1,61 @@
+<title>Bernard demo applet</title>
+<link rel="stylesheet" href="/__bernard/tokens.css" />
+<link rel="manifest" href="/__bernard/manifest.webmanifest" />
+<script src="/__bernard/applet.js"></script>
+
+<main>
+  <h1>Demo applet</h1>
+  <p>
+    Two ways to run the same question. There is no prompt here — the page holds handles to
+    <code>search</code> and <code>web_answer</code>, and nothing else.
+  </p>
+
+  <label>Question <input id="q" value="what is the default port for PostgreSQL?" /></label>
+  <button id="search">Search (no model)</button>
+  <button id="ask" class="secondary">Ask (agent)</button>
+  <p class="muted" id="last">…</p>
+  <pre id="out">Ready.</pre>
+</main>
+
+<script>
+  // The host serves the client; this page never speaks the wire protocol
+  // itself. It used to, and being the one worked example a generating model
+  // had is how a generated page ended up omitting the session header and
+  // getting a 403 on every click.
+  //
+  // `bernard.invoke` resolves to the action's RESULT and throws on failure, so
+  // there is no `if (!body.ok)` branch here to forget.
+
+  async function run(action) {
+    const out = document.getElementById('out');
+    const question = document.getElementById('q').value;
+    out.className = '';
+    out.textContent = 'Working…';
+    try {
+      const result = await bernard.invoke(action, { question });
+      out.textContent = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+      // Survives a host restart, and only this applet can read it.
+      await bernard.store.set('last', { question, action, at: Date.now() });
+      showLast();
+    } catch (err) {
+      out.className = 'error';
+      out.textContent = err.message;
+    }
+  }
+
+  async function showLast() {
+    const el = document.getElementById('last');
+    try {
+      const entry = await bernard.store.get('last');
+      el.textContent = entry
+        ? `Last run: ${entry.value.action} — “${entry.value.question}”`
+        : 'Nothing run yet.';
+    } catch {
+      el.textContent = '';
+    }
+  }
+
+  document.getElementById('search').addEventListener('click', () => run('search'));
+  document.getElementById('ask').addEventListener('click', () => run('web_answer'));
+  showLast();
+</script>

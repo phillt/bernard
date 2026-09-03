@@ -1,4 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
+import { buildTaskUserMessage } from './user-message.js';
+import type { WithAttachments } from './user-message.js';
 import { resolveSiteModel } from '../../model-policy.js';
 import { debugLog } from '../../logger.js';
 import { PlanStore } from '../../plan-store.js';
@@ -38,7 +40,7 @@ Rules:
  * creates the `PlanStore` so the `plan` tool the definition mounts shares the
  * same instance the ReAct enforcement loop reads from.
  */
-export interface SpecialistInput {
+export interface SpecialistInput extends WithAttachments {
   specialistId: string;
   task: string;
   context?: string;
@@ -78,7 +80,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
   },
 
   async tools(ctx, input, surface) {
-    const baseTools = createTools(
+    const baseTools = await createTools(
       ctx.toolOptions,
       ctx.stores.memory,
       surface.mcpTools,
@@ -111,10 +113,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
   },
 
   buildUserMessage(input): CoreMessage {
-    const content = input.context
-      ? `Task: ${input.task}\n\nContext: ${input.context}`
-      : `Task: ${input.task}`;
-    return { role: 'user', content };
+    return buildTaskUserMessage(input);
   },
 
   hooks(_ctx, input) {

@@ -1,4 +1,5 @@
 import type { CoreMessage, Tool } from 'ai';
+import { buildTaskUserMessage } from './user-message.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
 
 /**
@@ -92,10 +93,7 @@ export const mcpDelegateDefinition: AgentDefinition<McpDelegateInput, string> = 
   },
 
   buildUserMessage(input): CoreMessage {
-    const content = input.context
-      ? `Task: ${input.task}\n\nContext: ${input.context}`
-      : `Task: ${input.task}`;
-    return { role: 'user', content };
+    return buildTaskUserMessage(input);
   },
 
   hooks(_ctx, input) {

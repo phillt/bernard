@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as path from 'node:path';
+import * as os from 'node:os';
 
 vi.mock('ai', async () => {
   const actual = await vi.importActual<typeof import('ai')>('ai');
@@ -38,6 +40,7 @@ import { NormalStrategy } from '../../strategies/normal.js';
 import type { AgentContext } from '../../context.js';
 import type { BernardConfig } from '../../../config.js';
 import { buildContextMessage } from '../../../context-message.js';
+import { attachMeta } from '../../tools/adapter.js';
 
 function makeConfig(): BernardConfig {
   return {
@@ -497,6 +500,134 @@ describe('runDefinition per-turn token totals hook (#234)', () => {
   });
 });
 
+describe('vision gate (#427)', () => {
+  /**
+   * Pins the resolved model directly. Setting `config.model` would NOT work,
+   * and that is exactly what the gate exists to handle: `resolveModel` runs
+   * the lineup, a specialist pin or a per-call override, so the model that
+   * receives the bytes is routinely not the session's.
+   */
+  const textOnlyModel = {
+    resolveModel: () => ({
+      model: 'fake-model' as never,
+      provider: 'openai',
+      modelName: 'gpt-3.5-turbo',
+    }),
+  };
+
+  const imageSeed = (): CoreMessage[] => [
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Task: describe this' },
+        { type: 'image', image: Buffer.from('png'), mimeType: 'image/png' },
+      ],
+    },
+  ];
+
+  // `claude-*` is vision-capable, so a capable model must be completely
+  // untouched — bytes reach the model and nothing is stripped.
+  it('passes an attachment through to a capable model', async () => {
+    const def = fakeDefinition({
+      buildUserMessage: () => imageSeed()[0],
+    });
+    const res = await runDefinition(makeCtx(), def, { text: 'x' });
+    expect(res.result.text).toBe('final answer');
+    const sent = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const last = sent.messages[sent.messages.length - 1];
+    expect(Array.isArray(last.content)).toBe(true);
+    expect(last.content.some((p: { type: string }) => p.type === 'image')).toBe(true);
+  });
+
+  // An ephemeral dispatch throws: nothing billed, and the five dispatch
+  // boundaries shape a throw into each tool's own failure contract.
+  it('refuses an ephemeral dispatch to a text-only model, before any call', async () => {
+    const def = fakeDefinition({ ...textOnlyModel, buildUserMessage: () => imageSeed()[0] });
+    await expect(runDefinition(makeCtx(), def, { text: 'x' })).rejects.toThrow(
+      /does not accept images/,
+    );
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The one that matters most. `this.history` carries image parts across every
+   * `/model` switch, forever — so a throw here would brick every later turn of
+   * a conversation that once contained a screenshot. It sanitizes instead.
+   */
+  it('a persistent history with an image survives a text-only model', async () => {
+    const def = fakeDefinition({ ...textOnlyModel, historyMode: 'persistent' });
+    const res = await runDefinition(makeCtx(), def, { text: 'x' }, { seedMessages: imageSeed() });
+    expect(res.result.text).toBe('final answer');
+    const sent = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const last = sent.messages[sent.messages.length - 1];
+    expect(last.content.some((p: { type: string }) => p.type === 'image')).toBe(false);
+    expect(JSON.stringify(last.content)).toContain('[Image attached]');
+  });
+
+  // The gate must cost a text-only dispatch nothing but a shallow scan.
+  it('leaves a text-only dispatch alone even on a text-only model', async () => {
+    const res = await runDefinition(makeCtx(), fakeDefinition(textOnlyModel), { text: 'plain' });
+    expect(res.result.text).toBe('final answer');
+  });
+});
+
+describe('seed budget (#451)', () => {
+  const hugeSeed = (): CoreMessage[] => [{ role: 'user', content: 'x'.repeat(3_000_000) }];
+
+  /**
+   * Pins the window through `config.tokenWindow` rather than relying on a
+   * catalog number. Model windows move — the 4.1 family is ~1M, so a seed
+   * chosen to overflow "a small model" today quietly fits tomorrow.
+   */
+  const smallWindow = (): AgentContext => {
+    const ctx = makeCtx();
+    ctx.config.tokenWindow = 32_000;
+    return ctx;
+  };
+
+  it('refuses an oversized ephemeral dispatch before any provider call', async () => {
+    const def = fakeDefinition({
+      resolveModel: () => ({
+        model: 'fake' as never,
+        provider: 'openai',
+        modelName: 'gpt-4.1-mini',
+      }),
+      buildUserMessage: () => hugeSeed()[0],
+    });
+    await expect(runDefinition(smallWindow(), def, { text: 'x' })).rejects.toThrow(/too large/);
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The main agent already runs its own preflight `emergencyTruncate` with the
+   * COMPLETE prefix — the per-turn context message included, which the
+   * framework check cannot see. Checking here too would double up on the one
+   * definition that does not need it, using the worse estimate.
+   */
+  it('leaves a persistent history to its own preflight', async () => {
+    const def = fakeDefinition({
+      historyMode: 'persistent',
+      resolveModel: () => ({
+        model: 'fake' as never,
+        provider: 'openai',
+        modelName: 'gpt-4.1-mini',
+      }),
+    });
+    const res = await runDefinition(
+      smallWindow(),
+      def,
+      { text: 'x' },
+      { seedMessages: hugeSeed() },
+    );
+    expect(res.result.text).toBe('final answer');
+  });
+
+  it('leaves an ordinary dispatch alone', async () => {
+    const res = await runDefinition(smallWindow(), fakeDefinition(), { text: 'small' });
+    expect(res.result.text).toBe('final answer');
+  });
+});
+
 describe('DefinitionRegistry', () => {
   it('registers, looks up, and reports missing kinds', () => {
     const reg = new DefinitionRegistry();
@@ -519,5 +650,51 @@ describe('DefinitionRegistry', () => {
     definitions.register(fakeDefinition({ id }));
     expect(definitions.has(id)).toBe(true);
     definitions._clear();
+  });
+});
+
+/**
+ * The write-scope gate is only real if `runDefinition` forwards the reader
+ * (#340).
+ *
+ * `augmentTools` reads `getWriteScope` from ITS OWN options, not from `ctx`, so
+ * a scope set on `ctx.toolOptions` and never passed on is a scope that silently
+ * never applies. That is exactly what shipped in the first cut: the gate, its
+ * unit tests and its integration tests all passed while the production path
+ * enforced nothing — and cron had just had its `FILE_TOOLS` filter removed, so
+ * the net effect was unbounded unattended writes.
+ *
+ * Every other test of this feature calls `augmentTools` directly and cannot see
+ * that. This one drives a real tool through `runDefinition`.
+ */
+describe('write-scope forwarding (#340)', () => {
+  it('forwards ctx.toolOptions.writeScope into the augmented tools', async () => {
+    const workspace = path.join(os.tmpdir(), 'bernard-run-scope', 'ws');
+    const execute = vi.fn(async () => ({ ok: true }));
+    const writeTool: any = { execute, description: 'w', parameters: {} };
+    attachMeta(writeTool, {
+      name: 'file_write',
+      kind: 'write',
+      deterministic: false,
+      sideEffect: 'local',
+      cacheable: false,
+    });
+
+    const ctx = makeCtx();
+    ctx.toolOptions = { writeScope: { workspace } } as any;
+
+    let captured: Record<string, any> = {};
+    vi.mocked(generateText).mockImplementation(async (opts: any) => {
+      captured = opts.tools ?? {};
+      return { text: 'done', response: { messages: [] }, steps: [] } as any;
+    });
+
+    const def = fakeDefinition({ tools: () => ({ file_write: writeTool }) as any });
+    await runDefinition(ctx, def, { text: 'go' });
+
+    // Drive the augmented tool the model would have called.
+    const out = await captured.file_write.execute({ path: '/etc/passwd' }, {});
+    expect(execute).not.toHaveBeenCalled();
+    expect(String(out)).toContain(workspace);
   });
 });

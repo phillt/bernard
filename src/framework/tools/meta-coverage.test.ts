@@ -159,6 +159,21 @@ function checkMetaCoverage(tools: Record<string, unknown>): {
   return { missing, incomplete };
 }
 
+/**
+ * Every assertion in this file is a scan over a constructed registry, and a
+ * scan over an EMPTY registry passes. That is not hypothetical: `createTools`
+ * became async in #452 and the four `const tools = createTools(...)` call sites
+ * here kept their old shape, so `Object.entries(promise)` returned `[]` and all
+ * four invariants — including the two whose whole point is that they are
+ * fail-open — passed while checking nothing.
+ *
+ * So each test asserts the registry is non-empty first. The floor is deliberately
+ * a small absolute number rather than an exact count: an exact one is a second
+ * thing to update whenever a tool is added, and this guard only has to catch
+ * "the registry never materialised", not "the registry changed".
+ */
+const MIN_EXPECTED_TOOLS = 5;
+
 describe('tool meta coverage', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -166,13 +181,14 @@ describe('tool meta coverage', () => {
 
   it('every tool returned by createTools() declares the required meta fields', async () => {
     const { createTools } = await import('../../tools/index.js');
-    const tools = createTools(
+    const tools = await createTools(
       { shellTimeout: 10_000, confirmDangerous: async () => false },
       // Cast: the mocked MemoryStore satisfies the structural shape used here.
 
       new (await import('../../memory.js')).MemoryStore() as any,
     );
 
+    expect(Object.keys(tools).length).toBeGreaterThanOrEqual(MIN_EXPECTED_TOOLS);
     const { missing, incomplete } = checkMetaCoverage(tools);
     expect(missing, `Tools missing __bernardMeta: ${missing.join(', ')}`).toEqual([]);
     expect(incomplete, `Tools missing deterministic/sideEffect: ${incomplete.join(', ')}`).toEqual(
@@ -180,14 +196,103 @@ describe('tool meta coverage', () => {
     );
   });
 
+  /**
+   * `WRITE_PATH_TOOLS` (#340) is a hand-maintained name set, and its
+   * incompleteness is silent and **fail-open**: a fourth path-taking write
+   * tool, or `file_write`'s `path` argument being renamed, ships unscoped with
+   * every other test green — including the integration test, which proves the
+   * two listed names work but nothing about the set being closed.
+   *
+   * `FILE_TOOLS`' incompleteness is at least user-visible (a missing entry
+   * loses path-scoped grants and the user sees an unexpected prompt). This one
+   * would only ever be noticed by the write it failed to stop, so the
+   * "declared beside `FILE_TOOLS` so the two cannot drift" comment gets a test
+   * rather than a reader's good intentions.
+   */
+  it('every write tool taking a `path` argument is in WRITE_PATH_TOOLS', async () => {
+    const { createTools } = await import('../../tools/index.js');
+    const { WRITE_PATH_TOOLS } = await import('../../permissions/matchers.js');
+    const tools = await createTools(
+      { shellTimeout: 10_000, confirmDangerous: async () => false },
+      new (await import('../../memory.js')).MemoryStore() as any,
+    );
+
+    expect(Object.keys(tools).length).toBeGreaterThanOrEqual(MIN_EXPECTED_TOOLS);
+
+    const unscoped: string[] = [];
+    for (const [name, def] of Object.entries(tools)) {
+      const meta = readToolMeta(def);
+      if (!meta || (meta.kind !== 'write' && meta.kind !== 'dangerous')) continue;
+      // `parameters` is the zod schema the model is shown; a `path` key on it
+      // is what the gate reads off `args`.
+      const shape = (def as { parameters?: { shape?: Record<string, unknown> } })?.parameters
+        ?.shape;
+      if (!shape || !('path' in shape)) continue;
+      if (!WRITE_PATH_TOOLS.has(name)) unscoped.push(name);
+    }
+
+    expect(
+      unscoped,
+      `Write tools with a \`path\` argument missing from WRITE_PATH_TOOLS (they would write ` +
+        `anywhere in an unattended run): ${unscoped.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  /**
+   * `directInvocable` (#445) marks a tool an applet action may call with no
+   * model in the loop — so a browser button reaches it with caller-supplied
+   * arguments. The flag is fail-open by omission (a tool without it simply
+   * cannot be a deterministic action, which is the safe direction), but
+   * fail-OPEN by mistaken addition, and there is no other guard: adding the
+   * line to a tool's meta is one keystroke away from adding it to the wrong
+   * tool.
+   *
+   * Two invariants, both mechanical. `dangerous` is what actually keeps
+   * `shell` out — its parameters are `{command: string}`, a perfectly
+   * representable scalar, so the shape check alone would admit it.
+   */
+  it('no directInvocable tool is dangerous or takes inexpressible arguments', async () => {
+    const { createTools } = await import('../../tools/index.js');
+    const { unrepresentableParams } = await import('../../apps/direct-tool.js');
+    const tools = await createTools(
+      { shellTimeout: 10_000, confirmDangerous: async () => false },
+      new (await import('../../memory.js')).MemoryStore() as any,
+    );
+
+    expect(Object.keys(tools).length).toBeGreaterThanOrEqual(MIN_EXPECTED_TOOLS);
+
+    const dangerous: string[] = [];
+    const inexpressible: string[] = [];
+    for (const [name, def] of Object.entries(tools)) {
+      const meta = readToolMeta(def);
+      if (!meta?.directInvocable) continue;
+      if (meta.kind === 'dangerous') dangerous.push(name);
+      const bad = unrepresentableParams(def);
+      if (bad.length > 0) inexpressible.push(`${name} (${bad.join(', ')})`);
+    }
+
+    expect(
+      dangerous,
+      `Dangerous tools marked directInvocable — a web page could reach them with no ` +
+        `person in the loop: ${dangerous.join(', ')}`,
+    ).toEqual([]);
+    expect(
+      inexpressible,
+      `directInvocable tools whose arguments an app manifest cannot express, so the ` +
+        `mapping silently omits them: ${inexpressible.join('; ')}`,
+    ).toEqual([]);
+  });
+
   it('meta survives augmentTools — non-enumerable __bernardMeta is re-attached after the spread', async () => {
     const { createTools } = await import('../../tools/index.js');
     const { augmentTools } = await import('../../tools/augment.js');
-    const tools = createTools(
+    const tools = await createTools(
       { shellTimeout: 10_000, confirmDangerous: async () => false },
 
       new (await import('../../memory.js')).MemoryStore() as any,
     );
+
+    expect(Object.keys(tools).length).toBeGreaterThanOrEqual(MIN_EXPECTED_TOOLS);
 
     const augmented = augmentTools(tools, fakeProfileStore as any);
 

@@ -14,6 +14,7 @@ const MAIN_AUDIENCE_TOOLS = [
   'routine',
   'lineup_edit',
   'specialist',
+  'applet',
   'cron',
   'cron_logs',
   'cron_notes',
@@ -46,7 +47,7 @@ describe('cron consolidation (#253)', () => {
       expect(Object.keys(handlers).sort()).toEqual([...(names as readonly string[])].sort());
     });
 
-    it('every cron read action is a real action', () => {
+    it('every cron read action is a real action', async () => {
       for (const a of CRON_READ_ACTIONS) {
         expect(CRON_ACTION_NAMES as readonly string[]).toContain(a);
       }
@@ -71,7 +72,7 @@ describe('cron consolidation (#253)', () => {
       expect(meta.isWriteAction?.({ action })).toBe(true);
     });
 
-    it('treats a missing or malformed action as a write', () => {
+    it('treats a missing or malformed action as a write', async () => {
       // Fail-closed: an unreadable action must not slip past the gate.
       expect(meta.isWriteAction?.({})).toBe(true);
       expect(meta.isWriteAction?.({ action: 42 })).toBe(true);
@@ -86,7 +87,7 @@ describe('cron consolidation (#253)', () => {
     const cronMeta = (createCronTool().cron as { __bernardMeta: { actionScoped?: boolean } })
       .__bernardMeta;
 
-    it('does not collapse list and delete into one grant', () => {
+    it('does not collapse list and delete into one grant', async () => {
       expect(permissionKeyFor('cron', { action: 'list' }, cronMeta)).toBe('cron:list');
       expect(permissionKeyFor('cron', { action: 'delete', id: 'x' }, cronMeta)).toBe('cron:delete');
       expect(permissionKeyFor('cron', { action: 'list' }, cronMeta)).not.toBe(
@@ -94,24 +95,24 @@ describe('cron consolidation (#253)', () => {
       );
     });
 
-    it('keys the same action identically regardless of other args', () => {
+    it('keys the same action identically regardless of other args', async () => {
       expect(permissionKeyFor('cron', { action: 'delete', id: 'a' }, cronMeta)).toBe(
         permissionKeyFor('cron', { action: 'delete', id: 'b' }, cronMeta),
       );
     });
 
-    it('offers no profile grant when the action is unreadable', () => {
+    it('offers no profile grant when the action is unreadable', async () => {
       expect(permissionKeyFor('cron', {}, cronMeta)).toBeNull();
       expect(permissionKeyFor('cron', { action: 7 }, cronMeta)).toBeNull();
     });
 
-    it('leaves non-action tools keyed by name', () => {
+    it('leaves non-action tools keyed by name', async () => {
       expect(permissionKeyFor('web_read', { url: 'https://x.test' })).toBe('web_read');
     });
   });
 
   describe('worker surface', () => {
-    const registry = (surface?: 'full' | 'worker') =>
+    const registry = async (surface?: 'full' | 'worker') =>
       createTools(
         {} as never,
         memoryStub,
@@ -123,18 +124,18 @@ describe('cron consolidation (#253)', () => {
         undefined,
         surface ? { surface } : undefined,
       );
-    const names = (surface?: 'full' | 'worker') => Object.keys(registry(surface));
+    const names = async (surface?: 'full' | 'worker') => Object.keys(await registry(surface));
 
-    it('drops cron and the config tools', () => {
-      const worker = names('worker');
+    it('drops cron and the config tools', async () => {
+      const worker = await names('worker');
       expect(worker.filter((n) => n.startsWith('cron'))).toEqual([]);
       for (const mainOnly of MAIN_AUDIENCE_TOOLS) expect(worker).not.toContain(mainOnly);
     });
 
-    it('keeps everything a worker actually needs', () => {
+    it('keeps everything a worker actually needs', async () => {
       // If this list ever needs widening, do it explicitly here rather than by
       // quietly loosening the exclusion set.
-      const worker = names('worker');
+      const worker = await names('worker');
       for (const kept of [
         'shell',
         'memory',
@@ -150,11 +151,11 @@ describe('cron consolidation (#253)', () => {
       }
     });
 
-    it('leaves the full surface untouched', () => {
-      const full = names();
+    it('leaves the full surface untouched', async () => {
+      const full = await names();
       expect(full).toContain('cron');
       expect(full).toContain('lineup_edit');
-      expect(full.length).toBeGreaterThan(names('worker').length);
+      expect(full.length).toBeGreaterThan((await names('worker')).length);
     });
 
     /**
@@ -166,9 +167,9 @@ describe('cron consolidation (#253)', () => {
      * omitting it is a compile error. This pins the resulting set so a group
      * silently re-tagged `'any'` is caught.
      */
-    it('drops exactly the main-audience tools, and nothing else', () => {
-      const worker = new Set(names('worker'));
-      const dropped = names().filter((n) => !worker.has(n));
+    it('drops exactly the main-audience tools, and nothing else', async () => {
+      const worker = new Set(await names('worker'));
+      const dropped = (await names()).filter((n) => !worker.has(n));
       expect(dropped.sort()).toEqual([...MAIN_AUDIENCE_TOOLS].sort());
     });
   });

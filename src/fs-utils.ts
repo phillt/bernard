@@ -1,9 +1,27 @@
+import * as path from 'node:path';
 import * as fs from 'node:fs';
 
-/** Writes `data` to a `.tmp` file then renames it into place for crash-safe persistence. */
-export function atomicWriteFileSync(filePath: string, data: string): void {
+/**
+ * Writes `data` to a `.tmp` file then renames it into place for crash-safe
+ * persistence.
+ *
+ * `mode` is applied to the temp file **before** the rename, which is what
+ * makes a 0600 file achievable atomically: `writeFileSync` then `chmodSync`
+ * leaves a window at the default umask, and a rename does not carry a mode of
+ * its own. Callers that need restrictive permissions should pass it here
+ * rather than chmod afterwards.
+ */
+export function atomicWriteFileSync(
+  filePath: string,
+  data: string,
+  opts: { mode?: number } = {},
+): void {
   const tmp = filePath + '.tmp';
-  fs.writeFileSync(tmp, data, 'utf-8');
+  fs.writeFileSync(
+    tmp,
+    data,
+    opts.mode === undefined ? 'utf-8' : { encoding: 'utf-8', mode: opts.mode },
+  );
   fs.renameSync(tmp, filePath);
 }
 
@@ -99,4 +117,61 @@ export function seedOnce(markerPath: string, seedFn: () => void, opts: SeedOnceO
   }
   // All attempts exhausted — best-effort: skip seeding this run. The next
   // process to start (after staleMs passes) will reclaim and seed.
+}
+
+/**
+ * Copies one bundled `.json` file into a data directory, unless it is already
+ * there.
+ *
+ * The shared primitive behind every bundled-file seed. `SpecialistStore` and
+ * `AppRegistry` had independently grown the same body: never overwrite a
+ * user-edited copy, `JSON.parse` first so an obviously corrupt bundle file is
+ * skipped rather than written, and swallow a single bad file so the rest of
+ * the seed continues. Those semantics are exactly the ones that must not drift
+ * between two seeded directories.
+ */
+export function copyBundledJsonIfAbsent(bundledDir: string, destDir: string, file: string): void {
+  const dest = path.join(destDir, file);
+  if (fs.existsSync(dest)) return; // never overwrite a user-edited copy
+  try {
+    const raw = fs.readFileSync(path.join(bundledDir, file), 'utf-8');
+    JSON.parse(raw); // catch an obviously corrupt bundle file before seeding
+    atomicWriteFileSync(dest, raw);
+  } catch {
+    // skip individual bad files; continue seeding the rest
+  }
+}
+
+/**
+ * Seeds every `.json` file from a bundled directory into a data directory,
+ * once, behind a marker.
+ *
+ * Returns silently when the bundle directory is absent — a build that did not
+ * copy it must not break the caller. Best-effort throughout: seeding must
+ * never block startup or an invocation.
+ */
+export function seedBundledJsonDir(
+  bundledDir: string,
+  destDir: string,
+  markerPath: string,
+  /**
+   * Extra copying to perform under the SAME marker and the same cross-process
+   * lock — e.g. an applet's served assets alongside its manifest. Running it
+   * outside would re-do the work on every construction and, worse, lose
+   * `seedOnce`'s lock, letting two concurrent callers race the copy.
+   */
+  also?: (bundledDir: string, destDir: string) => void,
+): void {
+  try {
+    fs.mkdirSync(destDir, { recursive: true });
+    seedOnce(markerPath, () => {
+      if (!fs.existsSync(bundledDir)) return;
+      for (const file of fs.readdirSync(bundledDir).filter((f) => f.endsWith('.json'))) {
+        copyBundledJsonIfAbsent(bundledDir, destDir, file);
+      }
+      also?.(bundledDir, destDir);
+    });
+  } catch {
+    // best-effort
+  }
 }

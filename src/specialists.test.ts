@@ -20,11 +20,39 @@ vi.mock('node:fs', () => ({
 
 vi.mock('./fs-utils.js', async () => {
   const fsMock = await import('node:fs');
+  const atomicWrite = vi.fn();
+  // Mirrors the real `copyBundledJsonIfAbsent`, INCLUDING its JSON.parse probe
+  // — with `readFileSync` stubbed to '' the probe throws and the copy is
+  // skipped, which is what keeps "a protected specialist is never written"
+  // observable through the shared `atomicWriteFileSync` spy.
+  const copyIfAbsent = (bundledDir: string, destDir: string, file: string): void => {
+    const dest = `${destDir}/${file}`;
+    if (fsMock.existsSync(dest)) return;
+    try {
+      const raw = fsMock.readFileSync(`${bundledDir}/${file}`, 'utf-8') as unknown as string;
+      JSON.parse(raw);
+      atomicWrite(dest, raw);
+    } catch {
+      // skip individual bad files
+    }
+  };
   return {
-    atomicWriteFileSync: vi.fn(),
+    atomicWriteFileSync: atomicWrite,
     seedOnce: vi.fn((markerPath: string, seedFn: () => void) => {
       if (fsMock.existsSync(markerPath)) return;
       seedFn();
+      fsMock.writeFileSync(markerPath, new Date().toISOString(), 'utf-8');
+    }),
+    // Mirrors the real implementations closely enough to keep the seeding
+    // assertions meaningful: the copy still routes through the mocked
+    // `atomicWriteFileSync`, which is what the POST_V1 additive-seed test
+    // inspects, and the directory seed still respects its marker.
+    copyBundledJsonIfAbsent: vi.fn(copyIfAbsent),
+    seedBundledJsonDir: vi.fn((bundledDir: string, destDir: string, markerPath: string) => {
+      if (fsMock.existsSync(markerPath)) return;
+      for (const file of fsMock.readdirSync(bundledDir) as unknown as string[]) {
+        if (String(file).endsWith('.json')) copyIfAbsent(bundledDir, destDir, String(file));
+      }
       fsMock.writeFileSync(markerPath, new Date().toISOString(), 'utf-8');
     }),
   };
@@ -756,6 +784,41 @@ describe('SpecialistStore', () => {
 // is in `POST_V1_BUNDLED`. `.seeded-v1` short-circuits the v1 loop, so dropping
 // a JSON file into the manifest directory alone reaches nobody who already ran
 // Bernard once — which is nearly everyone.
+describe('applet-bound specialists (#423)', () => {
+  // `getSummaries()` is the single chokepoint for "excluded from dispatch
+  // discovery" — its one caller feeds BOTH the matcher and the `<specialists>`
+  // prompt block, so filtering here is what stops the main agent being advised
+  // to dispatch something it would then be refused for.
+  it('are excluded from getSummaries but still listed', async () => {
+    const { SpecialistStore } = await import('./specialists.js');
+    const fs = await import('node:fs');
+    const bound = {
+      id: 'bound-one',
+      name: 'Bound',
+      description: 'd',
+      systemPrompt: 'p',
+      guidelines: [],
+      boundTo: { appId: 'demo', action: 'go' },
+      createdAt: 'x',
+      updatedAt: 'x',
+    };
+    const free = { ...bound, id: 'free-one', name: 'Free', boundTo: undefined };
+    vi.mocked(fs.readdirSync).mockReturnValue(['bound-one.json', 'free-one.json'] as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockImplementation((f: never) =>
+      JSON.stringify(String(f).includes('bound-one') ? bound : free),
+    );
+    const store = new SpecialistStore({ seed: false });
+    expect(
+      store
+        .list()
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual(['bound-one', 'free-one']);
+    expect(store.getSummaries().map((s) => s.id)).toEqual(['free-one']);
+  });
+});
+
 describe('post-v1 bundled seeding', () => {
   /**
    * An install that has already run once: `.seeded-v1` present, so the v1 loop

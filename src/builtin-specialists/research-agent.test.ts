@@ -7,18 +7,18 @@ import record from './research-agent.json' with { type: 'json' };
 // not on that path, so nothing validates these records at runtime. These are
 // the checks that would otherwise only fail as silent misbehaviour.
 describe('research-agent bundled record', () => {
-  it('has an id matching its filename', () => {
+  it('has an id matching its filename', async () => {
     // `get(id)` reads `<id>.json` and `roleOf` derives ids from filenames, so a
     // mismatch makes the record unreachable AND unprotected.
     expect(record.id).toBe('research-agent');
   });
 
-  it('names only tools that actually resolve', () => {
+  it('names only tools that actually resolve', async () => {
     // An unresolvable name is dropped with only a debugLog, so a typo yields a
     // quietly under-equipped specialist rather than an error.
     // `cite` is only constructed when a provenance store is supplied — the
     // 8th positional argument — which is what the wrapper dispatch passes.
-    const registry = createTools(
+    const registry = await createTools(
       {} as any, // options
       {} as any, // memoryStore
       undefined, // mcpTools
@@ -34,17 +34,17 @@ describe('research-agent bundled record', () => {
     }
   });
 
-  it('leads with the tool its failures should be classified against', () => {
+  it('leads with the tool its failures should be classified against', async () => {
     // `targetTools[0]` is what reaches `classifyError` on the correction path.
     expect(record.targetTools[0]).toBe('web_search');
   });
 
-  it('declares structured output, which its result shape depends on', () => {
+  it('declares structured output, which its result shape depends on', async () => {
     expect(record.kind).toBe('tool-wrapper');
     expect(record.structuredOutput).toBe(true);
   });
 
-  it('can cite, which is what gates the citation conventions', () => {
+  it('can cite, which is what gates the citation conventions', async () => {
     expect(record.targetTools).toContain('cite');
   });
 });

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import type { CoreMessage } from 'ai';
-import { findModelMetaByName } from './providers/catalog.js';
+import { findModelMetaByName, getModelMeta } from './providers/catalog.js';
 
 /** Describes a loaded image ready to be attached to a user message. */
 export interface ImageAttachment {
@@ -58,11 +58,27 @@ function expandHome(filePath: string): string {
   return filePath;
 }
 
+/** A path that passed every check except being read. */
+export interface ValidatedImagePath {
+  path: string;
+  mimeType: string;
+}
+
 /**
- * Loads and validates an image file from disk.
- * @throws {Error} If the file does not exist, is a directory, exceeds 10 MB, or has an unsupported extension.
+ * Validates an image path without reading it.
+ *
+ * Split from {@link loadImage} because the two halves cost wildly different
+ * amounts: the checks are a `statSync` and an extension lookup — microseconds
+ * — while the read is up to 10 MB of **synchronous** I/O, which in this
+ * process blocks the Ink render loop and every concurrent dispatch. A caller
+ * that may still refuse the work (a saturated agent pool, a disabled
+ * specialist, an unknown provider) wants the cheap half up front and the
+ * expensive half only once the work is actually going to happen.
+ *
+ * @throws {Error} If the file does not exist, is a directory, exceeds 10 MB,
+ *   or has an unsupported extension.
  */
-export function loadImage(filePath: string): ImageAttachment {
+export function validateImagePath(filePath: string): ValidatedImagePath {
   const resolved = path.resolve(expandHome(filePath));
 
   let stat: fs.Stats;
@@ -89,9 +105,20 @@ export function loadImage(filePath: string): ImageAttachment {
     );
   }
 
-  const data = fs.readFileSync(resolved);
+  return { path: resolved, mimeType };
+}
 
-  return { path: resolved, mimeType, data };
+/** Reads a path {@link validateImagePath} already approved. */
+export function readValidatedImage(validated: ValidatedImagePath): ImageAttachment {
+  return { ...validated, data: fs.readFileSync(validated.path) };
+}
+
+/**
+ * Loads and validates an image file from disk.
+ * @throws {Error} If the file does not exist, is a directory, exceeds 10 MB, or has an unsupported extension.
+ */
+export function loadImage(filePath: string): ImageAttachment {
+  return readValidatedImage(validateImagePath(filePath));
 }
 
 /**
@@ -146,7 +173,13 @@ export function stripImagePaths(text: string): string {
  * - Unknown providers: optimistically allowed (the API will reject if unsupported).
  */
 export function isVisionCapableModel(provider: string, model: string): boolean {
-  const meta = findModelMetaByName(model);
+  // Provider-scoped FIRST. `findModelMetaByName` searches every built-in
+  // provider and returns the first hit, so a custom-provider model whose name
+  // collides with a catalog entry — an Ollama or internal-proxy `llava`, say —
+  // would inherit a stranger's capability tags. The name-only lookup stays as
+  // a fallback, because a custom provider is not in `BUILTIN_PROVIDERS` and
+  // `getModelMeta` returns null for it by design.
+  const meta = getModelMeta(provider, model) ?? findModelMetaByName(model);
   if (meta) {
     return meta.tags.includes('vision') || meta.tags.includes('file-input');
   }
@@ -195,12 +228,17 @@ export function estimateContentPartTokens(part: unknown): number {
 }
 
 /**
- * Returns a new history array where `ImagePart` entries in user messages are replaced
- * with a `[Image attached]` text placeholder. Does not mutate the original.
- * Used before persisting history to disk to avoid writing base64 data.
+ * True when any user message carries an image part.
+ *
+ * One predicate, two consumers: {@link stripImagesFromHistory} and the
+ * dispatch vision gate (#427). They were briefly separate and had already
+ * disagreed — the gate matched any NON-TEXT part while the sanitizer replaced
+ * only `image` ones, so a part kind only one of them knew about would trip the
+ * gate and then survive the sanitize, reaching a model that cannot read it.
+ * Sharing the predicate makes that disagreement unrepresentable.
  */
-export function stripImagesFromHistory(history: CoreMessage[]): CoreMessage[] {
-  const hasImages = history.some(
+export function hasImagePart(messages: CoreMessage[]): boolean {
+  return messages.some(
     (msg) =>
       msg.role === 'user' &&
       Array.isArray(msg.content) &&
@@ -208,7 +246,15 @@ export function stripImagesFromHistory(history: CoreMessage[]): CoreMessage[] {
         (p) => typeof p === 'object' && p !== null && 'type' in p && p.type === 'image',
       ),
   );
-  if (!hasImages) return history;
+}
+
+/**
+ * Returns a new history array where `ImagePart` entries in user messages are replaced
+ * with a `[Image attached]` text placeholder. Does not mutate the original.
+ * Used before persisting history to disk to avoid writing base64 data.
+ */
+export function stripImagesFromHistory(history: CoreMessage[]): CoreMessage[] {
+  if (!hasImagePart(history)) return history;
 
   return history.map((msg) => {
     if (msg.role !== 'user' || typeof msg.content === 'string' || !Array.isArray(msg.content)) {

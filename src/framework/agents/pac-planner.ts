@@ -1,4 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
+import { attachTo } from './user-message.js';
+import type { WithAttachments } from './user-message.js';
 import { createDateTimeTool } from '../../tools/datetime.js';
 import { createFileTools } from '../../tools/file.js';
 import { createThinkTool } from '../../tools/think.js';
@@ -50,7 +52,7 @@ PLAN COMPLETE`;
  * populated on a re-plan (after a Critic FAIL with retry budget remaining) so
  * the Planner can revise rather than start from scratch.
  */
-export interface PacPlannerInput {
+export interface PacPlannerInput extends WithAttachments {
   task: string;
   context?: string;
   slotId: number;
@@ -112,7 +114,7 @@ export const pacPlannerDefinition: AgentDefinition<PacPlannerInput, string> = {
     if (input.criticFeedback) {
       parts.push(`Critic feedback to address:\n${input.criticFeedback}`);
     }
-    return { role: 'user', content: parts.join('\n\n') };
+    return attachTo(parts.join('\n\n'), input.attachments);
   },
 
   hooks(_ctx, input) {

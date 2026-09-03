@@ -43,10 +43,53 @@ export const CRON_DIR = path.join(DATA_DIR, 'cron');
 export const CRON_JOBS_FILE = path.join(CRON_DIR, 'jobs.json');
 export const CRON_ALERTS_DIR = path.join(CRON_DIR, 'alerts');
 export const CRON_NOTES_DIR = path.join(CRON_DIR, 'notes');
+/** Root for the per-run workspaces unattended writers may always write to (#340). */
+export const WORKSPACES_DIR = path.join(DATA_DIR, 'workspaces');
+
+/**
+ * The workspace a scoped run may always write to.
+ *
+ * One convention in one place: `<namespace>/<stable id>`. Keyed on a *stable*
+ * id (a cron job id, an app id) rather than a run id, because the point of a
+ * workspace is that a job's output is still there on its next run. Each new
+ * unattended writer inherits the layout instead of re-deriving it — and
+ * retention, when it arrives, has one shape to prune rather than N.
+ */
+export function runWorkspace(namespace: string, id: string): string {
+  return path.join(WORKSPACES_DIR, namespace, id);
+}
 export const ROUTINES_DIR = path.join(DATA_DIR, 'routines');
 export const SPECIALISTS_DIR = path.join(DATA_DIR, 'specialists');
+/** One `<appId>.json` manifest per applet-style app (#419). */
+export const APPS_DIR = path.join(DATA_DIR, 'apps');
+/**
+ * An applet's served assets: `APPS_DIR/<appId>/index.html` and friends (#421).
+ *
+ * A sibling directory of the manifest, and deliberately NOT
+ * `runWorkspace('apps', appId)` — that is where an applet action may write
+ * *data*. Serving an applet's *code* from its own write scope would let an
+ * action rewrite the page it is served from.
+ */
+export function appletAssetDir(appId: string): string {
+  return path.join(APPS_DIR, appId);
+}
+
+/**
+ * An applet's persistent key-value store (#422): one SQLite file per app.
+ *
+ * Deliberately **neither** of the two directories it might have gone in.
+ * Not {@link appletAssetDir}, which is SERVED — the database would be
+ * fetchable over HTTP. Not `runWorkspace('apps', appId)`, which is the
+ * applet action's own write scope — `file_write` could then corrupt the
+ * database out from under the store. Access is only ever through the KV API,
+ * from either side.
+ */
+export function appletDataDir(appId: string): string {
+  return path.join(DATA_DIR, 'applet-data', appId);
+}
 export const SPECIALIST_CANDIDATES_DIR = path.join(DATA_DIR, 'specialist-candidates');
 export const CORRECTION_CANDIDATES_DIR = path.join(DATA_DIR, 'correction-candidates');
+export const APPLET_CANDIDATES_DIR = path.join(DATA_DIR, 'applet-candidates');
 export const TOOL_PROFILES_DIR = path.join(DATA_DIR, 'tool-profiles');
 
 // Cache
@@ -61,6 +104,18 @@ export const TURN_CONTEXT_FILE = path.join(STATE_DIR, 'turn-context.json');
 export const LOGS_DIR = path.join(STATE_DIR, 'logs');
 export const SESSION_LOGS_DIR = path.join(LOGS_DIR, 'sessions');
 export const TOOL_WRAPPER_LOG = path.join(LOGS_DIR, 'tool-wrappers.jsonl');
+/** Append-only record of every `bernard script` invocation (#419). */
+export const SCRIPT_LOG_FILE = path.join(LOGS_DIR, 'script-invocations.jsonl');
+/**
+ * Append-only record of every capability handle minted for an applet (#420).
+ *
+ * A **sibling** of {@link SCRIPT_LOG_FILE} rather than rows in it. That file
+ * rotates at a row count, so interleaving mints would evict them before the
+ * invokes they correlate with — under load the correlation is the first thing
+ * lost, which is the one property this log exists to provide. Two files cost a
+ * join on `capabilityId` and keep both sides intact.
+ */
+export const CAPABILITY_LOG_FILE = path.join(LOGS_DIR, 'capability-mints.jsonl');
 /** Per-session LLM cost/usage telemetry JSONL, one file per session id. */
 export const TELEMETRY_DIR = path.join(LOGS_DIR, 'telemetry');
 export function sessionTelemetryPath(sessionId: string): string {
@@ -68,3 +123,17 @@ export function sessionTelemetryPath(sessionId: string): string {
 }
 export const CRON_PID_FILE = path.join(STATE_DIR, 'cron-daemon.pid');
 export const CRON_LOG_FILE = path.join(STATE_DIR, 'cron-daemon.log');
+/** Applet host process state (#421), mirroring the cron daemon's pair. */
+export const APPLET_HOST_PID_FILE = path.join(STATE_DIR, 'applet-host.pid');
+export const APPLET_HOST_LOG_FILE = path.join(STATE_DIR, 'applet-host.log');
+/**
+ * Per-applet port and session token (#421).
+ *
+ * State rather than config: machine-local and regenerable. Kept out of the
+ * manifest on purpose — `AppManifestSchema` is `.strict()` with
+ * `schemaVersion: z.literal(1)`, so a new field there makes an older binary
+ * reject the whole app; the manifest is bundle-seeded and user-editable, so a
+ * token in it is settable by any local process; and it is validated on read,
+ * i.e. trusted at exactly the wrong moment.
+ */
+export const APPLET_HOSTS_FILE = path.join(STATE_DIR, 'applet-hosts.json');

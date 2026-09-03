@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import type { Agent } from '../agent.js';
 import type { BernardConfig } from '../config.js';
@@ -89,17 +89,17 @@ import { noPromptCacheHint } from '../cost-guardrail.js';
 import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
 import { WIZARD_CATEGORIES_DATA, type WizardFieldData } from '../profiles-wizard-data.js';
-import {
-  loadImage,
-  tryLoadImage,
-  extractImagePaths,
-  isVisionCapableModel,
-  type ImageAttachment,
-} from '../image.js';
+import { loadImage, tryLoadImage, extractImagePaths, type ImageAttachment } from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
+import { renderTaskText } from '../framework/agents/user-message.js';
 import type { CoreMessage } from 'ai';
-import { resolveMainModel, logSiteModelSnapshot, providersInUse } from '../model-policy.js';
+import {
+  resolveMainModel,
+  mainVisionCapable,
+  logSiteModelSnapshot,
+  providersInUse,
+} from '../model-policy.js';
 import {
   serializeMessages,
   extractDomainFacts,
@@ -182,6 +182,9 @@ import {
 } from '../voice-service.js';
 import { toSpokenForm } from '../speech-normalizer.js';
 import { toLiteralSpeech } from '../speech-text.js';
+import { AppRegistry, bundledAppIds } from '../apps/registry.js';
+import { AppletCandidateStore, type AppletCandidate } from '../applet-candidates.js';
+import { buildAppletRequest } from '../applet-detector.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -741,6 +744,12 @@ export function App({
       })),
     [stores.routines],
   );
+
+  // Applet suggestions (#430). Not threaded through `AppStores`: it is read by
+  // exactly one slash command and written by a detached exit worker that
+  // constructs its own, so a shared instance would buy nothing and add a
+  // constructor to every test that builds the prop.
+  const appletCandidates = useMemo(() => new AppletCandidateStore(), []);
 
   // Confirm-action session memo: `${toolName}:${stableHash(args)}` → true.
   // Mirrors the legacy REPL's confirm-allow-for-session map.
@@ -2041,6 +2050,125 @@ export function App({
       }
     }
 
+    if (is(text, '/applets')) {
+      // Both halves in one menu: what exists, and what Bernard thinks should.
+      // Splitting them into `/applets` and `/applet-candidates` would put the
+      // suggestion behind a command nobody has a reason to type — the list of
+      // real applets is what a user opens, and the suggestion belongs beside it.
+      let firstPass = true;
+      let listIndex = 0;
+      // `stale` is what decides whether the list is re-read, and it is set only
+      // by the two branches that change it. Returning from a submenu is the
+      // common navigation and used to re-`listIds()` and re-parse every
+      // manifest — up to `MAX_APPLETS` synchronous reads and zod parses — for a
+      // list that had not changed.
+      let stale = true;
+      let entries: MenuEntry[] = [];
+      let pending: AppletCandidate[] = [];
+      const rebuild = () => {
+        const registry = new AppRegistry();
+        pending = appletCandidates.listPending();
+        const rows: MenuEntry[] = [];
+        const appIds = registry.listIds();
+        // Split the same way `bernard app list` does, and for the same reason:
+        // a seeded example in one flat list is indistinguishable from the
+        // user's own work. Sections rather than omission — a bundled applet
+        // still holds a port and still answers in a browser, so hiding it
+        // makes it unfindable rather than tidy.
+        const bundled = bundledAppIds();
+        const group = (title: string, ids: string[]) => {
+          if (ids.length === 0) return;
+          rows.push({ type: 'section', title });
+          for (const id of ids) {
+            const parsed = registry.get(id);
+            const m = parsed.ok ? parsed.manifest : undefined;
+            rows.push({
+              label: m?.name ?? id,
+              annotation: m ? id : 'invalid manifest',
+              description: truncate(m?.description ?? '', 100),
+              value: `app:${id}`,
+            });
+          }
+        };
+        group(
+          'Applets',
+          appIds.filter((id) => !bundled.has(id)),
+        );
+        group(
+          'Bundled examples',
+          appIds.filter((id) => bundled.has(id)),
+        );
+        if (pending.length > 0) {
+          rows.push({ type: 'section', title: 'Suggestions' });
+          for (const c of pending) {
+            rows.push({
+              label: c.name,
+              annotation: `${Math.round(c.confidence * 100)}%`,
+              description: truncate(c.reasoning || c.description, 100),
+              value: `cand:${c.id}`,
+            });
+          }
+        }
+        entries = rows;
+        stale = false;
+      };
+      for (;;) {
+        if (stale) rebuild();
+        if (entries.length === 0) {
+          if (firstPass) flashToast('No applets yet. Ask me to build one.');
+          return;
+        }
+        firstPass = false;
+        const pick = await requestMenu(entries, {
+          title: 'Applets',
+          initialIndex: listIndex,
+        });
+        if (pick.cancelled) return;
+        listIndex = pick.index;
+        const value = pick.item.value as string;
+
+        if (value.startsWith('app:')) {
+          const id = value.slice(4);
+          const action = await requestMenu([{ label: 'Open in browser' }, { label: 'Back' }], {
+            title: id,
+          });
+          if (action.cancelled || action.index === 1) continue;
+          // Deliberately no Delete row: deleting an applet destroys its data
+          // store and any specialist bound to it, and that authority is the
+          // CLI's (`bernard app delete`) for the same reason `app-grant` is.
+          try {
+            const { appOpen } = await import('../apps/app-cli.js');
+            await appOpen(id, {});
+            flashToast(`Opened ${id}.`, 'success');
+          } catch (err) {
+            flashToast(`Could not open ${id}: ${(err as Error).message}`, 'error');
+          }
+          continue;
+        }
+
+        const c = pending.find((p) => p.id === value.slice(5));
+        if (!c) continue;
+        const action = await requestMenu(
+          [{ label: 'Build it' }, { label: 'Dismiss' }, { label: 'Back' }],
+          { title: `"${c.name}" (${c.draftId})` },
+        );
+        if (action.cancelled || action.index === 2) continue;
+        if (action.index === 1) {
+          appletCandidates.updateStatus(c.id, 'rejected');
+          flashToast(`Dismissed ${c.name}.`, 'success');
+          stale = true;
+          continue;
+        }
+        // Building goes through the agent and its `applet` tool rather than
+        // constructing a manifest here: the tool already owns id validation,
+        // the asset seed and the authority split, and a second writer in the
+        // UI is how those drift apart.
+        appletCandidates.updateStatus(c.id, 'accepted');
+        await handleSubmit(buildAppletRequest(c));
+        return;
+      }
+    }
+
     if (is(text, '/candidates')) {
       let firstPass = true;
       let listIndex = 0;
@@ -2152,9 +2280,12 @@ export function App({
             ? 'Describe this image.'
             : argsText.slice(spaceIdx + 1).trim() || 'Describe this image.';
       }
-      if (!isVisionCapableModel(config.provider, config.model)) {
+      // The model the turn will actually RUN on, not `config.model` — under a
+      // lineup those differ, and this refused images for a model that could
+      // read them. Same staleness #233 fixed for the context-window math.
+      if (!mainVisionCapable(config)) {
         flashToast(
-          `Model "${config.model}" does not support image input. Switch with /model.`,
+          `Model "${resolveMainModel(config)}" does not support image input. Switch with /model.`,
           'error',
         );
         return;
@@ -2199,7 +2330,7 @@ export function App({
     let inlineImages: ImageAttachment[] | undefined;
     const candidatePaths = extractImagePaths(text);
     if (candidatePaths.length > 0) {
-      if (isVisionCapableModel(config.provider, config.model)) {
+      if (mainVisionCapable(config)) {
         const loaded: ImageAttachment[] = [];
         for (const p of candidatePaths) {
           const img = tryLoadImage(p);
@@ -2224,6 +2355,7 @@ export function App({
 
   type BooleanPrefKey =
     | 'autoCreateSpecialists'
+    | 'autoCreateApplets'
     | 'promptRewriter'
     | 'recallFilter'
     | 'toolDetails'
@@ -2551,6 +2683,13 @@ export function App({
             );
           }
         },
+      ),
+      toggleRow(
+        'autoCreateApplets',
+        'Auto-create applets',
+        'Build suggested applets above the threshold, without asking.',
+        'Auto-create applets: on',
+        'Auto-create applets: off',
       ),
       {
         kind: 'item',
@@ -3551,10 +3690,16 @@ export function App({
           // user's skipPermissions / confirmMode / toolMode — re-prompting on
           // dangerous shell even in unrestricted mode. Resolve the same per-turn
           // decision a chat turn would, feeding the policy engine the exact user
-          // message the model sees (`buildUserMessage` adds the `Task:`/`Context:`
+          // message the model sees (`renderTaskText` adds the `Task:`/`Context:`
           // framing) so the decision can't diverge from the real dispatch.
-          const taskMessage = taskDefinition.buildUserMessage(input).content;
-          const policyInput = typeof taskMessage === 'string' ? taskMessage : description;
+          //
+          // `renderTaskText`, not `buildUserMessage(input).content`: that
+          // returns a `CoreMessage` whose content becomes an ARRAY once a
+          // dispatch carries an attachment (#427), and the `typeof === 'string'`
+          // guard this replaced would then have silently fed the policy engine
+          // the bare description — diverging in exactly the way the comment
+          // above promises it cannot.
+          const policyInput = renderTaskText(input);
           const taskCtx = { ...ctx, policyDecision: agent.resolvePolicyDecisionFor(policyInput) };
           const { result, formatted } = await runDefinition(taskCtx, taskDefinition, input);
           if (result.finishReason === 'length') {

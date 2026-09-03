@@ -35,6 +35,8 @@ export function makePolicyInput(overrides?: {
     subagentPac: true,
     toolDetails: false,
     autoCreateSpecialists: false,
+    autoCreateApplets: false,
+    autoOpenApplets: false,
     autoCreateThreshold: 0.8,
     correctionEnabled: true,
     promptRewriter: true,

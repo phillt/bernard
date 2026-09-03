@@ -2,13 +2,19 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { SPECIALISTS_DIR } from './paths.js';
 import { RESERVED_NAMES } from './reserved-names.js';
-import { atomicWriteFileSync, seedOnce } from './fs-utils.js';
+import {
+  atomicWriteFileSync,
+  seedOnce,
+  seedBundledJsonDir,
+  copyBundledJsonIfAbsent,
+} from './fs-utils.js';
 import {
   findBuiltinSpecialistsDir,
   assertCanDeleteSpecialist,
   assertCanEditSpecialist,
 } from './specialist-authority.js';
 import type { ModelParams } from './providers/model-params.js';
+import type { RoleId } from './model-roles.js';
 
 // Re-exported so existing importers (e.g. the `/specialists` UI grouping) keep
 // resolving it from this module; the authoritative definition lives in
@@ -43,6 +49,23 @@ export interface Specialist {
   provider?: string;
   model?: string;
   /**
+   * What this specialist is FOR, in model-selection terms (#423).
+   *
+   * A `RoleId` — `executor`, `function-caller`, `summarizer`, … — not a vendor
+   * and not a model. `resolveSiteModel` maps role → tier → the active lineup's
+   * slot, so a role says "whatever the user's current profile considers right
+   * for this kind of work" and keeps meaning that when the profile changes.
+   *
+   * **This is what an agent building a specialist should choose**, precisely
+   * because a persisted `provider`/`model` is the thing the off-lineup pin
+   * guard exists to drop — and a pin an agent minted itself is the most
+   * confusing kind, since nobody chose it.
+   *
+   * Ranks BELOW an explicit pin and ABOVE the dispatching site's default, so
+   * a user who pinned a model keeps it. Absent = the site decides, i.e. today.
+   */
+  role?: RoleId;
+  /**
    * Optional generation parameters applied when this specialist's pinned
    * `provider`/`model` resolves (issue #286). Absent = model defaults. Keyed
    * by {@link ParamDescriptor.id}; serialized by `serializeModelParams`.
@@ -67,6 +90,26 @@ export interface Specialist {
    * refuse to invoke it. Toggle from the `/specialists` menu.
    */
   disabled?: boolean;
+  /**
+   * Binds this specialist to one applet action (#423), so it is reachable
+   * only through that capability and never as a free-floating specialist.
+   *
+   * Enforced at the three dispatch chokepoints — `specialist_run` and
+   * `tool_wrapper_run` refuse a bound record outright, and an app dispatch
+   * permits it only for the matching `(appId, action)`. `getSummaries()`
+   * omits it too, so the main agent is never advised to dispatch something it
+   * would then be refused for. It stays in `list()`, and therefore in
+   * `/specialists`: a user must be able to see what an applet is running.
+   *
+   * Settable at create, and via `update` **only on a record that is not yet
+   * bound**. The property that matters is that a model cannot RE-bind — that
+   * would steal a specialist from the applet it belongs to, which is a model
+   * writing a policy field. Binding one it just created is the ordinary flow,
+   * and forbidding it outright made the builder's own loop impossible:
+   * validation goes through `tool_wrapper_run`, which refuses a bound record,
+   * so a create-bound specialist could never be validated by execution.
+   */
+  boundTo?: { appId: string; action: string };
 }
 
 export interface SpecialistSummary {
@@ -90,12 +133,16 @@ export interface CreateSpecialistInput {
   guidelines?: string[];
   provider?: string;
   model?: string;
+  /** See {@link Specialist.role}. Prefer this over a `provider`/`model` pin. */
+  role?: RoleId;
   params?: ModelParams;
   kind?: SpecialistKind;
   targetTools?: string[];
   goodExamples?: SpecialistExample[];
   badExamples?: SpecialistBadExample[];
   structuredOutput?: boolean;
+  /** See {@link Specialist.boundTo}. Create-only, deliberately. */
+  boundTo?: { appId: string; action: string };
 }
 
 export type SpecialistUpdates = Partial<
@@ -107,6 +154,7 @@ export type SpecialistUpdates = Partial<
     | 'guidelines'
     | 'provider'
     | 'model'
+    | 'boundTo'
     | 'params'
     | 'kind'
     | 'targetTools'
@@ -115,7 +163,13 @@ export type SpecialistUpdates = Partial<
     | 'structuredOutput'
     | 'disabled'
   >
->;
+> & {
+  /**
+   * `''` clears the role, the way `''` clears `provider`/`model` — those are
+   * typed `string` so they get it for free, while `RoleId` has to say so.
+   */
+  role?: RoleId | '';
+};
 
 const MAX_SPECIALISTS = 50;
 
@@ -129,7 +183,13 @@ const SEED_MARKER = '.seeded-v1';
  * additively (each via its own marker) so existing installs pick them up
  * without a v1-marker bump that would resurrect user-deleted v1 specialists.
  */
-const POST_V1_BUNDLED = ['mcp-manager.json', 'research-agent.json'];
+export const POST_V1_BUNDLED = [
+  'mcp-manager.json',
+  'research-agent.json',
+  'agent-builder.json',
+  'applet-styler.json',
+  'applet-reviewer.json',
+];
 
 /**
  * Disk-backed store for named specialists (reusable expert profiles).
@@ -158,27 +218,11 @@ export class SpecialistStore {
     const bundledDir = findBuiltinSpecialistsDir();
     if (!bundledDir) return;
 
-    const copyIfAbsent = (file: string): void => {
-      const dest = path.join(SPECIALISTS_DIR, file);
-      if (fs.existsSync(dest)) return; // never overwrite user-edited copies
-      try {
-        const raw = fs.readFileSync(path.join(bundledDir, file), 'utf-8');
-        // Parse once to catch obviously corrupt bundle files before seeding.
-        JSON.parse(raw);
-        atomicWriteFileSync(dest, raw);
-      } catch {
-        // skip individual bad files; continue seeding the rest
-      }
-    };
+    // First-run seed of the original bundle. Gated by `.seeded-v1` so users
+    // can freely edit OR delete these without them coming back.
+    seedBundledJsonDir(bundledDir, SPECIALISTS_DIR, path.join(SPECIALISTS_DIR, SEED_MARKER));
 
     try {
-      // First-run seed of the original bundle. Gated by `.seeded-v1` so users
-      // can freely edit OR delete these without them coming back.
-      seedOnce(path.join(SPECIALISTS_DIR, SEED_MARKER), () => {
-        for (const file of fs.readdirSync(bundledDir).filter((f) => f.endsWith('.json'))) {
-          copyIfAbsent(file);
-        }
-      });
       // Additive seed for specialists shipped AFTER `.seeded-v1`. Each gets its
       // own marker so existing installs receive the new file without the v1
       // marker bump that would resurrect a v1 specialist the user deleted on
@@ -186,7 +230,7 @@ export class SpecialistStore {
       // from returning.)
       for (const file of POST_V1_BUNDLED) {
         seedOnce(path.join(SPECIALISTS_DIR, `.seeded-${file.replace(/\.json$/, '')}`), () =>
-          copyIfAbsent(file),
+          copyBundledJsonIfAbsent(bundledDir, SPECIALISTS_DIR, file),
         );
       }
     } catch {
@@ -278,12 +322,14 @@ export class SpecialistStore {
       guidelines: input.guidelines ?? [],
       ...(input.provider !== undefined ? { provider: input.provider } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
+      ...(input.role !== undefined ? { role: input.role } : {}),
       ...(input.params !== undefined ? { params: input.params } : {}),
       ...(input.kind !== undefined ? { kind: input.kind } : {}),
       ...(input.targetTools !== undefined ? { targetTools: input.targetTools } : {}),
       ...(input.goodExamples !== undefined ? { goodExamples: input.goodExamples } : {}),
       ...(input.badExamples !== undefined ? { badExamples: input.badExamples } : {}),
       ...(input.structuredOutput !== undefined ? { structuredOutput: input.structuredOutput } : {}),
+      ...(input.boundTo !== undefined ? { boundTo: input.boundTo } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -334,6 +380,26 @@ export class SpecialistStore {
         delete specialist.model;
       } else {
         specialist.model = updates.model;
+      }
+    }
+    // One-way: bind an unbound record, never re-bind or unbind. Enforced in
+    // the store rather than only at the tool, since this is the property the
+    // field exists for.
+    if (updates.boundTo !== undefined) {
+      if (specialist.boundTo) {
+        throw new Error(
+          `Specialist "${id}" is already bound to "${specialist.boundTo.appId}/${specialist.boundTo.action}". A binding cannot be changed.`,
+        );
+      }
+      specialist.boundTo = updates.boundTo;
+    }
+    // `''` clears the role, matching how provider/model clear — `undefined`
+    // means "don't change", so there has to be a way to say "remove it".
+    if (updates.role !== undefined) {
+      if (updates.role === '') {
+        delete specialist.role;
+      } else {
+        specialist.role = updates.role;
       }
     }
     // An empty object clears params; undefined means "don't change".
@@ -408,14 +474,35 @@ export class SpecialistStore {
   }
 
   /**
-   * Returns id + name + description + optional model info for all *enabled*
-   * specialists, for system-prompt injection and the auto-matcher. Disabled
-   * specialists are excluded here so they drop out of dispatch while still
-   * appearing in `list()` (and thus the `/specialists` menu).
+   * Returns id + name + description + optional model info for all *enabled,
+   * unbound* specialists, for system-prompt injection and the auto-matcher.
+   * Disabled and applet-bound specialists are excluded here so they drop out
+   * of dispatch while still appearing in `list()` (and thus the
+   * `/specialists` menu).
+   *
+   * This is the single chokepoint for "excluded from dispatch discovery", and
+   * its one caller (`src/agent.ts`) feeds BOTH `matchSpecialists` and the
+   * `<specialists>` context block. Filtering in the matcher alone would leave
+   * a bound specialist advertised in the prompt but unmatchable — inviting a
+   * `specialist_run` call that hits the refusal, i.e. a wasted step per turn.
    */
+  /**
+   * Every specialist bound to one applet action's app.
+   *
+   * A scan, because `boundTo` is a FIELD and records are addressed by
+   * filename — there is no index. It exists for deletion: a specialist bound
+   * to a removed app is unreachable by construction (`getSummaries` filters it
+   * out of discovery, the dispatch gates refuse it, and `update` refuses
+   * re-binding), so without this it would sit on disk forever, invisible and
+   * counting against `MAX_SPECIALISTS`.
+   */
+  listBoundTo(appId: string): Specialist[] {
+    return this.list().filter((s) => s.boundTo?.appId === appId);
+  }
+
   getSummaries(): SpecialistSummary[] {
     return this.list()
-      .filter((s) => !s.disabled)
+      .filter((s) => !s.disabled && !s.boundTo)
       .map(({ id, name, description, provider, model, params, kind }) => ({
         id,
         name,

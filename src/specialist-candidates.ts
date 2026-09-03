@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { SPECIALIST_CANDIDATES_DIR } from './paths.js';
+import { atomicWriteFileSync } from './fs-utils.js';
 
 export interface SpecialistCandidate {
   id: string;
@@ -124,7 +125,7 @@ export class CandidateStore {
       status: 'pending',
     };
 
-    this.atomicWrite(
+    atomicWriteFileSync(
       path.join(SPECIALIST_CANDIDATES_DIR, `${candidate.id}.json`),
       JSON.stringify(candidate, null, 2),
     );
@@ -136,7 +137,7 @@ export class CandidateStore {
     const candidate = this.get(id);
     if (!candidate) return false;
     candidate.acknowledged = true;
-    this.atomicWrite(
+    atomicWriteFileSync(
       path.join(SPECIALIST_CANDIDATES_DIR, `${id}.json`),
       JSON.stringify(candidate, null, 2),
     );
@@ -148,7 +149,7 @@ export class CandidateStore {
     const candidate = this.get(id);
     if (!candidate) return false;
     candidate.status = status;
-    this.atomicWrite(
+    atomicWriteFileSync(
       path.join(SPECIALIST_CANDIDATES_DIR, `${id}.json`),
       JSON.stringify(candidate, null, 2),
     );
@@ -175,12 +176,5 @@ export class CandidateStore {
       }
     }
     return pruned;
-  }
-
-  /** Writes data to a `.tmp` file then renames it into place for crash-safe persistence. */
-  private atomicWrite(filePath: string, data: string): void {
-    const tmp = filePath + '.tmp';
-    fs.writeFileSync(tmp, data, 'utf-8');
-    fs.renameSync(tmp, filePath);
   }
 }

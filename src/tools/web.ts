@@ -157,6 +157,8 @@ export function createWebReadTool(provenance?: ProvenanceStore) {
     {
       name: 'web_read',
       kind: 'read',
+      // A URL and an optional selector (#445).
+      directInvocable: true,
       deterministic: false,
       sideEffect: 'network',
       cacheable: false,

@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import { z } from 'zod';
 import { augmentTools } from './augment.js';
 import { attachMeta, toolToAISDK } from '../framework/tools/adapter.js';
@@ -1137,6 +1139,116 @@ describe('augmentTools', () => {
     });
   });
 
+  describe('write-scope gate (#340)', () => {
+    const workspace = path.join(os.tmpdir(), 'bernard-scope-test', 'ws');
+
+    /** `file_write`-shaped: a write tool taking a `path` argument. */
+    function makeWriteTool(name: string) {
+      const execute = vi.fn(async () => ({ ok: true }));
+      const t: any = { execute, description: 't', parameters: {} };
+      attachMeta(t, {
+        name,
+        kind: 'write',
+        deterministic: false,
+        sideEffect: 'local',
+        cacheable: false,
+      });
+      return { t, execute };
+    }
+
+    it('no scope configured → no restriction (the interactive default)', async () => {
+      const { t, execute } = makeWriteTool('file_write');
+      const augmented = augmentTools({ file_write: t }, { profileStore: store });
+      await augmented.file_write.execute({ path: '/etc/passwd' }, {});
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('allows a write inside the workspace', async () => {
+      const { t, execute } = makeWriteTool('file_write');
+      const augmented = augmentTools(
+        { file_write: t },
+        { profileStore: store, writeScope: { workspace } },
+      );
+      await augmented.file_write.execute({ path: path.join(workspace, 'a.txt') }, {});
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('refuses a write outside it, without invoking the tool', async () => {
+      const { t, execute } = makeWriteTool('file_write');
+      const augmented = augmentTools(
+        { file_write: t },
+        { profileStore: store, writeScope: { workspace } },
+      );
+      const out = await augmented.file_write.execute({ path: '/etc/passwd' }, {});
+      expect(execute).not.toHaveBeenCalled();
+      expect(String(out)).toContain('refused');
+    });
+
+    // The caller is generated code with no operator watching, so a bare
+    // refusal gets retried against the same path forever.
+    it('names the workspace in the refusal it hands the model', async () => {
+      const { t } = makeWriteTool('file_write');
+      const augmented = augmentTools(
+        { file_write: t },
+        { profileStore: store, writeScope: { workspace } },
+      );
+      const out = await augmented.file_write.execute({ path: '/etc/passwd' }, {});
+      expect(String(out)).toContain(workspace);
+    });
+
+    it('honours an explicit grant', async () => {
+      const { t, execute } = makeWriteTool('file_edit_lines');
+      const granted = path.join(os.tmpdir(), 'bernard-scope-test', 'granted');
+      const augmented = augmentTools(
+        { file_edit_lines: t },
+        { profileStore: store, writeScope: { workspace, grants: [granted] } },
+      );
+      await augmented.file_edit_lines.execute({ path: path.join(granted, 'x.txt') }, {});
+      expect(execute).toHaveBeenCalled();
+    });
+
+    // This gate bounds writes, not reads — read scoping is a separate decision.
+    it('does not gate a read tool, even one taking a path', async () => {
+      const { t, execute } = makeWriteTool('file_read_lines');
+      const augmented = augmentTools(
+        { file_read_lines: t },
+        { profileStore: store, writeScope: { workspace } },
+      );
+      await augmented.file_read_lines.execute({ path: '/etc/passwd' }, {});
+      expect(execute).toHaveBeenCalled();
+    });
+
+    // Extracting write targets from an arbitrary command line is not reliably
+    // possible, and a containment check that is sometimes wrong is worse than
+    // none. `shell` keeps its existing dangerous-command denial instead.
+    it('does not gate shell — deliberately out of scope', async () => {
+      const { t, execute } = makeWriteTool('shell');
+      const augmented = augmentTools(
+        { shell: t },
+        { profileStore: store, writeScope: { workspace } },
+      );
+      await augmented.shell.execute({ command: 'echo hi > /etc/passwd' }, {});
+      expect(execute).toHaveBeenCalled();
+    });
+
+    it('runs before the block gate, so an out-of-scope write is never prompted', async () => {
+      const { t, execute } = makeWriteTool('file_write');
+      const blockAction = vi.fn(async () => 'allow-once' as const);
+      const augmented = augmentTools(
+        { file_write: t },
+        {
+          profileStore: store,
+          toolMode: 'read-only',
+          blockAction,
+          writeScope: { workspace },
+        },
+      );
+      await augmented.file_write.execute({ path: '/etc/passwd' }, {});
+      expect(blockAction).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+    });
+  });
+
   describe('profile permission gate (#212)', () => {
     function makeToolWithMeta(name: string, kind: 'read' | 'write' | 'dangerous' = 'dangerous') {
       const execute = vi.fn(async () => ({ output: 'done', is_error: false }));
@@ -1144,6 +1256,64 @@ describe('augmentTools', () => {
       attachMeta(t, { name, kind, deterministic: false, sideEffect: 'local', cacheable: false });
       return { t, execute };
     }
+
+    // The gate that was missing (#420). Both pre-existing gates consult the
+    // rules only AFTER short-circuiting — the block gate unless the posture is
+    // read-only and the tool is a write, the confirm gate unless the risk
+    // crosses the threshold — so a `deny` on a low-risk READ tool never ran.
+    // That is exactly an applet's own posture, and exactly the tools an applet
+    // is granted.
+    it('deny grant on a low-risk read tool refuses, where both other gates short-circuit', async () => {
+      const { t, execute } = makeToolWithMeta('web_search', 'read');
+      const confirmAction = vi.fn(async () => true);
+      const blockAction = vi.fn(async () => 'deny' as const);
+      const augmented = augmentTools(
+        { web_search: t },
+        {
+          profileStore: store,
+          // read-only + threshold 'high': a low-risk read passes both gates
+          // without either one reaching the rules.
+          toolMode: 'read-only',
+          confirmThreshold: 'high',
+          confirmAction,
+          blockAction,
+          getToolPermissions: () => [{ effect: 'deny', tool: 'web_search', _v: 2 }],
+        },
+      );
+      const out = await augmented.web_search.execute({ query: 'x' }, {});
+      expect(execute).not.toHaveBeenCalled();
+      // Refused outright, not routed to a dialog: there is nobody to ask.
+      expect(confirmAction).not.toHaveBeenCalled();
+      expect(blockAction).not.toHaveBeenCalled();
+      expect(String(out)).toContain('denied');
+    });
+
+    it('no rules leaves a low-risk read untouched', async () => {
+      const { t, execute } = makeToolWithMeta('web_search', 'read');
+      const augmented = augmentTools(
+        { web_search: t },
+        { profileStore: store, toolMode: 'read-only', confirmThreshold: 'high' },
+      );
+      await augmented.web_search.execute({ query: 'x' }, {});
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    // `allow` keeps meaning "skip the prompt in the gate that would raise
+    // one" — the deny gate must not turn it into a bypass of the others.
+    it('allow grant is not widened by the deny gate', async () => {
+      const { t, execute } = makeToolWithMeta('web_search', 'read');
+      const augmented = augmentTools(
+        { web_search: t },
+        {
+          profileStore: store,
+          toolMode: 'read-only',
+          confirmThreshold: 'high',
+          getToolPermissions: () => [{ effect: 'allow', tool: 'web_search', _v: 2 }],
+        },
+      );
+      await augmented.web_search.execute({ query: 'x' }, {});
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
 
     it('profile allow grant skips the confirm prompt', async () => {
       const { t, execute } = makeToolWithMeta('t');
@@ -1226,7 +1396,15 @@ describe('augmentTools', () => {
       const r = await augmented.t.execute({}, {});
       expect(confirmAction).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
-      expect(r).toEqual({ output: 'Action cancelled by user.', is_error: true });
+      // A rule deny now answers with the RULE as the reason, from the
+      // unconditional gate, rather than borrowing whichever downstream gate
+      // happened to catch it — which produced 'cancelled by user' when nobody
+      // cancelled, and 'read-only mode' when the mode was not the reason.
+      // The unconditional gates answer on the legacy path with the same
+      // `Error: `-prefixed string the write-scope gate already used, which is
+      // the prefix `detectToolError` reads (#364).
+      expect(String(r)).toContain('Error: ');
+      expect(String(r)).toContain('denied for this dispatch by a permission rule');
     });
 
     it('profile allow grant bypasses the read-only block gate', async () => {
@@ -1261,11 +1439,12 @@ describe('augmentTools', () => {
       const r = await augmented.t.execute({}, {});
       expect(blockAction).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
-      expect(r).toEqual({
-        output:
-          'Action denied — read-only mode. Ask the user to allow this tool or switch toolMode to write.',
-        is_error: true,
-      });
+      // Same refusal as the confirm-gate case above: one reason, one message.
+      // The unconditional gates answer on the legacy path with the same
+      // `Error: `-prefixed string the write-scope gate already used, which is
+      // the prefix `detectToolError` reads (#364).
+      expect(String(r)).toContain('Error: ');
+      expect(String(r)).toContain('denied for this dispatch by a permission rule');
     });
 
     it("'allow-tool-for-profile' block outcome proceeds without touching the session allowlist", async () => {

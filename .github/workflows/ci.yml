@@ -2,11 +2,17 @@ name: CI
 
 on:
   push:
-    branches: [master, bernard-1-0-0]
+    branches: [master, bernard-1-0-0, feat/applets]
   pull_request:
     # `bernard-1-0-0` is the active release branch — every 1.0.0 PR targets it,
     # not master, so without it here CI silently never ran on any of them.
-    branches: [master, bernard-1-0-0]
+    #
+    # `feat/applets` is the long-lived Applets epic branch (#425): its issues
+    # merge into it and it merges into `bernard-1-0-0` once the epic is done.
+    # It needs listing for the same reason — a base branch missing here does
+    # not fail CI, it silently never runs it, which reads as "no checks
+    # required" on every PR in the epic.
+    branches: [master, bernard-1-0-0, feat/applets]
 
 jobs:
   typecheck:
@@ -50,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [20, 22]
+        node-version: [22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -65,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [20, 22]
+        node-version: [22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

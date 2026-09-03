@@ -70,6 +70,7 @@ export const DISPATCHED_COMMANDS = [
   '/routines',
   '/specialists',
   '/candidates',
+  '/applets',
   '/create-routine',
   '/create-task',
   '/create-specialist',
@@ -180,6 +181,7 @@ export const SLASH_COMMANDS: readonly BuiltinSlashCommand[] = [
   { name: '/specialists', description: 'List specialist agents' },
   { name: '/create-specialist', description: 'Create a specialist with guided AI assistance' },
   { name: '/candidates', description: 'Review specialist suggestions' },
+  { name: '/applets', description: 'List applets and review applet suggestions' },
   {
     name: '/options',
     description: 'View and set options (max-tokens, max-steps, …)',

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { attachmentsArg, resolveAttachments } from './attachment-args.js';
 import { resolveProviderAndModel } from '../config.js';
 import { printTaskStart, printTaskEnd } from '../output.js';
 import type { AgentContext } from '../framework/context.js';
@@ -59,6 +60,8 @@ const TASK_PARAMETERS = z
         'ID of a saved task (task-prefixed routine) to execute. Loads stored task content as the primary description.',
       ),
     context: z.string().optional().describe('Optional additional context for the task'),
+    attachments: attachmentsArg,
+
     provider: z
       .string()
       .optional()
@@ -118,7 +121,11 @@ export function createTaskTool(ctx: AgentContext): BernardTool<TaskArgs, TaskPay
     description:
       'Execute a focused, isolated task with structured JSON output {status, output, details?}. Tasks have no conversation history and a limited step budget. Use when you need a discrete, machine-readable result — especially during routine execution for chaining outcomes.',
     parameters: TASK_PARAMETERS,
-    execute: async ({ task, taskId, context, provider, model }, execOptions) => {
+    execute: async ({ task, taskId, context, attachments, provider, model }, execOptions) => {
+      const loaded = resolveAttachments(attachments);
+      // `task` answers in a `ToolResult` envelope, not a prefixed string —
+      // each of the four dispatch tools reports a bad path in its own contract.
+      if (!loaded.ok) return err({ type: 'invalid_args', message: loaded.error });
       const resolution = resolveProviderAndModel({ provider, model, config });
       if (!resolution.ok) {
         const envHint = resolution.isCustom ? '' : ` or set ${resolution.envVar}`;
@@ -160,9 +167,12 @@ export function createTaskTool(ctx: AgentContext): BernardTool<TaskArgs, TaskPay
           return runDispatchOrFail(
             async () => {
               const def = definitions.get<TaskInput, TaskResult>('task');
-              const input: TaskInput = context
-                ? { task: resolvedTask, context, slotId: id }
-                : { task: resolvedTask, slotId: id };
+              const input: TaskInput = {
+                task: resolvedTask,
+                ...(context ? { context } : {}),
+                attachments: loaded.read(),
+                slotId: id,
+              };
               const { formatted: taskResult } = await runDefinition(ctx, def, input, {
                 abortSignal: execOptions.abortSignal,
                 // Forward only the user-supplied provider/model so resolveSiteModel

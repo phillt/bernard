@@ -99,6 +99,29 @@ export interface ToolMeta {
    */
   actionScoped?: boolean;
   /**
+   * True when an applet action may call this tool **directly, with no model in
+   * the loop** (#445).
+   *
+   * An opt-in allowlist, not a denylist, and that direction is the point: a
+   * tool added later is ineligible until someone deliberately marks it, so the
+   * failure mode of forgetting is "this cannot be a deterministic action"
+   * rather than "a web page can now call it".
+   *
+   * The bar is that every parameter is **structured** — a name, an enum, a
+   * number, a path — so a manifest can map declared args onto it and nothing
+   * free-form crosses. `shell` will never carry it: its parameters are
+   * `{command: string}`, which is arbitrary host code execution reachable from
+   * a browser, the exact hole the capability design exists to close. A
+   * manifest naming an ineligible tool is rejected at parse time, and
+   * `meta-coverage.test.ts` walks the registry so a free-form parameter cannot
+   * acquire the flag by accident.
+   *
+   * Declared here rather than in a name list, for the reason
+   * {@link actionScoped} gives: a separate list can disagree with the tool it
+   * describes, and a disagreement here is fail-open.
+   */
+  directInvocable?: boolean;
+  /**
    * Optional post-write schema/state check (issue #145). Runs after the tool
    * returns `status: 'ok'` and contributes a structured `Check` to the turn's
    * rubric. Used for "did we mutate external state, and did we confirm it

@@ -80,7 +80,25 @@ export interface BernardConfig {
   toolDetails: boolean;
   /** Whether to auto-create specialists above the confidence threshold. */
   autoCreateSpecialists: boolean;
-  /** Confidence threshold for auto-creating specialists (0-1). */
+  /**
+   * Whether to auto-create applets above the confidence threshold (#430).
+   *
+   * Separate from `autoCreateSpecialists` and defaulted false where that one is
+   * merely off-by-default: an applet is a much larger artifact — a manifest, a
+   * page, a bound agent, an origin — so auto-building one on the same composite
+   * is a bigger bet than auto-writing a specialist record.
+   */
+  autoCreateApplets: boolean;
+  /**
+   * Open a newly created applet in the browser (#453 follow-up).
+   *
+   * Defaults ON, unlike its `autoCreate*` neighbours, because the defect it
+   * fixes is "the thing I asked for never appeared". The environments where
+   * opening is wrong — headless, SSH with no display — are DETECTED
+   * (`canOpenBrowser`) rather than defaulted around.
+   */
+  autoOpenApplets: boolean;
+  /** Confidence threshold for auto-creating specialists and applets (0-1). */
   autoCreateThreshold: number;
   /** Whether the correction agent runs at session close to learn from tool-wrapper failures. */
   correctionEnabled: boolean;
@@ -290,7 +308,8 @@ export function resolveVoiceWarmupMs(override?: number, pref?: number): number {
   return DEFAULT_VOICE_WARMUP_MS;
 }
 const DEFAULT_MAX_TOKENS = 4096;
-const DEFAULT_SHELL_TIMEOUT = 30000;
+/** Shared with `src/apps/tool-dispatch.ts`, which resolves it without `loadConfig`. */
+export const DEFAULT_SHELL_TIMEOUT = 30000;
 const DEFAULT_TOKEN_WINDOW = 0;
 const DEFAULT_MAX_STEPS = 25;
 const DEFAULT_AUTO_CREATE_SPECIALISTS = false;
@@ -452,6 +471,8 @@ export function savePreferences(prefs: {
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
+  autoCreateApplets?: boolean;
+  autoOpenApplets?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
@@ -506,6 +527,8 @@ export function loadPreferences(): {
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
+  autoCreateApplets?: boolean;
+  autoOpenApplets?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
@@ -553,6 +576,10 @@ export function loadPreferences(): {
     toolDetails: typeof parsed.toolDetails === 'boolean' ? parsed.toolDetails : undefined,
     autoCreateSpecialists:
       typeof parsed.autoCreateSpecialists === 'boolean' ? parsed.autoCreateSpecialists : undefined,
+    autoCreateApplets:
+      typeof parsed.autoCreateApplets === 'boolean' ? parsed.autoCreateApplets : undefined,
+    autoOpenApplets:
+      typeof parsed.autoOpenApplets === 'boolean' ? parsed.autoOpenApplets : undefined,
     autoCreateThreshold:
       typeof parsed.autoCreateThreshold === 'number' ? parsed.autoCreateThreshold : undefined,
     promptRewriter: typeof parsed.promptRewriter === 'boolean' ? parsed.promptRewriter : undefined,
@@ -1140,6 +1167,19 @@ export function loadConfig(overrides?: {
       ? true
       : DEFAULT_AUTO_CREATE_SPECIALISTS);
 
+  const autoCreateApplets =
+    prefs.autoCreateApplets ??
+    (process.env.BERNARD_AUTO_CREATE_APPLETS === 'true' ||
+      process.env.BERNARD_AUTO_CREATE_APPLETS === '1');
+
+  // Default ON: opt OUT with `=false`, the inverse of its neighbours above.
+  const autoOpenApplets =
+    prefs.autoOpenApplets ??
+    !(
+      process.env.BERNARD_AUTO_OPEN_APPLETS === 'false' ||
+      process.env.BERNARD_AUTO_OPEN_APPLETS === '0'
+    );
+
   const envAutoCreateThreshold = parseFloat(process.env.BERNARD_AUTO_CREATE_THRESHOLD ?? '');
   const autoCreateThreshold = normalizeThreshold(
     prefs.autoCreateThreshold ??
@@ -1302,6 +1342,8 @@ export function loadConfig(overrides?: {
     subagentPac,
     toolDetails,
     autoCreateSpecialists,
+    autoCreateApplets,
+    autoOpenApplets,
     autoCreateThreshold,
     correctionEnabled,
     promptRewriter,
@@ -1393,6 +1435,8 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'subagentPac',
   'toolDetails',
   'autoCreateSpecialists',
+  'autoCreateApplets',
+  'autoOpenApplets',
   'autoCreateThreshold',
   'promptRewriter',
   'recallFilter',

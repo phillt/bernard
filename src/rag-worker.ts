@@ -19,6 +19,9 @@ import { loadConfig } from './config.js';
 import { extractDomainFacts } from './context.js';
 import { RAGStore } from './rag.js';
 import { CandidateStore, MAX_PENDING_CANDIDATES } from './specialist-candidates.js';
+import { AppletCandidateStore, MAX_PENDING_APPLET_CANDIDATES } from './applet-candidates.js';
+import { detectAppletCandidate } from './applet-detector.js';
+import { AppRegistry } from './apps/registry.js';
 import { SpecialistStore } from './specialists.js';
 import { detectSpecialistCandidate } from './specialist-detector.js';
 
@@ -91,25 +94,48 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
     }
   }
 
-  // Specialist candidate detection (non-blocking — runs after facts are stored)
-  try {
-    const candidateStore = new CandidateStore();
-    if (candidateStore.listPending().length < MAX_PENDING_CANDIDATES) {
+  // Specialist and applet candidate detection (#430).
+  //
+  // Two independent cheap-tier calls over the same transcript, so they run
+  // CONCURRENTLY: this process exists only to finish and exit, and awaiting them
+  // in sequence doubled its wall clock for no dependency between them. Each has
+  // its own try, because a failure in either must not cost the other its
+  // result — and `allSettled`, not `all`, so a rejection cannot skip the temp
+  // file cleanup below.
+  //
+  // Each `listPending()` is read ONCE and used for both the cap gate and the
+  // detector's "already suggested" list; the two used to be separate calls, i.e.
+  // a second full readdir and parse of the same directory.
+  await Promise.allSettled([
+    (async () => {
+      const candidateStore = new CandidateStore();
+      const pending = candidateStore.listPending();
+      if (pending.length >= MAX_PENDING_CANDIDATES) return;
       // Only calls .list() below — bundled seeding is the REPL's job (#163).
       const specialistStore = new SpecialistStore({ seed: false });
       const candidate = await detectSpecialistCandidate(
         payload.serialized,
         config,
         specialistStore.list(),
-        candidateStore.listPending(),
+        pending,
       );
       if (candidate?.type === 'new-candidate') {
         candidateStore.create(candidate.candidate, 'exit');
       }
-    }
-  } catch {
-    // Silent — detection failure must not block anything
-  }
+    })(),
+    (async () => {
+      const appletCandidates = new AppletCandidateStore();
+      const pending = appletCandidates.listPending();
+      if (pending.length >= MAX_PENDING_APPLET_CANDIDATES) return;
+      const detected = await detectAppletCandidate(
+        payload.serialized,
+        config,
+        new AppRegistry().listIds(),
+        pending,
+      );
+      if (detected) appletCandidates.create(detected.candidate, 'exit');
+    })(),
+  ]);
 
   // Clean up temp file
   tryUnlink(filePath);

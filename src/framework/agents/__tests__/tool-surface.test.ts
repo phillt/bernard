@@ -172,13 +172,16 @@ describe('cron participates in MCP delegation (#315)', () => {
     ]) {
       expect(names).toContain(t);
     }
-    // Withheld deliberately: a default cron job denies write-shaped `shell`
-    // (dangerous → high risk) but would pass these (write/local → medium)
-    // unprompted, so folding them in would hand every existing job an unbounded
-    // filesystem write through the one door that isn't gated. `file_write`
-    // (#342) is the stronger case — it can create files, not just edit them.
-    expect(names).not.toContain('file_edit_lines');
-    expect(names).not.toContain('file_write');
+    // Handed back by #340. They were withheld by #337 because a default cron
+    // job denies write-shaped `shell` (dangerous → high) but would have passed
+    // these (write/local → medium) unprompted — an unbounded filesystem write
+    // through the one door that wasn't gated. What replaced the withholding is
+    // the write-scope gate: the runner gives every job a workspace, so the
+    // question is *where* the write lands rather than which tool made it.
+    // Presence here is not the safety property; `write-scope.test.ts` and the
+    // gate tests in `augment.test.ts` are.
+    expect(names).toContain('file_edit_lines');
+    expect(names).toContain('file_write');
     // `cite` is provenance-gated in `createTools`, and this fixture carries no
     // store — so its absence here IS the gate working. Cron passes
     // `ctx.provenance` now (it previously passed none to anything), so in a real

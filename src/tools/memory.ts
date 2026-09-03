@@ -30,6 +30,10 @@ export function createMemoryTool(
     meta: {
       name: 'memory',
       kind: 'write',
+      // action / key / content, all scalars (#445). `isWriteAction` below
+      // still refines the gates per call, and a per-app `deny memory:action:write`
+      // rule narrows it further.
+      directInvocable: true,
       deterministic: false,
       sideEffect: 'local',
       cacheable: false,
