@@ -1,6 +1,6 @@
 import { type ToolProfileStore, classifyShellCommand, detectToolError } from '../tool-profiles.js';
 import { ERROR_SNIPPET_MAX, detectResultFailure } from '../tool-result-shape.js';
-import { debugLog } from '../logger.js';
+import { debugLog, isDebugEnabled } from '../logger.js';
 import { printInfo } from '../output.js';
 import { readBernardSource, readToolMeta, preserveMeta } from '../framework/tools/adapter.js';
 import { isCacheable, type ToolResult } from '../framework/tools/types.js';
@@ -9,7 +9,7 @@ import type { BlockActionInput, BlockOutcome, ConfirmActionInput, ToolOptions } 
 import type { ConfirmThreshold } from '../risk.js';
 import { riskFromMeta, shouldBlockInReadOnly, shouldConfirm } from '../risk.js';
 import { CACHE_MISS, getCachedResult, setCachedResult } from '../framework/tools/result-cache.js';
-import { redactArgs, REDACTED } from '../framework/tools/redact.js';
+import { boundedStringify, redactArgs, REDACTED } from '../framework/tools/redact.js';
 import type { ProvenanceStore } from '../provenance.js';
 import type { ToolMeta } from '../framework/tools/types.js';
 import { isDangerous, isSafelisted } from './shell.js';
@@ -75,6 +75,43 @@ function safeSerialize(args: unknown): string {
   } catch {
     return String(args).slice(0, 300);
   }
+}
+
+/** Characters of a tool result kept for the debug preview. */
+const RESULT_PREVIEW_MAX = 500;
+
+/**
+ * What a tool actually answered, for `tool:execute:end` (#459).
+ *
+ * The session log recorded what a tool was ASKED and how long it took, and
+ * nothing about the reply — so any claim of the form "the tool told me X" was
+ * unfalsifiable from our own logs. That is what made #458 invisible: twelve
+ * Gmail reads all logging `status: "ok"`, and nothing saying whether the server
+ * had returned the CC header Bernard then lost, or never sent one. Opposite
+ * owners, opposite fixes, and no way to separate them without reproducing the
+ * payload by hand.
+ *
+ * `boundedStringify` rather than {@link safeSerialize}: the naive
+ * stringify-then-slice materializes the whole value before discarding all but a
+ * few hundred bytes — ~39 ms and ~20 MB transient for a 10 MB `shell` result —
+ * and this sits on the path between a tool returning and its value reaching the
+ * model. It also never throws, which a log-write path requires.
+ *
+ * `resultChars` measures the BOUNDED text, so on a result that was cut it is a
+ * lower bound; `resultBounded` is what says which. The length is kept even for a
+ * `sensitiveResult` tool — a size is not a secret, and it is the number that
+ * makes a silently truncated read visible at all.
+ *
+ * Callers must invoke this inside an {@link isDebugEnabled} guard: `debugLog`'s
+ * payload is an ordinary argument, so it is built whether or not it is written.
+ */
+function resultStats(result: unknown, meta: ToolMeta | undefined) {
+  const { text, bounded } = boundedStringify(result, RESULT_PREVIEW_MAX);
+  return {
+    resultChars: text.length,
+    resultBounded: bounded,
+    resultPreview: meta?.sensitiveResult ? REDACTED : text,
+  };
 }
 
 /**
@@ -721,6 +758,28 @@ export function augmentTools(
                 // (kind, rawRef), so intra-turn repeats are a no-op.
                 const cachedPreview = typeof cached === 'string' ? cached : safeSerialize(cached);
                 registerEvidence(toolName, args, source.meta, cachedPreview);
+                // A cache hit is a tool call the model believes happened — it is
+                // registered as citable evidence just above — but it returned
+                // before `tool:execute:start`/`:end` were ever reached, so a
+                // scan of the log undercounted tool calls, and undercounted
+                // exactly the ones that are free and therefore most repeated.
+                // The same blindness #459 is about. Both lines, so a consumer
+                // pairing start with end stays balanced.
+                if (isDebugEnabled()) {
+                  const cachedArgs = safeSerialize(redactArgs(args, source.meta?.sensitiveArgs));
+                  debugLog('tool:execute:start', {
+                    tool: toolName,
+                    args: cachedArgs,
+                    cached: true,
+                  });
+                  debugLog('tool:execute:end', {
+                    tool: toolName,
+                    durationMs: 0,
+                    status: 'ok',
+                    cached: true,
+                    ...resultStats(cached, source.meta),
+                  });
+                }
                 return cached;
               }
               debugLog(`cache:tool:miss`, { tool: toolName });
@@ -735,11 +794,20 @@ export function augmentTools(
               debugLog(`augment:${toolName}:done`, {
                 ok: envelope.status === 'ok',
               });
-              debugLog('tool:execute:end', {
-                tool: toolName,
-                durationMs: Date.now() - execStartedAt,
-                status: envelope.status,
-              });
+              if (isDebugEnabled()) {
+                debugLog('tool:execute:end', {
+                  tool: toolName,
+                  durationMs: Date.now() - execStartedAt,
+                  status: envelope.status,
+                  // `envelope.result`, not the model-facing `serializeForModel`
+                  // (not built until further down) — this is the tool's own
+                  // answer, which is the thing under audit.
+                  ...resultStats(
+                    envelope.status === 'ok' ? envelope.result : envelope.error,
+                    source.meta,
+                  ),
+                });
+              }
             } catch (thrown: unknown) {
               // Infrastructure-level throws (reconnect, network, etc.) are not
               // usage errors — don't record them as bad examples.
@@ -851,7 +919,12 @@ export function augmentTools(
           // It replaces an inline `is_error === true || 'error' in result`,
           // which knew nothing of MCP's `isError` and misread `{error: null}`
           // (what `structured-output`'s `nullableOptional` leaves behind).
-          const looksLikeError = detectResultFailure(capturedResult) !== undefined;
+          // The snippet, not just the verdict. It was computed and discarded
+          // here, and it is the most useful thing the log can carry: the text
+          // the "did this fail?" answer was actually derived from (#459),
+          // already bounded to `ERROR_SNIPPET_MAX` by construction.
+          const failureSnippet = detectResultFailure(capturedResult);
+          const looksLikeError = failureSnippet !== undefined;
           // Log a non-throwing failure as `status: 'error'` so the JSONL
           // reflects what the model actually received. The legacy path used
           // to always log `'ok'` whenever execute didn't throw, which made
@@ -860,11 +933,16 @@ export function augmentTools(
           // invisible at the augment-log layer. Since #363 this also covers
           // MCP's `{content, isError: true}`, which is how a whole session of
           // dead-socket calls logged as 254 consecutive `ok`s.
-          debugLog('tool:execute:end', {
-            tool: toolName,
-            durationMs: Date.now() - execStartedAt,
-            status: looksLikeError ? 'error' : 'ok',
-          });
+          if (isDebugEnabled()) {
+            const meta = readToolMeta(toolDef);
+            debugLog('tool:execute:end', {
+              tool: toolName,
+              durationMs: Date.now() - execStartedAt,
+              status: looksLikeError ? 'error' : 'ok',
+              failureSnippet: meta?.sensitiveResult ? REDACTED : failureSnippet,
+              ...resultStats(capturedResult, meta),
+            });
+          }
           if (!looksLikeError) {
             const previewSrc =
               typeof capturedResult === 'string' ? capturedResult : safeSerialize(capturedResult);

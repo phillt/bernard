@@ -5,7 +5,7 @@ import { Experimental_StdioMCPTransport } from '@ai-sdk/mcp/mcp-stdio';
 import { jsonSchema } from 'ai';
 import { printInfo, printError } from './output.js';
 import { MCP_CONFIG_PATH as CONFIG_PATH } from './paths.js';
-import { openSessionSidecarFd } from './logger.js';
+import { debugLog, openSessionSidecarFd } from './logger.js';
 import {
   flattenServerTools,
   makeAliasResolver,
@@ -447,8 +447,22 @@ export class MCPManager {
     // Structure-aware result shaping (#297): bound over-budget MCP results
     // before they enter an agent's context so a large list/body doesn't re-bill
     // on every subsequent step. `off` (or unset) is a pass-through.
-    const shape = (result: unknown): unknown =>
-      shaping ? shapeMCPResult(result, shaping) : result;
+    //
+    // A capped result is logged (#459): tool results were bounded here with no
+    // record anywhere, which is why #458 — a Gmail read whose header block was
+    // silently cut, so Bernard reported a CC it had actually sent as dropped —
+    // could not be told apart from a server that never sent the header. The
+    // pre- and post-shaping sizes are what make "the tool told me X" checkable.
+    // Only a result that was actually cut is logged; a pass-through is not a
+    // decision worth a line, and it is the overwhelming majority of calls.
+    // Declared once outside the loop, so the server and the tool it is shaping
+    // for arrive as arguments rather than by closing over the loop variables.
+    const shape = (result: unknown, server: string, tool: string): unknown => {
+      if (!shaping) return result;
+      return shapeMCPResult(result, shaping, (stats) => {
+        debugLog('mcp:result:capped', { server, tool, ...stats });
+      });
+    };
     // Convert dynamic MCP tools to function tools compatible with AI SDK v4.
     // @ai-sdk/mcp@1.x returns tools with type:'dynamic' and inputSchema from
     // @ai-sdk/provider-utils@4.x, but ai@4.x expects type:undefined and
@@ -473,7 +487,7 @@ export class MCPManager {
           execute: async (args: unknown) => {
             try {
               const result = await originalExecute(args);
-              return shape(normalizeToolResult(result));
+              return shape(normalizeToolResult(result), serverName, raw);
             } catch (error) {
               // The RAW name: this line is for the user, and the raw name is
               // the one they see in the server's own docs and in `mcp_verify`.
@@ -483,7 +497,7 @@ export class MCPManager {
               if (reconnected && fresh) {
                 const freshTool = this.convertTool(name, fresh.tool);
                 const retryResult = await freshTool.execute(args);
-                return shape(normalizeToolResult(retryResult));
+                return shape(normalizeToolResult(retryResult), serverName, raw);
               }
               throw error;
             }

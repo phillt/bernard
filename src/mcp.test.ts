@@ -20,7 +20,15 @@ vi.mock('ai', () => ({
   jsonSchema: (schema: any) => ({ _jsonSchema: schema }),
 }));
 
+// `openSessionSidecarFd` is the other import `mcp.ts` takes from here; without
+// it the stderr-capture tests lose their target.
+vi.mock('./logger.js', async () => {
+  const actual = await vi.importActual<typeof import('./logger.js')>('./logger.js');
+  return { ...actual, debugLog: vi.fn() };
+});
+
 const { createMCPClient } = await import('@ai-sdk/mcp');
+const { debugLog } = await import('./logger.js');
 const { printInfo, printError } = await import('./output.js');
 const { MCPManager, verifyMCPServer } = await import('./mcp.js');
 const { mcpToolName } = await import('./mcp-names.js');
@@ -677,5 +685,63 @@ describe('MCPManager namespaced names (#413)', () => {
     await m2.connect();
 
     expect(Object.keys(m2.getTools()).sort()).toEqual(first);
+  });
+});
+
+/**
+ * #458/#459. The shaper's own tests pin what it cuts; this pins that the tool
+ * it was cutting for reaches the log. Without the server and tool names, a
+ * `mcp:result:capped` line cannot answer the question the log exists for —
+ * which read lost the header.
+ */
+describe('MCPManager result shaping telemetry (#459)', () => {
+  let manager: InstanceType<typeof MCPManager>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager = new MCPManager();
+  });
+
+  /** Connects one server whose single tool returns `result`. */
+  async function connectReturning(result: unknown): Promise<Record<string, any>> {
+    const client = makeMockClient({
+      get_email: makeDynamicTool(vi.fn().mockResolvedValue(result)),
+    });
+    mockCreateMCPClient.mockImplementation(async () => client);
+    vi.spyOn(manager, 'loadConfig').mockReturnValue({
+      mcpServers: { gmail: { url: 'http://gmail' } },
+    });
+    await manager.connect();
+    return manager.getServerTools({ mode: 'cap', maxChars: 800 });
+  }
+
+  function cappedLines() {
+    return vi.mocked(debugLog).mock.calls.filter(([label]) => label === 'mcp:result:capped');
+  }
+
+  it('names the server and the tool whose result was cut', async () => {
+    const perServer = await connectReturning({
+      content: [{ type: 'text', text: JSON.stringify({ body: 'x'.repeat(20_000) }) }],
+    });
+    await perServer.gmail[mcpToolName('gmail', 'get_email')].execute({});
+
+    const lines = cappedLines();
+    expect(lines).toHaveLength(1);
+    const payload = lines[0][1] as Record<string, unknown>;
+    // The RAW name, which is what the user sees in the server's own docs and in
+    // `mcp_verify` — not the namespaced registry key.
+    expect(payload.server).toBe('gmail');
+    expect(payload.tool).toBe('get_email');
+    expect(payload.rawChars).toBeGreaterThan(payload.keptChars as number);
+    expect(payload.unwrapped).toBe(true);
+  });
+
+  it('says nothing for a result that fit', async () => {
+    const perServer = await connectReturning({ content: [{ type: 'text', text: '{"ok":true}' }] });
+    await perServer.gmail[mcpToolName('gmail', 'get_email')].execute({});
+
+    // A pass-through is not a decision worth a line, and it is the overwhelming
+    // majority of calls.
+    expect(cappedLines()).toHaveLength(0);
   });
 });
