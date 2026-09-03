@@ -10,6 +10,11 @@ import type { SubAgentInput } from '../framework/agents/sub.js';
 import { runPAC } from '../framework/pac/run-pac.js';
 import { withSlot, _resetPool, getMaxConcurrentAgents, slotStatusLine } from './agent-pool.js';
 import { runDispatchOrFail } from './dispatch-failure.js';
+import {
+  ATTACHMENTS_DESCRIPTION,
+  MAX_DISPATCH_ATTACHMENTS,
+  resolveAttachments,
+} from './attachment-args.js';
 
 /**
  * Resets the shared concurrency pool state.
@@ -43,6 +48,12 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
           'A detailed, self-contained task description. Include: (1) specific objective and expected output format, (2) exact file paths, commands, or URLs, (3) edge cases and what to do if something fails, (4) what "done" looks like. The sub-agent has zero prior context.',
         ),
       context: z.string().optional().describe('Optional additional context to help the sub-agent'),
+      attachments: z
+        .array(z.string())
+        .max(MAX_DISPATCH_ATTACHMENTS)
+        .optional()
+        .describe(ATTACHMENTS_DESCRIPTION),
+
       provider: z
         .string()
         .optional()
@@ -56,11 +67,16 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
           'Optional model override for this sub-agent (e.g. "grok-code-fast-1"). Falls back to global config.',
         ),
     }),
-    execute: async ({ task, context, provider, model }, execOptions) => {
+    execute: async ({ task, context, attachments, provider, model }, execOptions) => {
       const resolution = resolveProviderAndModel({ provider, model, config: ctx.config });
       if (!resolution.ok) {
         return `Error: ${defaultProviderErrorMessage(resolution.provider, resolution.envVar, resolution.isCustom)}`;
       }
+      // Loaded at the tool boundary, before a slot is taken: a bad path is a
+      // model mistake, and it should cost nothing. The `Error: ` prefix is what
+      // `detectToolError` reads (#364).
+      const loaded = resolveAttachments(attachments);
+      if (!loaded.ok) return `Error: ${loaded.error}`;
 
       // Slot status is appended AFTER `withSlot` resolves, so this dispatch's
       // own slot is already released and the count describes what the model can
@@ -85,7 +101,11 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
                 if (ctx.config.subagentPac) {
                   // `runPAC` owns the final cap (and reserves space for the FAIL
                   // footer); re-capping here would risk truncating that footer away.
-                  const pacResult = await runPAC(ctx, { task, context, slotId: id }, runOpts);
+                  const pacResult = await runPAC(
+                    ctx,
+                    { task, context, slotId: id, attachments: loaded.attachments },
+                    runOpts,
+                  );
                   formatted = pacResult.formatted;
                   // Snapshot the verdict for the Agent Status overlay (#140). Last
                   // write wins across nested / parallel sub-agents — fine, this is a
@@ -100,7 +120,7 @@ export function createSubAgentTool(ctx: AgentContext): Tool {
                   const result = await runDefinition(
                     ctx,
                     def,
-                    { task, context, slotId: id },
+                    { task, context, slotId: id, attachments: loaded.attachments },
                     runOpts,
                   );
                   formatted = result.formatted;

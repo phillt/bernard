@@ -232,3 +232,57 @@ describe('runPAC', () => {
     expect(criticInput.actorOutput).toBe('A_OUTPUT');
   });
 });
+
+describe('runPAC attachment forwarding (#427)', () => {
+  const attachments = [
+    { kind: 'image' as const, mimeType: 'image/png', data: Buffer.from('x'), path: '/a.png' },
+  ];
+
+  /**
+   * `runPAC` is reached from `subagent` behind `config.subagentPac`. A pipeline
+   * that dropped attachments would make that toggle silently decide whether a
+   * sub-agent can see an image, with no error anywhere — which is why this
+   * shipped in the same commit as the producers rather than after them.
+   */
+  it('forwards to the planner and the actor', async () => {
+    const { calls } = setupQueue([
+      { defId: 'pac-planner', formatted: 'a plan' },
+      { defId: 'pac-actor', formatted: 'did it' },
+      { defId: 'pac-critic', formatted: { verdict: 'pass', reason: 'ok' } as PacCriticVerdict },
+    ]);
+    await runPAC(fakeCtx(), { task: 'describe', slotId: 1, attachments });
+    const planner = calls.find((c) => c.defId === 'pac-planner');
+    const actor = calls.find((c) => c.defId === 'pac-actor');
+    expect((planner?.input as { attachments?: unknown }).attachments).toEqual(attachments);
+    expect((actor?.input as { attachments?: unknown }).attachments).toEqual(attachments);
+  });
+
+  // Deliberately omitted: the critic's message already stacks task + context +
+  // plan + actor output, and with PAC_MAX_RETRIES = 1 including it would send
+  // the bytes up to six times for one dispatch.
+  it('does not send them to the critic', async () => {
+    const { calls } = setupQueue([
+      { defId: 'pac-planner', formatted: 'a plan' },
+      { defId: 'pac-actor', formatted: 'did it' },
+      { defId: 'pac-critic', formatted: { verdict: 'pass', reason: 'ok' } as PacCriticVerdict },
+    ]);
+    await runPAC(fakeCtx(), { task: 'describe', slotId: 1, attachments });
+    const critic = calls.find((c) => c.defId === 'pac-critic');
+    expect((critic?.input as { attachments?: unknown }).attachments).toBeUndefined();
+  });
+
+  it('carries them into the replan after a critic FAIL', async () => {
+    const { calls } = setupQueue([
+      { defId: 'pac-planner', formatted: 'plan 1' },
+      { defId: 'pac-actor', formatted: 'attempt 1' },
+      { defId: 'pac-critic', formatted: { verdict: 'fail', reason: 'no' } as PacCriticVerdict },
+      { defId: 'pac-planner', formatted: 'plan 2' },
+      { defId: 'pac-actor', formatted: 'attempt 2' },
+      { defId: 'pac-critic', formatted: { verdict: 'pass', reason: 'ok' } as PacCriticVerdict },
+    ]);
+    await runPAC(fakeCtx(), { task: 'describe', slotId: 1, attachments });
+    const planners = calls.filter((c) => c.defId === 'pac-planner');
+    expect(planners).toHaveLength(2);
+    expect((planners[1].input as { attachments?: unknown }).attachments).toEqual(attachments);
+  });
+});

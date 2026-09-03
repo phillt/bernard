@@ -1,4 +1,9 @@
 import { tool, type Tool } from 'ai';
+import {
+  ATTACHMENTS_DESCRIPTION,
+  MAX_DISPATCH_ATTACHMENTS,
+  resolveAttachments,
+} from './attachment-args.js';
 import { z } from 'zod';
 import { resolveProviderAndModel, defaultProviderErrorMessage } from '../config.js';
 import { printSpecialistStart, printSpecialistEnd } from '../output.js';
@@ -48,6 +53,12 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
           'A detailed, self-contained task description. Include: (1) specific objective and expected output format, (2) exact file paths, commands, or URLs, (3) edge cases and what to do if something fails. The specialist has zero prior context beyond its own profile.',
         ),
       context: z.string().optional().describe('Optional additional context to help the specialist'),
+      attachments: z
+        .array(z.string())
+        .max(MAX_DISPATCH_ATTACHMENTS)
+        .optional()
+        .describe(ATTACHMENTS_DESCRIPTION),
+
       provider: z
         .string()
         .optional()
@@ -61,7 +72,9 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
           'Optional model override for this invocation (e.g. "grok-code-fast-1"). Takes priority over specialist config and global config.',
         ),
     }),
-    execute: async ({ specialistId, task, context, provider, model }, execOptions) => {
+    execute: async ({ specialistId, task, context, attachments, provider, model }, execOptions) => {
+      const loaded = resolveAttachments(attachments);
+      if (!loaded.ok) return `Error: ${loaded.error}`;
       const specialist = specialistStore.get(specialistId);
       if (!specialist) {
         return `Error: No specialist found with id "${specialistId}". Use the specialist tool to list or create specialists.`;
@@ -104,9 +117,14 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
             async () => {
               try {
                 const def = definitions.get<SpecialistInput, string>('specialist');
-                const input: SpecialistInput = context
-                  ? { specialistId, task, context, slotId: id, planStore }
-                  : { specialistId, task, slotId: id, planStore };
+                const input: SpecialistInput = {
+                  specialistId,
+                  task,
+                  ...(context ? { context } : {}),
+                  ...(loaded.attachments ? { attachments: loaded.attachments } : {}),
+                  slotId: id,
+                  planStore,
+                };
                 const { formatted } = await runDefinition(ctx, def, input, {
                   abortSignal: execOptions.abortSignal,
                   overrides: { provider, model },
