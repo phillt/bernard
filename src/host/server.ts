@@ -113,6 +113,13 @@ function createHandler(
   const { appId, token, sessionId, capabilities } = opts;
   const assetDir = opts.assetDir ?? appletAssetDir(appId);
   const log = opts.log ?? (() => {});
+  // One registry for the life of this applet's server. The three routes below
+  // each constructed their own, so every request re-ran `seedOnce`'s mkdir and
+  // marker stat — and a page load hits two of them. The manifest itself is
+  // still read per request, deliberately: it is user-editable between requests,
+  // so caching the parsed value would re-open the time-of-check/time-of-use gap
+  // that validating on read exists to close (#420 R6).
+  const registry = new AppRegistry();
 
   return (req, res) => {
     void (async () => {
@@ -146,7 +153,7 @@ function createHandler(
        * are validated against that schema at invoke.
        */
       if (url === BOOTSTRAP_PATH) {
-        const app = new AppRegistry().get(appId);
+        const app = registry.get(appId);
         if (!app.ok) {
           sendJson(res, 500, { ok: false, error: app.failure.message });
           return;
@@ -230,7 +237,7 @@ function createHandler(
        * costs nothing either way and is the half that can be verified here.
        */
       if (url === MANIFEST_PATH) {
-        const app = new AppRegistry().get(appId);
+        const app = registry.get(appId);
         if (!app.ok) {
           sendJson(res, 500, { ok: false, error: app.failure.message });
           return;
@@ -242,7 +249,7 @@ function createHandler(
       }
 
       if (url === ICON_PATH) {
-        const app = new AppRegistry().get(appId);
+        const app = registry.get(appId);
         const label = app.ok ? app.manifest.name : appId;
         send(res, 200, appletIcon(label), { 'Content-Type': 'image/svg+xml; charset=utf-8' });
         return;

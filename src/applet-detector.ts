@@ -5,6 +5,7 @@ import { resolveSiteModel } from './model-policy.js';
 import { usageRecordFromSite, type UsageRecorder } from './framework/hooks/token-stats.js';
 import { getModelForConfig, getProviderOptionsForConfig } from './providers/index.js';
 import { checkOverlaps, OVERLAP_THRESHOLD } from './overlap-checker.js';
+import { extractJsonBlock } from './structured-output.js';
 import type { AppletCandidate } from './applet-candidates.js';
 
 /**
@@ -204,7 +205,14 @@ interface RawDetection {
   } | null;
 }
 
-/** Tolerates a fenced block, which small models emit despite the instruction. */
+/**
+ * Tolerates a fenced block, which small models emit despite the instruction.
+ *
+ * The fallback uses `extractJsonBlock` rather than `indexOf('{')` +
+ * `lastIndexOf('}')`, because this payload carries a free-prose `reasoning`
+ * field: a brace inside it truncates a naive span, and the naive span is
+ * exactly what the first cut of this had.
+ */
 function parseDetection(text: string): RawDetection | null {
   const trimmed = text.trim();
   const body = trimmed.startsWith('```')
@@ -214,10 +222,11 @@ function parseDetection(text: string): RawDetection | null {
     return JSON.parse(body) as RawDetection;
   } catch {
     const start = body.indexOf('{');
-    const end = body.lastIndexOf('}');
-    if (start === -1 || end <= start) return null;
+    if (start === -1) return null;
+    const block = extractJsonBlock(body, start);
+    if (!block) return null;
     try {
-      return JSON.parse(body.slice(start, end + 1)) as RawDetection;
+      return JSON.parse(block) as RawDetection;
     } catch {
       return null;
     }

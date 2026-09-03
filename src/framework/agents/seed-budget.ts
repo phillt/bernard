@@ -1,5 +1,9 @@
 import type { CoreMessage } from 'ai';
-import { estimateMessagesTokens, getContextWindow } from '../../token-estimate.js';
+import {
+  estimateMessagesTokens,
+  estimatePrefixTokens,
+  getContextWindow,
+} from '../../token-estimate.js';
 
 /**
  * Refuses a dispatch whose seed cannot fit the model it resolved to (#451).
@@ -51,10 +55,11 @@ export interface SeedBudgetInput {
 export function seedBudgetRefusal(input: SeedBudgetInput): string | null {
   const window = getContextWindow(input.modelName, input.windowOverride);
   const budget = Math.floor(window * SEED_BUDGET_RATIO);
-  // 4 chars/token for the prefix, matching `estimatePrefixTokens`. The 3.6 the
-  // message estimator uses is the other half of an asymmetry that predates
-  // this and is left alone deliberately.
-  const estimate = estimateMessagesTokens(input.seed) + Math.ceil(input.prefixChars / 4);
+  // `estimatePrefixTokens` rather than the divisor inline: the 3.6 chars/token
+  // the message estimator uses against this one's 4 is an asymmetry that
+  // predates #451 and is left alone deliberately, so the two must at least stay
+  // wrong in exactly the same way as the truncation path that shares the number.
+  const estimate = estimateMessagesTokens(input.seed) + estimatePrefixTokens(input.prefixChars);
   if (estimate <= budget) return null;
   return (
     `This dispatch is too large for ${input.modelName}: about ${estimate.toLocaleString()} tokens ` +

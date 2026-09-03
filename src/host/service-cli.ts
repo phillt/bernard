@@ -10,6 +10,7 @@ import {
   serviceUnit,
   serviceUnitPath,
   type ServicePlatform,
+  type ServiceUnit,
 } from './service.js';
 
 /**
@@ -38,13 +39,38 @@ function daemonPath(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'daemon.js');
 }
 
-export function appletHostInstall(opts: InstallOptions = {}): void {
+/**
+ * Platform → unit → target path, resolved once for all three commands.
+ *
+ * All three had this five-line preamble inline and had already drifted:
+ * `appletHostUninstall` carried a `platform as ServicePlatform` cast the other
+ * two did not need, which is what a hand-repeated narrowing looks like just
+ * before it stops narrowing. It deliberately does NOT print on the unsupported
+ * platform — `isServiceInstalled` answers `false` quietly for `applet-host
+ * status`, while the two mutating commands owe the user an error — so the
+ * message stays with the caller that means it.
+ */
+function resolveServiceTarget(
+  opts: InstallOptions,
+): { platform: ServicePlatform; unit: ServiceUnit; target: string } | null {
   const platform = opts.platform ?? os.platform();
-  if (!isSupportedServicePlatform(platform)) {
-    printError(`No login-service mechanism for platform "${platform}".`);
-    process.exitCode = 1;
-    return;
-  }
+  if (!isSupportedServicePlatform(platform)) return null;
+  const unit = serviceUnit(platform, {
+    nodePath: process.execPath,
+    daemonPath: daemonPath(),
+    logPath: APPLET_HOST_LOG_FILE,
+  });
+  return { platform, unit, target: serviceUnitPath(platform, opts.homeRoot ?? os.homedir(), unit) };
+}
+
+function unsupportedPlatform(opts: InstallOptions): void {
+  printError(`No login-service mechanism for platform "${opts.platform ?? os.platform()}".`);
+  process.exitCode = 1;
+}
+
+export function appletHostInstall(opts: InstallOptions = {}): void {
+  const resolved = resolveServiceTarget(opts);
+  if (!resolved) return unsupportedPlatform(opts);
   const daemon = daemonPath();
   if (!fs.existsSync(daemon)) {
     // Same guard `startHost` carries: under `npm run dev` there is no dist.
@@ -52,13 +78,7 @@ export function appletHostInstall(opts: InstallOptions = {}): void {
     process.exitCode = 1;
     return;
   }
-  const homeRoot = opts.homeRoot ?? os.homedir();
-  const unit = serviceUnit(platform, {
-    nodePath: process.execPath,
-    daemonPath: daemon,
-    logPath: APPLET_HOST_LOG_FILE,
-  });
-  const target = serviceUnitPath(platform, homeRoot, unit);
+  const { unit, target } = resolved;
 
   fs.mkdirSync(path.dirname(target), { recursive: true });
   // Plain write, not `atomicWriteFileSync`: systemd and launchd both watch
@@ -81,19 +101,9 @@ export function appletHostInstall(opts: InstallOptions = {}): void {
 }
 
 export function appletHostUninstall(opts: InstallOptions = {}): void {
-  const platform = opts.platform ?? os.platform();
-  if (!isSupportedServicePlatform(platform)) {
-    printError(`No login-service mechanism for platform "${platform}".`);
-    process.exitCode = 1;
-    return;
-  }
-  const homeRoot = opts.homeRoot ?? os.homedir();
-  const unit = serviceUnit(platform, {
-    nodePath: process.execPath,
-    daemonPath: daemonPath(),
-    logPath: APPLET_HOST_LOG_FILE,
-  });
-  const target = serviceUnitPath(platform as ServicePlatform, homeRoot, unit);
+  const resolved = resolveServiceTarget(opts);
+  if (!resolved) return unsupportedPlatform(opts);
+  const { unit, target } = resolved;
 
   // Deactivate BEFORE removing the file: `systemctl --user disable` reads the
   // unit to know what to unlink, and launchctl needs it to exist to unload.
@@ -111,13 +121,6 @@ export function appletHostUninstall(opts: InstallOptions = {}): void {
 
 /** Whether the unit file is present, for `applet-host status`. */
 export function isServiceInstalled(opts: InstallOptions = {}): boolean {
-  const platform = opts.platform ?? os.platform();
-  if (!isSupportedServicePlatform(platform)) return false;
-  const homeRoot = opts.homeRoot ?? os.homedir();
-  const unit = serviceUnit(platform, {
-    nodePath: process.execPath,
-    daemonPath: daemonPath(),
-    logPath: APPLET_HOST_LOG_FILE,
-  });
-  return fs.existsSync(serviceUnitPath(platform, homeRoot, unit));
+  const resolved = resolveServiceTarget(opts);
+  return resolved !== null && fs.existsSync(resolved.target);
 }

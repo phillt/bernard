@@ -183,7 +183,7 @@ import {
 import { toSpokenForm } from '../speech-normalizer.js';
 import { toLiteralSpeech } from '../speech-text.js';
 import { AppRegistry } from '../apps/registry.js';
-import { AppletCandidateStore } from '../applet-candidates.js';
+import { AppletCandidateStore, type AppletCandidate } from '../applet-candidates.js';
 import { buildAppletRequest } from '../applet-detector.js';
 
 /**
@@ -2057,22 +2057,25 @@ export function App({
       // real applets is what a user opens, and the suggestion belongs beside it.
       let firstPass = true;
       let listIndex = 0;
-      for (;;) {
+      // `stale` is what decides whether the list is re-read, and it is set only
+      // by the two branches that change it. Returning from a submenu is the
+      // common navigation and used to re-`listIds()` and re-parse every
+      // manifest — up to `MAX_APPLETS` synchronous reads and zod parses — for a
+      // list that had not changed.
+      let stale = true;
+      let entries: MenuEntry[] = [];
+      let pending: AppletCandidate[] = [];
+      const rebuild = () => {
         const registry = new AppRegistry();
+        pending = appletCandidates.listPending();
+        const rows: MenuEntry[] = [];
         const appIds = registry.listIds();
-        const pending = appletCandidates.listPending();
-        if (appIds.length === 0 && pending.length === 0) {
-          if (firstPass) flashToast('No applets yet. Ask me to build one.');
-          return;
-        }
-        firstPass = false;
-        const entries: MenuEntry[] = [];
         if (appIds.length > 0) {
-          entries.push({ type: 'section', title: 'Applets' });
+          rows.push({ type: 'section', title: 'Applets' });
           for (const id of appIds) {
             const parsed = registry.get(id);
             const m = parsed.ok ? parsed.manifest : undefined;
-            entries.push({
+            rows.push({
               label: m?.name ?? id,
               annotation: m ? id : 'invalid manifest',
               description: truncate(m?.description ?? '', 100),
@@ -2081,9 +2084,9 @@ export function App({
           }
         }
         if (pending.length > 0) {
-          entries.push({ type: 'section', title: 'Suggestions' });
+          rows.push({ type: 'section', title: 'Suggestions' });
           for (const c of pending) {
-            entries.push({
+            rows.push({
               label: c.name,
               annotation: `${Math.round(c.confidence * 100)}%`,
               description: truncate(c.reasoning || c.description, 100),
@@ -2091,6 +2094,16 @@ export function App({
             });
           }
         }
+        entries = rows;
+        stale = false;
+      };
+      for (;;) {
+        if (stale) rebuild();
+        if (entries.length === 0) {
+          if (firstPass) flashToast('No applets yet. Ask me to build one.');
+          return;
+        }
+        firstPass = false;
         const pick = await requestMenu(entries, {
           title: 'Applets',
           initialIndex: listIndex,
@@ -2128,6 +2141,7 @@ export function App({
         if (action.index === 1) {
           appletCandidates.updateStatus(c.id, 'rejected');
           flashToast(`Dismissed ${c.name}.`, 'success');
+          stale = true;
           continue;
         }
         // Building goes through the agent and its `applet` tool rather than

@@ -1,4 +1,5 @@
 import { APPLET_COLOR_TOKENS } from './tokens.js';
+import { escapeXml } from '../text.js';
 import type { AppManifest } from '../apps/manifest.js';
 
 /**
@@ -47,7 +48,10 @@ export function webManifest(manifest: AppManifest, port: number): Record<string,
 /** A letter on the accent colour — identity with nothing for an author to choose. */
 export function appletIcon(name: string): string {
   const letter = (name.trim()[0] ?? '?').toUpperCase();
-  const escaped = letter.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Shared, not a fourth hand copy of the same three replaces. One character
+  // of an app name barely needs it, but the next thing interpolated into this
+  // SVG will, and a local copy is where that gets forgotten.
+  const escaped = escapeXml(letter);
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <rect width="512" height="512" rx="96" fill="${APPLET_COLOR_TOKENS['--accent']}"/>
   <text x="256" y="256" fill="#ffffff" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif"

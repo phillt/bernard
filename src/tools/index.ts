@@ -125,13 +125,17 @@ export async function createTools(
     {
       audience: 'main',
       make: async () => {
-        const [{ createRoutineTool }, { createLineupTool }, { createSpecialistTool }] =
-          await Promise.all([
-            import('./routine.js'),
-            import('./lineup.js'),
-            import('./specialist.js'),
-          ]);
-        const { createAppletTool } = await import('./applet.js');
+        const [
+          { createRoutineTool },
+          { createLineupTool },
+          { createSpecialistTool },
+          { createAppletTool },
+        ] = await Promise.all([
+          import('./routine.js'),
+          import('./lineup.js'),
+          import('./specialist.js'),
+          import('./applet.js'),
+        ]);
         return {
           routine: createRoutineTool(routineStore),
           lineup_edit: createLineupTool(config),
@@ -190,11 +194,23 @@ export async function createTools(
     { audience: 'any', make: () => (provenance ? { cite: createCiteTool(provenance) } : {}) },
   ];
   const worker = opts?.surface === 'worker';
+  // Started together, merged in declaration order. The three async groups pull
+  // unrelated module graphs, so awaiting them one at a time stacked their load
+  // and compile time instead of bounding it by the slowest — a cold-start cost
+  // on the first `tools()` of a process, since later `import()`s hit Node's
+  // module cache. `Object.assign` in the original order is what preserves the
+  // "last group wins a collision" rule the table depends on; only the START is
+  // concurrent, never the merge.
+  // Filtered FIRST, so a dropped group's thunk is never invoked — the property
+  // the table exists for — and the survivors keep their relative order.
+  const wanted = groups.filter((g) => !(worker && g.audience === 'main'));
+  // `async` on the arrow so `make`'s `Record | Promise<Record>` union is always
+  // a promise here — `Promise.all` accepts both, but the mixed iterable is the
+  // shape `await-thenable` rejects, and `runDefinition` already normalizes
+  // `def.tools()` the same way.
+  const built = await Promise.all(wanted.map(async (g) => g.make()));
   const registry: Record<string, any> = {};
-  for (const group of groups) {
-    if (worker && group.audience === 'main') continue; // never LOADED — see ToolGroup
-    Object.assign(registry, await group.make());
-  }
+  for (const group of built) Object.assign(registry, group);
   // MCP merges last, so a server exporting a colliding name still wins — the
   // exclusions above are about Bernard's own built-ins, not about MCP.
   return { ...registry, ...mcpTools };

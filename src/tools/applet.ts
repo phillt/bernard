@@ -2,7 +2,15 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import { AppRegistry } from '../apps/registry.js';
-import { ACTION_NAME_RE, APP_ID_RE, type RawAppManifest } from '../apps/manifest.js';
+import {
+  ACTION_NAME_RE,
+  APP_ID_RE,
+  AgentDispatchFields,
+  ArgSpecFields,
+  ToolDispatchFields,
+  type RawAppAction,
+  type RawAppManifest,
+} from '../apps/manifest.js';
 
 /**
  * `applet` — authoring the small local web apps Bernard serves.
@@ -31,29 +39,31 @@ import { ACTION_NAME_RE, APP_ID_RE, type RawAppManifest } from '../apps/manifest
  * applet action can never reach this and author applets.
  */
 
-const ARG_SPEC = z
-  .object({
-    type: z.enum(['string', 'number', 'boolean', 'enum']),
-    required: z.boolean().optional(),
-    values: z.array(z.string()).optional().describe("Required for, and only valid on, type 'enum'"),
-    maxLength: z.number().int().positive().optional().describe("Only valid on type 'string'"),
-    description: z.string().max(200).optional(),
-  })
-  .strict();
+/**
+ * The manifest's own schemas, re-advertised to the model.
+ *
+ * Derived, never re-typed. A hand copy drops whatever the source gains — the
+ * first cut of this file had already lost `values.min(1)`, `maxLength.max()`
+ * and all three of `ArgSpecSchema`'s cross-field rules — and worse, a field
+ * added to the manifest would be silently unauthorable here, because the model
+ * can only set what the advertised schema names.
+ *
+ * `ArgSpecFields` rather than `ArgSpecSchema`, and the dispatch objects rather
+ * than `DispatchSchema`, because a refinement or a `.default()` transform makes
+ * a `ZodEffects` and changes what `zod-to-json-schema` emits for a tool
+ * parameter (the hazard #341 records). The refinements are not lost, only
+ * deferred: `store.create`/`store.update` parse with `parseRawAppManifest`
+ * before anything is written, so a malformed spec is refused — one beat later,
+ * with the real schema's message.
+ */
+const ARG_SPEC = ArgSpecFields.describe('One argument the button collects');
 
 const ACTION = z
   .object({
     description: z.string().max(400).optional(),
     args: z.record(z.string(), ARG_SPEC).optional(),
     dispatch: z
-      .union([
-        z.object({ kind: z.literal('agent'), specialistId: z.string(), instructions: z.string() }),
-        z.object({
-          kind: z.literal('tool'),
-          tool: z.string(),
-          args: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
-        }),
-      ])
+      .union([AgentDispatchFields, ToolDispatchFields])
       .describe(
         'How the button runs. `tool` calls one tool directly with no model — free and ' +
           'deterministic, and the right choice whenever the work has a known shape. `agent` ' +
@@ -180,25 +190,25 @@ function run(store: AppRegistry, args: AppletArgs): string {
 function buildManifest(
   id: string,
   args: AppletArgs,
-  existing?: { name: string; description?: string; actions: Record<string, unknown> },
+  existing?: { name: string; description?: string; actions: Record<string, RawAppAction> },
 ): RawAppManifest {
-  const actions: Record<string, unknown> = {};
+  const actions: Record<string, RawAppAction> = {};
   const source = args.actions ?? {};
   for (const [actionName, spec] of Object.entries(source)) {
     if (!ACTION_NAME_RE.test(actionName)) {
       throw new Error(`"${actionName}" is not a valid action name — lowercase, digits, _ and -.`);
     }
-    const prior = (existing?.actions?.[actionName] ?? {}) as Record<string, unknown>;
+    const prior = existing?.actions?.[actionName];
     actions[actionName] = {
       ...(spec.description !== undefined ? { description: spec.description } : {}),
       ...(spec.args ? { args: spec.args } : {}),
       dispatch: spec.dispatch,
       ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
-      // Carried, never authored here.
-      ...(prior.toolAllowlist ? { toolAllowlist: prior.toolAllowlist } : {}),
-      ...(prior.toolMode ? { toolMode: prior.toolMode } : {}),
-      ...(prior.confirmMode ? { confirmMode: prior.confirmMode } : {}),
-    };
+      // Carried, never authored here — see `AUTHORITY_ACTION_FIELDS`.
+      ...(prior?.toolAllowlist ? { toolAllowlist: prior.toolAllowlist } : {}),
+      ...(prior?.toolMode ? { toolMode: prior.toolMode } : {}),
+      ...(prior?.confirmMode ? { confirmMode: prior.confirmMode } : {}),
+    } as RawAppAction;
   }
   const merged = args.actions ? actions : (existing?.actions ?? {});
   return {
@@ -209,7 +219,7 @@ function buildManifest(
       ? { description: args.description ?? existing?.description }
       : {}),
     actions: merged,
-  } as RawAppManifest;
+  };
 }
 
 function need<T>(value: T | undefined, field: string, action: string): T {

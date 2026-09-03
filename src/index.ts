@@ -478,9 +478,7 @@ async function runInkRepl(args: {
   // watching. That is the same threshold `autoCreateSpecialists` uses and a
   // deliberately weaker action, for a deliberately larger artifact.
   {
-    const appletCandidateStore = new AppletCandidateStore();
-    appletCandidateStore.pruneOld();
-    const pendingApplets = appletCandidateStore.listPending();
+    const { pending: pendingApplets } = new AppletCandidateStore().pruneOld();
     if (pendingApplets.length > 0) {
       emitStartupNotice(
         `${pendingApplets.length} applet suggestion(s) pending. Use /applets to review.`,

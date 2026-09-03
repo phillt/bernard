@@ -94,45 +94,48 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
     }
   }
 
-  // Specialist candidate detection (non-blocking — runs after facts are stored)
-  try {
-    const candidateStore = new CandidateStore();
-    if (candidateStore.listPending().length < MAX_PENDING_CANDIDATES) {
+  // Specialist and applet candidate detection (#430).
+  //
+  // Two independent cheap-tier calls over the same transcript, so they run
+  // CONCURRENTLY: this process exists only to finish and exit, and awaiting them
+  // in sequence doubled its wall clock for no dependency between them. Each has
+  // its own try, because a failure in either must not cost the other its
+  // result — and `allSettled`, not `all`, so a rejection cannot skip the temp
+  // file cleanup below.
+  //
+  // Each `listPending()` is read ONCE and used for both the cap gate and the
+  // detector's "already suggested" list; the two used to be separate calls, i.e.
+  // a second full readdir and parse of the same directory.
+  await Promise.allSettled([
+    (async () => {
+      const candidateStore = new CandidateStore();
+      const pending = candidateStore.listPending();
+      if (pending.length >= MAX_PENDING_CANDIDATES) return;
       // Only calls .list() below — bundled seeding is the REPL's job (#163).
       const specialistStore = new SpecialistStore({ seed: false });
       const candidate = await detectSpecialistCandidate(
         payload.serialized,
         config,
         specialistStore.list(),
-        candidateStore.listPending(),
+        pending,
       );
       if (candidate?.type === 'new-candidate') {
         candidateStore.create(candidate.candidate, 'exit');
       }
-    }
-  } catch {
-    // Silent — detection failure must not block anything
-  }
-
-  // Applet candidate detection (#430), for the same reason and at the same
-  // cadence: a whole transcript is the only place recurrence is visible, and
-  // this process is already detached, so a second cheap-tier call costs the
-  // user no latency. Independently guarded — a specialist detection that threw
-  // must not take the applet one with it.
-  try {
-    const appletCandidates = new AppletCandidateStore();
-    if (appletCandidates.listPending().length < MAX_PENDING_APPLET_CANDIDATES) {
+    })(),
+    (async () => {
+      const appletCandidates = new AppletCandidateStore();
+      const pending = appletCandidates.listPending();
+      if (pending.length >= MAX_PENDING_APPLET_CANDIDATES) return;
       const detected = await detectAppletCandidate(
         payload.serialized,
         config,
         new AppRegistry().listIds(),
-        appletCandidates.listPending(),
+        pending,
       );
       if (detected) appletCandidates.create(detected.candidate, 'exit');
-    }
-  } catch {
-    // Silent — a suggestion nobody asked for must never fail a session exit.
-  }
+    })(),
+  ]);
 
   // Clean up temp file
   tryUnlink(filePath);

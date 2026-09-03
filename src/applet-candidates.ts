@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { APPLET_CANDIDATES_DIR } from './paths.js';
+import { atomicWriteFileSync } from './fs-utils.js';
 
 /**
  * The queue of applets Bernard has SUGGESTED but not built (#430).
@@ -15,8 +16,8 @@ import { APPLET_CANDIDATES_DIR } from './paths.js';
  * `reconcileSaved` matches a draft id against a saved specialist id. None of
  * that has an applet meaning. Extracting a base class for the six methods that
  * genuinely overlap would move `SpecialistCandidate`'s five specific ones into
- * a subclass and buy a shared `atomicWrite` — not worth a refactor of the path
- * every session-exit runs through.
+ * a subclass and buy nothing else — the atomic write is already shared, via
+ * `fs-utils`, which is where `CandidateStore`'s private copy should go too.
  */
 export interface AppletCandidate {
   id: string;
@@ -112,22 +113,36 @@ export class AppletCandidateStore {
     return true;
   }
 
-  /** Dismisses pending suggestions older than 30 days. Returns how many. */
-  pruneOld(): number {
+  /**
+   * Dismisses pending suggestions older than 30 days, and hands back the ones
+   * that survived.
+   *
+   * Returning the survivors rather than a count is what lets the REPL's startup
+   * path — its only caller that needs both — read the directory once. It used to
+   * `pruneOld()` and then `listPending()`, which is two full readdir + parse
+   * passes over a store nothing ever compacts (only PENDING is capped at 10;
+   * accepted and dismissed rows accumulate for the life of the install), paid on
+   * every single launch.
+   */
+  pruneOld(): { pruned: number; pending: AppletCandidate[] } {
     const now = Date.now();
+    const pending: AppletCandidate[] = [];
     let pruned = 0;
     for (const c of this.listPending()) {
       if (now - new Date(c.detectedAt).getTime() > MAX_AGE_MS) {
         this.updateStatus(c.id, 'dismissed');
         pruned++;
+      } else {
+        pending.push(c);
       }
     }
-    return pruned;
+    return { pruned, pending };
   }
 
   private write(candidate: AppletCandidate): void {
-    const file = path.join(APPLET_CANDIDATES_DIR, `${candidate.id}.json`);
-    fs.writeFileSync(`${file}.tmp`, JSON.stringify(candidate, null, 2), 'utf-8');
-    fs.renameSync(`${file}.tmp`, file);
+    atomicWriteFileSync(
+      path.join(APPLET_CANDIDATES_DIR, `${candidate.id}.json`),
+      JSON.stringify(candidate, null, 2),
+    );
   }
 }

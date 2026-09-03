@@ -115,3 +115,64 @@ describe('the applet tool', () => {
     expect(out).toContain('bernard app delete');
   });
 });
+
+/**
+ * The authority split (#453) is enforced twice — the `.strict()` action schema
+ * refuses an authority field at parse, and `buildManifest` builds each action
+ * field by field rather than spreading. Both are omissions, and an omission is
+ * what a future edit re-opens by accident: adding `toolAllowlist` to the tool's
+ * own schema "so an applet can manage its own tools" would compile, pass every
+ * other test, and hand a model the escalation `app-grants.ts` exists to prevent.
+ *
+ * So the set lives in `manifest.ts` beside the schema that declares it, and the
+ * assertion walks the ADVERTISED schema — what the model can actually name —
+ * rather than trusting `buildManifest`'s field list to stay closed.
+ */
+describe('the applet tool cannot author authority', () => {
+  useTempHome('bernard-applet-authority');
+
+  it('advertises no authority field on an action', async () => {
+    const { createAppletTool } = await import('./applet.js');
+    const { AUTHORITY_ACTION_FIELDS } = await import('../apps/manifest.js');
+    const tool = createAppletTool();
+    // parameters → actions (record) → the action object's own shape.
+    const params = tool.parameters as unknown as {
+      shape: { actions: { unwrap: () => { valueSchema: { shape: Record<string, unknown> } } } };
+    };
+    const actionShape = params.shape.actions.unwrap().valueSchema.shape;
+    for (const field of AUTHORITY_ACTION_FIELDS) {
+      expect(Object.keys(actionShape)).not.toContain(field);
+    }
+    // The set is non-empty, or the loop above proves nothing.
+    expect(AUTHORITY_ACTION_FIELDS.length).toBeGreaterThan(0);
+  });
+
+  it('refuses an authority field rather than dropping it silently', async () => {
+    const { createAppletTool } = await import('./applet.js');
+    const { AppRegistry } = await import('../apps/registry.js');
+    const tool = createAppletTool(new AppRegistry({ seed: false }));
+    const parsed = tool.parameters.safeParse({
+      ...CREATE,
+      actions: {
+        summarise: {
+          dispatch: {
+            kind: 'agent',
+            specialistId: 'web-wrapper',
+            instructions: 'Summarise.',
+          },
+          toolAllowlist: ['shell'],
+        },
+      },
+    });
+    // `.strict()` is what makes this a rejection and not a quiet drop — a drop
+    // would read as an applet that was granted `shell` and was not.
+    expect(parsed.success).toBe(false);
+  });
+
+  it('has no delete action', async () => {
+    const { createAppletTool } = await import('./applet.js');
+    const tool = createAppletTool();
+    const parsed = tool.parameters.safeParse({ action: 'delete', id: 'notes' });
+    expect(parsed.success).toBe(false);
+  });
+});

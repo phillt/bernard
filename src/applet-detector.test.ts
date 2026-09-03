@@ -123,7 +123,7 @@ describe('AppletCandidateStore (#430)', () => {
     aged.detectedAt = new Date(Date.now() - 31 * 24 * 3600 * 1000).toISOString();
     fs.writeFileSync(file, JSON.stringify(aged), 'utf-8');
 
-    expect(store.pruneOld()).toBe(1);
+    expect(store.pruneOld().pruned).toBe(1);
     expect(store.get(stale.id)?.status).toBe('dismissed');
     expect(store.listPending().map((c) => c.id)).toEqual([fresh.id]);
   });

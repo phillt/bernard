@@ -42,7 +42,20 @@ export const APPLET_COLOR_TOKENS: Record<string, string> = {
  * nothing still looks right, and an applet that needs more writes its own CSS
  * against these variables rather than against hex values.
  */
+/**
+ * Built once, not per request.
+ *
+ * `APPLET_COLOR_TOKENS` is a module constant and the body is a literal, so the
+ * result is the same string for the life of the process — and this route is hit
+ * by every applet page load, on the request path.
+ */
+let cached: string | undefined;
+
 export function tokensStylesheet(): string {
+  return (cached ??= buildStylesheet());
+}
+
+function buildStylesheet(): string {
   const vars = Object.entries(APPLET_COLOR_TOKENS)
     .map(([name, value]) => `  ${name}: ${value};`)
     .join('\n');

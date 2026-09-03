@@ -141,3 +141,19 @@ export function estimateMessagesTokens(messages: CoreMessage[]): number {
   for (const msg of messages) tokens += estimateMessageTokens(msg);
   return tokens;
 }
+
+/**
+ * Characters of non-history request prefix → tokens.
+ *
+ * The prefix is everything sent alongside the history: SYSTEM prompt, per-turn
+ * context message, and the tool block. Exported so the caller's "are we over
+ * budget?" test and {@link emergencyTruncate}'s "what fits?" answer cannot
+ * disagree about the divisor — they previously each spelled out `/ 4`.
+ *
+ * Note this is 4 chars/token while {@link estimateHistoryTokens} uses 3.6. That
+ * asymmetry predates #323 and is left alone deliberately: changing it would
+ * move every truncation threshold at once.
+ */
+export function estimatePrefixTokens(chars: number): number {
+  return Math.ceil(chars / 4);
+}
