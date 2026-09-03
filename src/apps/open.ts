@@ -42,6 +42,10 @@ export async function openApplet(
   const { HostRegistry } = await import('../host/registry.js');
   const { isHostProcessAlive, probeApplet, startHost } = await import('../host/client.js');
 
+  // Resolved once: the assignment is stable and every branch below wants it.
+  const port = new HostRegistry().recordFor(appId).port;
+  const url = `http://127.0.0.1:${port}`;
+
   let started = false;
   if (!isHostProcessAlive()) {
     // `startHost`, deliberately NOT `appletHostStart`. That one is the CLI
@@ -53,13 +57,11 @@ export async function openApplet(
     try {
       started = await startHost();
       if (!started) {
-        const url = `http://127.0.0.1:${new HostRegistry().recordFor(appId).port}`;
         return { url, opened: false, started: false, note: 'the applet host would not start' };
       }
     } catch (err) {
       // Never turn a successful create into a failure. `startHost` throws when
       // `dist/host/daemon.js` is missing, which is every `npm run dev` session.
-      const url = `http://127.0.0.1:${new HostRegistry().recordFor(appId).port}`;
       return {
         url,
         opened: false,
@@ -70,9 +72,6 @@ export async function openApplet(
       };
     }
   }
-
-  const port = new HostRegistry().recordFor(appId).port;
-  const url = `http://127.0.0.1:${port}`;
 
   const serving = await waitUntilServing(port, probeApplet);
   if (!serving) {

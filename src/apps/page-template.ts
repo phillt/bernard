@@ -1,6 +1,7 @@
 import { MANIFEST_PATH } from '../host/webmanifest.js';
 import { SDK_PATH } from '../host/sdk.js';
 import { TOKENS_PATH } from '../host/tokens.js';
+import { escapeXml } from '../text.js';
 import type { RawAppAction } from './manifest.js';
 
 /**
@@ -86,11 +87,14 @@ function wire([action, spec]: [string, RawAppAction]): string {
     .addEventListener('click', () => run('${action}', ${JSON.stringify(names)}));`;
 }
 
-/** The manifest is user-editable, so a name reaches this untrusted. */
+/**
+ * The manifest is user-editable, so a name reaches this untrusted.
+ *
+ * `escapeXml` plus the quote: unlike its other callers, values here land
+ * inside double-quoted HTML attributes, where a bare quote breaks out of the
+ * attribute. Only the extra escape is written here; the base three are not
+ * retyped a third time.
+ */
 function esc(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  return escapeXml(s).replace(/"/g, '&quot;');
 }

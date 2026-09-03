@@ -151,3 +151,26 @@ export function uncoveredTools(
   const targets = specialistTargetTools ?? [];
   return toolAllowlist.filter((t) => !targets.includes(t));
 }
+
+/**
+ * The sentence both write-time callers say about an uncovered grant.
+ *
+ * Shared because it had already drifted: one site said "fewer tools than it
+ * declares" and the other listed the survivors, for the same computation over
+ * the same two lists. The VERDICT is deliberately not shared — `bernard app
+ * allow` warns and the `applet` tool refuses, and that difference is about who
+ * is acting, not about what was found (see each call site).
+ */
+export function uncoveredToolsMessage(
+  specialistId: string,
+  toolAllowlist: readonly string[],
+  missing: readonly string[],
+): string {
+  const kept = toolAllowlist.filter((t) => !missing.includes(t));
+  return (
+    `specialist "${specialistId}" does not target ${missing.join(', ')}. An action gets the ` +
+    'INTERSECTION of its toolAllowlist and the specialist targetTools, so this action would ' +
+    `run with ${kept.length === 0 ? 'no tools at all' : `only ${kept.join(', ')}`}. ` +
+    `Update the specialist to target [${toolAllowlist.map((t) => `'${t}'`).join(', ')}].`
+  );
+}

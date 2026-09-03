@@ -211,13 +211,15 @@ function build(): string {
 }
 
 /**
- * Built once, not per request.
+ * Built once at module load.
  *
- * The body is a literal, so the result is the same string for the life of the
- * process — and this route is hit by every applet page load.
+ * `build()` closes over nothing but module constants, so there is no runtime
+ * input to memoize against — a `cached ??=` guard here was ceremony, and the
+ * test that claimed to pin it could not: `toBe` on two strings is value
+ * equality, so it passed identically with or without the cache.
  */
-let cached: string | undefined;
+const SCRIPT = build();
 
 export function appletSdkScript(): string {
-  return (cached ??= build());
+  return SCRIPT;
 }

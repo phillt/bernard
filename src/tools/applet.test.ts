@@ -413,15 +413,15 @@ describe('the applet tool enforces the toolAllowlist ∩ targetTools rule', () =
     const out = await edit(tool);
     expect(out).toContain('Error:');
     expect(out).toContain('no tools at all');
-    expect(out).toContain("targetTools: ['datetime']");
+    expect(out).toContain("target ['datetime']");
   });
 
   it('names only the tools that are actually missing', async () => {
     const tool = await setup('partial', ['web_search'], ['web_search', 'web_read']);
     const out = await edit(tool);
-    expect(out).toContain('web_read');
-    expect(out).not.toContain('does not target web_search');
-    expect(out).toContain('fewer tools than it declares');
+    expect(out).toContain('does not target web_read');
+    // Names what is missing, and what survives — not a vague "fewer tools".
+    expect(out).toContain('only web_search');
   });
 
   it('accepts a specialist that covers the allowlist', async () => {

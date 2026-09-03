@@ -1,12 +1,14 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
+import { capSubagentResult } from './result-cap.js';
 import { AppRegistry } from '../apps/registry.js';
 import { defaultAppletPage } from '../apps/page-template.js';
-import { SpecialistStore } from '../specialists.js';
+import { SpecialistStore, type Specialist } from '../specialists.js';
 import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-tool.js';
-import { uncoveredTools } from '../apps/invocation.js';
+import { uncoveredTools, uncoveredToolsMessage } from '../apps/invocation.js';
 import {
+  formatWarnings,
   refusalFor,
   validateAppletPage,
   warningsFor,
@@ -170,7 +172,7 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
       // this branch returned the manifest alone — so the instruction it was
       // given could not be followed.
       const page = store.readAsset(id, 'index.html');
-      const shown = page === null ? '(no index.html)' : clampPage(page);
+      const shown = page === null ? '(no index.html)' : capSubagentResult(page, PAGE_PREVIEW_MAX);
       return `${JSON.stringify(app.manifest, null, 2)}\n\n--- index.html ---\n${shown}`;
     }
     case 'create': {
@@ -200,7 +202,7 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
         `${Object.keys(created.actions).length} action(s).` +
         grantHint(created.id, Object.keys(created.actions)) +
         warningsFor(issues) +
-        extraWarnings(dispatch.warnings) +
+        formatWarnings(dispatch.warnings) +
         (await openedNote(created.id))
       );
     }
@@ -229,7 +231,7 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
       return (
         `Applet "${updated.name}" (${updated.id}) updated.` +
         warningsFor(issues) +
-        extraWarnings(dispatch.warnings)
+        formatWarnings(dispatch.warnings)
       );
     }
     default:
@@ -369,6 +371,18 @@ async function checkDispatch(
   const problems: string[] = [];
   const warnings: string[] = [];
   let specialists: SpecialistStore | undefined;
+  // Keyed by specialist id, because one specialist commonly backs several
+  // buttons — `SpecialistStore.get` is an existsSync + readFileSync + parse
+  // every call, so without this an applet with three actions on one specialist
+  // reads the same file three times.
+  const seen = new Map<string, Specialist | undefined>();
+  const lookup = (specialistId: string): Specialist | undefined => {
+    if (!seen.has(specialistId)) {
+      specialists ??= new SpecialistStore({ seed: false });
+      seen.set(specialistId, specialists.get(specialistId));
+    }
+    return seen.get(specialistId);
+  };
 
   for (const [name, action] of Object.entries(actions)) {
     const dispatch = action.dispatch;
@@ -415,8 +429,7 @@ async function checkDispatch(
     }
 
     const allowed = action.toolAllowlist ?? [];
-    specialists ??= new SpecialistStore({ seed: false });
-    const record = specialists.get(dispatch.specialistId);
+    const record = lookup(dispatch.specialistId);
 
     // An empty allowlist is legitimate for an action that only produces text,
     // so this is not warned on by itself. It IS warned on when the backing
@@ -452,12 +465,13 @@ async function checkDispatch(
 
     const missing = uncoveredTools(allowed, record.targetTools);
     if (missing.length > 0) {
+      // A REFUSAL where `bernard app allow` warns on the same finding. The
+      // axis is who is acting: there, a user making a grant that is theirs,
+      // who may fix the specialist next. Here, a model mid-authoring that will
+      // not come back to it — so the applet must not be written believing it
+      // works.
       problems.push(
-        `  - action "${name}": specialist "${dispatch.specialistId}" does not target ` +
-          `${missing.join(', ')}. The tools an action gets are the INTERSECTION of its ` +
-          `toolAllowlist and the specialist's targetTools, so this action would run with ` +
-          `${allowed.length === missing.length ? 'no tools at all' : 'fewer tools than it declares'}. ` +
-          `Update the specialist: targetTools: [${allowed.map((t) => `'${t}'`).join(', ')}].`,
+        `  - action "${name}": ${uncoveredToolsMessage(dispatch.specialistId, allowed, missing)}`,
       );
     }
   }
@@ -477,13 +491,3 @@ async function checkDispatch(
 
 /** A page is unbounded; a tool result that reaches a model is not. */
 const PAGE_PREVIEW_MAX = 20_000;
-
-function clampPage(page: string): string {
-  return page.length <= PAGE_PREVIEW_MAX
-    ? page
-    : `${page.slice(0, PAGE_PREVIEW_MAX)}\n… (truncated, ${page.length} chars total)`;
-}
-
-function extraWarnings(warnings: string[]): string {
-  return warnings.length === 0 ? '' : `\nWarnings:\n${warnings.map((w) => `  - ${w}`).join('\n')}`;
-}

@@ -54,20 +54,36 @@ export function validateAppletPage(html: string, actions: string[]): PageIssue[]
     );
   }
 
-  // A `<style>` block is not merely discouraged — `style-src 'self'` means the
-  // browser discards it silently, so the author sees an unstyled page and no
-  // error anywhere. Refusing here is the only place that failure is visible.
+  // Both inline forms, refused together. They were split — a `<style>` block
+  // refused, a `style="..."` attribute merely warned — which contradicts this
+  // module's own rule, because `style-src 'self'` discards both, equally
+  // silently, and both are equally decidable from the string.
+  //
+  // The honest caveat: a regex cannot tell markup from the same characters
+  // inside a JS string literal, so neither check is certain in the strict
+  // sense. They are refused anyway because the failure they prevent is
+  // invisible — an unstyled page with no error anywhere — and the message
+  // names the remedy. Being wrong here costs one rewritten page; being silent
+  // costs an applet that looks broken for reasons nobody can see.
   if (/<style[\s>]/i.test(html)) {
     refuse(
       "The page has an inline <style> block, which the CSP (`style-src 'self'`) discards silently. " +
         `Style it with the variables from ${TOKENS_PATH}, or ship a .css file alongside index.html.`,
     );
   }
+  if (/\sstyle=["']/.test(html)) {
+    refuse(
+      'The page uses inline `style="..."` attributes, which the CSP discards exactly as it ' +
+        `discards a <style> block. Use the variables from ${TOKENS_PATH}, or a .css file.`,
+    );
+  }
 
   // The load-bearing check: the SDK is only the one door if hand-rolling is
   // refused, and this is the one place that can be enforced.
   const rolled = HAND_ROLLED.filter((needle) => html.includes(needle));
-  if (html.toLowerCase().includes(TOKEN_HEADER)) rolled.push(TOKEN_HEADER);
+  // A regex, not `toLowerCase().includes` — that copies the whole page to
+  // answer one boolean.
+  if (new RegExp(TOKEN_HEADER, 'i').test(html)) rolled.push(TOKEN_HEADER);
   if (rolled.length > 0) {
     refuse(
       `The page speaks the host protocol itself (${rolled.join(', ')}). Use the served client ` +
@@ -96,10 +112,6 @@ export function validateAppletPage(html: string, actions: string[]): PageIssue[]
     }
   }
 
-  if (/\sstyle=["']/.test(html)) {
-    warn('Inline `style="..."` attributes are also refused by the CSP and will not apply.');
-  }
-
   const ids = new Set(Array.from(html.matchAll(/\sid=["']([^"']+)["']/g), (m) => m[1]));
   // The closing paren is required, so only a COMPLETE literal is checked. A
   // concatenation — `getElementById('arg-' + name)` — is a computed id, which
@@ -124,8 +136,17 @@ export function refusalFor(issues: PageIssue[]): string | null {
 
 /** Warnings, appended to a successful write rather than blocking it. */
 export function warningsFor(issues: PageIssue[]): string {
-  const warns = issues.filter((i) => i.level === 'warn');
-  return warns.length === 0
-    ? ''
-    : `\nWarnings:\n${warns.map((i) => `  - ${i.message}`).join('\n')}`;
+  return formatWarnings(issues.filter((i) => i.level === 'warn').map((i) => i.message));
+}
+
+/**
+ * The one warning block.
+ *
+ * Shared with the applet tool's own non-page warnings, which had grown an
+ * identical copy — two hand-maintained renderings of the same rule, either of
+ * which could change its bullet or its heading alone.
+ */
+export function formatWarnings(messages: string[]): string {
+  if (messages.length === 0) return '';
+  return `\nWarnings:\n${messages.map((m) => `  - ${m}`).join('\n')}`;
 }

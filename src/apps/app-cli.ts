@@ -3,7 +3,7 @@ import { AppRegistry, bundledAppIds } from './registry.js';
 import { parseRawAppManifest } from './manifest.js';
 import { deleteApplet } from './lifecycle.js';
 import { SpecialistStore } from '../specialists.js';
-import { uncoveredTools } from './invocation.js';
+import { uncoveredTools, uncoveredToolsMessage } from './invocation.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { APPS_DIR, appletAssetDir } from '../paths.js';
@@ -39,33 +39,41 @@ export function appList(opts: { bundled?: boolean; all?: boolean } = {}): void {
   const theirs = ids.filter((id) => bundled.has(id));
 
   if (opts.all) {
-    printGroup(registry, 'Yours', mine, 'No applets of your own yet.');
+    printApps(registry, mine, 'No applets of your own yet.', 'Yours');
     printInfo('');
-    printGroup(registry, 'Bundled', theirs, 'None installed.');
+    printApps(registry, theirs, 'None installed.', 'Bundled');
     return;
   }
 
   if (opts.bundled) {
-    if (theirs.length === 0) {
-      printInfo('No bundled applets installed.');
-      return;
-    }
-    theirs.forEach((id, i) => {
-      if (i > 0) printInfo('');
-      printApp(registry, id);
-    });
+    printApps(registry, theirs, 'No bundled applets installed.');
     return;
   }
 
-  if (mine.length === 0) {
-    printInfo(
-      theirs.length > 0
-        ? `No applets yet. ${theirs.length} bundled example(s) installed — \`bernard app list --bundled\`.`
-        : 'No applets installed.',
-    );
+  printApps(
+    registry,
+    mine,
+    theirs.length > 0
+      ? `No applets yet. ${theirs.length} bundled example(s) installed — \`bernard app list --bundled\`.`
+      : 'No applets installed.',
+  );
+}
+
+/**
+ * The only place a list of applets is printed.
+ *
+ * Was three near-identical loops, and they had already drifted: the `--all`
+ * branch printed group titles but omitted the blank line between applets that
+ * the other two had, so the grouped view — the one most likely to be long —
+ * was the least readable.
+ */
+function printApps(registry: AppRegistry, ids: string[], empty: string, title?: string): void {
+  if (title) printInfo(`${title}:`);
+  if (ids.length === 0) {
+    printInfo(title ? `  ${empty}` : empty);
     return;
   }
-  mine.forEach((id, i) => {
+  ids.forEach((id, i) => {
     if (i > 0) printInfo('');
     printApp(registry, id);
   });
@@ -86,15 +94,6 @@ function wrap(text: string, width: number): string[] {
   }
   if (line) out.push(line);
   return out;
-}
-
-function printGroup(registry: AppRegistry, title: string, ids: string[], empty: string): void {
-  printInfo(`${title}:`);
-  if (ids.length === 0) {
-    printInfo(`  ${empty}`);
-    return;
-  }
-  for (const id of ids) printApp(registry, id);
 }
 
 /**
@@ -274,13 +273,10 @@ function warnUncoveredGrant(action: Record<string, unknown>, tools: string[]): v
   }
   const missing = uncoveredTools(tools, record.targetTools);
   if (missing.length === 0) return;
-  printInfo(
-    `Warning: specialist "${dispatch.specialistId}" does not target ${missing.join(', ')}. ` +
-      'An action gets the INTERSECTION of its toolAllowlist and the specialist targetTools, so ' +
-      `this action would run with ${
-        missing.length === tools.length
-          ? 'no tools at all'
-          : 'only ' + tools.filter((t) => !missing.includes(t)).join(', ')
-      }. Update the specialist to target [${tools.map((t) => `'${t}'`).join(', ')}].`,
-  );
+  // A WARNING, not a refusal, and the axis is who is acting: this is the user
+  // at a CLI making a grant that is theirs to make, and the specialist may be
+  // the next thing they fix. The `applet` tool refuses the same finding
+  // because the actor there is a model mid-authoring, which will not come back
+  // to it.
+  printInfo(`Warning: ${uncoveredToolsMessage(dispatch.specialistId, tools, missing)}`);
 }

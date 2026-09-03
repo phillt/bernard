@@ -76,6 +76,13 @@ describe('validateAppletPage', () => {
     expect(refusalFor(out)).toContain('3 problem(s)');
   });
 
+  it('refuses both inline-style forms, not just the block', () => {
+    // They were split — block refused, attribute warned — while the comment
+    // admitted the CSP discards both. Equally decidable, equally silent.
+    expect(refusals(`${OK}\n<p style="color:red">x</p>`)).toHaveLength(1);
+    expect(refusals(`${OK}\n<style>p{color:red}</style>`)).toHaveLength(1);
+  });
+
   it('warns rather than refuses where the fact is uncertain', () => {
     // The boundary is CERTAINTY, not severity: the element may be created at
     // runtime, so this must not block a write.
