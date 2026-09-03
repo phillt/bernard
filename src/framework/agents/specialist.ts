@@ -80,7 +80,7 @@ export const specialistDefinition: AgentDefinition<SpecialistInput, string> = {
   },
 
   async tools(ctx, input, surface) {
-    const baseTools = createTools(
+    const baseTools = await createTools(
       ctx.toolOptions,
       ctx.stores.memory,
       surface.mcpTools,

@@ -325,7 +325,7 @@ export async function dispatchToolWrapper(
             // `specialist.targetTools`, which names real MCP tools, and delegates would
             // make those names unresolvable. Safe since #331, because an unscoped
             // specialist now gets NO tools rather than all of them.
-            const baseTools = createTools(
+            const baseTools = await createTools(
               options,
               stores.memory,
               ctx.mcp.tools,

@@ -6,13 +6,13 @@ import record from './agent-builder.json' with { type: 'json' };
 // not on that path, so nothing validates these records at runtime. These are
 // the checks that would otherwise only fail as silent misbehaviour.
 describe('agent-builder bundled record', () => {
-  it('has an id matching its filename', () => {
+  it('has an id matching its filename', async () => {
     // `get(id)` reads `<id>.json` and `roleOf` derives ids from filenames, so a
     // mismatch makes the record unreachable AND unprotected.
     expect(record.id).toBe('agent-builder');
   });
 
-  it('names only tools that actually resolve', () => {
+  it('names only tools that actually resolve', async () => {
     // An unresolvable name is dropped with only a debugLog, so a typo yields a
     // quietly under-equipped specialist rather than an error.
     //
@@ -22,7 +22,7 @@ describe('agent-builder bundled record', () => {
     // never in `createTools` alone. Named here rather than constructed,
     // because building them needs a whole `AgentContext`.
     const WRAPPER_EXTRA = ['agent', 'task', 'specialist_run', 'tool_wrapper_run'];
-    const registry = createTools(
+    const registry = await createTools(
       {} as any,
       {} as any,
       undefined,
@@ -46,12 +46,12 @@ describe('agent-builder bundled record', () => {
    * candidates (an external caller's failure must not teach a local
    * specialist), and `withSlot` makes its nested validation acquire free.
    */
-  it('is a meta specialist with structured output', () => {
+  it('is a meta specialist with structured output', async () => {
     expect(record.kind).toBe('meta');
     expect(record.structuredOutput).toBe(true);
   });
 
-  it('can create and validate, and nothing else', () => {
+  it('can create and validate, and nothing else', async () => {
     // `specialist` writes the record; `tool_wrapper_run` is the validation
     // step. Deliberately no shell/web: unlike `specialist-creator` this agent
     // is given a described need, not a CLI to research.
@@ -60,20 +60,20 @@ describe('agent-builder bundled record', () => {
 
   // The matcher scores identityHits / |id segments ∪ name tokens|, so extra
   // words LOWER the score. Two tokens is the best available denominator.
-  it('keeps its identity tokens few, which is what the matcher rewards', () => {
+  it('keeps its identity tokens few, which is what the matcher rewards', async () => {
     const idSegments = record.id.split('-');
     const nameTokens = record.name.toLowerCase().split(/\s+/);
     expect(new Set([...idSegments, ...nameTokens]).size).toBeLessThanOrEqual(2);
   });
 
-  it('carries no provider or model pin, like every other bundled record', () => {
+  it('carries no provider or model pin, like every other bundled record', async () => {
     expect(record).not.toHaveProperty('provider');
     expect(record).not.toHaveProperty('model');
   });
 
   // The rule with no code behind it: `grantedToolNames` is an intersection, so
   // an under-declared targetTools silently removes tools from the action.
-  it('teaches the intersection rule, which nothing enforces', () => {
+  it('teaches the intersection rule, which nothing enforces', async () => {
     expect(record.systemPrompt).toContain('intersection');
     expect(record.guidelines.join(' ')).toContain('toolAllowlist');
   });
@@ -84,7 +84,7 @@ describe('agent-builder bundled record', () => {
    * Binding at create made the record's own workflow impossible — every
    * validation call would have returned `error: 'bound'`.
    */
-  it('creates unbound, validates, then binds — in that order', () => {
+  it('creates unbound, validates, then binds — in that order', async () => {
     const p = record.systemPrompt;
     expect(p).toContain('Create it UNBOUND');
     expect(p.indexOf('Create it UNBOUND')).toBeLessThan(p.indexOf('VALIDATE'));
@@ -93,7 +93,7 @@ describe('agent-builder bundled record', () => {
 
   // `targetToolsScopeError` rejects a tool-wrapper/meta record with no target
   // tools, so an example showing that create would be teaching a refusal.
-  it('never shows a tool-wrapper example with no target tools', () => {
+  it('never shows a tool-wrapper example with no target tools', async () => {
     for (const ex of record.goodExamples) {
       if (ex.call.includes("kind:'tool-wrapper'")) {
         expect(ex.call).not.toContain('targetTools:[]');

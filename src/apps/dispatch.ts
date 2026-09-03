@@ -35,13 +35,13 @@ import { grantedToolNames, renderArgsBlock, type ResolvedInvocation } from './in
  *    path must not inherit whatever the definition declares for its
  *    user-facing use.
  */
-export function buildActionTools(
+export async function buildActionTools(
   ctx: AgentContext,
   action: AppAction,
   specialistTargetTools: string[] | undefined,
   appId?: string,
-): Record<string, Tool> {
-  const base = createTools(
+): Promise<Record<string, Tool>> {
+  const base = await createTools(
     ctx.toolOptions,
     ctx.stores.memory,
     // The raw MCP bag, not the delegation surface: `buildChildTools` filters by
@@ -142,8 +142,8 @@ export async function dispatchAction(opts: DispatchActionOpts): Promise<Dispatch
     runId,
     abortSignal,
     debugLabel: 'script',
-    buildInput: (env) => {
-      const childTools = buildActionTools(
+    buildInput: async (env) => {
+      const childTools = await buildActionTools(
         env.ctx,
         action,
         specialist?.targetTools,

@@ -1,20 +1,11 @@
 import { createShellTool } from './shell.js';
 import { createMemoryTool, createScratchTool } from './memory.js';
 import { createDateTimeTool } from './datetime.js';
-import { createCronTool } from './cron.js';
-import { createCronLogTool } from './cron-logs.js';
-import { createCronNotesTool } from './cron-notes.js';
 import { createTimeTools } from './time.js';
-import { createMCPConfigTool } from './mcp.js';
-import { createMCPAddUrlTool } from './mcp-url.js';
-import { createMCPVerifyTool } from './mcp-verify.js';
 import { createWebReadTool } from './web.js';
 import { createWebSearchTool } from './web-search.js';
 import { createWaitTool } from './wait.js';
 import { createFileTools } from './file.js';
-import { createRoutineTool } from './routine.js';
-import { createLineupTool } from './lineup.js';
-import { createSpecialistTool } from './specialist.js';
 import { createCiteTool } from './cite.js';
 import { toolToAISDK } from '../framework/tools/adapter.js';
 import type { ToolOptions } from './types.js';
@@ -64,7 +55,17 @@ export type ToolAudience = 'main' | 'any';
  */
 interface ToolGroup {
   audience: ToolAudience;
-  make: () => Record<string, any>;
+  /**
+   * Async so a `main`-audience group can `await import()` its modules (#452).
+   *
+   * The laziness was always the design — "a filtered-out thunk is never
+   * invoked" — but it was CONSTRUCTION-time laziness, and the static imports at
+   * the top of this file happened first. Measured: a worker surface paid 167 ms
+   * of module graph to build a registry in 0.20 ms, because `cron.ts` reaches
+   * `cron/runner.ts` and from there every agent definition. Deferring the nine
+   * `main`-only modules takes that to 76 ms.
+   */
+  make: () => Record<string, any> | Promise<Record<string, any>>;
 }
 
 /** Which built-in surface a dispatch receives. */
@@ -90,7 +91,7 @@ export interface CreateToolsOptions {
  *   ninth positional parameter, which would be unreadable at the call sites.
  * @returns A flat record of all available AI SDK tools keyed by tool name.
  */
-export function createTools(
+export async function createTools(
   options: ToolOptions,
   memoryStore: MemoryStore,
   mcpTools?: Record<string, any>,
@@ -100,7 +101,7 @@ export function createTools(
   config?: BernardConfig,
   provenance?: ProvenanceStore,
   opts?: CreateToolsOptions,
-): Record<string, any> {
+): Promise<Record<string, any>> {
   // Pure function of its arguments: no ctx, no policy, no per-turn state. The
   // main agent's tool block must stay byte-identical across turns for the
   // prompt cache to hit, so this must never vary with anything turn-scoped.
@@ -123,27 +124,57 @@ export function createTools(
     },
     {
       audience: 'main',
-      make: () => ({
-        routine: createRoutineTool(routineStore),
-        lineup_edit: createLineupTool(config),
-        specialist: createSpecialistTool(specialistStore, candidateStore, config),
-      }),
+      make: async () => {
+        const [{ createRoutineTool }, { createLineupTool }, { createSpecialistTool }] =
+          await Promise.all([
+            import('./routine.js'),
+            import('./lineup.js'),
+            import('./specialist.js'),
+          ]);
+        return {
+          routine: createRoutineTool(routineStore),
+          lineup_edit: createLineupTool(config),
+          specialist: createSpecialistTool(specialistStore, candidateStore, config),
+        };
+      },
     },
     // Scheduling is a main-agent concern: a cron job manages its own run via
     // `cron_self_disable`, not by editing the schedule. The cron definition now
     // takes its built-ins from this registry under the worker surface (#333),
     // so these three are the tools it deliberately does NOT get.
-    { audience: 'main', make: () => createCronTool() },
-    { audience: 'main', make: () => createCronLogTool() },
-    { audience: 'main', make: () => createCronNotesTool() },
+    {
+      audience: 'main',
+      make: async () => {
+        // One await for all three: `cron-logs` and `cron-notes` both import
+        // `./cron.js`, so they share a module graph and resolve together.
+        const [cron, logs, notes] = await Promise.all([
+          import('./cron.js'),
+          import('./cron-logs.js'),
+          import('./cron-notes.js'),
+        ]);
+        return {
+          ...cron.createCronTool(),
+          ...logs.createCronLogTool(),
+          ...notes.createCronNotesTool(),
+        };
+      },
+    },
     { audience: 'any', make: () => createTimeTools() },
     {
       audience: 'main',
-      make: () => ({
-        mcp_config: createMCPConfigTool(),
-        mcp_add_url: createMCPAddUrlTool(),
-        mcp_verify: createMCPVerifyTool(),
-      }),
+      make: async () => {
+        const [{ createMCPConfigTool }, { createMCPAddUrlTool }, { createMCPVerifyTool }] =
+          await Promise.all([
+            import('./mcp.js'),
+            import('./mcp-url.js'),
+            import('./mcp-verify.js'),
+          ]);
+        return {
+          mcp_config: createMCPConfigTool(),
+          mcp_add_url: createMCPAddUrlTool(),
+          mcp_verify: createMCPVerifyTool(),
+        };
+      },
     },
     {
       audience: 'any',
@@ -159,8 +190,8 @@ export function createTools(
   const worker = opts?.surface === 'worker';
   const registry: Record<string, any> = {};
   for (const group of groups) {
-    if (worker && group.audience === 'main') continue; // never constructed — see ToolGroup
-    Object.assign(registry, group.make());
+    if (worker && group.audience === 'main') continue; // never LOADED — see ToolGroup
+    Object.assign(registry, await group.make());
   }
   // MCP merges last, so a server exporting a colliding name still wins — the
   // exclusions above are about Bernard's own built-ins, not about MCP.

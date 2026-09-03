@@ -229,7 +229,7 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     return buildMainContextInputs(ctx, input);
   },
 
-  tools(ctx, input, surface): Record<string, Tool> {
+  async tools(ctx, input, surface): Promise<Record<string, Tool>> {
     // `surface.mcpTools` is per-server MCP delegation (#296): when on, the main
     // agent carries ONE thin `delegate_<server>` tool per connected server
     // instead of every MCP tool's schema. The real schemas live only inside
@@ -242,7 +242,7 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     // `surface.surface` is `'full'` here by derivation — main is the only
     // `historyMode: 'persistent'` definition — so the config/scheduling tools
     // the worker surface drops (#253) stay present.
-    const baseTools = createTools(
+    const baseTools = await createTools(
       ctx.toolOptions,
       ctx.stores.memory,
       surface.mcpTools,
