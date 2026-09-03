@@ -90,6 +90,22 @@ export interface Specialist {
    * refuse to invoke it. Toggle from the `/specialists` menu.
    */
   disabled?: boolean;
+  /**
+   * Binds this specialist to one applet action (#423), so it is reachable
+   * only through that capability and never as a free-floating specialist.
+   *
+   * Enforced at the three dispatch chokepoints — `specialist_run` and
+   * `tool_wrapper_run` refuse a bound record outright, and an app dispatch
+   * permits it only for the matching `(appId, action)`. `getSummaries()`
+   * omits it too, so the main agent is never advised to dispatch something it
+   * would then be refused for. It stays in `list()`, and therefore in
+   * `/specialists`: a user must be able to see what an applet is running.
+   *
+   * Settable at create, NOT via `update` — a model rebinding an existing
+   * specialist is a model writing a policy field, the instinct that keeps
+   * `skipPermissions` out of the manifest schema.
+   */
+  boundTo?: { appId: string; action: string };
 }
 
 export interface SpecialistSummary {
@@ -121,6 +137,8 @@ export interface CreateSpecialistInput {
   goodExamples?: SpecialistExample[];
   badExamples?: SpecialistBadExample[];
   structuredOutput?: boolean;
+  /** See {@link Specialist.boundTo}. Create-only, deliberately. */
+  boundTo?: { appId: string; action: string };
 }
 
 export type SpecialistUpdates = Partial<
@@ -295,6 +313,7 @@ export class SpecialistStore {
       ...(input.goodExamples !== undefined ? { goodExamples: input.goodExamples } : {}),
       ...(input.badExamples !== undefined ? { badExamples: input.badExamples } : {}),
       ...(input.structuredOutput !== undefined ? { structuredOutput: input.structuredOutput } : {}),
+      ...(input.boundTo !== undefined ? { boundTo: input.boundTo } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -428,14 +447,21 @@ export class SpecialistStore {
   }
 
   /**
-   * Returns id + name + description + optional model info for all *enabled*
-   * specialists, for system-prompt injection and the auto-matcher. Disabled
-   * specialists are excluded here so they drop out of dispatch while still
-   * appearing in `list()` (and thus the `/specialists` menu).
+   * Returns id + name + description + optional model info for all *enabled,
+   * unbound* specialists, for system-prompt injection and the auto-matcher.
+   * Disabled and applet-bound specialists are excluded here so they drop out
+   * of dispatch while still appearing in `list()` (and thus the
+   * `/specialists` menu).
+   *
+   * This is the single chokepoint for "excluded from dispatch discovery", and
+   * its one caller (`src/agent.ts`) feeds BOTH `matchSpecialists` and the
+   * `<specialists>` context block. Filtering in the matcher alone would leave
+   * a bound specialist advertised in the prompt but unmatchable — inviting a
+   * `specialist_run` call that hits the refusal, i.e. a wasted step per turn.
    */
   getSummaries(): SpecialistSummary[] {
     return this.list()
-      .filter((s) => !s.disabled)
+      .filter((s) => !s.disabled && !s.boundTo)
       .map(({ id, name, description, provider, model, params, kind }) => ({
         id,
         name,

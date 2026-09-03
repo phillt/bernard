@@ -69,6 +69,11 @@ export function createSpecialistRunTool(ctx: AgentContext): Tool {
       if (specialist.disabled) {
         return `Error: Specialist "${specialistId}" is disabled. Re-enable it from the /specialists menu before invoking it.`;
       }
+      // Bound to one applet action (#423), so it is reachable only through
+      // that capability. Same shape and same place as the `disabled` refusal.
+      if (specialist.boundTo) {
+        return `Error: Specialist "${specialistId}" is bound to applet action "${specialist.boundTo.appId}/${specialist.boundTo.action}" and can only be invoked through it.`;
+      }
 
       const resolution = resolveProviderAndModel({
         provider,

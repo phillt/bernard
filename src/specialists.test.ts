@@ -784,6 +784,41 @@ describe('SpecialistStore', () => {
 // is in `POST_V1_BUNDLED`. `.seeded-v1` short-circuits the v1 loop, so dropping
 // a JSON file into the manifest directory alone reaches nobody who already ran
 // Bernard once — which is nearly everyone.
+describe('applet-bound specialists (#423)', () => {
+  // `getSummaries()` is the single chokepoint for "excluded from dispatch
+  // discovery" — its one caller feeds BOTH the matcher and the `<specialists>`
+  // prompt block, so filtering here is what stops the main agent being advised
+  // to dispatch something it would then be refused for.
+  it('are excluded from getSummaries but still listed', async () => {
+    const { SpecialistStore } = await import('./specialists.js');
+    const fs = await import('node:fs');
+    const bound = {
+      id: 'bound-one',
+      name: 'Bound',
+      description: 'd',
+      systemPrompt: 'p',
+      guidelines: [],
+      boundTo: { appId: 'demo', action: 'go' },
+      createdAt: 'x',
+      updatedAt: 'x',
+    };
+    const free = { ...bound, id: 'free-one', name: 'Free', boundTo: undefined };
+    vi.mocked(fs.readdirSync).mockReturnValue(['bound-one.json', 'free-one.json'] as never);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockImplementation((f: never) =>
+      JSON.stringify(String(f).includes('bound-one') ? bound : free),
+    );
+    const store = new SpecialistStore({ seed: false });
+    expect(
+      store
+        .list()
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual(['bound-one', 'free-one']);
+    expect(store.getSummaries().map((s) => s.id)).toEqual(['free-one']);
+  });
+});
+
 describe('post-v1 bundled seeding', () => {
   /**
    * An install that has already run once: `.seeded-v1` present, so the v1 loop

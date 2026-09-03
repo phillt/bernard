@@ -264,6 +264,13 @@ export async function dispatchToolWrapper(
       error: 'disabled',
     };
   }
+  if (specialist.boundTo) {
+    return {
+      status: 'error',
+      result: `Specialist "${specialistId}" is bound to applet action "${specialist.boundTo.appId}/${specialist.boundTo.action}" and can only be invoked through it.`,
+      error: 'bound',
+    };
+  }
   const kind = specialist.kind ?? 'persona';
   if (kind === 'persona') {
     return {

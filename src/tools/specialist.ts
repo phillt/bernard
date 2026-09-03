@@ -136,6 +136,18 @@ export function createSpecialistTool(
               'kind most likely to go stale. Call action:"roles" to see the options. ' +
               'Pass "" to clear. Used with create/update.',
           ),
+        boundTo: z
+          .object({
+            appId: z.string().min(1).describe('The applet this specialist serves.'),
+            action: z.string().min(1).describe('The action within it.'),
+          })
+          .optional()
+          .describe(
+            'Binds this specialist to ONE applet action, so it is reachable only through that ' +
+              'capability and never as a free-floating specialist. Create-only: rebinding an ' +
+              'existing specialist is a policy change, not an edit. Use it when building the ' +
+              'agent behind an applet button.',
+          ),
         kind: z
           .enum(['persona', 'tool-wrapper', 'meta'])
           .optional()
@@ -177,6 +189,7 @@ export function createSpecialistTool(
         provider,
         model,
         role,
+        boundTo,
         params,
         kind,
         targetTools,
@@ -327,6 +340,7 @@ export function createSpecialistTool(
                 provider: resolvedProvider,
                 model: resolvedModel,
                 role,
+                boundTo,
                 params: resolvedParams,
                 kind,
                 targetTools,

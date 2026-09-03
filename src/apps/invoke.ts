@@ -45,6 +45,12 @@ export type InvocationErrorCode =
   | 'invalid_manifest'
   | 'invalid_args'
   | 'unknown_specialist'
+  /**
+   * The named specialist exists but is bound to a different applet action
+   * (#423). Distinct from `unknown_specialist` — the record is there, and
+   * saying it is missing would send an integrator looking for the wrong bug.
+   */
+  | 'specialist_not_bound'
   | 'run_failed'
   | 'timeout';
 
@@ -306,6 +312,17 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
   // manifest, not a failed run — the caller should see a request-shaped
   // failure, and no model call should be billed for it.
   const specialist = new SpecialistStore().get(dispatch.specialistId);
+  // Permit the MATCHING pair, refuse every other caller — the inverse of the
+  // `specialist_run` / `tool_wrapper_run` refusals, and the whole point of the
+  // field. An unbound specialist is untouched: `boundTo` is absent on every
+  // record that existed before #423, so the guard keys on presence.
+  const bound = specialist?.boundTo;
+  if (bound && (bound.appId !== invocation.appId || bound.action !== invocation.actionName)) {
+    return fail(
+      'specialist_not_bound',
+      `Action "${opts.action}" names specialist "${dispatch.specialistId}", which is bound to "${bound.appId}/${bound.action}".`,
+    );
+  }
   if (!specialist) {
     return fail(
       'unknown_specialist',
