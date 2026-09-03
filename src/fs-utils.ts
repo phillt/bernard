@@ -1,10 +1,27 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 
-/** Writes `data` to a `.tmp` file then renames it into place for crash-safe persistence. */
-export function atomicWriteFileSync(filePath: string, data: string): void {
+/**
+ * Writes `data` to a `.tmp` file then renames it into place for crash-safe
+ * persistence.
+ *
+ * `mode` is applied to the temp file **before** the rename, which is what
+ * makes a 0600 file achievable atomically: `writeFileSync` then `chmodSync`
+ * leaves a window at the default umask, and a rename does not carry a mode of
+ * its own. Callers that need restrictive permissions should pass it here
+ * rather than chmod afterwards.
+ */
+export function atomicWriteFileSync(
+  filePath: string,
+  data: string,
+  opts: { mode?: number } = {},
+): void {
   const tmp = filePath + '.tmp';
-  fs.writeFileSync(tmp, data, 'utf-8');
+  fs.writeFileSync(
+    tmp,
+    data,
+    opts.mode === undefined ? 'utf-8' : { encoding: 'utf-8', mode: opts.mode },
+  );
   fs.renameSync(tmp, filePath);
 }
 
@@ -133,7 +150,18 @@ export function copyBundledJsonIfAbsent(bundledDir: string, destDir: string, fil
  * copy it must not break the caller. Best-effort throughout: seeding must
  * never block startup or an invocation.
  */
-export function seedBundledJsonDir(bundledDir: string, destDir: string, markerPath: string): void {
+export function seedBundledJsonDir(
+  bundledDir: string,
+  destDir: string,
+  markerPath: string,
+  /**
+   * Extra copying to perform under the SAME marker and the same cross-process
+   * lock — e.g. an applet's served assets alongside its manifest. Running it
+   * outside would re-do the work on every construction and, worse, lose
+   * `seedOnce`'s lock, letting two concurrent callers race the copy.
+   */
+  also?: (bundledDir: string, destDir: string) => void,
+): void {
   try {
     fs.mkdirSync(destDir, { recursive: true });
     seedOnce(markerPath, () => {
@@ -141,6 +169,7 @@ export function seedBundledJsonDir(bundledDir: string, destDir: string, markerPa
       for (const file of fs.readdirSync(bundledDir).filter((f) => f.endsWith('.json'))) {
         copyBundledJsonIfAbsent(bundledDir, destDir, file);
       }
+      also?.(bundledDir, destDir);
     });
   } catch {
     // best-effort

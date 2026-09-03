@@ -1000,6 +1000,25 @@ program
   });
 
 program
+  .command('applet-host <action>')
+  .description('Manage the applet host: status | start | stop')
+  .action(async (action: string) => {
+    const { appletHostStatus, appletHostStart, appletHostStop } = await import('./host/cli.js');
+    try {
+      if (action === 'status') await appletHostStatus();
+      else if (action === 'start') await appletHostStart();
+      else if (action === 'stop') await appletHostStop();
+      else {
+        printError(`Unknown action "${action}". Use status, start or stop.`);
+        process.exitCode = 1;
+      }
+    } catch (err: unknown) {
+      printError(err instanceof Error ? err.message : String(err));
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command('cron-list')
   .description('List all cron jobs with status')
   .action(async () => {

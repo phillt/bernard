@@ -43,7 +43,7 @@
     "ai-sdk"
   ],
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=22.18.0"
   },
   "files": [
     "dist",
