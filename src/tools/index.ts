@@ -131,10 +131,12 @@ export async function createTools(
             import('./lineup.js'),
             import('./specialist.js'),
           ]);
+        const { createAppletTool } = await import('./applet.js');
         return {
           routine: createRoutineTool(routineStore),
           lineup_edit: createLineupTool(config),
           specialist: createSpecialistTool(specialistStore, candidateStore, config),
+          applet: createAppletTool(),
         };
       },
     },

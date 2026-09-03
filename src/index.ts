@@ -1081,6 +1081,57 @@ program
   });
 
 program
+  .command('app [action] [appId] [actionName]')
+  .description('List, inspect, permit or delete applets (list | allow | delete | path)')
+  .option('--tools <names>', 'Comma-separated tool names for `allow` (empty clears)')
+  .option('--write', 'Let this action write, rather than read-only')
+  .option('--confirm <mode>', 'Confirmation mode for this action: off | auto | strict')
+  .action(
+    async (
+      action: string | undefined,
+      appId: string | undefined,
+      actionName: string | undefined,
+      options: { tools?: string; write?: boolean; confirm?: string },
+    ) => {
+      try {
+        const cli = await import('./apps/app-cli.js');
+        switch (action ?? 'list') {
+          case 'list':
+            cli.appList();
+            return;
+          case 'path':
+            if (!appId) throw new Error('Usage: bernard app path <appId>');
+            cli.appPath(appId);
+            return;
+          case 'delete':
+            if (!appId) throw new Error('Usage: bernard app delete <appId>');
+            cli.appDelete(appId);
+            return;
+          case 'allow': {
+            if (!appId || !actionName) {
+              throw new Error('Usage: bernard app allow <appId> <action> --tools a,b');
+            }
+            const tools = (options.tools ?? '')
+              .split(',')
+              .map((t) => t.trim())
+              .filter(Boolean);
+            cli.appAllow(appId, actionName, tools, {
+              ...(options.write !== undefined ? { write: options.write } : {}),
+              ...(options.confirm !== undefined ? { confirm: options.confirm } : {}),
+            });
+            return;
+          }
+          default:
+            throw new Error(`Unknown action "${action}". Use list, allow, delete or path.`);
+        }
+      } catch (err: unknown) {
+        printError(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    },
+  );
+
+program
   .command('app-grant <appId> [tools...]')
   .description('Show or set the permission rules an applet runs under')
   .option('--deny', 'Write the named tools as deny rules instead of allow')

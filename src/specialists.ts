@@ -480,6 +480,20 @@ export class SpecialistStore {
    * a bound specialist advertised in the prompt but unmatchable — inviting a
    * `specialist_run` call that hits the refusal, i.e. a wasted step per turn.
    */
+  /**
+   * Every specialist bound to one applet action's app.
+   *
+   * A scan, because `boundTo` is a FIELD and records are addressed by
+   * filename — there is no index. It exists for deletion: a specialist bound
+   * to a removed app is unreachable by construction (`getSummaries` filters it
+   * out of discovery, the dispatch gates refuse it, and `update` refuses
+   * re-binding), so without this it would sit on disk forever, invisible and
+   * counting against `MAX_SPECIALISTS`.
+   */
+  listBoundTo(appId: string): Specialist[] {
+    return this.list().filter((s) => s.boundTo?.appId === appId);
+  }
+
   getSummaries(): SpecialistSummary[] {
     return this.list()
       .filter((s) => !s.disabled && !s.boundTo)

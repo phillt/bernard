@@ -275,7 +275,17 @@ export const AppActionSchema = RawAppActionSchema.superRefine((action, ctx) =>
   intraActionRules(action, ctx),
 ).transform(liftAction);
 
-export const AppManifestSchema = z
+/**
+ * A manifest exactly as it sits on disk, validated but **not lifted**.
+ *
+ * The write side needs this and cannot use {@link AppManifestSchema}, which
+ * `.transform`s: `liftAction` moves a v1 action's flat `instructions` /
+ * `specialistId` into `dispatch`, so parsing then re-serializing turns a v1
+ * manifest into one that its own `schemaVersion` refinement rejects. A writer
+ * validates the raw shape and writes the raw shape; readers keep getting the
+ * lifted one.
+ */
+export const RawAppManifestSchema = z
   .object({
     schemaVersion: AppSchemaVersionSchema,
     id: z.string().regex(APP_ID_RE),
@@ -304,15 +314,26 @@ export const AppManifestSchema = z
         });
       }
     }
-  })
-  .transform((m) => ({
-    ...m,
-    actions: Object.fromEntries(
-      Object.entries(m.actions).map(([name, action]) => [name, liftAction(action)]),
-    ),
-  }));
+  });
+
+export type RawAppManifest = z.infer<typeof RawAppManifestSchema>;
+
+/** The reader's view: every action lifted into the `dispatch` union. */
+export const AppManifestSchema = RawAppManifestSchema.transform((m) => ({
+  ...m,
+  actions: Object.fromEntries(
+    Object.entries(m.actions).map(([name, action]) => [name, liftAction(action)]),
+  ),
+}));
 
 export type AppManifest = z.output<typeof AppManifestSchema>;
+
+/** Validates a manifest for WRITING — no lift, so what is checked is what lands. */
+export function parseRawAppManifest(raw: unknown): ParseResult<RawAppManifest> {
+  const parsed = RawAppManifestSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: formatZodError(parsed.error) };
+  return { ok: true, value: parsed.data };
+}
 
 /**
  * `.strict()` on every object above is load-bearing rather than tidiness.

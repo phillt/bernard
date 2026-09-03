@@ -14,6 +14,7 @@ const MAIN_AUDIENCE_TOOLS = [
   'routine',
   'lineup_edit',
   'specialist',
+  'applet',
   'cron',
   'cron_logs',
   'cron_notes',
