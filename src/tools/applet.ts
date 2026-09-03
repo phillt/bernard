@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import { AppRegistry } from '../apps/registry.js';
 import { defaultAppletPage } from '../apps/page-template.js';
+import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-tool.js';
 import {
   refusalFor,
   validateAppletPage,
@@ -123,7 +124,11 @@ export function createAppletTool(registry?: AppRegistry) {
       parameters: PARAMETERS,
       execute: async (args: AppletArgs): Promise<string> => {
         try {
-          return run(store, args);
+          // `return await`, not `return`. With `run` async a bare return hands
+          // back the promise before it rejects, so this `catch` would see
+          // nothing and the `Error: ` prefix `detectToolError` reads (#364)
+          // would silently stop being applied.
+          return await run(store, args);
         } catch (err) {
           // The `Error: ` prefix is what `detectToolError` reads (#364).
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -141,7 +146,7 @@ export function createAppletTool(registry?: AppRegistry) {
   );
 }
 
-function run(store: AppRegistry, args: AppletArgs): string {
+async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
   switch (args.action) {
     case 'list': {
       const ids = store.listIds();
@@ -165,6 +170,8 @@ function run(store: AppRegistry, args: AppletArgs): string {
         return `Error: "${id}" is not a valid applet id — lowercase letters, digits and hyphens, 2-64 characters.`;
       }
       const manifest = buildManifest(id, args);
+      const dispatchRefusal = await checkDispatch(manifest.actions);
+      if (dispatchRefusal) return dispatchRefusal;
       // Scaffolded when the caller supplies none, so every refusal below has a
       // remedy reachable in one call rather than being a dead end.
       const page =
@@ -189,6 +196,8 @@ function run(store: AppRegistry, args: AppletArgs): string {
       // been lifted, so writing it back would be rejected by its own version
       // refinement — see `RawAppManifestSchema`.
       const manifest = buildManifest(id, args, existing.manifest);
+      const dispatchRefusal = await checkDispatch(manifest.actions);
+      if (dispatchRefusal) return dispatchRefusal;
       const files: Record<string, string> = { ...(args.files ?? {}) };
       let issues: PageIssue[] = [];
       if (args.page !== undefined) {
@@ -260,6 +269,40 @@ function buildManifest(
 function need<T>(value: T | undefined, field: string, action: string): T {
   if (value === undefined) throw new Error(`\`${field}\` is required for action "${action}".`);
   return value;
+}
+
+/**
+ * Refuses a manifest whose actions could never run.
+ *
+ * Gated on a `kind: 'tool'` action actually being present, so the common
+ * agent-backed applet builds no registry and pays nothing.
+ *
+ * An unknown `specialistId` is deliberately a WARNING, not a refusal, and that
+ * is the whole reason the boundary is "immutable relative to the write". A
+ * tool's eligibility is compiled in — `datetime` will never become eligible.
+ * A specialist is user state, and the natural authoring order is to create the
+ * applet and then create and bind its agent, which `agent-builder` depends on;
+ * refusing here would break that sequence. It is already pre-flighted at run
+ * time with its own error code.
+ */
+async function checkDispatch(actions: Record<string, RawAppAction>): Promise<string | null> {
+  const problems: string[] = [];
+  for (const [name, action] of Object.entries(actions)) {
+    const dispatch = action.dispatch;
+    if (dispatch?.kind !== 'tool') continue;
+    const refusal =
+      (await directInvocableRefusalByName(dispatch.tool)) ??
+      (await toolArgRefusal(dispatch.tool, dispatch.args ?? {}));
+    if (refusal) problems.push(`  - action "${name}": ${refusal}`);
+  }
+  if (problems.length === 0) return null;
+  return (
+    `Error: this applet was not written — ${problems.length} action(s) could never run:\n` +
+    `${problems.join('\n')}\n` +
+    'Tools callable directly are: web_read, web_search, memory, file_read_lines, file_write. ' +
+    'For anything else, back the action with a specialist: ' +
+    "dispatch: { kind: 'agent', specialistId: '...', instructions: '...' }."
+  );
 }
 
 /** A page is unbounded; a tool result that reaches a model is not. */

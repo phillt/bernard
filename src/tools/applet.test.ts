@@ -265,3 +265,65 @@ describe('the applet tool refuses a page that would not work', () => {
     expect(out).toContain('/__bernard/applet.js');
   });
 });
+
+/**
+ * The `datetime` defect: an action that could never run, written and reported
+ * as created, failing as an HTTP 500 at the click.
+ */
+describe('the applet tool refuses an action that could never run', () => {
+  useTempHome('bernard-applet-dispatch');
+
+  const withTool = (tool: string, dispatchArgs: Record<string, unknown> = {}) => ({
+    ...CREATE,
+    actions: { go: { dispatch: { kind: 'tool' as const, tool, args: dispatchArgs } } },
+    page: PAGE.replace("bernard.invoke('summarise')", "bernard.invoke('go')"),
+  });
+
+  it('refuses the exact manifest that shipped broken', async () => {
+    const { tool, AppRegistry } = await load();
+    const out = await tool.execute(withTool('datetime') as never, {} as never);
+    expect(out).toContain('Error:');
+    expect(out).toContain('datetime');
+    // The refusal has to name the way out, or the model just tries again.
+    expect(out).toContain('web_search');
+    expect(out).toContain('specialistId');
+    expect(new AppRegistry({ seed: false }).listIds()).not.toContain('notes');
+  });
+
+  it('accepts a tool that actually opted in', async () => {
+    const { tool } = await load();
+    const out = await tool.execute(
+      withTool('web_search', { query: 'bernard' }) as never,
+      {} as never,
+    );
+    expect(out).toContain('created');
+  });
+
+  it('refuses a misspelled tool parameter, naming the real ones', async () => {
+    const { tool } = await load();
+    const out = await tool.execute(withTool('file_write', { pth: '/tmp/x' }) as never, {} as never);
+    expect(out).toContain('Error:');
+    expect(out).toContain('"pth"');
+  });
+
+  it('builds no registry for an agent-backed applet', async () => {
+    // The check costs ~76 ms, so it is gated on a tool-backed action being
+    // present — the common case must pay nothing.
+    const mod = await import('./index.js');
+    const spy = vi.spyOn(mod, 'createTools');
+    const { tool } = await load();
+    await tool.execute(CREATE, {} as never);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('lets an unknown specialist through with a warning, not a refusal', async () => {
+    // Deliberately the carve-out: the natural order is create the applet, then
+    // create and bind its agent — which is what `agent-builder` does. Refusing
+    // would break that sequence, and run time already pre-flights it.
+    const { tool, AppRegistry } = await load();
+    const out = await tool.execute(CREATE, {} as never);
+    expect(out).toContain('created');
+    expect(new AppRegistry({ seed: false }).listIds()).toContain('notes');
+  });
+});

@@ -196,3 +196,51 @@ describe('dispatchToolAction', () => {
     }
   });
 });
+
+/**
+ * The write-time check added for the `datetime` defect is ADDITIVE.
+ *
+ * A manifest is user-editable between runs, so a write-time check alone is a
+ * time-of-check/time-of-use gap (#420 R6's complete mediation). This is the
+ * test that stops someone later "simplifying" by deleting the dispatch-side
+ * refusal on the grounds that authoring already covers it.
+ */
+describe('eligibility is still enforced at dispatch (#420 R6)', () => {
+  useTempHome('bernard-toctou');
+
+  it('refuses a hand-written manifest the applet tool would never have accepted', async () => {
+    const { AppRegistry } = await import('./registry.js');
+    const { APPS_DIR } = await import('../paths.js');
+
+    // Written straight to disk, bypassing every authoring check — which is
+    // exactly what a user with an editor can do.
+    fs.mkdirSync(APPS_DIR, { recursive: true });
+    fs.writeFileSync(
+      path.join(APPS_DIR, 'sneaky.json'),
+      JSON.stringify({
+        schemaVersion: 2,
+        id: 'sneaky',
+        name: 'Sneaky',
+        actions: { go: { dispatch: { kind: 'tool', tool: 'datetime', args: {} } } },
+      }),
+      'utf-8',
+    );
+
+    // It resolves — the manifest is structurally valid, which is the point:
+    // nothing about its SHAPE is wrong, only what it names.
+    const { resolveFromManifest } = await import('./invocation.js');
+    const resolved = resolveFromManifest(new AppRegistry({ seed: false }), 'sneaky', 'go', {});
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+
+    const { dispatchToolAction } = await import('./tool-dispatch.js');
+    const out = await dispatchToolAction({
+      invocation: resolved.invocation,
+      dispatch: { kind: 'tool', tool: 'datetime', args: {} },
+      timeoutMs: null,
+    });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.message).toContain('datetime');
+  });
+});
