@@ -19,6 +19,7 @@ import { truncate } from '../text.js';
 import { formatCostSuffix } from '../usage-report.js';
 import { formatFriendlyTimestamp } from '../output.js';
 import { renderMarkdown } from './markdown.js';
+import { useDimensionsCtx } from './DimensionsContext.js';
 import { ErrorPanel } from './ErrorPanel.js';
 import type { ErrorPanelData } from './error-format.js';
 import type { MessageStore, StreamEvent } from './message-store.js';
@@ -228,10 +229,15 @@ function groupByLabel(events: readonly StreamEvent[]): EventGroup[] {
  * (`**partial`, open fences) doesn't flash raw delimiters.
  */
 function MarkdownLines({ text, streaming = false }: { text: string; streaming?: boolean }) {
-  const { stdout } = useStdout();
+  // `useDimensionsCtx`, not `useStdout`: the context is subscribed to stdout's
+  // `resize`, so markdown re-lays-out when the terminal does. `useStdout` is not
+  // reactive, so the frame reflowed around a body still measured for the old
+  // width. This component serves both render paths, so it showed up in
+  // full-screen too. Every other consumer in the tree already reads the context.
+  const { columns } = useDimensionsCtx();
   const colors = getThemeColors();
   // App's outer <Box> has paddingX={2}; keep the table/rule width inside it.
-  const width = Math.max(40, (stdout?.columns ?? 80) - 4);
+  const width = Math.max(40, columns - 4);
   const rendered = renderMarkdown(text, width, colors, streaming);
   return (
     <Box flexDirection="column">

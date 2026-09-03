@@ -67,8 +67,13 @@ function buildTerminalOptions(
   return {
     heading: accent.bold,
     firstHeading: accent.bold.underline,
+    // `link` only. marked-terminal applies `this.o.href(...)` to the link text
+    // and then wraps the whole thing in `this.o.link(...)`, so setting both to
+    // the same style nests underline inside underline: measured, one link
+    // opened underline THREE times and closed it twice, with the teardown
+    // re-enabling it mid-close — 180 raw bytes for 44 visible columns. `href`
+    // is left at marked-terminal's default so the style is applied once.
     link: accent.underline,
-    href: accent.underline,
     code,
     codespan: code,
     blockquote: muted.italic,
