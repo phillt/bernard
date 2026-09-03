@@ -184,7 +184,7 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
       // one without saying what it is for.
       need(args.description, 'description', 'create');
       const manifest = buildManifest(id, args);
-      const dispatch = await checkDispatch(manifest.actions);
+      const dispatch = await checkDispatch(id, manifest.actions);
       if (dispatch.refusal) return dispatch.refusal;
       // Scaffolded when the caller supplies none, so every refusal below has a
       // remedy reachable in one call rather than being a dead end.
@@ -197,8 +197,8 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
       const created = store.create(manifest, { 'index.html': page, ...(args.files ?? {}) });
       return (
         `Applet "${created.name}" (${created.id}) created with ` +
-        `${Object.keys(created.actions).length} action(s). Its actions have no tools yet — ` +
-        `grant them with \`bernard app-grant ${created.id}\`.` +
+        `${Object.keys(created.actions).length} action(s).` +
+        grantHint(created.id, Object.keys(created.actions)) +
         warningsFor(issues) +
         extraWarnings(dispatch.warnings) +
         (await openedNote(created.id))
@@ -212,7 +212,7 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
       // been lifted, so writing it back would be rejected by its own version
       // refinement — see `RawAppManifestSchema`.
       const manifest = buildManifest(id, args, existing.manifest);
-      const dispatch = await checkDispatch(manifest.actions);
+      const dispatch = await checkDispatch(id, manifest.actions);
       if (dispatch.refusal) return dispatch.refusal;
       const files: Record<string, string> = { ...(args.files ?? {}) };
       let issues: PageIssue[] = [];
@@ -292,6 +292,36 @@ function need<T>(value: T | undefined, field: string, action: string): T {
 }
 
 /**
+ * How to actually grant the new applet its tools.
+ *
+ * The previous text pointed at `bernard app-grant <id>`, which **cannot do
+ * it**. There are two mechanisms and they are not interchangeable:
+ * `app-grant` writes `ProfileSettings.appToolGrants`, a list of
+ * `PermissionRule`s that allow or deny at the gate — a REFINEMENT over tools
+ * that already exist. `bernard app allow <id> <action> --tools a,b` writes the
+ * manifest's `toolAllowlist`, which is what decides whether a tool is
+ * CONSTRUCTED at all.
+ *
+ * An action created here always has an empty allowlist, because this tool
+ * cannot set one (the authority split). So the very first thing a new
+ * agent-backed applet needs is the command this message names, and naming the
+ * wrong one meant following the instruction exactly left the button as broken
+ * as before — observed, as "No datetime tool available" from a button whose
+ * author had done everything right.
+ */
+function grantHint(appId: string, actions: string[]): string {
+  if (actions.length === 0) return '';
+  const example = actions[0];
+  return (
+    ` Its actions have no tools yet — an action with an empty allowlist can only produce text. ` +
+    `Grant per action with \`bernard app allow ${appId} ${example} --tools <names>\`` +
+    (actions.length > 1 ? ` (and likewise for ${actions.slice(1).join(', ')}).` : '.') +
+    ' Note `bernard app-grant` is a different thing — it refines rules over tools an action' +
+    ' already has, and cannot add one.'
+  );
+}
+
+/**
  * Opens a just-built applet, and says where it is either way.
  *
  * On `create` only, never `update`: an edit mid-conversation stealing window
@@ -333,6 +363,7 @@ async function openedNote(appId: string): Promise<string> {
  * time with its own error code.
  */
 async function checkDispatch(
+  appId: string,
   actions: Record<string, RawAppAction>,
 ): Promise<{ refusal: string | null; warnings: string[] }> {
   const problems: string[] = [];
@@ -360,10 +391,26 @@ async function checkDispatch(
     // so hard to see: the observed case produced "No datetime tool available"
     // from a specialist whose action declared `toolAllowlist: ['datetime']`.
     const allowed = action.toolAllowlist ?? [];
-    if (allowed.length === 0) continue;
-
     specialists ??= new SpecialistStore({ seed: false });
     const record = specialists.get(dispatch.specialistId);
+
+    // An empty allowlist is legitimate for an action that only produces text,
+    // so this is not warned on by itself. It IS warned on when the backing
+    // specialist declares `targetTools` — that specialist was built to use
+    // them, the intersection is empty, and the action will fail at the click
+    // saying it has no tool. That is the exact shape observed.
+    if (allowed.length === 0) {
+      const wants = record?.targetTools ?? [];
+      if (wants.length > 0) {
+        warnings.push(
+          `Action "${name}" grants no tools, but its specialist "${dispatch.specialistId}" ` +
+            `targets ${wants.join(', ')}. An action gets the INTERSECTION of the two, so this ` +
+            `one runs with nothing. Grant them: ` +
+            `\`bernard app allow ${appId} ${name} --tools ${wants.join(',')}\`.`,
+        );
+      }
+      continue;
+    }
 
     // ABSENT is a warning, not a refusal, and the distinction is load-bearing:
     // the natural authoring order is to write the applet and then build and

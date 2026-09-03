@@ -475,3 +475,81 @@ describe('the applet tool requires a description', () => {
     expect(out).toContain('updated');
   });
 });
+
+describe('a new applet says how to actually grant its tools', () => {
+  useTempHome('bernard-applet-grant-hint');
+
+  it('names `app allow`, not `app-grant`', async () => {
+    // `app-grant` writes permission RULES, which refine tools an action
+    // already has; it cannot add one. Pointing at it meant following the
+    // instruction exactly left the button broken — observed as
+    // "No datetime tool available" from an applet whose author did everything
+    // else right.
+    const { tool } = await load();
+    const out = await tool.execute(CREATE, {} as never);
+    expect(out).toContain('bernard app allow notes summarise --tools');
+    expect(out).toContain('cannot add one');
+  });
+
+  it('warns when the specialist targets tools the action does not grant', async () => {
+    // The action's allowlist is empty at create (the tool cannot set it), so
+    // a specialist built to use tools is guaranteed an empty intersection.
+    vi.resetModules();
+    const { SpecialistStore } = await import('../specialists.js');
+    new SpecialistStore({ seed: false }).createFull({
+      id: 'greeter',
+      name: 'S',
+      description: 'd',
+      kind: 'tool-wrapper',
+      systemPrompt: 'p',
+      guidelines: [],
+      targetTools: ['datetime'],
+    });
+    const { createAppletTool } = await import('./applet.js');
+    const { AppRegistry } = await import('../apps/registry.js');
+    const tool = createAppletTool(new AppRegistry({ seed: false }));
+    const out = await tool.execute(
+      {
+        ...CREATE,
+        actions: {
+          summarise: {
+            dispatch: { kind: 'agent' as const, specialistId: 'greeter', instructions: 'go' },
+          },
+        },
+      } as never,
+      {} as never,
+    );
+    expect(out).toContain('created');
+    expect(out).toContain('runs with nothing');
+    expect(out).toContain('--tools datetime');
+  });
+
+  it('stays quiet for a text-only action, which legitimately needs no tools', async () => {
+    vi.resetModules();
+    const { SpecialistStore } = await import('../specialists.js');
+    new SpecialistStore({ seed: false }).createFull({
+      id: 'writer',
+      name: 'S',
+      description: 'd',
+      kind: 'tool-wrapper',
+      systemPrompt: 'p',
+      guidelines: [],
+      targetTools: [],
+    });
+    const { createAppletTool } = await import('./applet.js');
+    const { AppRegistry } = await import('../apps/registry.js');
+    const tool = createAppletTool(new AppRegistry({ seed: false }));
+    const out = await tool.execute(
+      {
+        ...CREATE,
+        actions: {
+          summarise: {
+            dispatch: { kind: 'agent' as const, specialistId: 'writer', instructions: 'go' },
+          },
+        },
+      } as never,
+      {} as never,
+    );
+    expect(out).not.toContain('runs with nothing');
+  });
+});
