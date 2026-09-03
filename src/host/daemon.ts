@@ -7,7 +7,7 @@ import { CapabilityTable } from '../apps/capabilities.js';
 import { recordCapabilityMint } from '../apps/capability-log.js';
 import { HostRegistry } from './registry.js';
 import { startApplet, type RunningApplet } from './server.js';
-import { closeAppletStore } from './store-route.js';
+import { closeAllAppletStores, closeAppletStore } from './store-route.js';
 
 /**
  * The applet host process (#421).
@@ -91,6 +91,9 @@ async function reconcile(): Promise<void> {
 async function shutdown(): Promise<void> {
   log('shutting down');
   for (const applet of running.values()) await applet.close();
+  // Closes each cached SQLite handle so WAL checkpoints, rather than leaving
+  // it to `process.exit`.
+  closeAllAppletStores();
   try {
     fs.unlinkSync(APPLET_HOST_PID_FILE);
   } catch {

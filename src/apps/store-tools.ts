@@ -2,7 +2,14 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import { debugLog } from '../logger.js';
-import { AppletStore, MAX_KEY_LENGTH, MAX_LIST_LIMIT } from './store.js';
+import {
+  applyStoreOp,
+  appletStoreFor,
+  MAX_KEY_LENGTH,
+  MAX_LIST_LIMIT,
+  type AppletStore,
+  type StoreOp,
+} from './store.js';
 
 /**
  * `applet_store`, pre-scoped to one applet (#422).
@@ -36,13 +43,7 @@ function isWriteAction(args: unknown): boolean {
   return action === 'set' || action === 'delete';
 }
 
-export function createAppletStoreTool(appId: string, store?: AppletStore) {
-  // Constructed lazily so building the registry does not open a database for a
-  // dispatch that never touches it — the same reason `runHeadless` builds a
-  // RAG store only when a query was supplied.
-  let db = store ?? null;
-  const open = (): AppletStore => (db ??= new AppletStore(appId));
-
+export function createAppletStoreTool(appId: string) {
   return attachMeta(
     tool({
       description:
@@ -52,7 +53,12 @@ export function createAppletStoreTool(appId: string, store?: AppletStore) {
       execute: async (args: StoreArgs): Promise<string> => {
         debugLog('applet_store:execute', { appId, action: args.action });
         try {
-          return run(open(), args);
+          // Resolved per call, from the process-wide per-app cache: building
+          // the registry must not open a database for a dispatch that never
+          // touches it, and a dispatch must not open a SECOND connection to a
+          // file the host's HTTP route already holds — this runs inside a
+          // long-lived daemon, where that leaks per invocation.
+          return run(appletStoreFor(appId), args);
         } catch (err) {
           // The `Error: ` prefix is the convention `detectToolError` reads
           // (#364) — without it a failed call registers as a success.
@@ -68,58 +74,62 @@ export function createAppletStoreTool(appId: string, store?: AppletStore) {
       cacheable: false,
       isWriteAction,
       actionScoped: true,
-      // An applet page reaches this through the host's own endpoint, not
-      // through a manifest tool action: the page already has a store door, and
-      // a second one whose `appId` came from a manifest would be the ambient
+      // Deliberately NOT `directInvocable`: absence is what marks a tool
+      // ineligible, and stating `false` on one tool would imply absence
+      // elsewhere is an oversight. The reason it is ineligible is that an
+      // applet page already reaches its store through the host's own endpoint;
+      // a second door whose `appId` came from a manifest would be the ambient
       // authority this tool is scoped to avoid.
-      directInvocable: false,
     },
   );
 }
 
+/**
+ * Turns the tool's validated arguments into a {@link StoreOp} and renders the
+ * result for a model.
+ *
+ * The op vocabulary itself lives in `store.ts` and is shared with the HTTP
+ * door; what stays here is the tool's own encoding — `value` arrives as JSON
+ * TEXT, because a tool parameter is a scalar — and the prose the model reads.
+ */
 function run(store: AppletStore, args: StoreArgs): string {
-  switch (args.action) {
-    case 'get': {
-      const key = require_(args.key, 'key', 'get');
-      const entry = store.get(key);
-      return entry ? JSON.stringify(entry) : `No value stored for "${key}".`;
-    }
-    case 'set': {
-      const key = require_(args.key, 'key', 'set');
-      const raw = require_(args.value, 'value', 'set');
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        // A bare string is a reasonable thing to want to store, and demanding
-        // the model quote it correctly is a round trip for nothing.
-        parsed = raw;
-      }
-      const entry = store.set(key, parsed);
-      return `Stored "${entry.key}" at ${entry.updatedAt}.`;
-    }
-    case 'delete': {
-      const key = require_(args.key, 'key', 'delete');
-      return store.delete(key) ? `Deleted "${key}".` : `No value stored for "${key}".`;
-    }
-    case 'list': {
-      const entries = store.list({
-        ...(args.prefix !== undefined ? { prefix: args.prefix } : {}),
-        ...(args.limit !== undefined ? { limit: args.limit } : {}),
-        ...(args.after !== undefined ? { after: args.after } : {}),
-      });
-      return entries.length === 0 ? 'The store is empty.' : JSON.stringify(entries);
-    }
+  const need = (value: string | undefined, name: string): string => {
+    // One zod schema cannot say "key is required, but only for three of four
+    // actions", so per-action requirements are enforced here — the same reason
+    // the cron family checks in its handler (#253).
+    if (value === undefined)
+      throw new Error(`\`${name}\` is required for action "${args.action}".`);
+    return value;
+  };
+
+  const op: StoreOp =
+    args.action === 'list'
+      ? { op: 'list', prefix: args.prefix, limit: args.limit, after: args.after }
+      : args.action === 'set'
+        ? { op: 'set', key: need(args.key, 'key'), value: parseValue(need(args.value, 'value')) }
+        : { op: args.action, key: need(args.key, 'key') };
+
+  const result = applyStoreOp(store, op);
+  switch (result.kind) {
+    case 'entry':
+      return result.entry ? JSON.stringify(result.entry) : `No value stored for "${args.key}".`;
+    case 'written':
+      return `Stored "${result.entry.key}" at ${result.entry.updatedAt}.`;
+    case 'deleted':
+      return result.deleted ? `Deleted "${args.key}".` : `No value stored for "${args.key}".`;
+    case 'entries':
+      return result.entries.length === 0 ? 'The store is empty.' : JSON.stringify(result.entries);
   }
 }
 
 /**
- * Per-action argument requirements, enforced here rather than in the schema.
- *
- * One zod schema cannot say "key is required, but only for three of four
- * actions" — the same reason the cron family checks in its handler (#253).
+ * A bare string is a reasonable thing to want to store, and demanding the
+ * model quote it correctly is a round trip for nothing.
  */
-function require_(value: string | undefined, name: string, action: string): string {
-  if (value === undefined) throw new Error(`\`${name}\` is required for action "${action}".`);
-  return value;
+function parseValue(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
 }

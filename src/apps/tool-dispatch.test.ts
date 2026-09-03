@@ -144,6 +144,30 @@ describe('dispatchToolAction', () => {
     expect(fs.existsSync(target)).toBe(false);
   });
 
+  /**
+   * The fail-closed property, on this second headless path.
+   *
+   * `augmentTools` auto-denies a write under `read-only` precisely because
+   * `blockAction` is ABSENT — an omission, which nothing type-checks. Both
+   * paths now build their options through `headlessToolOptions`, and this is
+   * what would notice if one of them grew the field back.
+   */
+  it('a read-only action cannot write, with nobody to ask', async () => {
+    const m = await load();
+    const target = path.join(m.runWorkspace('apps', 'demo'), 'nope.txt');
+    const inv = invocation({ dest: target, body: 'x' }) as unknown as {
+      action: { toolMode: string };
+    };
+    inv.action.toolMode = 'read-only';
+    const res = await m.dispatchToolAction({
+      invocation: inv as never,
+      dispatch: { kind: 'tool', tool: 'file_write', args: { path: '$.dest', content: '$.body' } },
+      timeoutMs: null,
+    });
+    expect(res.ok).toBe(false);
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
   it('refuses an ineligible tool as a request failure, not a run failure', async () => {
     const m = await load();
     const res = await m.dispatchToolAction({

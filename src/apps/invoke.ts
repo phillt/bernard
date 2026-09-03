@@ -205,6 +205,49 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
     };
   };
 
+  /**
+   * The single success path, the sibling of {@link fail}.
+   *
+   * The two arms had hand-rolled this envelope and its log row, and had
+   * already diverged — one recomputed `durationMs` independently and omitted
+   * `mcpConnectMs`/`stepLimitHit` from the row while hard-coding them in the
+   * envelope. That is exactly what `fail` exists to prevent, applied to the
+   * other half of the same table.
+   */
+  const succeed = (
+    appId: string,
+    action: string,
+    result: unknown,
+    meta: Extract<InvocationResult, { ok: true }>['meta'],
+    extra: Record<string, unknown>,
+  ): InvocationResult => {
+    const durationMs = Date.now() - startMs;
+    recordInvocation({
+      invocationId,
+      appId,
+      action,
+      ...extra,
+      startedAt,
+      completedAt: new Date().toISOString(),
+      durationMs,
+      ok: true,
+      mcpConnectMs: meta.mcpConnectMs,
+      stepLimitHit: meta.stepLimitHit,
+      capabilityId,
+    });
+    return {
+      schemaVersion: 1,
+      ok: true,
+      invocationId,
+      app: appId,
+      action,
+      startedAt,
+      durationMs,
+      result,
+      meta,
+    };
+  };
+
   const registry = new AppRegistry();
   const resolved = resolveFromManifest(registry, opts.appId, opts.action, opts.args);
   if (!resolved.ok) return fail(resolved.failure.kind, resolved.failure.message);
@@ -214,20 +257,26 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
   const timeoutMs = effectiveTimeoutMs(invocation.action.timeoutMs, opts.timeoutMs);
   const dispatch = invocation.action.dispatch;
 
-  // The deterministic tier (#445). Branches before anything agent-shaped is
-  // touched — no specialist lookup, no MCP connect, no RAG store, no model —
-  // because the whole value of this arm is that it costs nothing.
-  if (dispatch.kind === 'tool') {
+  /** Everything both arms log, plus the one field that names which arm ran. */
+  const logInvoke = (arm: Record<string, string>): void =>
     debugLog('script:invoke', {
       invocationId,
       appId: invocation.appId,
       action: invocation.actionName,
+      // Names only, never values: args carry the caller's data and the debug
+      // log is not the place for it.
       argKeys,
-      tool: dispatch.tool,
+      ...arm,
       toolMode: invocation.action.toolMode,
       timeoutMs,
       capabilityId,
     });
+
+  // The deterministic tier (#445). Branches before anything agent-shaped is
+  // touched — no specialist lookup, no MCP connect, no RAG store, no model —
+  // because the whole value of this arm is that it costs nothing.
+  if (dispatch.kind === 'tool') {
+    logInvoke({ tool: dispatch.tool });
     const { dispatchToolAction } = await import('./tool-dispatch.js');
     const run = await dispatchToolAction({
       invocation,
@@ -244,29 +293,13 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
         ? fail('invalid_manifest', run.message, toolDispatched)
         : fail(run.timedOut ? 'timeout' : 'run_failed', run.message, toolDispatched);
     }
-    const durationMs = Date.now() - startMs;
-    recordInvocation({
-      invocationId,
-      appId: invocation.appId,
-      action: invocation.actionName,
-      ...toolDispatched,
-      startedAt,
-      completedAt: new Date().toISOString(),
-      durationMs,
-      ok: true,
-      capabilityId,
-    });
-    return {
-      schemaVersion: 1,
-      ok: true,
-      invocationId,
-      app: invocation.appId,
-      action: invocation.actionName,
-      startedAt,
-      durationMs,
-      result: run.result,
-      meta: { dispatch: 'tool', tool: dispatch.tool, stepLimitHit: false, mcpConnectMs: 0 },
-    };
+    return succeed(
+      invocation.appId,
+      invocation.actionName,
+      run.result,
+      { dispatch: 'tool', tool: dispatch.tool, stepLimitHit: false, mcpConnectMs: 0 },
+      toolDispatched,
+    );
   }
 
   // Pre-flight: an action naming a specialist that does not exist is a broken
@@ -285,24 +318,14 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
   // is worse than no log — and this is the audit trail.
   const toolsGranted = grantedToolNames(invocation.action, specialist.targetTools);
 
-  debugLog('script:invoke', {
-    invocationId,
-    appId: invocation.appId,
-    action: invocation.actionName,
-    // Names only, never values: args carry the caller's data and the debug log
-    // is not the place for it.
-    argKeys,
-    specialistId: dispatch.specialistId,
-    toolMode: invocation.action.toolMode,
-    timeoutMs,
-    capabilityId,
-  });
+  logInvoke({ specialistId: dispatch.specialistId });
 
   // The same id `runHeadless` namespaces its debug lines with, so
   // `script:mcp:ready` joins the invocation record rather than naming a run
   // that appears nowhere else.
   const run = await dispatchAction({
     invocation,
+    specialist,
     timeoutMs,
     log,
     runId: invocationId,
@@ -328,35 +351,16 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
     });
   }
 
-  const durationMs = Date.now() - startMs;
-  recordInvocation({
-    invocationId,
-    appId: invocation.appId,
-    action: invocation.actionName,
-    ...dispatched,
-    startedAt,
-    completedAt: new Date().toISOString(),
-    durationMs,
-    ok: true,
-    mcpConnectMs: run.timings.mcpConnectMs,
-    stepLimitHit: run.stepLimitHit,
-    capabilityId,
-  });
-
-  return {
-    schemaVersion: 1,
-    ok: true,
-    invocationId,
-    app: invocation.appId,
-    action: invocation.actionName,
-    startedAt,
-    durationMs,
-    result: wrapper.result,
-    meta: {
+  return succeed(
+    invocation.appId,
+    invocation.actionName,
+    wrapper.result,
+    {
       dispatch: 'agent',
       specialistId: dispatch.specialistId,
       stepLimitHit: run.stepLimitHit,
       mcpConnectMs: run.timings.mcpConnectMs,
     },
-  };
+    dispatched,
+  );
 }

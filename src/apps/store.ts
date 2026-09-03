@@ -147,33 +147,28 @@ export class AppletStore {
    */
   list(opts: { prefix?: string; limit?: number; after?: string } = {}): StoreEntry[] {
     const limit = Math.min(Math.max(1, opts.limit ?? DEFAULT_LIST_LIMIT), MAX_LIST_LIMIT);
+    // One statement rather than four assembled ones: both predicates have a
+    // neutral value — `substr(key, 1, 0) = ''` is true for every row, and
+    // `key > ''` is too, since `set` rejects an empty key — so the unfiltered
+    // case needs no separate SQL.
+    //
+    // `substr`, never `LIKE`, whose `%` and `_` are wildcards: that would make
+    // the caller's prefix a pattern rather than the literal text it is.
+    //
+    // `after` is exclusive because it is a cursor — the caller passes back the
+    // last key it saw — which is why it is a separate parameter from the
+    // prefix rather than one value carrying two boundary rules.
     const prefix = opts.prefix ?? '';
-    const where: string[] = [];
-    const params: (string | number)[] = [];
-
-    if (prefix !== '') {
-      // A `LIKE` pattern would make the caller's prefix interpretable (`%`,
-      // `_` are wildcards). `substr` compares it as the literal text it is,
-      // and still uses the primary-key index for the range below.
-      where.push('substr(key, 1, ?) = ?');
-      params.push(prefix.length, prefix);
-    }
-    // Exclusive, because it is a cursor: the caller passes back the last key it
-    // saw. Separate from the prefix so one parameter does not carry two
-    // meanings with two different boundary rules.
-    if (opts.after !== undefined) {
-      where.push('key > ?');
-      params.push(opts.after);
-    }
-    params.push(limit);
-
     const rows = this.db
       .prepare(
-        'SELECT key, value, updated_at FROM kv' +
-          (where.length ? ` WHERE ${where.join(' AND ')}` : '') +
-          ' ORDER BY key LIMIT ?',
+        'SELECT key, value, updated_at FROM kv ' +
+          'WHERE substr(key, 1, ?) = ? AND key > ? ORDER BY key LIMIT ?',
       )
-      .all(...params) as { key: string; value: string; updated_at: string }[];
+      .all(prefix.length, prefix, opts.after ?? '', limit) as {
+      key: string;
+      value: string;
+      updated_at: string;
+    }[];
     return rows.map(toEntry);
   }
 
@@ -191,4 +186,86 @@ function toEntry(row: { key: string; value: string; updated_at: string }): Store
     // value rather than making the whole listing fail.
   }
   return { key: row.key, value, updatedAt: row.updated_at };
+}
+
+/**
+ * The store's whole request vocabulary, as data.
+ *
+ * Both doors — the HTTP route and the `applet_store` tool — dispatch through
+ * {@link applyStoreOp} rather than each switching on an op string. They had
+ * already diverged when written twice: one clamped `limit` and the other did
+ * not. What legitimately differs is only the ENCODING each door receives
+ * (`value` arrives as JSON text through the tool's string parameter and as a
+ * JSON value through the route), so that stays at each door and nothing else
+ * does.
+ */
+export type StoreOp =
+  | { op: 'get'; key: string }
+  | { op: 'set'; key: string; value: unknown }
+  | { op: 'delete'; key: string }
+  | { op: 'list'; prefix?: string; limit?: number; after?: string };
+
+export type StoreOpResult =
+  | { kind: 'entry'; entry: StoreEntry | null }
+  | { kind: 'written'; entry: StoreEntry }
+  | { kind: 'deleted'; deleted: boolean }
+  | { kind: 'entries'; entries: StoreEntry[] };
+
+export function applyStoreOp(store: AppletStore, op: StoreOp): StoreOpResult {
+  switch (op.op) {
+    case 'get':
+      return { kind: 'entry', entry: store.get(op.key) };
+    case 'set':
+      return { kind: 'written', entry: store.set(op.key, op.value) };
+    case 'delete':
+      return { kind: 'deleted', deleted: store.delete(op.key) };
+    case 'list':
+      return { kind: 'entries', entries: store.list(op) };
+  }
+}
+
+/**
+ * One connection per applet, for the life of the process.
+ *
+ * Shared by **both** doors — the HTTP route and the `applet_store` tool — and
+ * that sharing is the point, not a convenience. The applet host is long-lived
+ * and runs both: a connection opened per dispatch and never closed leaks a
+ * descriptor and a WAL mapping per invocation, and puts a second writer on a
+ * file the route already holds open, manufacturing exactly the contention the
+ * busy timeout exists to absorb.
+ *
+ * Bounded by the number of installed applets, so it does not grow with traffic.
+ */
+const connections = new Map<string, AppletStore>();
+
+export function appletStoreFor(appId: string): AppletStore {
+  let store = connections.get(appId);
+  if (!store) {
+    store = new AppletStore(appId);
+    connections.set(appId, store);
+  }
+  return store;
+}
+
+/** Drops one app's connection — the host calls this when it stops serving it. */
+export function closeAppletStore(appId: string): void {
+  const store = connections.get(appId);
+  if (!store) return;
+  connections.delete(appId);
+  try {
+    store.close();
+  } catch {
+    // Already closed, or the file went away. Nothing left to do.
+  }
+}
+
+/**
+ * Closes every cached connection.
+ *
+ * Called on host shutdown so WAL checkpoints rather than being left to
+ * `process.exit`, and so an in-process embedder (the tests) does not leak a
+ * handle per app per run.
+ */
+export function closeAllAppletStores(): void {
+  for (const appId of [...connections.keys()]) closeAppletStore(appId);
 }

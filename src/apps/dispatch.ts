@@ -5,6 +5,7 @@ import { buildChildTools, type ToolWrapperInput } from '../framework/agents/inde
 import { definitions } from '../framework/agents/index.js';
 import { runHeadless, resolvePosture, type RunHeadlessResult } from '../headless.js';
 import type { WrapperResult } from '../structured-output.js';
+import type { Specialist } from '../specialists.js';
 import { loadAppGrants } from './app-grants.js';
 import { createAppletStoreTool } from './store-tools.js';
 import { runWorkspace } from '../paths.js';
@@ -70,6 +71,15 @@ export function buildActionTools(
 
 export interface DispatchActionOpts {
   invocation: ResolvedInvocation;
+  /**
+   * The specialist backing this action, already resolved.
+   *
+   * Threaded in rather than re-fetched: `invokeAction` reads the record for
+   * its pre-flight and for `grantedToolNames`, and reading it again here was a
+   * second `readFileSync` + `JSON.parse` plus a second `SpecialistStore`
+   * construction (which seeds bundled records) on every invocation.
+   */
+  specialist: Specialist | null;
   /** Effective wall clock, already floored against the action's own. */
   timeoutMs: number | null;
   log: (msg: string) => void;
@@ -92,7 +102,7 @@ export type DispatchActionResult = RunHeadlessResult<WrapperResult>;
  * adversarial caller's.
  */
 export async function dispatchAction(opts: DispatchActionOpts): Promise<DispatchActionResult> {
-  const { invocation, timeoutMs, log, runId, abortSignal } = opts;
+  const { invocation, specialist, timeoutMs, log, runId, abortSignal } = opts;
   const { action, frozenArgs } = invocation;
   // Narrowed by the caller, which branches on `dispatch.kind` before choosing
   // a path — a tool action never reaches an agent runtime at all (#445).
@@ -133,7 +143,6 @@ export async function dispatchAction(opts: DispatchActionOpts): Promise<Dispatch
     abortSignal,
     debugLabel: 'script',
     buildInput: (env) => {
-      const specialist = env.ctx.stores.specialists.get(agent.specialistId);
       const childTools = buildActionTools(
         env.ctx,
         action,

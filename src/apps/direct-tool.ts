@@ -1,4 +1,3 @@
-import type { z } from 'zod';
 import { readToolMeta } from '../framework/tools/adapter.js';
 
 /**
@@ -95,6 +94,3 @@ export function directInvocableRefusal(toolName: string, tool: unknown): string 
   }
   return null;
 }
-
-/** Narrow alias so callers do not have to import zod to name the schema. */
-export type ToolParameters = z.ZodTypeAny;

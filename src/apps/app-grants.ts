@@ -45,9 +45,12 @@ export type AppToolGrants = Record<string, PermissionRule[]>;
  * lets `runHeadless` skip both the reader and the shell-parser warmup.
  */
 export function loadAppGrants(appId: string): PermissionRule[] | null {
-  const all = readAll();
-  const rules = all[appId];
-  return rules && rules.length > 0 ? rules : null;
+  // Sanitizes only the app asked for. `readAll` normalizes every app's rules,
+  // which is right when listing and wasted work when serving one dispatch.
+  const raw = readRaw()[appId];
+  if (!raw) return null;
+  const rules = sanitizePermissionRules(raw);
+  return rules.length > 0 ? rules : null;
 }
 
 /** Every app that currently has rules, sorted. */
@@ -71,6 +74,22 @@ export function saveAppGrants(appId: string, rules: PermissionRule[]): void {
 }
 
 /**
+ * The map as written, unsanitized, with unaddressable ids dropped.
+ *
+ * `APP_ID_RE` is checked here rather than only in {@link readAll} because an
+ * id that does not match cannot address an app: it can only have been
+ * hand-written, and repairing it would silently point at a different store.
+ */
+function readRaw(): Record<string, unknown> {
+  const { file } = loadProfiles();
+  const raw = getActiveSettings(file).appToolGrants;
+  if (!raw || typeof raw !== 'object') return {};
+  return Object.fromEntries(
+    Object.entries(raw).filter(([appId]) => APP_ID_RE.test(appId)),
+  ) as Record<string, unknown>;
+}
+
+/**
  * Reads and sanitizes the whole map.
  *
  * Every value goes through `sanitizePermissionRules` — the same normalizer the
@@ -80,12 +99,8 @@ export function saveAppGrants(appId: string, rules: PermissionRule[]): void {
  * repaired: it can only have been hand-written, and it addresses nothing.
  */
 function readAll(): AppToolGrants {
-  const { file } = loadProfiles();
-  const raw = getActiveSettings(file).appToolGrants;
-  if (!raw || typeof raw !== 'object') return {};
   const out: AppToolGrants = Object.create(null) as AppToolGrants;
-  for (const [appId, rules] of Object.entries(raw)) {
-    if (!APP_ID_RE.test(appId)) continue;
+  for (const [appId, rules] of Object.entries(readRaw())) {
     const clean = sanitizePermissionRules(rules);
     if (clean.length > 0) out[appId] = clean;
   }

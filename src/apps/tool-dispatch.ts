@@ -1,16 +1,21 @@
 import type { Tool } from 'ai';
+import type { z } from 'zod';
 import { debugLog } from '../logger.js';
+import { DEFAULT_SHELL_TIMEOUT, loadPreferences } from '../config.js';
 import { createTools } from '../tools/index.js';
 import { augmentTools } from '../tools/augment.js';
 import { MemoryStore } from '../memory.js';
 import { ToolProfileStore } from '../tool-profiles.js';
 import { initShellParser } from '../permissions/shell-ast.js';
 import { runWorkspace } from '../paths.js';
-import { resolvePosture } from '../headless.js';
+// The LEAF, not `../headless.js`. That module imports `MCPManager`, `RAGStore`
+// and the agent-definition registry — 161 ms of module graph, on the one path
+// whose whole premise is that it does not pay for an agent runtime.
+import { headlessToolOptions, resolvePosture, type HeadlessPosture } from '../headless-posture.js';
 import { loadAppGrants } from './app-grants.js';
 import { directInvocableRefusal } from './direct-tool.js';
 import { detectResultFailure } from '../tool-result-shape.js';
-import { ARG_REF_PREFIX, type ToolDispatch } from './manifest.js';
+import { ARG_REF_PREFIX, formatZodError, type ToolDispatch } from './manifest.js';
 import type { ResolvedInvocation } from './invocation.js';
 import * as fs from 'node:fs';
 
@@ -98,7 +103,7 @@ export async function dispatchToolAction(opts: DispatchToolActionOpts): Promise<
   // one path that has nothing to do with an agent — the same property
   // `bernard voice-test` holds. The single value needed is a shell timeout,
   // and nothing directly invocable runs a shell.
-  const registry = buildRegistry(shellTimeoutFromEnv(), posture);
+  const registry = buildRegistry(shellTimeout(), posture);
   const tool = registry[dispatch.tool];
 
   const refusal = directInvocableRefusal(dispatch.tool, tool);
@@ -121,7 +126,7 @@ export async function dispatchToolAction(opts: DispatchToolActionOpts): Promise<
     return {
       ok: false,
       kind: 'invalid',
-      message: `Arguments for "${dispatch.tool}" are not valid: ${formatIssues(parsed.error)}`,
+      message: `Arguments for "${dispatch.tool}" are not valid: ${formatZodError(parsed.error as z.ZodError)}`,
     };
   }
 
@@ -133,7 +138,7 @@ export async function dispatchToolAction(opts: DispatchToolActionOpts): Promise<
     params: Object.keys(mapped),
   });
 
-  const { signal, cancel } = withDeadline(timeoutMs, opts.abortSignal);
+  const signal = deadlineSignal(timeoutMs, opts.abortSignal);
   try {
     const raw: unknown = await (
       tool as unknown as { execute: (a: unknown, o: unknown) => Promise<unknown> }
@@ -157,8 +162,6 @@ export async function dispatchToolAction(opts: DispatchToolActionOpts): Promise<
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, kind: 'failed', message, timedOut: signal?.aborted === true };
-  } finally {
-    cancel();
   }
 }
 
@@ -170,24 +173,17 @@ export async function dispatchToolAction(opts: DispatchToolActionOpts): Promise<
  * declares for its user-facing use. There is no MCP bag — an MCP tool arrives
  * pre-wrapped with a JSON Schema rather than a zod schema, so it could not be
  * arg-checked here even if it were eligible.
+ *
+ * `headlessToolOptions` is shared with `runHeadless` rather than restated. Its
+ * security property is what it OMITS — no `blockAction`, so `augmentTools`
+ * auto-denies a write under `read-only` — and an omission cannot be
+ * type-checked, so a second hand-written copy is how one of them quietly grows
+ * the field and stops failing closed.
  */
-function buildRegistry(
-  shellTimeout: number,
-  posture: ReturnType<typeof resolvePosture>,
-): Record<string, Tool> {
+function buildRegistry(shellTimeoutMs: number, posture: HeadlessPosture): Record<string, Tool> {
+  const toolOptions = headlessToolOptions(posture, shellTimeoutMs);
   const base = createTools(
-    {
-      shellTimeout,
-      confirmDangerous: async () => false,
-      confirmAction: posture.confirmAction,
-      ...(posture.writeScope ? { writeScope: posture.writeScope } : {}),
-      ...(posture.toolPermissions
-        ? { getToolPermissions: () => posture.toolPermissions ?? [] }
-        : {}),
-      // blockAction / askUser / sessionToolAllowlist omitted, exactly as in
-      // `runHeadless`: omission IS the fail-closed mechanism — `augmentTools`
-      // auto-denies a write under `read-only` when `blockAction` is absent.
-    },
+    toolOptions,
     new MemoryStore(),
     undefined,
     undefined,
@@ -201,45 +197,25 @@ function buildRegistry(
     profileStore: new ToolProfileStore({ seed: false }),
     toolMode: posture.toolMode,
     confirmThreshold: posture.confirmThreshold,
-    confirmAction: posture.confirmAction,
-    ...(posture.writeScope ? { writeScope: posture.writeScope } : {}),
-    ...(posture.toolPermissions ? { getToolPermissions: () => posture.toolPermissions ?? [] } : {}),
+    ...toolOptions,
   }) as unknown as Record<string, Tool>;
 }
 
 /** Composes the action's wall clock with the caller's own signal. */
-function withDeadline(
-  timeoutMs: number | null,
-  caller?: AbortSignal,
-): { signal: AbortSignal | undefined; cancel: () => void } {
-  if (timeoutMs === null || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return { signal: caller, cancel: () => {} };
-  }
+function deadlineSignal(timeoutMs: number | null, caller?: AbortSignal): AbortSignal | undefined {
+  if (timeoutMs === null || timeoutMs <= 0) return caller;
   const timer = AbortSignal.timeout(timeoutMs);
-  return {
-    signal: caller ? AbortSignal.any([caller, timer]) : timer,
-    // `AbortSignal.timeout` holds no unref'd handle we can clear, but the
-    // signal is dropped with this scope; the shape stays symmetric with the
-    // caller-signal branch so a future clearTimeout has a home.
-    cancel: () => {},
-  };
-}
-
-function formatIssues(error: unknown): string {
-  const issues = (error as { issues?: { path: (string | number)[]; message: string }[] })?.issues;
-  if (!issues) return String(error);
-  return issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
+  return caller ? AbortSignal.any([caller, timer]) : timer;
 }
 
 /**
- * The shell timeout, read straight from the environment.
+ * The shell timeout `createTools` requires.
  *
- * `createTools` requires one; no directly-invocable tool can run a shell, so
- * this only has to be a number of the right order. Reading the env var rather
- * than the config avoids `validateConfig`'s API-key requirement — see the call
- * site.
+ * No directly-invocable tool can run a shell, so this never bounds anything
+ * here — but it is resolved the way the REPL resolves it rather than hardcoded,
+ * so the number cannot quietly disagree with the user's own setting.
+ * `loadPreferences` rather than `loadConfig`, for the reason at the call site.
  */
-function shellTimeoutFromEnv(): number {
-  const raw = Number(process.env.BERNARD_SHELL_TIMEOUT);
-  return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
+function shellTimeout(): number {
+  return loadPreferences().shellTimeout ?? DEFAULT_SHELL_TIMEOUT;
 }
