@@ -148,9 +148,18 @@ export function resolveSiteModel(
     provider: blankToUndefined(opts?.overrides?.provider),
     model: blankToUndefined(opts?.overrides?.model),
   };
-  const specialist: { provider?: string; model?: string; params?: ModelParams } = {
+  const specialist: {
+    provider?: string;
+    model?: string;
+    role?: RoleId;
+    params?: ModelParams;
+  } = {
     provider: blankToUndefined(opts?.specialist?.provider),
     model: blankToUndefined(opts?.specialist?.model),
+    // Deliberately NOT cleared by the off-lineup pin guard below (#423): a
+    // dropped pin should fall through to what the record says it is FOR, not
+    // to the generic site default.
+    role: opts?.specialist?.role,
     params: opts?.specialist?.params,
   };
 
@@ -240,7 +249,25 @@ export function resolveSiteModel(
   // normalize an unknown/undefined `modelMode` (legacy `'off'`, missing key in
   // test fixtures) to `'balanced'` so resolution never crashes.
   const mode: ModelMode = isKnownMode(config.modelMode) ? config.modelMode : 'balanced';
-  const role = SITE_ROLE[site];
+  // The specialist's own declared role outranks the dispatching site's default
+  // (#423). Reached only when no pin short-circuited above, so precedence is
+  // override > pin > record role > site — a property of the control flow
+  // rather than a rule imposed on it. A role says "whatever this profile
+  // considers right for this kind of work", which keeps meaning that when the
+  // profile changes; a pin does not.
+  const role = specialist.role ?? SITE_ROLE[site];
+  // Logged only when the record's role actually displaced the site's, which is
+  // the one case a reader would be trying to explain. `buildSiteModel`'s
+  // `model-policy:resolve` line carries `site` and `tier` but cannot
+  // distinguish a record role from a site role, and threading a ninth
+  // parameter through it to say so would cost every call site for this one.
+  if (specialist.role && specialist.role !== SITE_ROLE[site]) {
+    debugLog('model-policy:specialist-role', {
+      site,
+      siteRole: SITE_ROLE[site],
+      specialistRole: specialist.role,
+    });
+  }
   const tier = tierForRole(mode, role);
   const lineup = getActiveLineup();
   const slot = lineup.roles[role][tier];

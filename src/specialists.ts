@@ -14,6 +14,7 @@ import {
   assertCanEditSpecialist,
 } from './specialist-authority.js';
 import type { ModelParams } from './providers/model-params.js';
+import type { RoleId } from './model-roles.js';
 
 // Re-exported so existing importers (e.g. the `/specialists` UI grouping) keep
 // resolving it from this module; the authoritative definition lives in
@@ -47,6 +48,23 @@ export interface Specialist {
   guidelines: string[];
   provider?: string;
   model?: string;
+  /**
+   * What this specialist is FOR, in model-selection terms (#423).
+   *
+   * A `RoleId` — `executor`, `function-caller`, `summarizer`, … — not a vendor
+   * and not a model. `resolveSiteModel` maps role → tier → the active lineup's
+   * slot, so a role says "whatever the user's current profile considers right
+   * for this kind of work" and keeps meaning that when the profile changes.
+   *
+   * **This is what an agent building a specialist should choose**, precisely
+   * because a persisted `provider`/`model` is the thing the off-lineup pin
+   * guard exists to drop — and a pin an agent minted itself is the most
+   * confusing kind, since nobody chose it.
+   *
+   * Ranks BELOW an explicit pin and ABOVE the dispatching site's default, so
+   * a user who pinned a model keeps it. Absent = the site decides, i.e. today.
+   */
+  role?: RoleId;
   /**
    * Optional generation parameters applied when this specialist's pinned
    * `provider`/`model` resolves (issue #286). Absent = model defaults. Keyed
@@ -95,6 +113,8 @@ export interface CreateSpecialistInput {
   guidelines?: string[];
   provider?: string;
   model?: string;
+  /** See {@link Specialist.role}. Prefer this over a `provider`/`model` pin. */
+  role?: RoleId;
   params?: ModelParams;
   kind?: SpecialistKind;
   targetTools?: string[];
@@ -112,6 +132,7 @@ export type SpecialistUpdates = Partial<
     | 'guidelines'
     | 'provider'
     | 'model'
+    | 'role'
     | 'params'
     | 'kind'
     | 'targetTools'
@@ -267,6 +288,7 @@ export class SpecialistStore {
       guidelines: input.guidelines ?? [],
       ...(input.provider !== undefined ? { provider: input.provider } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
+      ...(input.role !== undefined ? { role: input.role } : {}),
       ...(input.params !== undefined ? { params: input.params } : {}),
       ...(input.kind !== undefined ? { kind: input.kind } : {}),
       ...(input.targetTools !== undefined ? { targetTools: input.targetTools } : {}),
@@ -323,6 +345,15 @@ export class SpecialistStore {
         delete specialist.model;
       } else {
         specialist.model = updates.model;
+      }
+    }
+    // `''` clears the role, matching how provider/model clear — `undefined`
+    // means "don't change", so there has to be a way to say "remove it".
+    if (updates.role !== undefined) {
+      if ((updates.role as string) === '') {
+        delete specialist.role;
+      } else {
+        specialist.role = updates.role;
       }
     }
     // An empty object clears params; undefined means "don't change".
