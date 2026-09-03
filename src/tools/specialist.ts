@@ -127,7 +127,11 @@ export function createSpecialistTool(
               'rejected params are dropped. Requires a provider/model pin. Used with create/update.',
           ),
         role: z
-          .enum(ALL_ROLE_IDS as unknown as [RoleId, ...RoleId[]])
+          // `''` is in the union deliberately: the description offers it as
+          // the way to clear a role, and a bare `z.enum` would reject it
+          // before `execute` ran — making the documented behaviour
+          // unreachable and the store's clearing branch dead.
+          .union([z.enum(ALL_ROLE_IDS as unknown as [RoleId, ...RoleId[]]), z.literal('')])
           .optional()
           .describe(
             'What this specialist is FOR, in model-selection terms — NOT a vendor or a model. ' +
@@ -144,9 +148,9 @@ export function createSpecialistTool(
           .optional()
           .describe(
             'Binds this specialist to ONE applet action, so it is reachable only through that ' +
-              'capability and never as a free-floating specialist. Create-only: rebinding an ' +
-              'existing specialist is a policy change, not an edit. Use it when building the ' +
-              'agent behind an applet button.',
+              'capability and never as a free-floating specialist. May be set on create, or on ' +
+              'update for a specialist that is not yet bound — validate an unbound specialist ' +
+              'first, then bind it. Re-binding an already-bound one is refused.',
           ),
         kind: z
           .enum(['persona', 'tool-wrapper', 'meta'])
@@ -286,7 +290,8 @@ export function createSpecialistTool(
             // carrying both would behave according to `resolveSiteModel`'s
             // internal ordering rather than anything anyone declared, which is
             // the shape `AppActionSchema` refuses for the same reason.
-            if (role && (normProvider !== undefined || normModel !== undefined)) {
+            const normRole = role === '' ? undefined : role;
+            if (normRole && (normProvider !== undefined || normModel !== undefined)) {
               return 'Error: declare either `role` or `provider`/`model`, not both. A role lets the active profile choose the model; a pin overrides it.';
             }
             if (normProvider !== undefined) {
@@ -306,7 +311,7 @@ export function createSpecialistTool(
             // (`specialist-creator` among them) unaffected. Only a declared
             // role suppresses it, and that pin is exactly what the off-lineup
             // guard exists to drop: one nobody chose.
-            if (normProvider === undefined && normModel === undefined && !role && config) {
+            if (normProvider === undefined && normModel === undefined && !normRole && config) {
               try {
                 const site = resolveSiteModel(config, 'specialist');
                 if (site.source === 'policy') {
@@ -339,7 +344,7 @@ export function createSpecialistTool(
                 guidelines: guidelines ?? [],
                 provider: resolvedProvider,
                 model: resolvedModel,
-                role,
+                role: normRole,
                 boundTo,
                 params: resolvedParams,
                 kind,
@@ -385,13 +390,14 @@ export function createSpecialistTool(
             if (guidelines !== undefined) updates.guidelines = guidelines;
             if (provider !== undefined) updates.provider = provider;
             if (model !== undefined) updates.model = model;
+            if (boundTo !== undefined) updates.boundTo = boundTo;
             if (role !== undefined) {
               updates.role = role;
               // Setting a role clears any pin, or the both-state `create`
               // refuses is reachable through `update`. `params` go with it:
               // they are capability-gated against a pin (see below), so a
               // role-declaring specialist can never carry them.
-              if (role !== ('' as RoleId)) {
+              if (role !== '') {
                 updates.provider = '';
                 updates.model = '';
                 updates.params = {};

@@ -77,4 +77,27 @@ describe('agent-builder bundled record', () => {
     expect(record.systemPrompt).toContain('intersection');
     expect(record.guidelines.join(' ')).toContain('toolAllowlist');
   });
+
+  /**
+   * The collision Copilot caught: #423's binding gate refuses a bound
+   * specialist at `tool_wrapper_run`, which is exactly how #426 validates.
+   * Binding at create made the record's own workflow impossible — every
+   * validation call would have returned `error: 'bound'`.
+   */
+  it('creates unbound, validates, then binds — in that order', () => {
+    const p = record.systemPrompt;
+    expect(p).toContain('Create it UNBOUND');
+    expect(p.indexOf('Create it UNBOUND')).toBeLessThan(p.indexOf('VALIDATE'));
+    expect(p.indexOf('VALIDATE')).toBeLessThan(p.indexOf('THEN bind it'));
+  });
+
+  // `targetToolsScopeError` rejects a tool-wrapper/meta record with no target
+  // tools, so an example showing that create would be teaching a refusal.
+  it('never shows a tool-wrapper example with no target tools', () => {
+    for (const ex of record.goodExamples) {
+      if (ex.call.includes("kind:'tool-wrapper'")) {
+        expect(ex.call).not.toContain('targetTools:[]');
+      }
+    }
+  });
 });

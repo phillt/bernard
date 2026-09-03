@@ -101,9 +101,13 @@ export interface Specialist {
    * would then be refused for. It stays in `list()`, and therefore in
    * `/specialists`: a user must be able to see what an applet is running.
    *
-   * Settable at create, NOT via `update` — a model rebinding an existing
-   * specialist is a model writing a policy field, the instinct that keeps
-   * `skipPermissions` out of the manifest schema.
+   * Settable at create, and via `update` **only on a record that is not yet
+   * bound**. The property that matters is that a model cannot RE-bind — that
+   * would steal a specialist from the applet it belongs to, which is a model
+   * writing a policy field. Binding one it just created is the ordinary flow,
+   * and forbidding it outright made the builder's own loop impossible:
+   * validation goes through `tool_wrapper_run`, which refuses a bound record,
+   * so a create-bound specialist could never be validated by execution.
    */
   boundTo?: { appId: string; action: string };
 }
@@ -150,7 +154,7 @@ export type SpecialistUpdates = Partial<
     | 'guidelines'
     | 'provider'
     | 'model'
-    | 'role'
+    | 'boundTo'
     | 'params'
     | 'kind'
     | 'targetTools'
@@ -159,7 +163,13 @@ export type SpecialistUpdates = Partial<
     | 'structuredOutput'
     | 'disabled'
   >
->;
+> & {
+  /**
+   * `''` clears the role, the way `''` clears `provider`/`model` — those are
+   * typed `string` so they get it for free, while `RoleId` has to say so.
+   */
+  role?: RoleId | '';
+};
 
 const MAX_SPECIALISTS = 50;
 
@@ -366,10 +376,21 @@ export class SpecialistStore {
         specialist.model = updates.model;
       }
     }
+    // One-way: bind an unbound record, never re-bind or unbind. Enforced in
+    // the store rather than only at the tool, since this is the property the
+    // field exists for.
+    if (updates.boundTo !== undefined) {
+      if (specialist.boundTo) {
+        throw new Error(
+          `Specialist "${id}" is already bound to "${specialist.boundTo.appId}/${specialist.boundTo.action}". A binding cannot be changed.`,
+        );
+      }
+      specialist.boundTo = updates.boundTo;
+    }
     // `''` clears the role, matching how provider/model clear — `undefined`
     // means "don't change", so there has to be a way to say "remove it".
     if (updates.role !== undefined) {
-      if ((updates.role as string) === '') {
+      if (updates.role === '') {
         delete specialist.role;
       } else {
         specialist.role = updates.role;

@@ -484,6 +484,52 @@ describe('createSpecialistTool', () => {
       expect(written.model).toBeUndefined();
     });
 
+    // Binding is ONE-WAY: bind an unbound record, never re-bind. The property
+    // is that a model cannot steal a specialist from the applet it belongs to
+    // — not that it can never bind, which made the builder's own loop
+    // impossible (validation goes through a gate that refuses bound records).
+    it('binds an unbound specialist on update', async () => {
+      const specialist = {
+        id: 'u',
+        name: 'U',
+        description: 'd',
+        systemPrompt: 'p',
+        guidelines: [],
+        createdAt: 'x',
+        updatedAt: 'x',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+      const res = await tool.execute(
+        { action: 'update', id: 'u', boundTo: { appId: 'notes', action: 'go' } },
+        {} as any,
+      );
+      expect(res).toContain('updated');
+      const written = JSON.parse(vi.mocked(fs.writeFileSync).mock.calls[0][1] as string);
+      expect(written.boundTo).toEqual({ appId: 'notes', action: 'go' });
+    });
+
+    it('refuses to re-bind one that is already bound', async () => {
+      const specialist = {
+        id: 'b',
+        name: 'B',
+        description: 'd',
+        systemPrompt: 'p',
+        guidelines: [],
+        boundTo: { appId: 'notes', action: 'go' },
+        createdAt: 'x',
+        updatedAt: 'x',
+      };
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(specialist));
+      await expect(
+        tool.execute(
+          { action: 'update', id: 'b', boundTo: { appId: 'evil', action: 'steal' } },
+          {} as any,
+        ),
+      ).rejects.toThrow(/cannot be changed/);
+    });
+
     it('lists the role catalogue with what each is for', async () => {
       const result = await tool.execute({ action: 'roles' }, {} as any);
       for (const id of [
