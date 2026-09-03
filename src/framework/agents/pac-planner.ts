@@ -1,4 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
+import { attachTo } from './user-message.js';
+import type { DispatchAttachment } from './user-message.js';
 import { createDateTimeTool } from '../../tools/datetime.js';
 import { createFileTools } from '../../tools/file.js';
 import { createThinkTool } from '../../tools/think.js';
@@ -55,7 +57,15 @@ export interface PacPlannerInput {
   context?: string;
   slotId: number;
   priorPlan?: string;
-  criticFeedback?: string;
+  criticFeedback?: string; /**
+   * Files travelling with this dispatch (#427).
+   *
+   * Opt-in per definition: a definition that never declares this field cannot
+   * receive bytes, which is the same fail-closed-by-omission shape as
+   * `headlessToolOptions`. Resolved from paths by the dispatch tool, never
+   * loaded here — the framework must not reach the filesystem.
+   */
+  attachments?: DispatchAttachment[];
 }
 
 function buildPlannerTools(ctx: import('../context.js').AgentContext): Record<string, Tool> {
@@ -112,7 +122,7 @@ export const pacPlannerDefinition: AgentDefinition<PacPlannerInput, string> = {
     if (input.criticFeedback) {
       parts.push(`Critic feedback to address:\n${input.criticFeedback}`);
     }
-    return { role: 'user', content: parts.join('\n\n') };
+    return attachTo(parts.join('\n\n'), input.attachments);
   },
 
   hooks(_ctx, input) {

@@ -1,4 +1,6 @@
 import type { CoreMessage, Tool } from 'ai';
+import { buildTaskUserMessage } from './user-message.js';
+import type { DispatchAttachment } from './user-message.js';
 import { classifyError } from '../../error-taxonomy.js';
 import { CITATIONS_PROMPT, allowsInlineMarkers } from '../../agent-prompt.js';
 import { getModelProfile } from '../../providers/index.js';
@@ -43,7 +45,15 @@ export interface ToolWrapperInput {
   /** Pre-assembled child registry (already filtered by `specialist.targetTools`). */
   childTools: Record<string, Tool>;
   /** Whether to enforce JSON last-step + parse output through `wrapWrapperResult`. */
-  wantStructured: boolean;
+  wantStructured: boolean; /**
+   * Files travelling with this dispatch (#427).
+   *
+   * Opt-in per definition: a definition that never declares this field cannot
+   * receive bytes, which is the same fail-closed-by-omission shape as
+   * `headlessToolOptions`. Resolved from paths by the dispatch tool, never
+   * loaded here — the framework must not reach the filesystem.
+   */
+  attachments?: DispatchAttachment[];
 }
 
 /**
@@ -146,10 +156,13 @@ export const toolWrapperDefinition: AgentDefinition<ToolWrapperInput, WrapperRes
   },
 
   buildUserMessage(input): CoreMessage {
-    const content = input.context
-      ? `Request: ${input.input}\n\nContext: ${input.context}`
-      : `Request: ${input.input}`;
-    return { role: 'user', content };
+    return buildTaskUserMessage({
+      task: input.input,
+      context: input.context,
+      attachments: input.attachments,
+      // Not `Task:` — some tool-wrapper prompts and tests read this verbatim.
+      label: 'Request',
+    });
   },
 
   hooks(_ctx, input) {

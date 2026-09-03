@@ -1,4 +1,6 @@
 import type { CoreMessage } from 'ai';
+import { buildTaskUserMessage } from './user-message.js';
+import type { DispatchAttachment } from './user-message.js';
 import { debugLog } from '../../logger.js';
 import { capSubagentResult } from '../../tools/result-cap.js';
 import { appendActivitySummary } from '../../tools/activity-summary.js';
@@ -40,7 +42,15 @@ Rules:
 export interface SubAgentInput {
   task: string;
   context?: string;
-  slotId: number;
+  slotId: number; /**
+   * Files travelling with this dispatch (#427).
+   *
+   * Opt-in per definition: a definition that never declares this field cannot
+   * receive bytes, which is the same fail-closed-by-omission shape as
+   * `headlessToolOptions`. Resolved from paths by the dispatch tool, never
+   * loaded here — the framework must not reach the filesystem.
+   */
+  attachments?: DispatchAttachment[];
 }
 
 /**
@@ -87,10 +97,7 @@ export const subAgentDefinition: AgentDefinition<SubAgentInput, string> = {
   },
 
   buildUserMessage(input): CoreMessage {
-    const content = input.context
-      ? `Task: ${input.task}\n\nContext: ${input.context}`
-      : `Task: ${input.task}`;
-    return { role: 'user', content };
+    return buildTaskUserMessage(input);
   },
 
   hooks(_ctx, input) {

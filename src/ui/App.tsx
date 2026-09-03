@@ -98,6 +98,7 @@ import {
 } from '../image.js';
 import { runDefinition } from '../framework/agents/run.js';
 import { taskDefinition, type TaskInput } from '../framework/agents/task.js';
+import { renderTaskText } from '../framework/agents/user-message.js';
 import type { CoreMessage } from 'ai';
 import { resolveMainModel, logSiteModelSnapshot, providersInUse } from '../model-policy.js';
 import {
@@ -3551,10 +3552,16 @@ export function App({
           // user's skipPermissions / confirmMode / toolMode — re-prompting on
           // dangerous shell even in unrestricted mode. Resolve the same per-turn
           // decision a chat turn would, feeding the policy engine the exact user
-          // message the model sees (`buildUserMessage` adds the `Task:`/`Context:`
+          // message the model sees (`renderTaskText` adds the `Task:`/`Context:`
           // framing) so the decision can't diverge from the real dispatch.
-          const taskMessage = taskDefinition.buildUserMessage(input).content;
-          const policyInput = typeof taskMessage === 'string' ? taskMessage : description;
+          //
+          // `renderTaskText`, not `buildUserMessage(input).content`: that
+          // returns a `CoreMessage` whose content becomes an ARRAY once a
+          // dispatch carries an attachment (#427), and the `typeof === 'string'`
+          // guard this replaced would then have silently fed the policy engine
+          // the bare description — diverging in exactly the way the comment
+          // above promises it cannot.
+          const policyInput = renderTaskText(input);
           const taskCtx = { ...ctx, policyDecision: agent.resolvePolicyDecisionFor(policyInput) };
           const { result, formatted } = await runDefinition(taskCtx, taskDefinition, input);
           if (result.finishReason === 'length') {
