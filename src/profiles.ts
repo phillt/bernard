@@ -57,6 +57,7 @@ export interface ProfileSettings {
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
+  autoCreateApplets?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
@@ -229,6 +230,7 @@ const LEGACY_BOOLEAN_KEYS = [
   'subagentPac',
   'toolDetails',
   'autoCreateSpecialists',
+  'autoCreateApplets',
   'promptRewriter',
   'recallFilter',
   'referenceLookup',

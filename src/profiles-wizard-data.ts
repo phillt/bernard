@@ -205,6 +205,12 @@ export const WIZARD_CATEGORIES_DATA: WizardCategoryData[] = [
         field: { kind: 'boolean' },
       },
       {
+        key: 'autoCreateApplets',
+        label: 'Auto-create applets',
+        description: 'Build applets Bernard suggests, above the same threshold.',
+        field: { kind: 'boolean' },
+      },
+      {
         key: 'autoCreateThreshold',
         label: 'Auto-create threshold',
         description: 'Confidence threshold 0-1 (e.g. 0.8).',

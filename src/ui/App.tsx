@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import type { Agent } from '../agent.js';
 import type { BernardConfig } from '../config.js';
@@ -182,6 +182,9 @@ import {
 } from '../voice-service.js';
 import { toSpokenForm } from '../speech-normalizer.js';
 import { toLiteralSpeech } from '../speech-text.js';
+import { AppRegistry } from '../apps/registry.js';
+import { AppletCandidateStore } from '../applet-candidates.js';
+import { buildAppletRequest } from '../applet-detector.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -741,6 +744,12 @@ export function App({
       })),
     [stores.routines],
   );
+
+  // Applet suggestions (#430). Not threaded through `AppStores`: it is read by
+  // exactly one slash command and written by a detached exit worker that
+  // constructs its own, so a shared instance would buy nothing and add a
+  // constructor to every test that builds the prop.
+  const appletCandidates = useMemo(() => new AppletCandidateStore(), []);
 
   // Confirm-action session memo: `${toolName}:${stableHash(args)}` → true.
   // Mirrors the legacy REPL's confirm-allow-for-session map.
@@ -2041,6 +2050,96 @@ export function App({
       }
     }
 
+    if (is(text, '/applets')) {
+      // Both halves in one menu: what exists, and what Bernard thinks should.
+      // Splitting them into `/applets` and `/applet-candidates` would put the
+      // suggestion behind a command nobody has a reason to type — the list of
+      // real applets is what a user opens, and the suggestion belongs beside it.
+      let firstPass = true;
+      let listIndex = 0;
+      for (;;) {
+        const registry = new AppRegistry();
+        const appIds = registry.listIds();
+        const pending = appletCandidates.listPending();
+        if (appIds.length === 0 && pending.length === 0) {
+          if (firstPass) flashToast('No applets yet. Ask me to build one.');
+          return;
+        }
+        firstPass = false;
+        const entries: MenuEntry[] = [];
+        if (appIds.length > 0) {
+          entries.push({ type: 'section', title: 'Applets' });
+          for (const id of appIds) {
+            const parsed = registry.get(id);
+            const m = parsed.ok ? parsed.manifest : undefined;
+            entries.push({
+              label: m?.name ?? id,
+              annotation: m ? id : 'invalid manifest',
+              description: truncate(m?.description ?? '', 100),
+              value: `app:${id}`,
+            });
+          }
+        }
+        if (pending.length > 0) {
+          entries.push({ type: 'section', title: 'Suggestions' });
+          for (const c of pending) {
+            entries.push({
+              label: c.name,
+              annotation: `${Math.round(c.confidence * 100)}%`,
+              description: truncate(c.reasoning || c.description, 100),
+              value: `cand:${c.id}`,
+            });
+          }
+        }
+        const pick = await requestMenu(entries, {
+          title: 'Applets',
+          initialIndex: listIndex,
+        });
+        if (pick.cancelled) return;
+        listIndex = pick.index;
+        const value = pick.item.value as string;
+
+        if (value.startsWith('app:')) {
+          const id = value.slice(4);
+          const action = await requestMenu([{ label: 'Open in browser' }, { label: 'Back' }], {
+            title: id,
+          });
+          if (action.cancelled || action.index === 1) continue;
+          // Deliberately no Delete row: deleting an applet destroys its data
+          // store and any specialist bound to it, and that authority is the
+          // CLI's (`bernard app delete`) for the same reason `app-grant` is.
+          try {
+            const { appOpen } = await import('../apps/app-cli.js');
+            await appOpen(id, {});
+            flashToast(`Opened ${id}.`, 'success');
+          } catch (err) {
+            flashToast(`Could not open ${id}: ${(err as Error).message}`, 'error');
+          }
+          continue;
+        }
+
+        const c = pending.find((p) => p.id === value.slice(5));
+        if (!c) continue;
+        const action = await requestMenu(
+          [{ label: 'Build it' }, { label: 'Dismiss' }, { label: 'Back' }],
+          { title: `"${c.name}" (${c.draftId})` },
+        );
+        if (action.cancelled || action.index === 2) continue;
+        if (action.index === 1) {
+          appletCandidates.updateStatus(c.id, 'rejected');
+          flashToast(`Dismissed ${c.name}.`, 'success');
+          continue;
+        }
+        // Building goes through the agent and its `applet` tool rather than
+        // constructing a manifest here: the tool already owns id validation,
+        // the asset seed and the authority split, and a second writer in the
+        // UI is how those drift apart.
+        appletCandidates.updateStatus(c.id, 'accepted');
+        await handleSubmit(buildAppletRequest(c));
+        return;
+      }
+    }
+
     if (is(text, '/candidates')) {
       let firstPass = true;
       let listIndex = 0;
@@ -2227,6 +2326,7 @@ export function App({
 
   type BooleanPrefKey =
     | 'autoCreateSpecialists'
+    | 'autoCreateApplets'
     | 'promptRewriter'
     | 'recallFilter'
     | 'toolDetails'
@@ -2554,6 +2654,13 @@ export function App({
             );
           }
         },
+      ),
+      toggleRow(
+        'autoCreateApplets',
+        'Auto-create applets',
+        'Build suggested applets above the threshold, without asking.',
+        'Auto-create applets: on',
+        'Auto-create applets: off',
       ),
       {
         kind: 'item',

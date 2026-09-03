@@ -89,6 +89,7 @@ export function appletDataDir(appId: string): string {
 }
 export const SPECIALIST_CANDIDATES_DIR = path.join(DATA_DIR, 'specialist-candidates');
 export const CORRECTION_CANDIDATES_DIR = path.join(DATA_DIR, 'correction-candidates');
+export const APPLET_CANDIDATES_DIR = path.join(DATA_DIR, 'applet-candidates');
 export const TOOL_PROFILES_DIR = path.join(DATA_DIR, 'tool-profiles');
 
 // Cache

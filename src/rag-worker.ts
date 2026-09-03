@@ -19,6 +19,9 @@ import { loadConfig } from './config.js';
 import { extractDomainFacts } from './context.js';
 import { RAGStore } from './rag.js';
 import { CandidateStore, MAX_PENDING_CANDIDATES } from './specialist-candidates.js';
+import { AppletCandidateStore, MAX_PENDING_APPLET_CANDIDATES } from './applet-candidates.js';
+import { detectAppletCandidate } from './applet-detector.js';
+import { AppRegistry } from './apps/registry.js';
 import { SpecialistStore } from './specialists.js';
 import { detectSpecialistCandidate } from './specialist-detector.js';
 
@@ -109,6 +112,26 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
     }
   } catch {
     // Silent — detection failure must not block anything
+  }
+
+  // Applet candidate detection (#430), for the same reason and at the same
+  // cadence: a whole transcript is the only place recurrence is visible, and
+  // this process is already detached, so a second cheap-tier call costs the
+  // user no latency. Independently guarded — a specialist detection that threw
+  // must not take the applet one with it.
+  try {
+    const appletCandidates = new AppletCandidateStore();
+    if (appletCandidates.listPending().length < MAX_PENDING_APPLET_CANDIDATES) {
+      const detected = await detectAppletCandidate(
+        payload.serialized,
+        config,
+        new AppRegistry().listIds(),
+        appletCandidates.listPending(),
+      );
+      if (detected) appletCandidates.create(detected.candidate, 'exit');
+    }
+  } catch {
+    // Silent — a suggestion nobody asked for must never fail a session exit.
   }
 
   // Clean up temp file

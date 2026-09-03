@@ -87,6 +87,8 @@ import { TurnContextStore } from './turn-context.js';
 import { assembleContext } from './framework/context.js';
 import { Agent } from './agent.js';
 import { bootstrapPendingCandidates } from './candidate-bootstrap.js';
+import { AppletCandidateStore } from './applet-candidates.js';
+import { appletSuggestionBlock } from './applet-detector.js';
 import { runCorrectionAgent } from './correction.js';
 import { debugLog, isDebugEnabled } from './logger.js';
 import { installInstrumentedFetchIfDebug } from './framework/instrumented-fetch.js';
@@ -465,6 +467,30 @@ async function runInkRepl(args: {
       `${pendingCandidates.length} specialist suggestion(s) pending. Use /candidates to review.`,
     );
     alertContext = alertContext ? alertContext + '\n\n' + contextBlock : contextBlock;
+  }
+
+  // Applet suggestions (#430). Deliberately a NOTICE plus a context block, never
+  // a build: an applet is a manifest, a page, a bound agent and an origin, and
+  // building one needs an agent turn the startup path does not have. So
+  // `autoCreateApplets` widens what the agent is TOLD — above the threshold it
+  // is instructed to offer to build the applet in this session, rather than
+  // silently authoring an app the user never asked for at a moment they are not
+  // watching. That is the same threshold `autoCreateSpecialists` uses and a
+  // deliberately weaker action, for a deliberately larger artifact.
+  {
+    const appletCandidateStore = new AppletCandidateStore();
+    appletCandidateStore.pruneOld();
+    const pendingApplets = appletCandidateStore.listPending();
+    if (pendingApplets.length > 0) {
+      emitStartupNotice(
+        `${pendingApplets.length} applet suggestion(s) pending. Use /applets to review.`,
+      );
+      const eligible = config.autoCreateApplets
+        ? pendingApplets.filter((c) => c.confidence >= config.autoCreateThreshold)
+        : [];
+      const block = appletSuggestionBlock(pendingApplets, eligible);
+      alertContext = alertContext ? alertContext + '\n\n' + block : block;
+    }
   }
 
   const agentCtx = assembleContext({
