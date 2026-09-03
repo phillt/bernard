@@ -3,7 +3,9 @@ import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import { AppRegistry } from '../apps/registry.js';
 import { defaultAppletPage } from '../apps/page-template.js';
+import { SpecialistStore } from '../specialists.js';
 import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-tool.js';
+import { uncoveredTools } from '../apps/invocation.js';
 import {
   refusalFor,
   validateAppletPage,
@@ -170,8 +172,8 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
         return `Error: "${id}" is not a valid applet id — lowercase letters, digits and hyphens, 2-64 characters.`;
       }
       const manifest = buildManifest(id, args);
-      const dispatchRefusal = await checkDispatch(manifest.actions);
-      if (dispatchRefusal) return dispatchRefusal;
+      const dispatch = await checkDispatch(manifest.actions);
+      if (dispatch.refusal) return dispatch.refusal;
       // Scaffolded when the caller supplies none, so every refusal below has a
       // remedy reachable in one call rather than being a dead end.
       const page =
@@ -186,6 +188,7 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
         `${Object.keys(created.actions).length} action(s). Its actions have no tools yet — ` +
         `grant them with \`bernard app-grant ${created.id}\`.` +
         warningsFor(issues) +
+        extraWarnings(dispatch.warnings) +
         (await openedNote(created.id))
       );
     }
@@ -197,8 +200,8 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
       // been lifted, so writing it back would be rejected by its own version
       // refinement — see `RawAppManifestSchema`.
       const manifest = buildManifest(id, args, existing.manifest);
-      const dispatchRefusal = await checkDispatch(manifest.actions);
-      if (dispatchRefusal) return dispatchRefusal;
+      const dispatch = await checkDispatch(manifest.actions);
+      if (dispatch.refusal) return dispatch.refusal;
       const files: Record<string, string> = { ...(args.files ?? {}) };
       let issues: PageIssue[] = [];
       if (args.page !== undefined) {
@@ -211,7 +214,11 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
         files['index.html'] = args.page;
       }
       const updated = store.update(id, manifest, files);
-      return `Applet "${updated.name}" (${updated.id}) updated.` + warningsFor(issues);
+      return (
+        `Applet "${updated.name}" (${updated.id}) updated.` +
+        warningsFor(issues) +
+        extraWarnings(dispatch.warnings)
+      );
     }
     default:
       // Unreachable through the AI SDK, which parses against the enum first —
@@ -313,24 +320,76 @@ async function openedNote(appId: string): Promise<string> {
  * refusing here would break that sequence. It is already pre-flighted at run
  * time with its own error code.
  */
-async function checkDispatch(actions: Record<string, RawAppAction>): Promise<string | null> {
+async function checkDispatch(
+  actions: Record<string, RawAppAction>,
+): Promise<{ refusal: string | null; warnings: string[] }> {
   const problems: string[] = [];
+  const warnings: string[] = [];
+  let specialists: SpecialistStore | undefined;
+
   for (const [name, action] of Object.entries(actions)) {
     const dispatch = action.dispatch;
-    if (dispatch?.kind !== 'tool') continue;
-    const refusal =
-      (await directInvocableRefusalByName(dispatch.tool)) ??
-      (await toolArgRefusal(dispatch.tool, dispatch.args ?? {}));
-    if (refusal) problems.push(`  - action "${name}": ${refusal}`);
+
+    if (dispatch?.kind === 'tool') {
+      const refusal =
+        (await directInvocableRefusalByName(dispatch.tool)) ??
+        (await toolArgRefusal(dispatch.tool, dispatch.args ?? {}));
+      if (refusal) problems.push(`  - action "${name}": ${refusal}`);
+      continue;
+    }
+
+    if (dispatch?.kind !== 'agent') continue;
+
+    // The intersection rule, which until now had no code behind it.
+    // `grantedToolNames` intersects the action's `toolAllowlist` with the
+    // specialist's `targetTools`, so an under-declared specialist yields an
+    // action with FEWER tools than its manifest promises — possibly none. It
+    // then fails as a bad answer rather than an error, which is what makes it
+    // so hard to see: the observed case produced "No datetime tool available"
+    // from a specialist whose action declared `toolAllowlist: ['datetime']`.
+    const allowed = action.toolAllowlist ?? [];
+    if (allowed.length === 0) continue;
+
+    specialists ??= new SpecialistStore({ seed: false });
+    const record = specialists.get(dispatch.specialistId);
+
+    // ABSENT is a warning, not a refusal, and the distinction is load-bearing:
+    // the natural authoring order is to write the applet and then build and
+    // bind its agent, which is exactly what `agent-builder` does. Refusing
+    // here would make that sequence impossible. Run time pre-flights it with
+    // its own error code. A specialist created later is picked up on the next
+    // invocation — the store is read from disk per dispatch, never cached.
+    if (!record) {
+      warnings.push(
+        `Action "${name}" names specialist "${dispatch.specialistId}", which does not exist ` +
+          `yet. Create it with targetTools covering ${allowed.join(', ')} before the button is used.`,
+      );
+      continue;
+    }
+
+    const missing = uncoveredTools(allowed, record.targetTools);
+    if (missing.length > 0) {
+      problems.push(
+        `  - action "${name}": specialist "${dispatch.specialistId}" does not target ` +
+          `${missing.join(', ')}. The tools an action gets are the INTERSECTION of its ` +
+          `toolAllowlist and the specialist's targetTools, so this action would run with ` +
+          `${allowed.length === missing.length ? 'no tools at all' : 'fewer tools than it declares'}. ` +
+          `Update the specialist: targetTools: [${allowed.map((t) => `'${t}'`).join(', ')}].`,
+      );
+    }
   }
-  if (problems.length === 0) return null;
-  return (
-    `Error: this applet was not written — ${problems.length} action(s) could never run:\n` +
-    `${problems.join('\n')}\n` +
-    'Tools callable directly are: web_read, web_search, memory, file_read_lines, file_write. ' +
-    'For anything else, back the action with a specialist: ' +
-    "dispatch: { kind: 'agent', specialistId: '...', instructions: '...' }."
-  );
+
+  if (problems.length === 0) return { refusal: null, warnings };
+  return {
+    refusal:
+      `Error: this applet was not written — ${problems.length} action(s) could never run:\n` +
+      `${problems.join('\n')}\n` +
+      'Tools callable directly are: web_read, web_search, memory, file_read_lines, file_write. ' +
+      'For anything else, back the action with a specialist — and the specialist must be ' +
+      "kind: 'tool-wrapper' and declare targetTools covering the action's toolAllowlist, or it " +
+      'is handed no tools and answers that it cannot do the job.',
+    warnings,
+  };
 }
 
 /** A page is unbounded; a tool result that reaches a model is not. */
@@ -340,4 +399,8 @@ function clampPage(page: string): string {
   return page.length <= PAGE_PREVIEW_MAX
     ? page
     : `${page.slice(0, PAGE_PREVIEW_MAX)}\n… (truncated, ${page.length} chars total)`;
+}
+
+function extraWarnings(warnings: string[]): string {
+  return warnings.length === 0 ? '' : `\nWarnings:\n${warnings.map((w) => `  - ${w}`).join('\n')}`;
 }

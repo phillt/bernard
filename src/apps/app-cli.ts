@@ -2,6 +2,8 @@ import { printError, printInfo } from '../output.js';
 import { AppRegistry } from './registry.js';
 import { parseRawAppManifest } from './manifest.js';
 import { deleteApplet } from './lifecycle.js';
+import { SpecialistStore } from '../specialists.js';
+import { uncoveredTools } from './invocation.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { APPS_DIR, appletAssetDir } from '../paths.js';
@@ -71,6 +73,12 @@ export function appAllow(
     return;
   }
   action.toolAllowlist = tools;
+  // The grant is the user's and is applied either way — but a grant the
+  // backing specialist cannot reach is a no-op, and silently so: the action
+  // runs with an empty registry and the agent answers that it cannot do the
+  // job. This is where the two halves of the intersection first meet, so it is
+  // where the mismatch is worth saying out loud.
+  warnUncoveredGrant(action, tools);
   if (opts.write !== undefined) action.toolMode = opts.write ? 'write' : 'read-only';
   if (opts.confirm !== undefined) action.confirmMode = opts.confirm;
 
@@ -139,4 +147,36 @@ export async function appOpen(appId: string, opts: { open?: boolean } = {}): Pro
   if (result.started) printInfo('Started the applet host.');
   if (result.opened) printInfo(`Opening ${result.url}`);
   else printInfo(result.note ? `${result.note} — open it at ${result.url}` : result.url);
+}
+
+/**
+ * Says so when a grant lands on a specialist that does not target the tool.
+ *
+ * A warning rather than a refusal: the grant itself is legitimate and the
+ * specialist may be updated next. What must not happen is the user believing
+ * the tool was granted when the intersection has voided it.
+ */
+function warnUncoveredGrant(action: Record<string, unknown>, tools: string[]): void {
+  const dispatch = action.dispatch as { kind?: string; specialistId?: string } | undefined;
+  if (dispatch?.kind !== 'agent' || !dispatch.specialistId || tools.length === 0) return;
+
+  const record = new SpecialistStore({ seed: false }).get(dispatch.specialistId);
+  if (!record) {
+    printInfo(
+      `Note: specialist "${dispatch.specialistId}" does not exist yet. Create it with ` +
+        `targetTools covering ${tools.join(', ')}, or this action will run with no tools.`,
+    );
+    return;
+  }
+  const missing = uncoveredTools(tools, record.targetTools);
+  if (missing.length === 0) return;
+  printInfo(
+    `Warning: specialist "${dispatch.specialistId}" does not target ${missing.join(', ')}. ` +
+      'An action gets the INTERSECTION of its toolAllowlist and the specialist targetTools, so ' +
+      `this action would run with ${
+        missing.length === tools.length
+          ? 'no tools at all'
+          : 'only ' + tools.filter((t) => !missing.includes(t)).join(', ')
+      }. Update the specialist to target [${tools.map((t) => `'${t}'`).join(', ')}].`,
+  );
 }

@@ -1,0 +1,107 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { useTempHome } from '../__tests__/temp-home.js';
+import { uncoveredTools } from './invocation.js';
+
+describe('uncoveredTools', () => {
+  /**
+   * The rule `grantedToolNames` enforces silently, stated so it can be
+   * checked. An under-declared specialist yields fewer tools than the manifest
+   * promises — possibly none — and fails as a bad ANSWER rather than an error.
+   */
+  it('names what the specialist cannot reach', () => {
+    expect(uncoveredTools(['datetime'], [])).toEqual(['datetime']);
+    expect(uncoveredTools(['a', 'b'], ['a'])).toEqual(['b']);
+    expect(uncoveredTools(['a'], ['a', 'b'])).toEqual([]);
+  });
+
+  it('treats an absent targetTools as covering nothing', () => {
+    // The observed case: the record simply had no `targetTools` key.
+    expect(uncoveredTools(['datetime'], undefined)).toEqual(['datetime']);
+  });
+});
+
+describe('bernard app allow', () => {
+  useTempHome('bernard-app-allow');
+  const lines: string[] = [];
+
+  beforeEach(() => {
+    lines.length = 0;
+    vi.resetModules();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  async function setup(targets: string[] | null) {
+    const output = await import('../output.js');
+    vi.spyOn(output, 'printInfo').mockImplementation((m: string) => void lines.push(m));
+    vi.spyOn(output, 'printError').mockImplementation((m: string) => void lines.push(m));
+
+    if (targets !== null) {
+      const { SpecialistStore } = await import('../specialists.js');
+      new SpecialistStore({ seed: false }).createFull({
+        id: 'greeter',
+        name: 'S',
+        description: 'd',
+        kind: 'tool-wrapper',
+        systemPrompt: 'p',
+        guidelines: [],
+        targetTools: targets,
+      });
+    }
+    const { AppRegistry } = await import('./registry.js');
+    new AppRegistry({ seed: false }).create(
+      {
+        schemaVersion: 2,
+        id: 'notes',
+        name: 'Notes',
+        actions: {
+          summarise: { dispatch: { kind: 'agent', specialistId: 'greeter', instructions: 'x' } },
+        },
+      },
+      { 'index.html': '<p>x</p>' },
+    );
+    return (await import('./app-cli.js')).appAllow;
+  }
+
+  it('warns when the grant lands on a specialist that cannot use it', async () => {
+    // This is the failure that shipped: the grant was applied, the specialist
+    // could not reach the tool, and nothing said so — the applet just answered
+    // that it had no datetime tool.
+    const appAllow = await setup([]);
+    appAllow('notes', 'summarise', ['datetime']);
+    const all = lines.join('\n');
+    expect(all).toContain('does not target datetime');
+    expect(all).toContain('no tools at all');
+  });
+
+  it("still applies the grant — it is the user's to make", async () => {
+    const appAllow = await setup([]);
+    appAllow('notes', 'summarise', ['datetime']);
+    const { AppRegistry } = await import('./registry.js');
+    const app = new AppRegistry({ seed: false }).get('notes');
+    expect(app.ok && app.manifest.actions.summarise.toolAllowlist).toEqual(['datetime']);
+  });
+
+  it('says nothing when the specialist covers the grant', async () => {
+    const appAllow = await setup(['datetime']);
+    appAllow('notes', 'summarise', ['datetime']);
+    // Asserted on the WARNING, not on the phrase: `appAllow` already prints a
+    // generic reminder that the grant is an intersection, which contains
+    // "does not target" verbatim. Matching that would pass for the wrong
+    // reason — and did, when this assertion was first written.
+    expect(lines.join('\n')).not.toContain('Warning:');
+  });
+
+  it('names the partial case precisely', async () => {
+    const appAllow = await setup(['web_search']);
+    appAllow('notes', 'summarise', ['web_search', 'web_read']);
+    const all = lines.join('\n');
+    expect(all).toContain('does not target web_read');
+    expect(all).toContain('only web_search');
+  });
+
+  it('flags a specialist that does not exist yet without failing', async () => {
+    const appAllow = await setup(null);
+    appAllow('notes', 'summarise', ['datetime']);
+    expect(lines.join('\n')).toContain('does not exist yet');
+  });
+});

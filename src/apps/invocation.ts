@@ -126,3 +126,28 @@ export function grantedToolNames(
   const targets = specialistTargetTools ?? [];
   return action.toolAllowlist.filter((t) => targets.includes(t));
 }
+
+/**
+ * Whether a specialist can actually reach everything an action grants it.
+ *
+ * The counterpart to {@link grantedToolNames}, and it lives here because it is
+ * that function's behaviour stated as a rule: the tools an action gets are the
+ * INTERSECTION of its `toolAllowlist` and the specialist's `targetTools`, so an
+ * under-declared specialist silently yields fewer tools than the manifest
+ * promises — possibly none.
+ *
+ * That was documented as "the rule with no code behind it" and it cost a real
+ * applet: an action declaring `toolAllowlist: ['datetime']` pointed at a
+ * specialist with no `targetTools` ran with an empty registry and answered "No
+ * datetime tool available". A bad ANSWER, not an error, which is what made it
+ * hard to see — nothing in the invocation log said the grant had been voided.
+ *
+ * Returns the tools the action grants that the specialist cannot reach.
+ */
+export function uncoveredTools(
+  toolAllowlist: readonly string[],
+  specialistTargetTools: string[] | undefined,
+): string[] {
+  const targets = specialistTargetTools ?? [];
+  return toolAllowlist.filter((t) => !targets.includes(t));
+}

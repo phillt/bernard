@@ -286,7 +286,7 @@ describe('the applet tool refuses an action that could never run', () => {
     expect(out).toContain('datetime');
     // The refusal has to name the way out, or the model just tries again.
     expect(out).toContain('web_search');
-    expect(out).toContain('specialistId');
+    expect(out).toContain('targetTools');
     expect(new AppRegistry({ seed: false }).listIds()).not.toContain('notes');
   });
 
@@ -325,5 +325,119 @@ describe('the applet tool refuses an action that could never run', () => {
     const out = await tool.execute(CREATE, {} as never);
     expect(out).toContain('created');
     expect(new AppRegistry({ seed: false }).listIds()).toContain('notes');
+  });
+});
+
+/**
+ * The intersection rule, which CLAUDE.md recorded as "the rule with no code
+ * behind it" — and which the `datetime` refusal made much easier to hit, by
+ * routing every ineligible-tool case into "use a specialist" without saying
+ * what a specialist needs.
+ *
+ * Observed: an action declaring `toolAllowlist: ['datetime']` pointed at a
+ * specialist with no `targetTools`. The intersection was empty, so the agent
+ * ran with no tools and answered "No datetime tool available" — a bad answer,
+ * not an error, which is what made it hard to see.
+ *
+ * Note the tool cannot set `toolAllowlist` itself: that is the authority split,
+ * so an allowlist only ever arrives from `bernard app allow`. The tool's own
+ * check therefore covers the CARRY-FORWARD path (an update of an applet that
+ * already has grants), and `app-cli.test.ts` covers the producer.
+ */
+describe('the applet tool enforces the toolAllowlist ∩ targetTools rule', () => {
+  useTempHome('bernard-applet-intersection');
+
+  /**
+   * Sets up an applet whose action grants `tools`, backed by a specialist
+   * targeting `targets`.
+   *
+   * **Everything after one `vi.resetModules()`, deliberately.** `paths.ts`
+   * caches `BERNARD_HOME` at module load, and `useTempHome` hands out a new
+   * directory per test — so an import issued BEFORE the reset returns the
+   * previous test's module instance, still pointing at the previous test's
+   * (now deleted) directory. That writes the specialist somewhere nothing will
+   * look, and the assertion then fails only when the file is run as a whole,
+   * passing in isolation. Which is exactly how this was found.
+   */
+  async function setup(specialistId: string, targets: string[] | null, tools: string[]) {
+    vi.resetModules();
+    const { SpecialistStore } = await import('../specialists.js');
+    const { createAppletTool } = await import('./applet.js');
+    const { AppRegistry } = await import('../apps/registry.js');
+    const { APPS_DIR } = await import('../paths.js');
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+
+    if (targets !== null) {
+      new SpecialistStore({ seed: false }).createFull({
+        id: specialistId,
+        name: 'S',
+        description: 'd',
+        kind: 'tool-wrapper',
+        systemPrompt: 'p',
+        guidelines: [],
+        targetTools: targets,
+      });
+    }
+
+    const tool = createAppletTool(new AppRegistry({ seed: false }));
+    await tool.execute(
+      {
+        ...CREATE,
+        actions: {
+          summarise: {
+            dispatch: { kind: 'agent' as const, specialistId, instructions: 'do it' },
+          },
+        },
+      } as never,
+      {} as never,
+    );
+
+    // The allowlist can only come from `bernard app allow` — the tool cannot
+    // set it — so it is written the way that command writes it.
+    const file = path.join(APPS_DIR, 'notes.json');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as {
+      actions: Record<string, Record<string, unknown>>;
+    };
+    raw.actions.summarise.toolAllowlist = tools;
+    fs.writeFileSync(file, JSON.stringify(raw), 'utf-8');
+    return tool;
+  }
+
+  const edit = (tool: { execute: (a: unknown, b: unknown) => Promise<string> }) =>
+    tool.execute({ action: 'update', id: 'notes', description: 'edited' }, {});
+
+  it('refuses an update that would leave the action with no tools', async () => {
+    const tool = await setup('greeter', [], ['datetime']);
+    const out = await edit(tool);
+    expect(out).toContain('Error:');
+    expect(out).toContain('no tools at all');
+    expect(out).toContain("targetTools: ['datetime']");
+  });
+
+  it('names only the tools that are actually missing', async () => {
+    const tool = await setup('partial', ['web_search'], ['web_search', 'web_read']);
+    const out = await edit(tool);
+    expect(out).toContain('web_read');
+    expect(out).not.toContain('does not target web_search');
+    expect(out).toContain('fewer tools than it declares');
+  });
+
+  it('accepts a specialist that covers the allowlist', async () => {
+    const tool = await setup('covers', ['web_search', 'web_read'], ['web_search']);
+    const out = await edit(tool);
+    expect(out).toContain('updated');
+  });
+
+  it('warns rather than refuses when the specialist does not exist yet', async () => {
+    // The carve-out that keeps `agent-builder`'s order possible: write the
+    // applet, then build and bind its agent. A specialist created afterwards
+    // is picked up on the next invocation — the store is read per dispatch,
+    // never cached, so nothing has to be restarted.
+    const tool = await setup('not-yet', null, ['datetime']);
+    const out = await edit(tool);
+    expect(out).toContain('updated');
+    expect(out).toContain('does not exist yet');
+    expect(out).toContain('datetime');
   });
 });
