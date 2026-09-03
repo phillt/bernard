@@ -8,6 +8,7 @@ import { checkRequest } from './guard.js';
 import { securityHeaders, originFor } from './csp.js';
 import { resolveAsset } from './assets.js';
 import { TOKENS_PATH, tokensStylesheet } from './tokens.js';
+import { SDK_PATH, appletSdkScript } from './sdk.js';
 import { ICON_PATH, MANIFEST_PATH, appletIcon, webManifest } from './webmanifest.js';
 import { handleStoreRequest } from './store-route.js';
 
@@ -252,6 +253,16 @@ function createHandler(
         const app = registry.get(appId);
         const label = app.ok ? app.manifest.name : appId;
         send(res, 200, appletIcon(label), { 'Content-Type': 'image/svg+xml; charset=utf-8' });
+        return;
+      }
+
+      if (url === SDK_PATH) {
+        // The Content-Type is hardcoded like its neighbours rather than going
+        // through `contentTypeFor` — these routes never touch the filesystem.
+        // It has to be exactly a JS MIME: with `nosniff` on every response a
+        // wrong one means the browser silently declines to execute, which is
+        // the same invisible-failure class this whole module exists to remove.
+        send(res, 200, appletSdkScript(), { 'Content-Type': 'text/javascript; charset=utf-8' });
         return;
       }
 

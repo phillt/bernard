@@ -1,6 +1,7 @@
 <title>Bernard demo applet</title>
 <link rel="stylesheet" href="/__bernard/tokens.css" />
 <link rel="manifest" href="/__bernard/manifest.webmanifest" />
+<script src="/__bernard/applet.js"></script>
 
 <main>
   <h1>Demo applet</h1>
@@ -17,42 +18,13 @@
 </main>
 
 <script>
-  // The page never learns its own token or handles from markup — it fetches
-  // them from its own origin. `connect-src 'self'` is what keeps that the only
-  // place it can reach.
-  let boot = null;
-
-  async function bootstrap() {
-    if (boot) return boot;
-    const res = await fetch('/__bernard/bootstrap.json');
-    if (!res.ok) throw new Error('bootstrap failed');
-    boot = await res.json();
-    return boot;
-  }
-
-  /** The applet's own persistent store (#422). POST even to read: the token
-   *  gate exempts GET so that assets load, and this is data, not an asset. */
-  async function store(body) {
-    const b = await bootstrap();
-    const res = await fetch('/__bernard/store', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-bernard-token': b.token },
-      body: JSON.stringify(body),
-    });
-    return res.json();
-  }
-
-  async function invoke(action, args) {
-    const b = await bootstrap();
-    const res = await fetch('/__bernard/invoke', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-bernard-token': b.token },
-      // A handle plus data. Never an action name, never a prompt — the host
-      // resolves what to run from its own record.
-      body: JSON.stringify({ handle: b.handles[action], args }),
-    });
-    return res.json();
-  }
+  // The host serves the client; this page never speaks the wire protocol
+  // itself. It used to, and being the one worked example a generating model
+  // had is how a generated page ended up omitting the session header and
+  // getting a 403 on every click.
+  //
+  // `bernard.invoke` resolves to the action's RESULT and throws on failure, so
+  // there is no `if (!body.ok)` branch here to forget.
 
   async function run(action) {
     const out = document.getElementById('out');
@@ -60,28 +32,21 @@
     out.className = '';
     out.textContent = 'Working…';
     try {
-      const body = await invoke(action, { question });
-      if (!body.ok) {
-        out.className = 'error';
-        out.textContent = `${body.error.code}: ${body.error.message}`;
-        return;
-      }
-      out.textContent =
-        typeof body.result === 'string' ? body.result : JSON.stringify(body.result, null, 2);
+      const result = await bernard.invoke(action, { question });
+      out.textContent = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
       // Survives a host restart, and only this applet can read it.
-      await store({ op: 'set', key: 'last', value: { question, action, at: Date.now() } });
+      await bernard.store.set('last', { question, action, at: Date.now() });
       showLast();
     } catch (err) {
       out.className = 'error';
-      out.textContent = String(err);
+      out.textContent = err.message;
     }
   }
 
   async function showLast() {
     const el = document.getElementById('last');
     try {
-      const res = await store({ op: 'get', key: 'last' });
-      const entry = res.ok && res.result;
+      const entry = await bernard.store.get('last');
       el.textContent = entry
         ? `Last run: ${entry.value.action} — “${entry.value.question}”`
         : 'Nothing run yet.';
