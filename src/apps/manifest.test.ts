@@ -72,7 +72,15 @@ describe('parseAppManifest', () => {
   });
 
   it('rejects an unknown schemaVersion', () => {
-    expect(parseAppManifest(manifest({ schemaVersion: 2 })).ok).toBe(false);
+    expect(parseAppManifest(manifest({ schemaVersion: 3 })).ok).toBe(false);
+    expect(parseAppManifest(manifest({ schemaVersion: 0 })).ok).toBe(false);
+  });
+
+  // Both revisions are read by this binary, and a v1 manifest must keep
+  // parsing byte-for-byte as it did — the manifests already on disk are v1.
+  it('accepts both schema revisions', () => {
+    expect(parseAppManifest(manifest({ schemaVersion: 1 })).ok).toBe(true);
+    expect(parseAppManifest(manifest({ schemaVersion: 2 })).ok).toBe(true);
   });
 
   it("rejects type:'enum' without values, and values without enum", () => {

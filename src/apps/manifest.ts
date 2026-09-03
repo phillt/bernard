@@ -64,6 +64,26 @@ export const ACTION_NAME_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 export const APP_ID_RE = /^[a-z][a-z0-9-]{1,63}$/;
 const ARG_NAME_RE = /^[a-z][a-z0-9_]{0,31}$/;
 
+/**
+ * The manifest revisions this binary understands.
+ *
+ * A union rather than a bump, because {@link AppManifestSchema} is `.strict()`
+ * in both directions: an older binary meeting a field it does not know rejects
+ * the **whole app**, not just the field, and a newer binary must still read the
+ * v1 manifests already on disk. So a revision is added here, never replaced.
+ *
+ * v1 (#419) — an action is backed by a tool-wrapper specialist.
+ * v2 (#445) — an action may instead name a tool to call directly, with no
+ * model in the loop. The v2-only fields are rejected on a v1 manifest by
+ * {@link AppManifestSchema}'s refinement, so a manifest cannot half-declare
+ * itself: the version it states is the version it is read as.
+ */
+export const AppSchemaVersionSchema = z.union([z.literal(1), z.literal(2)]);
+export type AppSchemaVersion = z.infer<typeof AppSchemaVersionSchema>;
+
+/** What a manifest Bernard authors today declares. */
+export const LATEST_APP_SCHEMA_VERSION: AppSchemaVersion = 2;
+
 export const AppActionSchema = z
   .object({
     /**
@@ -106,7 +126,7 @@ export type AppAction = z.infer<typeof AppActionSchema>;
 
 export const AppManifestSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: AppSchemaVersionSchema,
     id: z.string().regex(APP_ID_RE),
     name: z.string().min(1).max(80),
     description: z.string().max(400).optional(),
