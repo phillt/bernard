@@ -40,6 +40,7 @@ export function appList(opts: { bundled?: boolean; all?: boolean } = {}): void {
 
   if (opts.all) {
     printGroup(registry, 'Yours', mine, 'No applets of your own yet.');
+    printInfo('');
     printGroup(registry, 'Bundled', theirs, 'None installed.');
     return;
   }
@@ -49,7 +50,10 @@ export function appList(opts: { bundled?: boolean; all?: boolean } = {}): void {
       printInfo('No bundled applets installed.');
       return;
     }
-    for (const id of theirs) printApp(registry, id);
+    theirs.forEach((id, i) => {
+      if (i > 0) printInfo('');
+      printApp(registry, id);
+    });
     return;
   }
 
@@ -61,7 +65,27 @@ export function appList(opts: { bundled?: boolean; all?: boolean } = {}): void {
     );
     return;
   }
-  for (const id of mine) printApp(registry, id);
+  mine.forEach((id, i) => {
+    if (i > 0) printInfo('');
+    printApp(registry, id);
+  });
+}
+
+/** Word-wraps to `width`, preserving nothing else — descriptions are one line of prose. */
+function wrap(text: string, width: number): string[] {
+  if (!text) return [];
+  const out: string[] = [];
+  let line = '';
+  for (const word of text.split(/\s+/)) {
+    if (line && line.length + 1 + word.length > width) {
+      out.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) out.push(line);
+  return out;
 }
 
 function printGroup(registry: AppRegistry, title: string, ids: string[], empty: string): void {
@@ -73,20 +97,43 @@ function printGroup(registry: AppRegistry, title: string, ids: string[], empty: 
   for (const id of ids) printApp(registry, id);
 }
 
+/**
+ * One applet, laid out like `--help` rather than a run-on line.
+ *
+ * The reported problem was that the flat form was unreadable: id, name, action
+ * count, then every action on its own line at one indent, with the description
+ * mixed in among them. Aligning the action column and separating the applet
+ * header from its body is what makes it scannable.
+ */
 function printApp(registry: AppRegistry, id: string): void {
   const app = registry.get(id);
   if (!app.ok) {
-    printInfo(`  ${id} — ⚠ ${app.failure.message}`);
+    printInfo(`  ${id}`);
+    printInfo(`      ⚠ ${app.failure.message}`);
     return;
   }
-  const actions = Object.entries(app.manifest.actions);
-  printInfo(`  ${id} — ${app.manifest.name} (${actions.length} action(s))`);
-  // The description is what makes a list of ids readable at a glance, and it
-  // is the reason the `applet` tool now requires one on create.
-  if (app.manifest.description) printInfo(`      ${app.manifest.description}`);
-  for (const [name, action] of actions) {
+  const { name, description, actions } = app.manifest;
+  const entries = Object.entries(actions);
+
+  printInfo(`  ${id}${name && name !== id ? `  (${name})` : ''}`);
+  // Wrapped rather than left to the terminal, which breaks mid-word and
+  // destroys the indent that makes the block read as one applet.
+  for (const line of wrap(description ?? '', 72)) printInfo(`      ${line}`);
+  if (description) printInfo('');
+  if (entries.length === 0) {
+    printInfo('      no actions');
+    return;
+  }
+
+  // Pad to the widest name so the kind/mode columns line up, the way
+  // Commander's own option list does.
+  const width = Math.max(...entries.map(([n]) => n.length));
+  for (const [actionName, action] of entries) {
     const tools = action.toolAllowlist.length ? action.toolAllowlist.join(', ') : 'no tools';
-    printInfo(`      ${name}  [${action.dispatch.kind}] ${action.toolMode}, ${tools}`);
+    printInfo(
+      `      ${actionName.padEnd(width)}  ${action.dispatch.kind.padEnd(5)}  ` +
+        `${action.toolMode.padEnd(9)}  ${tools}`,
+    );
   }
 }
 

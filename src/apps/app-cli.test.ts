@@ -189,3 +189,46 @@ describe('bernard app list', () => {
     expect(bundledAppIds().has('mine')).toBe(false);
   });
 });
+
+describe('app list formatting', () => {
+  useTempHome('bernard-app-list-fmt');
+  const lines: string[] = [];
+
+  beforeEach(() => {
+    lines.length = 0;
+    vi.resetModules();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('aligns the action column and wraps a long description', async () => {
+    // The reported problem was that the flat form was unreadable — id, name,
+    // count and every action run together at one indent.
+    const output = await import('../output.js');
+    vi.spyOn(output, 'printInfo').mockImplementation((m: string) => void lines.push(m));
+    const { AppRegistry } = await import('./registry.js');
+    new AppRegistry({ seed: false }).create(
+      {
+        schemaVersion: 2,
+        id: 'wide',
+        name: 'Wide',
+        description: 'x '.repeat(80).trim(),
+        actions: {
+          a: { dispatch: { kind: 'agent', specialistId: 's', instructions: 'i' } },
+          longer_name: { dispatch: { kind: 'agent', specialistId: 's', instructions: 'i' } },
+        },
+      },
+      { 'index.html': '<p>x</p>' },
+    );
+    const { appList } = await import('./app-cli.js');
+    appList();
+
+    // No line runs away: the description wraps rather than relying on the
+    // terminal, which breaks mid-word and destroys the indent.
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(80);
+
+    // The two action rows start their `kind` column at the same offset.
+    const actionRows = lines.filter((l) => /\bagent\b/.test(l));
+    expect(actionRows).toHaveLength(2);
+    expect(new Set(actionRows.map((l) => l.indexOf('agent'))).size).toBe(1);
+  });
+});
