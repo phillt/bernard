@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { z } from 'zod';
@@ -17,8 +17,12 @@ vi.mock('../tool-profiles.js', () => ({
   detectToolError: vi.fn(() => ({ isError: false })),
 }));
 
+// `isDebugEnabled` defaults ON so the debug-gated `tool:execute:end` stats are
+// exercised by every test in this file rather than skipped in all of them — the
+// same choice, for the same reason, as `context.test.ts`.
 vi.mock('../logger.js', () => ({
   debugLog: vi.fn(),
+  isDebugEnabled: vi.fn(() => true),
 }));
 
 vi.mock('../output.js', () => ({
@@ -26,7 +30,7 @@ vi.mock('../output.js', () => ({
 }));
 
 const { classifyShellCommand, detectToolError } = await import('../tool-profiles.js');
-const { debugLog } = await import('../logger.js');
+const { debugLog, isDebugEnabled } = await import('../logger.js');
 const { printInfo } = await import('../output.js');
 
 function createMockStore() {
@@ -61,6 +65,17 @@ describe('augmentTools', () => {
     vi.clearAllMocks();
     store = createMockStore();
     vi.mocked(detectToolError).mockReturnValue({ isError: false });
+  });
+
+  afterEach(async () => {
+    // `augmentTools` defers `recordOutcome` with `setImmediate` on several
+    // paths. Undrained, those callbacks land inside whatever test runs NEXT and
+    // call `detectToolError` there — which fails the neighbour asserting the
+    // heuristic is never reached, but only under some orders, so the file was
+    // green in declaration order and red under a shuffle. That is the
+    // `augment.test.ts` row in #457's table; draining here is what makes every
+    // test in this file own its own mock state.
+    await new Promise((resolve) => setImmediate(resolve));
   });
 
   describe('basic wrapping', () => {
@@ -1928,6 +1943,202 @@ describe('augmentTools', () => {
       const augmented = augmentTools({ demo: aisdk }, store);
 
       await expect(augmented.demo.execute({ x: 1 }, {})).resolves.toBeDefined();
+    });
+  });
+  /**
+   * #459. The log recorded what a tool was asked and how long it took, and
+   * nothing about the answer — so "the tool told me X" could not be checked
+   * against our own logs. That is what kept #458 invisible: twelve Gmail reads
+   * all logging `status: "ok"`, with no way to tell a server that never sent a
+   * CC header from one Bernard had truncated it out of.
+   */
+  describe('tool result logging (#459)', () => {
+    beforeEach(() => {
+      // Both of these are the `vi.clearAllMocks` trap #457 is about: it clears
+      // call history, not implementations, and the shared result cache is not
+      // reset at all outside the caching block. State this block's own
+      // preconditions rather than inheriting whatever ran before it.
+      clearResultCache();
+      vi.mocked(isDebugEnabled).mockReturnValue(true);
+    });
+
+    /** The payload of the last `tool:execute:end` line, or undefined. */
+    function lastEnd(): Record<string, unknown> | undefined {
+      const calls = vi.mocked(debugLog).mock.calls.filter(([l]) => l === 'tool:execute:end');
+      return calls.at(-1)?.[1] as Record<string, unknown> | undefined;
+    }
+
+    function bernardTool(opts: {
+      name: string;
+      result?: unknown;
+      sensitiveResult?: boolean;
+    }): BernardTool<Record<string, unknown>, unknown> {
+      return {
+        meta: {
+          name: opts.name,
+          kind: 'read',
+          ...(opts.sensitiveResult ? { sensitiveResult: true } : {}),
+        },
+        description: opts.name,
+        parameters: z.object({}).passthrough(),
+        execute: async () => ok(opts.result ?? { val: 1 }),
+        serializeForModel: (r) => JSON.stringify(r.status === 'ok' ? r.result : r.error),
+      };
+    }
+
+    it('envelope path records the result size and a preview', async () => {
+      const aisdk = toolToAISDK(bernardTool({ name: 'demo', result: { secretish: 'abcdef' } }));
+      await augmentTools({ demo: aisdk }, store).demo.execute({ x: 1 }, {});
+
+      const end = lastEnd();
+      expect(end).toBeDefined();
+      expect(end!.status).toBe('ok');
+      expect(end!.resultChars).toBeGreaterThan(0);
+      expect(end!.resultPreview).toContain('abcdef');
+      expect(end!.resultBounded).toBe(false);
+    });
+
+    it('legacy path records the size and the snippet the verdict came from', async () => {
+      // A non-throwing failure (#363): the shape says it failed while the call
+      // returned normally. `status` alone has always misrepresented this; the
+      // snippet is the evidence for the verdict.
+      const aisdk = {
+        description: 'mcp-ish',
+        parameters: z.object({}).passthrough(),
+        execute: async () => ({
+          isError: true,
+          content: [{ type: 'text', text: 'socket closed' }],
+        }),
+      };
+      await augmentTools({ mcp_thing: aisdk as never }, store).mcp_thing.execute({}, {});
+
+      const end = lastEnd();
+      expect(end!.status).toBe('error');
+      expect(end!.failureSnippet).toContain('socket closed');
+      expect(end!.resultChars).toBeGreaterThan(0);
+    });
+
+    it('marks a result that had to be bounded', async () => {
+      const aisdk = toolToAISDK(bernardTool({ name: 'big', result: { blob: 'x'.repeat(50_000) } }));
+      await augmentTools({ big: aisdk }, store).big.execute({}, {});
+
+      const end = lastEnd();
+      // The flag, not the length: once the budget starts dropping keys the text
+      // comes back UNDER the cap, so a length test cannot answer this.
+      expect(end!.resultBounded).toBe(true);
+      expect(String(end!.resultPreview).length).toBeLessThan(2000);
+    });
+
+    it('redacts the preview for a sensitiveResult tool but keeps the size', async () => {
+      const aisdk = toolToAISDK(
+        bernardTool({ name: 'secret', result: { token: 'hunter2' }, sensitiveResult: true }),
+      );
+      await augmentTools({ secret: aisdk }, store).secret.execute({}, {});
+
+      const end = lastEnd();
+      expect(end!.resultPreview).toBe('[REDACTED]');
+      expect(end!.resultPreview).not.toContain('hunter2');
+      // A size is not a secret, and it is the number that makes a silently
+      // truncated read visible at all.
+      expect(end!.resultChars).toBeGreaterThan(0);
+    });
+
+    it('omits failureSnippet entirely on a successful sensitive-result call', async () => {
+      // Keying the redaction off the TOOL rather than the snippet's presence
+      // stamped `[REDACTED]` on every successful call from a sensitive tool —
+      // `detectResultFailure` returns undefined on success — so the line read
+      // `status: "ok"` beside a hidden failure reason. A log that invents a
+      // failure is the thing #459 exists to remove, not to add.
+      const aisdk = toolToAISDK(
+        bernardTool({ name: 'secret', result: { token: 'hunter2' }, sensitiveResult: true }),
+      );
+      await augmentTools({ secret: aisdk }, store).secret.execute({}, {});
+
+      const end = lastEnd();
+      expect(end!.status).toBe('ok');
+      expect(end!).not.toHaveProperty('failureSnippet');
+    });
+
+    it('redacts failureSnippet when there genuinely is one', async () => {
+      const aisdk = {
+        description: 'mcp-ish',
+        parameters: z.object({}).passthrough(),
+        execute: async () => ({
+          isError: true,
+          content: [{ type: 'text', text: 'socket closed' }],
+        }),
+        // `attachMeta` is how a real MCP tool carries its meta through augment.
+      };
+      const augmented = augmentTools(
+        {
+          mcp_secret: attachMeta(aisdk as never, {
+            // `kind` is required for `readToolMeta` to return the record at all.
+            name: 'mcp_secret',
+            kind: 'read',
+            sensitiveResult: true,
+          }),
+        },
+        store,
+      );
+      await augmented.mcp_secret.execute({}, {});
+
+      const end = lastEnd();
+      expect(end!.status).toBe('error');
+      expect(end!.failureSnippet).toBe('[REDACTED]');
+      expect(end!.failureSnippet).not.toContain('socket');
+    });
+
+    it('bounds the preview for a number-heavy result', async () => {
+      // `boundedStringify` decrements its budget on strings and caps arrays, so
+      // a numeric object is bounded by neither — measured at 4,877,781 chars
+      // for 300k fields, which would land in the session JSONL once per call.
+      const numbers: Record<string, number> = {};
+      for (let i = 0; i < 20_000; i++) numbers[`f${i}`] = i;
+      const aisdk = toolToAISDK(bernardTool({ name: 'metrics', result: numbers }));
+      await augmentTools({ metrics: aisdk }, store).metrics.execute({}, {});
+
+      const end = lastEnd();
+      expect(String(end!.resultPreview).length).toBeLessThanOrEqual(1000);
+      expect(end!.resultBounded).toBe(true);
+      // The reported size is the TRUE length, not the slice — that is the
+      // number that makes a truncated read visible.
+      expect(end!.resultChars).toBeGreaterThan(100_000);
+    });
+
+    it('builds nothing when debug is off', async () => {
+      // `debugLog`'s payload is an ordinary argument, so it is constructed
+      // whether or not it is written — an unguarded preview would serialize
+      // every result on every call with debug off.
+      vi.mocked(isDebugEnabled).mockReturnValue(false);
+      const aisdk = toolToAISDK(bernardTool({ name: 'demo' }));
+      await augmentTools({ demo: aisdk }, store).demo.execute({}, {});
+
+      expect(vi.mocked(debugLog).mock.calls.some(([l]) => l === 'tool:execute:end')).toBe(false);
+    });
+
+    it('a cache hit is counted, with a balanced start and end', async () => {
+      // A cache hit returns before either line was reached, so a scan of the log
+      // undercounted tool calls — and undercounted exactly the ones that are
+      // free and therefore most repeated.
+      const exec = vi.fn().mockResolvedValue(ok({ val: 7 }));
+      const cacheable: BernardTool<Record<string, unknown>, unknown> = {
+        meta: { name: 'cacheable_tool', kind: 'read', deterministic: true, sideEffect: 'none' },
+        description: 'c',
+        parameters: z.object({}).passthrough(),
+        execute: exec,
+        serializeForModel: (r) => JSON.stringify(r.status === 'ok' ? r.result : r.error),
+      };
+      const augmented = augmentTools({ cacheable_tool: toolToAISDK(cacheable) }, store);
+      await augmented.cacheable_tool.execute({ x: 1 }, {});
+      vi.mocked(debugLog).mockClear();
+      await augmented.cacheable_tool.execute({ x: 1 }, {});
+
+      expect(exec).toHaveBeenCalledTimes(1);
+      const labels = vi.mocked(debugLog).mock.calls.map(([l]) => l);
+      expect(labels).toContain('tool:execute:start');
+      expect(labels).toContain('tool:execute:end');
+      expect(lastEnd()!.cached).toBe(true);
+      expect(lastEnd()!.resultChars).toBeGreaterThan(0);
     });
   });
 });
