@@ -500,6 +500,77 @@ describe('runDefinition per-turn token totals hook (#234)', () => {
   });
 });
 
+describe('vision gate (#427)', () => {
+  /**
+   * Pins the resolved model directly. Setting `config.model` would NOT work,
+   * and that is exactly what the gate exists to handle: `resolveModel` runs
+   * the lineup, a specialist pin or a per-call override, so the model that
+   * receives the bytes is routinely not the session's.
+   */
+  const textOnlyModel = {
+    resolveModel: () => ({
+      model: 'fake-model' as never,
+      provider: 'openai',
+      modelName: 'gpt-3.5-turbo',
+    }),
+  };
+
+  const imageSeed = (): CoreMessage[] => [
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Task: describe this' },
+        { type: 'image', image: Buffer.from('png'), mimeType: 'image/png' },
+      ],
+    },
+  ];
+
+  // `claude-*` is vision-capable, so a capable model must be completely
+  // untouched — bytes reach the model and nothing is stripped.
+  it('passes an attachment through to a capable model', async () => {
+    const def = fakeDefinition({
+      buildUserMessage: () => imageSeed()[0],
+    });
+    const res = await runDefinition(makeCtx(), def, { text: 'x' });
+    expect(res.result.text).toBe('final answer');
+    const sent = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const last = sent.messages[sent.messages.length - 1];
+    expect(Array.isArray(last.content)).toBe(true);
+    expect(last.content.some((p: { type: string }) => p.type === 'image')).toBe(true);
+  });
+
+  // An ephemeral dispatch throws: nothing billed, and the five dispatch
+  // boundaries shape a throw into each tool's own failure contract.
+  it('refuses an ephemeral dispatch to a text-only model, before any call', async () => {
+    const def = fakeDefinition({ ...textOnlyModel, buildUserMessage: () => imageSeed()[0] });
+    await expect(runDefinition(makeCtx(), def, { text: 'x' })).rejects.toThrow(
+      /does not accept images/,
+    );
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The one that matters most. `this.history` carries image parts across every
+   * `/model` switch, forever — so a throw here would brick every later turn of
+   * a conversation that once contained a screenshot. It sanitizes instead.
+   */
+  it('a persistent history with an image survives a text-only model', async () => {
+    const def = fakeDefinition({ ...textOnlyModel, historyMode: 'persistent' });
+    const res = await runDefinition(makeCtx(), def, { text: 'x' }, { seedMessages: imageSeed() });
+    expect(res.result.text).toBe('final answer');
+    const sent = (generateText as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const last = sent.messages[sent.messages.length - 1];
+    expect(last.content.some((p: { type: string }) => p.type === 'image')).toBe(false);
+    expect(JSON.stringify(last.content)).toContain('[Image attached]');
+  });
+
+  // The gate must cost a text-only dispatch nothing but a shallow scan.
+  it('leaves a text-only dispatch alone even on a text-only model', async () => {
+    const res = await runDefinition(makeCtx(), fakeDefinition(textOnlyModel), { text: 'plain' });
+    expect(res.result.text).toBe('final answer');
+  });
+});
+
 describe('DefinitionRegistry', () => {
   it('registers, looks up, and reports missing kinds', () => {
     const reg = new DefinitionRegistry();

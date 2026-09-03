@@ -8,6 +8,7 @@ import {
 import { detectToolError } from '../../tool-profiles.js';
 import { makeRepairHook } from '../../tool-call-repair.js';
 import { toolBlockBytes } from '../../tool-bytes.js';
+import { debugLog } from '../../logger.js';
 import { augmentTools } from '../../tools/augment.js';
 import type { AgentContext } from '../context.js';
 import { getOutputSink } from '../hooks/output-sink.js';
@@ -22,6 +23,8 @@ import type { StepFinishPayload } from '../hooks/types.js';
 import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
+import { seedHasAttachment, visionRefusal } from './vision-gate.js';
+import { isVisionCapableModel, stripImagesFromHistory } from '../../image.js';
 import type {
   AgentDefinition,
   FormatMeta,
@@ -259,13 +262,49 @@ export async function runDefinition<TInput, TFormatted>(
       })
     : undefined;
 
-  const getSeed: () => CoreMessage[] =
+  const rawSeed: () => CoreMessage[] =
     typeof opts.seedMessages === 'function'
       ? opts.seedMessages
       : (() => {
           const arr = opts.seedMessages ?? [def.buildUserMessage(input)];
           return () => arr;
         })();
+
+  /**
+   * Vision gate (#427). Resolved here for the reason `resolveToolSurface` is:
+   * it is a cross-cutting fact about what this dispatch is entitled to, and a
+   * check each definition made itself would default to the permissive answer
+   * and fail silently at a missed call site.
+   *
+   * It has to be HERE and not in the dispatch tools. `specialist-run.ts` and
+   * `tool-wrapper-run.ts` do a pre-flight `resolveProviderAndModel`, which is
+   * override → pin → `config.provider/model` — no lineup, no `SITE_ROLE`, no
+   * tier. The model that actually runs comes from `resolveSiteModel`, and the
+   * two disagree by construction whenever there is no pin and no override.
+   * That population is exactly what #423 enlarges, since a role-declaring
+   * specialist persists no pin. A gate checking a different model than the one
+   * that runs is decoration.
+   *
+   * Applied to the MATERIALIZED seed, not to `input`: the function form of
+   * `seedMessages` is the main agent's live history, and only the messages
+   * themselves say whether bytes are actually present.
+   */
+  const getSeed = (): CoreMessage[] => {
+    const seed = rawSeed();
+    if (!seedHasAttachment(seed)) return seed;
+    const capable = isVisionCapableModel(resolved.provider, resolved.modelName);
+    debugLog('agent:vision-gate', {
+      historyMode: def.historyMode,
+      provider: resolved.provider,
+      model: resolved.modelName,
+      capable,
+    });
+    if (capable) return seed;
+    // Persistent history: sanitize, never throw. A `/model` switch must not
+    // brick every later turn of a conversation that once held a screenshot.
+    if (def.historyMode === 'persistent') return stripImagesFromHistory(seed);
+    throw new Error(visionRefusal(resolved.provider, resolved.modelName));
+  };
 
   // Per-turn lower-privilege context (issue #172 + #143). The framework
   // ALWAYS wraps `memoryStore` + `includeScratch: true` by default so a new

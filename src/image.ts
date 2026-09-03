@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import type { CoreMessage } from 'ai';
-import { findModelMetaByName } from './providers/catalog.js';
+import { findModelMetaByName, getModelMeta } from './providers/catalog.js';
 
 /** Describes a loaded image ready to be attached to a user message. */
 export interface ImageAttachment {
@@ -146,7 +146,13 @@ export function stripImagePaths(text: string): string {
  * - Unknown providers: optimistically allowed (the API will reject if unsupported).
  */
 export function isVisionCapableModel(provider: string, model: string): boolean {
-  const meta = findModelMetaByName(model);
+  // Provider-scoped FIRST. `findModelMetaByName` searches every built-in
+  // provider and returns the first hit, so a custom-provider model whose name
+  // collides with a catalog entry — an Ollama or internal-proxy `llava`, say —
+  // would inherit a stranger's capability tags. The name-only lookup stays as
+  // a fallback, because a custom provider is not in `BUILTIN_PROVIDERS` and
+  // `getModelMeta` returns null for it by design.
+  const meta = getModelMeta(provider, model) ?? findModelMetaByName(model);
   if (meta) {
     return meta.tags.includes('vision') || meta.tags.includes('file-input');
   }
