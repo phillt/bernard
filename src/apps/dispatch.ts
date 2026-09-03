@@ -7,7 +7,7 @@ import { runHeadless, resolvePosture, type RunHeadlessResult } from '../headless
 import type { WrapperResult } from '../structured-output.js';
 import { loadAppGrants } from './app-grants.js';
 import { runWorkspace } from '../paths.js';
-import type { AppAction } from './manifest.js';
+import type { AgentDispatch, AppAction } from './manifest.js';
 import { grantedToolNames, renderArgsBlock, type ResolvedInvocation } from './invocation.js';
 
 /**
@@ -84,6 +84,9 @@ export type DispatchActionResult = RunHeadlessResult<WrapperResult>;
 export async function dispatchAction(opts: DispatchActionOpts): Promise<DispatchActionResult> {
   const { invocation, timeoutMs, log, runId, abortSignal } = opts;
   const { action, frozenArgs } = invocation;
+  // Narrowed by the caller, which branches on `dispatch.kind` before choosing
+  // a path — a tool action never reaches an agent runtime at all (#445).
+  const agent = action.dispatch as AgentDispatch;
 
   return runHeadless<ToolWrapperInput, WrapperResult>({
     definition: () => definitions.get<ToolWrapperInput, WrapperResult>('tool-wrapper'),
@@ -120,12 +123,12 @@ export async function dispatchAction(opts: DispatchActionOpts): Promise<Dispatch
     abortSignal,
     debugLabel: 'script',
     buildInput: (env) => {
-      const specialist = env.ctx.stores.specialists.get(action.specialistId);
+      const specialist = env.ctx.stores.specialists.get(agent.specialistId);
       const childTools = buildActionTools(env.ctx, action, specialist?.targetTools);
       return {
-        specialistId: action.specialistId,
+        specialistId: agent.specialistId,
         // The instruction channel: author-written, never caller bytes.
-        input: action.instructions,
+        input: agent.instructions,
         // The data channel.
         context: renderArgsBlock(frozenArgs),
         slotId: 0,

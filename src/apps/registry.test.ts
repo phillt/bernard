@@ -48,7 +48,14 @@ describe('AppRegistry', () => {
     write('notes', VALID);
     const res = new AppRegistry({ seed: false }).resolve('notes', 'summarize');
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.action.specialistId).toBe('web-wrapper');
+    // A v1 manifest's flat fields arrive lifted into the v2 union (#445), so
+    // nothing downstream branches on the schema version.
+    if (res.ok)
+      expect(res.action.dispatch).toEqual({
+        kind: 'agent',
+        specialistId: 'web-wrapper',
+        instructions: 'Summarise the supplied text.',
+      });
   });
 
   // Three distinct failures, because they mean different things to a caller:

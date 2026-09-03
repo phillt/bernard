@@ -84,18 +84,73 @@ export type AppSchemaVersion = z.infer<typeof AppSchemaVersionSchema>;
 /** What a manifest Bernard authors today declares. */
 export const LATEST_APP_SCHEMA_VERSION: AppSchemaVersion = 2;
 
-export const AppActionSchema = z
+/**
+ * How one tool parameter gets its value (#445).
+ *
+ * `$.<name>` reads a declared argument; anything else is a literal.
+ *
+ * **Arguments are mapped, never passed through.** Handing a caller's object to
+ * a tool wholesale is how an undeclared field rides along — the same reason
+ * `validateActionArgs` is `.strict()`. Naming each parameter explicitly means
+ * the manifest author decided what reaches the tool, and a caller cannot add
+ * to it.
+ */
+export const ARG_REF_PREFIX = '$.';
+
+export const ToolDispatchSchema = z
   .object({
+    kind: z.literal('tool'),
+    /**
+     * The tool to call. Eligibility is checked against the live registry, not
+     * here: `ToolMeta.directInvocable` is a tool-local fact and this module is
+     * a pure leaf. See `src/apps/direct-tool.ts`.
+     */
+    tool: z.string().min(1),
+    /** Tool parameter name → `$.<declaredArg>` or a literal value. */
+    args: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
+  })
+  .strict();
+
+export const AgentDispatchSchema = z
+  .object({
+    kind: z.literal('agent'),
+    /** The tool-wrapper specialist that backs this action. */
+    specialistId: z.string().min(1),
     /**
      * What the agent is asked to do. **Author-written and trusted** — this is
      * the instruction channel, and caller bytes never reach it. Args travel in
      * a separate, labelled data channel; see `src/apps/dispatch.ts`.
      */
     instructions: z.string().min(1).max(2000),
+  })
+  .strict();
+
+export const ActionDispatchSchema = z.discriminatedUnion('kind', [
+  ToolDispatchSchema,
+  AgentDispatchSchema,
+]);
+
+export type ToolDispatch = z.infer<typeof ToolDispatchSchema>;
+export type AgentDispatch = z.infer<typeof AgentDispatchSchema>;
+export type ActionDispatch = z.infer<typeof ActionDispatchSchema>;
+
+export const AppActionSchema = z
+  .object({
+    /**
+     * v1's flat agent fields. Lifted into {@link AppAction.dispatch} on read
+     * (see the manifest refinement below), so nothing downstream branches on
+     * the schema version — every action, whatever it was written as, arrives
+     * as a discriminated union.
+     */
+    instructions: z.string().min(1).max(2000).optional(),
+    specialistId: z.string().min(1).optional(),
+    /**
+     * How this action runs (v2, #445). Absent on a v1 manifest, where the two
+     * flat fields above say the same thing.
+     */
+    dispatch: ActionDispatchSchema.optional(),
     /** Human-facing summary, surfaced by `bernard script --describe`. */
     description: z.string().max(400).optional(),
-    /** The tool-wrapper specialist that backs this action. */
-    specialistId: z.string().min(1),
     /** Declared args, by name. An undeclared key in a call is rejected. */
     args: z.record(z.string().regex(ARG_NAME_RE), ArgSpecSchema).default({}),
     /**
@@ -122,7 +177,39 @@ export const AppActionSchema = z
   })
   .strict();
 
-export type AppAction = z.infer<typeof AppActionSchema>;
+/** One action exactly as written on disk, before the v1 lift. */
+export type RawAppAction = z.infer<typeof AppActionSchema>;
+
+/**
+ * One action as the rest of Bernard sees it: `dispatch` resolved, so nothing
+ * downstream branches on the schema version.
+ */
+export type AppAction = Omit<RawAppAction, 'instructions' | 'specialistId' | 'dispatch'> & {
+  dispatch: ActionDispatch;
+};
+
+/**
+ * Lifts a v1 action's flat fields into the v2 union.
+ *
+ * The lift happens on **read** rather than by rewriting files, because the
+ * manifests on disk are the user's and a schema bump is not a reason to
+ * rewrite them. Downstream code sees one shape either way, which is the whole
+ * point — a `schemaVersion` check outside this module would be the version
+ * leaking into logic.
+ */
+function liftAction(raw: RawAppAction): AppAction {
+  const { instructions, specialistId, dispatch, ...rest } = raw;
+  return {
+    ...rest,
+    dispatch: dispatch ?? {
+      kind: 'agent',
+      // Non-null by the manifest refinement: an action with no `dispatch` must
+      // carry both flat fields.
+      specialistId: specialistId as string,
+      instructions: instructions as string,
+    },
+  };
+}
 
 export const AppManifestSchema = z
   .object({
@@ -137,9 +224,71 @@ export const AppManifestSchema = z
     if (Object.keys(m.actions).length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'manifest declares no actions' });
     }
-  });
+    for (const [name, action] of Object.entries(m.actions)) {
+      const at = (field: string) => ['actions', name, field];
+      const flat = action.instructions !== undefined || action.specialistId !== undefined;
 
-export type AppManifest = z.infer<typeof AppManifestSchema>;
+      // A manifest is read as the version it states. `dispatch` on a v1
+      // manifest would make it half-v2 — readable here and rejected wholesale
+      // by an older binary, which is the failure the version union exists to
+      // avoid rather than to hide.
+      if (action.dispatch && m.schemaVersion < 2) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: at('dispatch'),
+          message: '`dispatch` requires schemaVersion 2',
+        });
+      }
+      // Both forms at once is ambiguous, not redundant: they can disagree.
+      if (action.dispatch && flat) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: at('dispatch'),
+          message: 'declare either `dispatch` or `instructions`/`specialistId`, not both',
+        });
+      }
+      if (!action.dispatch) {
+        if (action.instructions === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: at('instructions'),
+            message: 'required unless `dispatch` is declared',
+          });
+        }
+        if (action.specialistId === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: at('specialistId'),
+            message: 'required unless `dispatch` is declared',
+          });
+        }
+      }
+      // Every `$.<name>` must name a declared arg. Caught here rather than at
+      // call time so a typo is a broken manifest — loud, and costing nothing —
+      // instead of a parameter that silently arrives as the literal `$.dset`.
+      if (action.dispatch?.kind === 'tool') {
+        for (const [param, value] of Object.entries(action.dispatch.args)) {
+          if (typeof value !== 'string' || !value.startsWith(ARG_REF_PREFIX)) continue;
+          const ref = value.slice(ARG_REF_PREFIX.length);
+          if (!(ref in action.args)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [...at('dispatch'), 'args', param],
+              message: `references undeclared argument "${ref}"`,
+            });
+          }
+        }
+      }
+    }
+  })
+  .transform((m) => ({
+    ...m,
+    actions: Object.fromEntries(
+      Object.entries(m.actions).map(([name, action]) => [name, liftAction(action)]),
+    ),
+  }));
+
+export type AppManifest = z.output<typeof AppManifestSchema>;
 
 /**
  * `.strict()` on every object above is load-bearing rather than tidiness.

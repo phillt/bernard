@@ -188,3 +188,78 @@ describe('validateActionArgs', () => {
     expect(validateActionArgs(a, undefined).ok).toBe(true);
   });
 });
+
+describe('the dispatch union (#445)', () => {
+  const v2 = (action: Record<string, unknown>) =>
+    parseAppManifest({
+      schemaVersion: 2,
+      id: 'notes',
+      name: 'Notes',
+      actions: { go: { args: { dest: { type: 'string' } }, ...action } },
+    });
+
+  it('accepts a tool dispatch and leaves it as written', () => {
+    const res = v2({ dispatch: { kind: 'tool', tool: 'file_write', args: { path: '$.dest' } } });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.value.actions.go.dispatch).toEqual({
+        kind: 'tool',
+        tool: 'file_write',
+        args: { path: '$.dest' },
+      });
+    }
+  });
+
+  // Eligibility is checked against the LIVE registry, not here: this module is
+  // a pure leaf and `directInvocable` is a tool-local fact. See
+  // `direct-tool.test.ts` for the refusal.
+  it('does not police tool names — that is the registry\'s job', () => {
+    expect(v2({ dispatch: { kind: 'tool', tool: 'shell', args: {} } }).ok).toBe(true);
+  });
+
+  // A manifest is read as the version it states. `dispatch` on a v1 manifest
+  // would be readable here and rejected wholesale by an older binary.
+  it('rejects `dispatch` on a v1 manifest', () => {
+    const res = parseAppManifest({
+      schemaVersion: 1,
+      id: 'notes',
+      name: 'Notes',
+      actions: { go: { args: {}, dispatch: { kind: 'tool', tool: 'web_read', args: {} } } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('schemaVersion 2');
+  });
+
+  it('rejects both forms at once — they can disagree', () => {
+    const res = v2({
+      dispatch: { kind: 'tool', tool: 'web_read', args: {} },
+      specialistId: 'web-wrapper',
+      instructions: 'do it',
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('not both');
+  });
+
+  it('rejects neither form', () => {
+    expect(v2({}).ok).toBe(false);
+  });
+
+  // A typo would otherwise arrive at the tool as the literal string `$.dset`.
+  it('rejects an arg reference to an undeclared argument', () => {
+    const res = v2({ dispatch: { kind: 'tool', tool: 'file_write', args: { path: '$.dset' } } });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toContain('undeclared argument "dset"');
+  });
+
+  it('allows a literal value that is not an arg reference', () => {
+    expect(
+      v2({ dispatch: { kind: 'tool', tool: 'web_search', args: { query: 'fixed', limit: 3 } } }).ok,
+    ).toBe(true);
+  });
+
+  it('rejects an unknown key inside dispatch', () => {
+    expect(
+      v2({ dispatch: { kind: 'tool', tool: 'web_read', args: {}, skipPermissions: true } }).ok,
+    ).toBe(false);
+  });
+});

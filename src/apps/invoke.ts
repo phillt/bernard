@@ -66,7 +66,17 @@ export type InvocationResult =
       startedAt: string;
       durationMs: number;
       result: unknown;
-      meta: { specialistId: string; stepLimitHit: boolean; mcpConnectMs: number };
+      meta: {
+        /** Which tier ran this action (#445): an agent, or one direct tool call. */
+        dispatch: 'agent' | 'tool';
+        /** Present on the agent arm. */
+        specialistId?: string;
+        /** Present on the tool arm. */
+        tool?: string;
+        stepLimitHit: boolean;
+        /** Always 0 on the tool arm — it never connects to MCP at all. */
+        mcpConnectMs: number;
+      };
     }
   | {
       schemaVersion: 1;
@@ -201,15 +211,72 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
 
   const { invocation } = resolved;
   const argKeys = Object.keys(invocation.frozenArgs);
+  const timeoutMs = effectiveTimeoutMs(invocation.action.timeoutMs, opts.timeoutMs);
+  const dispatch = invocation.action.dispatch;
+
+  // The deterministic tier (#445). Branches before anything agent-shaped is
+  // touched — no specialist lookup, no MCP connect, no RAG store, no model —
+  // because the whole value of this arm is that it costs nothing.
+  if (dispatch.kind === 'tool') {
+    debugLog('script:invoke', {
+      invocationId,
+      appId: invocation.appId,
+      action: invocation.actionName,
+      argKeys,
+      tool: dispatch.tool,
+      toolMode: invocation.action.toolMode,
+      timeoutMs,
+      capabilityId,
+    });
+    const { dispatchToolAction } = await import('./tool-dispatch.js');
+    const run = await dispatchToolAction({
+      invocation,
+      dispatch,
+      timeoutMs,
+      abortSignal: opts.abortSignal,
+    });
+    const toolDispatched = { argKeys, tool: dispatch.tool, toolsGranted: [dispatch.tool] };
+    if (!run.ok) {
+      // `invalid` is a broken manifest — an ineligible tool, or a mapping the
+      // tool's own schema rejects — and must read as a request failure (exit
+      // 2) rather than a run that might succeed on retry.
+      return run.kind === 'invalid'
+        ? fail('invalid_manifest', run.message, toolDispatched)
+        : fail(run.timedOut ? 'timeout' : 'run_failed', run.message, toolDispatched);
+    }
+    const durationMs = Date.now() - startMs;
+    recordInvocation({
+      invocationId,
+      appId: invocation.appId,
+      action: invocation.actionName,
+      ...toolDispatched,
+      startedAt,
+      completedAt: new Date().toISOString(),
+      durationMs,
+      ok: true,
+      capabilityId,
+    });
+    return {
+      schemaVersion: 1,
+      ok: true,
+      invocationId,
+      app: invocation.appId,
+      action: invocation.actionName,
+      startedAt,
+      durationMs,
+      result: run.result,
+      meta: { dispatch: 'tool', tool: dispatch.tool, stepLimitHit: false, mcpConnectMs: 0 },
+    };
+  }
 
   // Pre-flight: an action naming a specialist that does not exist is a broken
   // manifest, not a failed run — the caller should see a request-shaped
   // failure, and no model call should be billed for it.
-  const specialist = new SpecialistStore().get(invocation.action.specialistId);
+  const specialist = new SpecialistStore().get(dispatch.specialistId);
   if (!specialist) {
     return fail(
       'unknown_specialist',
-      `Action "${opts.action}" names specialist "${invocation.action.specialistId}", which does not exist.`,
+      `Action "${opts.action}" names specialist "${dispatch.specialistId}", which does not exist.`,
     );
   }
 
@@ -218,8 +285,6 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
   // is worse than no log — and this is the audit trail.
   const toolsGranted = grantedToolNames(invocation.action, specialist.targetTools);
 
-  const timeoutMs = effectiveTimeoutMs(invocation.action.timeoutMs, opts.timeoutMs);
-
   debugLog('script:invoke', {
     invocationId,
     appId: invocation.appId,
@@ -227,7 +292,7 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
     // Names only, never values: args carry the caller's data and the debug log
     // is not the place for it.
     argKeys,
-    specialistId: invocation.action.specialistId,
+    specialistId: dispatch.specialistId,
     toolMode: invocation.action.toolMode,
     timeoutMs,
     capabilityId,
@@ -244,7 +309,7 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
     abortSignal: opts.abortSignal,
   });
 
-  const dispatched = { argKeys, specialistId: invocation.action.specialistId, toolsGranted };
+  const dispatched = { argKeys, specialistId: dispatch.specialistId, toolsGranted };
 
   if (!run.ok) {
     return fail(
@@ -288,7 +353,8 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
     durationMs,
     result: wrapper.result,
     meta: {
-      specialistId: invocation.action.specialistId,
+      dispatch: 'agent',
+      specialistId: dispatch.specialistId,
       stepLimitHit: run.stepLimitHit,
       mcpConnectMs: run.timings.mcpConnectMs,
     },
