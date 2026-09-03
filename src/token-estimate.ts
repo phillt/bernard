@@ -76,17 +76,12 @@ export const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 
 /** Fallback context window size (in tokens) for models not listed in MODEL_CONTEXT_WINDOWS. */
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
-/** Fraction of the context window at which history compression is triggered. */
-export const COMPRESSION_THRESHOLD = 0.75;
-/** Number of recent user/assistant exchanges preserved verbatim during compression. */
-export const RECENT_TURNS_TO_KEEP = 4;
-/**
- * Minimum estimated tokens in the compressible region for a compaction to be
- * worth its two LLM calls (#310). Below this the summary that replaces the
- * region is a meaningful fraction of the region itself, so the run costs money
- * and latency to recover approximately nothing.
- */
-export const MIN_COMPRESSION_RECLAIM_TOKENS = 2_000;
+// The three compression constants (`COMPRESSION_THRESHOLD`,
+// `RECENT_TURNS_TO_KEEP`, `MIN_COMPRESSION_RECLAIM_TOKENS`) deliberately stay in
+// `context.ts`. This module answers "how big is this?"; deciding when that
+// answer is big enough to act on is compaction's policy, and it has exactly one
+// consumer. Copying them here during the extraction gave two definitions of the
+// same number with nothing importing the copy — a silent drift waiting to happen.
 
 /**
  * Look up a model's context window. Resolution order, most to least trusted:
