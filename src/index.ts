@@ -1113,6 +1113,8 @@ program
 program
   .command('app [action] [appId] [actionName]')
   .description('Manage applets: list | open | allow | delete | path')
+  .option('-b, --bundled', 'List only the applets Bernard ships')
+  .option('-a, --all', 'List every applet, grouped by origin')
   .option('--no-open', 'Print the URL instead of opening a browser')
   .option('--tools <names>', 'Comma-separated tool names for `allow` (empty clears)')
   .option('--write', 'Let this action write, rather than read-only')
@@ -1122,13 +1124,23 @@ program
       action: string | undefined,
       appId: string | undefined,
       actionName: string | undefined,
-      options: { tools?: string; write?: boolean; confirm?: string; open?: boolean },
+      options: {
+        tools?: string;
+        write?: boolean;
+        confirm?: string;
+        open?: boolean;
+        bundled?: boolean;
+        all?: boolean;
+      },
     ) => {
       try {
         const cli = await import('./apps/app-cli.js');
         switch (action ?? 'list') {
           case 'list':
-            cli.appList();
+            cli.appList({
+              ...(options.bundled ? { bundled: true } : {}),
+              ...(options.all ? { all: true } : {}),
+            });
             return;
           case 'path':
             if (!appId) throw new Error('Usage: bernard app path <appId>');

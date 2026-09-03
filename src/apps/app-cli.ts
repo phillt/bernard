@@ -1,5 +1,5 @@
 import { printError, printInfo } from '../output.js';
-import { AppRegistry } from './registry.js';
+import { AppRegistry, bundledAppIds } from './registry.js';
 import { parseRawAppManifest } from './manifest.js';
 import { deleteApplet } from './lifecycle.js';
 import { SpecialistStore } from '../specialists.js';
@@ -18,25 +18,75 @@ import { APPS_DIR, appletAssetDir } from '../paths.js';
  * the escalation the gates exist to prevent.
  */
 
-export function appList(): void {
+/**
+ * Lists applets, the user's own by default.
+ *
+ * The default is **not** everything, and that is the point. A seeded example
+ * sitting in the same flat list as the user's own work is indistinguishable
+ * from it — the observed report was "I tried deleting the old apps and don't
+ * know what is what". Bundled applets are still listable and still deletable;
+ * they are just not mixed in unasked.
+ *
+ * Hiding them entirely was the other option and is worse: a bundled applet
+ * still holds a port and still answers in a browser, so a listing that cannot
+ * show it makes it unfindable rather than tidy.
+ */
+export function appList(opts: { bundled?: boolean; all?: boolean } = {}): void {
   const registry = new AppRegistry();
+  const bundled = bundledAppIds();
   const ids = registry.listIds();
-  if (ids.length === 0) {
-    printInfo('No applets installed.');
+  const mine = ids.filter((id) => !bundled.has(id));
+  const theirs = ids.filter((id) => bundled.has(id));
+
+  if (opts.all) {
+    printGroup(registry, 'Yours', mine, 'No applets of your own yet.');
+    printGroup(registry, 'Bundled', theirs, 'None installed.');
     return;
   }
-  for (const id of ids) {
-    const app = registry.get(id);
-    if (!app.ok) {
-      printInfo(`  ${id} — ⚠ ${app.failure.message}`);
-      continue;
+
+  if (opts.bundled) {
+    if (theirs.length === 0) {
+      printInfo('No bundled applets installed.');
+      return;
     }
-    const actions = Object.entries(app.manifest.actions);
-    printInfo(`  ${id} — ${app.manifest.name} (${actions.length} action(s))`);
-    for (const [name, action] of actions) {
-      const tools = action.toolAllowlist.length ? action.toolAllowlist.join(', ') : 'no tools';
-      printInfo(`      ${name}  [${action.dispatch.kind}] ${action.toolMode}, ${tools}`);
-    }
+    for (const id of theirs) printApp(registry, id);
+    return;
+  }
+
+  if (mine.length === 0) {
+    printInfo(
+      theirs.length > 0
+        ? `No applets yet. ${theirs.length} bundled example(s) installed — \`bernard app list --bundled\`.`
+        : 'No applets installed.',
+    );
+    return;
+  }
+  for (const id of mine) printApp(registry, id);
+}
+
+function printGroup(registry: AppRegistry, title: string, ids: string[], empty: string): void {
+  printInfo(`${title}:`);
+  if (ids.length === 0) {
+    printInfo(`  ${empty}`);
+    return;
+  }
+  for (const id of ids) printApp(registry, id);
+}
+
+function printApp(registry: AppRegistry, id: string): void {
+  const app = registry.get(id);
+  if (!app.ok) {
+    printInfo(`  ${id} — ⚠ ${app.failure.message}`);
+    return;
+  }
+  const actions = Object.entries(app.manifest.actions);
+  printInfo(`  ${id} — ${app.manifest.name} (${actions.length} action(s))`);
+  // The description is what makes a list of ids readable at a glance, and it
+  // is the reason the `applet` tool now requires one on create.
+  if (app.manifest.description) printInfo(`      ${app.manifest.description}`);
+  for (const [name, action] of actions) {
+    const tools = action.toolAllowlist.length ? action.toolAllowlist.join(', ') : 'no tools';
+    printInfo(`      ${name}  [${action.dispatch.kind}] ${action.toolMode}, ${tools}`);
   }
 }
 

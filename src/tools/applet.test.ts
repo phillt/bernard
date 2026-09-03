@@ -22,6 +22,7 @@ const CREATE = {
   action: 'create' as const,
   id: 'notes',
   name: 'Notes',
+  description: 'Keeps short notes and summarises them.',
   page: PAGE,
   actions: {
     summarise: {
@@ -439,5 +440,38 @@ describe('the applet tool enforces the toolAllowlist ∩ targetTools rule', () =
     expect(out).toContain('updated');
     expect(out).toContain('does not exist yet');
     expect(out).toContain('datetime');
+  });
+});
+
+describe('the applet tool requires a description', () => {
+  useTempHome('bernard-applet-description');
+
+  it('refuses a create with no description', async () => {
+    // Required by the TOOL, not the schema: `bernard app list` shows it, and a
+    // list of bare ids is what made a seeded example indistinguishable from
+    // the user's own work.
+    const { tool, AppRegistry } = await load();
+    const { description: _dropped, ...noDescription } = CREATE;
+    const out = await tool.execute(noDescription as never, {} as never);
+    expect(out).toContain('Error:');
+    expect(out).toContain('description');
+    expect(new AppRegistry({ seed: false }).listIds()).not.toContain('notes');
+  });
+
+  it('keeps the description on the manifest, where the listing reads it', async () => {
+    const { tool, AppRegistry } = await load();
+    await tool.execute(CREATE, {} as never);
+    const app = new AppRegistry({ seed: false }).get('notes');
+    expect(app.ok && app.manifest.description).toBe('Keeps short notes and summarises them.');
+  });
+
+  it('does not demand one on update, which would block every small edit', async () => {
+    const { tool } = await load();
+    await tool.execute(CREATE, {} as never);
+    const out = await tool.execute(
+      { action: 'update', id: 'notes', name: 'Notes v2' } as never,
+      {} as never,
+    );
+    expect(out).toContain('updated');
   });
 });

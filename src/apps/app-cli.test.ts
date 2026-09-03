@@ -105,3 +105,87 @@ describe('bernard app allow', () => {
     expect(lines.join('\n')).toContain('does not exist yet');
   });
 });
+
+describe('bernard app list', () => {
+  useTempHome('bernard-app-list');
+  const lines: string[] = [];
+
+  beforeEach(() => {
+    lines.length = 0;
+    vi.resetModules();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  async function setup() {
+    const output = await import('../output.js');
+    vi.spyOn(output, 'printInfo').mockImplementation((m: string) => void lines.push(m));
+    const { AppRegistry } = await import('./registry.js');
+    // `seed: true` installs the bundled demo, which is the whole point here.
+    const registry = new AppRegistry();
+    registry.create(
+      {
+        schemaVersion: 2,
+        id: 'mine',
+        name: 'Mine',
+        description: 'An applet the user made.',
+        actions: {
+          go: { dispatch: { kind: 'agent', specialistId: 'web-wrapper', instructions: 'x' } },
+        },
+      },
+      { 'index.html': '<p>x</p>' },
+    );
+    return (await import('./app-cli.js')).appList;
+  }
+
+  it("lists only the user's applets by default", async () => {
+    // The reported confusion: a seeded example sitting in the same flat list
+    // as your own work, with nothing saying which is which.
+    const appList = await setup();
+    appList();
+    const out = lines.join('\n');
+    expect(out).toContain('mine');
+    expect(out).not.toContain('demo');
+  });
+
+  it('shows the description, which is what makes a list of ids readable', async () => {
+    const appList = await setup();
+    appList();
+    expect(lines.join('\n')).toContain('An applet the user made.');
+  });
+
+  it('lists only bundled applets with --bundled', async () => {
+    const appList = await setup();
+    appList({ bundled: true });
+    const out = lines.join('\n');
+    expect(out).toContain('demo');
+    expect(out).not.toContain('mine');
+  });
+
+  it('groups both under headers with --all', async () => {
+    const appList = await setup();
+    appList({ all: true });
+    const out = lines.join('\n');
+    expect(out).toContain('Yours:');
+    expect(out).toContain('Bundled:');
+    expect(out.indexOf('mine')).toBeLessThan(out.indexOf('demo'));
+  });
+
+  it('points at the bundled ones when the user has none', async () => {
+    // Otherwise "No applets installed" is a lie while demo is holding a port.
+    const output = await import('../output.js');
+    vi.spyOn(output, 'printInfo').mockImplementation((m: string) => void lines.push(m));
+    const { AppRegistry } = await import('./registry.js');
+    new AppRegistry();
+    const { appList } = await import('./app-cli.js');
+    appList();
+    expect(lines.join('\n')).toContain('--bundled');
+  });
+
+  it('derives bundled-ness from what ships, not from the manifest', async () => {
+    // A manifest is user-editable, so a record that could declare itself
+    // bundled would let a tampered file claim provenance it does not have.
+    const { bundledAppIds } = await import('./registry.js');
+    expect(bundledAppIds().has('demo')).toBe(true);
+    expect(bundledAppIds().has('mine')).toBe(false);
+  });
+});

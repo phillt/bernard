@@ -87,7 +87,14 @@ const PARAMETERS = z.object({
   action: z.enum(['create', 'update', 'read', 'list']).describe('The operation to perform'),
   id: z.string().optional().describe('Applet id (kebab-case). Required for create/update/read.'),
   name: z.string().max(80).optional().describe('Display name (required for create)'),
-  description: z.string().max(400).optional(),
+  description: z
+    .string()
+    .max(400)
+    .optional()
+    .describe(
+      'One line on what this applet is for. REQUIRED on create — it is what the user reads ' +
+        'in `bernard app list` and in /applets, where a list of ids alone is unreadable.',
+    ),
   actions: z
     .record(z.string(), ACTION)
     .optional()
@@ -171,6 +178,11 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
       if (!APP_ID_RE.test(id)) {
         return `Error: "${id}" is not a valid applet id — lowercase letters, digits and hyphens, 2-64 characters.`;
       }
+      // Required by the TOOL, not by the schema. The manifest stays tolerant
+      // of a missing description because it must still read files written
+      // before this and by hand; what changes is that Bernard cannot author
+      // one without saying what it is for.
+      need(args.description, 'description', 'create');
       const manifest = buildManifest(id, args);
       const dispatch = await checkDispatch(manifest.actions);
       if (dispatch.refusal) return dispatch.refusal;
