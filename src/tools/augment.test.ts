@@ -2043,6 +2043,68 @@ describe('augmentTools', () => {
       expect(end!.resultChars).toBeGreaterThan(0);
     });
 
+    it('omits failureSnippet entirely on a successful sensitive-result call', async () => {
+      // Keying the redaction off the TOOL rather than the snippet's presence
+      // stamped `[REDACTED]` on every successful call from a sensitive tool —
+      // `detectResultFailure` returns undefined on success — so the line read
+      // `status: "ok"` beside a hidden failure reason. A log that invents a
+      // failure is the thing #459 exists to remove, not to add.
+      const aisdk = toolToAISDK(
+        bernardTool({ name: 'secret', result: { token: 'hunter2' }, sensitiveResult: true }),
+      );
+      await augmentTools({ secret: aisdk }, store).secret.execute({}, {});
+
+      const end = lastEnd();
+      expect(end!.status).toBe('ok');
+      expect(end!).not.toHaveProperty('failureSnippet');
+    });
+
+    it('redacts failureSnippet when there genuinely is one', async () => {
+      const aisdk = {
+        description: 'mcp-ish',
+        parameters: z.object({}).passthrough(),
+        execute: async () => ({
+          isError: true,
+          content: [{ type: 'text', text: 'socket closed' }],
+        }),
+        // `attachMeta` is how a real MCP tool carries its meta through augment.
+      };
+      const augmented = augmentTools(
+        {
+          mcp_secret: attachMeta(aisdk as never, {
+            // `kind` is required for `readToolMeta` to return the record at all.
+            name: 'mcp_secret',
+            kind: 'read',
+            sensitiveResult: true,
+          }),
+        },
+        store,
+      );
+      await augmented.mcp_secret.execute({}, {});
+
+      const end = lastEnd();
+      expect(end!.status).toBe('error');
+      expect(end!.failureSnippet).toBe('[REDACTED]');
+      expect(end!.failureSnippet).not.toContain('socket');
+    });
+
+    it('bounds the preview for a number-heavy result', async () => {
+      // `boundedStringify` decrements its budget on strings and caps arrays, so
+      // a numeric object is bounded by neither — measured at 4,877,781 chars
+      // for 300k fields, which would land in the session JSONL once per call.
+      const numbers: Record<string, number> = {};
+      for (let i = 0; i < 20_000; i++) numbers[`f${i}`] = i;
+      const aisdk = toolToAISDK(bernardTool({ name: 'metrics', result: numbers }));
+      await augmentTools({ metrics: aisdk }, store).metrics.execute({}, {});
+
+      const end = lastEnd();
+      expect(String(end!.resultPreview).length).toBeLessThanOrEqual(1000);
+      expect(end!.resultBounded).toBe(true);
+      // The reported size is the TRUE length, not the slice — that is the
+      // number that makes a truncated read visible.
+      expect(end!.resultChars).toBeGreaterThan(100_000);
+    });
+
     it('builds nothing when debug is off', async () => {
       // `debugLog`'s payload is an ordinary argument, so it is constructed
       // whether or not it is written — an unguarded preview would serialize

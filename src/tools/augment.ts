@@ -77,8 +77,13 @@ function safeSerialize(args: unknown): string {
   }
 }
 
-/** Characters of a tool result kept for the debug preview. */
-const RESULT_PREVIEW_MAX = 500;
+/**
+ * Per-string cap handed to `boundedStringify` for the debug preview — NOT the
+ * length of the emitted preview, which runs to roughly 2x this plus JSON
+ * punctuation (that function budgets the whole walk at `maxLen * 2`). Named for
+ * what it is so nobody sizes their log volume off the wrong number.
+ */
+const RESULT_PREVIEW_STRING_MAX = 500;
 
 /**
  * What a tool actually answered, for `tool:execute:end` (#459).
@@ -105,12 +110,27 @@ const RESULT_PREVIEW_MAX = 500;
  * Callers must invoke this inside an {@link isDebugEnabled} guard: `debugLog`'s
  * payload is an ordinary argument, so it is built whether or not it is written.
  */
-function resultStats(result: unknown, meta: ToolMeta | undefined) {
-  const { text, bounded } = boundedStringify(result, RESULT_PREVIEW_MAX);
+function resultStats(result: unknown, meta: ToolMeta | undefined, failureSnippet?: string) {
+  const { text, bounded } = boundedStringify(result, RESULT_PREVIEW_STRING_MAX);
+  const redact = meta?.sensitiveResult === true;
+  // `boundedStringify` decrements its budget on STRINGS and caps ARRAYS, so a
+  // number-heavy shape is bounded by neither: 300k numeric fields measured a
+  // 4,877,781-character "preview". A metrics or embedding server is a plausible
+  // producer, and this would land in the session JSONL once per tool call — so
+  // the final slice is what actually makes the documented size true.
+  const preview = text.slice(0, RESULT_PREVIEW_STRING_MAX * 2);
   return {
+    // The TRUE serialized length, from before the slice — a lower bound on a
+    // result that was cut, and the number that makes a truncated read visible.
     resultChars: text.length,
-    resultBounded: bounded,
-    resultPreview: meta?.sensitiveResult ? REDACTED : text,
+    resultBounded: bounded || preview.length < text.length,
+    resultPreview: redact ? REDACTED : preview,
+    // Keyed off the snippet's PRESENCE, not the tool's sensitivity. Redacting
+    // on the tool alone stamped `[REDACTED]` on every successful call from a
+    // sensitive tool — `detectResultFailure` returns `undefined` on success —
+    // so the log read `status: "ok"` beside a hidden failure reason. Exactly the
+    // kind of unfalsifiable line #459 exists to remove.
+    ...(failureSnippet !== undefined && { failureSnippet: redact ? REDACTED : failureSnippet }),
   };
 }
 
@@ -933,35 +953,27 @@ export function augmentTools(
           // invisible at the augment-log layer. Since #363 this also covers
           // MCP's `{content, isError: true}`, which is how a whole session of
           // dead-socket calls logged as 254 consecutive `ok`s.
+          const meta = readToolMeta(toolDef);
           if (isDebugEnabled()) {
-            const meta = readToolMeta(toolDef);
             debugLog('tool:execute:end', {
               tool: toolName,
               durationMs: Date.now() - execStartedAt,
               status: looksLikeError ? 'error' : 'ok',
-              failureSnippet: meta?.sensitiveResult ? REDACTED : failureSnippet,
-              ...resultStats(capturedResult, meta),
+              ...resultStats(capturedResult, meta, failureSnippet),
             });
           }
           if (!looksLikeError) {
             const previewSrc =
               typeof capturedResult === 'string' ? capturedResult : safeSerialize(capturedResult);
-            registerEvidence(toolName, args, readToolMeta(toolDef), previewSrc);
+            registerEvidence(toolName, args, meta, previewSrc);
             recordVerification(verificationTracker, toolName, args, capturedResult);
-            runVerifyOutput(postWriteChecks, readToolMeta(toolDef), args, capturedResult);
+            runVerifyOutput(postWriteChecks, meta, args, capturedResult);
           }
           setImmediate(() => {
             try {
               const errorInfo = detectToolError(toolName, capturedResult);
               const errSnippet = errorInfo.isError ? errorInfo.snippet : undefined;
-              recordOutcome(
-                profileStore,
-                toolName,
-                profileKey,
-                argsSnippet,
-                errSnippet,
-                readToolMeta(toolDef),
-              );
+              recordOutcome(profileStore, toolName, profileKey, argsSnippet, errSnippet, meta);
             } catch {
               // detectToolError throws are swallowed; recording must never propagate.
             }

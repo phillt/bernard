@@ -33,11 +33,14 @@ describe('shapeMCPResult', () => {
     expect(shapeMCPResult('short string', cap(8000))).toBe('short string');
   });
 
-  it('caps a large string and stays under budget', () => {
-    const out = shapeMCPResult('y'.repeat(50_000), cap(1000)) as string;
+  it('caps a large string to head and tail, naming what it lost', () => {
+    // Head AND tail: a result that IS one large string is the case where a
+    // head-only slice costs most, which is the general form of #458.
+    const out = shapeMCPResult('a'.repeat(25_000) + 'TAILMARK', cap(1000)) as string;
     expect(typeof out).toBe('string');
     expect(out.length).toBeLessThanOrEqual(1000);
-    expect(out).toContain('truncated');
+    expect(out).toContain('chars omitted');
+    expect(out).toContain('TAILMARK');
   });
 
   it('caps a large top-level array to a valid, bounded JSON array', () => {
@@ -67,14 +70,6 @@ describe('shapeMCPResult', () => {
     const serialized = JSON.stringify(out);
     expect(serialized.length).toBeLessThanOrEqual(1200 + 128);
     expect(() => JSON.parse(serialized)).not.toThrow();
-  });
-
-  it('falls back to a valid {_truncated, preview} wrapper for a huge object with no array to trim', () => {
-    const out = shapeMCPResult(manySmallFields(), cap(800)) as any;
-    expect(out._truncated).toBe(true);
-    expect(typeof out.preview).toBe('string');
-    expect(() => JSON.parse(JSON.stringify(out))).not.toThrow();
-    expect(JSON.stringify(out).length).toBeLessThanOrEqual(800 + 64);
   });
 
   // Was a wrapper case before #458. `capArray` still refuses to drop the first
@@ -291,6 +286,16 @@ describe('shapeMCPResult — MCP text envelopes (#458)', () => {
 });
 
 describe('shapeMCPResult — termination guards', () => {
+  it('never throws on a value structuredClone refuses', () => {
+    // `JSON.stringify` drops a function silently, so this measures finite,
+    // clears the cycle guard, and reaches `structuredClone`. A throw here lands
+    // in `mcp.ts`'s reconnect catch and tears down a healthy stdio connection.
+    const withFn = { keep: 'a', blob: 'x'.repeat(20_000), fn: () => 1 };
+    const out = shapeMCPResult(withFn, cap(500)) as any;
+    expect(out._truncated).toBe(true);
+    expect(JSON.stringify(out).length).toBeLessThanOrEqual(500);
+  });
+
   it('bounds a cyclic result instead of walking it', () => {
     const cyclic: Record<string, unknown> = { big: 'x'.repeat(20000) };
     cyclic.self = cyclic;
@@ -322,6 +327,21 @@ describe('shapeMCPResult — termination guards', () => {
     const out = shapeMCPResult({ content: [{ type: 'text', text: hostile }] }, cap(800));
     expect((Object.prototype as Record<string, unknown>).pad).toBeUndefined();
     expect(JSON.stringify(out).length).toBeLessThanOrEqual(800 + 64);
+  });
+
+  it('never exceeds the budget across a sweep of sizes and budgets', () => {
+    // The cap is a contract, not a target. `truncatedString` keeps its own
+    // marker inside the budget it is handed — which is what let `shrinkLargest`
+    // drop the hand-tuned `- 40` allowance that used to stand in for it.
+    const over: string[] = [];
+    for (let budget = 100; budget <= 3000; budget += 7) {
+      for (const n of [500, 5000, 100_000]) {
+        const out = shapeMCPResult({ meta: 1, blob: 'x'.repeat(n) }, cap(budget));
+        const len = JSON.stringify(out).length;
+        if (len > budget) over.push(`budget=${budget} n=${n} -> ${len}`);
+      }
+    }
+    expect(over).toEqual([]);
   });
 
   it('bounds a large array of scalars', () => {

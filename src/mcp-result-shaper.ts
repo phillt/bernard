@@ -47,6 +47,11 @@ export interface ShapeStats {
  *
  * Only fires when something was actually cut: an under-budget result is not a
  * decision worth a log line, and it is the overwhelming majority of calls.
+ *
+ * The stats arrive as a THUNK so `keptChars` — a full extra stringify of the
+ * shaped result — is not computed when no observer is listening. Same rule this
+ * change applies to `tool:execute:end`, where the payload is built inside an
+ * `isDebugEnabled()` guard for exactly this reason.
  */
 export type ShapeObserver = (stats: ShapeStats) => void;
 
@@ -59,10 +64,10 @@ export type ShapeObserver = (stats: ShapeStats) => void;
  * defensive treatment `capabilities.ts` gives `onMint`, and the same reason the
  * `truncatedWrapper` catch exists.
  */
-function report(onCap: ShapeObserver | undefined, stats: ShapeStats): void {
+function report(onCap: ShapeObserver | undefined, stats: () => ShapeStats): void {
   if (!onCap) return;
   try {
-    onCap(stats);
+    onCap(stats());
   } catch {
     // A logging failure must never cost a tool result.
   }
@@ -78,10 +83,26 @@ function serializedSize(v: unknown): number {
   }
 }
 
-/** A string cut to `budget`, saying how much it lost. */
+/**
+ * A string cut to fit `budget`, saying how much it lost.
+ *
+ * The marker is INSIDE the budget, so the return is always `<= budget` — the
+ * same contract `capSubagentResult` gives, and what lets `shrinkLargest` size a
+ * slot without a hand-tuned allowance for the marker's own length. The wording
+ * differs from that helper deliberately: it names the LOSS (`N chars omitted`),
+ * matching `capArray`'s sentinel and `headAndTail`'s marker, because inside a
+ * shaped payload what a reader needs is how much is missing, not what the
+ * budget was.
+ */
 function truncatedString(s: string, budget: number): string {
   if (s.length <= budget) return s;
-  return `${s.slice(0, budget)}…[${s.length - budget} chars omitted]`;
+  // Solved against the final length: the marker names the count it is itself
+  // part of, so a fixed-width estimate would either overshoot the budget or
+  // understate the loss.
+  const marker = (n: number) => `…[${n} chars omitted]`;
+  let keep = Math.max(0, budget - marker(s.length).length);
+  while (keep > 0 && keep + marker(s.length - keep).length > budget) keep--;
+  return s.slice(0, keep) + marker(s.length - keep);
 }
 
 /**
@@ -148,9 +169,9 @@ const MAX_SHRINK_PASSES = 24;
  */
 const MIN_SHRINK_SLOT = 64;
 
-/** A settable array/string position in the tree, with the size it holds now. */
+/** A settable array/string position in the tree, with the value it holds now. */
 interface Slot {
-  get: () => unknown;
+  value: unknown;
   set: (v: unknown) => void;
   size: number;
 }
@@ -178,7 +199,7 @@ function collectSlots(root: unknown, out: Slot[] = [], depth = 0): Slot[] {
     const v = container[key];
     if (Array.isArray(v) || typeof v === 'string') {
       out.push({
-        get: () => container[key],
+        value: v,
         set: (nv) => {
           container[key] = nv;
         },
@@ -201,8 +222,16 @@ function collectSlots(root: unknown, out: Slot[] = [], depth = 0): Slot[] {
  * value fits — the layer that makes the structure-aware cap actually reach the
  * shapes that occur (#458).
  *
- * `capArray` / `largestArrayKey` only ever look at the TOP level. That is
- * enough for a list result and useless for a record: a Gmail message keeps its
+ * `capArray` / `largestArrayKey` only ever look at the TOP level, and this
+ * reaches the shapes they cannot. Measured, the relationship is **subsumption,
+ * not complementary coverage**: this pass also handles everything the object
+ * path handles, and the only shape it cannot reach is a bare root array of
+ * small elements — because `collectSlots` visits root's children, never root
+ * itself. The top-level scans are therefore kept as a **fast path** (they land
+ * in one exact-budget pass, where this pays a `structuredClone` and a
+ * re-serialize per pass on inputs that can be megabytes) and for their honest
+ * strategy labels — not because they cover a case this one misses. A Gmail
+ * message keeps its
  * bulk in `payload.parts[].body.data` (a base64 blob) and its identifying
  * fields in `payload.headers` (a nested array), so the top-level scan finds
  * only `labelIds`, saves nothing, and drops the payload into the front-slicing
@@ -220,34 +249,57 @@ function shrinkLargest(result: unknown, maxChars: number): unknown | null {
   // no gap to close and no way to measure progress. The wrapper stringifies
   // defensively and is the right answer for those.
   if (!Number.isFinite(serializedSize(result))) return null;
-  const clone = structuredClone(result);
+  let clone: unknown;
+  try {
+    clone = structuredClone(result);
+  } catch {
+    // `JSON.stringify` DROPS a function silently, so a result carrying one
+    // measures finite, clears the guard above, and then makes `structuredClone`
+    // throw `DataCloneError`. `mcp.ts` calls the shaper inside the try whose
+    // catch reconnects the server, so a throw here is indistinguishable from a
+    // failed tool call and tears down a healthy stdio connection — the same
+    // reason `truncatedWrapper` and `report` each carry a catch. The wrapper,
+    // which stringifies defensively, is the right answer for an unclonable
+    // value anyway.
+    return null;
+  }
   for (let pass = 0; pass < MAX_SHRINK_PASSES; pass++) {
     const total = serializedSize(clone);
     if (total <= maxChars) return clone;
     const over = total - maxChars;
     const slots = collectSlots(clone).sort((a, b) => b.size - a.size);
     // Refuse a payload no amount of shrinking can bring under budget, before
-    // spending a pass on it. `reclaimable` sums what every slot could give up
-    // if all of them were cut to the floor; nested slots are counted twice, so
-    // it is an OVER-estimate — which is the safe direction. It can only ever
-    // decline to bail on something it might have shrunk, never bail on
-    // something it could have.
+    // spending a pass on it.
     //
-    // Without it, an object of 500 eighty-character fields spends all 24 passes
-    // reclaiming ~12 characters each against a 43k gap and re-serializing the
-    // whole tree every time — 11.8 ms to reach the wrapper it was always going
-    // to reach. With it, 0.7 ms. `MIN_SHRINK_SLOT` alone does not catch this:
-    // each field individually clears the floor, and only their sum does not.
-    const reclaimable = slots.reduce((sum, sl) => sum + Math.max(0, sl.size - MIN_SHRINK_SLOT), 0);
+    // Budgeted against the passes actually left, not against every slot: one
+    // pass shrinks exactly one slot, so the most that can still be reclaimed is
+    // the sum over the largest `remaining` slots. Summing ALL of them instead
+    // answers a question nobody asked — 30 fields of 200 KB can clear a 6 MB
+    // gap in principle and cannot in 24 passes, so the shrink ran the full 24,
+    // re-serialising a 6 MB tree each time, and returned `null` to the wrapper
+    // that was the answer from the start: 317 ms of pure loss on a shape
+    // CLAUDE.md already names as reachable (a browser accessibility snapshot).
+    // Slots are sorted descending, so the slice IS the best case.
+    //
+    // Still an over-estimate — nested slots are counted twice — which is the
+    // safe direction: it can decline to bail on something it might have shrunk,
+    // never bail on something it could have. `MIN_SHRINK_SLOT` alone catches
+    // neither case: 500 eighty-character fields each clear the floor
+    // individually and only their sum does not.
+    const remaining = MAX_SHRINK_PASSES - pass;
+    const reclaimable = slots
+      .slice(0, remaining)
+      .reduce((sum, sl) => sum + Math.max(0, sl.size - MIN_SHRINK_SLOT), 0);
     if (reclaimable < over) return null;
     let progressed = false;
     for (const slot of slots) {
       // Sorted descending, so the first slot too small to help means every
       // remaining one is too.
       if (slot.size < MIN_SHRINK_SLOT) break;
-      const value = slot.get();
-      // `- 40` leaves room for the marker the shrink itself adds.
-      const target = Math.max(48, slot.size - over - 40);
+      const value = slot.value;
+      // No allowance for a marker: `truncatedString` and `capArray` both keep
+      // their own markers inside the budget they are handed.
+      const target = Math.max(48, slot.size - over);
       const next =
         typeof value === 'string'
           ? truncatedString(value, target)
@@ -341,7 +393,12 @@ function shapeOverBudget(
   maxChars: number,
 ): { value: unknown; strategy: ShapeStrategy } {
   if (typeof result === 'string') {
-    return { value: capSubagentResult(result, maxChars), strategy: 'string' };
+    // Head AND tail, for the reason `truncatedWrapper` gives: a head-only slice
+    // is the worst choice for a payload whose identifying fields sit at the
+    // end, and a result that IS one large string is the case where that costs
+    // most. (`truncatedString` stays head-only on purpose — the slots it cuts
+    // are blobs whose tails are worthless by construction.)
+    return { value: headAndTail(result, maxChars), strategy: 'string' };
   }
   if (Array.isArray(result)) {
     const capped = capArray(result, maxChars);
@@ -368,8 +425,11 @@ function shapeOverBudget(
     if (shrunk !== null) return { value: shrunk, strategy: 'shrink' };
     return { value: truncatedWrapper(result, maxChars), strategy: 'wrapper' };
   }
-  // Primitives (number/boolean/null/undefined) are already tiny — leave as-is.
-  return { value: result, strategy: 'fields' };
+  // Unreachable: `shapeMCPResult` returns a primitive before ever calling this,
+  // so every arm above owns a shape it genuinely reshaped. Kept total rather
+  // than thrown, because throwing out of the shaping path lands in `mcp.ts`'s
+  // reconnect catch and would tear down a healthy server.
+  return { value: result, strategy: 'wrapper' };
 }
 
 /**
@@ -382,10 +442,16 @@ function shapeOverBudget(
  * a plain object whose only array is `content`, `capArray` will not drop its
  * sole element, and the whole payload fell to the wrapper.
  *
- * Exactly one entry, deliberately. A multi-entry result is several values whose
- * relative importance this module cannot know, and re-emitting them from one
- * shaped object would have to invent that ordering. Non-JSON text is left alone
- * too — plenty of servers return prose, and parsing is not the point.
+ * Exactly one entry — a deliberately CONSERVATIVE bound rather than a
+ * principled one, and worth saying so. The rule the code actually wants is "if
+ * a text entry carries JSON, unwrap it", which has no arity in it; unwrapping
+ * each entry needs only a budget split, not the ordering the restriction is
+ * usually justified by. Single-entry is what Gmail and the common servers emit,
+ * so the narrow fix is what ships here. A multi-entry result still gets bounded
+ * by the ordinary paths — nothing is lost unnamed — but its inner payload is
+ * cut as opaque text, so the module's "never severs JSON mid-token" promise
+ * holds for the envelope and not for that inner value. Non-JSON text is left
+ * alone too — plenty of servers return prose, and parsing is not the point.
  *
  * A real cost this introduces, worth stating rather than discovering: the round
  * trip through `JSON.parse`/`JSON.stringify` is **lossy**. Insignificant
@@ -397,7 +463,7 @@ function shapeOverBudget(
  */
 function contentJson(
   result: unknown,
-): { payload: unknown; entry: Record<string, unknown>; envelope: Record<string, unknown> } | null {
+): { payload: unknown; rewrap: (payload: unknown) => unknown } | null {
   if (!isPlainObject(result) || !Array.isArray(result.content) || result.content.length !== 1) {
     return null;
   }
@@ -410,9 +476,14 @@ function contentJson(
     const payload: unknown = JSON.parse(entry.text);
     // A bare scalar parses but has no structure to shape, so unwrapping it buys
     // nothing and costs a re-serialize.
-    return isPlainObject(payload) || Array.isArray(payload)
-      ? { payload, entry, envelope: result }
-      : null;
+    if (!isPlainObject(payload) && !Array.isArray(payload)) return null;
+    return {
+      payload,
+      // Spread rather than a fresh `{content:[{type,text}]}`: a real server
+      // flags `isError` on a content ENTRY as well as on the envelope, and
+      // `detectResultFailure` reads both.
+      rewrap: (p) => ({ ...result, content: [{ ...entry, text: JSON.stringify(p) }] }),
+    };
   } catch {
     return null;
   }
@@ -438,6 +509,12 @@ export function shapeMCPResult(
   if (config.mode === 'off') return result;
   const rawChars = serializedSize(result);
   if (rawChars <= config.maxChars) return result;
+  // A primitive over budget means a budget smaller than `null` serializes to.
+  // There is nothing to cut, so returning it is right — but firing `onCap`
+  // would record a capping decision for a value nothing touched, and a log that
+  // reports work it did not do is what #459 exists to remove. Decided here, so
+  // every arm of `shapeOverBudget` owns a shape it genuinely reshaped.
+  if (result === null || (typeof result !== 'object' && typeof result !== 'string')) return result;
 
   // Unwrap `content[].text` so the structure-aware paths see the real payload,
   // then re-emit the envelope. Re-emitting rather than returning the bare
@@ -445,39 +522,44 @@ export function shapeMCPResult(
   // keeps `isError` meaningful downstream (#363).
   const inner = contentJson(result);
   if (inner) {
-    const rewrap = (payload: unknown) => ({
-      ...inner.envelope,
-      content: [{ ...inner.entry, text: JSON.stringify(payload) }],
-    });
     // The envelope's own keys cost characters the payload cannot use.
-    const overhead = serializedSize(rewrap(''));
+    const overhead = serializedSize(inner.rewrap(''));
     let budget = Math.max(64, config.maxChars - overhead);
     let shaped = shapeOverBudget(inner.payload, budget);
-    let rewrapped = rewrap(shaped.value);
+    let rewrapped = inner.rewrap(shaped.value);
+    // The measurement is CARRIED, not re-taken: `serializedSize` here is a full
+    // stringify of the whole envelope, and reading it in the loop condition and
+    // again in the body cost four of them per call where two suffice.
+    let encoded = serializedSize(rewrapped);
     // The shaped payload goes back as a JSON string *value*, so its quotes and
     // backslashes are escaped a second time — inflating it by up to ~2x, the
     // same trap `truncatedWrapper` documents. Budgeting the payload alone
     // therefore lets the envelope overshoot. Re-budget against the *encoded*
     // size by the observed overshoot ratio, which converges in one or two
     // passes; the guard is there so a pathological ratio cannot spin.
-    for (let i = 0; i < 6 && serializedSize(rewrapped) > config.maxChars && budget > 64; i++) {
-      const encoded = serializedSize(rewrapped);
+    for (let i = 0; i < 6 && encoded > config.maxChars && budget > 64; i++) {
       // `0.95` undershoots deliberately: converging from below costs one extra
       // pass, overshooting costs the contract.
       budget = Math.max(64, Math.floor((budget * config.maxChars * 0.95) / encoded));
       shaped = shapeOverBudget(inner.payload, budget);
-      rewrapped = rewrap(shaped.value);
+      rewrapped = inner.rewrap(shaped.value);
+      encoded = serializedSize(rewrapped);
     }
-    report(onCap, {
+    report(onCap, () => ({
       rawChars,
-      keptChars: serializedSize(rewrapped),
+      keptChars: encoded,
       strategy: shaped.strategy,
       unwrapped: true,
-    });
+    }));
     return rewrapped;
   }
 
   const { value, strategy } = shapeOverBudget(result, config.maxChars);
-  report(onCap, { rawChars, keptChars: serializedSize(value), strategy, unwrapped: false });
+  report(onCap, () => ({
+    rawChars,
+    keptChars: serializedSize(value),
+    strategy,
+    unwrapped: false,
+  }));
   return value;
 }
