@@ -30,6 +30,11 @@ function log(msg: string): void {
     fs.mkdirSync(path.dirname(APPLET_HOST_LOG_FILE), { recursive: true });
     try {
       if (fs.statSync(APPLET_HOST_LOG_FILE).size > MAX_LOG_BYTES) {
+        // Unlink first, as the cron daemon does. `renameSync` over an existing
+        // file is fine on POSIX and FAILS on Windows — which #428 is about to
+        // make a supported platform, where the failure would be a host that
+        // silently stops logging once it hits 1 MB.
+        fs.rmSync(`${APPLET_HOST_LOG_FILE}.old`, { force: true });
         fs.renameSync(APPLET_HOST_LOG_FILE, `${APPLET_HOST_LOG_FILE}.old`);
       }
     } catch {

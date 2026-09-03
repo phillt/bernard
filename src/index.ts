@@ -1001,15 +1001,21 @@ program
 
 program
   .command('applet-host <action>')
-  .description('Manage the applet host: status | start | stop')
+  .description('Manage the applet host: status | start | stop | install | uninstall')
   .action(async (action: string) => {
     const { appletHostStatus, appletHostStart, appletHostStop } = await import('./host/cli.js');
     try {
       if (action === 'status') await appletHostStatus();
       else if (action === 'start') await appletHostStart();
       else if (action === 'stop') await appletHostStop();
-      else {
-        printError(`Unknown action "${action}". Use status, start or stop.`);
+      else if (action === 'install') {
+        const { appletHostInstall } = await import('./host/service-cli.js');
+        appletHostInstall();
+      } else if (action === 'uninstall') {
+        const { appletHostUninstall } = await import('./host/service-cli.js');
+        appletHostUninstall();
+      } else {
+        printError(`Unknown action "${action}". Use status, start, stop, install or uninstall.`);
         process.exitCode = 1;
       }
     } catch (err: unknown) {
