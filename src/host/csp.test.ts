@@ -97,4 +97,17 @@ describe('securityHeaders', () => {
     expect(h['Referrer-Policy']).toBe('no-referrer');
     expect(h['Cache-Control']).toBe('no-store');
   });
+
+  /**
+   * #424. The argument for `script-src 'unsafe-inline'` — applet code is
+   * generated, and demanding nonces of a model buys little — does not transfer
+   * to style: the host SERVES the palette, so an applet never has to invent
+   * one. Refusing inline style is what makes `/__bernard/tokens.css` mandatory
+   * rather than advisory.
+   */
+  it('refuses inline style while still allowing inline script', () => {
+    const d = directives();
+    expect(d.get('style-src')).toBe("'self'");
+    expect(d.get('script-src')).toContain("'unsafe-inline'");
+  });
 });

@@ -7,6 +7,7 @@ import { AppRegistry } from '../apps/registry.js';
 import { checkRequest } from './guard.js';
 import { securityHeaders, originFor } from './csp.js';
 import { resolveAsset } from './assets.js';
+import { TOKENS_PATH, tokensStylesheet } from './tokens.js';
 import { handleStoreRequest } from './store-route.js';
 
 /**
@@ -206,6 +207,15 @@ function createHandler(
           capabilityId: record.id,
         });
         sendJson(res, result.ok ? 200 : 500, result);
+        return;
+      }
+
+      // The shared palette (#424). Served from the host's own namespace so
+      // every applet references one artifact rather than carrying a copy that
+      // drifts — which is what happened to the four `docs/*.html` this is
+      // lifted from. `style-src 'self'` already permits it.
+      if (url === TOKENS_PATH) {
+        send(res, 200, tokensStylesheet(), { 'Content-Type': 'text/css; charset=utf-8' });
         return;
       }
 

@@ -1,27 +1,19 @@
 <title>Bernard demo applet</title>
-<style>
-  body {
-    font: 16px/1.5 system-ui, sans-serif;
-    max-width: 34rem;
-    margin: 3rem auto;
-    padding: 0 1rem;
-  }
-  input { width: 100%; padding: 0.5rem; font: inherit; }
-  button { margin-top: 0.75rem; padding: 0.5rem 1rem; font: inherit; }
-  pre { white-space: pre-wrap; background: #f4f4f5; padding: 1rem; border-radius: 4px; }
-  .err { color: #b91c1c; }
-  .note { color: #52525b; font-size: 0.875rem; }
-</style>
+<link rel="stylesheet" href="/__bernard/tokens.css" />
 
-<h1>Demo applet</h1>
-<p>Two ways to run the same question. There is no prompt here — the page holds
-handles to <code>search</code> and <code>web_answer</code>, and nothing else.</p>
+<main>
+  <h1>Demo applet</h1>
+  <p>
+    Two ways to run the same question. There is no prompt here — the page holds handles to
+    <code>search</code> and <code>web_answer</code>, and nothing else.
+  </p>
 
-<label>Question <input id="q" value="what is the default port for PostgreSQL?" /></label>
-<button id="search">Search (no model)</button>
-<button id="ask">Ask (agent)</button>
-<p class="note" id="last">…</p>
-<pre id="out">Ready.</pre>
+  <label>Question <input id="q" value="what is the default port for PostgreSQL?" /></label>
+  <button id="search">Search (no model)</button>
+  <button id="ask" class="secondary">Ask (agent)</button>
+  <p class="muted" id="last">…</p>
+  <pre id="out">Ready.</pre>
+</main>
 
 <script>
   // The page never learns its own token or handles from markup — it fetches
@@ -69,7 +61,7 @@ handles to <code>search</code> and <code>web_answer</code>, and nothing else.</p
     try {
       const body = await invoke(action, { question });
       if (!body.ok) {
-        out.className = 'err';
+        out.className = 'error';
         out.textContent = `${body.error.code}: ${body.error.message}`;
         return;
       }
@@ -79,7 +71,7 @@ handles to <code>search</code> and <code>web_answer</code>, and nothing else.</p
       await store({ op: 'set', key: 'last', value: { question, action, at: Date.now() } });
       showLast();
     } catch (err) {
-      out.className = 'err';
+      out.className = 'error';
       out.textContent = String(err);
     }
   }

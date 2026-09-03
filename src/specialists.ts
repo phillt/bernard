@@ -183,7 +183,13 @@ const SEED_MARKER = '.seeded-v1';
  * additively (each via its own marker) so existing installs pick them up
  * without a v1-marker bump that would resurrect user-deleted v1 specialists.
  */
-export const POST_V1_BUNDLED = ['mcp-manager.json', 'research-agent.json', 'agent-builder.json'];
+export const POST_V1_BUNDLED = [
+  'mcp-manager.json',
+  'research-agent.json',
+  'agent-builder.json',
+  'applet-styler.json',
+  'applet-reviewer.json',
+];
 
 /**
  * Disk-backed store for named specialists (reusable expert profiles).
