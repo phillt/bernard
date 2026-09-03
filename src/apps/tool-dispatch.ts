@@ -103,7 +103,7 @@ export async function dispatchToolAction(opts: DispatchToolActionOpts): Promise<
   // one path that has nothing to do with an agent — the same property
   // `bernard voice-test` holds. The single value needed is a shell timeout,
   // and nothing directly invocable runs a shell.
-  const registry = buildRegistry(shellTimeout(), posture);
+  const registry = await buildRegistry(shellTimeout(), posture);
   const tool = registry[dispatch.tool];
 
   const refusal = directInvocableRefusal(dispatch.tool, tool);
@@ -180,9 +180,12 @@ export async function dispatchToolAction(opts: DispatchToolActionOpts): Promise<
  * type-checked, so a second hand-written copy is how one of them quietly grows
  * the field and stops failing closed.
  */
-function buildRegistry(shellTimeoutMs: number, posture: HeadlessPosture): Record<string, Tool> {
+async function buildRegistry(
+  shellTimeoutMs: number,
+  posture: HeadlessPosture,
+): Promise<Record<string, Tool>> {
   const toolOptions = headlessToolOptions(posture, shellTimeoutMs);
-  const base = createTools(
+  const base = await createTools(
     toolOptions,
     new MemoryStore(),
     undefined,

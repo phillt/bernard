@@ -157,12 +157,19 @@ describe('pacActorDefinition scoped-tools override (#296 Phase 2E)', () => {
     return { task: 't', plan: 'p', slotId: 1, ...over };
   }
 
-  it('returns the caller-provided childTools verbatim, keeping MCP schemas contained', () => {
+  it('returns the caller-provided childTools verbatim, keeping MCP schemas contained', async () => {
     const scoped: Record<string, Tool> = {
       google__list: {} as Tool,
       ask_user: {} as Tool,
     };
-    const out = pacActorDefinition.tools({} as AgentContext, actorInput({ childTools: scoped }));
+    // `tools()` is async since #452, but the `??` short-circuits before the
+    // registry is built — an escalation that supplied `childTools` still pays
+    // for nothing, which is the property this test is really about.
+    const out = await pacActorDefinition.tools(
+      {} as AgentContext,
+      actorInput({ childTools: scoped }),
+      undefined as never,
+    );
     expect(out).toBe(scoped);
   });
 });

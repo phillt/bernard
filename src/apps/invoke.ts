@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto';
 import { invocationRefusal } from '../specialist-authority.js';
 import { AppRegistry } from './registry.js';
 import { grantedToolNames, resolveFromManifest } from './invocation.js';
-import { dispatchAction } from './dispatch.js';
+import type { DispatchActionResult } from './dispatch.js';
 import { SpecialistStore } from '../specialists.js';
 import { classifyError } from '../error-taxonomy.js';
 import { appendJsonl, rotateJsonlByCount } from '../jsonl.js';
@@ -354,7 +354,13 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
   // The same id `runHeadless` namespaces its debug lines with, so
   // `script:mcp:ready` joins the invocation record rather than naming a run
   // that appears nowhere else.
-  const run = await dispatchAction({
+  // Deferred for the same reason the tool arm above is (#452): `dispatch.ts`
+  // statically imports `createTools`, so importing it at module load made
+  // `bernard script` pay for the whole agent runtime BEFORE reaching the
+  // `kind === 'tool'` branch that exists to avoid exactly that. Measured 168 ms
+  // on `apps/invoke.js` against 76 for the worker path.
+  const { dispatchAction } = await import('./dispatch.js');
+  const run: DispatchActionResult = await dispatchAction({
     invocation,
     specialist,
     timeoutMs,

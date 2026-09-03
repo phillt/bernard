@@ -571,6 +571,63 @@ describe('vision gate (#427)', () => {
   });
 });
 
+describe('seed budget (#451)', () => {
+  const hugeSeed = (): CoreMessage[] => [{ role: 'user', content: 'x'.repeat(3_000_000) }];
+
+  /**
+   * Pins the window through `config.tokenWindow` rather than relying on a
+   * catalog number. Model windows move — the 4.1 family is ~1M, so a seed
+   * chosen to overflow "a small model" today quietly fits tomorrow.
+   */
+  const smallWindow = (): AgentContext => {
+    const ctx = makeCtx();
+    ctx.config.tokenWindow = 32_000;
+    return ctx;
+  };
+
+  it('refuses an oversized ephemeral dispatch before any provider call', async () => {
+    const def = fakeDefinition({
+      resolveModel: () => ({
+        model: 'fake' as never,
+        provider: 'openai',
+        modelName: 'gpt-4.1-mini',
+      }),
+      buildUserMessage: () => hugeSeed()[0],
+    });
+    await expect(runDefinition(smallWindow(), def, { text: 'x' })).rejects.toThrow(/too large/);
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The main agent already runs its own preflight `emergencyTruncate` with the
+   * COMPLETE prefix — the per-turn context message included, which the
+   * framework check cannot see. Checking here too would double up on the one
+   * definition that does not need it, using the worse estimate.
+   */
+  it('leaves a persistent history to its own preflight', async () => {
+    const def = fakeDefinition({
+      historyMode: 'persistent',
+      resolveModel: () => ({
+        model: 'fake' as never,
+        provider: 'openai',
+        modelName: 'gpt-4.1-mini',
+      }),
+    });
+    const res = await runDefinition(
+      smallWindow(),
+      def,
+      { text: 'x' },
+      { seedMessages: hugeSeed() },
+    );
+    expect(res.result.text).toBe('final answer');
+  });
+
+  it('leaves an ordinary dispatch alone', async () => {
+    const res = await runDefinition(smallWindow(), fakeDefinition(), { text: 'small' });
+    expect(res.result.text).toBe('final answer');
+  });
+});
+
 describe('DefinitionRegistry', () => {
   it('registers, looks up, and reports missing kinds', () => {
     const reg = new DefinitionRegistry();

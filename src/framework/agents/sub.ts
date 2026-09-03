@@ -66,8 +66,8 @@ export const subAgentDefinition: AgentDefinition<SubAgentInput, string> = {
     return { ragResults: await searchRag(ctx, input.task) };
   },
 
-  tools(ctx, _input, surface) {
-    return createTools(
+  async tools(ctx, _input, surface) {
+    return await createTools(
       ctx.toolOptions,
       ctx.stores.memory,
       surface.mcpTools,

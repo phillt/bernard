@@ -3,7 +3,6 @@ import { z } from 'zod';
 import cron from 'node-cron';
 import { CronStore } from '../cron/store.js';
 import { CronLogStore } from '../cron/log-store.js';
-import { runJob } from '../cron/runner.js';
 import { isDaemonRunning, startDaemon, stopDaemon } from '../cron/client.js';
 import { debugLog } from '../logger.js';
 import { attachActionMeta } from '../framework/tools/adapter.js';
@@ -203,6 +202,16 @@ export const CRON_ACTIONS = {
     store.updateJob(id, { lastRun: startTime, lastRunStatus: 'running' });
     try {
       const logs: string[] = [];
+      // Deferred, following `delegate.ts`'s precedent and for the same
+      // reason: `cron/runner.ts` reaches `framework/agents/index.js`, which
+      // reaches `main.ts`, which imports `createTools` from `tools/index.ts` —
+      // this module's own parent. Statically that cycle was resolved at load
+      // time; once `tools/index.ts` began deferring its `main`-audience
+      // imports (#452) it became a cycle resolved at CALL time, which
+      // deadlocks under `vi.resetModules()`. Deferring the one edge that
+      // actually needs the agent runtime breaks it, and makes `cron.js` cheap
+      // to load besides.
+      const { runJob } = await import('../cron/runner.js');
       const result = await runJob(job, (msg) => logs.push(msg));
       store.updateJob(id, {
         lastRunStatus: result.success ? 'success' : 'error',

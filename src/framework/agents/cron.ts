@@ -132,7 +132,7 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     };
   },
 
-  tools(ctx, input, surface) {
+  async tools(ctx, input, surface) {
     const { job, store, notesStore, runId, log } = input;
     // MCP comes from the centrally-resolved surface (#315), not from
     // `input.mcpTools` as it used to. That field was the sixth definition-level
@@ -211,7 +211,7 @@ export const cronDefinition: AgentDefinition<CronInput, string> = {
     // `ctx.provenance` is passed where it previously was not, so cron's web
     // reads and memory lookups register as citable sources like every other
     // dispatch — closing a second silent divergence.
-    const baseTools = createTools(
+    const baseTools = await createTools(
       // Carries the per-job `confirmDangerous` the runner installs (#260) —
       // `async () => false` for every cron job, so dangerous shell stays denied.
       ctx.toolOptions,

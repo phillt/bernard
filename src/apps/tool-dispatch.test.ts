@@ -13,7 +13,7 @@ const dispatch = (args: Record<string, string | number | boolean>): ToolDispatch
 });
 
 describe('mapToolArgs', () => {
-  it('reads `$.<name>` from the call args and passes literals through', () => {
+  it('reads `$.<name>` from the call args and passes literals through', async () => {
     expect(mapToolArgs(dispatch({ path: '$.dest', content: 'fixed' }), { dest: '/tmp/x' })).toEqual(
       {
         path: '/tmp/x',
@@ -24,12 +24,12 @@ describe('mapToolArgs', () => {
 
   // An absent optional arg drops the parameter rather than passing `undefined`,
   // so the tool sees the same shape a model would have produced.
-  it('omits a parameter whose referenced arg was not supplied', () => {
+  it('omits a parameter whose referenced arg was not supplied', async () => {
     expect(mapToolArgs(dispatch({ path: '$.dest' }), {})).toEqual({});
   });
 
   // The caller's object never reaches the tool; only named parameters do.
-  it('never passes an undeclared caller field through', () => {
+  it('never passes an undeclared caller field through', async () => {
     expect(
       mapToolArgs(dispatch({ path: '$.dest' }), { dest: '/tmp/x', extra: 'smuggled' }),
     ).toEqual({ path: '/tmp/x' });
@@ -40,10 +40,10 @@ describe('direct-invocation eligibility (#445)', () => {
   async function registry() {
     const { createTools } = await import('../tools/index.js');
     const { MemoryStore } = await import('../memory.js');
-    return createTools(
+    return (await createTools(
       { shellTimeout: 1000, confirmDangerous: async () => false },
       new MemoryStore(),
-    ) as unknown as Record<string, unknown>;
+    )) as unknown as Record<string, unknown>;
   }
 
   it('admits a marked tool', async () => {

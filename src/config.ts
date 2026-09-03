@@ -80,7 +80,16 @@ export interface BernardConfig {
   toolDetails: boolean;
   /** Whether to auto-create specialists above the confidence threshold. */
   autoCreateSpecialists: boolean;
-  /** Confidence threshold for auto-creating specialists (0-1). */
+  /**
+   * Whether to auto-create applets above the confidence threshold (#430).
+   *
+   * Separate from `autoCreateSpecialists` and defaulted false where that one is
+   * merely off-by-default: an applet is a much larger artifact — a manifest, a
+   * page, a bound agent, an origin — so auto-building one on the same composite
+   * is a bigger bet than auto-writing a specialist record.
+   */
+  autoCreateApplets: boolean;
+  /** Confidence threshold for auto-creating specialists and applets (0-1). */
   autoCreateThreshold: number;
   /** Whether the correction agent runs at session close to learn from tool-wrapper failures. */
   correctionEnabled: boolean;
@@ -453,6 +462,7 @@ export function savePreferences(prefs: {
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
+  autoCreateApplets?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
@@ -507,6 +517,7 @@ export function loadPreferences(): {
   subagentPac?: boolean;
   toolDetails?: boolean;
   autoCreateSpecialists?: boolean;
+  autoCreateApplets?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
@@ -554,6 +565,8 @@ export function loadPreferences(): {
     toolDetails: typeof parsed.toolDetails === 'boolean' ? parsed.toolDetails : undefined,
     autoCreateSpecialists:
       typeof parsed.autoCreateSpecialists === 'boolean' ? parsed.autoCreateSpecialists : undefined,
+    autoCreateApplets:
+      typeof parsed.autoCreateApplets === 'boolean' ? parsed.autoCreateApplets : undefined,
     autoCreateThreshold:
       typeof parsed.autoCreateThreshold === 'number' ? parsed.autoCreateThreshold : undefined,
     promptRewriter: typeof parsed.promptRewriter === 'boolean' ? parsed.promptRewriter : undefined,
@@ -1141,6 +1154,11 @@ export function loadConfig(overrides?: {
       ? true
       : DEFAULT_AUTO_CREATE_SPECIALISTS);
 
+  const autoCreateApplets =
+    prefs.autoCreateApplets ??
+    (process.env.BERNARD_AUTO_CREATE_APPLETS === 'true' ||
+      process.env.BERNARD_AUTO_CREATE_APPLETS === '1');
+
   const envAutoCreateThreshold = parseFloat(process.env.BERNARD_AUTO_CREATE_THRESHOLD ?? '');
   const autoCreateThreshold = normalizeThreshold(
     prefs.autoCreateThreshold ??
@@ -1303,6 +1321,7 @@ export function loadConfig(overrides?: {
     subagentPac,
     toolDetails,
     autoCreateSpecialists,
+    autoCreateApplets,
     autoCreateThreshold,
     correctionEnabled,
     promptRewriter,
@@ -1394,6 +1413,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'subagentPac',
   'toolDetails',
   'autoCreateSpecialists',
+  'autoCreateApplets',
   'autoCreateThreshold',
   'promptRewriter',
   'recallFilter',

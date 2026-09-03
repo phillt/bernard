@@ -24,6 +24,7 @@ import { runAgent, type AgentResult, type AgentSpec } from '../runner.js';
 import type { IterateFn, IterateOpts, StrategyContext } from '../strategies/types.js';
 import { resolveToolSurface } from './tool-surface.js';
 import { visionRefusal } from './vision-gate.js';
+import { seedBudgetRefusal } from './seed-budget.js';
 import { hasImagePart, isVisionCapableModel, stripImagesFromHistory } from '../../image.js';
 import type {
   AgentDefinition,
@@ -313,7 +314,38 @@ export async function runDefinition<TInput, TFormatted>(
     if (def.historyMode === 'persistent') return stripImagesFromHistory(seed);
     throw new Error(visionRefusal(resolved.provider, resolved.modelName));
   };
-  const getSeed = (): CoreMessage[] => gateSeed(rawSeed());
+  /**
+   * Seed-size gate (#451). Ephemeral dispatches only, and that asymmetry is
+   * the point rather than an omission: the main agent (`historyMode:
+   * 'persistent'`) already runs its own preflight `emergencyTruncate` with the
+   * COMPLETE prefix — the per-turn context message included, which this cannot
+   * see — so checking here too would double up on the one definition that does
+   * not need it, using a worse estimate.
+   *
+   * Memoized on the seed identity for the reason `visionCapable` is: `getSeed`
+   * is called at three sites and up to five times a turn, and summing tokens is
+   * O(chars) with a `JSON.stringify` per non-string part.
+   */
+  let budgetCheckedSeed: CoreMessage[] | undefined;
+  const budgetSeed = (seed: CoreMessage[]): CoreMessage[] => {
+    if (def.historyMode === 'persistent' || budgetCheckedSeed === seed) return seed;
+    budgetCheckedSeed = seed;
+    const refusal = seedBudgetRefusal({
+      seed,
+      modelName: resolved.modelName,
+      windowOverride: config.tokenWindow,
+      // The two prefix contributors that ARE known here. `system` and the tool
+      // block are both resolved above; the context message is not.
+      prefixChars: system.length + toolBytes(),
+    });
+    if (refusal) {
+      debugLog('agent:seed-budget:refused', { model: resolved.modelName, def: def.id });
+      throw new Error(refusal);
+    }
+    return seed;
+  };
+
+  const getSeed = (): CoreMessage[] => budgetSeed(gateSeed(rawSeed()));
 
   // Per-turn lower-privilege context (issue #172 + #143). The framework
   // ALWAYS wraps `memoryStore` + `includeScratch: true` by default so a new

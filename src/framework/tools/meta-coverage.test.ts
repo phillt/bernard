@@ -159,6 +159,21 @@ function checkMetaCoverage(tools: Record<string, unknown>): {
   return { missing, incomplete };
 }
 
+/**
+ * Every assertion in this file is a scan over a constructed registry, and a
+ * scan over an EMPTY registry passes. That is not hypothetical: `createTools`
+ * became async in #452 and the four `const tools = createTools(...)` call sites
+ * here kept their old shape, so `Object.entries(promise)` returned `[]` and all
+ * four invariants — including the two whose whole point is that they are
+ * fail-open — passed while checking nothing.
+ *
+ * So each test asserts the registry is non-empty first. The floor is deliberately
+ * a small absolute number rather than an exact count: an exact one is a second
+ * thing to update whenever a tool is added, and this guard only has to catch
+ * "the registry never materialised", not "the registry changed".
+ */
+const MIN_EXPECTED_TOOLS = 5;
+
 describe('tool meta coverage', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -166,13 +181,14 @@ describe('tool meta coverage', () => {
 
   it('every tool returned by createTools() declares the required meta fields', async () => {
     const { createTools } = await import('../../tools/index.js');
-    const tools = createTools(
+    const tools = await createTools(
       { shellTimeout: 10_000, confirmDangerous: async () => false },
       // Cast: the mocked MemoryStore satisfies the structural shape used here.
 
       new (await import('../../memory.js')).MemoryStore() as any,
     );
 
+    expect(Object.keys(tools).length).toBeGreaterThanOrEqual(MIN_EXPECTED_TOOLS);
     const { missing, incomplete } = checkMetaCoverage(tools);
     expect(missing, `Tools missing __bernardMeta: ${missing.join(', ')}`).toEqual([]);
     expect(incomplete, `Tools missing deterministic/sideEffect: ${incomplete.join(', ')}`).toEqual(
@@ -196,10 +212,12 @@ describe('tool meta coverage', () => {
   it('every write tool taking a `path` argument is in WRITE_PATH_TOOLS', async () => {
     const { createTools } = await import('../../tools/index.js');
     const { WRITE_PATH_TOOLS } = await import('../../permissions/matchers.js');
-    const tools = createTools(
+    const tools = await createTools(
       { shellTimeout: 10_000, confirmDangerous: async () => false },
       new (await import('../../memory.js')).MemoryStore() as any,
     );
+
+    expect(Object.keys(tools).length).toBeGreaterThanOrEqual(MIN_EXPECTED_TOOLS);
 
     const unscoped: string[] = [];
     for (const [name, def] of Object.entries(tools)) {
@@ -236,10 +254,12 @@ describe('tool meta coverage', () => {
   it('no directInvocable tool is dangerous or takes inexpressible arguments', async () => {
     const { createTools } = await import('../../tools/index.js');
     const { unrepresentableParams } = await import('../../apps/direct-tool.js');
-    const tools = createTools(
+    const tools = await createTools(
       { shellTimeout: 10_000, confirmDangerous: async () => false },
       new (await import('../../memory.js')).MemoryStore() as any,
     );
+
+    expect(Object.keys(tools).length).toBeGreaterThanOrEqual(MIN_EXPECTED_TOOLS);
 
     const dangerous: string[] = [];
     const inexpressible: string[] = [];
@@ -266,11 +286,13 @@ describe('tool meta coverage', () => {
   it('meta survives augmentTools — non-enumerable __bernardMeta is re-attached after the spread', async () => {
     const { createTools } = await import('../../tools/index.js');
     const { augmentTools } = await import('../../tools/augment.js');
-    const tools = createTools(
+    const tools = await createTools(
       { shellTimeout: 10_000, confirmDangerous: async () => false },
 
       new (await import('../../memory.js')).MemoryStore() as any,
     );
+
+    expect(Object.keys(tools).length).toBeGreaterThanOrEqual(MIN_EXPECTED_TOOLS);
 
     const augmented = augmentTools(tools, fakeProfileStore as any);
 

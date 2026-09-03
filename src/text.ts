@@ -149,3 +149,18 @@ export function normalizeToolResult(v: unknown): unknown {
   }
   return v;
 }
+
+/**
+ * XML-escapes a string for interpolation into a markup-ish payload.
+ *
+ * A leaf, because both consumers are: `context-message.ts` escapes untrusted
+ * provenance labels into the `<available_sources>` block (OWASP LLM01 — the
+ * reason that block is user-role rather than SYSTEM), and `host/webmanifest.ts`
+ * escapes an app name into a generated SVG. Neither can import the other —
+ * `context-message.ts` reaches `reference-resolver` and so `generateText` and
+ * `config`, which is precisely the edge a host leaf must not acquire — so the
+ * three replaces live here rather than being hand-copied a third time.
+ */
+export function escapeXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}

@@ -83,8 +83,17 @@ export function probeApplet(port: number, timeoutMs = 1500): Promise<boolean> {
   });
 }
 
-/** True when at least one registered applet answers its health endpoint. */
-export async function isHostRunning(): Promise<boolean> {
+/**
+ * True when at least one registered applet answers its health endpoint.
+ *
+ * **Distinct from "the process is up", and #428 is why that matters.** A host
+ * started at login before any applet exists is running correctly and serving
+ * nothing, and this returns `false` for it — which made `appletHostStart` poll
+ * for ten seconds and then report a healthy service as stopped. Callers that
+ * want liveness want {@link isHostProcessAlive}; callers that want "is my
+ * applet reachable" want this.
+ */
+export async function isHostServing(): Promise<boolean> {
   if (!isHostProcessAlive()) return false;
   const hosts = new HostRegistry();
   for (const appId of new AppRegistry().listIds()) {
@@ -92,6 +101,18 @@ export async function isHostRunning(): Promise<boolean> {
     if (port !== undefined && (await probeApplet(port))) return true;
   }
   return false;
+}
+
+/**
+ * True when the host is up AND either serving an applet or has none to serve.
+ *
+ * The question `applet-host start` actually needs: "did it come up?", which for
+ * an install with no applets is answered by the process alone.
+ */
+export async function isHostRunning(): Promise<boolean> {
+  if (!isHostProcessAlive()) return false;
+  if (new AppRegistry().listIds().length === 0) return true;
+  return isHostServing();
 }
 
 /**

@@ -70,15 +70,17 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
     return { ragResults: await searchRag(ctx, input.task) };
   },
 
-  tools(ctx, input, surface) {
+  async tools(ctx, input, surface) {
     // A caller-scoped registry (e.g. MCP delegation escalation) wins, keeping
     // MCP schemas contained; the generic sub-agent PAC path is unchanged.
     // Note this deliberately bypasses `surface` entirely: for the escalation
     // path `childTools` IS one server's raw MCP tools, and re-resolving would
     // hand it delegates for every server instead.
+    // `??` rather than `||`, and the await sits INSIDE it: an escalation that
+    // supplied `childTools` must not pay for a registry it discards.
     return (
       input.childTools ??
-      createTools(
+      (await createTools(
         ctx.toolOptions,
         ctx.stores.memory,
         surface.mcpTools,
@@ -88,7 +90,7 @@ export const pacActorDefinition: AgentDefinition<PacActorInput, string> = {
         undefined,
         ctx.provenance,
         surface,
-      )
+      ))
     );
   },
 

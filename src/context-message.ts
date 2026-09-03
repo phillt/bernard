@@ -6,7 +6,7 @@ import type { SpecialistSummary } from './specialists.js';
 import type { SpecialistMatch } from './specialist-matcher.js';
 import { renderResolvedBlock, RAG_SOURCE_KEY, type ResolvedEntry } from './reference-resolver.js';
 import { sanitizeKey } from './memory.js';
-import { plural } from './text.js';
+import { escapeXml, plural } from './text.js';
 import { getDomain } from './domains.js';
 import type { ProvenanceStore } from './provenance.js';
 import { debugLog } from './logger.js';
@@ -58,9 +58,6 @@ type SectionRenderer = () => string | null;
  * containment tag and break the data/instructions separation that this whole
  * module exists to enforce (issue #172, OWASP LLM01).
  */
-function escapeXml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 /**
  * Build the lower-privilege per-turn context message that replaces the

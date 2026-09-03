@@ -30,6 +30,7 @@ export type ModelSite =
   | 'recall-filter'
   | 'compressor'
   | 'specialist-detector'
+  | 'applet-detector'
   | 'claim-verifier'
   | 'speech-normalizer';
 
@@ -395,6 +396,7 @@ const TEMPERATURE_ZERO_SITES: ReadonlySet<ModelSite> = new Set([
   'reference-lookup',
   'recall-filter',
   'specialist-detector',
+  'applet-detector',
   // Entailment is a judgement that must not drift between two runs over the
   // same claim and the same source text.
   'claim-verifier',

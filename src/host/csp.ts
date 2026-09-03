@@ -65,9 +65,21 @@ export function cspFor(): string {
   return [
     "default-src 'none'",
     "script-src 'self' 'unsafe-inline'",
-    "style-src 'self' 'unsafe-inline'",
+    // `'unsafe-inline'` is deliberately NOT here, unlike `script-src` (#424).
+    // The argument for allowing inline SCRIPT — applet code is generated, and
+    // demanding nonces of a model buys little — does not transfer: styling is
+    // the one thing an applet does not have to invent, because the host serves
+    // the palette at `/__bernard/tokens.css`. Refusing inline style is what
+    // makes that stylesheet mandatory rather than advisory, so a generated
+    // applet cannot quietly reintroduce its own colours.
+    "style-src 'self'",
     "connect-src 'self'",
     "img-src 'self' data:",
+    // Without this a `<link rel="manifest">` falls through to
+    // `default-src 'none'` and the manifest is never fetched, so PWA install
+    // cannot even be offered (#429). Same-origin only — the manifest is a
+    // generated route on this applet's own server.
+    "manifest-src 'self'",
     "font-src 'self'",
     "form-action 'none'",
     "base-uri 'none'",

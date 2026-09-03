@@ -63,7 +63,13 @@ export interface RunHeadlessOpts<TInput, TFormatted> {
    * strictly after MCP connect and the RAG search, which is what a payload
    * naming `serverNames` / `ragResults` needs.
    */
-  buildInput: (env: HeadlessEnv) => TInput;
+  /**
+   * May be async (#452). `apps/dispatch.ts` builds its tool registry here, and
+   * `createTools` became async when the `main`-audience tool modules moved to
+   * deferred imports — so the one caller that assembles tools inside
+   * `buildInput` needs to await. Cron's implementor does not and is unaffected.
+   */
+  buildInput: (env: HeadlessEnv) => TInput | Promise<TInput>;
   posture: HeadlessPosture;
   /** Retrieval query. Omit to skip the RAG search entirely. */
   ragQuery?: string;
@@ -319,7 +325,7 @@ export async function runHeadless<TInput, TFormatted>(
   }
 
   try {
-    const input = buildInput(env);
+    const input = await buildInput(env);
     const { formatted, stepLimitHit } = await runDefinition(ctx, opts.definition(), input, {
       abortSignal: abort.signal,
     });

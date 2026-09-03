@@ -1,3 +1,4 @@
+import { isServiceInstalled } from './service-cli.js';
 import { printInfo, printError } from '../output.js';
 import { AppRegistry } from '../apps/registry.js';
 import { HostRegistry } from './registry.js';
@@ -26,6 +27,11 @@ export async function appletHostStatus(): Promise<void> {
     const serving = alive ? await probeApplet(port) : false;
     printInfo(`  ${appId} — http://127.0.0.1:${port} ${serving ? '(serving)' : '(not serving)'}`);
   }
+  printInfo(
+    isServiceInstalled()
+      ? '  starts at login: yes'
+      : '  starts at login: no — run `bernard applet-host install`',
+  );
 }
 
 export async function appletHostStart(): Promise<void> {

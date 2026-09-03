@@ -172,8 +172,8 @@ export const taskDefinition: AgentDefinition<TaskInput, TaskResult> = {
     };
   },
 
-  tools(ctx, _input, surface) {
-    return createTools(
+  async tools(ctx, _input, surface) {
+    return await createTools(
       ctx.toolOptions,
       ctx.stores.memory,
       surface.mcpTools,

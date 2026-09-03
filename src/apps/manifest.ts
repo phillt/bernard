@@ -29,7 +29,16 @@ import { z } from 'zod';
  * admit no prose at all, so an action built only from them is structurally
  * uninjectable. Prefer them wherever the domain allows.
  */
-export const ArgSpecSchema = z
+/**
+ * The arg-spec FIELDS, without the cross-field refinement.
+ *
+ * Exported because `src/tools/applet.ts` advertises this shape to a model and
+ * needs the object (a refinement makes it a `ZodEffects`, which changes what
+ * `zod-to-json-schema` emits for a tool parameter — the hazard `#341` records
+ * for `.transform`). Sharing the object rather than re-typing it is what stops
+ * a field added here from being silently unauthorable there.
+ */
+export const ArgSpecFields = z
   .object({
     type: z.enum(['string', 'number', 'boolean', 'enum']),
     required: z.boolean().default(false),
@@ -39,24 +48,25 @@ export const ArgSpecSchema = z
     maxLength: z.number().int().positive().max(32_000).optional(),
     description: z.string().max(200).optional(),
   })
-  .strict()
-  .superRefine((spec, ctx) => {
-    if (spec.type === 'enum' && !spec.values) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "type 'enum' requires `values`" });
-    }
-    if (spec.type !== 'enum' && spec.values) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "`values` is only valid on type 'enum'",
-      });
-    }
-    if (spec.type !== 'string' && spec.maxLength !== undefined) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "`maxLength` is only valid on type 'string'",
-      });
-    }
-  });
+  .strict();
+
+export const ArgSpecSchema = ArgSpecFields.superRefine((spec, ctx) => {
+  if (spec.type === 'enum' && !spec.values) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "type 'enum' requires `values`" });
+  }
+  if (spec.type !== 'enum' && spec.values) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "`values` is only valid on type 'enum'",
+    });
+  }
+  if (spec.type !== 'string' && spec.maxLength !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "`maxLength` is only valid on type 'string'",
+    });
+  }
+});
 
 export type ArgSpec = z.infer<typeof ArgSpecSchema>;
 
@@ -94,7 +104,7 @@ export type AppSchemaVersion = z.infer<typeof AppSchemaVersionSchema>;
  */
 export const ARG_REF_PREFIX = '$.';
 
-export const ToolDispatchSchema = z
+export const ToolDispatchFields = z
   .object({
     kind: z.literal('tool'),
     /**
@@ -104,11 +114,19 @@ export const ToolDispatchSchema = z
      */
     tool: z.string().min(1),
     /** Tool parameter name → `$.<declaredArg>` or a literal value. */
-    args: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
+    args: z
+      .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+      .optional()
+      .describe('Tool parameter name → `$.<declaredArg>` or a literal value'),
   })
   .strict();
 
-export const AgentDispatchSchema = z
+/** The manifest form: `args` defaulted, so a parsed dispatch always has one. */
+export const ToolDispatchSchema = ToolDispatchFields.extend({
+  args: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
+});
+
+export const AgentDispatchFields = z
   .object({
     kind: z.literal('agent'),
     /** The tool-wrapper specialist that backs this action. */
@@ -121,6 +139,9 @@ export const AgentDispatchSchema = z
     instructions: z.string().min(1).max(2000),
   })
   .strict();
+
+/** Same shape; named for symmetry with {@link ToolDispatchSchema}. */
+export const AgentDispatchSchema = AgentDispatchFields;
 
 export const ActionDispatchSchema = z.discriminatedUnion('kind', [
   ToolDispatchSchema,
@@ -182,6 +203,21 @@ const RawAppActionSchema = z
   .strict();
 
 export type RawAppAction = z.infer<typeof RawAppActionSchema>;
+
+/**
+ * The action fields only a USER may set (#453).
+ *
+ * These decide what an app is permitted to do, so they are settable at
+ * `bernard app allow` and nowhere else — never from the `applet` tool, for the
+ * reason `app-grants.ts` gives about a model widening its own authority, and
+ * `toolAllowlist` is the stronger of the two controls it would be widening.
+ *
+ * Written down here, beside the schema that declares them, so the tool's own
+ * test can assert its advertised schema names none of them. The set is what
+ * makes that assertion possible: without it, "the tool happens not to mention
+ * these three strings" is a fact nothing checks.
+ */
+export const AUTHORITY_ACTION_FIELDS = ['toolAllowlist', 'toolMode', 'confirmMode'] as const;
 
 /**
  * One action as the rest of Bernard sees it: `dispatch` resolved, so nothing
@@ -275,7 +311,17 @@ export const AppActionSchema = RawAppActionSchema.superRefine((action, ctx) =>
   intraActionRules(action, ctx),
 ).transform(liftAction);
 
-export const AppManifestSchema = z
+/**
+ * A manifest exactly as it sits on disk, validated but **not lifted**.
+ *
+ * The write side needs this and cannot use {@link AppManifestSchema}, which
+ * `.transform`s: `liftAction` moves a v1 action's flat `instructions` /
+ * `specialistId` into `dispatch`, so parsing then re-serializing turns a v1
+ * manifest into one that its own `schemaVersion` refinement rejects. A writer
+ * validates the raw shape and writes the raw shape; readers keep getting the
+ * lifted one.
+ */
+export const RawAppManifestSchema = z
   .object({
     schemaVersion: AppSchemaVersionSchema,
     id: z.string().regex(APP_ID_RE),
@@ -304,15 +350,26 @@ export const AppManifestSchema = z
         });
       }
     }
-  })
-  .transform((m) => ({
-    ...m,
-    actions: Object.fromEntries(
-      Object.entries(m.actions).map(([name, action]) => [name, liftAction(action)]),
-    ),
-  }));
+  });
+
+export type RawAppManifest = z.infer<typeof RawAppManifestSchema>;
+
+/** The reader's view: every action lifted into the `dispatch` union. */
+export const AppManifestSchema = RawAppManifestSchema.transform((m) => ({
+  ...m,
+  actions: Object.fromEntries(
+    Object.entries(m.actions).map(([name, action]) => [name, liftAction(action)]),
+  ),
+}));
 
 export type AppManifest = z.output<typeof AppManifestSchema>;
+
+/** Validates a manifest for WRITING — no lift, so what is checked is what lands. */
+export function parseRawAppManifest(raw: unknown): ParseResult<RawAppManifest> {
+  const parsed = RawAppManifestSchema.safeParse(raw);
+  if (!parsed.success) return { ok: false, error: formatZodError(parsed.error) };
+  return { ok: true, value: parsed.data };
+}
 
 /**
  * `.strict()` on every object above is load-bearing rather than tidiness.
