@@ -390,6 +390,30 @@ async function checkDispatch(
     // then fails as a bad answer rather than an error, which is what makes it
     // so hard to see: the observed case produced "No datetime tool available"
     // from a specialist whose action declared `toolAllowlist: ['datetime']`.
+    // `{{arg}}` is not a thing, and the two-channel design is why it must not
+    // become one. `action.instructions` is the author-written TRUSTED channel;
+    // validated args travel separately as a labelled, fenced JSON block that
+    // the model is told to treat as untrusted data. Interpolating an arg into
+    // the instruction string would collapse exactly the boundary that makes an
+    // applet action safe to expose to a browser.
+    //
+    // So this warns rather than adding the feature. Observed working by luck:
+    // an action whose instructions said `{{dob}}` produced the right answer
+    // because the model ALSO had the real value in the args block and used
+    // that one. "Reply with exactly {{dob}}" would have printed the literal.
+    const placeholders = [
+      ...new Set(Array.from(dispatch.instructions.matchAll(/\{\{\s*(\w+)\s*\}\}/g), (m) => m[1])),
+    ];
+    if (placeholders.length > 0) {
+      warnings.push(
+        `Action "${name}" writes ${placeholders.map((v) => `{{${v}}}`).join(', ')} in its ` +
+          'instructions, which is NOT interpolated — the model receives that text literally. ' +
+          'Arguments arrive separately as a JSON block the model is told to treat as untrusted ' +
+          'data, and that separation is deliberate. Refer to them by name instead, e.g. ' +
+          `"use the ${placeholders[0]} value from the supplied JSON".`,
+      );
+    }
+
     const allowed = action.toolAllowlist ?? [];
     specialists ??= new SpecialistStore({ seed: false });
     const record = specialists.get(dispatch.specialistId);

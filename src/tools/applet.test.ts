@@ -553,3 +553,43 @@ describe('a new applet says how to actually grant its tools', () => {
     expect(out).not.toContain('runs with nothing');
   });
 });
+
+describe('instructions are not a template', () => {
+  useTempHome('bernard-applet-placeholder');
+
+  const withInstructions = (instructions: string) => ({
+    ...CREATE,
+    actions: {
+      summarise: { dispatch: { kind: 'agent' as const, specialistId: 's', instructions } },
+    },
+  });
+
+  it('warns on {{arg}}, which reaches the model as a literal', async () => {
+    // Observed working by luck: an action whose instructions said `{{dob}}`
+    // returned the right answer because the model ALSO had the real value in
+    // the args block. "Reply with exactly {{dob}}" would print the literal.
+    const { tool } = await load();
+    const out = await tool.execute(
+      withInstructions('The user provided DOB: {{dob}}. Read their sign.') as never,
+      {} as never,
+    );
+    expect(out).toContain('created');
+    expect(out).toContain('{{dob}}');
+    expect(out).toContain('NOT interpolated');
+  });
+
+  it('warns rather than refuses, because the action still works', async () => {
+    const { tool, AppRegistry } = await load();
+    await tool.execute(withInstructions('Use {{a}} and {{b}}.') as never, {} as never);
+    expect(new AppRegistry({ seed: false }).listIds()).toContain('notes');
+  });
+
+  it('says nothing for ordinary instructions', async () => {
+    const { tool } = await load();
+    const out = await tool.execute(
+      withInstructions('Summarise the text from the supplied JSON.') as never,
+      {} as never,
+    );
+    expect(out).not.toContain('NOT interpolated');
+  });
+});
