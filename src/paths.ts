@@ -62,6 +62,17 @@ export const ROUTINES_DIR = path.join(DATA_DIR, 'routines');
 export const SPECIALISTS_DIR = path.join(DATA_DIR, 'specialists');
 /** One `<appId>.json` manifest per applet-style app (#419). */
 export const APPS_DIR = path.join(DATA_DIR, 'apps');
+/**
+ * An applet's served assets: `APPS_DIR/<appId>/index.html` and friends (#421).
+ *
+ * A sibling directory of the manifest, and deliberately NOT
+ * `runWorkspace('apps', appId)` — that is where an applet action may write
+ * *data*. Serving an applet's *code* from its own write scope would let an
+ * action rewrite the page it is served from.
+ */
+export function appletAssetDir(appId: string): string {
+  return path.join(APPS_DIR, appId);
+}
 export const SPECIALIST_CANDIDATES_DIR = path.join(DATA_DIR, 'specialist-candidates');
 export const CORRECTION_CANDIDATES_DIR = path.join(DATA_DIR, 'correction-candidates');
 export const TOOL_PROFILES_DIR = path.join(DATA_DIR, 'tool-profiles');
@@ -87,3 +98,17 @@ export function sessionTelemetryPath(sessionId: string): string {
 }
 export const CRON_PID_FILE = path.join(STATE_DIR, 'cron-daemon.pid');
 export const CRON_LOG_FILE = path.join(STATE_DIR, 'cron-daemon.log');
+/** Applet host process state (#421), mirroring the cron daemon's pair. */
+export const APPLET_HOST_PID_FILE = path.join(STATE_DIR, 'applet-host.pid');
+export const APPLET_HOST_LOG_FILE = path.join(STATE_DIR, 'applet-host.log');
+/**
+ * Per-applet port and session token (#421).
+ *
+ * State rather than config: machine-local and regenerable. Kept out of the
+ * manifest on purpose — `AppManifestSchema` is `.strict()` with
+ * `schemaVersion: z.literal(1)`, so a new field there makes an older binary
+ * reject the whole app; the manifest is bundle-seeded and user-editable, so a
+ * token in it is settable by any local process; and it is validated on read,
+ * i.e. trusted at exactly the wrong moment.
+ */
+export const APPLET_HOSTS_FILE = path.join(STATE_DIR, 'applet-hosts.json');
