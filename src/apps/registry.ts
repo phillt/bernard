@@ -246,6 +246,25 @@ export class AppRegistry {
   }
 
   /**
+   * Reads one of an applet's page files back.
+   *
+   * The same filename rule `writeAssets` enforces on the way in, for the same
+   * reason: the name reaches here from a tool call, and `../` would read a
+   * sibling applet's manifest out of `APPS_DIR`. Returns `null` rather than
+   * throwing for a missing file — an applet without the asset is a state a
+   * caller has to handle either way.
+   */
+  readAsset(appId: string, name: string): string | null {
+    if (!ASSET_NAME_RE.test(name)) return null;
+    const file = path.join(appletAssetDir(appId), name);
+    try {
+      return fs.readFileSync(file, 'utf-8');
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Writes page files under `appletAssetDir`.
    *
    * Every name is checked against a plain filename pattern rather than joined

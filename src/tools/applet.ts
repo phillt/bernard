@@ -2,6 +2,13 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import { AppRegistry } from '../apps/registry.js';
+import { defaultAppletPage } from '../apps/page-template.js';
+import {
+  refusalFor,
+  validateAppletPage,
+  warningsFor,
+  type PageIssue,
+} from '../apps/page-validate.js';
 import {
   ACTION_NAME_RE,
   APP_ID_RE,
@@ -86,9 +93,16 @@ const PARAMETERS = z.object({
     .string()
     .optional()
     .describe(
-      "The applet's index.html. Required for create. Plain HTML with inline <script>; it " +
-        'reaches Bernard by POSTing a capability handle to /__bernard/invoke — read the ' +
-        'bundled demo applet for the shape.',
+      "The applet's index.html. OPTIONAL — omit it and a working page is scaffolded from " +
+        'the actions, which is the fastest way to a running applet. When you do write one, ' +
+        'it MUST: link <link rel="stylesheet" href="/__bernard/tokens.css"> (inline <style> ' +
+        'is refused by the CSP and renders nothing), link <link rel="manifest" ' +
+        'href="/__bernard/manifest.webmanifest">, and load the client with a plain ' +
+        '<script src="/__bernard/applet.js"></script> — never type="module", which is ' +
+        "deferred. Then call `await bernard.invoke('action', args)`, which resolves to the " +
+        'result and throws on failure, and `bernard.store.get/set/list/delete`. Never fetch ' +
+        '/__bernard/* yourself: a hand-rolled request omits the session header and gets a 403, ' +
+        'and writing one is refused. `applet read <id>` returns an existing page to copy from.',
     ),
   files: z
     .record(z.string(), z.string())
@@ -137,7 +151,13 @@ function run(store: AppRegistry, args: AppletArgs): string {
       const id = need(args.id, 'id', 'read');
       const app = store.get(id);
       if (!app.ok) return `Error: ${app.failure.message}`;
-      return JSON.stringify(app.manifest, null, 2);
+      // The page, not only the manifest. The `page` field's own description
+      // tells a model to read an existing applet for the shape, and until now
+      // this branch returned the manifest alone — so the instruction it was
+      // given could not be followed.
+      const page = store.readAsset(id, 'index.html');
+      const shown = page === null ? '(no index.html)' : clampPage(page);
+      return `${JSON.stringify(app.manifest, null, 2)}\n\n--- index.html ---\n${shown}`;
     }
     case 'create': {
       const id = need(args.id, 'id', 'create');
@@ -145,14 +165,20 @@ function run(store: AppRegistry, args: AppletArgs): string {
         return `Error: "${id}" is not a valid applet id — lowercase letters, digits and hyphens, 2-64 characters.`;
       }
       const manifest = buildManifest(id, args);
-      const created = store.create(manifest, {
-        'index.html': need(args.page, 'page', 'create'),
-        ...(args.files ?? {}),
-      });
+      // Scaffolded when the caller supplies none, so every refusal below has a
+      // remedy reachable in one call rather than being a dead end.
+      const page =
+        args.page ?? defaultAppletPage(manifest.name, manifest.description, manifest.actions);
+      const issues = validateAppletPage(page, Object.keys(manifest.actions));
+      const refusal = refusalFor(issues);
+      if (refusal) return refusal;
+
+      const created = store.create(manifest, { 'index.html': page, ...(args.files ?? {}) });
       return (
         `Applet "${created.name}" (${created.id}) created with ` +
         `${Object.keys(created.actions).length} action(s). Its actions have no tools yet — ` +
-        `grant them with \`bernard app-grant ${created.id}\`.`
+        `grant them with \`bernard app-grant ${created.id}\`.` +
+        warningsFor(issues)
       );
     }
     case 'update': {
@@ -164,9 +190,18 @@ function run(store: AppRegistry, args: AppletArgs): string {
       // refinement — see `RawAppManifestSchema`.
       const manifest = buildManifest(id, args, existing.manifest);
       const files: Record<string, string> = { ...(args.files ?? {}) };
-      if (args.page !== undefined) files['index.html'] = args.page;
+      let issues: PageIssue[] = [];
+      if (args.page !== undefined) {
+        // Validated against the manifest as it will be AFTER this update, so a
+        // call that adds an action and its button in one go is not refused for
+        // invoking something that does not exist yet.
+        issues = validateAppletPage(args.page, Object.keys(manifest.actions));
+        const refusal = refusalFor(issues);
+        if (refusal) return refusal;
+        files['index.html'] = args.page;
+      }
       const updated = store.update(id, manifest, files);
-      return `Applet "${updated.name}" (${updated.id}) updated.`;
+      return `Applet "${updated.name}" (${updated.id}) updated.` + warningsFor(issues);
     }
     default:
       // Unreachable through the AI SDK, which parses against the enum first —
@@ -225,4 +260,13 @@ function buildManifest(
 function need<T>(value: T | undefined, field: string, action: string): T {
   if (value === undefined) throw new Error(`\`${field}\` is required for action "${action}".`);
   return value;
+}
+
+/** A page is unbounded; a tool result that reaches a model is not. */
+const PAGE_PREVIEW_MAX = 20_000;
+
+function clampPage(page: string): string {
+  return page.length <= PAGE_PREVIEW_MAX
+    ? page
+    : `${page.slice(0, PAGE_PREVIEW_MAX)}\n… (truncated, ${page.length} chars total)`;
 }

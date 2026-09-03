@@ -8,11 +8,21 @@ async function load() {
   return { tool: createAppletTool(new AppRegistry({ seed: false })), AppRegistry };
 }
 
+/** A page that satisfies the contract — the three links plus the client. */
+const PAGE = [
+  '<title>Notes</title>',
+  '<link rel="stylesheet" href="/__bernard/tokens.css" />',
+  '<link rel="manifest" href="/__bernard/manifest.webmanifest" />',
+  '<script src="/__bernard/applet.js"></script>',
+  '<main><button id="go">Go</button></main>',
+  "<script>document.getElementById('go').addEventListener('click', () => bernard.invoke('summarise'));</script>",
+].join('\n');
+
 const CREATE = {
   action: 'create' as const,
   id: 'notes',
   name: 'Notes',
-  page: '<h1>Notes</h1>',
+  page: PAGE,
   actions: {
     summarise: {
       dispatch: { kind: 'agent' as const, specialistId: 'web-wrapper', instructions: 'Summarise.' },
@@ -174,5 +184,84 @@ describe('the applet tool cannot author authority', () => {
     const tool = createAppletTool();
     const parsed = tool.parameters.safeParse({ action: 'delete', id: 'notes' });
     expect(parsed.success).toBe(false);
+  });
+});
+
+/**
+ * The write path refuses a page that cannot work.
+ *
+ * Serving `/__bernard/applet.js` makes the protocol impossible to get wrong;
+ * it does not make a generated page use it, and unlike `style-src` the CSP
+ * cannot force the issue — inline script has to stay legal. So this is where
+ * the 403, the unstyled page and the missing install prompt are actually
+ * prevented.
+ */
+describe('the applet tool refuses a page that would not work', () => {
+  useTempHome('bernard-applet-page');
+
+  const bad = (page: string) => ({ ...CREATE, page });
+
+  it('refuses a bare page, naming every problem at once', async () => {
+    const { tool } = await load();
+    const out = await tool.execute(bad('<h1>Notes</h1>'), {} as never);
+    expect(out).toContain('Error:');
+    expect(out).toContain('/__bernard/tokens.css');
+    expect(out).toContain('/__bernard/manifest.webmanifest');
+    expect(out).toContain('/__bernard/applet.js');
+  });
+
+  it('refuses a hand-rolled invoke — the exact shape that 403d', async () => {
+    const { tool } = await load();
+    const out = await tool.execute(
+      bad(`${PAGE}\n<script>fetch('/__bernard/invoke', {method:'POST'})</script>`),
+      {} as never,
+    );
+    expect(out).toContain('Error:');
+    expect(out).toContain('bernard.invoke');
+  });
+
+  it('writes nothing when it refuses', async () => {
+    // A refusal that half-created the applet would be worse than the defect.
+    const { tool, AppRegistry } = await load();
+    await tool.execute(bad('<h1>Notes</h1>'), {} as never);
+    expect(new AppRegistry({ seed: false }).listIds()).not.toContain('notes');
+  });
+
+  it('scaffolds a working page when none is given', async () => {
+    // Every refusal above needs a remedy reachable in one call, or the gate is
+    // an obstruction.
+    const { tool, AppRegistry } = await load();
+    const { page: _dropped, ...noPage } = CREATE;
+    const out = await tool.execute(noPage as never, {} as never);
+    expect(out).toContain('created');
+    const html = new AppRegistry({ seed: false }).readAsset('notes', 'index.html');
+    expect(html).toContain('/__bernard/applet.js');
+    // Dispatched through one `run(action, …)` helper, so the action reaches
+    // `bernard.invoke` as a variable — which is also why the validator's
+    // literal-action check cannot cover the template, and why the template is
+    // instead pinned by passing the validator in `page-validate.test.ts`.
+    expect(html).toContain("run('summarise'");
+    expect(html).toContain('bernard.invoke(action, args)');
+  });
+
+  it('reports a warning without blocking the write', async () => {
+    const { tool, AppRegistry } = await load();
+    const out = await tool.execute(
+      bad(`${PAGE}\n<script>document.getElementById('ghost').focus();</script>`),
+      {} as never,
+    );
+    expect(out).toContain('created');
+    expect(out).toContain('Warnings:');
+    expect(new AppRegistry({ seed: false }).listIds()).toContain('notes');
+  });
+
+  it('returns the page on read, so the description it gives is followable', async () => {
+    // `page`'s own description points a model at an existing applet for the
+    // shape; until now this branch returned the manifest alone.
+    const { tool } = await load();
+    await tool.execute(CREATE, {} as never);
+    const out = await tool.execute({ action: 'read', id: 'notes' } as never, {} as never);
+    expect(out).toContain('--- index.html ---');
+    expect(out).toContain('/__bernard/applet.js');
   });
 });
