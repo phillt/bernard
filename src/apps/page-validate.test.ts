@@ -80,7 +80,15 @@ describe('validateAppletPage', () => {
     // They were split — block refused, attribute warned — while the comment
     // admitted the CSP discards both. Equally decidable, equally silent.
     expect(refusals(`${OK}\n<p style="color:red">x</p>`)).toHaveLength(1);
+    expect(refusals(`${OK}\n<p STYLE = "color:red">x</p>`)).toHaveLength(1);
     expect(refusals(`${OK}\n<style>p{color:red}</style>`)).toHaveLength(1);
+  });
+
+  it('refuses a near-miss client path', () => {
+    const wrongClient = OK.replace('/__bernard/applet.js', '/__bernard/appletxjs');
+    const out = refusals(wrongClient);
+    expect(out).toHaveLength(1);
+    expect(out[0].message).toContain('/__bernard/applet.js');
   });
 
   it('warns rather than refuses where the fact is uncertain', () => {

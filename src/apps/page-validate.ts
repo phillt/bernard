@@ -71,7 +71,7 @@ export function validateAppletPage(html: string, actions: string[]): PageIssue[]
         `Style it with the variables from ${TOKENS_PATH}, or ship a .css file alongside index.html.`,
     );
   }
-  if (/\sstyle=["']/.test(html)) {
+  if (/\sstyle\s*=\s*["']/i.test(html)) {
     refuse(
       'The page uses inline `style="..."` attributes, which the CSP discards exactly as it ' +
         `discards a <style> block. Use the variables from ${TOKENS_PATH}, or a .css file.`,
@@ -94,7 +94,7 @@ export function validateAppletPage(html: string, actions: string[]): PageIssue[]
 
   // Only when there is something to invoke. A page with no actions is a static
   // page, and requiring a client it never calls would be ceremony.
-  if (actions.length > 0 && !new RegExp(`src=["']${SDK_PATH}`).test(html)) {
+  if (actions.length > 0 && !new RegExp(`src=["']${escapeForRegExp(SDK_PATH)}["']`).test(html)) {
     refuse(
       `The page must load the applet client: <script src="${SDK_PATH}"></script> in <head>. ` +
         'Use a plain <script>, never type="module" — a module is deferred, so an inline script ' +
@@ -149,4 +149,8 @@ export function warningsFor(issues: PageIssue[]): string {
 export function formatWarnings(messages: string[]): string {
   if (messages.length === 0) return '';
   return `\nWarnings:\n${messages.map((m) => `  - ${m}`).join('\n')}`;
+}
+
+function escapeForRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
