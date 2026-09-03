@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { APPLET_HOSTS_FILE } from '../paths.js';
+import { atomicWriteFileSync } from '../fs-utils.js';
 
 /**
  * Which port each applet is served from, and the session token for it (#421).
@@ -57,11 +58,15 @@ export class HostRegistry {
 
   private savePorts(ports: HostsFile): void {
     fs.mkdirSync(path.dirname(APPLET_HOSTS_FILE), { recursive: true });
-    // `mode` on the write itself, not a `chmod` after it. `config.ts`'s
-    // `keys.json` does the latter and leaves a window at the default umask;
-    // this file is less sensitive now that tokens are memory-only, but the
-    // habit is the point.
-    fs.writeFileSync(APPLET_HOSTS_FILE, JSON.stringify(ports, null, 2) + '\n', { mode: 0o600 });
+    // Atomic, like every other JSON store in the repo — and here it is not
+    // hygiene. `loadPorts` fails open to `{}`, so a torn write means every
+    // applet is reassigned a port, which silently destroys all of their
+    // browser storage. That is the exact outcome this record exists to
+    // prevent.
+    //
+    // `mode` on the temp file rather than a `chmod` afterwards: the latter
+    // leaves a window at the default umask.
+    atomicWriteFileSync(APPLET_HOSTS_FILE, JSON.stringify(ports, null, 2) + '\n', { mode: 0o600 });
   }
 
   /** The port this applet has been assigned, or `undefined` if it has none yet. */
@@ -117,17 +122,15 @@ export class HostRegistry {
     return token;
   }
 
-  /** Port + token together, assigning and minting as needed. */
+  /**
+   * Port + token together, assigning and minting as needed.
+   *
+   * There is deliberately no `release`. An assignment is kept even after an
+   * applet is removed, so re-adding it restores the same origin and therefore
+   * the browser storage that origin still holds. The file grows by one small
+   * entry per applet ever seen, which is the cheaper side of that trade.
+   */
   recordFor(appId: string): AppletHostRecord {
     return { port: this.assignPort(appId), token: this.tokenFor(appId) };
-  }
-
-  /** Forgets an applet's port assignment. Its browser storage becomes unreachable. */
-  release(appId: string): void {
-    const ports = this.loadPorts();
-    if (!(appId in ports)) return;
-    delete ports[appId];
-    this.savePorts(ports);
-    this.tokens.delete(appId);
   }
 }

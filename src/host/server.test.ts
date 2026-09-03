@@ -130,8 +130,10 @@ describe('applet server', () => {
     const csp = res.headers.get('content-security-policy') ?? '';
     expect(csp).toContain("img-src 'self' data:");
     expect(csp).toContain("form-action 'none'");
-    expect(csp).toContain('sandbox allow-scripts');
-    expect(csp).not.toContain('allow-same-origin');
+    // `allow-same-origin` is REQUIRED, not forbidden — see csp.ts. Without it
+    // the document is opaque-origin: no localStorage, `Origin: null`, and
+    // `connect-src 'self'` matching nothing.
+    expect(csp).toContain('sandbox allow-scripts allow-same-origin');
   });
 
   /** Two applets, two origins — the acceptance criterion for storage isolation. */

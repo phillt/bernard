@@ -1,12 +1,7 @@
 import * as fs from 'node:fs';
 import * as crypto from 'node:crypto';
 import { AppRegistry } from '../apps/registry.js';
-import {
-  invokeAction,
-  effectiveTimeoutMs,
-  type InvocationErrorCode,
-  type InvocationResult,
-} from '../apps/invoke.js';
+import { invokeAction, type InvocationErrorCode, type InvocationResult } from '../apps/invoke.js';
 import type { ParseResult } from '../apps/manifest.js';
 import { withStdoutRedirectedToStderr } from './stdout-guard.js';
 
@@ -79,8 +74,22 @@ export interface ScriptCliOptions {
   describe?: boolean;
 }
 
+/**
+ * The CLI's own failure arm.
+ *
+ * Structurally `InvocationResult`'s failure member, widened only where the CLI
+ * genuinely differs: its `code` set includes `invalid_request` and
+ * `internal_error`, which no invocation can produce. Named rather than left as
+ * `Record<string, unknown>` so `emit` stays closed — the alternative accepts
+ * any object and stops typechecking the success path, which is how the
+ * envelope drifted across five sites before #419.
+ */
+type CliFailure = Omit<Extract<InvocationResult, { ok: false }>, 'error'> & {
+  error: { code: ScriptErrorCode; category?: string; message: string };
+};
+
 /** One JSON object, written to stdout, and nothing else ever is. */
-function emit(result: InvocationResult | Record<string, unknown>): void {
+function emit(result: InvocationResult | CliFailure): void {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
@@ -223,9 +232,3 @@ export async function scriptRun(opts: ScriptRunOptions): Promise<number> {
   emit(result);
   return result.ok ? EXIT_OK : EXIT_FOR[result.error.code];
 }
-
-/**
- * Re-exported so `run.test.ts` and any existing importer keep addressing it
- * here, though it now lives with the invocation core it belongs to.
- */
-export { effectiveTimeoutMs };

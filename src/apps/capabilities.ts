@@ -29,28 +29,16 @@ import * as crypto from 'node:crypto';
 /** How long a minted handle stays usable. */
 export const DEFAULT_CAPABILITY_TTL_MS = 60 * 60_000;
 
-export type CapabilityKind =
-  /**
-   * Binds `(appId, action)` and the action's **arg schema**, minted at serve
-   * time — before any untrusted data is in scope. Values are validated against
-   * that schema at invoke.
-   *
-   * This is the honest answer to R2's "minted before untrusted data is in
-   * scope, and immutable". An applet's arguments come from user interaction,
-   * so they cannot all be frozen at mint; what *is* frozen is the designation
-   * — which action, with which shape — and that is the property the
-   * Action-Selector Pattern actually rests on. Only the data varies.
-   */
-  | 'action'
-  /**
-   * Binds specific argument **values**, minted after a human confirmation.
-   * The shape R8's confirmation flow needs — the user approved *this* call,
-   * not this kind of call.
-   */
-  | 'frozen';
-
 export interface CapabilityRecord {
-  kind: CapabilityKind;
+  /**
+   * A short, non-secret identifier for logging.
+   *
+   * Separate from the handle because the handle is a live credential: slicing
+   * it for a log line writes part of an unexpired secret to disk, which is
+   * what the first cut did (`handle.slice(0, 8)` at the call site). Identity
+   * belongs to the capability, not to a consumer's substring.
+   */
+  id: string;
   appId: string;
   action: string;
   /** Present only for `frozen` handles. */
@@ -73,7 +61,6 @@ export type CapabilityResolution =
   | { ok: false; reason: ResolveFailure };
 
 export interface MintOptions {
-  kind?: CapabilityKind;
   appId: string;
   action: string;
   sessionId: string;
@@ -91,6 +78,8 @@ export interface RedeemContext {
 
 export class CapabilityTable {
   private readonly entries = new Map<string, CapabilityRecord>();
+  /** `appId\0action\0sessionId` → the live reusable handle for it. */
+  private readonly designations = new Map<string, string>();
 
   /**
    * Mints a handle. The returned string **encodes nothing** — no app id, no
@@ -100,7 +89,7 @@ export class CapabilityTable {
   mint(opts: MintOptions): string {
     const handle = crypto.randomBytes(32).toString('base64url');
     this.entries.set(handle, {
-      kind: opts.kind ?? 'action',
+      id: crypto.randomBytes(6).toString('hex'),
       appId: opts.appId,
       action: opts.action,
       frozenArgs: opts.frozenArgs,
@@ -108,6 +97,42 @@ export class CapabilityTable {
       expiresAt: Date.now() + (opts.ttlMs ?? DEFAULT_CAPABILITY_TTL_MS),
       usesRemaining: opts.uses ?? Number.POSITIVE_INFINITY,
     });
+    return handle;
+  }
+
+  /**
+   * The reusable handle for one `(appId, action, sessionId)` designation,
+   * minting it only the first time.
+   *
+   * **This is a bound on the table, not a convenience.** All three parts of the
+   * designation are fixed for the life of the host process, so a fresh handle
+   * per page load bought nothing and cost everything: `bootstrap.json` is a
+   * `GET`, which the guard does not gate on the token, so anything that can
+   * open the port could mint — one entry per declared action per fetch. And
+   * they were unreachable-but-live: `usesRemaining` starts at `Infinity`, and
+   * `Infinity - 1` is `Infinity`, so use never evicts them, while the TTL check
+   * is lazy and only runs when that exact handle is presented — which an
+   * abandoned handle never is. Measured at ~2.2 GB/h for a one-action applet
+   * and ~11 GB/h for five, unbounded until the process exits. On the
+   * login-started service #428 builds, that is a memory-exhaustion DoS
+   * reachable by anything local.
+   *
+   * Reuse keeps the table at O(apps × actions). Every binding property is
+   * unchanged: the handle is still opaque and unforgeable, and is still checked
+   * against `appId` and `sessionId` at redeem.
+   */
+  handleFor(appId: string, action: string, sessionId: string): string {
+    const key = `${appId}\u0000${action}\u0000${sessionId}`;
+    const existing = this.designations.get(key);
+    if (existing) {
+      const record = this.entries.get(existing);
+      // Still live? Reuse. Otherwise fall through and mint a replacement.
+      if (record && Date.now() <= record.expiresAt) return existing;
+      this.designations.delete(key);
+      if (existing) this.entries.delete(existing);
+    }
+    const handle = this.mint({ appId, action, sessionId });
+    this.designations.set(key, handle);
     return handle;
   }
 
@@ -154,22 +179,12 @@ export class CapabilityTable {
   revokeApp(appId: string): number {
     let dropped = 0;
     for (const [handle, record] of this.entries) {
-      if (record.appId === appId) {
-        this.entries.delete(handle);
-        dropped++;
-      }
+      if (record.appId !== appId) continue;
+      this.entries.delete(handle);
+      dropped++;
     }
-    return dropped;
-  }
-
-  /** Drops every handle issued to one session — used when a host restarts. */
-  revokeSession(sessionId: string): number {
-    let dropped = 0;
-    for (const [handle, record] of this.entries) {
-      if (record.sessionId === sessionId) {
-        this.entries.delete(handle);
-        dropped++;
-      }
+    for (const [key, handle] of this.designations) {
+      if (!this.entries.has(handle)) this.designations.delete(key);
     }
     return dropped;
   }

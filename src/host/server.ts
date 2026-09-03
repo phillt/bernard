@@ -7,7 +7,6 @@ import { AppRegistry } from '../apps/registry.js';
 import { checkRequest } from './guard.js';
 import { securityHeaders, originFor } from './csp.js';
 import { resolveAsset } from './assets.js';
-import { HostRegistry } from './registry.js';
 
 /**
  * One loopback HTTP server per applet (#421).
@@ -48,7 +47,6 @@ export interface AppletServerOptions {
 }
 
 export interface RunningApplet {
-  appId: string;
   port: number;
   origin: string;
   close: () => Promise<void>;
@@ -85,13 +83,8 @@ async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString('utf-8'));
 }
 
-/**
- * Builds the request handler for one applet.
- *
- * Exported separately from {@link startApplet} so it can be driven directly in
- * a test without binding anything.
- */
-export function createHandler(
+/** Builds the request handler for one applet. */
+function createHandler(
   opts: AppletServerOptions,
   /**
    * Resolves the port actually bound.
@@ -101,7 +94,7 @@ export function createHandler(
    * compares `Host` against it. A captured `opts.port` would be `0` and refuse
    * every request.
    */
-  getPort: () => number = () => opts.port,
+  getPort: () => number,
 ): (req: http.IncomingMessage, res: http.ServerResponse) => void {
   const { appId, token, sessionId, capabilities } = opts;
   const assetDir = opts.assetDir ?? appletAssetDir(appId);
@@ -114,7 +107,6 @@ export function createHandler(
         { port, token },
         {
           method: req.method ?? 'GET',
-          url: req.url ?? '/',
           headers: req.headers as Record<string, string | string[] | undefined>,
         },
       );
@@ -147,7 +139,11 @@ export function createHandler(
         }
         const handles: Record<string, string> = {};
         for (const action of Object.keys(app.manifest.actions)) {
-          handles[action] = capabilities.mint({ appId, action, sessionId });
+          // `handleFor`, not `mint`: the designation is constant for this
+          // process, so a fresh handle per page load only grew the table —
+          // and this route is a GET, which the guard does not gate on the
+          // token. See `CapabilityTable.handleFor`.
+          handles[action] = capabilities.handleFor(appId, action, sessionId);
         }
         sendJson(res, 200, { schemaVersion: 1, appId, token, handles });
         return;
@@ -195,7 +191,7 @@ export function createHandler(
           // user approved those, not whatever arrived with the request.
           args: record.frozenArgs ?? args ?? {},
           log,
-          capabilityId: handle.slice(0, 8),
+          capabilityId: record.id,
         });
         sendJson(res, result.ok ? 200 : 500, result);
         return;
@@ -241,7 +237,6 @@ export function startApplet(opts: AppletServerOptions): Promise<RunningApplet> {
       const port = typeof address === 'object' && address ? address.port : opts.port;
       boundPort = port;
       resolve({
-        appId: opts.appId,
         port,
         origin: originFor(port),
         close: () =>
@@ -255,5 +250,3 @@ export function startApplet(opts: AppletServerOptions): Promise<RunningApplet> {
     });
   });
 }
-
-export type { HostRegistry };

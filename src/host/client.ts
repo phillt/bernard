@@ -142,27 +142,3 @@ export function stopHost(): boolean {
   }
   return true;
 }
-
-/**
- * Stops, then starts once the port is genuinely free.
- *
- * **Not a fixed sleep.** `cronBounce` waits 500 ms between stop and start,
- * which is fine for a process that binds nothing; with a port, `TIME_WAIT` and
- * `EADDRINUSE` make a fixed delay unreliable in exactly the way that produces
- * an intermittent failure. This retries against a real readiness check.
- */
-export async function restartHost(timeoutMs = 10_000): Promise<boolean> {
-  stopHost();
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isHostProcessAlive()) break;
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  const started = await startHost();
-  if (!started) return false;
-  while (Date.now() < deadline) {
-    if (await isHostRunning()) return true;
-    await new Promise((r) => setTimeout(r, 150));
-  }
-  return false;
-}

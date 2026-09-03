@@ -50,15 +50,29 @@ describe('cspFor', () => {
   });
 
   /**
-   * `allow-scripts` WITHOUT `allow-same-origin`. The two together let a framed
-   * document remove its own `sandbox` attribute — MDN: "no more secure than
-   * not using the sandbox attribute at all" — and that escape requires being
-   * same-origin with the embedder. A per-applet port rules it out, but the
-   * combination must never appear regardless.
+   * `allow-scripts` **with** `allow-same-origin`, and the pairing is required.
+   *
+   * The MDN warning about these two together — "no more secure than not using
+   * the sandbox attribute at all" — is about an iframe whose document is
+   * same-origin with its EMBEDDER, which can then delete its own `sandbox`
+   * attribute. An applet is a top-level document on its own port; there is no
+   * embedder, so there is no escape to grant.
+   *
+   * Omitting it is the broken configuration: an opaque-origin document
+   * "cannot access `localStorage`" (MDN), which voids the whole reason
+   * per-applet origins exist, sends `Origin: null`, which the guard rejects,
+   * and makes `connect-src 'self'` match nothing, blocking its own callback.
+   *
+   * This test previously asserted the opposite and encoded the bug.
    */
-  it('sandboxes with scripts but never grants allow-same-origin', () => {
-    expect(directives().get('sandbox')).toBe('allow-scripts');
-    expect(cspFor()).not.toContain('allow-same-origin');
+  it('grants allow-same-origin, so the applet keeps its own origin and storage', () => {
+    expect(directives().get('sandbox')).toBe('allow-scripts allow-same-origin');
+  });
+
+  // Isolation between applets is carried by the port — two applets are two
+  // origins regardless of this flag.
+  it('still scopes connect-src to self, so the origin is the boundary', () => {
+    expect(directives().get('connect-src')).toBe("'self'");
   });
 
   it('accepts inline script, deliberately — generated code, boundary carried elsewhere', () => {

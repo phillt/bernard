@@ -8,6 +8,28 @@ import { parseAppManifest, type AppAction, type AppManifest } from './manifest.j
 /** Marker gating the one-time seed of the bundled example app. */
 const SEED_MARKER = '.seeded-v1';
 
+/**
+ * Copies a bundled applet's served files alongside its manifest (#421).
+ *
+ * Runs INSIDE `seedBundledJsonDir`'s `seedOnce`, so it is gated by the same
+ * `.seeded-v1` marker and protected by the same cross-process lock. Called
+ * outside it — as the first cut did — it re-ran a `readdir` plus a per-entry
+ * `existsSync` on every `AppRegistry` construction, which is once per script
+ * invocation and once per applet bootstrap request, and two concurrent
+ * requests could race the `cpSync`.
+ *
+ * Never overwrites: an existing directory is one the user or an agent has
+ * written into, the same promise the manifest half makes.
+ */
+function seedAssets(bundledDir: string, destDir: string): void {
+  for (const entry of fs.readdirSync(bundledDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dest = path.join(destDir, entry.name);
+    if (fs.existsSync(dest)) continue;
+    fs.cpSync(path.join(bundledDir, entry.name), dest, { recursive: true });
+  }
+}
+
 function bundledAppsDir(): string {
   return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'builtin-apps');
 }
@@ -53,34 +75,7 @@ export class AppRegistry {
    * produced a first-run write race.
    */
   private seed(): void {
-    seedBundledJsonDir(bundledAppsDir(), APPS_DIR, path.join(APPS_DIR, SEED_MARKER));
-    this.seedAssets();
-  }
-
-  /**
-   * Copies a bundled applet's served files alongside its manifest (#421).
-   *
-   * `seedBundledJsonDir` handles the manifest; an applet also has an
-   * `index.html` and whatever it loads, which live in a sibling directory. Both
-   * halves are gated by the same `.seeded-v1` marker the manifest uses, so a
-   * user who deletes a bundled applet does not get its assets back.
-   *
-   * Never overwrites: an existing directory is one the user (or an agent) has
-   * written into, and the manifest seed makes the same promise.
-   */
-  private seedAssets(): void {
-    try {
-      const src = bundledAppsDir();
-      if (!fs.existsSync(src)) return;
-      for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue;
-        const dest = path.join(APPS_DIR, entry.name);
-        if (fs.existsSync(dest)) continue;
-        fs.cpSync(path.join(src, entry.name), dest, { recursive: true });
-      }
-    } catch {
-      // Seeding is best-effort and must never block an invocation.
-    }
+    seedBundledJsonDir(bundledAppsDir(), APPS_DIR, path.join(APPS_DIR, SEED_MARKER), seedAssets);
   }
 
   /** App ids present on disk, sorted. Does not parse the manifests. */

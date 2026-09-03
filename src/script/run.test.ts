@@ -243,24 +243,24 @@ describe('scriptRun', () => {
 
 describe('effectiveTimeoutMs', () => {
   it("uses the action's own clock when no flag is given", async () => {
-    const { effectiveTimeoutMs } = await import('./run.js');
+    const { effectiveTimeoutMs } = await import('../apps/invoke.js');
     expect(effectiveTimeoutMs(60_000, undefined)).toBe(60_000);
   });
 
   it('lets the flag shorten the clock', async () => {
-    const { effectiveTimeoutMs } = await import('./run.js');
+    const { effectiveTimeoutMs } = await import('../apps/invoke.js');
     expect(effectiveTimeoutMs(60_000, 5_000)).toBe(5_000);
   });
 
   // A caller must not be able to buy itself more wall clock than the manifest
   // grants — the budget is a property of the app, not of who is calling it.
   it('never lets the flag extend the clock', async () => {
-    const { effectiveTimeoutMs } = await import('./run.js');
+    const { effectiveTimeoutMs } = await import('../apps/invoke.js');
     expect(effectiveTimeoutMs(60_000, 600_000)).toBe(60_000);
   });
 
   it('falls back to the default ceiling when the action declares none', async () => {
-    const { effectiveTimeoutMs } = await import('./run.js');
+    const { effectiveTimeoutMs } = await import('../apps/invoke.js');
     expect(effectiveTimeoutMs(undefined, undefined)).toBe(5 * 60_000);
     expect(effectiveTimeoutMs(undefined, 1_000)).toBe(1_000);
   });
@@ -269,7 +269,7 @@ describe('effectiveTimeoutMs', () => {
   // to survive `Math.min` and reach `setTimeout`, which coerces it to 0 and
   // fires the abort immediately.
   it('falls back to the ceiling rather than propagating a non-finite value', async () => {
-    const { effectiveTimeoutMs } = await import('./run.js');
+    const { effectiveTimeoutMs } = await import('../apps/invoke.js');
     expect(effectiveTimeoutMs(60_000, NaN)).toBe(60_000);
     expect(effectiveTimeoutMs(60_000, Infinity)).toBe(60_000);
     expect(effectiveTimeoutMs(NaN, undefined)).toBe(5 * 60_000);

@@ -19,7 +19,7 @@ import { isContainedIn, resolveForComparison } from '../permissions/write-scope.
 
 /** A file resolved for serving. */
 export type AssetResult =
-  | { ok: true; absPath: string; contentType: string; size: number }
+  | { ok: true; absPath: string; contentType: string }
   | { ok: false; status: 404 };
 
 /**
@@ -77,31 +77,20 @@ export function resolveAsset(rootDir: string, urlPath: string): AssetResult {
   const resolved = resolveForComparison(candidate);
   if (!isContainedIn(root, resolved)) return { ok: false, status: 404 };
 
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(resolved);
-  } catch {
-    return { ok: false, status: 404 };
-  }
-
-  // A directory request serves its index; anything that is not a regular file
+  // A directory request serves its index. Anything that is not a regular file
   // — a fifo, a socket, a device — is not servable and reading it could block.
-  if (stat.isDirectory()) {
-    const index = path.join(resolved, 'index.html');
-    try {
-      const indexStat = fs.statSync(index);
-      if (!indexStat.isFile()) return { ok: false, status: 404 };
-      return {
-        ok: true,
-        absPath: index,
-        contentType: contentTypeFor(index),
-        size: indexStat.size,
-      };
-    } catch {
-      return { ok: false, status: 404 };
-    }
-  }
-  if (!stat.isFile()) return { ok: false, status: 404 };
+  const stat = statOrNull(resolved);
+  const target = stat?.isDirectory() ? path.join(resolved, 'index.html') : resolved;
+  if (!statOrNull(target)?.isFile()) return { ok: false, status: 404 };
 
-  return { ok: true, absPath: resolved, contentType: contentTypeFor(resolved), size: stat.size };
+  return { ok: true, absPath: target, contentType: contentTypeFor(target) };
+}
+
+/** `statSync` without the try/catch at every call site. */
+function statOrNull(p: string): fs.Stats | null {
+  try {
+    return fs.statSync(p);
+  } catch {
+    return null;
+  }
 }

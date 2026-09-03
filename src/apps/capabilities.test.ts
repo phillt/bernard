@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { CapabilityTable } from './capabilities.js';
+import { CapabilityTable, DEFAULT_CAPABILITY_TTL_MS } from './capabilities.js';
 
 afterEach(() => vi.useRealTimers());
 
@@ -96,7 +96,7 @@ describe('redeem — TTL and use counts', () => {
 
   // The shape a confirmed call needs: the user approved *this* invocation.
   it('a one-shot handle is spent after a single redeem', () => {
-    const { t, h } = tableWithHandle({ kind: 'frozen', uses: 1, frozenArgs: { q: 'fixed' } });
+    const { t, h } = tableWithHandle({ uses: 1, frozenArgs: { q: 'fixed' } });
     const first = t.redeem(h, CTX);
     expect(first.ok).toBe(true);
     if (first.ok) expect(first.record.frozenArgs).toEqual({ q: 'fixed' });
@@ -116,12 +116,44 @@ describe('revocation', () => {
     expect(t.redeem(b, { appId: 'other', sessionId: 's' }).ok).toBe(true);
   });
 
-  it('revoking a session drops its handles across apps', () => {
+  /**
+   * `handleFor` is the bound on the table: the designation is constant for the
+   * process, so a reload reuses rather than accumulating. Minting fresh per
+   * page load grew the table at ~2.2 GB/h for a one-action applet, and
+   * `bootstrap.json` is a GET the guard does not gate on the token.
+   */
+  it('reuses one handle per designation instead of minting per call', () => {
     const t = new CapabilityTable();
-    t.mint({ appId: 'demo', action: 'ask', sessionId: 'old' });
-    t.mint({ appId: 'other', action: 'ask', sessionId: 'old' });
-    t.mint({ appId: 'demo', action: 'ask', sessionId: 'new' });
-    expect(t.revokeSession('old')).toBe(2);
+    const first = t.handleFor('demo', 'ask', 'sess-1');
+    for (let i = 0; i < 50; i++) expect(t.handleFor('demo', 'ask', 'sess-1')).toBe(first);
     expect(t.size()).toBe(1);
+  });
+
+  it('gives different designations different handles', () => {
+    const t = new CapabilityTable();
+    const a = t.handleFor('demo', 'ask', 's');
+    const b = t.handleFor('demo', 'other', 's');
+    const c = t.handleFor('two', 'ask', 's');
+    expect(new Set([a, b, c]).size).toBe(3);
+    expect(t.size()).toBe(3);
+  });
+
+  it('mints a replacement once the reused handle has expired', () => {
+    vi.useFakeTimers();
+    const t = new CapabilityTable();
+    const first = t.handleFor('demo', 'ask', 's');
+    vi.advanceTimersByTime(DEFAULT_CAPABILITY_TTL_MS + 1);
+    const second = t.handleFor('demo', 'ask', 's');
+    expect(second).not.toBe(first);
+    expect(t.size()).toBe(1);
+  });
+
+  it('drops a revoked app from the designation index too, not just the entries', () => {
+    const t = new CapabilityTable();
+    const before = t.handleFor('demo', 'ask', 's');
+    t.revokeApp('demo');
+    expect(t.redeem(before, CTX).ok).toBe(false);
+    // A fresh handle, not the revoked one resurrected from the index.
+    expect(t.handleFor('demo', 'ask', 's')).not.toBe(before);
   });
 });

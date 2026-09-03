@@ -29,10 +29,14 @@ export interface GuardContext {
   token: string;
 }
 
-/** The subset of a request the guard reads. Shaped so a test needs no socket. */
+/**
+ * The subset of a request the guard reads. Shaped so a test needs no socket.
+ *
+ * Deliberately no `url`: this gate makes no path-based decision, and carrying
+ * one would imply it does. Routing lives in `createHandler`.
+ */
 export interface GuardRequest {
   method: string;
-  url: string;
   headers: Record<string, string | string[] | undefined>;
 }
 
@@ -40,7 +44,8 @@ export type GuardVerdict =
   | { ok: true }
   | {
       ok: false;
-      status: 403 | 404 | 405;
+      /** Always 403 — the gate has exactly one failure mode by construction. */
+      status: 403;
       /**
        * Deliberately terse and identical across causes. A gate that explains
        * which check failed is a gate that helps an attacker enumerate them,
