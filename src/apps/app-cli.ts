@@ -1,7 +1,9 @@
 import { printError, printInfo } from '../output.js';
-import { AppRegistry } from './registry.js';
+import { AppRegistry, bundledAppIds } from './registry.js';
 import { parseRawAppManifest } from './manifest.js';
 import { deleteApplet } from './lifecycle.js';
+import { SpecialistStore } from '../specialists.js';
+import { uncoveredTools, uncoveredToolsMessage } from './invocation.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { APPS_DIR, appletAssetDir } from '../paths.js';
@@ -16,25 +18,128 @@ import { APPS_DIR, appletAssetDir } from '../paths.js';
  * the escalation the gates exist to prevent.
  */
 
-export function appList(): void {
+/**
+ * Lists applets, the user's own by default.
+ *
+ * The default is **not** everything, and that is the point. A seeded example
+ * sitting in the same flat list as the user's own work is indistinguishable
+ * from it — the observed report was "I tried deleting the old apps and don't
+ * know what is what". Bundled applets are still listable and still deletable;
+ * they are just not mixed in unasked.
+ *
+ * Hiding them entirely was the other option and is worse: a bundled applet
+ * still holds a port and still answers in a browser, so a listing that cannot
+ * show it makes it unfindable rather than tidy.
+ */
+export function appList(opts: { bundled?: boolean; all?: boolean } = {}): void {
   const registry = new AppRegistry();
+  const bundled = bundledAppIds();
   const ids = registry.listIds();
-  if (ids.length === 0) {
-    printInfo('No applets installed.');
+  const mine = ids.filter((id) => !bundled.has(id));
+  const theirs = ids.filter((id) => bundled.has(id));
+
+  if (opts.all) {
+    printApps(registry, mine, 'No applets of your own yet.', 'Yours');
+    printInfo('');
+    printApps(registry, theirs, 'None installed.', 'Bundled');
     return;
   }
-  for (const id of ids) {
-    const app = registry.get(id);
-    if (!app.ok) {
-      printInfo(`  ${id} — ⚠ ${app.failure.message}`);
-      continue;
+
+  if (opts.bundled) {
+    printApps(registry, theirs, 'No bundled applets installed.');
+    return;
+  }
+
+  printApps(
+    registry,
+    mine,
+    theirs.length > 0
+      ? `No applets yet. ${theirs.length} bundled example(s) installed — \`bernard app list --bundled\`.`
+      : 'No applets installed.',
+  );
+}
+
+/**
+ * The only place a list of applets is printed.
+ *
+ * Was three near-identical loops, and they had already drifted: the `--all`
+ * branch printed group titles but omitted the blank line between applets that
+ * the other two had, so the grouped view — the one most likely to be long —
+ * was the least readable.
+ */
+function printApps(registry: AppRegistry, ids: string[], empty: string, title?: string): void {
+  if (title) printInfo(`${title}:`);
+  if (ids.length === 0) {
+    printInfo(title ? `  ${empty}` : empty);
+    return;
+  }
+  ids.forEach((id, i) => {
+    if (i > 0) printInfo('');
+    printApp(registry, id);
+  });
+}
+
+/** Word-wraps to `width`, preserving nothing else — descriptions are one line of prose. */
+function wrap(text: string, width: number): string[] {
+  if (!text) return [];
+  const out: string[] = [];
+  let line = '';
+  for (const word of text.split(/\s+/)) {
+    if (line && line.length + 1 + word.length > width) {
+      out.push(line);
+      line = word;
+    } else {
+      line = line ? `${line} ${word}` : word;
     }
-    const actions = Object.entries(app.manifest.actions);
-    printInfo(`  ${id} — ${app.manifest.name} (${actions.length} action(s))`);
-    for (const [name, action] of actions) {
-      const tools = action.toolAllowlist.length ? action.toolAllowlist.join(', ') : 'no tools';
-      printInfo(`      ${name}  [${action.dispatch.kind}] ${action.toolMode}, ${tools}`);
-    }
+  }
+  if (line) out.push(line);
+  return out;
+}
+
+/**
+ * One applet, laid out like `--help` rather than a run-on line.
+ *
+ * The reported problem was that the flat form was unreadable: id, name, action
+ * count, then every action on its own line at one indent, with the description
+ * mixed in among them. Aligning the action column and separating the applet
+ * header from its body is what makes it scannable.
+ */
+function printApp(registry: AppRegistry, id: string): void {
+  const app = registry.get(id);
+  if (!app.ok) {
+    printInfo(`  ${id}`);
+    printInfo(`      ⚠ ${app.failure.message}`);
+    return;
+  }
+  const { name, description, actions } = app.manifest;
+  const entries = Object.entries(actions);
+
+  printInfo(`  ${id}${name && name !== id ? `  (${name})` : ''}`);
+  // Wrapped rather than left to the terminal, which breaks mid-word and
+  // destroys the indent that makes the block read as one applet.
+  for (const line of wrap(description ?? '', 72)) printInfo(`      ${line}`);
+  if (description) printInfo('');
+  if (entries.length === 0) {
+    printInfo('      no actions');
+    return;
+  }
+
+  // Labelled and addressed as `<app>/<action>`, because the bare name read as
+  // a top-level entry: a user seeing `greet  agent  read-only  datetime` in a
+  // command called `app list` tried `bernard app delete greet`. The slash form
+  // is also exactly how `bernard app allow <app> <action>` addresses it, so
+  // the listing now shows the thing you would type.
+  //
+  // The dispatch kind is deliberately gone. `agent` next to an action name
+  // read as "this is an agent" in a listing that never mentions agents; how an
+  // action runs is not what `app list` is for.
+  printInfo('      actions:');
+  const width = Math.max(...entries.map(([n]) => n.length + id.length + 1));
+  for (const [actionName, action] of entries) {
+    const tools = action.toolAllowlist.length ? action.toolAllowlist.join(', ') : 'no tools';
+    printInfo(
+      `        ${`${id}/${actionName}`.padEnd(width)}  ${action.toolMode.padEnd(9)}  ${tools}`,
+    );
   }
 }
 
@@ -71,6 +176,12 @@ export function appAllow(
     return;
   }
   action.toolAllowlist = tools;
+  // The grant is the user's and is applied either way — but a grant the
+  // backing specialist cannot reach is a no-op, and silently so: the action
+  // runs with an empty registry and the agent answers that it cannot do the
+  // job. This is where the two halves of the intersection first meet, so it is
+  // where the mismatch is worth saying out loud.
+  warnUncoveredGrant(action, tools);
   if (opts.write !== undefined) action.toolMode = opts.write ? 'write' : 'read-only';
   if (opts.confirm !== undefined) action.confirmMode = opts.confirm;
 
@@ -129,24 +240,43 @@ export function appPath(appId: string): void {
  * as the user's first impression of the feature.
  */
 export async function appOpen(appId: string, opts: { open?: boolean } = {}): Promise<void> {
-  const registry = new AppRegistry();
-  if (!registry.exists(appId)) {
-    printError(`No such app: ${appId}`);
+  const { openApplet } = await import('./open.js');
+  const result = await openApplet(appId, opts);
+  if ('error' in result) {
+    printError(result.error);
     process.exitCode = 1;
     return;
   }
-  const { HostRegistry } = await import('../host/registry.js');
-  const { isHostProcessAlive } = await import('../host/client.js');
-  if (!isHostProcessAlive()) {
-    const { appletHostStart } = await import('../host/cli.js');
-    await appletHostStart();
-  }
-  const url = `http://127.0.0.1:${new HostRegistry().recordFor(appId).port}`;
-  if (opts.open === false) {
-    printInfo(url);
+  if (result.started) printInfo('Started the applet host.');
+  if (result.opened) printInfo(`Opening ${result.url}`);
+  else printInfo(result.note ? `${result.note} — open it at ${result.url}` : result.url);
+}
+
+/**
+ * Says so when a grant lands on a specialist that does not target the tool.
+ *
+ * A warning rather than a refusal: the grant itself is legitimate and the
+ * specialist may be updated next. What must not happen is the user believing
+ * the tool was granted when the intersection has voided it.
+ */
+function warnUncoveredGrant(action: Record<string, unknown>, tools: string[]): void {
+  const dispatch = action.dispatch as { kind?: string; specialistId?: string } | undefined;
+  if (dispatch?.kind !== 'agent' || !dispatch.specialistId || tools.length === 0) return;
+
+  const record = new SpecialistStore({ seed: false }).get(dispatch.specialistId);
+  if (!record) {
+    printInfo(
+      `Note: specialist "${dispatch.specialistId}" does not exist yet. Create it with ` +
+        `targetTools covering ${tools.join(', ')}, or this action will run with no tools.`,
+    );
     return;
   }
-  const { openUrl } = await import('../open-url.js');
-  if (!openUrl(url)) printInfo(`Open it at ${url}`);
-  else printInfo(`Opening ${url}`);
+  const missing = uncoveredTools(tools, record.targetTools);
+  if (missing.length === 0) return;
+  // A WARNING, not a refusal, and the axis is who is acting: this is the user
+  // at a CLI making a grant that is theirs to make, and the specialist may be
+  // the next thing they fix. The `applet` tool refuses the same finding
+  // because the actor there is a model mid-authoring, which will not come back
+  // to it.
+  printInfo(`Warning: ${uncoveredToolsMessage(dispatch.specialistId, tools, missing)}`);
 }

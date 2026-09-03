@@ -126,3 +126,51 @@ export function grantedToolNames(
   const targets = specialistTargetTools ?? [];
   return action.toolAllowlist.filter((t) => targets.includes(t));
 }
+
+/**
+ * Whether a specialist can actually reach everything an action grants it.
+ *
+ * The counterpart to {@link grantedToolNames}, and it lives here because it is
+ * that function's behaviour stated as a rule: the tools an action gets are the
+ * INTERSECTION of its `toolAllowlist` and the specialist's `targetTools`, so an
+ * under-declared specialist silently yields fewer tools than the manifest
+ * promises — possibly none.
+ *
+ * That was documented as "the rule with no code behind it" and it cost a real
+ * applet: an action declaring `toolAllowlist: ['datetime']` pointed at a
+ * specialist with no `targetTools` ran with an empty registry and answered "No
+ * datetime tool available". A bad ANSWER, not an error, which is what made it
+ * hard to see — nothing in the invocation log said the grant had been voided.
+ *
+ * Returns the tools the action grants that the specialist cannot reach.
+ */
+export function uncoveredTools(
+  toolAllowlist: readonly string[],
+  specialistTargetTools: string[] | undefined,
+): string[] {
+  const targets = specialistTargetTools ?? [];
+  return toolAllowlist.filter((t) => !targets.includes(t));
+}
+
+/**
+ * The sentence both write-time callers say about an uncovered grant.
+ *
+ * Shared because it had already drifted: one site said "fewer tools than it
+ * declares" and the other listed the survivors, for the same computation over
+ * the same two lists. The VERDICT is deliberately not shared — `bernard app
+ * allow` warns and the `applet` tool refuses, and that difference is about who
+ * is acting, not about what was found (see each call site).
+ */
+export function uncoveredToolsMessage(
+  specialistId: string,
+  toolAllowlist: readonly string[],
+  missing: readonly string[],
+): string {
+  const kept = toolAllowlist.filter((t) => !missing.includes(t));
+  return (
+    `specialist "${specialistId}" does not target ${missing.join(', ')}. An action gets the ` +
+    'INTERSECTION of its toolAllowlist and the specialist targetTools, so this action would ' +
+    `run with ${kept.length === 0 ? 'no tools at all' : `only ${kept.join(', ')}`}. ` +
+    `Update the specialist to target [${toolAllowlist.map((t) => `'${t}'`).join(', ')}].`
+  );
+}

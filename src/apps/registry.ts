@@ -53,6 +53,35 @@ function seedAssets(bundledDir: string, destDir: string): void {
   }
 }
 
+/**
+ * The applet ids Bernard ships, read from what is actually bundled.
+ *
+ * Derived from the shipped directory, never from a field on the manifest —
+ * the same rule `specialist-authority.ts` follows for `SpecialistRole`, and
+ * for the same reason: a manifest is user-editable, so a record that could
+ * *declare* itself bundled would let a tampered file claim provenance it does
+ * not have. Here that only mislabels a listing rather than bypassing a
+ * permission, but the cheap habit is worth keeping.
+ *
+ * Unlike a bundled specialist, a bundled applet is **not protected**: it is
+ * copied on first run and the copy is the user's to edit or delete. So this
+ * answers "where did this come from", not "may I touch it".
+ */
+export function bundledAppIds(): Set<string> {
+  try {
+    return new Set(
+      fs
+        .readdirSync(bundledAppsDir(), { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name),
+    );
+  } catch {
+    // A build without `builtin-apps/` copied in: everything reads as the
+    // user's, which is the safer way to be wrong — it hides nothing.
+    return new Set();
+  }
+}
+
 function bundledAppsDir(): string {
   return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'builtin-apps');
 }
@@ -243,6 +272,25 @@ export class AppRegistry {
   /** True when a manifest exists for this id. */
   exists(appId: string): boolean {
     return fs.existsSync(path.join(APPS_DIR, `${appId}.json`));
+  }
+
+  /**
+   * Reads one of an applet's page files back.
+   *
+   * The same filename rule `writeAssets` enforces on the way in, for the same
+   * reason: the name reaches here from a tool call, and `../` would read a
+   * sibling applet's manifest out of `APPS_DIR`. Returns `null` rather than
+   * throwing for a missing file — an applet without the asset is a state a
+   * caller has to handle either way.
+   */
+  readAsset(appId: string, name: string): string | null {
+    if (!ASSET_NAME_RE.test(name)) return null;
+    const file = path.join(appletAssetDir(appId), name);
+    try {
+      return fs.readFileSync(file, 'utf-8');
+    } catch {
+      return null;
+    }
   }
 
   /**

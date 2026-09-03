@@ -40,10 +40,25 @@ import { APP_ID_RE } from './manifest.js';
  * are still real.
  *
  * The same idiom `src/permissions/shell-ast.ts` uses, for the same reason.
+ *
+ * **Loaded on first use, not at module load.** Requiring it eagerly meant that
+ * merely importing this module printed Node's one-per-process
+ * `ExperimentalWarning: SQLite is an experimental feature` — and `app-cli.ts`
+ * imports `lifecycle.ts`, which imports this, so **every** `bernard app`
+ * command emitted it, `list` and `--help`-shaped errors included. That is
+ * noise on commands that never open a database, and it made a true statement
+ * about SQLite look like a warning about listing applets.
+ *
+ * Deferring is the fix rather than suppressing the warning: the warning is
+ * correct whenever we actually use SQLite, and this repo has no suppression
+ * convention worth starting here. Now it fires when an applet's store is
+ * opened, which is when it is true.
  */
-const { DatabaseSync: SQLiteDatabase } = createRequire(import.meta.url)(
-  'node:sqlite',
-) as typeof import('node:sqlite');
+let sqlite: typeof import('node:sqlite') | undefined;
+
+function sqliteModule(): typeof import('node:sqlite') {
+  return (sqlite ??= createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite'));
+}
 
 /** Values are stored as JSON text, so anything structured-cloneable round-trips. */
 export interface StoreEntry {
@@ -79,7 +94,7 @@ export class AppletStore {
     // rather than glossed: the containing directory is created 0700 first, so
     // the window is inside a directory nothing else can traverse.
     const existed = fs.existsSync(file);
-    this.db = new SQLiteDatabase(file, { timeout: 5_000 });
+    this.db = new (sqliteModule().DatabaseSync)(file, { timeout: 5_000 });
     if (!existed) {
       try {
         fs.chmodSync(file, 0o600);

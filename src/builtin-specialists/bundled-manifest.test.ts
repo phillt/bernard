@@ -75,3 +75,41 @@ describe('bundled specialist manifest', () => {
     expect(mismatched).toEqual([]);
   });
 });
+
+/**
+ * The two applet-authoring prompts must teach the served client, not the wire
+ * protocol.
+ *
+ * Both once described the protocol in prose — bootstrap, then POST with an
+ * `x-bernard-token` header — and a generated page duly hand-rolled it and got
+ * a 403 on every click. The write path refuses that now, but a prompt that
+ * still teaches it wastes a turn per applet before the refusal lands.
+ */
+describe('the applet specialists teach the client, not the protocol', () => {
+  const load = (name: string) =>
+    JSON.parse(fs.readFileSync(path.join(DIR, `${name}.json`), 'utf-8')) as Record<string, unknown>;
+
+  const text = (record: Record<string, unknown>) =>
+    JSON.stringify([record.systemPrompt, record.guidelines, record.goodExamples]);
+
+  for (const name of ['applet-styler', 'applet-reviewer']) {
+    it(`${name} names the served client`, () => {
+      expect(text(load(name))).toContain('/__bernard/applet.js');
+    });
+
+    it(`${name} never instructs a page to set the session header`, () => {
+      // The one instruction that reproduces the original defect. Allowed only
+      // as something to REFUSE — so it may appear in a badExample, never in
+      // the prompt, guidelines or a good example.
+      expect(text(load(name)).toLowerCase()).not.toContain('with `x-bernard-token`');
+    });
+  }
+
+  it('applet-reviewer does not claim `bernard script` proves a button works', () => {
+    // It bypasses the HTTP server entirely, so a green run and a dead button
+    // are compatible — which is how a broken applet shipped.
+    const p = String(load('applet-reviewer').systemPrompt);
+    expect(p).toContain('does not touch the browser half');
+    expect(p).not.toContain('This is the check that matters');
+  });
+});

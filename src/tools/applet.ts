@@ -1,7 +1,19 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
+import { capSubagentResult } from './result-cap.js';
 import { AppRegistry } from '../apps/registry.js';
+import { defaultAppletPage } from '../apps/page-template.js';
+import { SpecialistStore, type Specialist } from '../specialists.js';
+import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-tool.js';
+import { uncoveredTools, uncoveredToolsMessage } from '../apps/invocation.js';
+import {
+  formatWarnings,
+  refusalFor,
+  validateAppletPage,
+  warningsFor,
+  type PageIssue,
+} from '../apps/page-validate.js';
 import {
   ACTION_NAME_RE,
   APP_ID_RE,
@@ -77,7 +89,14 @@ const PARAMETERS = z.object({
   action: z.enum(['create', 'update', 'read', 'list']).describe('The operation to perform'),
   id: z.string().optional().describe('Applet id (kebab-case). Required for create/update/read.'),
   name: z.string().max(80).optional().describe('Display name (required for create)'),
-  description: z.string().max(400).optional(),
+  description: z
+    .string()
+    .max(400)
+    .optional()
+    .describe(
+      'One line on what this applet is for. REQUIRED on create — it is what the user reads ' +
+        'in `bernard app list` and in /applets, where a list of ids alone is unreadable.',
+    ),
   actions: z
     .record(z.string(), ACTION)
     .optional()
@@ -86,9 +105,16 @@ const PARAMETERS = z.object({
     .string()
     .optional()
     .describe(
-      "The applet's index.html. Required for create. Plain HTML with inline <script>; it " +
-        'reaches Bernard by POSTing a capability handle to /__bernard/invoke — read the ' +
-        'bundled demo applet for the shape.',
+      "The applet's index.html. OPTIONAL — omit it and a working page is scaffolded from " +
+        'the actions, which is the fastest way to a running applet. When you do write one, ' +
+        'it MUST: link <link rel="stylesheet" href="/__bernard/tokens.css"> (inline <style> ' +
+        'is refused by the CSP and renders nothing), link <link rel="manifest" ' +
+        'href="/__bernard/manifest.webmanifest">, and load the client with a plain ' +
+        '<script src="/__bernard/applet.js"></script> — never type="module", which is ' +
+        "deferred. Then call `await bernard.invoke('action', args)`, which resolves to the " +
+        'result and throws on failure, and `bernard.store.get/set/list/delete`. Never fetch ' +
+        '/__bernard/* yourself: a hand-rolled request omits the session header and gets a 403, ' +
+        'and writing one is refused. `applet read <id>` returns an existing page to copy from.',
     ),
   files: z
     .record(z.string(), z.string())
@@ -109,7 +135,11 @@ export function createAppletTool(registry?: AppRegistry) {
       parameters: PARAMETERS,
       execute: async (args: AppletArgs): Promise<string> => {
         try {
-          return run(store, args);
+          // `return await`, not `return`. With `run` async a bare return hands
+          // back the promise before it rejects, so this `catch` would see
+          // nothing and the `Error: ` prefix `detectToolError` reads (#364)
+          // would silently stop being applied.
+          return await run(store, args);
         } catch (err) {
           // The `Error: ` prefix is what `detectToolError` reads (#364).
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -127,7 +157,7 @@ export function createAppletTool(registry?: AppRegistry) {
   );
 }
 
-function run(store: AppRegistry, args: AppletArgs): string {
+async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
   switch (args.action) {
     case 'list': {
       const ids = store.listIds();
@@ -137,22 +167,43 @@ function run(store: AppRegistry, args: AppletArgs): string {
       const id = need(args.id, 'id', 'read');
       const app = store.get(id);
       if (!app.ok) return `Error: ${app.failure.message}`;
-      return JSON.stringify(app.manifest, null, 2);
+      // The page, not only the manifest. The `page` field's own description
+      // tells a model to read an existing applet for the shape, and until now
+      // this branch returned the manifest alone — so the instruction it was
+      // given could not be followed.
+      const page = store.readAsset(id, 'index.html');
+      const shown = page === null ? '(no index.html)' : capSubagentResult(page, PAGE_PREVIEW_MAX);
+      return `${JSON.stringify(app.manifest, null, 2)}\n\n--- index.html ---\n${shown}`;
     }
     case 'create': {
       const id = need(args.id, 'id', 'create');
       if (!APP_ID_RE.test(id)) {
         return `Error: "${id}" is not a valid applet id — lowercase letters, digits and hyphens, 2-64 characters.`;
       }
+      // Required by the TOOL, not by the schema. The manifest stays tolerant
+      // of a missing description because it must still read files written
+      // before this and by hand; what changes is that Bernard cannot author
+      // one without saying what it is for.
+      need(args.description, 'description', 'create');
       const manifest = buildManifest(id, args);
-      const created = store.create(manifest, {
-        'index.html': need(args.page, 'page', 'create'),
-        ...(args.files ?? {}),
-      });
+      const dispatch = await checkDispatch(id, manifest.actions);
+      if (dispatch.refusal) return dispatch.refusal;
+      // Scaffolded when the caller supplies none, so every refusal below has a
+      // remedy reachable in one call rather than being a dead end.
+      const page =
+        args.page ?? defaultAppletPage(manifest.name, manifest.description, manifest.actions);
+      const issues = validateAppletPage(page, Object.keys(manifest.actions));
+      const refusal = refusalFor(issues);
+      if (refusal) return refusal;
+
+      const created = store.create(manifest, { 'index.html': page, ...(args.files ?? {}) });
       return (
         `Applet "${created.name}" (${created.id}) created with ` +
-        `${Object.keys(created.actions).length} action(s). Its actions have no tools yet — ` +
-        `grant them with \`bernard app-grant ${created.id}\`.`
+        `${Object.keys(created.actions).length} action(s).` +
+        grantHint(created.id, Object.keys(created.actions)) +
+        warningsFor(issues) +
+        formatWarnings(dispatch.warnings) +
+        (await openedNote(created.id))
       );
     }
     case 'update': {
@@ -163,10 +214,25 @@ function run(store: AppRegistry, args: AppletArgs): string {
       // been lifted, so writing it back would be rejected by its own version
       // refinement — see `RawAppManifestSchema`.
       const manifest = buildManifest(id, args, existing.manifest);
+      const dispatch = await checkDispatch(id, manifest.actions);
+      if (dispatch.refusal) return dispatch.refusal;
       const files: Record<string, string> = { ...(args.files ?? {}) };
-      if (args.page !== undefined) files['index.html'] = args.page;
+      let issues: PageIssue[] = [];
+      if (args.page !== undefined) {
+        // Validated against the manifest as it will be AFTER this update, so a
+        // call that adds an action and its button in one go is not refused for
+        // invoking something that does not exist yet.
+        issues = validateAppletPage(args.page, Object.keys(manifest.actions));
+        const refusal = refusalFor(issues);
+        if (refusal) return refusal;
+        files['index.html'] = args.page;
+      }
       const updated = store.update(id, manifest, files);
-      return `Applet "${updated.name}" (${updated.id}) updated.`;
+      return (
+        `Applet "${updated.name}" (${updated.id}) updated.` +
+        warningsFor(issues) +
+        formatWarnings(dispatch.warnings)
+      );
     }
     default:
       // Unreachable through the AI SDK, which parses against the enum first —
@@ -226,3 +292,202 @@ function need<T>(value: T | undefined, field: string, action: string): T {
   if (value === undefined) throw new Error(`\`${field}\` is required for action "${action}".`);
   return value;
 }
+
+/**
+ * How to actually grant the new applet its tools.
+ *
+ * The previous text pointed at `bernard app-grant <id>`, which **cannot do
+ * it**. There are two mechanisms and they are not interchangeable:
+ * `app-grant` writes `ProfileSettings.appToolGrants`, a list of
+ * `PermissionRule`s that allow or deny at the gate — a REFINEMENT over tools
+ * that already exist. `bernard app allow <id> <action> --tools a,b` writes the
+ * manifest's `toolAllowlist`, which is what decides whether a tool is
+ * CONSTRUCTED at all.
+ *
+ * An action created here always has an empty allowlist, because this tool
+ * cannot set one (the authority split). So the very first thing a new
+ * agent-backed applet needs is the command this message names, and naming the
+ * wrong one meant following the instruction exactly left the button as broken
+ * as before — observed, as "No datetime tool available" from a button whose
+ * author had done everything right.
+ */
+function grantHint(appId: string, actions: string[]): string {
+  if (actions.length === 0) return '';
+  const example = actions[0];
+  return (
+    ` Its actions have no tools yet — an action with an empty allowlist can only produce text. ` +
+    `Grant per action with \`bernard app allow ${appId} ${example} --tools <names>\`` +
+    (actions.length > 1 ? ` (and likewise for ${actions.slice(1).join(', ')}).` : '.') +
+    ' Note `bernard app-grant` is a different thing — it refines rules over tools an action' +
+    ' already has, and cannot add one.'
+  );
+}
+
+/**
+ * Opens a just-built applet, and says where it is either way.
+ *
+ * On `create` only, never `update`: an edit mid-conversation stealing window
+ * focus is worse than the defect this fixes. Best-effort by construction — the
+ * URL is in the returned string whatever happened, so a model can always tell
+ * the user where the applet is, and no failure here can turn a successful
+ * create into a failed tool call.
+ */
+async function openedNote(appId: string): Promise<string> {
+  try {
+    const { loadConfig } = await import('../config.js');
+    if (!loadConfig().autoOpenApplets) return '';
+    const { openApplet } = await import('../apps/open.js');
+    const result = await openApplet(appId);
+    if ('error' in result) return '';
+    if (result.opened) return ` Opened it at ${result.url}.`;
+    return result.note
+      ? ` It is at ${result.url} (not opened: ${result.note}).`
+      : ` It is at ${result.url}.`;
+  } catch {
+    // `loadConfig` throws with no provider key configured, and a tool action
+    // that makes no model call must not require one.
+    return '';
+  }
+}
+
+/**
+ * Refuses a manifest whose actions could never run.
+ *
+ * Gated on a `kind: 'tool'` action actually being present, so the common
+ * agent-backed applet builds no registry and pays nothing.
+ *
+ * An unknown `specialistId` is deliberately a WARNING, not a refusal, and that
+ * is the whole reason the boundary is "immutable relative to the write". A
+ * tool's eligibility is compiled in — `datetime` will never become eligible.
+ * A specialist is user state, and the natural authoring order is to create the
+ * applet and then create and bind its agent, which `agent-builder` depends on;
+ * refusing here would break that sequence. It is already pre-flighted at run
+ * time with its own error code.
+ */
+async function checkDispatch(
+  appId: string,
+  actions: Record<string, RawAppAction>,
+): Promise<{ refusal: string | null; warnings: string[] }> {
+  const problems: string[] = [];
+  const warnings: string[] = [];
+  let specialists: SpecialistStore | undefined;
+  // Keyed by specialist id, because one specialist commonly backs several
+  // buttons — `SpecialistStore.get` is an existsSync + readFileSync + parse
+  // every call, so without this an applet with three actions on one specialist
+  // reads the same file three times.
+  const seen = new Map<string, Specialist | undefined>();
+  const lookup = (specialistId: string): Specialist | undefined => {
+    if (!seen.has(specialistId)) {
+      specialists ??= new SpecialistStore({ seed: false });
+      seen.set(specialistId, specialists.get(specialistId));
+    }
+    return seen.get(specialistId);
+  };
+
+  for (const [name, action] of Object.entries(actions)) {
+    const dispatch = action.dispatch;
+
+    if (dispatch?.kind === 'tool') {
+      const refusal =
+        (await directInvocableRefusalByName(dispatch.tool)) ??
+        (await toolArgRefusal(dispatch.tool, dispatch.args ?? {}));
+      if (refusal) problems.push(`  - action "${name}": ${refusal}`);
+      continue;
+    }
+
+    if (dispatch?.kind !== 'agent') continue;
+
+    // The intersection rule, which until now had no code behind it.
+    // `grantedToolNames` intersects the action's `toolAllowlist` with the
+    // specialist's `targetTools`, so an under-declared specialist yields an
+    // action with FEWER tools than its manifest promises — possibly none. It
+    // then fails as a bad answer rather than an error, which is what makes it
+    // so hard to see: the observed case produced "No datetime tool available"
+    // from a specialist whose action declared `toolAllowlist: ['datetime']`.
+    // `{{arg}}` is not a thing, and the two-channel design is why it must not
+    // become one. `action.instructions` is the author-written TRUSTED channel;
+    // validated args travel separately as a labelled, fenced JSON block that
+    // the model is told to treat as untrusted data. Interpolating an arg into
+    // the instruction string would collapse exactly the boundary that makes an
+    // applet action safe to expose to a browser.
+    //
+    // So this warns rather than adding the feature. Observed working by luck:
+    // an action whose instructions said `{{dob}}` produced the right answer
+    // because the model ALSO had the real value in the args block and used
+    // that one. "Reply with exactly {{dob}}" would have printed the literal.
+    const placeholders = [
+      ...new Set(Array.from(dispatch.instructions.matchAll(/\{\{\s*(\w+)\s*\}\}/g), (m) => m[1])),
+    ];
+    if (placeholders.length > 0) {
+      warnings.push(
+        `Action "${name}" writes ${placeholders.map((v) => `{{${v}}}`).join(', ')} in its ` +
+          'instructions, which is NOT interpolated — the model receives that text literally. ' +
+          'Arguments arrive separately as a JSON block the model is told to treat as untrusted ' +
+          'data, and that separation is deliberate. Refer to them by name instead, e.g. ' +
+          `"use the ${placeholders[0]} value from the supplied JSON".`,
+      );
+    }
+
+    const allowed = action.toolAllowlist ?? [];
+    const record = lookup(dispatch.specialistId);
+
+    // An empty allowlist is legitimate for an action that only produces text,
+    // so this is not warned on by itself. It IS warned on when the backing
+    // specialist declares `targetTools` — that specialist was built to use
+    // them, the intersection is empty, and the action will fail at the click
+    // saying it has no tool. That is the exact shape observed.
+    if (allowed.length === 0) {
+      const wants = record?.targetTools ?? [];
+      if (wants.length > 0) {
+        warnings.push(
+          `Action "${name}" grants no tools, but its specialist "${dispatch.specialistId}" ` +
+            `targets ${wants.join(', ')}. An action gets the INTERSECTION of the two, so this ` +
+            `one runs with nothing. Grant them: ` +
+            `\`bernard app allow ${appId} ${name} --tools ${wants.join(',')}\`.`,
+        );
+      }
+      continue;
+    }
+
+    // ABSENT is a warning, not a refusal, and the distinction is load-bearing:
+    // the natural authoring order is to write the applet and then build and
+    // bind its agent, which is exactly what `agent-builder` does. Refusing
+    // here would make that sequence impossible. Run time pre-flights it with
+    // its own error code. A specialist created later is picked up on the next
+    // invocation — the store is read from disk per dispatch, never cached.
+    if (!record) {
+      warnings.push(
+        `Action "${name}" names specialist "${dispatch.specialistId}", which does not exist ` +
+          `yet. Create it with targetTools covering ${allowed.join(', ')} before the button is used.`,
+      );
+      continue;
+    }
+
+    const missing = uncoveredTools(allowed, record.targetTools);
+    if (missing.length > 0) {
+      // A REFUSAL where `bernard app allow` warns on the same finding. The
+      // axis is who is acting: there, a user making a grant that is theirs,
+      // who may fix the specialist next. Here, a model mid-authoring that will
+      // not come back to it — so the applet must not be written believing it
+      // works.
+      problems.push(
+        `  - action "${name}": ${uncoveredToolsMessage(dispatch.specialistId, allowed, missing)}`,
+      );
+    }
+  }
+
+  if (problems.length === 0) return { refusal: null, warnings };
+  return {
+    refusal:
+      `Error: this applet was not written — ${problems.length} action(s) could never run:\n` +
+      `${problems.join('\n')}\n` +
+      'Tools callable directly are: web_read, web_search, memory, file_read_lines, file_write. ' +
+      'For anything else, back the action with a specialist — and the specialist must be ' +
+      "kind: 'tool-wrapper' and declare targetTools covering the action's toolAllowlist, or it " +
+      'is handed no tools and answers that it cannot do the job.',
+    warnings,
+  };
+}
+
+/** A page is unbounded; a tool result that reaches a model is not. */
+const PAGE_PREVIEW_MAX = 20_000;

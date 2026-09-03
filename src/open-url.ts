@@ -50,3 +50,28 @@ export function openUrl(url: string, platform: string = osPlatform()): boolean {
     return false;
   }
 }
+
+/**
+ * Whether opening a browser could plausibly work here.
+ *
+ * {@link openUrl} cannot answer this: it returns `true` the moment `spawn`
+ * succeeds, and the real failure — `xdg-open` with no display — arrives
+ * asynchronously on `child.on('error')`, long after the caller has moved on.
+ * So a headless session gets a cheerful "opened it" and no window.
+ *
+ * Checked rather than attempted, because the caller's alternative is to print
+ * the URL, and printing it is only useful if it happens INSTEAD of a claim
+ * that the browser is already showing it. Same injectable-platform shape as
+ * {@link browserCommand}, so this is testable without a machine.
+ */
+export function canOpenBrowser(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: string = osPlatform(),
+): boolean {
+  if (!browserCommand('about:blank', platform)) return false;
+  // macOS and Windows always have a window server for a logged-in user.
+  if (platform !== 'linux') return true;
+  // A display is what `xdg-open` actually needs; SSH without one is the
+  // common case, but a bare tty console is the same situation.
+  return Boolean(env.DISPLAY || env.WAYLAND_DISPLAY);
+}

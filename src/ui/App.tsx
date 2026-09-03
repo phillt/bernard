@@ -182,7 +182,7 @@ import {
 } from '../voice-service.js';
 import { toSpokenForm } from '../speech-normalizer.js';
 import { toLiteralSpeech } from '../speech-text.js';
-import { AppRegistry } from '../apps/registry.js';
+import { AppRegistry, bundledAppIds } from '../apps/registry.js';
 import { AppletCandidateStore, type AppletCandidate } from '../applet-candidates.js';
 import { buildAppletRequest } from '../applet-detector.js';
 
@@ -2070,9 +2070,16 @@ export function App({
         pending = appletCandidates.listPending();
         const rows: MenuEntry[] = [];
         const appIds = registry.listIds();
-        if (appIds.length > 0) {
-          rows.push({ type: 'section', title: 'Applets' });
-          for (const id of appIds) {
+        // Split the same way `bernard app list` does, and for the same reason:
+        // a seeded example in one flat list is indistinguishable from the
+        // user's own work. Sections rather than omission — a bundled applet
+        // still holds a port and still answers in a browser, so hiding it
+        // makes it unfindable rather than tidy.
+        const bundled = bundledAppIds();
+        const group = (title: string, ids: string[]) => {
+          if (ids.length === 0) return;
+          rows.push({ type: 'section', title });
+          for (const id of ids) {
             const parsed = registry.get(id);
             const m = parsed.ok ? parsed.manifest : undefined;
             rows.push({
@@ -2082,7 +2089,15 @@ export function App({
               value: `app:${id}`,
             });
           }
-        }
+        };
+        group(
+          'Applets',
+          appIds.filter((id) => !bundled.has(id)),
+        );
+        group(
+          'Bundled examples',
+          appIds.filter((id) => bundled.has(id)),
+        );
         if (pending.length > 0) {
           rows.push({ type: 'section', title: 'Suggestions' });
           for (const c of pending) {

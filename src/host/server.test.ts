@@ -80,8 +80,9 @@ describe('applet server', () => {
     const server = await import('./server.js');
     const webmanifest = await import('./webmanifest.js');
     const tokens = await import('./tokens.js');
+    const sdk = await import('./sdk.js');
     const caps = await import('../apps/capabilities.js');
-    return { ...server, ...caps, ...paths, ...webmanifest, ...tokens };
+    return { ...server, ...caps, ...paths, ...webmanifest, ...tokens, ...sdk };
   }
 
   function writeApp(m: typeof import('../paths.js'), appId = 'demo', body: unknown = APP): string {
@@ -358,6 +359,32 @@ describe('applet server', () => {
     const { app } = await start(m);
     const res = await fetch(app.origin, { headers: hostHeaders(app.port) });
     expect(res.headers.get('content-security-policy')).toContain("manifest-src 'self'");
+  });
+
+  it('serves the applet client, and with a MIME the browser will execute', async () => {
+    const m = await load();
+    writeApp(m);
+    const { app } = await start(m);
+    const res = await fetch(`${app.origin}${m.SDK_PATH}`, { headers: hostHeaders(app.port) });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('window.bernard');
+
+    // Pinned against `contentTypeFor` rather than a literal. `nosniff` is on
+    // every response, so a Content-Type the browser does not accept as script
+    // means it silently declines to execute — no error, no console entry, just
+    // a page where `bernard` is undefined. The two must not drift.
+    const { contentTypeFor } = await import('./assets.js');
+    expect(res.headers.get('content-type')).toBe(contentTypeFor('a.js'));
+  });
+
+  it('serves the client without a token, because a page cannot have one yet', async () => {
+    // The guard gates on METHOD, not path: a GET needs no token, which is what
+    // lets a page load its own client before it holds anything.
+    const m = await load();
+    writeApp(m);
+    const { app } = await start(m);
+    const res = await fetch(`${app.origin}${m.SDK_PATH}`, { headers: hostHeaders(app.port) });
+    expect(res.status).toBe(200);
   });
 
   it('serves the shared token stylesheet', async () => {
