@@ -1,0 +1,65 @@
+<title>Bernard demo applet</title>
+<style>
+  body {
+    font: 16px/1.5 system-ui, sans-serif;
+    max-width: 34rem;
+    margin: 3rem auto;
+    padding: 0 1rem;
+  }
+  input { width: 100%; padding: 0.5rem; font: inherit; }
+  button { margin-top: 0.75rem; padding: 0.5rem 1rem; font: inherit; }
+  pre { white-space: pre-wrap; background: #f4f4f5; padding: 1rem; border-radius: 4px; }
+  .err { color: #b91c1c; }
+</style>
+
+<h1>Demo applet</h1>
+<p>Asks Bernard a question through a named action. There is no prompt here — the
+page holds a handle to <code>web_answer</code> and nothing else.</p>
+
+<label>Question <input id="q" value="what is the default port for PostgreSQL?" /></label>
+<button id="go">Ask</button>
+<pre id="out">Ready.</pre>
+
+<script>
+  // The page never learns its own token or handles from markup — it fetches
+  // them from its own origin. `connect-src 'self'` is what keeps that the only
+  // place it can reach.
+  let boot = null;
+
+  async function bootstrap() {
+    const res = await fetch('/__bernard/bootstrap.json');
+    if (!res.ok) throw new Error('bootstrap failed');
+    boot = await res.json();
+  }
+
+  async function ask() {
+    const out = document.getElementById('out');
+    out.className = '';
+    out.textContent = 'Working…';
+    try {
+      if (!boot) await bootstrap();
+      const res = await fetch('/__bernard/invoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-bernard-token': boot.token },
+        // A handle plus data. Never an action name, never a prompt — the host
+        // resolves what to run from its own record.
+        body: JSON.stringify({
+          handle: boot.handles.web_answer,
+          args: { question: document.getElementById('q').value },
+        }),
+      });
+      const body = await res.json();
+      if (!body.ok) {
+        out.className = 'err';
+        out.textContent = `${body.error.code}: ${body.error.message}`;
+        return;
+      }
+      out.textContent = body.result;
+    } catch (err) {
+      out.className = 'err';
+      out.textContent = String(err);
+    }
+  }
+
+  document.getElementById('go').addEventListener('click', ask);
+</script>

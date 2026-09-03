@@ -54,6 +54,33 @@ export class AppRegistry {
    */
   private seed(): void {
     seedBundledJsonDir(bundledAppsDir(), APPS_DIR, path.join(APPS_DIR, SEED_MARKER));
+    this.seedAssets();
+  }
+
+  /**
+   * Copies a bundled applet's served files alongside its manifest (#421).
+   *
+   * `seedBundledJsonDir` handles the manifest; an applet also has an
+   * `index.html` and whatever it loads, which live in a sibling directory. Both
+   * halves are gated by the same `.seeded-v1` marker the manifest uses, so a
+   * user who deletes a bundled applet does not get its assets back.
+   *
+   * Never overwrites: an existing directory is one the user (or an agent) has
+   * written into, and the manifest seed makes the same promise.
+   */
+  private seedAssets(): void {
+    try {
+      const src = bundledAppsDir();
+      if (!fs.existsSync(src)) return;
+      for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const dest = path.join(APPS_DIR, entry.name);
+        if (fs.existsSync(dest)) continue;
+        fs.cpSync(path.join(src, entry.name), dest, { recursive: true });
+      }
+    } catch {
+      // Seeding is best-effort and must never block an invocation.
+    }
   }
 
   /** App ids present on disk, sorted. Does not parse the manifests. */
