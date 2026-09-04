@@ -96,9 +96,15 @@ export function buildStyleBrief(target: StyleTarget): string {
     `What it is for: ${target.description}`,
     `Actions it declares: ${actions}`,
     '',
-    'Read the current page first',
+    // The read is what carries the applet's design brief — what it is for and
+    // what has been tried (#463). Deliberately not repeated in this prompt:
+    // `applet read` returns it, and putting it here too would pay for the same
+    // text twice in one context.
+    'Read the current page and its design brief first',
     `(\`applet\` with \`{"action":"read","id":"${target.id}"}\`), then write the styled`,
-    `page with \`applet\` and \`{"action":"update","id":"${target.id}","page":"<the full HTML>"}\`.`,
+    `page with \`applet\` and \`{"action":"update","id":"${target.id}","page":"<the full HTML>",` +
+      `"note":"<one line on what you changed>"}\`. The note is required and lands in the`,
+    "applet's design brief, which the next editor reads.",
     '',
     'Keep every declared action reachable from a control.',
   ].join('\n');

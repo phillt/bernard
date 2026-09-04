@@ -8,6 +8,8 @@ import { defaultAppletPage } from '../apps/page-template.js';
 import { SpecialistStore, type Specialist } from '../specialists.js';
 import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-tool.js';
 import type { AppletStyler, StyleOutcome } from './applet-styling.js';
+import { AppletBriefStore } from '../apps/brief-store.js';
+import { INTENT_FIELDS, INTENT_FIELD_LABELS, MAX_NOTE_CHARS, renderBrief } from '../apps/brief.js';
 import { uncoveredTools, uncoveredToolsMessage } from '../apps/invocation.js';
 import {
   formatWarnings,
@@ -117,14 +119,35 @@ const APPLET_HIGH_RISK_ACTIONS: ReadonlySet<string> = new Set(['delete']);
 
 const PARAMETERS = z.object({
   action: z
-    .enum(['create', 'update', 'read', 'list', 'logs', 'delete', 'style'])
+    .enum(['create', 'update', 'read', 'list', 'logs', 'delete', 'style', 'brief'])
     .describe(
       "The operation to perform. `logs` shows what this applet's buttons actually did, " +
         'including why one failed. `delete` removes the applet and everything keyed to it, ' +
         'and asks the user first. `style` hands an existing applet to the design pass — ' +
-        'a new applet gets that automatically, so reach for this to restyle one.',
+        'a new applet gets that automatically, so reach for this to restyle one. ' +
+        "`brief` reads or edits the applet's design brief — what it is for and what has " +
+        'been decided; `read` already returns it, so reach for `brief` to CHANGE it.',
     ),
   id: z.string().optional().describe('Applet id (kebab-case). Required for create/update/read.'),
+  intent: z
+    .record(z.enum(INTENT_FIELDS), z.string())
+    .optional()
+    .describe(
+      "The design brief's intent model — what the applet is FOR, kept separately from the " +
+        'page so it can be revised without rebuilding. Fields: ' +
+        INTENT_FIELDS.map((f) => `\`${f}\` (${INTENT_FIELD_LABELS[f].toLowerCase()})`).join(', ') +
+        '. Supply what you actually know; an empty string clears a field. Set on `create` and ' +
+        'edit with `brief`.',
+    ),
+  note: z
+    .string()
+    .max(MAX_NOTE_CHARS)
+    .optional()
+    .describe(
+      'One line for the design brief: what changed and why, or what was tried and rejected. ' +
+        'REQUIRED on `update` — the next edit reads it, and a note written only when ' +
+        'convenient is written once.',
+    ),
   name: z.string().max(80).optional().describe('Display name (required for create)'),
   description: z
     .string()
@@ -245,6 +268,19 @@ export function createAppletTool(
   );
 }
 
+/**
+ * The brief store, built on first use.
+ *
+ * Lazy so that importing this module does not create `APPLET_BRIEFS_DIR` as a
+ * side effect — the constructor's `mkdirSync` is 4.6 us and idempotent, so the
+ * saving is the directory, not the microseconds.
+ */
+let briefStoreInstance: AppletBriefStore | undefined;
+function briefStore(): AppletBriefStore {
+  briefStoreInstance ??= new AppletBriefStore();
+  return briefStoreInstance;
+}
+
 async function run(
   store: AppRegistry,
   args: AppletArgs,
@@ -267,7 +303,14 @@ async function run(
       // given could not be followed.
       const page = store.readAsset(id, 'index.html');
       const shown = page === null ? '(no index.html)' : capSubagentResult(page, PAGE_PREVIEW_MAX);
-      return `${JSON.stringify(app.manifest, null, 2)}\n\n--- index.html ---\n${shown}`;
+      // The brief is the third thing, and `read` is the only place it is
+      // loaded: someone calling this is about to edit, which is exactly when
+      // knowing what was already tried is worth its tokens (#463).
+      const rendered = renderBrief(briefStore().read(id));
+      const briefBlock = rendered ? `\n\n--- design brief ---\n${rendered}` : '';
+      return (
+        `${JSON.stringify(app.manifest, null, 2)}\n\n--- index.html ---\n${shown}` + briefBlock
+      );
     }
     case 'create': {
       const id = need(args.id, 'id', 'create');
@@ -298,6 +341,11 @@ async function run(
       // either way — denying a permission is not a build failure — and asking
       // once it is on screen would be asking about something the user is
       // already looking at.
+      // With the applet, not after it: an applet whose brief failed to land is
+      // one whose next editor re-derives intent from the page, which is the
+      // defect. Before consent for the same reason the write is — nothing
+      // below can turn a successful create into a failed tool call.
+      if (args.intent) briefStore().write(created.id, { intent: args.intent });
       const consent = await askForPermissions(created.id, created.name, manifest, requestConsent);
       // BEFORE `openedNote`, which is what opens the browser: styling after
       // the open would show the scaffold and make the user refresh. The applet
@@ -318,6 +366,11 @@ async function run(
     }
     case 'update': {
       const id = need(args.id, 'id', 'update');
+      // Required by the TOOL, not the schema — the same shape as `description`
+      // on create, and for the same reason. A design brief written only when
+      // convenient is written once and then drifts, which is precisely the
+      // failure it exists to prevent (#463).
+      need(args.note, 'note', 'update');
       const existing = store.get(id);
       if (!existing.ok) return `Error: ${existing.failure.message}`;
       // Read-modify-write on the RAW shape. The reader's manifest has already
@@ -356,6 +409,7 @@ async function run(
       }
       if (args.page !== undefined) files['index.html'] = args.page;
       const updated = store.update(id, manifest, files);
+      briefStore().write(id, { intent: args.intent, note: args.note });
       const consent = await askForPermissions(id, updated.name, manifest, requestConsent);
       return (
         `Applet "${updated.name}" (${updated.id}) updated.` +
@@ -393,10 +447,25 @@ async function run(
             `${result.boundSpecialists.join(', ')} — they were reachable only through this applet.`
           : '';
       return (
-        `Deleted applet "${id}" — its page, data store, workspace, tool grants and ` +
-        `external-access grants are gone.${bound} Its port assignment is kept, so re-creating ` +
+        `Deleted applet "${id}" — its page, design brief, data store, workspace, tool grants ` +
+        `and external-access grants are gone.${bound} Its port assignment is kept, so re-creating ` +
         'this id restores the same origin.'
       );
+    }
+    case 'brief': {
+      const id = need(args.id, 'id', 'brief');
+      // `exists`, not `get`: this arm never reads the manifest, and `get` runs
+      // a full zod parse to produce a value that was thrown away.
+      if (!store.exists(id)) return `Error: no such applet "${id}".`;
+      if (args.intent === undefined && args.note === undefined) {
+        return (
+          renderBrief(briefStore().read(id)) ||
+          `Applet "${id}" has no design brief yet. Set one with \`intent\`.`
+        );
+      }
+      const written = briefStore().write(id, { intent: args.intent, note: args.note });
+      const fields = Object.keys(written.intent).length;
+      return `Updated the brief for "${id}" — ${fields} intent field(s), ${written.notes.length} note(s).`;
     }
     case 'style': {
       const id = need(args.id, 'id', 'style');
@@ -629,6 +698,9 @@ async function openedNote(appId: string): Promise<string> {
 
 /** The applet, as the design pass needs to see it. */
 function targetFor(manifest: AppManifest) {
+  // No brief here on purpose: the styler reaches it through `applet read`,
+  // which is the one carrier. Loading it here as well put the same text in the
+  // same context twice.
   return {
     id: manifest.id,
     name: manifest.name,

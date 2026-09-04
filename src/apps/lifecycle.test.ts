@@ -14,6 +14,7 @@ async function load() {
     ...(await import('../host/violations.js')),
     specialists: await import('../specialists.js'),
     store: await import('./store.js'),
+    brief: await import('./brief-store.js'),
     paths,
   };
 }
@@ -100,6 +101,10 @@ describe('deleteApplet', () => {
     m.saveAppCspGrant('notes', { imgSrc: ['https://cdn.example.com'] });
     m.recordBlocked('notes', { directive: 'img-src', blockedURL: 'https://x.example/a.png' });
     new m.store.AppletStore('notes').set('k', 'v');
+    new m.brief.AppletBriefStore().write('notes', {
+      intent: { goal: 'keep notes' },
+      note: 'tried a grid, too cramped',
+    });
     fs.mkdirSync(m.paths.runWorkspace('apps', 'notes'), { recursive: true });
     fs.writeFileSync(path.join(m.paths.runWorkspace('apps', 'notes'), 'out.txt'), 'work');
     const specialists = new m.specialists.SpecialistStore({ seed: false });
@@ -124,6 +129,9 @@ describe('deleteApplet', () => {
     // external access the user granted to a different one.
     expect(m.loadAppCspGrant('notes')).toBeNull();
     expect(m.loadBlocked('notes')).toEqual([]);
+    // The brief is what the user told Bernard about their own workflow, so
+    // leaving it behind would hand it to whatever next claims this id.
+    expect(fs.existsSync(path.join(m.paths.APPLET_BRIEFS_DIR, 'notes.json'))).toBe(false);
     expect(specialists.get('notes-agent')).toBeUndefined();
   });
 
