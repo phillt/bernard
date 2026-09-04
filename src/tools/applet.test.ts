@@ -844,3 +844,187 @@ describe('the grantable directives agree across every schema that names them', (
     expect(toolKeys).toEqual(expected);
   });
 });
+
+/**
+ * The design pass on create (`applet-styler` routing).
+ *
+ * `loadConfig` throws under a temp home with no provider key, which is exactly
+ * the branch `styleNote` catches — so the config module is mocked here rather
+ * than leaving every assertion to pass for the wrong reason. `autoOpenApplets`
+ * is forced off in the same mock: it is the next line to run, and a test that
+ * spawns a browser is a test that fails on someone else's machine.
+ */
+async function loadWithStyler(
+  styler?: ReturnType<typeof vi.fn>,
+  config: { autoStyleApplets?: boolean } = {},
+) {
+  vi.resetModules();
+  vi.doMock('../config.js', () => ({
+    loadConfig: () => ({
+      autoStyleApplets: config.autoStyleApplets ?? true,
+      autoOpenApplets: false,
+    }),
+  }));
+  const { createAppletTool } = await import('./applet.js');
+  const { AppRegistry } = await import('../apps/registry.js');
+  return {
+    tool: createAppletTool(new AppRegistry({ seed: false }), undefined, styler as never),
+    AppRegistry,
+  };
+}
+
+describe('the design pass on create', () => {
+  useTempHome('bernard-applet-style');
+
+  it('hands a new applet to the styler and reports what it did', async () => {
+    const styler = vi.fn(async () => ({ styled: true, summary: 'Rewrote the layout.' }));
+    const { tool } = await loadWithStyler(styler);
+
+    const out = await tool.execute({ ...CREATE, id: 'styled-ok' }, {} as never);
+
+    expect(styler).toHaveBeenCalledTimes(1);
+    expect(styler.mock.calls[0][0]).toEqual({
+      id: 'styled-ok',
+      name: 'Notes',
+      description: 'Keeps short notes and summarises them.',
+      actions: ['summarise'],
+    });
+    expect(out).toContain('Styled it: Rewrote the layout.');
+  });
+
+  it('does not style when the flag is off', async () => {
+    const styler = vi.fn(async () => ({ styled: true }));
+    const { tool } = await loadWithStyler(styler, { autoStyleApplets: false });
+
+    const out = await tool.execute({ ...CREATE, id: 'flag-off' }, {} as never);
+
+    expect(styler).not.toHaveBeenCalled();
+    expect(out).toContain('created');
+    expect(out).not.toContain('Styled');
+  });
+
+  it('does not style when no styler was supplied — the createTools instance', async () => {
+    const { tool } = await loadWithStyler(undefined);
+
+    const out = await tool.execute({ ...CREATE, id: 'no-styler' }, {} as never);
+
+    expect(out).toContain('created');
+    expect(out).not.toContain('Styled');
+  });
+
+  it('a styling failure never fails the create, and is named', async () => {
+    // The applet is already on disk when the pass runs. Reporting the failure
+    // as a tool error would tell the model to retry a write that succeeded.
+    const styler = vi.fn(async () => ({ styled: false, reason: 'pool_exhausted' }));
+    const { tool, AppRegistry } = await loadWithStyler(styler);
+
+    const out = await tool.execute({ ...CREATE, id: 'style-failed' }, {} as never);
+
+    expect(out.startsWith('Error:')).toBe(false);
+    expect(out).toContain('created');
+    expect(out).toContain('pool_exhausted');
+    expect(new AppRegistry({ seed: false }).listIds()).toContain('style-failed');
+  });
+
+  it('a thrown styler never fails the create either', async () => {
+    const styler = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    const { tool, AppRegistry } = await loadWithStyler(styler);
+
+    const out = await tool.execute({ ...CREATE, id: 'style-threw' }, {} as never);
+
+    // `makeAppletStyler` catches, but the tool must not depend on that: a
+    // second producer of this callback would be free to throw.
+    expect(out.startsWith('Error:')).toBe(false);
+    expect(new AppRegistry({ seed: false }).listIds()).toContain('style-threw');
+  });
+
+  it('styles before opening the browser', async () => {
+    // Ordering is the whole reason this hook is inside `run()` rather than a
+    // wrapper around the tool: styling after the open shows the scaffold and
+    // makes the user refresh.
+    const order: string[] = [];
+    vi.resetModules();
+    vi.doMock('../config.js', () => ({
+      loadConfig: () => ({ autoStyleApplets: true, autoOpenApplets: true }),
+    }));
+    vi.doMock('../apps/open.js', () => ({
+      openApplet: async () => {
+        order.push('open');
+        return { url: 'http://127.0.0.1:1', opened: false, started: false };
+      },
+    }));
+    const { createAppletTool } = await import('./applet.js');
+    const { AppRegistry } = await import('../apps/registry.js');
+    const styler = vi.fn(async () => {
+      order.push('style');
+      return { styled: true };
+    });
+    const tool = createAppletTool(new AppRegistry({ seed: false }), undefined, styler as never);
+
+    await tool.execute({ ...CREATE, id: 'order-check' }, {} as never);
+
+    expect(order).toEqual(['style', 'open']);
+  });
+
+  it('update never styles — a supplied page is the page that was meant', async () => {
+    const styler = vi.fn(async () => ({ styled: true }));
+    const { tool } = await loadWithStyler(styler);
+    await tool.execute({ ...CREATE, id: 'no-restyle' }, {} as never);
+    styler.mockClear();
+
+    await tool.execute({ action: 'update', id: 'no-restyle', page: PAGE } as never, {} as never);
+
+    expect(styler).not.toHaveBeenCalled();
+  });
+});
+
+describe('the style action', () => {
+  useTempHome('bernard-applet-style-action');
+
+  it('restyles an existing applet, ignoring the auto flag', async () => {
+    // The flag governs what happens without being asked. This IS the ask.
+    const styler = vi.fn(async () => ({ styled: true, summary: 'Tightened the form.' }));
+    const { tool } = await loadWithStyler(styler, { autoStyleApplets: false });
+    await tool.execute({ ...CREATE, id: 'restyle-me' }, {} as never);
+
+    const out = await tool.execute({ action: 'style', id: 'restyle-me' } as never, {} as never);
+
+    expect(styler).toHaveBeenCalledTimes(1);
+    expect(out).toContain('Restyled "Notes" (restyle-me).');
+    expect(out).toContain('Tightened the form.');
+  });
+
+  it('reports a refusal as an error, since nothing else was asked for', async () => {
+    const styler = vi.fn(async () => ({ styled: false, reason: 'no_api_key' }));
+    const { tool } = await loadWithStyler(styler);
+    await tool.execute({ ...CREATE, id: 'style-refused' }, {} as never);
+
+    const out = await tool.execute({ action: 'style', id: 'style-refused' } as never, {} as never);
+
+    expect(out).toContain('Error:');
+    expect(out).toContain('no_api_key');
+    expect(out).toContain('unchanged');
+  });
+
+  it('says plainly that the pass is unavailable rather than reporting a failure', async () => {
+    const { tool } = await loadWithStyler(undefined);
+    await tool.execute({ ...CREATE, id: 'style-unavailable' }, {} as never);
+
+    const out = await tool.execute(
+      { action: 'style', id: 'style-unavailable' } as never,
+      {} as never,
+    );
+
+    expect(out).toContain('not available here');
+  });
+
+  it('refuses an unknown applet', async () => {
+    const { tool } = await loadWithStyler(vi.fn(async () => ({ styled: true })));
+
+    const out = await tool.execute({ action: 'style', id: 'nope' } as never, {} as never);
+
+    expect(out.startsWith('Error:')).toBe(true);
+  });
+});

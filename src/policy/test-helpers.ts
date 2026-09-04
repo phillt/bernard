@@ -37,6 +37,7 @@ export function makePolicyInput(overrides?: {
     autoCreateSpecialists: false,
     autoCreateApplets: false,
     autoOpenApplets: false,
+    autoStyleApplets: false,
     autoCreateThreshold: 0.8,
     correctionEnabled: true,
     promptRewriter: true,

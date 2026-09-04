@@ -13,6 +13,7 @@ import { createThinkTool } from '../../tools/think.js';
 import { createAskUserTool } from '../../tools/ask-user.js';
 import { createEvaluateTool } from '../../tools/evaluate.js';
 import { applyShimRouting } from '../../tools/wrap-with-specialist.js';
+import { createAppletToolWithStyling } from '../../tools/applet-styling.js';
 import { toolToAISDK } from '../tools/adapter.js';
 import { buildToolProfilesPrompt } from '../../tool-profiles.js';
 import { getModelProfile } from '../../providers/index.js';
@@ -272,6 +273,14 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     const reactToolsAvailable = isReactPossible(ctx.config);
     const tools: Record<string, Tool> = {
       ...baseTools,
+      // Overrides the ctx-free `applet` that `createTools` builds, adding the
+      // design pass (`applet-styler`, which had no caller at all before this).
+      // It has to be built here rather than in `createTools`, which is a pure
+      // function of its arguments and has no live ctx to dispatch from — and
+      // that split is also what makes re-entry impossible, since the `applet`
+      // the styler itself receives comes from `createTools` and cannot style.
+      // See `tools/applet-styling.ts`.
+      applet: createAppletToolWithStyling(ctx),
       agent: createSubAgentTool(ctx),
       task: toolToAISDK(createTaskTool(ctx)),
       specialist_run: createSpecialistRunTool(ctx),
