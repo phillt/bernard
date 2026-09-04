@@ -166,6 +166,14 @@ export async function createTools(
       },
     },
     { audience: 'any', make: () => createTimeTools() },
+    // `'any'` because a dispatched specialist is exactly who needs it: the
+    // applet-styler and any agent backing an applet action build against these
+    // contracts. Its own group so a deferred import stays possible if the
+    // corpus ever grows past a readdir.
+    {
+      audience: 'any',
+      make: async () => ({ docs: (await import('./docs.js')).createDocsTool() }),
+    },
     {
       audience: 'main',
       make: async () => {
