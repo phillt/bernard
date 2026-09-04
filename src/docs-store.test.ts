@@ -260,6 +260,34 @@ describe('shipping', () => {
     // green — and this is the first bundled directory read on a TOOL RESULT
     // path, where absence is user-visible and silent.
     const script = fs.readFileSync('scripts/copy-builtins.mjs', 'utf-8');
-    expect(script).toContain("cpSync('src/docs', 'dist/docs'");
+    expect(script).toMatch(/'docs'/);
+    expect(script).toMatch(/cpSync\(`src\/\$\{dir\}`, `dist\/\$\{dir\}`/);
+  });
+
+  it('clears each destination first, because cpSync merges and never deletes', () => {
+    // A source file removed or renamed stays in `dist` forever across
+    // incremental builds. That happened: `applet-ui-runtime.md` moved into
+    // `docs-generated.ts`, and the stale `dist` copy meant a built install
+    // served that document TWICE — the generated one bound to the live
+    // constants, and the drifted hand-written copy deleted for drifting.
+    //
+    // No test can observe it directly: vitest resolves `src/`, so every finder
+    // answers `src/docs` and `dist` is unreachable from here. Asserting on the
+    // script is the only place the guarantee can live.
+    const script = fs.readFileSync('scripts/copy-builtins.mjs', 'utf-8');
+    expect(script).toMatch(/rmSync\(`dist\/\$\{dir\}`, \{ recursive: true, force: true \}\)/);
+  });
+
+  it('no authored document can shadow a generated one', () => {
+    // The source-level form of the same collision, and the one that IS
+    // reachable: a `src/docs/<id>.md` whose name matches a generated doc gives
+    // two entries with one id, where `findDoc`'s `Array.find` silently picks a
+    // winner. The stale-`dist` case above is prevented by the build; this one
+    // has to be prevented here.
+    const generated = new Set(generatedDocs().map((d) => d.id));
+    for (const file of fs.readdirSync(findDocsDir()!)) {
+      if (!file.endsWith('.md')) continue;
+      expect(generated, `${file} shadows a generated document`).not.toContain(file.slice(0, -3));
+    }
   });
 });
