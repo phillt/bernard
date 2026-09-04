@@ -84,14 +84,24 @@ export function validateAppletPage(
   // Script bodies are masked first, and that split is what the caveat above
   // demanded once a template-literal runtime existed (#466): an htm page writes
   // ``html`<div style="…">` `` inside an inline <script>, which matches both
-  // regexes and is not markup. The same masking `colourIssues` already does for
-  // comments and href/id/name, applied one level up.
+  // regexes and is not markup.
+  //
+  // `colourIssues` deliberately does NOT mask scripts, and that asymmetry is
+  // correct rather than an oversight to tidy up: a colour literal inside a
+  // script IS a colour the applet paints — `el.style.color = '#f85149'` is
+  // exactly the CSSOM route the warning below recommends — whereas a `style=`
+  // inside a template literal is not markup. Masking scripts there too would
+  // silently kill the evasion case that test file pins.
   //
   // Outside a script the finding is certain and the failure invisible, so it
   // refuses. Inside one it is uncertain — and if it IS emitted as markup the
   // CSP drops it and the element renders visibly wrong, which is the module's
   // own warn case. Refusing there would reject every correct htm page to catch
   // a case the browser already reports by looking wrong.
+  // Declared INSIDE the function on purpose, despite the constant-shaped name:
+  // `matchAll` seeds its clone from `lastIndex`, so a module-scoped `/g` regex
+  // shared with a later `.test()` would become order-dependent. `replace` and
+  // `matchAll` both leave it at 0, so the two uses below are safe as written.
   const SCRIPT_BLOCK = /<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi;
   const markup = html.replace(SCRIPT_BLOCK, '');
   const scripts = [...html.matchAll(SCRIPT_BLOCK)].map((m) => m[1]).join('\n');

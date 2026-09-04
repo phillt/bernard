@@ -5,30 +5,13 @@ import * as path from 'node:path';
 /**
  * `/__bernard/ui.js` — Preact + htm, for the applets that need a runtime (#466).
  *
- * ## Why this one, and why the others are out
- *
- * The applet CSP is `script-src 'self' 'unsafe-inline'` with **no**
- * `'unsafe-eval'`, `style-src 'self'` with no inline, and there is no build
- * step. That is not a preference, it eliminates most of the field — and the
- * eliminations were verified in the shipped bundles rather than taken from
- * docs:
- *
- * - **Vue 3's full global build calls `Function(l)()`** in `compileToFunction`.
- *   Its runtime-only build is clean but has no template compiler, so it needs
- *   the build step we do not have, at 41 KB.
- * - **Alpine** hides the same constructor behind
- *   `Object.getPrototypeOf(async function(){}).constructor`, so grepping for
- *   `new Function` misses it; its own docs concede it violates
- *   `'unsafe-eval'`. `@alpinejs/csp` gives up arrow functions, template
- *   literals, property assignment and globals.
- * - **Shoelace is end-of-life**, and its successor shipped four components
- *   emitting inline `style="…"` — this exact policy failing in the wild.
- *
- * **htm and Preact contain no dynamic code evaluation at all.** htm is a
- * tagged-template parser: it walks the template strings array at runtime and
- * builds a vdom tree. `ui-runtime.test.ts` asserts that against the bytes this
- * module actually serves, so an upgrade that introduced `eval` would fail here
- * rather than at a browser that silently refuses to run it.
+ * **Why this one:** the CSP has no `'unsafe-eval'`, which eliminates most of
+ * the field — Vue's full build, Alpine, and (for inline `style=` attributes in
+ * its own components) Shoelace. htm and Preact contain no dynamic evaluation at
+ * all, asserted by `ui-runtime.test.ts` over the bytes this module serves, so
+ * an upgrade that introduced `eval` fails here rather than at a browser that
+ * silently declines to run it. The measurements behind those eliminations are
+ * in CLAUDE.md; repeating them here would be a third copy.
  *
  * ## Resolved through npm, not vendored
  *
@@ -51,8 +34,18 @@ export const UI_RUNTIME_PATH = '/__bernard/ui.js';
 /** The global the UMD bundle attaches: `html`, `render`, `h`, and the hooks. */
 export const UI_RUNTIME_GLOBAL = 'htmPreact';
 
-/** The bundle, relative to htm's package root. Exported so the test agrees. */
-export const UI_RUNTIME_FILE = 'preact/standalone.umd.js';
+/**
+ * When a page should load the runtime, in one sentence.
+ *
+ * Two prompts state this rule — the `applet` tool's `page` description and
+ * `applet-styler` — and nothing bound them, which is precisely the drift the
+ * styled-selector record on this same branch exists to stop. A test asserts
+ * both name it.
+ */
+export const UI_RUNTIME_RULE = 'a LIST that changes, or has more than about four controls';
+
+/** The bundle, relative to htm's package root. */
+const UI_RUNTIME_FILE = 'preact/standalone.umd.js';
 
 let cached: string | undefined;
 
@@ -79,10 +72,13 @@ export function uiRuntimeScript(): string {
  */
 export function uiRuntimePath(): string {
   const entry = createRequire(import.meta.url).resolve('htm');
-  return path.join(path.dirname(entry), '..', UI_RUNTIME_FILE);
-}
-
-/** Test seam: forget the memoised bytes. */
-export function resetUiRuntimeCache(): void {
-  cached = undefined;
+  const resolved = path.join(path.dirname(entry), '..', UI_RUNTIME_FILE);
+  // Checked, because the join assumes htm's `main` sits one directory down: if
+  // that ever moved to the package root, `..` would address a SIBLING package
+  // and this would serve whatever it found. Failing loudly here beats serving
+  // the wrong bytes with a correct Content-Type.
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`The applet UI runtime is missing at ${resolved}. Reinstall dependencies.`);
+  }
+  return resolved;
 }

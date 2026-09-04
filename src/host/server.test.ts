@@ -189,25 +189,16 @@ describe('applet server', () => {
     writeApp(m);
     const { app } = await start(m);
     const { UI_RUNTIME_PATH, UI_RUNTIME_GLOBAL } = await import('./ui-runtime.js');
+    const { contentTypeFor } = await import('./assets.js');
 
     const res = await fetch(`${app.origin}${UI_RUNTIME_PATH}`, { headers: hostHeaders(app.port) });
 
     expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toBe('text/javascript; charset=utf-8');
+    // Pinned against `contentTypeFor` rather than a literal, matching the SDK
+    // route's test below — one entry in `CONTENT_TYPES` decides both, and the
+    // two must not drift.
+    expect(res.headers.get('content-type')).toBe(contentTypeFor('x.js'));
     expect(await res.text()).toContain(UI_RUNTIME_GLOBAL);
-  });
-
-  it('serves the runtime to a GET with no token, like every other asset', async () => {
-    // A page fetches it before it holds a handle, so a token requirement here
-    // would make the runtime unreachable — `guard.ts` only demands one for
-    // non-GET, and this asserts that still covers the new route.
-    const m = await load();
-    writeApp(m);
-    const { app } = await start(m);
-    const { UI_RUNTIME_PATH } = await import('./ui-runtime.js');
-
-    const res = await fetch(`${app.origin}${UI_RUNTIME_PATH}`, { headers: hostHeaders(app.port) });
-    expect(res.status).toBe(200);
   });
 
   it('serves the applet index from its own loopback origin', async () => {

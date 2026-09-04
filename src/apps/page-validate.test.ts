@@ -339,18 +339,6 @@ describe('inline style: refused in markup, warned inside a script (#466)', () =>
     '<script src="/__bernard/applet.js"></script>',
   ].join('\n');
 
-  it('still refuses a style attribute in the markup', () => {
-    // The direction that must not weaken: outside a script the finding is
-    // certain and the failure invisible.
-    const issues = validateAppletPage(`${HEAD}\n<main><p style="color:red">x</p></main>`, []);
-    expect(refusalFor(issues)).toContain('inline `style="..."`');
-  });
-
-  it('still refuses a <style> block in the markup', () => {
-    const issues = validateAppletPage(`${HEAD}\n<style>p{color:red}</style>`, []);
-    expect(refusalFor(issues)).toContain('inline <style>');
-  });
-
   it('accepts an htm template that writes style= inside a script, with a warning', () => {
     // An htm page writes html`<div style="…">` in an inline script. Refusing
     // that rejects every correct page to catch a case the browser already

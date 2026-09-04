@@ -227,22 +227,30 @@ describe('the styled-selector record tracks the sheet', () => {
    */
   const NOT_ADVERTISED = new Set([':root', '*', ':focus-visible', ':focus:not(:focus-visible)']);
 
-  it('every selector the sheet declares is in the record, or reasoned out', () => {
-    // Sheet → record, the direction the mistake is actually made in. Iterating
-    // the record instead would make the assertion self-consistent with whatever
-    // the record happens to say.
-    // Compared on the LEADING simple selector: `.cards > li` is reached
-    // through `.cards`, and `button:hover` through `button`, so a prompt naming
-    // the base has told the model everything it can act on.
+  const declared = declaredSelectors(sheet);
+
+  it('the record and the sheet name exactly the same selectors', () => {
+    // BOTH directions. Sheet → record catches a rule added and not recorded,
+    // which is the mistake actually made. Record → sheet catches a rule REMOVED
+    // and left in the prompt, which nothing caught before and which ships the
+    // model a class that no longer exists.
+    //
+    // Compared on the LEADING simple selector: `.cards > li` is reached through
+    // `.cards`, and `button:hover` through `button`, so a prompt naming the
+    // base has told the model everything it can act on.
+    //
+    // The record stays hand-written rather than derived from this parse, even
+    // though the two sets are identical today. Deriving would move a CSS regex
+    // into production, where a miss ships a wrong list to a model silently; as
+    // a test it fails loudly instead. It also keeps the prompt's order curated
+    // — structure, then text, then forms, then utilities — rather than
+    // whatever order the sheet happens to declare things in.
     const base = (sel: string): string => sel.split(/[\s>+~:]/)[0];
-    const missing = declaredSelectors(sheet).filter((sel) => {
-      if (NOT_ADVERTISED.has(sel)) return false;
-      return !APPLET_STYLED_SELECTORS.some((known) => base(sel) === known);
-    });
-    expect(missing, `selectors the styler is never told about: ${missing.join(', ')}`).toEqual([]);
+    const fromSheet = new Set(declared.filter((sel) => !NOT_ADVERTISED.has(sel)).map(base));
+    expect([...fromSheet].sort()).toEqual([...APPLET_STYLED_SELECTORS].sort());
   });
 
   it('finds a non-trivial number of selectors — a scan over nothing passes', () => {
-    expect(declaredSelectors(sheet).length).toBeGreaterThan(20);
+    expect(declared.length).toBeGreaterThan(20);
   });
 });

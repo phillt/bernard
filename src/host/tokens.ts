@@ -294,6 +294,10 @@ a:hover { text-decoration-color: var(--accent); }
 /* One applet invented \`.hidden\`; the other reached for \`el.style.display\`
    instead — which works only because the CSSOM property setter slips past
    \`style-src\` on a spec-layering quirk, not because it was meant to. */
+/* \`!important\` deliberately, and it is the one rule here that CONSTRAINS an
+   applet rather than serving it: a utility whose whole job is "this is not on
+   screen" loses to any more specific selector without it, and an applet
+   reaching for \`el.style.display\` instead is what this replaces. */
 .hidden { display: none !important; }
 
 /* Label plus its control, as one unit that can sit in a \`.row\`. \`label\` is

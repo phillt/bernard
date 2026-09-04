@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { POST_V1_BUNDLED } from '../specialists.js';
 import { APPLET_COLOR_TOKENS, APPLET_STYLED_SELECTORS } from '../host/tokens.js';
+import { UI_RUNTIME_PATH, UI_RUNTIME_RULE } from '../host/ui-runtime.js';
 
 /**
  * What the original `.seeded-v1` pass shipped.
@@ -172,5 +173,19 @@ describe('applet-styler stays in step with the served tokens', () => {
       if (!example.call.includes('applet update')) continue;
       expect(example.call, 'the update example must model the required note').toContain('note:');
     }
+  });
+});
+
+describe('the two-path rule is stated once (#466)', () => {
+  it('the styler names the runtime and the rule for reaching for it', () => {
+    // The rule lives in two prompts — here and the `applet` tool's `page`
+    // description — and nothing bound them. That is the drift the styled-token
+    // and styled-selector pins on this same branch exist to stop, so it gets
+    // the same treatment rather than a third unbound copy.
+    const styler = JSON.parse(fs.readFileSync(path.join(DIR, 'applet-styler.json'), 'utf-8')) as {
+      systemPrompt: string;
+    };
+    expect(styler.systemPrompt).toContain(UI_RUNTIME_PATH);
+    expect(styler.systemPrompt).toContain(UI_RUNTIME_RULE);
   });
 });

@@ -1,9 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
-import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import {
-  UI_RUNTIME_FILE,
   UI_RUNTIME_GLOBAL,
   UI_RUNTIME_PATH,
   uiRuntimePath,
@@ -35,16 +33,21 @@ describe('the served UI runtime (#466)', () => {
   });
 
   it('exposes the API a page actually needs', () => {
+    // Matched as an assignment, not a substring: `html` alone is satisfied by
+    // any `innerHTML`-adjacent token in 13 KB of minified code.
     for (const name of ['html', 'render', 'useState', 'useEffect']) {
-      expect(script, `missing ${name}`).toContain(name);
+      expect(script, `missing ${name}`).toMatch(new RegExp(`\\b${name}\\s*[=:]`));
     }
   });
 
   it('serves the bytes npm resolved, so an upgrade cannot silently not arrive', () => {
-    const entry = createRequire(import.meta.url).resolve('htm');
-    const resolved = path.join(path.dirname(entry), '..', UI_RUNTIME_FILE);
+    // Asserted INDEPENDENTLY of how `uiRuntimePath` computes it. Re-deriving
+    // the join here made the second half a tautology: a wrong `..` moved both
+    // sides together and the test still passed.
+    const resolved = uiRuntimePath();
+    expect(resolved).toContain(`node_modules${path.sep}htm${path.sep}`);
+    expect(fs.existsSync(resolved)).toBe(true);
     expect(script).toBe(fs.readFileSync(resolved, 'utf-8'));
-    expect(uiRuntimePath()).toBe(resolved);
   });
 
   it('stays small enough to serve uncached on every load', () => {
