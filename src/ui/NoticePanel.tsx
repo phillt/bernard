@@ -1,5 +1,5 @@
-import { Box, Text } from 'ink';
 import { getThemeColors } from '../theme.js';
+import { TranscriptPanel } from './TranscriptPanel.js';
 import { formatFriendlyTimestamp } from '../output.js';
 import type { NoticeData } from './notice.js';
 
@@ -26,37 +26,16 @@ import type { NoticeData } from './notice.js';
 export function NoticePanel({ data }: { data: NoticeData }) {
   const colors = getThemeColors();
   return (
-    <Box
-      flexDirection="column"
-      marginTop={1}
-      borderStyle="round"
-      borderColor={colors.warning}
-      paddingX={1}
-    >
-      <Box>
-        <Text color={colors.warning} bold>
-          ✉ Message from {data.sourceLabel}
-        </Text>
-        {/* Same dim weight as the timestamp, deliberately: the label is a
-            claim by whoever wrote the file, not something Bernard verified. */}
-        <Text dimColor>
-          {' '}
-          · {data.sourceKind} · {formatFriendlyTimestamp(new Date(data.receivedAt))}
-        </Text>
-      </Box>
-      <Box flexDirection="column" marginTop={1}>
-        {data.text.split('\n').map((line, i) => (
-          <Text key={i}>{line.length === 0 ? ' ' : line}</Text>
-        ))}
-      </Box>
-      {data.hint && (
-        <Box marginTop={1}>
-          <Text color={colors.accent}>→ {data.hint}</Text>
-        </Box>
-      )}
-      <Box marginTop={1}>
-        <Text dimColor>Bernard has not seen this — type to act on it.</Text>
-      </Box>
-    </Box>
+    <TranscriptPanel
+      color={colors.warning}
+      title={`✉ Message from ${data.sourceLabel}`}
+      // Same dim weight as the timestamp, deliberately: the label is a claim
+      // by whoever wrote the file, not something Bernard verified.
+      meta={` · ${data.sourceKind} · ${formatFriendlyTimestamp(new Date(data.receivedAt))}`}
+      body={data.text}
+      hint={data.hint}
+      hintColor={colors.accent}
+      footer="Bernard has not seen this — type to act on it."
+    />
   );
 }

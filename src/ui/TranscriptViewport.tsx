@@ -210,18 +210,7 @@ export function TranscriptViewport({
           {header}
           {items.map((item) => (
             <Box key={item.key} flexDirection="column">
-              <StaticItemView
-                item={item}
-                renderMessage={(it) => (
-                  <MemoMessageBlock
-                    message={it.message!}
-                    rewriteOriginal={it.rewriteOriginal}
-                    timing={it.timing}
-                    costUsd={it.costUsd}
-                    toolDetails={it.toolDetails}
-                  />
-                )}
-              />
+              <StaticItemView item={item} MessageComponent={MemoMessageBlock} />
             </Box>
           ))}
           {busy && messageStore && (

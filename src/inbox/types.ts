@@ -21,7 +21,7 @@
 export type InboxKind = 'notice';
 
 /** Where a message claims to come from. A CLAIM — see {@link sanitizeSourceLabel}. */
-export type InboxSourceKind = 'cli' | 'applet' | 'cron' | 'script';
+export type InboxSourceKind = 'cli' | 'applet';
 
 /** One message, as it sits on disk. */
 export interface InboxMessage {
@@ -45,7 +45,14 @@ export interface SessionRecord {
   cwd: string;
   /** Absolute, so a sender never re-derives the layout. */
   inboxDir: string;
-  /** What this REPL can be asked to do. An older binary will not list a new kind. */
+  /**
+   * What this REPL can be asked to do.
+   *
+   * Checked before delivery, not merely recorded: a sender refuses a session
+   * whose capabilities do not include the message's `kind`. That is the whole
+   * point — a later mode (a message that DOES start a turn) must fail against
+   * an older REPL rather than arrive there and be rendered as a notice.
+   */
   capabilities: readonly InboxKind[];
 }
 
@@ -139,11 +146,13 @@ export function isInboxMessage(value: unknown): value is InboxMessage {
     typeof m.text === 'string' &&
     typeof m.sentAt === 'number' &&
     (m.hint === undefined || typeof m.hint === 'string') &&
-    (m.sourceKind === 'cli' ||
-      m.sourceKind === 'applet' ||
-      m.sourceKind === 'cron' ||
-      m.sourceKind === 'script')
+    (m.sourceKind === 'cli' || m.sourceKind === 'applet')
   );
+}
+
+/** Whether a session can be asked to handle this kind of message. */
+export function sessionAccepts(record: SessionRecord, kind: InboxKind): boolean {
+  return record.capabilities.includes(kind);
 }
 
 /** Whether a parsed value is a session record this binary understands. */

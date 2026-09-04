@@ -1,7 +1,8 @@
 import { printInfo, printError } from './output.js';
-import { listLiveSessions, reapDeadSessions } from './inbox/registry.js';
+import { reapAndListLiveSessions } from './inbox/registry.js';
 import { sendToSessions, waitForConsumption } from './inbox/send.js';
-import { DEFAULT_DELIVERY_TIMEOUT_MS, type InboxSourceKind } from './inbox/types.js';
+import { DEFAULT_DELIVERY_TIMEOUT_MS } from './inbox/types.js';
+import type { SendReason } from './inbox/send.js';
 
 /**
  * `bernard say` — put a message in front of a running REPL (#462).
@@ -19,7 +20,6 @@ export interface SayOptions {
   session?: string;
   all?: boolean;
   source?: string;
-  sourceKind?: InboxSourceKind;
   hint?: string;
   ifRunning?: boolean;
   wait?: boolean;
@@ -36,11 +36,37 @@ export const SAY_EXIT = {
   notPickedUp: 4,
 } as const;
 
-export async function sayCommand(text: string, opts: SayOptions = {}): Promise<number> {
-  reapDeadSessions();
+/**
+ * Every refusal's exit status, as a table rather than an if-chain.
+ *
+ * A `Record` keyed on the union so adding a `SendReason` is a compile error
+ * until its status is decided — the reasoning `EXIT_FOR` in `src/script/run.ts`
+ * already states. The chain this replaced would have let a new reason fall
+ * through to the success path and report a delivery that never happened.
+ */
+const REASON_EXIT: Record<SendReason, number> = {
+  'none-running': SAY_EXIT.noSession,
+  ambiguous: SAY_EXIT.ambiguous,
+  'unknown-session': SAY_EXIT.usage,
+  empty: SAY_EXIT.usage,
+  'too-large': SAY_EXIT.usage,
+  'inbox-full': SAY_EXIT.usage,
+};
 
+const REASON_MESSAGE: Record<SendReason, (opts: SayOptions) => string> = {
+  'none-running': () => 'No Bernard session is running.',
+  ambiguous: () => 'Several Bernard sessions are running — name one with --session, or use --all:',
+  'unknown-session': (o) => `No live session matches "${o.session ?? ''}".`,
+  empty: () => 'Nothing to say once stripped.',
+  'too-large': () => 'That message is too long.',
+  'inbox-full': () => 'That session has too many undelivered messages already.',
+};
+
+export async function sayCommand(text: string, opts: SayOptions = {}): Promise<number> {
   if (opts.list) {
-    const live = listLiveSessions();
+    // `sendToSessions` reaps on the send path, so this is the only place the
+    // CLI needs to ask.
+    const live = reapAndListLiveSessions();
     if (live.length === 0) {
       printInfo('No Bernard session is running.');
       return SAY_EXIT.ok;
@@ -56,7 +82,7 @@ export async function sayCommand(text: string, opts: SayOptions = {}): Promise<n
 
   const result = sendToSessions({
     text,
-    source: { kind: opts.sourceKind ?? 'cli', label: opts.source ?? 'cli' },
+    source: { kind: 'cli', label: opts.source ?? 'cli' },
     ...(opts.hint ? { hint: opts.hint } : {}),
     ...(opts.session
       ? { target: { sessionId: opts.session } }
@@ -65,32 +91,17 @@ export async function sayCommand(text: string, opts: SayOptions = {}): Promise<n
         : {}),
   });
 
-  if (result.reason === 'none-running') {
+  if (result.reason) {
     // `--if-running` exists so a failure hook does not itself register as a
     // failure when nobody happens to be at a terminal.
-    if (opts.ifRunning) return SAY_EXIT.ok;
-    printError('No Bernard session is running.');
-    printInfo('Start one with `bernard`, then run this again.');
-    return SAY_EXIT.noSession;
-  }
-  if (result.reason === 'ambiguous') {
-    printError('Several Bernard sessions are running — name one with --session, or use --all:');
-    for (const s of result.candidates ?? []) printInfo(`  ${describeSession(s)}`);
-    return SAY_EXIT.ambiguous;
-  }
-  if (result.reason === 'unknown-session') {
-    printError(`No live session matches "${opts.session ?? ''}".`);
-    return SAY_EXIT.usage;
-  }
-  if (result.reason === 'too-large' || result.reason === 'empty') {
-    printError(
-      result.reason === 'empty' ? 'Nothing to say once stripped.' : 'That message is too long.',
-    );
-    return SAY_EXIT.usage;
-  }
-  if (result.reason === 'inbox-full') {
-    printError('That session has too many undelivered messages already.');
-    return SAY_EXIT.usage;
+    if (result.reason === 'none-running' && opts.ifRunning) return SAY_EXIT.ok;
+    printError(REASON_MESSAGE[result.reason](opts));
+    if (result.reason === 'ambiguous') {
+      for (const s of result.candidates ?? []) printInfo(`  ${describeSession(s)}`);
+    }
+    if (result.reason === 'none-running')
+      printInfo('Start one with `bernard`, then run this again.');
+    return REASON_EXIT[result.reason];
   }
   if (result.delivered.length === 0) {
     // Deduped: an identical message from the same source moments ago.

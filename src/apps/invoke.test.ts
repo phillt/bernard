@@ -310,7 +310,17 @@ describe('invokeAction', () => {
     registry.registerSession({ sessionId: 'listener' });
     writeApp();
 
-    const result = await m.invokeAction({ appId: 'nope', action: 'ask', args: {} });
+    // A failure that actually RAN. A request-shaped one (unknown app, bad
+    // args) deliberately does not notify — see `fail()`.
+    mockDispatchAction.mockResolvedValueOnce({
+      ok: false,
+      error: 'the wrapper blew up',
+      env: {},
+      startedAt: '2026-01-01T00:00:00.000Z',
+      timings: { mcpConnectMs: 1, totalMs: 2 },
+      stepLimitHit: false,
+    });
+    const result = await m.invokeAction({ appId: 'demo', action: 'ask', args: { q: 'x' } });
     expect(result.ok).toBe(false);
     const inbox = registry.listLiveSessions()[0].inboxDir;
     const delivered = fs.readdirSync(inbox).filter((n) => n.endsWith('.json'));
@@ -319,8 +329,16 @@ describe('invokeAction', () => {
       text: string;
       hint?: string;
     };
-    expect(msg.text).toContain('nope');
+    expect(msg.text).toContain('demo');
     expect(msg.hint).toContain('bernard app logs');
+
+    // ...and a request-shaped failure stays quiet: the caller already has it,
+    // and a mistyped action must not pop a panel in every open REPL. Nothing
+    // drains the inbox in this test, so clear it to count only what follows.
+    for (const n of delivered) fs.rmSync(path.join(inbox, n));
+    send.resetSendDedupe();
+    await m.invokeAction({ appId: 'nope', action: 'ask', args: {} });
+    expect(fs.readdirSync(inbox).filter((n) => n.endsWith('.json'))).toHaveLength(0);
     registry.unregisterSession('listener');
   });
 

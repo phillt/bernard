@@ -1,4 +1,4 @@
-import { useSyncExternalStore, type ReactNode } from 'react';
+import { useSyncExternalStore, type ComponentType, type ReactNode } from 'react';
 import { Box, Static, Text, useStdout } from 'ink';
 import type {
   CoreMessage,
@@ -127,18 +127,7 @@ export function Thread({
       <Static items={staticItems}>
         {(item) => (
           <Box key={item.key} width={itemWidth} flexDirection="column" paddingX={2}>
-            <StaticItemView
-              item={item}
-              renderMessage={(it) => (
-                <MessageBlock
-                  message={it.message!}
-                  rewriteOriginal={it.rewriteOriginal}
-                  timing={it.timing}
-                  costUsd={it.costUsd}
-                  toolDetails={it.toolDetails}
-                />
-              )}
-            />
+            <StaticItemView item={item} MessageComponent={MessageBlock} />
           </Box>
         )}
       </Static>
@@ -459,15 +448,38 @@ function StreamingToolResult({
  */
 export function StaticItemView({
   item,
-  renderMessage,
+  MessageComponent,
 }: {
   item: StaticItem;
-  renderMessage: (item: StaticItem) => ReactNode;
+  /** `MessageBlock`, or the viewport's memoized copy of it. */
+  MessageComponent: ComponentType<MessageBlockProps>;
 }) {
   if (item.error) return <ErrorPanel data={item.error} />;
   if (item.notice) return <NoticePanel data={item.notice} />;
-  if (item.message) return <>{renderMessage(item)}</>;
+  // The component, not a render prop: a closure would throw away the narrowing
+  // this line just did, forcing a `message!` at both call sites — an assertion
+  // a later reordering of this ladder could silently invalidate.
+  if (item.message) {
+    return (
+      <MessageComponent
+        message={item.message}
+        rewriteOriginal={item.rewriteOriginal}
+        timing={item.timing}
+        costUsd={item.costUsd}
+        toolDetails={item.toolDetails}
+      />
+    );
+  }
   return null;
+}
+
+/** Everything a committed message needs to render itself. */
+export interface MessageBlockProps {
+  message: CoreMessage;
+  rewriteOriginal?: string;
+  timing?: { endedAt: number; durationMs: number };
+  costUsd?: number;
+  toolDetails: boolean;
 }
 
 export function MessageBlock({
@@ -476,13 +488,7 @@ export function MessageBlock({
   timing,
   costUsd,
   toolDetails,
-}: {
-  message: CoreMessage;
-  rewriteOriginal?: string;
-  timing?: { endedAt: number; durationMs: number };
-  costUsd?: number;
-  toolDetails: boolean;
-}) {
+}: MessageBlockProps) {
   if (message.role === 'user')
     return <UserMessage message={message as CoreUserMessage} rewriteOriginal={rewriteOriginal} />;
   if (message.role === 'assistant')

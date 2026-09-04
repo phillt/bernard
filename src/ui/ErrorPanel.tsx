@@ -1,5 +1,6 @@
 import { Box, Text } from 'ink';
 import { getThemeColors } from '../theme.js';
+import { TranscriptPanel } from './TranscriptPanel.js';
 import type { ErrorPanelData } from './error-format.js';
 
 /**
@@ -11,27 +12,14 @@ import type { ErrorPanelData } from './error-format.js';
 export function ErrorPanel({ data }: { data: ErrorPanelData }) {
   const colors = getThemeColors();
   return (
-    <Box
-      flexDirection="column"
-      marginTop={1}
-      borderStyle="round"
-      borderColor={colors.error}
-      paddingX={1}
+    <TranscriptPanel
+      color={colors.error}
+      title={`⚠ ${data.title}`}
+      meta={` · ${data.category}`}
+      body={data.message}
+      hint={data.hint}
+      hintColor={colors.warning}
     >
-      <Box>
-        <Text color={colors.error} bold>
-          ⚠ {data.title}
-        </Text>
-        <Text dimColor> · {data.category}</Text>
-      </Box>
-      <Box marginTop={1}>
-        <Text>{data.message}</Text>
-      </Box>
-      {data.hint && (
-        <Box marginTop={1}>
-          <Text color={colors.warning}>→ {data.hint}</Text>
-        </Box>
-      )}
       {data.details && (
         <Box flexDirection="column" marginTop={1}>
           {data.details.split('\n').map((line, i) => (
@@ -41,6 +29,6 @@ export function ErrorPanel({ data }: { data: ErrorPanelData }) {
           ))}
         </Box>
       )}
-    </Box>
+    </TranscriptPanel>
   );
 }

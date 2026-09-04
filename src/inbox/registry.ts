@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { atomicWriteFileSync } from '../fs-utils.js';
 import { SESSIONS_DIR, sessionInboxDir, sessionRecordPath } from '../paths.js';
 import { isSessionRecord, type InboxKind, type SessionRecord } from './types.js';
+import { isPidAlive } from '../pid.js';
 
 /**
  * Which REPLs are running, so a message can be addressed to one (#462).
@@ -70,18 +71,26 @@ export function unregisterSession(sessionId: string): void {
   }
 }
 
-/** Whether a process is still around. See the note above on what this misses. */
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Every session that still has a live process, most recently started last. */
 export function listLiveSessions(): SessionRecord[] {
+  return scanSessions(false);
+}
+
+/**
+ * The live sessions, sweeping the dead ones in the same pass.
+ *
+ * One `readdir` and one parse per record, where reaping and then listing was
+ * two of each — and `bernard say` did it three times over, since the CLI
+ * reaped, `sendToSessions` reaped again, and `resolveTargets` then listed. The
+ * scans answer the same question from the same files with nothing mutating
+ * between them, so doing it once is not an optimisation so much as removing a
+ * repeat.
+ */
+export function reapAndListLiveSessions(): SessionRecord[] {
+  return scanSessions(true);
+}
+
+function scanSessions(reap: boolean): SessionRecord[] {
   let names: string[];
   try {
     names = fs.readdirSync(SESSIONS_DIR);
@@ -91,42 +100,35 @@ export function listLiveSessions(): SessionRecord[] {
   const live: SessionRecord[] = [];
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
-    const record = readRecord(path.join(SESSIONS_DIR, name));
-    if (record && isAlive(record.pid)) live.push(record);
+    const file = path.join(SESSIONS_DIR, name);
+    const record = readRecord(file);
+    if (record && isPidAlive(record.pid)) {
+      live.push(record);
+      continue;
+    }
+    // An unreadable or unknown-version record is swept too: it addresses
+    // nothing this binary can deliver to, and leaving it makes every listing
+    // noisier forever.
+    if (!reap) continue;
+    try {
+      fs.rmSync(file, { force: true });
+      fs.rmSync(record ? record.inboxDir : sessionInboxDir(name.replace(/\.json$/, '')), {
+        recursive: true,
+        force: true,
+      });
+    } catch {
+      // Another process may have swept it first.
+    }
   }
   return live.sort((a, b) => a.startedAt - b.startedAt);
 }
 
 /**
- * Drops records whose process is gone, or that this binary cannot read.
- *
- * Best-effort and never throws — it runs at REPL start and before every send,
- * neither of which may fail because a stale file could not be unlinked.
+ * Drops records whose process is gone. Best-effort and never throws — it runs
+ * at REPL start, where a stale file must not stop the session.
  */
 export function reapDeadSessions(): void {
-  let names: string[];
-  try {
-    names = fs.readdirSync(SESSIONS_DIR);
-  } catch {
-    return;
-  }
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue;
-    const file = path.join(SESSIONS_DIR, name);
-    const record = readRecord(file);
-    // An unreadable or unknown-version record is swept too: it addresses
-    // nothing this binary can deliver to, and leaving it would make every
-    // listing noisier forever.
-    if (record && isAlive(record.pid)) continue;
-    try {
-      fs.rmSync(file, { force: true });
-      if (record) fs.rmSync(record.inboxDir, { recursive: true, force: true });
-      else
-        fs.rmSync(sessionInboxDir(name.replace(/\.json$/, '')), { recursive: true, force: true });
-    } catch {
-      // Another process may have swept it first.
-    }
-  }
+  reapAndListLiveSessions();
 }
 
 /**
@@ -136,8 +138,11 @@ export function reapDeadSessions(): void {
  * that the caller knows which they mean, and picking the "closest" match would
  * deliver to the wrong terminal in exactly the case the flag exists for.
  */
-export function resolveSession(prefix: string): SessionRecord | 'ambiguous' | null {
-  const matches = listLiveSessions().filter((s) => s.sessionId.startsWith(prefix));
+export function resolveSession(
+  prefix: string,
+  live: SessionRecord[] = listLiveSessions(),
+): SessionRecord | 'ambiguous' | null {
+  const matches = live.filter((s) => s.sessionId.startsWith(prefix));
   if (matches.length === 0) return null;
   if (matches.length > 1) return 'ambiguous';
   return matches[0];

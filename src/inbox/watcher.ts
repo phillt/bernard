@@ -41,8 +41,14 @@ export interface InboxWatcherOptions {
   sessionId: string;
   /** Called once per delivered message, in arrival order. */
   onMessage: (message: InboxMessage) => void;
-  /** Called when a burst is coalesced, with how many were folded away. */
-  onCoalesced?: (count: number, sourceLabel: string) => void;
+  /**
+   * Called when a burst is coalesced, with how many were folded away.
+   *
+   * Required, not optional: a caller that omitted it would silently drop
+   * everything past the burst cap with no signal that anything was lost, and
+   * both call sites pass one anyway.
+   */
+  onCoalesced: (count: number, sourceLabel: string) => void;
   pollMs?: number;
 }
 
@@ -140,7 +146,7 @@ export class InboxWatcher {
     for (const message of messages.slice(0, MAX_RENDER_BURST)) this.opts.onMessage(message);
     const extra = messages.length - MAX_RENDER_BURST;
     if (extra > 0) {
-      this.opts.onCoalesced?.(extra, messages[messages.length - 1].sourceLabel);
+      this.opts.onCoalesced(extra, messages[messages.length - 1].sourceLabel);
     }
   }
 }

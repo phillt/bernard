@@ -1166,9 +1166,19 @@ program
     }
   });
 
+/**
+ * The `app` sub-actions, written once.
+ *
+ * The description and the unknown-action error each spelled this list out by
+ * hand and had already drifted — one listed `csp`, the other did not — and
+ * were then both edited by hand again when `logs` arrived. Derived from one
+ * array, they cannot.
+ */
+const APP_ACTIONS = ['list', 'open', 'allow', 'csp', 'logs', 'delete', 'path'] as const;
+
 program
   .command('app [action] [appId] [actionName]')
-  .description('Manage applets: list | open | allow | csp | logs | delete | path')
+  .description(`Manage applets: ${APP_ACTIONS.join(' | ')}`)
   .option('-b, --bundled', 'List only the applets Bernard ships')
   .option('-a, --all', 'List every applet, grouped by origin')
   .option('--no-open', 'Print the URL instead of opening a browser')
@@ -1272,12 +1282,7 @@ program
             return;
           }
           default:
-            // Kept in step with `.description()` above — the two enumerate the
-            // actions by hand and had already drifted (one listed `csp`, this
-            // one did not).
-            throw new Error(
-              `Unknown action "${action}". Use list, open, allow, csp, logs, delete or path.`,
-            );
+            throw new Error(`Unknown action "${action}". Use ${APP_ACTIONS.join(', ')}.`);
         }
       } catch (err: unknown) {
         printError(err instanceof Error ? err.message : String(err));

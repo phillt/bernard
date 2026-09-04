@@ -312,7 +312,14 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
       ...extra,
       capabilityId,
     });
-    notifySessions(opts.appId, opts.action, message);
+    // Gated on the SAME condition as `category` above, and for the same
+    // reason that comment already gives. A request-shaped failure — a typo'd
+    // action, a bad args payload — is not news: the caller already has it
+    // synchronously in the response, the user did nothing, and there is
+    // nothing to act on. Notifying on all nine codes would pop a panel in
+    // every open REPL whenever an external caller mistyped, which is noise
+    // dressed as a diagnosis one layer up from where that phrase was written.
+    if (category !== undefined) notifySessions(opts.appId, opts.action, message);
     return {
       schemaVersion: 1,
       ok: false,
