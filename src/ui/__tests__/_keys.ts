@@ -34,10 +34,28 @@ export const PAGE_DOWN = '\x1b[6~';
 export const tick = (ms = 10): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Home/End, in the four encodings terminals actually send for each. They are
+ * NOT bindable through `useInput` — Ink parses them and drops the name, so they
+ * arrive as empty input with no flags — which is why they were absent here
+ * until #399 and why `Ctrl-A`/`Ctrl-E` were the only spelling. They now reach
+ * the app through `useRawKeys`, which decodes stdin directly, so a test that
+ * writes these to stdin exercises the real path.
+ */
+export const HOME_CSI = '\x1b[H';
+export const HOME_SS3 = '\x1bOH';
+export const HOME_VT = '\x1b[1~';
+export const HOME_RXVT = '\x1b[7~';
+export const END_CSI = '\x1b[F';
+export const END_SS3 = '\x1bOF';
+export const END_VT = '\x1b[4~';
+export const END_RXVT = '\x1b[8~';
+/** Every spelling of each, for tests that must not pass on one terminal only. */
+export const HOME_ALL = [HOME_CSI, HOME_SS3, HOME_VT, HOME_RXVT];
+export const END_ALL = [END_CSI, END_SS3, END_VT, END_RXVT];
+
+/**
  * Readline-style editing chords (#356). Byte sequences verified against Ink's
  * key parser — Alt-* arrive as `{meta}`, Ctrl-arrows as `{leftArrow, ctrl}`.
- * Home/End are deliberately absent: Ink surfaces them as empty input with no
- * flags, so they cannot be bound through `useInput`.
  */
 export const CTRL_W = '\x17';
 export const CTRL_U = '\x15';

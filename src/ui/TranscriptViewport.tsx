@@ -3,6 +3,7 @@ import { Box, Text, measureElement, useInput } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 import { useMouseWheel } from './useMouseWheel.js';
+import { useRawKeys } from './useRawKeys.js';
 import { ErrorPanel } from './ErrorPanel.js';
 import { MessageBlock, StreamingAssistantMessage, type StaticItem } from './Thread.js';
 import { formatPosition, listPosition } from './overlays/viewer-util.js';
@@ -114,20 +115,32 @@ export function TranscriptViewport({
     scrollBy(event.direction === 'up' ? -WHEEL_STEP : WHEEL_STEP);
   }, mouseEnabled);
 
-  useInput((input, key) => {
+  useInput((_input, key) => {
     const page = Math.max(1, viewportH - 1);
     if (key.pageUp) scrollBy(-page);
     else if (key.pageDown) scrollBy(page);
-    // Home/End aren't named keys in Ink — match their raw escape sequences, and
-    // only when the input line is empty so they don't fight the line editor.
-    else if (promptEmpty && (input === '\x1b[H' || input === '\x1b[1~')) {
+  });
+
+  // Home/End jump to the ends of the transcript, decoded off stdin because Ink
+  // drops them before `useInput` (see `keys.ts`). This replaces a branch that
+  // matched `input === '\x1b[H'` and could never fire — `input` is `''` for
+  // these keys — so transcript Home/End had never worked despite being
+  // advertised, from #288 until #399.
+  //
+  // `promptEmpty` is the arbitration, and it is the rule that dead branch
+  // already chose: with text in the prompt, Home/End belong to the line editor.
+  // The overlap when the prompt IS empty is harmless — Home/End on an empty
+  // buffer move a cursor that is already at 0. An open overlay unmounts this
+  // component entirely, so no overlay ever competes.
+  useRawKeys((key) => {
+    if (key === 'home') {
       setStick(false);
       setOffset(0);
-    } else if (promptEmpty && (input === '\x1b[F' || input === '\x1b[4~')) {
+    } else {
       setStick(true);
       setOffset(maxOffset);
     }
-  });
+  }, promptEmpty);
 
   // Not stuck at the bottom. When `stick`, `effectiveOffset === maxOffset`, so
   // the "new output" marker is gated exactly as it was when this was a row

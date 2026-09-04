@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { SlashHints, matchSlashCommands, type SlashCommand } from './SlashHints.js';
+import { useRawKeys } from './useRawKeys.js';
 import { useLineEditor } from './use-line-editor.js';
 import { BoundedLine, PROMPT_RESERVED_COLUMNS } from './BoundedLine.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
@@ -97,6 +98,13 @@ export function Prompt({
   renderAbove,
 }: PromptProps) {
   const editor = useLineEditor('', { multiline: true });
+  // Home/End never reach `useInput` (Ink drops them — see `keys.ts`), so they
+  // are decoded off stdin. Gated by the same `!disabled` the keystream uses, so
+  // a busy turn or an open overlay silences them together with everything else.
+  useRawKeys((key) => {
+    if (key === 'home') editor.toLineStart();
+    else editor.toLineEnd();
+  }, !disabled);
   const { buffer } = editor;
   const [selectedIndex, setSelectedIndex] = useState(0);
   // Position in `history` while browsing with ↑/↓; null = editing the live

@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Text, type Key } from 'ink';
 import { looksLikeMouseReport } from './mouse.js';
+import { stripModifiedEnter } from './keys.js';
 import { lineStart, lineEnd, wordLeft, wordRight } from './line-geometry.js';
 
 /**
@@ -28,6 +29,15 @@ export interface LineEditor {
    * caller-specific meaning (return, escape, tab, up/down) always return false.
    */
   handleKey: (input: string, key: Key) => boolean;
+  /**
+   * Home/End. Separate from {@link LineEditor.handleKey} because they never
+   * reach it: Ink parses those escapes and drops them before `useInput`, so the
+   * caller decodes them off stdin (`useRawKeys`) and calls these directly.
+   * `Ctrl-A`/`Ctrl-E` remain bound in `handleKey` as aliases — they are correct
+   * readline and the muscle memory of anyone who has been using them.
+   */
+  toLineStart: () => void;
+  toLineEnd: () => void;
 }
 
 export interface LineEditorOptions {
@@ -90,6 +100,15 @@ export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineE
     [multiline],
   );
 
+  // Home/End, shared by the decoded keys (`useRawKeys`) and the Ctrl-A/Ctrl-E
+  // aliases below, so the two spellings cannot drift.
+  const toLineStart = useCallback(() => {
+    setState((s) => ({ ...s, cursor: lineStart(s.buffer, s.cursor) }));
+  }, []);
+  const toLineEnd = useCallback(() => {
+    setState((s) => ({ ...s, cursor: lineEnd(s.buffer, s.cursor) }));
+  }, []);
+
   const handleKey = useCallback(
     (input: string, key: Key): boolean => {
       // `moveTo` / `deleteRange` keep every branch to one line, so the two
@@ -116,11 +135,19 @@ export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineE
       if (wordMod && (key.rightArrow || input === 'f')) return moveTo(wordRight);
       if (key.leftArrow) return moveTo((_b, c) => Math.max(0, c - 1));
       if (key.rightArrow) return moveTo((b, c) => Math.min(b.length, c + 1));
-      // Emacs-style Home/End — Ink's Key has no home/end flags, and the raw
-      // Home/End escapes reach `useInput` as empty input with no flags at all,
-      // so they are indistinguishable from noise and cannot be bound here.
-      if (key.ctrl && input === 'a') return moveTo(lineStart);
-      if (key.ctrl && input === 'e') return moveTo(lineEnd);
+      // Emacs-style Home/End. The real Home/End keys cannot be bound HERE —
+      // Ink parses their escapes and drops them, so they reach `useInput` as
+      // empty input with no flags (see `keys.ts`) — but they are no longer
+      // unreachable: `useRawKeys` decodes them off stdin and calls
+      // `toLineStart`/`toLineEnd` directly. These chords stay as aliases.
+      if (key.ctrl && input === 'a') {
+        toLineStart();
+        return true;
+      }
+      if (key.ctrl && input === 'e') {
+        toLineEnd();
+        return true;
+      }
 
       // ORDERING 2: word-delete before plain backspace. Alt-Backspace arrives
       // as `{delete: true, meta: true}`, so the backspace branch below would
@@ -147,7 +174,19 @@ export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineE
         // parser as `input` like `[<64;36;30M`. Swallow them so they don't get
         // typed into the buffer (the parser already consumed them).
         if (looksLikeMouseReport(input)) return true;
-        insert(input);
+        // Modified Enter in CSI-u encoding (kitty/foot/ghostty Shift+Enter).
+        // Ink cannot parse `ESC [ 13 ; 2 u`, so it strips the ESC and hands the
+        // rest on as printable text — which is how `[13;2u` got typed into
+        // overlay fields (#399). `Prompt` never gets here (its `newlineIntent`
+        // runs first and inserts a real newline); every other caller is
+        // single-line, where a newline would be stripped anyway.
+        //
+        // Stripped rather than swallowed whole, unlike the mouse report above:
+        // a chunk can coalesce the keypress with real typing (`[13;2uabc`), and
+        // discarding all of it would silently eat the `abc`.
+        const printable = stripModifiedEnter(input);
+        if (!printable) return true;
+        insert(printable);
         return true;
       }
       return false;
@@ -155,7 +194,16 @@ export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineE
     [insert],
   );
 
-  return { buffer: state.buffer, cursor: state.cursor, setBuffer, clear, insert, handleKey };
+  return {
+    buffer: state.buffer,
+    cursor: state.cursor,
+    setBuffer,
+    clear,
+    insert,
+    handleKey,
+    toLineStart,
+    toLineEnd,
+  };
 }
 
 interface LineWithCursorProps {
