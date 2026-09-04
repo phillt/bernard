@@ -90,4 +90,27 @@ describe('per-app CSP grants (#467, #468)', () => {
       sandbox: ['allow-popups', 'allow-popups-to-escape-sandbox'],
     });
   });
+
+  it('sees a change made by another process on the very next call', async () => {
+    // The parse is memoized on the file's mtime and size, so this is the
+    // property that keeps "revoke applies to the next request" true across
+    // processes: the daemon serving the applet is not the process the CLI
+    // wrote the grant from.
+    const m = await loadModule();
+    m.saveAppCspGrant('notes', { imgSrc: ['https://a.example'] });
+    expect(m.loadAppCspGrant('notes')).toEqual({ imgSrc: ['https://a.example'] });
+
+    const file = JSON.parse(fs.readFileSync(m.PROFILES_PATH, 'utf-8')) as {
+      profiles: Record<string, { settings: { appCspGrants: Record<string, unknown> } }>;
+    };
+    const profile = Object.values(file.profiles)[0];
+    profile.settings.appCspGrants.notes = { imgSrc: ['https://b.example'] };
+    // A distinct mtime, since the write above happened in this same
+    // millisecond and the memo compares mtime and size.
+    fs.writeFileSync(m.PROFILES_PATH, JSON.stringify(file));
+    const later = new Date(Date.now() + 1000);
+    fs.utimesSync(m.PROFILES_PATH, later, later);
+
+    expect(m.loadAppCspGrant('notes')).toEqual({ imgSrc: ['https://b.example'] });
+  });
 });

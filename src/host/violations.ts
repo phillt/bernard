@@ -2,7 +2,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { APPLET_BLOCKS_FILE } from '../paths.js';
 import { atomicWriteFileSync } from '../fs-utils.js';
-import { isGrantableSource, GRANTABLE_DIRECTIVES, type GrantableDirective } from './csp-grant.js';
+import {
+  isGrantableSource,
+  GRANTABLE_DIRECTIVES,
+  DIRECTIVE_NAMES,
+  type GrantableDirective,
+} from './csp-grant.js';
 import { APP_ID_RE } from '../apps/manifest.js';
 
 /**
@@ -57,12 +62,13 @@ type BlocksFile = Record<string, BlockedRequest[]>;
  * guessed at, since presenting the user with a grant that would not have
  * helped is worse than presenting nothing.
  */
-const FROM_CSP_DIRECTIVE: Record<string, GrantableDirective> = {
-  'img-src': 'imgSrc',
-  'connect-src': 'connectSrc',
-  'font-src': 'fontSrc',
-  'media-src': 'mediaSrc',
-};
+// Derived, not written out: `csp-grant.ts` states the rule as "adding one
+// later is a row in this table plus a row in `DIRECTIVE_NAMES`", and a
+// hand-written mirror here would quietly make it three. Forgetting the third
+// fails silently — reports for the new directive would simply be dropped.
+const FROM_CSP_DIRECTIVE: Record<string, GrantableDirective> = Object.fromEntries(
+  Object.entries(DIRECTIVE_NAMES).map(([key, directive]) => [directive, key]),
+) as Record<string, GrantableDirective>;
 
 /**
  * Reduces a violation report to the grant it would need, or `null`.

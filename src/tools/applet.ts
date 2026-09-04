@@ -101,6 +101,7 @@ const PERMISSION_REQUEST = z
   .object({
     origins: z
       .array(z.string())
+      .min(1)
       .describe('Exact origins: `https://host` or `https://host:port`. No paths, no `*`.'),
     reason: z.string().max(200).optional().describe(REASON_HELP),
   })

@@ -89,6 +89,10 @@ export function cspFor(grant?: AppCspGrant | null): string {
   // argument above is that omitting `allow-same-origin` is the actively broken
   // configuration, so a grant may only ever append.
   const sandbox = ['allow-scripts', 'allow-same-origin', ...(grant?.sandbox ?? [])];
+  // Resolved once rather than inside the array literal: `media-src` has no
+  // base value, so it cannot go through `widen`, and computing it twice would
+  // be the one asymmetry against the three directives just above.
+  const media = sourcesFor('mediaSrc');
   return [
     "default-src 'none'",
     "script-src 'self' 'unsafe-inline'",
@@ -112,9 +116,7 @@ export function cspFor(grant?: AppCspGrant | null): string {
     // an applet with no grant falls through to `default-src 'none'`, and
     // adding a `'self'` default here would widen every existing applet to
     // pay for a directive none of them use.
-    ...(sourcesFor('mediaSrc').length
-      ? [`media-src 'self' ${sourcesFor('mediaSrc').join(' ')}`]
-      : []),
+    ...(media.length ? [`media-src 'self' ${media.join(' ')}`] : []),
     "form-action 'none'",
     "base-uri 'none'",
     "object-src 'none'",

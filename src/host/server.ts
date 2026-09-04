@@ -175,6 +175,22 @@ function createHandler(
     ): void => respond(res, base, status, body, headers);
     const sendJson = (status: number, value: unknown): void =>
       send(status, JSON.stringify(value), { 'Content-Type': 'application/json; charset=utf-8' });
+    /**
+     * The body, or `undefined` after answering 400 — so a caller reads as
+     * `const body = await bodyOr400(); if (body === undefined) return;`.
+     *
+     * Three POST routes had hand-rolled the identical six lines, which is
+     * exactly the triplication the `send`/`sendJson` closures above exist to
+     * remove one layer up.
+     */
+    const bodyOr400 = async (error: unknown): Promise<unknown | undefined> => {
+      try {
+        return await readJsonBody(req);
+      } catch {
+        sendJson(400, error);
+        return undefined;
+      }
+    };
 
     void (async () => {
       const port = getPort();
@@ -229,13 +245,11 @@ function createHandler(
           send(405, 'Method Not Allowed', { Allow: 'POST' });
           return;
         }
-        let body: unknown;
-        try {
-          body = await readJsonBody(req);
-        } catch {
-          sendJson(400, { ok: false, error: { code: 'invalid_args', message: 'Bad body.' } });
-          return;
-        }
+        const body = await bodyOr400({
+          ok: false,
+          error: { code: 'invalid_args', message: 'Bad body.' },
+        });
+        if (body === undefined) return;
         const { handle, args } = (body ?? {}) as { handle?: unknown; args?: unknown };
         if (typeof handle !== 'string') {
           sendJson(400, {
@@ -334,13 +348,8 @@ function createHandler(
         // the applet's claim about itself, so `recordBlocked` validates the
         // origin through the same parser a grant goes through and drops
         // anything it could not later grant.
-        let body: unknown;
-        try {
-          body = await readJsonBody(req);
-        } catch {
-          sendJson(400, { ok: false, error: 'Bad body.' });
-          return;
-        }
+        const body = await bodyOr400({ ok: false, error: 'Bad body.' });
+        if (body === undefined) return;
         recordBlocked(appId, body);
         sendJson(200, { ok: true });
         return;

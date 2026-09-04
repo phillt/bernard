@@ -88,6 +88,8 @@ import { assembleContext } from './framework/context.js';
 import { Agent } from './agent.js';
 import { bootstrapPendingCandidates } from './candidate-bootstrap.js';
 import type { PendingPermission } from './apps/permission-consent.js';
+import { GRANTABLE_DIRECTIVES } from './host/csp-grant.js';
+import type { CspGrantSpec } from './apps/manage.js';
 import { AppletCandidateStore } from './applet-candidates.js';
 import { appletSuggestionBlock } from './applet-detector.js';
 import { runCorrectionAgent } from './correction.js';
@@ -1190,21 +1192,24 @@ program
             if (!appId) throw new Error('Usage: bernard app csp <appId> [--img-src a,b] [--clear]');
             // A flag that was not passed leaves its directive alone; passing
             // one with an empty value clears just that directive.
-            const list = (v: string | undefined) =>
-              v === undefined
-                ? undefined
-                : v
-                    .split(',')
-                    .map((t) => t.trim())
-                    .filter(Boolean);
-            cli.appCsp(appId, {
-              ...(options.imgSrc !== undefined ? { imgSrc: list(options.imgSrc) } : {}),
-              ...(options.connectSrc !== undefined ? { connectSrc: list(options.connectSrc) } : {}),
-              ...(options.fontSrc !== undefined ? { fontSrc: list(options.fontSrc) } : {}),
-              ...(options.mediaSrc !== undefined ? { mediaSrc: list(options.mediaSrc) } : {}),
-              ...(options.sandbox !== undefined ? { sandbox: list(options.sandbox) } : {}),
-              ...(options.clear ? { clear: true } : {}),
-            });
+            const list = (v: string) =>
+              v
+                .split(',')
+                .map((t) => t.trim())
+                .filter(Boolean);
+            // Driven from the table rather than four hand-written arms:
+            // Commander camelCases `--img-src` to exactly the grant key, so a
+            // fifth directive would need only its `.option()` line above.
+            // Spelled out, forgetting this arm leaves the flag silently
+            // ignored — which is the failure mode the table exists to remove.
+            const spec: CspGrantSpec = {};
+            for (const key of GRANTABLE_DIRECTIVES) {
+              const raw = (options as Record<string, string | undefined>)[key];
+              if (raw !== undefined) spec[key] = list(raw);
+            }
+            if (options.sandbox !== undefined) spec.sandbox = list(options.sandbox);
+            if (options.clear) spec.clear = true;
+            cli.appCsp(appId, spec);
             return;
           }
           case 'allow': {

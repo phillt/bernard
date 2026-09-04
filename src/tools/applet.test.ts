@@ -772,3 +772,37 @@ describe('the applet tool asks before anything is granted', () => {
     expect(out).toContain('already permitted');
   });
 });
+
+/**
+ * The four grantable directives are named in three places — the table in
+ * `csp-grant.ts`, the manifest's declaration schema, and the tool's own
+ * advertised schema — and nothing but this test ties them together.
+ *
+ * Drift fails in the safe direction (a directive becomes un-requestable rather
+ * than over-granted), so this is maintenance hygiene rather than a security
+ * guard. It is the habit the codebase already keeps for `WRITE_PATH_TOOLS`,
+ * `FILE_TOOLS` and `AUTHORITY_ACTION_FIELDS`: an enumeration is written down
+ * once and a test asserts the copies agree.
+ */
+describe('the grantable directives agree across every schema that names them', () => {
+  it('matches the table, the manifest schema and the tool schema', async () => {
+    const { GRANTABLE_DIRECTIVES } = await import('../host/csp-grant.js');
+    const { AppPermissionsSchema } = await import('../apps/manifest.js');
+    const { createAppletTool } = await import('./applet.js');
+
+    const expected = [...GRANTABLE_DIRECTIVES].sort();
+    const manifestKeys = Object.keys(AppPermissionsSchema.shape)
+      .filter((k) => k !== 'sandbox')
+      .sort();
+
+    const params = createAppletTool().parameters as unknown as {
+      shape: { permissions: { unwrap: () => { shape: Record<string, unknown> } } };
+    };
+    const toolKeys = Object.keys(params.shape.permissions.unwrap().shape)
+      .filter((k) => k !== 'sandbox')
+      .sort();
+
+    expect(manifestKeys).toEqual(expected);
+    expect(toolKeys).toEqual(expected);
+  });
+});

@@ -186,6 +186,7 @@ import { AppRegistry, bundledAppIds } from '../apps/registry.js';
 import { AppletCandidateStore, type AppletCandidate } from '../applet-candidates.js';
 import { buildAppletRequest } from '../applet-detector.js';
 import { notAskedLine, type PendingPermission } from '../apps/permission-consent.js';
+import { isWildcardSource, type GrantableDirective } from '../host/csp-grant.js';
 import type { PermissionConsentRequest } from '../tools/types.js';
 
 /**
@@ -2348,7 +2349,12 @@ export function App({
               label: `Allow ${DIRECTIVE_NAMES[b.directive]} ${b.origin}`,
               annotation: `${b.count}×`,
               description: `last ${formatFriendlyTimestamp(new Date(b.lastSeen))}`,
-              value: `allow:${b.directive}:${b.origin}`,
+              // A typed payload, not a colon-joined string: `MenuEntry.value`
+              // is `unknown` precisely so a shape can travel through intact,
+              // and an origin legitimately contains a `:` before its port —
+              // so encoding one here would only round-trip by being carefully
+              // re-joined at the other end.
+              value: { kind: 'allow' as const, directive: b.directive, origin: b.origin },
             });
           }
         }
@@ -2362,7 +2368,18 @@ export function App({
           headerLines: current.warnings.map((w) => `⚠ ${w}`),
         });
         if (pick.cancelled) return;
-        const v = String(pick.item.value ?? 'noop');
+        const v = pick.item.value ?? 'noop';
+        if (typeof v === 'object' && v !== null && 'kind' in v) {
+          const { directive, origin } = v as unknown as {
+            directive: GrantableDirective;
+            origin: string;
+          };
+          const out = manage.applyCspGrant(id, {
+            [directive]: [...new Set([...(current.grant[directive] ?? []), origin])],
+          });
+          flashToast(out.ok ? `Allowed ${origin}.` : out.error, out.ok ? 'success' : 'error');
+          continue;
+        }
         if (v === 'back') return;
         if (v === 'noop') continue;
         if (v === 'clear') {
@@ -2378,17 +2395,6 @@ export function App({
             out.ok ? 'success' : 'error',
           );
           continue;
-        }
-        if (v.startsWith('allow:')) {
-          const [, directive, ...rest] = v.split(':');
-          const origin = rest.join(':');
-          const held = current.grant[directive as keyof typeof current.grant] as
-            | string[]
-            | undefined;
-          const out = manage.applyCspGrant(id, {
-            [directive]: [...new Set([...(held ?? []), origin])],
-          } as never);
-          flashToast(out.ok ? `Allowed ${origin}.` : out.error, out.ok ? 'success' : 'error');
         }
       }
     }
@@ -4098,7 +4104,7 @@ export function App({
             // where the difference actually costs something.
             item.key === 'connectSrc'
               ? 'This is a two-way channel: the applet can send data to these sites, not only read from them.'
-              : item.sources.some((src) => src === 'https:' || src.includes('*'))
+              : item.sources.some(isWildcardSource)
                 ? 'This is a wildcard — it covers every site, not a named few.'
                 : 'The applet can load content from these sites.',
           ],
