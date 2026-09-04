@@ -30,7 +30,9 @@ import type {
   BlockActionInput,
   BlockOutcome,
   ConfirmActionInput,
+  PermissionConsentRequest,
 } from '../tools/types.js';
+import type { PendingPermission } from '../apps/permission-consent.js';
 
 export type MenuResult = { cancelled: true } | { cancelled: false; index: number; item: MenuItem };
 
@@ -55,6 +57,19 @@ export interface InkHandlers {
     signal?: AbortSignal,
   ) => Promise<AskUserBatchResult>;
   requestConfirmDangerous: (command: string, signal?: AbortSignal) => Promise<boolean>;
+  /**
+   * Ask the user to allow what an applet declared it needs (#467, #468).
+   *
+   * Declared on the interface for the reason the trailing `signal` above is:
+   * the registered shim is typed by this interface, so a method missing here
+   * is silently dropped one frame short of the overlay. Its ABSENCE at the
+   * `src/index.ts` end is the fail-closed path — no handler means no consent,
+   * which means no grant.
+   */
+  requestPermissionConsent?: (
+    request: PermissionConsentRequest,
+    signal?: AbortSignal,
+  ) => Promise<PendingPermission[]>;
 }
 
 let registered: InkHandlers | null = null;

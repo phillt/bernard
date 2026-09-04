@@ -87,6 +87,7 @@ import { TurnContextStore } from './turn-context.js';
 import { assembleContext } from './framework/context.js';
 import { Agent } from './agent.js';
 import { bootstrapPendingCandidates } from './candidate-bootstrap.js';
+import type { PendingPermission } from './apps/permission-consent.js';
 import { AppletCandidateStore } from './applet-candidates.js';
 import { appletSuggestionBlock } from './applet-detector.js';
 import { runCorrectionAgent } from './correction.js';
@@ -103,6 +104,7 @@ import type {
   BlockActionInput,
   BlockOutcome,
   AskUserQuestion,
+  PermissionConsentRequest,
   AskUserBatchResult,
 } from './tools/types.js';
 import type { CoreMessage } from 'ai';
@@ -378,6 +380,23 @@ async function runInkRepl(args: {
     return h.requestAskUser(questions, signal);
   };
 
+  /**
+   * The applet permission prompt (#467, #468).
+   *
+   * Returns `[]` — deny — when there is no live REPL, which is the whole
+   * fail-closed story: `bernard script`, a cron dispatch and a headless test
+   * all land here, and none of them may grant an applet external access on a
+   * user's behalf. Nothing is granted by nobody answering.
+   */
+  const requestPermissionConsent = async (
+    request: PermissionConsentRequest,
+    signal?: AbortSignal,
+  ): Promise<PendingPermission[]> => {
+    const h = getInkHandlers();
+    if (!h?.requestPermissionConsent) return [];
+    return h.requestPermissionConsent(request, signal);
+  };
+
   const toolOptions: ToolOptions = {
     shellTimeout: config.shellTimeout,
     confirmDangerous,
@@ -385,6 +404,7 @@ async function runInkRepl(args: {
     blockAction,
     sessionToolAllowlist,
     askUser,
+    requestPermissionConsent,
     // Profile-persisted grants (#212). Reads the live config reference so
     // "always allow for this profile" decisions and profile switches
     // (applyProfileToConfig mutates in place) take effect immediately.

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { parseAppManifest, validateActionArgs, AppActionSchema } from './manifest.js';
+import {
+  parseAppManifest,
+  parseRawAppManifest,
+  validateActionArgs,
+  AppActionSchema,
+} from './manifest.js';
 
 function manifest(over: Record<string, unknown> = {}) {
   return {
@@ -72,7 +77,9 @@ describe('parseAppManifest', () => {
   });
 
   it('rejects an unknown schemaVersion', () => {
-    expect(parseAppManifest(manifest({ schemaVersion: 3 })).ok).toBe(false);
+    // Bumped from 3 to 4 when #467 added a revision. The union grows, never
+    // replaces: v1 and v2 manifests on disk must still read.
+    expect(parseAppManifest(manifest({ schemaVersion: 4 })).ok).toBe(false);
     expect(parseAppManifest(manifest({ schemaVersion: 0 })).ok).toBe(false);
   });
 
@@ -261,5 +268,85 @@ describe('the dispatch union (#445)', () => {
     expect(
       v2({ dispatch: { kind: 'tool', tool: 'web_read', args: {}, skipPermissions: true } }).ok,
     ).toBe(false);
+  });
+});
+
+/**
+ * Declared permissions (#467, #468).
+ *
+ * The property under test throughout is that a declaration is a REQUEST: it
+ * parses, it is carried, and it grants nothing. What it can reach is asserted
+ * in `csp.test.ts` and `server.test.ts`, where the header is built from the
+ * grant store and never from a manifest.
+ */
+describe('manifest permissions', () => {
+  const v3 = (permissions: unknown) => ({
+    schemaVersion: 3,
+    id: 'demo',
+    name: 'Demo',
+    permissions,
+    actions: { go: { instructions: 'do it', specialistId: 'web-wrapper' } },
+  });
+
+  it('accepts a declaration naming origins and a reason', () => {
+    const parsed = parseAppManifest(
+      v3({
+        imgSrc: { origins: ['https://cdn.example.com'], reason: 'so headlines have thumbnails' },
+      }),
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value.permissions?.imgSrc?.origins).toEqual(['https://cdn.example.com']);
+    }
+  });
+
+  it('accepts a sandbox request by alias', () => {
+    const parsed = parseAppManifest(
+      v3({ sandbox: { tokens: ['links'], reason: 'so you can open a story' } }),
+    );
+    expect(parsed.ok).toBe(true);
+  });
+
+  it('refuses an origin no user could ever grant', () => {
+    // Decidable with certainty at write time, so the model fixes it now
+    // rather than the user meeting a grant command that cannot work.
+    for (const origins of [["'self'"], ['https://cdn.example.com/assets'], ['data:'], ['*']]) {
+      expect(parseAppManifest(v3({ imgSrc: { origins } })).ok).toBe(false);
+    }
+  });
+
+  it('refuses a directive that is not grantable', () => {
+    expect(parseAppManifest(v3({ scriptSrc: { origins: ['https://a.example'] } })).ok).toBe(false);
+    expect(parseAppManifest(v3({ styleSrc: { origins: ['https://a.example'] } })).ok).toBe(false);
+  });
+
+  it('refuses permissions on a manifest that does not claim v3', () => {
+    // A manifest is read as the version it states. Half-v3 would be readable
+    // here and rejected wholesale by an older binary, which is the failure
+    // the version union exists to avoid rather than to hide.
+    const v1 = { ...v3({ imgSrc: { origins: ['https://a.example'] } }), schemaVersion: 1 };
+    expect(parseAppManifest(v1).ok).toBe(false);
+    const v2 = { ...v3({ imgSrc: { origins: ['https://a.example'] } }), schemaVersion: 2 };
+    expect(parseAppManifest(v2).ok).toBe(false);
+  });
+
+  it('still reads a v1 and a v2 manifest that declares nothing', () => {
+    expect(
+      parseAppManifest({
+        schemaVersion: 1,
+        id: 'demo',
+        name: 'Demo',
+        actions: { go: { instructions: 'x', specialistId: 'web-wrapper' } },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it('round-trips through the writer schema', () => {
+    // `parseRawAppManifest` is what a writer validates with; a declaration
+    // must survive create -> read -> update without being dropped.
+    const raw = v3({ imgSrc: { origins: ['https://cdn.example.com'] } });
+    const written = parseRawAppManifest(raw);
+    expect(written.ok).toBe(true);
+    if (written.ok) expect(written.value.permissions?.imgSrc?.origins).toHaveLength(1);
   });
 });

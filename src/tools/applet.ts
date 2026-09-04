@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { attachMeta } from '../framework/tools/adapter.js';
 import { capSubagentResult } from './result-cap.js';
 import { AppRegistry } from '../apps/registry.js';
+import type { ToolOptions } from './types.js';
 import { defaultAppletPage } from '../apps/page-template.js';
 import { SpecialistStore, type Specialist } from '../specialists.js';
 import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-tool.js';
@@ -21,6 +22,7 @@ import {
   ArgSpecFields,
   ToolDispatchFields,
   type RawAppAction,
+  type AppPermissions,
   type RawAppManifest,
 } from '../apps/manifest.js';
 
@@ -85,6 +87,25 @@ const ACTION = z
   })
   .strict();
 
+/**
+ * Prose the USER reads before making a security decision, so it is capped and
+ * every renderer treats it as untrusted — Bernard states the structural fact
+ * (which directive, which origins) in its own words and shows this beneath it,
+ * attributed to the applet.
+ */
+const REASON_HELP =
+  "One short sentence, in the user's terms, on what this buys THEM — " +
+  '"so each headline has a thumbnail", not "required for img-src".';
+
+const PERMISSION_REQUEST = z
+  .object({
+    origins: z
+      .array(z.string())
+      .describe('Exact origins: `https://host` or `https://host:port`. No paths, no `*`.'),
+    reason: z.string().max(200).optional().describe(REASON_HELP),
+  })
+  .strict();
+
 const PARAMETERS = z.object({
   action: z.enum(['create', 'update', 'read', 'list']).describe('The operation to perform'),
   id: z.string().optional().describe('Applet id (kebab-case). Required for create/update/read.'),
@@ -120,11 +141,44 @@ const PARAMETERS = z.object({
     .record(z.string(), z.string())
     .optional()
     .describe('Additional files to serve, by plain filename (no directories).'),
+  permissions: z
+    .object({
+      imgSrc: PERMISSION_REQUEST.optional(),
+      connectSrc: PERMISSION_REQUEST.optional(),
+      fontSrc: PERMISSION_REQUEST.optional(),
+      mediaSrc: PERMISSION_REQUEST.optional(),
+      sandbox: z
+        .object({
+          tokens: z
+            .array(z.enum(['links', 'navigate']))
+            .describe(
+              '`links` to open a link in a new browser window (the only setting that works — ' +
+                'a popup that inherits the sandbox loads with no scripts or storage). ' +
+                '`navigate` replaces the applet itself, which is right for docs and wrong ' +
+                'for a feed.',
+            ),
+          reason: z.string().max(200).optional().describe(REASON_HELP),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict()
+    .optional()
+    .describe(
+      'What this applet needs from outside its own origin, and why. REQUESTING IS NOT ' +
+        'GRANTING: the user is shown this and allows or denies it, and until they allow it ' +
+        'the browser blocks the load. Declare the NARROWEST set that works — the exact ' +
+        'origins, never a bare `https:`. Omit entirely for an applet that only talks to ' +
+        'Bernard, which is most of them.',
+    ),
 });
 
 type AppletArgs = z.infer<typeof PARAMETERS>;
 
-export function createAppletTool(registry?: AppRegistry) {
+export function createAppletTool(
+  registry?: AppRegistry,
+  requestConsent?: ToolOptions['requestPermissionConsent'],
+) {
   const store = registry ?? new AppRegistry();
   return attachMeta(
     tool({
@@ -139,7 +193,7 @@ export function createAppletTool(registry?: AppRegistry) {
           // back the promise before it rejects, so this `catch` would see
           // nothing and the `Error: ` prefix `detectToolError` reads (#364)
           // would silently stop being applied.
-          return await run(store, args);
+          return await run(store, args, requestConsent);
         } catch (err) {
           // The `Error: ` prefix is what `detectToolError` reads (#364).
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -157,7 +211,11 @@ export function createAppletTool(registry?: AppRegistry) {
   );
 }
 
-async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
+async function run(
+  store: AppRegistry,
+  args: AppletArgs,
+  requestConsent?: ToolOptions['requestPermissionConsent'],
+): Promise<string> {
   switch (args.action) {
     case 'list': {
       const ids = store.listIds();
@@ -197,10 +255,16 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
       if (refusal) return refusal;
 
       const created = store.create(manifest, { 'index.html': page, ...(args.files ?? {}) });
+      // Asked AFTER the write and BEFORE the applet opens: the applet exists
+      // either way — denying a permission is not a build failure — and asking
+      // once it is on screen would be asking about something the user is
+      // already looking at.
+      const consent = await askForPermissions(created.id, created.name, manifest, requestConsent);
       return (
         `Applet "${created.name}" (${created.id}) created with ` +
         `${Object.keys(created.actions).length} action(s).` +
         grantHint(created.id, Object.keys(created.actions)) +
+        consent +
         warningsFor(issues) +
         formatWarnings(dispatch.warnings) +
         (await openedNote(created.id))
@@ -228,8 +292,10 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
         files['index.html'] = args.page;
       }
       const updated = store.update(id, manifest, files);
+      const consent = await askForPermissions(id, updated.name, manifest, requestConsent);
       return (
         `Applet "${updated.name}" (${updated.id}) updated.` +
+        consent +
         warningsFor(issues) +
         formatWarnings(dispatch.warnings)
       );
@@ -256,7 +322,12 @@ async function run(store: AppRegistry, args: AppletArgs): Promise<string> {
 function buildManifest(
   id: string,
   args: AppletArgs,
-  existing?: { name: string; description?: string; actions: Record<string, RawAppAction> },
+  existing?: {
+    name: string;
+    description?: string;
+    actions: Record<string, RawAppAction>;
+    permissions?: AppPermissions;
+  },
 ): RawAppManifest {
   const actions: Record<string, RawAppAction> = {};
   const source = args.actions ?? {};
@@ -277,15 +348,84 @@ function buildManifest(
     } as RawAppAction;
   }
   const merged = args.actions ? actions : (existing?.actions ?? {});
+  // Carried like the authority fields, and for a related reason: an update
+  // that omits `permissions` is an edit to the page or the actions, not a
+  // withdrawal of a request the user may not have answered yet.
+  const permissions = (args.permissions as AppPermissions | undefined) ?? existing?.permissions;
   return {
-    schemaVersion: 2,
+    // Bumped ONLY when something is declared. The version union means an
+    // older binary rejects the whole app rather than the field it does not
+    // know, so stamping v3 on every applet would cost every existing one its
+    // readability to pay for a field it does not use.
+    schemaVersion: permissions ? 3 : 2,
     id,
     name: args.name ?? existing?.name ?? id,
     ...((args.description ?? existing?.description)
       ? { description: args.description ?? existing?.description }
       : {}),
+    ...(permissions ? { permissions } : {}),
     actions: merged,
   };
+}
+
+/**
+ * Puts what the applet just asked for in front of the user, and records what
+ * they allowed (#467, #468).
+ *
+ * **Declaring is not granting**, and this function is the only place the two
+ * meet. A manifest's `permissions` block is written by a model; nothing in it
+ * reaches a response header until a person says so here, and what they say is
+ * written to the profile — never back to the manifest, which the model owns.
+ *
+ * Fail-closed by omission: with no `requestConsent` callback there is no user
+ * to ask, so nothing is granted. That is the headless path (`bernard script`,
+ * a cron dispatch, a test), and it is also what happens if the callback is
+ * ever forgotten at a call site — the applet is built, the browser keeps
+ * blocking, and the user can grant later from `/applets` or the CLI. The
+ * failure mode of forgetting is a permission that was not given, which is the
+ * right direction for it to fail in.
+ *
+ * The returned string is what the MODEL reads, so it says what was allowed and
+ * what was not: an applet whose images were denied should render source names
+ * rather than dead image frames, and it cannot adapt to an answer it is not
+ * told.
+ */
+async function askForPermissions(
+  appId: string,
+  appName: string,
+  manifest: RawAppManifest,
+  requestConsent?: ToolOptions['requestPermissionConsent'],
+): Promise<string> {
+  if (!manifest.permissions) return '';
+  const { loadAppCspGrant, saveAppCspGrant } = await import('../apps/app-csp-grants.js');
+  const { pendingPermissions, grantWith } = await import('../apps/permission-consent.js');
+
+  const grant = loadAppCspGrant(appId);
+  const pending = pendingPermissions(manifest.permissions, grant);
+  if (pending.length === 0) return ' Everything it needs is already permitted.';
+
+  const asked = pending.map((p) => p.label).join('; ');
+  if (!requestConsent) {
+    return (
+      ` It needs permission to: ${asked} — nobody was present to ask, so this is NOT granted ` +
+      'and the browser will block it. The user can allow it from /applets.'
+    );
+  }
+
+  const allowed = await requestConsent({ appId, appName, pending });
+  if (allowed.length > 0) saveAppCspGrant(appId, grantWith(grant, allowed));
+
+  const yes = allowed.map((p) => p.label);
+  const no = pending.filter((p) => !allowed.includes(p)).map((p) => p.label);
+  const parts: string[] = [];
+  if (yes.length > 0) parts.push(`The user allowed: ${yes.join('; ')}.`);
+  if (no.length > 0) {
+    parts.push(
+      `The user did NOT allow: ${no.join('; ')} — the browser will block it, so the page ` +
+        'should degrade rather than show something broken.',
+    );
+  }
+  return ` ${parts.join(' ')}`;
 }
 
 function need<T>(value: T | undefined, field: string, action: string): T {

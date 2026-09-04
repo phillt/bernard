@@ -1,3 +1,4 @@
+import type { PendingPermission } from '../apps/permission-consent.js';
 import type { RiskLevel } from '../risk.js';
 import type { PermissionRule } from '../tool-permissions.js';
 import type { WriteScope } from '../permissions/write-scope.js';
@@ -33,6 +34,15 @@ export interface ConfirmActionInput {
    * offered (complex/dangerous shell), so the dialog omits the profile row.
    */
   breadthOptions?: BreadthOption[];
+}
+
+/** What {@link ToolOptions.requestPermissionConsent} is asked to put on screen. */
+export interface PermissionConsentRequest {
+  appId: string;
+  /** The applet's display name, which is what the prompt is headed with. */
+  appName: string;
+  /** What it asked for that it has not already been granted. */
+  pending: PendingPermission[];
 }
 
 /** A single question for the `askUser` callback. */
@@ -142,6 +152,24 @@ export interface ToolOptions {
    * Omitted in non-interactive environments (cron daemon).
    */
   askUser?: (questions: AskUserQuestion[], signal?: AbortSignal) => Promise<AskUserBatchResult>;
+  /**
+   * Ask the user to allow or deny what an applet just declared it needs
+   * (#467, #468).
+   *
+   * A `ToolOptions` callback rather than a direct reach into the Ink bridge,
+   * for the reason `askUser` is one: the applet tool must stay constructible
+   * with no REPL — and **its absence is the fail-closed path**. Headless,
+   * nobody is there to consent, so nothing is granted and the applet is built
+   * with the browser still blocking what it asked for. A grant is never the
+   * default outcome of not asking.
+   *
+   * Returns the subset the user allowed. An empty array is a real answer
+   * ("deny"), not an error.
+   */
+  requestPermissionConsent?: (
+    request: PermissionConsentRequest,
+    signal?: AbortSignal,
+  ) => Promise<PendingPermission[]>;
   /**
    * Live reader for the active profile's persisted tool grants (#212).
    * Consulted by both augment gates before prompting: `allow` proceeds,

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isGrantableSource, MAX_SOURCES_PER_DIRECTIVE } from '../host/csp-grant.js';
 
 /**
  * The app manifest: a closed, typed registry of the actions an external
@@ -87,8 +88,9 @@ const ARG_NAME_RE = /^[a-z][a-z0-9_]{0,31}$/;
  * model in the loop. The v2-only fields are rejected on a v1 manifest by
  * {@link AppManifestSchema}'s refinement, so a manifest cannot half-declare
  * itself: the version it states is the version it is read as.
+ * v3 (#467) — the applet may DECLARE the external origins it needs and why.
  */
-export const AppSchemaVersionSchema = z.union([z.literal(1), z.literal(2)]);
+export const AppSchemaVersionSchema = z.union([z.literal(1), z.literal(2), z.literal(3)]);
 export type AppSchemaVersion = z.infer<typeof AppSchemaVersionSchema>;
 
 /**
@@ -312,6 +314,73 @@ export const AppActionSchema = RawAppActionSchema.superRefine((action, ctx) =>
 ).transform(liftAction);
 
 /**
+ * One thing an applet asks for, and why (#467, #468).
+ *
+ * **A declaration is a request, and requests are not authority.** This is the
+ * one part of the permission design that has to stay true for the rest of it
+ * to be safe: the manifest is written by the `applet` tool — by a model — so
+ * nothing here reaches a response header. `src/apps/app-csp-grants.ts` holds
+ * what the user actually allowed, and only that is read by `cspFor`. What a
+ * declaration buys is that there is something to SHOW the user: without it a
+ * permission prompt has nothing to put on screen, and the alternative is the
+ * shape #467 originally imagined — a line of prose telling the user to go and
+ * type a CLI command, which is homework rather than a request.
+ *
+ * Android is the precedent and it is exact: the app's manifest declares
+ * `<uses-permission>`, the OS asks, the OS stores the answer. It is also what
+ * MCP Apps (SEP-1865) already requires of a host — "MUST construct CSP headers
+ * based on declared domains; MUST NOT allow undeclared domains" — with Bernard
+ * one step stricter, since declared is necessary here and not sufficient.
+ *
+ * `reason` is model-written prose shown to a user who is about to make a
+ * security decision, so it is capped, and every renderer treats it as
+ * untrusted: the structural fact (which directive, which origins) is what
+ * Bernard states in its own words, and this sentence appears beneath it,
+ * escaped and attributed to the applet. Same posture as `<available_sources>`.
+ */
+const PermissionRequestSchema = z
+  .object({
+    origins: z
+      .array(
+        z
+          .string()
+          .refine(isGrantableSource, 'not an origin a user could grant — scheme://host[:port]'),
+      )
+      .min(1)
+      .max(MAX_SOURCES_PER_DIRECTIVE),
+    reason: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+/**
+ * What an applet asks for.
+ *
+ * Keyed by the same camelCase directive names the grant store uses, so a
+ * declaration and a grant are comparable without a translation table that
+ * could disagree with itself.
+ */
+export const AppPermissionsSchema = z
+  .object({
+    imgSrc: PermissionRequestSchema.optional(),
+    connectSrc: PermissionRequestSchema.optional(),
+    fontSrc: PermissionRequestSchema.optional(),
+    mediaSrc: PermissionRequestSchema.optional(),
+    sandbox: z
+      .object({
+        // Aliases are accepted here — `links` and `navigate` are what a model
+        // should be asking for, since the raw tokens are not independently
+        // useful and `allow-popups` alone is the trap #468 names.
+        tokens: z.array(z.string().min(1).max(64)).min(1).max(4),
+        reason: z.string().min(1).max(200).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export type AppPermissions = z.infer<typeof AppPermissionsSchema>;
+
+/**
  * A manifest exactly as it sits on disk, validated but **not lifted**.
  *
  * The write side needs this and cannot use {@link AppManifestSchema}, which
@@ -327,12 +396,24 @@ export const RawAppManifestSchema = z
     id: z.string().regex(APP_ID_RE),
     name: z.string().min(1).max(80),
     description: z.string().max(400).optional(),
+    /** What the applet asks the user for. Declaring grants nothing. */
+    permissions: AppPermissionsSchema.optional(),
     actions: z.record(z.string().regex(ACTION_NAME_RE), RawAppActionSchema),
   })
   .strict()
   .superRefine((m, ctx) => {
     if (Object.keys(m.actions).length === 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'manifest declares no actions' });
+    }
+    // Same rule as `dispatch` below, one level up: a manifest is read as the
+    // version it states, so a v3-only field on a v1 or v2 manifest would make
+    // it half-v3 — readable here and rejected wholesale by an older binary.
+    if (m.permissions && m.schemaVersion < 3) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['permissions'],
+        message: '`permissions` requires schemaVersion 3',
+      });
     }
     for (const [name, action] of Object.entries(m.actions)) {
       intraActionRules(action, ctx, ['actions', name]);

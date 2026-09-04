@@ -593,3 +593,182 @@ describe('instructions are not a template', () => {
     expect(out).not.toContain('NOT interpolated');
   });
 });
+
+/**
+ * Declaring is not granting (#467, #468).
+ *
+ * The tool may write `permissions` because a declaration is a REQUEST — the
+ * user is shown it and allows or denies it. That is the opposite polarity from
+ * the authority fields above, and both halves need pinning: the tool must be
+ * able to ask, and asking must reach no header.
+ */
+describe('the applet tool declares permissions but grants none', () => {
+  useTempHome('bernard-applet-permissions');
+
+  const withPermissions = {
+    ...CREATE,
+    permissions: {
+      imgSrc: { origins: ['https://cdn.example.com'], reason: 'so each headline has a thumbnail' },
+      sandbox: { tokens: ['links' as const], reason: 'so you can open a story' },
+    },
+  };
+
+  it('writes a declaration and stamps the manifest v3', async () => {
+    const { createAppletTool } = await import('./applet.js');
+    const { AppRegistry } = await import('../apps/registry.js');
+    const store = new AppRegistry({ seed: false });
+    await createAppletTool(store).execute(withPermissions, {} as never);
+    const app = store.get('notes');
+    expect(app.ok).toBe(true);
+    if (!app.ok) return;
+    expect(app.manifest.schemaVersion).toBe(3);
+    expect(app.manifest.permissions?.imgSrc?.origins).toEqual(['https://cdn.example.com']);
+  });
+
+  it('leaves an applet that declares nothing on v2', async () => {
+    // The version union means an older binary rejects the whole app rather
+    // than the field it does not know, so a gratuitous bump would cost every
+    // existing applet its readability to pay for a field it does not use.
+    const { createAppletTool } = await import('./applet.js');
+    const { AppRegistry } = await import('../apps/registry.js');
+    const store = new AppRegistry({ seed: false });
+    // A distinct id: `create` refuses a duplicate, and reading the applet the
+    // previous test wrote would assert nothing about this one.
+    await createAppletTool(store).execute({ ...CREATE, id: 'plain' }, {} as never);
+    const app = store.get('plain');
+    expect(app.ok && app.manifest.schemaVersion).toBe(2);
+  });
+
+  it('carries a declaration through an update that does not mention it', async () => {
+    // An edit to the page is not a withdrawal of a request the user may not
+    // have answered yet.
+    const { createAppletTool } = await import('./applet.js');
+    const { AppRegistry } = await import('../apps/registry.js');
+    const store = new AppRegistry({ seed: false });
+    const tool = createAppletTool(store);
+    await tool.execute(withPermissions, {} as never);
+    await tool.execute({ action: 'update', id: 'notes', page: PAGE }, {} as never);
+    const app = store.get('notes');
+    expect(app.ok && app.manifest.permissions?.imgSrc?.origins).toEqual([
+      'https://cdn.example.com',
+    ]);
+  });
+
+  it('grants nothing by declaring — the served header is unchanged', async () => {
+    // The single assertion the whole three-channel design rests on.
+    const { createAppletTool } = await import('./applet.js');
+    const { AppRegistry } = await import('../apps/registry.js');
+    const { loadAppCspGrant } = await import('../apps/app-csp-grants.js');
+    const { cspFor } = await import('../host/csp.js');
+    await createAppletTool(new AppRegistry({ seed: false })).execute(withPermissions, {} as never);
+    expect(loadAppCspGrant('notes')).toBeNull();
+    expect(cspFor(loadAppCspGrant('notes'))).toBe(cspFor());
+  });
+
+  it('refuses an origin the user could never grant', async () => {
+    const { createAppletTool } = await import('./applet.js');
+    const { AppRegistry } = await import('../apps/registry.js');
+    const out = await createAppletTool(new AppRegistry({ seed: false })).execute(
+      { ...CREATE, permissions: { imgSrc: { origins: ['https:/'] } } },
+      {} as never,
+    );
+    expect(out).toMatch(/Error/);
+  });
+
+  it('advertises no grant field alongside the request', async () => {
+    // `permissions` is what the model may ask with; nothing here may set what
+    // the user answered.
+    const { createAppletTool } = await import('./applet.js');
+    const shape = (createAppletTool().parameters as unknown as { shape: Record<string, unknown> })
+      .shape;
+    expect(Object.keys(shape)).toContain('permissions');
+    for (const grantField of ['cspGrants', 'appCspGrants', 'allowOrigins', 'sandboxTokens']) {
+      expect(Object.keys(shape)).not.toContain(grantField);
+    }
+  });
+});
+
+/**
+ * The consent hand-off (#467, #468).
+ *
+ * These pin the direction the mechanism fails in. A grant is written only when
+ * a user answered; every other path — no callback at all, an empty answer —
+ * leaves the applet built and the browser still blocking.
+ */
+describe('the applet tool asks before anything is granted', () => {
+  useTempHome('bernard-applet-consent');
+
+  // `useTempHome` is per-describe, so the registry persists between tests here
+  // and `create` refuses a duplicate id. One id per test, or a later assertion
+  // reads the applet an earlier test wrote.
+  const WITH = (id: string) => ({
+    ...CREATE,
+    id,
+    permissions: { imgSrc: { origins: ['https://cdn.example.com'], reason: 'thumbnails' } },
+  });
+
+  async function tools() {
+    const { createAppletTool } = await import('./applet.js');
+    const { AppRegistry } = await import('../apps/registry.js');
+    const grants = await import('../apps/app-csp-grants.js');
+    return { createAppletTool, AppRegistry, grants };
+  }
+
+  it('writes the grant the user allowed', async () => {
+    const { createAppletTool, AppRegistry, grants } = await tools();
+    const consent = vi.fn(async (req: { pending: unknown[] }) => req.pending as never);
+    const out = await createAppletTool(new AppRegistry({ seed: false }), consent).execute(
+      WITH('allowed'),
+      {} as never,
+    );
+    expect(consent).toHaveBeenCalledOnce();
+    expect(grants.loadAppCspGrant('allowed')).toEqual({ imgSrc: ['https://cdn.example.com'] });
+    expect(out).toContain('The user allowed');
+  });
+
+  it('grants nothing when the user denies, and tells the model so', async () => {
+    // Denying is a normal outcome, not a build failure: the applet exists and
+    // the model is told, so the page can degrade rather than show dead frames.
+    const { createAppletTool, AppRegistry, grants } = await tools();
+    const out = await createAppletTool(new AppRegistry({ seed: false }), async () => []).execute(
+      WITH('denied'),
+      {} as never,
+    );
+    expect(grants.loadAppCspGrant('denied')).toBeNull();
+    expect(out).toContain('created');
+    expect(out).toContain('did NOT allow');
+  });
+
+  it('grants nothing when there is nobody to ask', async () => {
+    // The fail-closed path, and the one a forgotten call site lands on: no
+    // callback means no consent, never implied consent.
+    const { createAppletTool, AppRegistry, grants } = await tools();
+    const out = await createAppletTool(new AppRegistry({ seed: false })).execute(
+      WITH('headless'),
+      {} as never,
+    );
+    expect(grants.loadAppCspGrant('headless')).toBeNull();
+    expect(out).toContain('nobody was present to ask');
+  });
+
+  it('does not ask at all when the applet declared nothing', async () => {
+    const { createAppletTool, AppRegistry } = await tools();
+    const consent = vi.fn(async () => []);
+    await createAppletTool(new AppRegistry({ seed: false }), consent).execute(
+      { ...CREATE, id: 'nodeclare' },
+      {} as never,
+    );
+    expect(consent).not.toHaveBeenCalled();
+  });
+
+  it('does not re-ask on an update for something already granted', async () => {
+    const { createAppletTool, AppRegistry } = await tools();
+    const store = new AppRegistry({ seed: false });
+    const consent = vi.fn(async (req: { pending: unknown[] }) => req.pending as never);
+    const tool = createAppletTool(store, consent);
+    await tool.execute(WITH('reask'), {} as never);
+    const out = await tool.execute({ action: 'update', id: 'reask', page: PAGE }, {} as never);
+    expect(consent).toHaveBeenCalledOnce();
+    expect(out).toContain('already permitted');
+  });
+});

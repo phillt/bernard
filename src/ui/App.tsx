@@ -185,6 +185,8 @@ import { toLiteralSpeech } from '../speech-text.js';
 import { AppRegistry, bundledAppIds } from '../apps/registry.js';
 import { AppletCandidateStore, type AppletCandidate } from '../applet-candidates.js';
 import { buildAppletRequest } from '../applet-detector.js';
+import { notAskedLine, type PendingPermission } from '../apps/permission-consent.js';
+import type { PermissionConsentRequest } from '../tools/types.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -934,6 +936,7 @@ export function App({
     requestBlock: typeof requestBlock;
     requestTextInput: typeof requestTextInput;
     requestAskUser: typeof requestAskUser;
+    requestPermissionConsent: typeof requestPermissionConsent;
   } | null>(null);
   useEffect(() => {
     setInkHandlers({
@@ -946,6 +949,8 @@ export function App({
       requestBlock: (input, signal) => handlersRef.current!.requestBlock(input, signal),
       requestTextInput: (options, signal) => handlersRef.current!.requestTextInput(options, signal),
       requestAskUser: (questions, signal) => handlersRef.current!.requestAskUser(questions, signal),
+      requestPermissionConsent: (request, signal) =>
+        handlersRef.current!.requestPermissionConsent(request, signal),
       requestConfirmDangerous: async (command, signal) => {
         // The signal now reaches the overlay, so an abort while the menu is on
         // screen tears it down. The two `signal?.aborted` polls this replaces
@@ -3738,12 +3743,111 @@ export function App({
   // `handlersRef.current` assignment below rewrites the slot every render so
   // the registered (stable) shim object always forwards to the latest
   // closures.
+
+  /**
+   * The permission prompt an applet's declaration produces (#467, #468).
+   *
+   * This is the "installing an app" moment: the applet has just been built and
+   * the user is already looking at the screen, which is the only point where an
+   * interruption is cheaper than a note telling them to go and type a command
+   * later. Everything after this is `/applets → Permissions`.
+   *
+   * **Bernard writes the label; the applet writes the reason.** The structural
+   * facts — which capability, which origins — are rendered from the manifest by
+   * `permission-consent.ts` and are verifiable. The applet's own sentence is
+   * model-written prose being used to influence a security decision, so it is
+   * quoted and attributed rather than presented as Bernard's own words, and it
+   * is never the only thing on the row. Same posture as `<available_sources>`.
+   *
+   * **"Allow all" cannot cover everything, deliberately.** An ask marked
+   * `ownScreen` — a two-way network channel, or any whole-scheme wildcard —
+   * gets its own question however the blanket row was answered, because the
+   * blanket row is the one people press without reading.
+   *
+   * Cancelling is a deny: the applet is still built, and the user can grant
+   * later. Nothing here can widen anything the applet did not ask for.
+   */
+  async function requestPermissionConsent(
+    request: PermissionConsentRequest,
+    signal?: AbortSignal,
+  ): Promise<PendingPermission[]> {
+    const { pending, appName } = request;
+    if (pending.length === 0) return [];
+
+    const describe = (p: PendingPermission): string[] => [
+      `  ${p.label}`,
+      `    ${p.detail}`,
+      // Attributed, so the reader can tell whose claim it is.
+      ...(p.reason ? [`    "${p.reason}" — the applet's words`] : []),
+    ];
+
+    const blanket = pending.filter((p) => !p.ownScreen);
+    const individually = pending.filter((p) => p.ownScreen);
+    const header = [
+      `${appName} needs permission to:`,
+      '',
+      ...pending.flatMap(describe),
+      '',
+      notAskedLine(pending),
+    ];
+
+    const allowed: PendingPermission[] = [];
+    let reviewEach = blanket.length === 0;
+
+    if (blanket.length > 0) {
+      const rows: MenuEntry[] = [
+        {
+          label: blanket.length === pending.length ? 'Allow all' : 'Allow these',
+          description: blanket.map((p) => p.label).join('; '),
+        },
+        { label: 'Review one at a time' },
+        { label: "Skip — don't allow any" },
+      ];
+      const pick = await requestMenu(
+        rows,
+        { title: 'Applet permissions', headerLines: header },
+        signal,
+      );
+      if (pick.cancelled || pick.index === 2) return [];
+      if (pick.index === 0) allowed.push(...blanket);
+      else reviewEach = true;
+    }
+
+    const remaining = reviewEach ? [...blanket, ...individually] : individually;
+    for (const item of remaining) {
+      if (signal?.aborted) return allowed;
+      const rows: MenuEntry[] = [{ label: 'Allow' }, { label: "Don't allow" }];
+      const pick = await requestMenu(
+        rows,
+        {
+          title: item.label,
+          headerLines: [
+            ...describe(item),
+            '',
+            // Said plainly rather than in CSP terms, because this is the screen
+            // where the difference actually costs something.
+            item.key === 'connectSrc'
+              ? 'This is a two-way channel: the applet can send data to these sites, not only read from them.'
+              : item.sources.some((src) => src === 'https:' || src.includes('*'))
+                ? 'This is a wildcard — it covers every site, not a named few.'
+                : 'The applet can load content from these sites.',
+          ],
+        },
+        signal,
+      );
+      if (pick.cancelled) return allowed;
+      if (pick.index === 0) allowed.push(item);
+    }
+    return allowed;
+  }
+
   handlersRef.current = {
     requestMenu,
     requestConfirm,
     requestBlock,
     requestTextInput,
     requestAskUser,
+    requestPermissionConsent,
   };
 
   // Overlay teardown, one closure per pending slot. Passed to `openOverlay` so
