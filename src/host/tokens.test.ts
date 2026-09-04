@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { APPLET_COLOR_TOKENS, tokensStylesheet, TOKENS_PATH } from './tokens.js';
+import {
+  APPLET_COLOR_TOKENS,
+  APPLET_STYLED_SELECTORS,
+  tokensStylesheet,
+  TOKENS_PATH,
+} from './tokens.js';
 import { contrastOver, HEX_LITERAL_RE } from '../color.js';
 import { getThemeColors, setTheme, DEFAULT_THEME } from '../theme.js';
 
@@ -184,5 +189,68 @@ describe('the served floor meets WCAG AA', () => {
     ]);
     const unused = declared.filter((d) => !body.includes(`var(${d})`) && !UNUSED_BY_DESIGN.has(d));
     expect(unused).toEqual([]);
+  });
+});
+
+/**
+ * The floor and the prompt that describes it, bound in both directions.
+ *
+ * `applet-styler.json` lists what is "already styled" so a model writes no CSS
+ * in the common case. That list had drifted from the sheet by ten selectors,
+ * with nothing to catch it — the same class of drift #424 built the served
+ * stylesheet to end, one level up.
+ */
+describe('the styled-selector record tracks the sheet', () => {
+  const sheet = tokensStylesheet();
+
+  /** Selectors the sheet declares, read off the artefact rather than restated. */
+  function declaredSelectors(css: string): string[] {
+    const out = new Set<string>();
+    // Rule heads only: a line ending in `{` that is not an at-rule.
+    for (const line of css.split('\n')) {
+      const m = /^([^{}@/*][^{}]*)\{/.exec(line.trim());
+      if (!m) continue;
+      for (const part of m[1].split(',')) {
+        const sel = part.trim();
+        if (sel) out.add(sel);
+      }
+    }
+    return [...out];
+  }
+
+  /**
+   * Selectors that are real but must not be advertised.
+   *
+   * `:root` and `*` are plumbing; the pseudo-classes are the focus contract an
+   * applet is told NOT to override. Naming them in the prompt would invite
+   * exactly the override #465 forbids.
+   */
+  const NOT_ADVERTISED = new Set([':root', '*', ':focus-visible', ':focus:not(:focus-visible)']);
+
+  const declared = declaredSelectors(sheet);
+
+  it('the record and the sheet name exactly the same selectors', () => {
+    // BOTH directions. Sheet → record catches a rule added and not recorded,
+    // which is the mistake actually made. Record → sheet catches a rule REMOVED
+    // and left in the prompt, which nothing caught before and which ships the
+    // model a class that no longer exists.
+    //
+    // Compared on the LEADING simple selector: `.cards > li` is reached through
+    // `.cards`, and `button:hover` through `button`, so a prompt naming the
+    // base has told the model everything it can act on.
+    //
+    // The record stays hand-written rather than derived from this parse, even
+    // though the two sets are identical today. Deriving would move a CSS regex
+    // into production, where a miss ships a wrong list to a model silently; as
+    // a test it fails loudly instead. It also keeps the prompt's order curated
+    // — structure, then text, then forms, then utilities — rather than
+    // whatever order the sheet happens to declare things in.
+    const base = (sel: string): string => sel.split(/[\s>+~:]/)[0];
+    const fromSheet = new Set(declared.filter((sel) => !NOT_ADVERTISED.has(sel)).map(base));
+    expect([...fromSheet].sort()).toEqual([...APPLET_STYLED_SELECTORS].sort());
+  });
+
+  it('finds a non-trivial number of selectors — a scan over nothing passes', () => {
+    expect(declared.length).toBeGreaterThan(20);
   });
 });

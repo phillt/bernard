@@ -330,3 +330,49 @@ describe('a stylesheet-only change is still checked', () => {
     expect(issues.some((i) => i.level === 'warn' && i.message.includes('app.css'))).toBe(true);
   });
 });
+
+describe('inline style: refused in markup, warned inside a script (#466)', () => {
+  const HEAD = [
+    '<title>T</title>',
+    '<link rel="stylesheet" href="/__bernard/tokens.css" />',
+    '<link rel="manifest" href="/__bernard/manifest.webmanifest" />',
+    '<script src="/__bernard/applet.js"></script>',
+  ].join('\n');
+
+  it('accepts an htm template that writes style= inside a script, with a warning', () => {
+    // An htm page writes html`<div style="…">` in an inline script. Refusing
+    // that rejects every correct page to catch a case the browser already
+    // reports by looking wrong.
+    const page = `${HEAD}
+<script src="/__bernard/ui.js"></script>
+<main id="root"></main>
+<script>
+  const { html, render } = htmPreact;
+  render(html\`<div style="color:red">hi</div>\`, document.getElementById('root'));
+</script>`;
+    const issues = validateAppletPage(page, []);
+
+    expect(refusalFor(issues)).toBeNull();
+    expect(warningsFor(issues)).toContain('style="..."');
+  });
+
+  it('does not warn about a script that sets the property instead', () => {
+    // `el.style.color = …` is the form the CSP actually allows, so the warning
+    // must not fire on the remedy it recommends.
+    const page = `${HEAD}
+<script>document.getElementById('x').style.color = 'red';</script>`;
+    const issues = validateAppletPage(page, []);
+
+    expect(refusalFor(issues)).toBeNull();
+    expect(warningsFor(issues)).not.toContain('style="..."');
+  });
+
+  it('masks only script bodies, not the whole page', () => {
+    // Masking too much is how a real inline style slips through: a page with
+    // BOTH must still refuse.
+    const page = `${HEAD}
+<main><p style="color:red">x</p></main>
+<script>const t = html\`<b style="color:blue">y</b>\`;</script>`;
+    expect(refusalFor(validateAppletPage(page, []))).toContain('inline `style="..."`');
+  });
+});

@@ -181,6 +181,26 @@ describe('applet server', () => {
     }
   });
 
+  it('serves the UI runtime with a JS content type (#466)', async () => {
+    // `nosniff` is on every response, so a wrong Content-Type means the
+    // browser silently declines to execute — and for a rendering runtime that
+    // means the page shows nothing at all, not merely unstyled.
+    const m = await load();
+    writeApp(m);
+    const { app } = await start(m);
+    const { UI_RUNTIME_PATH, UI_RUNTIME_GLOBAL } = await import('./ui-runtime.js');
+    const { contentTypeFor } = await import('./assets.js');
+
+    const res = await fetch(`${app.origin}${UI_RUNTIME_PATH}`, { headers: hostHeaders(app.port) });
+
+    expect(res.status).toBe(200);
+    // Pinned against `contentTypeFor` rather than a literal, matching the SDK
+    // route's test below — one entry in `CONTENT_TYPES` decides both, and the
+    // two must not drift.
+    expect(res.headers.get('content-type')).toBe(contentTypeFor('x.js'));
+    expect(await res.text()).toContain(UI_RUNTIME_GLOBAL);
+  });
+
   it('serves the applet index from its own loopback origin', async () => {
     const m = await load();
     writeApp(m);

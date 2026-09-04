@@ -62,6 +62,7 @@
     "chalk": "^5.6.2",
     "commander": "^12.1.0",
     "dotenv": "^16.4.0",
+    "htm": "3.1.1",
     "ink": "^5.0.1",
     "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",

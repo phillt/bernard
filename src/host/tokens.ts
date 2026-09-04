@@ -68,6 +68,56 @@ export const APPLET_COLOR_TOKENS: Record<string, string> = {
  * against these variables rather than against hex values.
  */
 /**
+ * What the floor styles, as a list a prompt can name.
+ *
+ * `applet-styler.json` tells the model which elements and classes are already
+ * handled so it writes no CSS in the common case — and that list had drifted:
+ * it omitted ten selectors the sheet really has (`.note`, `.err`, `.success`,
+ * `.warning`, `.info`, `.output`, `.app`, `button.danger`, `ul`/`ol`,
+ * `section + section`), so a model was told to write CSS it did not need.
+ *
+ * Exported so the two are bound by a test in BOTH directions: every selector
+ * the sheet declares appears here, and every entry here appears in the prompt.
+ * This is the drift the served stylesheet exists to end, one level up — the
+ * same argument #424 made for serving the sheet rather than copying it.
+ */
+export const APPLET_STYLED_SELECTORS = [
+  'body',
+  'main',
+  '.app',
+  'h1',
+  'h2',
+  'h3',
+  'p',
+  'section',
+  'a',
+  'label',
+  '.field',
+  'input',
+  'textarea',
+  'select',
+  'button',
+  'button.secondary',
+  'button.danger',
+  'pre',
+  '.output',
+  'ul',
+  'ol',
+  '.cards',
+  '.card',
+  '.row',
+  '.actions',
+  '.hidden',
+  '.muted',
+  '.note',
+  '.error',
+  '.err',
+  '.success',
+  '.warning',
+  '.info',
+] as const;
+
+/**
  * Built once, not per request.
  *
  * `APPLET_COLOR_TOKENS` is a module constant and the body is a literal, so the
@@ -203,6 +253,78 @@ pre, .output {
 }
 
 ul, ol { padding-left: 1.25rem; }
+
+/* ── Six patterns, from what applets actually invented ──────────────────────
+   Not a component library. Each of these was written by hand, in an applet
+   a model wrote, because the floor did not have it — and two of them were
+   invented INDEPENDENTLY by two applets, which is the whole argument for
+   moving them down here rather than adding a third copy.
+
+   The alternative was adopting Pico, Bulma or Bootstrap. Those are class
+   VOCABULARIES that would duplicate and fight the element rules above —
+   Bulma is 65 KB gzipped against roughly these six rules. \`recovery-baseline-
+   tracker/app.css\` already shows what that collision looks like: 145 lines
+   that re-declare \`body\`, \`h1\`, the input block, the button variants and
+   even \`.muted\`, all of which are above. */
+
+/* No link styling existed at all, so \`news-headlines\` wrote \`a.story-link\`. */
+a {
+  color: var(--accent);
+  text-decoration-color: var(--border);
+  text-underline-offset: 0.15em;
+}
+a:hover { text-decoration-color: var(--accent); }
+
+/* A horizontal group. \`.actions\` is the same thing pushed right, and BOTH
+   applets invented it under that exact name. */
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+}
+
+/* One applet invented \`.hidden\`; the other reached for \`el.style.display\`
+   instead — which works only because the CSSOM property setter slips past
+   \`style-src\` on a spec-layering quirk, not because it was meant to. */
+/* \`!important\` deliberately, and it is the one rule here that CONSTRAINS an
+   applet rather than serving it: a utility whose whole job is "this is not on
+   screen" loses to any more specific selector without it, and an applet
+   reaching for \`el.style.display\` instead is what this replaces. */
+.hidden { display: none !important; }
+
+/* Label plus its control, as one unit that can sit in a \`.row\`. \`label\` is
+   already \`display: block\`, so this is the grouping it was missing. */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+/* A raised item. \`li.story\` and \`.entry\` are this, twice. Applied to \`li\`
+   only inside \`.cards\`, so ordinary lists keep their bullets. */
+.card, .cards > li {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+}
+.cards {
+  list-style: none;
+  padding-left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
 
 /* The floor has no motion. It is served anyway because an applet's own \`.css\`
    is where motion appears, and that file is the one thing nobody reviews. */
