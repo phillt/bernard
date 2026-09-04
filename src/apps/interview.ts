@@ -13,8 +13,11 @@ import type { IntentField } from './brief.js';
  * It is ~200 lines of prose that matters on the handful of turns where someone
  * is building an applet. In `BASE_SYSTEM_PROMPT` it would be in the cached
  * prefix of every turn forever; returned as a tool result it costs nothing
- * until it is asked for. `writeScopePrompt` and `slotStatusLine` are the same
- * shape — guidance a tool hands over at the moment it applies.
+ * until it is asked for. The idiom is `CREATE_SEED_PROMPTS` (`ui/App.tsx`),
+ * which `/create-routine` and `/create-specialist` already use: a static
+ * interactive playbook handed to the main agent on demand. (`writeScopePrompt`
+ * and `slotStatusLine` are NOT the same shape — the first is composed into a
+ * system prompt and the second is live state appended to a result.)
  *
  * ## Why the MAIN agent conducts it, not a dispatched specialist
  *
@@ -145,28 +148,6 @@ export const ANTI_PATTERNS: { avoid: string; instead: string; why: string }[] = 
 ];
 
 /**
- * The problem statement, derived rather than asked.
- *
- * A pure function of the brief, so it costs no round trip and cannot disagree
- * with the fields it is built from. Whatever is missing is simply left out —
- * a statement with a hole in it is more honest than one with a guess in it.
- */
-export function problemStatement(intent: Partial<Record<IntentField, string>>): string {
-  const who = intent.who?.trim();
-  const goal = intent.goal?.trim();
-  const context = intent.context?.trim();
-  const current = intent.current?.trim() ?? intent.example?.trim();
-  const outcome = intent.outcome?.trim();
-  if (!goal) return '';
-  const parts = [`${who ? `${who} needs` : 'Someone needs'} an easier way to ${goal}`];
-  if (context) parts.push(` when ${context}`);
-  if (current) parts.push(`, because today ${current}`);
-  parts.push('.');
-  if (outcome) parts.push(` A good result would ${outcome}.`);
-  return parts.join('');
-}
-
-/**
  * The playbook handed to the main agent.
  *
  * Generated from the question bank rather than written twice, so a question
@@ -174,9 +155,25 @@ export function problemStatement(intent: Partial<Record<IntentField, string>>): 
  * drift `applet-styler`'s token list needed a test to prevent.
  */
 export function interviewPlaybook(): string {
-  const questions = INTERVIEW_QUESTIONS.map(
-    (q, i) => `${i + 1}. **${q.question}**${q.hint ? `\n   _${q.hint}_` : ''}\n   → ${q.decides}`,
-  ).join('\n');
+  const why = INTERVIEW_QUESTIONS.map((q, i) => `${i + 1}. ${q.question}\n   → ${q.decides}`).join(
+    '\n',
+  );
+  // The literal call, not prose for the model to paraphrase. Retyping is what
+  // dropped `hint`, `summary` and question four's `choices` — all authored
+  // here, none of them reaching a screen.
+  const call = JSON.stringify(
+    {
+      questions: INTERVIEW_QUESTIONS.map((q) => ({
+        question: q.question,
+        ...(q.hint ? { hint: q.hint } : {}),
+        summary: q.summary,
+        ...(q.choices ? { choices: q.choices, allow_other: true } : {}),
+      })),
+    },
+    null,
+    2,
+  );
+  const fields = INTERVIEW_QUESTIONS.map((q) => `"${q.field}": "…"`).join(', ');
   const avoid = ANTI_PATTERNS.map(
     (a) => `- Never: "${a.avoid}" — ${a.why}\n  Ask instead: "${a.instead}"`,
   ).join('\n');
@@ -199,7 +196,16 @@ Ask ALL of them in ONE \`ask_user\` call. They are rendered one per screen with
 back, edit, and a check-your-answers review, so a single call is a whole
 interview — and asking them one call at a time costs a model round trip each.
 
-${questions}
+Ask them with ONE \`ask_user\` call, exactly this:
+
+\`\`\`json
+${call}
+\`\`\`
+
+Why each one is allowed to exist — if an answer would not change what you build,
+do not ask it:
+
+${why}
 
 ## Then stop
 
@@ -228,7 +234,7 @@ features instead of describing their week.
 ## Then build, immediately
 
 1. Write what you learned into the brief: \`applet\` with
-   \`{"action":"create", …, "intent":{"goal":"…","example":"…","input":"…","who":"…"}}\`.
+   \`{"action":"create", …, "intent":{${fields}}}\`.
    Put what you are GUESSING in \`assumptions\` — that is what separates it from
    what you were told.
 2. Build the smallest coherent thing: one input, one transformation, one

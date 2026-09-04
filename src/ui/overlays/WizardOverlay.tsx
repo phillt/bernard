@@ -1,24 +1,27 @@
 import { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../../theme.js';
-import { HintRow, KEY, HINT_CANCEL } from '../hints.js';
+import { HintRow, KEY, HINT_CANCEL, HINT_MOVE } from '../hints.js';
 import { isDismissKey } from './overlay-contract.js';
 import { useListCursor, useListWindow } from './use-list-cursor.js';
 import { chromeRows, overlayViewport } from './menu-geometry.js';
-import { clampOffset, formatPosition, listPosition } from './viewer-util.js';
+import { formatPosition, listPosition } from './viewer-util.js';
 import { useDimensionsCtx } from '../DimensionsContext.js';
 import { useLineEditor } from '../use-line-editor.js';
+import { useRawKeys } from '../useRawKeys.js';
 import { BoundedLine, OVERLAY_RESERVED_COLUMNS } from '../BoundedLine.js';
 import { MenuRow } from './MenuRow.js';
 import { OverlayFooter, OVERLAY_FOOTER_ROWS } from './OverlayFooter.js';
 import {
   answerStep,
+  choiceRows,
   answeredSoFar,
   editStep,
   goBack,
   initialWizardState,
   isAnswered,
   summarizeAnswer,
+  useFreeform,
   type WizardAnswer,
   type WizardResult,
   type WizardSpec,
@@ -68,19 +71,10 @@ interface WizardOverlayProps {
  */
 export function WizardOverlay({ spec, onResolve, reserveRows = 0 }: WizardOverlayProps) {
   const [state, setState] = useState(() => initialWizardState(spec.steps));
-  // Set when a choice step's escape-hatch row is picked: the same index is
-  // re-rendered as a text field rather than becoming a second step.
-  const [freeform, setFreeform] = useState(false);
 
   const cancel = (): void => onResolve({ cancelled: true, answered: answeredSoFar(state) });
-  const back = (): void => {
-    setFreeform(false);
-    setState((s) => goBack(s));
-  };
-  const submit = (answer: WizardAnswer): void => {
-    setFreeform(false);
-    setState((s) => answerStep(s, spec.steps, answer));
-  };
+  const back = (): void => setState(goBack);
+  const submit = (answer: WizardAnswer): void => setState((s) => answerStep(s, spec.steps, answer));
 
   if (state.phase === 'review') {
     return (
@@ -88,10 +82,7 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0 }: WizardOverla
         spec={spec}
         answers={state.answers}
         reserveRows={reserveRows}
-        onEdit={(index) => {
-          setFreeform(false);
-          setState((s) => editStep(s, index));
-        }}
+        onEdit={(index) => setState((s) => editStep(s, index))}
         onCommit={() => onResolve({ cancelled: false, answers: state.answers })}
         onCancel={cancel}
       />
@@ -100,9 +91,10 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0 }: WizardOverla
 
   const step = spec.steps[state.index];
   const header = state.index === 0 && spec.intro ? spec.intro : undefined;
-  const asText = freeform || step.field.kind === 'text';
-  // An edit can always go back — to the review it came from.
-  const canGoBack = state.index > 0 || state.phase === 'editing';
+  const asText = state.freeform || step.field.kind === 'text';
+  // An edit goes back to the review it came from; the escape hatch goes back to
+  // its own choices.
+  const canGoBack = state.index > 0 || state.phase === 'editing' || state.freeform;
 
   return asText ? (
     <WizardTextStep
@@ -114,9 +106,9 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0 }: WizardOverla
       initial={
         typeof state.answers[state.index] === 'string' ? (state.answers[state.index] as string) : ''
       }
-      canGoBack={canGoBack || freeform}
+      canGoBack={canGoBack}
       onSubmit={submit}
-      onBack={freeform ? () => setFreeform(false) : back}
+      onBack={back}
       onCancel={cancel}
     />
   ) : (
@@ -126,7 +118,7 @@ export function WizardOverlay({ spec, onResolve, reserveRows = 0 }: WizardOverla
       intro={header}
       canGoBack={canGoBack}
       onSubmit={submit}
-      onOther={() => setFreeform(true)}
+      onOther={() => setState(useFreeform)}
       onBack={back}
       onCancel={cancel}
       reserveRows={reserveRows}
@@ -171,6 +163,13 @@ function WizardTextStep({
 }) {
   const colors = getThemeColors();
   const editor = useLineEditor(initial);
+  // Ink drops the Home/End key NAMES, so they reach the editor only through the
+  // raw-stdin decoder (#399). Without this they are dead here while working in
+  // every other text surface — exactly the drift a copied component produces.
+  useRawKeys((key) => {
+    if (key === 'home') editor.toLineStart();
+    else editor.toLineEnd();
+  }, true);
 
   useInput((input, key) => {
     // Dismissal first, before the editor claims its chords. `isDismissKey`, not
@@ -230,7 +229,6 @@ function WizardChoiceStep({
   onCancel: () => void;
   reserveRows: number;
 }) {
-  const colors = getThemeColors();
   const { columns, rows } = useDimensionsCtx();
   const field = step.field as {
     kind: 'choice' | 'multi';
@@ -239,19 +237,18 @@ function WizardChoiceStep({
     otherLabel?: string;
   };
   const multi = field.kind === 'multi';
-  const hatchLabel = field.otherLabel?.trim() || 'Something else (type your own)';
-  const labels = field.allowOther ? [...field.choices, hatchLabel] : field.choices;
-  const hatchIndex = field.allowOther ? labels.length - 1 : -1;
+  // One rule, shared with `App.tsx`'s single-question path — see `choiceRows`.
+  const { labels, isHatch } = choiceRows(field);
 
   const [checked, setChecked] = useState<Set<number>>(new Set());
   const commit = (index: number): void => {
-    if (index === hatchIndex) return onOther();
+    if (isHatch(index)) return onOther();
     if (!multi) return onSubmit(labels[index]);
     const picked = [...checked].sort((a, b) => a - b);
     onSubmit(picked.length > 0 ? picked.map((i) => labels[i]) : [labels[index]]);
   };
   const toggle = (index: number): void => {
-    if (index === hatchIndex) return onOther();
+    if (isHatch(index)) return onOther();
     setChecked((prev) => {
       const next = new Set(prev);
       if (next.has(index)) next.delete(index);
@@ -271,7 +268,7 @@ function WizardChoiceStep({
     cursor.handleKey(input, key);
   });
 
-  const usable = Math.max(20, columns - 4);
+  const usable = columns - 4;
   const chrome =
     1 +
     chromeRows([intro, step.question, step.hint], usable) +
@@ -300,14 +297,13 @@ function WizardChoiceStep({
       <OverlayFooter
         position={position}
         hints={[
-          { key: KEY.arrows, label: 'move' },
+          HINT_MOVE,
           ...(multi ? [{ key: KEY.space, label: 'toggle' }] : []),
           { key: KEY.enter, label: multi ? 'confirm' : 'choose' },
           ...(canGoBack ? [BACK_HINT] : []),
           HINT_CANCEL,
         ]}
       />
-      <Text color={colors.muted}> </Text>
     </Box>
   );
 }
@@ -351,10 +347,10 @@ function WizardReview({
     cursor.handleKey(input, key);
   });
 
-  const usable = Math.max(20, columns - 4);
+  const usable = columns - 4;
   const chrome = 1 + chromeRows([title], usable) + 1 + OVERLAY_FOOTER_ROWS + reserveRows;
   const size = overlayViewport(rows, chrome);
-  const offset = clampOffset(cursor.index, 0, size, total);
+  const { offset } = useListWindow(cursor.index, size, total);
   const position = formatPosition(listPosition(offset, size, total), 'answers');
 
   const rowFor = (index: number): string => {
@@ -373,11 +369,7 @@ function WizardReview({
       ))}
       <OverlayFooter
         position={position}
-        hints={[
-          { key: KEY.arrows, label: 'move' },
-          { key: KEY.enter, label: 'change or confirm' },
-          HINT_CANCEL,
-        ]}
+        hints={[HINT_MOVE, { key: KEY.enter, label: 'change or confirm' }, HINT_CANCEL]}
       />
       {missing > 0 && (
         <Text color={colors.muted}>{missing} still unanswered — pick one to fill it in.</Text>

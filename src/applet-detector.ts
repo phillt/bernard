@@ -1,4 +1,5 @@
 import { generateText } from 'ai';
+import { interviewPlaybook } from './apps/interview.js';
 import { debugLog } from './logger.js';
 import type { BernardConfig } from './config.js';
 import { resolveSiteModel } from './model-policy.js';
@@ -254,14 +255,14 @@ export function buildAppletRequest(c: {
     `- name: ${c.name}\n` +
     `- description: ${c.description}\n` +
     `- actions to cover: ${actions}\n\n` +
-    // The one door that is not a hope: this is already an ordinary main-agent
-    // turn, so it has `ask_user` and the full step budget. A suggestion is
-    // inferred from a transcript, which is a guess about what someone wanted —
-    // confirming it costs four questions and is what stops the applet being
-    // built for the wrong problem.
-    `Before building, call \`applet\` with \`{"action":"interview"}\` and follow it: ` +
-    `the description above is inferred from a conversation, not something they said ` +
-    `they wanted. Then write the page, consistent with the served token stylesheet.`
+    // The playbook INLINE rather than a `{"action":"interview"}` instruction.
+    // This string is already submitted as a user turn, so telling the model to
+    // fetch it costs an extra round trip for the same tokens, and can be
+    // ignored. The tool action stays for the free-form path, where there is no
+    // seed to inline into.
+    `The description above is inferred from a conversation, not something they ` +
+    `said they wanted, so confirm it before building.\n\n${interviewPlaybook()}\n\n` +
+    `Then write the page, consistent with the served token stylesheet.`
   );
 }
 

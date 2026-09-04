@@ -1,11 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  ANTI_PATTERNS,
-  INTERVIEW_QUESTIONS,
-  PROBES,
-  interviewPlaybook,
-  problemStatement,
-} from './interview.js';
+import { ANTI_PATTERNS, INTERVIEW_QUESTIONS, PROBES, interviewPlaybook } from './interview.js';
 import { INTENT_FIELDS } from './brief.js';
 
 describe('the question bank', () => {
@@ -61,8 +55,19 @@ describe('the question bank', () => {
 describe('the playbook', () => {
   const text = interviewPlaybook();
 
-  it('carries every question, so the prose cannot drift from the bank', () => {
-    for (const q of INTERVIEW_QUESTIONS) expect(text).toContain(q.question);
+  it('emits the literal `ask_user` call, not prose to paraphrase', () => {
+    // Retyping is what dropped `hint`, `summary` and question four's `choices`
+    // — all authored in the bank, none of them reaching a screen.
+    for (const q of INTERVIEW_QUESTIONS) {
+      expect(text).toContain(JSON.stringify(q.question));
+      expect(text).toContain(JSON.stringify(q.summary));
+      if (q.hint) expect(text).toContain(JSON.stringify(q.hint));
+      for (const c of q.choices ?? []) expect(text).toContain(JSON.stringify(c));
+    }
+  });
+
+  it('names the intent keys from the bank rather than a second hand-written list', () => {
+    for (const q of INTERVIEW_QUESTIONS) expect(text).toContain(`"${q.field}"`);
   });
 
   it('carries every probe and every anti-pattern', () => {
@@ -90,40 +95,5 @@ describe('the playbook', () => {
 
   it('does not announce a question count it might not keep', () => {
     expect(text).not.toMatch(/\b(four|4|seven|7) questions\b/i);
-  });
-});
-
-describe('problemStatement', () => {
-  it('is derived, not asked — no round trip and nothing to disagree with', () => {
-    expect(
-      problemStatement({
-        who: 'A shift manager',
-        goal: 'send everyone their hours',
-        context: 'every Friday',
-        current: 'they copy four rotas into separate texts',
-        outcome: 'let them send the lot in one go',
-      }),
-    ).toBe(
-      'A shift manager needs an easier way to send everyone their hours when every Friday, ' +
-        'because today they copy four rotas into separate texts. A good result would let them ' +
-        'send the lot in one go.',
-    );
-  });
-
-  it('leaves a hole rather than guessing', () => {
-    // A statement with a gap is more honest than one with an invention in it.
-    expect(problemStatement({ goal: 'send shifts' })).toBe(
-      'Someone needs an easier way to send shifts.',
-    );
-  });
-
-  it('falls back to the worked example when there is no separate workaround', () => {
-    expect(problemStatement({ goal: 'x', example: 'they did it by hand last Friday' })).toContain(
-      'because today they did it by hand last Friday',
-    );
-  });
-
-  it('says nothing at all without a goal', () => {
-    expect(problemStatement({ who: 'someone' })).toBe('');
   });
 });

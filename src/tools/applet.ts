@@ -113,7 +113,14 @@ const PERMISSION_REQUEST = z
   .strict();
 
 /** Actions that only look. Drives the read-only block gate and the risk tier. */
-const APPLET_READ_ACTIONS: ReadonlySet<string> = new Set(['read', 'list', 'logs']);
+const APPLET_READ_ACTIONS: ReadonlySet<string> = new Set([
+  'read',
+  'list',
+  'logs',
+  // Returns a constant string and touches nothing. Omitted, `attachActionMeta`
+  // classifies it a write and the read-only block gate refuses a prompt getter.
+  'interview',
+]);
 
 /** Actions that must be confirmed even under `confirmMode: 'auto'` (#456). */
 const APPLET_HIGH_RISK_ACTIONS: ReadonlySet<string> = new Set(['delete']);
@@ -127,7 +134,10 @@ const PARAMETERS = z.object({
         'and asks the user first. `style` hands an existing applet to the design pass — ' +
         'a new applet gets that automatically, so reach for this to restyle one. ' +
         "`brief` reads or edits the applet's design brief — what it is for and what has " +
-        'been decided; `read` already returns it, so reach for `brief` to CHANGE it.',
+        'been decided; `read` already returns it, so reach for `brief` to CHANGE it. ' +
+        '`interview` returns how to find out what someone actually needs before building ' +
+        'for them — reach for it FIRST whenever the request is vague, or the person has ' +
+        'not built software before.',
     ),
   id: z.string().optional().describe('Applet id (kebab-case). Required for create/update/read.'),
   intent: z

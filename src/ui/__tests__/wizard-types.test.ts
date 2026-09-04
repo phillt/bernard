@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   answerStep,
   answeredSoFar,
+  choiceRows,
   editStep,
   goBack,
   initialWizardState,
@@ -181,8 +182,18 @@ describe('stepsFromQuestions', () => {
       { question: 'a', choices: ['x', 'y'], allowOther: true },
       { question: 'b', choices: ['x', 'y'], allowOther: false, multiSelect: true },
     ]);
-    expect(single.field).toEqual({ kind: 'choice', choices: ['x', 'y'], allowOther: true });
-    expect(multi.field).toEqual({ kind: 'multi', choices: ['x', 'y'] });
+    expect(single.field).toEqual({
+      kind: 'choice',
+      choices: ['x', 'y'],
+      allowOther: true,
+      otherLabel: undefined,
+    });
+    expect(multi.field).toEqual({
+      kind: 'multi',
+      choices: ['x', 'y'],
+      allowOther: false,
+      otherLabel: undefined,
+    });
   });
 
   it('gives every step a distinct id, so an edit addresses one answer', () => {
@@ -191,5 +202,38 @@ describe('stepsFromQuestions', () => {
       { question: 'b', allowOther: true },
     ]);
     expect(new Set(steps.map((s) => s.id)).size).toBe(2);
+  });
+});
+
+describe('choiceRows — the #230 escape-hatch rule, in one place', () => {
+  it('appends a hatch when the caller supplied none', () => {
+    const { labels, isHatch } = choiceRows({ choices: ['A', 'B'], allowOther: true });
+    expect(labels).toEqual(['A', 'B', 'Other (type your own)']);
+    expect(isHatch(2)).toBe(true);
+    expect(isHatch(0)).toBe(false);
+  });
+
+  it('does NOT append a second one when the caller already supplied "Other"', () => {
+    // Re-derived in the wizard, this gave a batch two hatch rows where a single
+    // question got one — the divergence that made sharing the rule necessary.
+    const { labels, isHatch } = choiceRows({ choices: ['A', 'Other'], allowOther: true });
+    expect(labels).toEqual(['A', 'Other']);
+    expect(isHatch(1)).toBe(true);
+  });
+
+  it('uses the same default label the single-question path uses', () => {
+    // Two spellings of one row, chosen by how many questions were asked, is the
+    // other half of that divergence.
+    expect(choiceRows({ choices: ['A'], allowOther: true }).labels[1]).toBe(
+      'Other (type your own)',
+    );
+  });
+
+  it('honours a custom label, and appends nothing without allowOther', () => {
+    expect(choiceRows({ choices: ['A'], allowOther: true, otherLabel: 'Say more' }).labels).toEqual(
+      ['A', 'Say more'],
+    );
+    expect(choiceRows({ choices: ['A'] }).labels).toEqual(['A']);
+    expect(choiceRows({ choices: ['A'] }).isHatch(0)).toBe(false);
   });
 });

@@ -39,6 +39,21 @@ async function type(stdin: { write: (s: string) => void }, text: string) {
   await tick();
 }
 
+/** Answers the three-step SPEC and lands on the review. */
+async function answerAll(stdin: { write: (s: string) => void }) {
+  await type(stdin, 'one');
+  await type(stdin, ENTER);
+  await type(stdin, 'two');
+  await type(stdin, ENTER);
+  await type(stdin, ENTER); // the choice step commits the highlighted row
+}
+
+/** Moves past the three answer rows to "Looks right" and commits. */
+async function confirmReview(stdin: { write: (s: string) => void }) {
+  for (let i = 0; i < 3; i++) await type(stdin, ARROW_DOWN);
+  await type(stdin, ENTER);
+}
+
 describe('WizardOverlay', () => {
   it('shows the intro once, on the first step only', async () => {
     const { stdin, lastFrame } = await mount(vi.fn());
@@ -100,11 +115,7 @@ describe('WizardOverlay', () => {
   it('lands on the review after the last step, not on a result', async () => {
     const onResolve = vi.fn();
     const { stdin, lastFrame } = await mount(onResolve);
-    await type(stdin, 'one');
-    await type(stdin, ENTER);
-    await type(stdin, 'two');
-    await type(stdin, ENTER);
-    await type(stdin, ENTER); // choice step: commit the highlighted row
+    await answerAll(stdin);
 
     expect(onResolve).not.toHaveBeenCalled();
     const frame = stripAnsi(lastFrame() ?? '');
@@ -115,15 +126,8 @@ describe('WizardOverlay', () => {
   it('resolves only when the review is confirmed', async () => {
     const onResolve = vi.fn();
     const { stdin } = await mount(onResolve);
-    await type(stdin, 'one');
-    await type(stdin, ENTER);
-    await type(stdin, 'two');
-    await type(stdin, ENTER);
-    await type(stdin, ENTER);
-
-    // Move to the commit row (3 answers, then "Looks right").
-    for (let i = 0; i < 3; i++) await type(stdin, ARROW_DOWN);
-    await type(stdin, ENTER);
+    await answerAll(stdin);
+    await confirmReview(stdin);
 
     expect(onResolve).toHaveBeenCalledWith({
       cancelled: false,
@@ -134,11 +138,7 @@ describe('WizardOverlay', () => {
   it('edits one answer from the review and changes only that one', async () => {
     const onResolve = vi.fn();
     const { stdin, lastFrame } = await mount(onResolve);
-    await type(stdin, 'one');
-    await type(stdin, ENTER);
-    await type(stdin, 'two');
-    await type(stdin, ENTER);
-    await type(stdin, ENTER);
+    await answerAll(stdin);
 
     // Edit the second answer.
     await type(stdin, ARROW_DOWN);
@@ -153,8 +153,7 @@ describe('WizardOverlay', () => {
     // Straight back to the review — the user changed one thing, not the flow.
     expect(stripAnsi(lastFrame() ?? '')).toContain('Here is what I heard');
 
-    for (let i = 0; i < 3; i++) await type(stdin, ARROW_DOWN);
-    await type(stdin, ENTER);
+    await confirmReview(stdin);
     expect(onResolve).toHaveBeenCalledWith({
       cancelled: false,
       answers: ['one', 'two revised', 'Just me'],

@@ -157,7 +157,7 @@ import { HintBar } from './HintBar.js';
 import { PlanPanel } from './PlanPanel.js';
 import { MenuOverlay } from './overlays/MenuOverlay.js';
 import { WizardOverlay } from './overlays/WizardOverlay.js';
-import { stepsFromQuestions } from './overlays/wizard-types.js';
+import { choiceRows, stepsFromQuestions } from './overlays/wizard-types.js';
 import type { WizardResult, WizardSpec } from './overlays/wizard-types.js';
 import { ModelGridOverlay } from './overlays/ModelGridOverlay.js';
 import { ConfirmDialog } from './overlays/ConfirmDialog.js';
@@ -370,7 +370,6 @@ type PendingDialog = PendingConfirm | PendingBlock;
  * saying not to (#230); `requestAskUser` dedupes against the auto-appended
  * escape hatch and routes matching selections to the free-text input.
  */
-const OTHER_RE = /^other\b/i;
 
 /**
  * Module-level voice service singleton. Created lazily on first use and
@@ -473,26 +472,30 @@ function askUserPrompt(question: string): ValuePromptOptions {
 
 /**
  * Builds the menu entries for an `ask_user` choice question and a predicate for
- * whether a selected item is the "Other" escape hatch. Shared by the single-
- * and multi-select paths of `requestAskUser` so the #230 dedup rule lives in
- * one place: append a hatch row only when the model didn't already supply an
- * "Other"-shaped choice, and treat either the appended row (by identity — its
- * label may be custom via `otherLabel`) or any `OTHER_RE`-matching label as the
- * hatch. The matching selection routes to a free-text follow-up.
+ * whether a selected item is the "Other" escape hatch, for the single-question
+ * path. The #230 rule itself lives in `choiceRows` (`overlays/wizard-types.ts`)
+ * so the wizard cannot re-derive it differently — which it did: a batch got two
+ * hatch rows where one question got one, and the default label read "Something
+ * else" in one and "Other" in the other, decided only by how many questions
+ * were asked.
  */
 function buildChoiceMenu(q: AskUserQuestion): {
   entries: MenuEntry[];
   isHatch: (item: MenuItem) => boolean;
 } {
-  const otherLabel = q.otherLabel?.trim() || 'Other (type your own)';
-  const entries: MenuEntry[] = (q.choices ?? []).map((c) => ({ label: c }));
-  const hasModelOther = (q.choices ?? []).some((c) => OTHER_RE.test(c.trim()));
-  const appendedHatch = q.allowOther && !hasModelOther;
-  if (appendedHatch) entries.push({ label: otherLabel });
-  const hatchRow = appendedHatch ? entries[entries.length - 1] : undefined;
+  // The rule itself lives in `choiceRows` so the wizard cannot re-derive it
+  // differently — which it did, giving a batch two hatch rows where a single
+  // question got one.
+  const { labels, isHatch } = choiceRows({
+    choices: q.choices ?? [],
+    allowOther: q.allowOther,
+    ...(q.otherLabel ? { otherLabel: q.otherLabel } : {}),
+  });
+  const entries: MenuEntry[] = labels.map((label) => ({ label }));
+  const hatchIndices = new Set(labels.map((_, i) => i).filter(isHatch));
   return {
     entries,
-    isHatch: (item) => item === hatchRow || OTHER_RE.test(item.label.trim()),
+    isHatch: (item) => hatchIndices.has(entries.indexOf(item as MenuEntry)),
   };
 }
 
@@ -987,6 +990,7 @@ export function App({
     requestBlock: typeof requestBlock;
     requestTextInput: typeof requestTextInput;
     requestAskUser: typeof requestAskUser;
+    requestWizard: typeof requestWizard;
     requestPermissionConsent: typeof requestPermissionConsent;
   } | null>(null);
   useEffect(() => {
@@ -1000,6 +1004,7 @@ export function App({
       requestBlock: (input, signal) => handlersRef.current!.requestBlock(input, signal),
       requestTextInput: (options, signal) => handlersRef.current!.requestTextInput(options, signal),
       requestAskUser: (questions, signal) => handlersRef.current!.requestAskUser(questions, signal),
+      requestWizard: (spec, signal) => handlersRef.current!.requestWizard(spec, signal),
       requestPermissionConsent: (request, signal) =>
         handlersRef.current!.requestPermissionConsent(request, signal),
       requestConfirmDangerous: async (command, signal) => {
@@ -4173,6 +4178,7 @@ export function App({
     requestBlock,
     requestTextInput,
     requestAskUser,
+    requestWizard,
     requestPermissionConsent,
   };
 

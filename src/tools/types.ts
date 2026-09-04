@@ -48,6 +48,16 @@ export interface PermissionConsentRequest {
 /** A single question for the `askUser` callback. */
 export interface AskUserQuestion {
   question: string;
+  /**
+   * One short sentence of standing help, shown beside the question.
+   *
+   * Persistent, never placeholder text — a placeholder vanishes on the first
+   * keystroke, which raises error rates for everyone and leaves a screen reader
+   * nothing to announce.
+   */
+  hint?: string;
+  /** Short label for the review screen, where the full question is too long. */
+  summary?: string;
   choices?: string[];
   /** When true and `choices` is present, the implementation appends an escape-hatch row that falls back to free-form input. */
   allowOther: boolean;

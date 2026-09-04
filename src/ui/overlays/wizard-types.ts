@@ -1,3 +1,4 @@
+import { truncate } from '../../text.js';
 import type { AskUserQuestion } from '../../tools/types.js';
 
 /**
@@ -23,12 +24,19 @@ import type { AskUserQuestion } from '../../tools/types.js';
  *
  * ## What is deliberately NOT here
  *
- * **No progress fraction.** Conrad et al. randomised progress feedback in web
- * surveys: breakoff was 12.7% with no feedback and **21.8%** when the indicator
- * implied slow progress — nearly double. On-demand was best, and 37% of users
- * never asked for it. An adaptive interview does not know its own length, so a
- * fraction is both a guess and the discouraging variant. `intro` states the
- * shape in words instead, once, at the start.
+ * **No progress fraction**, and no "I don't know" row — see `WizardOverlay.tsx`,
+ * which is the file that would render either.
+ *
+ * ## What it deliberately cannot express
+ *
+ * A FLAT batch of string answers with no validation. No branching (`steps` is a
+ * frozen array), no typed answers (`WizardAnswer` is `string | string[]`), no
+ * per-step validate hook. `runProfileWizardInk` needs all three — conditional
+ * category steps, `int`/`float01`/`boolean` fields with range checks, and a
+ * re-prompt on invalid — so it is not a port that was skipped, it is a flow
+ * this shape cannot hold yet. `runAddProviderInk` is the closer candidate: five
+ * linear string steps that today discard everything typed when step three fails
+ * validation. It needs only the validate hook.
  *
  * **No "I don't know" row.** Offering a no-opinion option measurably encourages
  * satisficing rather than the work of answering. A typed "not sure" is a signal
@@ -90,10 +98,18 @@ export interface WizardState {
   phase: 'asking' | 'editing' | 'review';
   index: number;
   answers: WizardAnswer[];
+  /**
+   * The escape-hatch row was picked, so this step renders as a text field.
+   *
+   * In the state machine rather than a sibling `useState` because every
+   * transition clears it, and expressed in the renderer that rule had to be
+   * written three times.
+   */
+  freeform: boolean;
 }
 
 export function initialWizardState(steps: readonly WizardStep[]): WizardState {
-  return { phase: 'asking', index: 0, answers: steps.map(() => '') };
+  return { phase: 'asking', index: 0, answers: steps.map(() => ''), freeform: false };
 }
 
 /** True when this step has been answered — the gate on advancing. */
@@ -121,15 +137,18 @@ export function answerStep(
   // An edit goes straight back to the review rather than walking the remaining
   // steps again — the user asked to change one thing, not to redo the
   // interview.
-  if (state.phase !== 'asking') return { phase: 'review', index: state.index, answers };
+  if (state.phase === 'editing')
+    return { phase: 'review', index: state.index, answers, freeform: false };
   const next = state.index + 1;
   return next >= steps.length
-    ? { phase: 'review', index: state.index, answers }
-    : { phase: 'asking', index: next, answers };
+    ? { phase: 'review', index: state.index, answers, freeform: false }
+    : { phase: 'asking', index: next, answers, freeform: false };
 }
 
 /** Moves to the previous step. At the first step there is nowhere to go. */
 export function goBack(state: WizardState): WizardState {
+  // Back out of the escape hatch returns to the choices, not to the last step.
+  if (state.freeform) return { ...state, freeform: false };
   // Abandoning an edit returns to the review with the answer untouched.
   if (state.phase === 'editing') return { ...state, phase: 'review' };
   if (state.phase === 'review') {
@@ -139,6 +158,7 @@ export function goBack(state: WizardState): WizardState {
       phase: 'asking',
       index: Math.max(0, state.answers.length - 1),
       answers: state.answers,
+      freeform: false,
     };
   }
   if (state.index === 0) return state;
@@ -147,19 +167,53 @@ export function goBack(state: WizardState): WizardState {
 
 /** Re-opens one step from the review screen. */
 export function editStep(state: WizardState, index: number): WizardState {
-  return { phase: 'editing', index, answers: state.answers };
+  return { phase: 'editing', index, answers: state.answers, freeform: false };
+}
+
+/** The escape-hatch row was picked: re-render this same step as a text field. */
+export function useFreeform(state: WizardState): WizardState {
+  return { ...state, freeform: true };
 }
 
 /** Answers as far as they got, for a cancellation. Trailing blanks are not answers. */
 export function answeredSoFar(state: WizardState): WizardAnswer[] {
-  const out = [...state.answers];
-  while (out.length > 0) {
-    const last = out[out.length - 1];
-    const blank = Array.isArray(last) ? last.length === 0 : last.trim().length === 0;
-    if (!blank) break;
-    out.pop();
-  }
-  return out;
+  const blank = (a: WizardAnswer): boolean =>
+    Array.isArray(a) ? a.length === 0 : a.trim().length === 0;
+  let end = state.answers.length;
+  while (end > 0 && blank(state.answers[end - 1])) end--;
+  return state.answers.slice(0, end);
+}
+
+/** A label the model itself supplied as an escape hatch. */
+const OTHER_RE = /^other\b/i;
+
+/**
+ * The choice rows for a step, and which of them is the escape hatch.
+ *
+ * The #230 rule, in ONE place: append a hatch row only when the caller did not
+ * already supply an "Other"-shaped choice, and treat either the appended row or
+ * any `OTHER_RE`-matching label as the hatch. `App.tsx`'s `buildChoiceMenu`
+ * renders the same rule into `MenuEntry`s for a single question; when this was
+ * re-derived here instead, the two disagreed twice — a model supplying
+ * `['A','B','Other']` with `allowOther` got TWO hatch rows in a batch and one
+ * on its own, and the default label read "Something else" in one and "Other" in
+ * the other, depending only on how many questions were asked.
+ */
+export function choiceRows(field: {
+  choices: string[];
+  allowOther?: boolean;
+  otherLabel?: string;
+}): { labels: string[]; isHatch: (index: number) => boolean } {
+  const hasOwnOther = field.choices.some((c) => OTHER_RE.test(c.trim()));
+  const appended = field.allowOther === true && !hasOwnOther;
+  const labels = appended
+    ? [...field.choices, field.otherLabel?.trim() || 'Other (type your own)']
+    : [...field.choices];
+  const appendedIndex = appended ? labels.length - 1 : -1;
+  return {
+    labels,
+    isHatch: (index) => index === appendedIndex || OTHER_RE.test((labels[index] ?? '').trim()),
+  };
 }
 
 /**
@@ -171,9 +225,14 @@ export function answeredSoFar(state: WizardState): WizardAnswer[] {
  */
 export function summarizeAnswer(answer: WizardAnswer | undefined, max = 60): string {
   const text = Array.isArray(answer) ? answer.join(', ') : (answer ?? '');
-  const flat = text.replace(/\s+/g, ' ').trim();
-  if (flat.length === 0) return '(not answered)';
-  return flat.length <= max ? flat : flat.slice(0, max - 1).trimEnd() + '…';
+  // Sliced BEFORE the collapse: a whitespace run can shrink the string, so
+  // `max * 4` is a safe over-slice, and the full scan on an 8k-character answer
+  // measured 51 us — once per visible row, on every arrow key.
+  const flat = text
+    .slice(0, max * 4)
+    .replace(/\s+/g, ' ')
+    .trim();
+  return flat.length === 0 ? '(not answered)' : truncate(flat, max);
 }
 
 /**
@@ -186,13 +245,14 @@ export function summarizeAnswer(answer: WizardAnswer | undefined, max = 60): str
  */
 export function stepsFromQuestions(questions: readonly AskUserQuestion[]): WizardStep[] {
   return questions.map((q, i) => {
-    const base = { id: `q${i}`, question: q.question };
-    if (!q.choices || q.choices.length === 0) return { ...base, field: { kind: 'text' as const } };
-    const opts = {
-      choices: q.choices,
-      ...(q.allowOther ? { allowOther: true } : {}),
-      ...(q.otherLabel ? { otherLabel: q.otherLabel } : {}),
+    const base = {
+      id: `q${i}`,
+      question: q.question,
+      ...(q.hint ? { hint: q.hint } : {}),
+      ...(q.summary ? { summary: q.summary } : {}),
     };
+    if (!q.choices || q.choices.length === 0) return { ...base, field: { kind: 'text' as const } };
+    const opts = { choices: q.choices, allowOther: q.allowOther, otherLabel: q.otherLabel };
     return {
       ...base,
       field: q.multiSelect

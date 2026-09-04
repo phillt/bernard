@@ -19,6 +19,22 @@ export function createAskUserTool(askUser: ToolOptions['askUser']) {
           .array(
             z.object({
               question: z.string().min(1).describe('The question to show the user'),
+              hint: z
+                .string()
+                .max(120)
+                .optional()
+                .describe(
+                  'One short sentence of help shown beside the question — the KIND of answer you ' +
+                    'are after, not a specific one. Stays on screen while they type.',
+                ),
+              summary: z
+                .string()
+                .max(30)
+                .optional()
+                .describe(
+                  'A few words naming what this question was about, for the review screen where ' +
+                    'the full question does not fit.',
+                ),
               choices: z
                 .array(z.string())
                 .min(2)
@@ -58,6 +74,8 @@ export function createAskUserTool(askUser: ToolOptions['askUser']) {
         }
         const normalised: AskUserQuestion[] = questions.map((q) => ({
           question: q.question,
+          ...(q.hint ? { hint: q.hint } : {}),
+          ...(q.summary ? { summary: q.summary } : {}),
           choices: q.choices,
           allowOther: q.choices && q.choices.length > 0 ? q.allow_other !== false : true,
           otherLabel: q.other_label,
