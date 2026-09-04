@@ -108,16 +108,17 @@ const PERMISSION_REQUEST = z
   .strict();
 
 /** Actions that only look. Drives the read-only block gate and the risk tier. */
-const APPLET_READ_ACTIONS: ReadonlySet<string> = new Set(['read', 'list']);
+const APPLET_READ_ACTIONS: ReadonlySet<string> = new Set(['read', 'list', 'logs']);
 
 /** Actions that must be confirmed even under `confirmMode: 'auto'` (#456). */
 const APPLET_HIGH_RISK_ACTIONS: ReadonlySet<string> = new Set(['delete']);
 
 const PARAMETERS = z.object({
   action: z
-    .enum(['create', 'update', 'read', 'list', 'delete'])
+    .enum(['create', 'update', 'read', 'list', 'logs', 'delete'])
     .describe(
-      'The operation to perform. `delete` removes the applet and everything keyed to it, ' +
+      "The operation to perform. `logs` shows what this applet's buttons actually did, " +
+        'including why one failed. `delete` removes the applet and everything keyed to it, ' +
         'and asks the user first.',
     ),
   id: z.string().optional().describe('Applet id (kebab-case). Required for create/update/read.'),
@@ -317,6 +318,16 @@ async function run(
         warningsFor(issues) +
         formatWarnings(dispatch.warnings)
       );
+    }
+    case 'logs': {
+      const id = need(args.id, 'id', 'logs');
+      if (!store.exists(id)) return `Error: no such applet "${id}".`;
+      const { formatAppletLog } = await import('../apps/invocation-log.js');
+      const lines = formatAppletLog(id, 20);
+      if (lines.length === 0) {
+        return `No recorded invocations for "${id}" — its buttons have not been pressed yet.`;
+      }
+      return capSubagentResult(lines.join('\n'), PAGE_PREVIEW_MAX);
     }
     case 'delete': {
       const id = need(args.id, 'id', 'delete');

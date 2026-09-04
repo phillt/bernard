@@ -262,4 +262,54 @@ describe('invokeAction', () => {
     expect(log).toContain('"q"');
     expect(log).not.toContain('a-secret-value');
   });
+
+  /**
+   * The failure message is the whole point of #461 — without it a real failure
+   * read back as `run_failed`/`unknown` — but it cannot be stored blindly.
+   *
+   * An `invalid_args` message is `formatZodError` over the CALLER's arguments,
+   * and zod echoes the value it rejected, so storing it verbatim would put
+   * caller data in the log on exactly the path where the caller supplied it.
+   */
+  it('records the failure message, and withholds the one that would echo an argument', async () => {
+    const m = await load();
+    // An enum arg, because zod names the received value only when it has a
+    // set of expected ones to contrast it against.
+    writeApp({
+      ...VALID_APP,
+      actions: {
+        ask: {
+          ...VALID_APP.actions.ask,
+          args: {
+            q: { type: 'string', required: true },
+            depth: { type: 'enum', values: ['quick', 'thorough'] },
+          },
+        },
+      },
+    });
+    await m.invokeAction({
+      appId: 'demo',
+      action: 'ask',
+      args: { q: 'fine', depth: 'hunter2-the-secret' },
+    });
+    const log = fs.readFileSync(m.SCRIPT_LOG_FILE, 'utf-8');
+    expect(log).not.toContain('hunter2-the-secret');
+    // Still diagnosable: which field failed is the question being asked, and a
+    // field name is a key, which this log already carries.
+    expect(log).toContain('depth');
+    expect(log).toContain('values withheld');
+  });
+
+  it('records a run failure message in full', async () => {
+    const m = await load();
+    writeApp();
+    await m.invokeAction({ appId: 'nope', action: 'ask', args: {} });
+    const rows = fs
+      .readFileSync(m.SCRIPT_LOG_FILE, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as { errorMessage?: string });
+    // Bernard's own words about its own state — not caller data.
+    expect(rows[0].errorMessage).toContain('nope');
+  });
 });

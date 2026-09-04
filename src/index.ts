@@ -1134,7 +1134,7 @@ program
 
 program
   .command('app [action] [appId] [actionName]')
-  .description('Manage applets: list | open | allow | csp | delete | path')
+  .description('Manage applets: list | open | allow | csp | logs | delete | path')
   .option('-b, --bundled', 'List only the applets Bernard ships')
   .option('-a, --all', 'List every applet, grouped by origin')
   .option('--no-open', 'Print the URL instead of opening a browser')
@@ -1147,6 +1147,7 @@ program
   .option('--media-src <origins>', 'Origins it may play audio or video from')
   .option('--sandbox <setting>', 'Link handling: links (open in a new window) | navigate')
   .option('--clear', 'Remove every external-access grant from this applet')
+  .option('--last <n>', 'How many log rows to show for `logs` (default 20)')
   .action(
     async (
       action: string | undefined,
@@ -1165,6 +1166,7 @@ program
         mediaSrc?: string;
         sandbox?: string;
         clear?: boolean;
+        last?: string;
       },
     ) => {
       try {
@@ -1212,6 +1214,15 @@ program
             cli.appCsp(appId, spec);
             return;
           }
+          case 'logs': {
+            if (!appId) throw new Error('Usage: bernard app logs <appId> [--last N]');
+            const last = options.last === undefined ? undefined : Number(options.last);
+            if (last !== undefined && (!Number.isFinite(last) || last <= 0)) {
+              throw new Error('--last must be a positive number');
+            }
+            cli.appLogs(appId, last === undefined ? {} : { last });
+            return;
+          }
           case 'allow': {
             if (!appId || !actionName) {
               throw new Error('Usage: bernard app allow <appId> <action> --tools a,b');
@@ -1227,7 +1238,12 @@ program
             return;
           }
           default:
-            throw new Error(`Unknown action "${action}". Use list, open, allow, delete or path.`);
+            // Kept in step with `.description()` above — the two enumerate the
+            // actions by hand and had already drifted (one listed `csp`, this
+            // one did not).
+            throw new Error(
+              `Unknown action "${action}". Use list, open, allow, csp, logs, delete or path.`,
+            );
         }
       } catch (err: unknown) {
         printError(err instanceof Error ? err.message : String(err));

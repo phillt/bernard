@@ -148,13 +148,88 @@ export function effectiveTimeoutMs(
   return Math.min(flagTimeoutMs, ceiling);
 }
 
-function recordInvocation(entry: Record<string, unknown>): void {
+function recordInvocation(entry: InvocationLogRow): void {
   try {
     appendJsonl(SCRIPT_LOG_FILE, entry);
     rotateJsonlByCount(SCRIPT_LOG_FILE, SCRIPT_LOG_KEEP);
   } catch {
     // The log must never take down an invocation.
   }
+}
+
+/**
+ * How much of an error message is kept.
+ *
+ * Bounded because the row budget is a COUNT, not a size: without a cap one
+ * agent's stack trace could dwarf the 2,000 rows around it. The same 500-char
+ * idiom `cron-logs.ts` uses for a persisted tool result.
+ */
+const MESSAGE_MAX = 500;
+
+/**
+ * What may be written into the log for a failure, and what may not (#461).
+ *
+ * The message is the whole point of the record — it is Bernard's own words, or
+ * a tool's, and dropping it is what made a real failure read back as
+ * `run_failed`/`unknown`. But **`invalid_args` is different in kind**: that
+ * message is rendered by `formatZodError` over the CALLER's arguments, and zod
+ * echoes the value it rejected —
+ *
+ *     mode: Invalid enum value. Expected 'quick' | 'thorough', received 'hunter2'
+ *
+ * — so storing it verbatim would put caller data in the log on precisely the
+ * path where the caller supplied it, breaking the keys-never-values rule this
+ * file otherwise keeps by construction (`argKeys`, and the sibling comments in
+ * `capability-log.ts` and `tool-dispatch.ts`).
+ *
+ * So: keep the message for every other code, and for `invalid_args` keep only
+ * the field PATHS, which are argument names and therefore already permitted.
+ * A validation failure is still diagnosable — "which field" is the question
+ * being asked — without the value that failed.
+ */
+export function loggableMessage(code: InvocationErrorCode, message: string): string {
+  if (code !== 'invalid_args') return message.slice(0, MESSAGE_MAX);
+  // `formatZodError` emits `path: reason; path: reason`. The path is
+  // everything before the first colon of each clause.
+  const paths = message
+    .split(';')
+    .map((clause) => clause.trim().split(':')[0]?.trim())
+    .filter((path): path is string => Boolean(path) && !path.includes(' '));
+  return paths.length > 0
+    ? `invalid arguments at: ${paths.join(', ')} (values withheld)`
+    : 'invalid arguments (values withheld)';
+}
+
+/**
+ * One row of `script-invocations.jsonl`.
+ *
+ * Typed because it was `Record<string, unknown>`, so no field was checked by
+ * the compiler and a reader had to guess. Argument VALUES never appear here —
+ * only `argKeys`; see {@link loggableMessage} for the one message that has to
+ * be reduced to keep that true.
+ */
+export interface InvocationLogRow {
+  invocationId: string;
+  appId: string;
+  action: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  ok: boolean;
+  capabilityId: string | null;
+  errorCode?: InvocationErrorCode;
+  errorCategory?: string;
+  /** The failure's own words, reduced for `invalid_args`. */
+  errorMessage?: string;
+  argKeys?: string[];
+  specialistId?: string;
+  tool?: string;
+  /** What the action DECLARED it wanted. */
+  toolAllowlist?: string[];
+  /** What it actually got — the intersection with the specialist's targets. */
+  toolsGranted?: string[];
+  mcpConnectMs?: number;
+  stepLimitHit?: boolean;
 }
 
 /**
@@ -200,6 +275,7 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
       ok: false,
       errorCode: code,
       errorCategory: category,
+      errorMessage: loggableMessage(code, message),
       ...extra,
       capabilityId,
     });
@@ -369,7 +445,18 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
     abortSignal: opts.abortSignal,
   });
 
-  const dispatched = { argKeys, specialistId: dispatch.specialistId, toolsGranted };
+  // Both halves of the intersection, deliberately (#461). `toolsGranted` alone
+  // is the load-bearing signal — the observed failure declared
+  // `toolAllowlist: ['datetime']` and got an EMPTY grant because the backing
+  // specialist targeted none of it, then answered "No datetime tool
+  // available". Logging only the declared list would have read as fine; only
+  // the pair makes the gap computable at read time.
+  const dispatched = {
+    argKeys,
+    specialistId: dispatch.specialistId,
+    toolAllowlist: invocation.action.toolAllowlist,
+    toolsGranted,
+  };
 
   if (!run.ok) {
     return fail(
