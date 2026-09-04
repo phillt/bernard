@@ -149,3 +149,32 @@ export const APPLET_HOSTS_FILE = path.join(STATE_DIR, 'applet-hosts.json');
  * than anything the applet declares about itself.
  */
 export const APPLET_BLOCKS_FILE = path.join(STATE_DIR, 'applet-blocks.json');
+
+/**
+ * Live REPL sessions, and their inboxes (#462).
+ *
+ * The first record Bernard has ever kept that a REPL is *running*.
+ * `getSessionId()` names log files and is gated on `BERNARD_DEBUG`, so it was
+ * never an index of anything.
+ *
+ * Two directories rather than one, so each `readdir` has exactly one meaning:
+ * a session record living inside its own inbox would be read by the drain as
+ * a message. One file per session and never a shared map — `atomicWriteFileSync`
+ * makes a WRITE atomic, not a read-modify-write, so two REPLs starting in the
+ * same tick would lose one.
+ *
+ * State, like the PID files above: machine-local, regenerable, and meaningless
+ * once the process it describes is gone.
+ */
+export const SESSIONS_DIR = path.join(STATE_DIR, 'sessions');
+export const INBOX_DIR = path.join(STATE_DIR, 'inbox');
+
+/** Where one session's record lives. */
+export function sessionRecordPath(sessionId: string): string {
+  return path.join(SESSIONS_DIR, `${sessionId}.json`);
+}
+
+/** Where messages for one session are dropped. */
+export function sessionInboxDir(sessionId: string): string {
+  return path.join(INBOX_DIR, sessionId);
+}

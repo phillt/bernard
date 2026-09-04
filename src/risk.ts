@@ -43,9 +43,13 @@ export function isReadOnlyMCPSuffix(name: string): boolean {
 /**
  * Maps tool metadata to a {@link RiskLevel}. Honors an explicit
  * `meta.risk` override; otherwise derives from `kind` + `sideEffect`,
- * with `meta.isWriteAction(args)` as a per-call refinement (e.g.
- * `memory.read` downgrades to `low` even though the tool's static
- * `kind` is `write`).
+ * with two per-call refinements: `meta.riskForCall(args)`, which may raise
+ * or lower (#456 — `applet.delete` is `high` while the tool is `medium`),
+ * and `meta.isWriteAction(args)`, which may only lower (e.g. `memory.read`
+ * downgrades to `low` even though the tool's static `kind` is `write`).
+ *
+ * The order is the contract and `risk.test.ts` states it: `meta.risk` >
+ * `riskForCall` > `isWriteAction` > `kind`/`sideEffect`.
  *
  * Unknown / missing metadata defaults to `medium` — a safe middle ground
  * that prompts in `strict` mode but not in `auto`.
@@ -53,6 +57,15 @@ export function isReadOnlyMCPSuffix(name: string): boolean {
 export function riskFromMeta(meta: ToolMeta | undefined, args?: unknown): RiskLevel {
   if (!meta) return 'medium';
   if (meta.risk) return meta.risk;
+  // The only hook that can RAISE (#456), and it sits here for two reasons: a
+  // static `meta.risk` is the more deliberate statement so it still wins, and
+  // a statement about this specific call beats the generic downgrade below.
+  // Guarded on `args` exactly as the predicate below is, so a metadata-only
+  // call (no args in hand) is unchanged.
+  if (meta.riskForCall && args !== undefined) {
+    const raised = meta.riskForCall(args);
+    if (raised) return raised;
+  }
   // Per-call predicate FIRST (#212) — read-shaped invocations downgrade even
   // on dangerous-kind tools (shell's `ls` / `git status`), not just on
   // discriminator-style write tools (memory/scratch with action: 'read').

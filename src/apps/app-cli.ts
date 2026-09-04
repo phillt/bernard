@@ -3,6 +3,7 @@ import { AppRegistry, bundledAppIds } from './registry.js';
 import { parseRawAppManifest } from './manifest.js';
 import { deleteApplet } from './lifecycle.js';
 import { applyCspGrant, setActionGrant, type CspGrantSpec } from './manage.js';
+import { formatAppletLog } from './invocation-log.js';
 import { SpecialistStore } from '../specialists.js';
 import { uncoveredTools, uncoveredToolsMessage } from './invocation.js';
 import * as fs from 'node:fs';
@@ -251,4 +252,27 @@ export function appCsp(appId: string, spec: CspGrantSpec): void {
   for (const line of outcome.lines) printInfo(`  ${line}`);
   for (const warning of outcome.warnings) printInfo(`Warning: ${warning}`);
   printInfo('Applies to the next request — no restart needed.');
+}
+
+/**
+ * `bernard app logs <id>` — what this applet's actions have actually done.
+ *
+ * The log has existed since #419 and nothing read it, which is why the
+ * observed failure had to be diagnosed by pasting the browser's error text
+ * into a chat. Printing shape follows `bernard usage`: an empty state that
+ * says what to do next rather than nothing at all.
+ */
+export function appLogs(appId: string, opts: { last?: number } = {}): void {
+  if (!new AppRegistry({ seed: false }).exists(appId)) {
+    printError(`No such app: ${appId}`);
+    process.exitCode = 1;
+    return;
+  }
+  const lines = formatAppletLog(appId, opts.last ?? 20);
+  if (lines.length === 0) {
+    printInfo(`No recorded invocations for "${appId}".`);
+    printInfo('Actions are recorded when they run — open the applet and press a button.');
+    return;
+  }
+  for (const line of lines) printInfo(line);
 }

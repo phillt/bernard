@@ -1119,6 +1119,40 @@ program
   });
 
 program
+  .command('say [text...]')
+  .description('Put a message in front of a running Bernard session')
+  .option('--session <id>', 'Deliver to this session (an unambiguous id prefix is fine)')
+  .option('--all', 'Deliver to every live session')
+  .option('--source <label>', 'Attribution shown on the notice (default: cli)')
+  .option('--hint <text>', 'One-line suggested next step, shown under the message')
+  .option('--if-running', 'Exit 0 instead of failing when no session is live')
+  .option('--no-wait', 'Exit as soon as it is written; do not confirm pickup')
+  .option('--timeout <ms>', 'How long to wait for pickup')
+  .option('--list', 'List live sessions and exit')
+  .action(
+    async (
+      text: string[] | undefined,
+      options: {
+        session?: string;
+        all?: boolean;
+        source?: string;
+        hint?: string;
+        ifRunning?: boolean;
+        wait?: boolean;
+        timeout?: string;
+        list?: boolean;
+      },
+    ) => {
+      const { sayCommand } = await import('./say-cli.js');
+      const { timeout, ...rest } = options;
+      process.exitCode = await sayCommand((text ?? []).join(' '), {
+        ...rest,
+        ...(timeout ? { timeout: Number(timeout) } : {}),
+      });
+    },
+  );
+
+program
   .command('cron-grant <id> [paths...]')
   .description('Show or set the folders a cron job may write to, beyond its own workspace')
   .option('--clear', 'Remove all extra write paths, leaving only the job workspace')
@@ -1132,9 +1166,19 @@ program
     }
   });
 
+/**
+ * The `app` sub-actions, written once.
+ *
+ * The description and the unknown-action error each spelled this list out by
+ * hand and had already drifted — one listed `csp`, the other did not — and
+ * were then both edited by hand again when `logs` arrived. Derived from one
+ * array, they cannot.
+ */
+const APP_ACTIONS = ['list', 'open', 'allow', 'csp', 'logs', 'delete', 'path'] as const;
+
 program
   .command('app [action] [appId] [actionName]')
-  .description('Manage applets: list | open | allow | csp | delete | path')
+  .description(`Manage applets: ${APP_ACTIONS.join(' | ')}`)
   .option('-b, --bundled', 'List only the applets Bernard ships')
   .option('-a, --all', 'List every applet, grouped by origin')
   .option('--no-open', 'Print the URL instead of opening a browser')
@@ -1147,6 +1191,7 @@ program
   .option('--media-src <origins>', 'Origins it may play audio or video from')
   .option('--sandbox <setting>', 'Link handling: links (open in a new window) | navigate')
   .option('--clear', 'Remove every external-access grant from this applet')
+  .option('--last <n>', 'How many log rows to show for `logs` (default 20)')
   .action(
     async (
       action: string | undefined,
@@ -1165,6 +1210,7 @@ program
         mediaSrc?: string;
         sandbox?: string;
         clear?: boolean;
+        last?: string;
       },
     ) => {
       try {
@@ -1212,6 +1258,15 @@ program
             cli.appCsp(appId, spec);
             return;
           }
+          case 'logs': {
+            if (!appId) throw new Error('Usage: bernard app logs <appId> [--last N]');
+            const last = options.last === undefined ? undefined : Number(options.last);
+            if (last !== undefined && (!Number.isFinite(last) || last <= 0)) {
+              throw new Error('--last must be a positive number');
+            }
+            cli.appLogs(appId, last === undefined ? {} : { last });
+            return;
+          }
           case 'allow': {
             if (!appId || !actionName) {
               throw new Error('Usage: bernard app allow <appId> <action> --tools a,b');
@@ -1227,7 +1282,7 @@ program
             return;
           }
           default:
-            throw new Error(`Unknown action "${action}". Use list, open, allow, delete or path.`);
+            throw new Error(`Unknown action "${action}". Use ${APP_ACTIONS.join(', ')}.`);
         }
       } catch (err: unknown) {
         printError(err instanceof Error ? err.message : String(err));

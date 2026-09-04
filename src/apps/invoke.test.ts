@@ -262,4 +262,96 @@ describe('invokeAction', () => {
     expect(log).toContain('"q"');
     expect(log).not.toContain('a-secret-value');
   });
+
+  /**
+   * The failure message is the whole point of #461 — without it a real failure
+   * read back as `run_failed`/`unknown` — but it cannot be stored blindly.
+   *
+   * An `invalid_args` message is `formatZodError` over the CALLER's arguments,
+   * and zod echoes the value it rejected, so storing it verbatim would put
+   * caller data in the log on exactly the path where the caller supplied it.
+   */
+  it('records the failure message, and withholds the one that would echo an argument', async () => {
+    const m = await load();
+    // An enum arg, because zod names the received value only when it has a
+    // set of expected ones to contrast it against.
+    writeApp({
+      ...VALID_APP,
+      actions: {
+        ask: {
+          ...VALID_APP.actions.ask,
+          args: {
+            q: { type: 'string', required: true },
+            depth: { type: 'enum', values: ['quick', 'thorough'] },
+          },
+        },
+      },
+    });
+    await m.invokeAction({
+      appId: 'demo',
+      action: 'ask',
+      args: { q: 'fine', depth: 'hunter2-the-secret' },
+    });
+    const log = fs.readFileSync(m.SCRIPT_LOG_FILE, 'utf-8');
+    expect(log).not.toContain('hunter2-the-secret');
+    // Still diagnosable: which field failed is the question being asked, and a
+    // field name is a key, which this log already carries.
+    expect(log).toContain('depth');
+    expect(log).toContain('values withheld');
+  });
+
+  it('pings any running session, and a broken notifier does not break the failure', async () => {
+    // The hook lives in `fail()` so it covers every failure shape by
+    // construction — including ones added later.
+    const m = await load();
+    const registry = await import('../inbox/registry.js');
+    const send = await import('../inbox/send.js');
+    send.resetSendDedupe();
+    registry.registerSession({ sessionId: 'listener' });
+    writeApp();
+
+    // A failure that actually RAN. A request-shaped one (unknown app, bad
+    // args) deliberately does not notify — see `fail()`.
+    mockDispatchAction.mockResolvedValueOnce({
+      ok: false,
+      error: 'the wrapper blew up',
+      env: {},
+      startedAt: '2026-01-01T00:00:00.000Z',
+      timings: { mcpConnectMs: 1, totalMs: 2 },
+      stepLimitHit: false,
+    });
+    const result = await m.invokeAction({ appId: 'demo', action: 'ask', args: { q: 'x' } });
+    expect(result.ok).toBe(false);
+    const inbox = registry.listLiveSessions()[0].inboxDir;
+    const delivered = fs.readdirSync(inbox).filter((n) => n.endsWith('.json'));
+    expect(delivered).toHaveLength(1);
+    const msg = JSON.parse(fs.readFileSync(path.join(inbox, delivered[0]), 'utf-8')) as {
+      text: string;
+      hint?: string;
+    };
+    expect(msg.text).toContain('demo');
+    expect(msg.hint).toContain('bernard app logs');
+
+    // ...and a request-shaped failure stays quiet: the caller already has it,
+    // and a mistyped action must not pop a panel in every open REPL. Nothing
+    // drains the inbox in this test, so clear it to count only what follows.
+    for (const n of delivered) fs.rmSync(path.join(inbox, n));
+    send.resetSendDedupe();
+    await m.invokeAction({ appId: 'nope', action: 'ask', args: {} });
+    expect(fs.readdirSync(inbox).filter((n) => n.endsWith('.json'))).toHaveLength(0);
+    registry.unregisterSession('listener');
+  });
+
+  it('records a run failure message in full', async () => {
+    const m = await load();
+    writeApp();
+    await m.invokeAction({ appId: 'nope', action: 'ask', args: {} });
+    const rows = fs
+      .readFileSync(m.SCRIPT_LOG_FILE, 'utf-8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as { errorMessage?: string });
+    // Bernard's own words about its own state — not caller data.
+    expect(rows[0].errorMessage).toContain('nope');
+  });
 });

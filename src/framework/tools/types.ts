@@ -74,6 +74,30 @@ export interface ToolMeta {
    */
   isWriteAction?: (args: unknown) => boolean;
   /**
+   * Per-call risk, able to **raise** as well as lower (#456).
+   *
+   * {@link isWriteAction} is the only other arg-aware hook and it can produce
+   * exactly one value, `'low'` — so before this there was no way to say that
+   * ONE action of a tool is more dangerous than the tool. `applet` is
+   * `write` + `local` → `medium`, and the default `confirmMode: 'auto'`
+   * prompts only on `high`, so an agent-initiated `applet{action:'delete'}`
+   * ran with no prompt at all. A static `risk` cannot express it either: it
+   * wins outright, so raising the tool would prompt on `list` and `read` too,
+   * which is the nagging the tiering exists to avoid.
+   *
+   * Returns `null` to defer to the rules below it. Consulted after
+   * {@link risk} — a whole-tool override is the most deliberate statement
+   * available and still wins — and before {@link isWriteAction}, because a
+   * statement about THIS call beats the generic downgrade.
+   *
+   * Deliberately on `ToolMeta` rather than behind `actionScoped`:
+   * `routine`, `specialist` and `lineup_edit` are documented non-adopters of
+   * that flag pending a grant migration, and they have the same
+   * destructive-`delete` shape. Keying the mechanism to `actionScoped` would
+   * lock out the tools that most need it.
+   */
+  riskForCall?: (args: unknown) => ToolRisk | null;
+  /**
    * True when this tool dispatches on an `action` argument covering operations
    * of very different consequence (#253, #322). Profile permission grants then
    * key per action (`cron:delete`) and the breadth ladder offers "this action" /

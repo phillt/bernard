@@ -1,4 +1,4 @@
-import { useSyncExternalStore, type ReactNode } from 'react';
+import { useSyncExternalStore, type ComponentType, type ReactNode } from 'react';
 import { Box, Static, Text, useStdout } from 'ink';
 import type {
   CoreMessage,
@@ -21,6 +21,8 @@ import { formatFriendlyTimestamp } from '../output.js';
 import { renderMarkdown } from './markdown.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 import { ErrorPanel } from './ErrorPanel.js';
+import { NoticePanel } from './NoticePanel.js';
+import type { NoticeData } from './notice.js';
 import type { ErrorPanelData } from './error-format.js';
 import type { MessageStore, StreamEvent } from './message-store.js';
 
@@ -50,6 +52,16 @@ export interface StaticItem {
    * the agent's LLM history.
    */
   error?: ErrorPanelData;
+  /**
+   * When set, this item is a message delivered from OUTSIDE the session
+   * (#462), rendered as {@link NoticePanel} instead of a message.
+   *
+   * UI transcript only — never pushed into `agent.history`, so the model never
+   * sees it and it is never persisted or replayed. That is the whole trust
+   * story for `bernard say`: the text has no path to the model, so the
+   * instruction-source boundary is structural rather than a policy.
+   */
+  notice?: NoticeData;
 }
 
 interface ThreadProps {
@@ -115,17 +127,7 @@ export function Thread({
       <Static items={staticItems}>
         {(item) => (
           <Box key={item.key} width={itemWidth} flexDirection="column" paddingX={2}>
-            {item.error ? (
-              <ErrorPanel data={item.error} />
-            ) : item.message ? (
-              <MessageBlock
-                message={item.message}
-                rewriteOriginal={item.rewriteOriginal}
-                timing={item.timing}
-                costUsd={item.costUsd}
-                toolDetails={item.toolDetails}
-              />
-            ) : null}
+            <StaticItemView item={item} MessageComponent={MessageBlock} />
           </Box>
         )}
       </Static>
@@ -433,19 +435,60 @@ function StreamingToolResult({
   );
 }
 
+/**
+ * One transcript item, rendered by whichever surface is showing the
+ * transcript.
+ *
+ * Shared because there are TWO: `<Thread>`'s `<Static>` list and
+ * `<TranscriptViewport>`'s windowed column, and which one a user sees is
+ * decided by TTY detection at startup. Each carried its own copy of this
+ * ladder, so adding a variant to one left it invisible in the other — a bug
+ * that would only reproduce for half the users. `MessageBlock` is passed in
+ * rather than imported here so the viewport can hand in its memoized copy.
+ */
+export function StaticItemView({
+  item,
+  MessageComponent,
+}: {
+  item: StaticItem;
+  /** `MessageBlock`, or the viewport's memoized copy of it. */
+  MessageComponent: ComponentType<MessageBlockProps>;
+}) {
+  if (item.error) return <ErrorPanel data={item.error} />;
+  if (item.notice) return <NoticePanel data={item.notice} />;
+  // The component, not a render prop: a closure would throw away the narrowing
+  // this line just did, forcing a `message!` at both call sites — an assertion
+  // a later reordering of this ladder could silently invalidate.
+  if (item.message) {
+    return (
+      <MessageComponent
+        message={item.message}
+        rewriteOriginal={item.rewriteOriginal}
+        timing={item.timing}
+        costUsd={item.costUsd}
+        toolDetails={item.toolDetails}
+      />
+    );
+  }
+  return null;
+}
+
+/** Everything a committed message needs to render itself. */
+export interface MessageBlockProps {
+  message: CoreMessage;
+  rewriteOriginal?: string;
+  timing?: { endedAt: number; durationMs: number };
+  costUsd?: number;
+  toolDetails: boolean;
+}
+
 export function MessageBlock({
   message,
   rewriteOriginal,
   timing,
   costUsd,
   toolDetails,
-}: {
-  message: CoreMessage;
-  rewriteOriginal?: string;
-  timing?: { endedAt: number; durationMs: number };
-  costUsd?: number;
-  toolDetails: boolean;
-}) {
+}: MessageBlockProps) {
   if (message.role === 'user')
     return <UserMessage message={message as CoreUserMessage} rewriteOriginal={rewriteOriginal} />;
   if (message.role === 'assistant')

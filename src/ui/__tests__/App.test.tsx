@@ -1789,3 +1789,71 @@ describe('<App> /applets management', () => {
     unmount();
   });
 });
+
+/**
+ * External messages (#462).
+ *
+ * Two of these assertions are the whole scope decision rather than details:
+ * a notice must not be billed and must not reach the model. If either ever
+ * stops holding, `bernard say` has quietly become a way for any local writer
+ * to put instructions in front of the agent.
+ */
+describe('<App> external messages', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function deliver(text: string, hint?: string) {
+    const { sendToSessions, resetSendDedupe } = await import('../../inbox/send.js');
+    resetSendDedupe();
+    return sendToSessions({
+      text,
+      source: { kind: 'applet', label: 'applet:news' },
+      ...(hint ? { hint } : {}),
+      target: { all: true },
+    });
+  }
+
+  it('renders a delivered message, attributed and marked as unseen', async () => {
+    const { lastFrame, unmount } = renderApp();
+    await tick();
+    await deliver('Action "now" failed: No datetime tool available', 'bernard app logs news');
+    // The watcher polls; a tick past its interval is enough.
+    await tick(1200);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('applet:news');
+    expect(frame).toContain('No datetime tool available');
+    expect(frame).toContain('bernard app logs news');
+    // The load-bearing row: without it a reader cannot tell that acting on
+    // this costs a turn they have to choose.
+    expect(frame).toContain('Bernard has not seen this');
+    unmount();
+  });
+
+  it('never starts a turn and never touches history', async () => {
+    const history: CoreMessage[] = [{ role: 'user', content: 'an earlier turn' }];
+    const { agentSpy, unmount } = renderApp({ history });
+    await tick();
+    const before = JSON.stringify(history);
+    await deliver('something happened');
+    await tick(1200);
+    // Not billed: no turn was started.
+    expect(agentSpy.processInput).not.toHaveBeenCalled();
+    // Not visible to the model: the notice went to `staticItems` only.
+    expect(JSON.stringify(history)).toBe(before);
+    unmount();
+  });
+
+  it('registers itself as a live session while mounted, and not after', async () => {
+    const { listLiveSessions } = await import('../../inbox/registry.js');
+    const { unmount } = renderApp();
+    await tick();
+    expect(listLiveSessions().length).toBeGreaterThan(0);
+    unmount();
+    await tick();
+    expect(listLiveSessions()).toEqual([]);
+  });
+});

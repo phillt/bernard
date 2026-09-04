@@ -169,6 +169,8 @@ import { SettingsOverlay, type SettingsTab } from './overlays/SettingsOverlay.js
 import { Toast, type ToastVariant } from './Toast.js';
 import { persistAgentState } from './save.js';
 import { MessageStore } from './message-store.js';
+import { InboxWatcher } from '../inbox/watcher.js';
+import { coalescedNotice, toNoticeData, type NoticeData } from './notice.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers, type MenuResult } from './ink-handlers.js';
 import { injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
@@ -864,6 +866,37 @@ export function App({
     setOutputSink(messageStore);
     return () => setOutputSink(null);
   }, [messageStore]);
+
+  /**
+   * External messages (#462).
+   *
+   * A NOTICE, never a turn: it lands in `staticItems` only — never
+   * `agent.history` — so it is not billed, not persisted, not replayed, and
+   * never presented to the model as instruction. The same channel the startup
+   * lineup notice and the #403 interrupt record use.
+   *
+   * Nothing queues, deliberately. A queue protects a singleton — the prompt,
+   * the turn, the agent loop — and a notice contends for none of them; it is
+   * an append to an append-only list, and `TranscriptViewport` already tracks
+   * growth and sticks to the bottom. Do not add one out of caution.
+   *
+   * Registered here rather than in `src/index.ts` before `render()`: a mount
+   * that threw would otherwise advertise a session that can never drain.
+   */
+  useEffect(() => {
+    const push = (notice: NoticeData) =>
+      setStaticItems((prev) => [
+        ...prev,
+        { key: String(itemKeyRef.current++), notice, toolDetails: false },
+      ]);
+    const watcher = new InboxWatcher({
+      sessionId: getSessionId(),
+      onMessage: (message) => push(toNoticeData(message)),
+      onCoalesced: (count, label) => push(coalescedNotice(count, label)),
+    });
+    watcher.start();
+    return () => watcher.stop();
+  }, []);
 
   // Per-session debug log boundaries. `session:start` captures the runtime
   // shape so a future tail-read can correlate behavior with the active
