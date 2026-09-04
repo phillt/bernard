@@ -512,4 +512,47 @@ describe('applet server', () => {
       expect(cspOf(res)).toContain("img-src 'self' data:;");
     });
   });
+
+  /**
+   * The blocked-request channel (#467).
+   *
+   * A page reports what the browser refused so a denied applet stops being
+   * silently broken. Recorded, never acted on.
+   */
+  describe('violation reports', () => {
+    it('records a report the page posts with its token', async () => {
+      const m = await load();
+      writeApp(m);
+      const { app } = await start(m);
+      const violations = await import('./violations.js');
+      const res = await fetch(`${app.origin}/__bernard/violation`, {
+        method: 'POST',
+        headers: {
+          ...hostHeaders(app.port),
+          'content-type': 'application/json',
+          'x-bernard-token': 'tok-1',
+        },
+        body: JSON.stringify({ directive: 'img-src', blockedURL: 'https://cdn.example.com/x.png' }),
+      });
+      expect(res.status).toBe(200);
+      expect(violations.loadBlocked('demo')).toEqual([
+        expect.objectContaining({ directive: 'imgSrc', origin: 'https://cdn.example.com' }),
+      ]);
+    });
+
+    it('refuses a report with no token, like every other state-changing route', async () => {
+      // The reason this is a POST the PAGE makes rather than a CSP report-uri:
+      // a browser-generated report carries no headers, so accepting one would
+      // mean exempting a path from the token check.
+      const m = await load();
+      writeApp(m);
+      const { app } = await start(m);
+      const res = await fetch(`${app.origin}/__bernard/violation`, {
+        method: 'POST',
+        headers: { ...hostHeaders(app.port), 'content-type': 'application/json' },
+        body: JSON.stringify({ directive: 'img-src', blockedURL: 'https://cdn.example.com/x.png' }),
+      });
+      expect(res.status).toBe(403);
+    });
+  });
 });

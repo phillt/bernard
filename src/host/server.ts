@@ -7,6 +7,7 @@ import { AppRegistry } from '../apps/registry.js';
 import { checkRequest } from './guard.js';
 import { securityHeaders, originFor } from './csp.js';
 import { loadAppCspGrant } from '../apps/app-csp-grants.js';
+import { recordBlocked } from './violations.js';
 import { resolveAsset } from './assets.js';
 import { TOKENS_PATH, tokensStylesheet } from './tokens.js';
 import { SDK_PATH, appletSdkScript } from './sdk.js';
@@ -47,6 +48,19 @@ export const BOOTSTRAP_PATH = '/__bernard/bootstrap.json';
  * path.
  */
 export const STORE_PATH = '/__bernard/store';
+
+/**
+ * Where the page reports what the browser refused to load (#467).
+ *
+ * POST, so the guard requires the token — and that is the whole reason this is
+ * a route the PAGE calls rather than a CSP `report-uri`. A browser-generated
+ * report carries no custom header, so accepting one would mean exempting a
+ * path from the token check in `guard.ts`, widening the one gate that keeps
+ * every state-changing route honest. The `securitypolicyviolation` DOM event
+ * gives the same information to same-page JavaScript, which already holds the
+ * token, so nothing has to be relaxed.
+ */
+export const VIOLATION_PATH = '/__bernard/violation';
 
 /** Bodies are small by construction — an action's args are scalars. */
 const MAX_BODY_BYTES = 64 * 1024;
@@ -307,6 +321,28 @@ function createHandler(
 
       if (url === TOKENS_PATH) {
         send(200, tokensStylesheet(), { 'Content-Type': 'text/css; charset=utf-8' });
+        return;
+      }
+
+      if (url === VIOLATION_PATH) {
+        if (req.method !== 'POST') {
+          send(405, 'Method Not Allowed', { Allow: 'POST' });
+          return;
+        }
+        // Recorded, never acted on: this tells the user what the applet tried
+        // to reach, and granting it is still their own keystroke. The body is
+        // the applet's claim about itself, so `recordBlocked` validates the
+        // origin through the same parser a grant goes through and drops
+        // anything it could not later grant.
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          sendJson(400, { ok: false, error: 'Bad body.' });
+          return;
+        }
+        recordBlocked(appId, body);
+        sendJson(200, { ok: true });
         return;
       }
 

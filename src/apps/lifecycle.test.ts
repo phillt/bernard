@@ -11,6 +11,7 @@ async function load() {
     ...(await import('./registry.js')),
     ...(await import('./app-grants.js')),
     ...(await import('./app-csp-grants.js')),
+    ...(await import('../host/violations.js')),
     specialists: await import('../specialists.js'),
     store: await import('./store.js'),
     paths,
@@ -97,6 +98,7 @@ describe('deleteApplet', () => {
     // Populate the other stores.
     m.saveAppGrants('notes', [{ effect: 'deny', tool: 'web_read', _v: 2 }]);
     m.saveAppCspGrant('notes', { imgSrc: ['https://cdn.example.com'] });
+    m.recordBlocked('notes', { directive: 'img-src', blockedURL: 'https://x.example/a.png' });
     new m.store.AppletStore('notes').set('k', 'v');
     fs.mkdirSync(m.paths.runWorkspace('apps', 'notes'), { recursive: true });
     fs.writeFileSync(path.join(m.paths.runWorkspace('apps', 'notes'), 'out.txt'), 'work');
@@ -121,6 +123,7 @@ describe('deleteApplet', () => {
     // A leftover origin grant would hand a re-added applet of the same id
     // external access the user granted to a different one.
     expect(m.loadAppCspGrant('notes')).toBeNull();
+    expect(m.loadBlocked('notes')).toEqual([]);
     expect(specialists.get('notes-agent')).toBeUndefined();
   });
 

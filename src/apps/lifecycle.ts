@@ -4,6 +4,7 @@ import { SpecialistStore } from '../specialists.js';
 import { closeAppletStore } from './store.js';
 import { saveAppGrants } from './app-grants.js';
 import { saveAppCspGrant } from './app-csp-grants.js';
+import { clearBlocked } from '../host/violations.js';
 import { AppRegistry } from './registry.js';
 
 /**
@@ -65,6 +66,9 @@ export function deleteApplet(appId: string): DeleteResult {
   //    re-added applet of the same id external access the user granted to a
   //    different applet.
   saveAppCspGrant(appId, {});
+  //    ...and what the browser reported it was refused, which is only ever
+  //    read to offer that grant.
+  clearBlocked(appId);
 
   // 6. Specialists bound to this app, which are unreachable without it.
   const specialists = new SpecialistStore({ seed: false });
