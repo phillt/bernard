@@ -13,6 +13,17 @@
  * moves here; everything else stays an opinion and is labelled as one.
  */
 
+/**
+ * Every hex colour literal, as a scanner.
+ *
+ * Shared with `page-validate.ts` so the warning and the floor's own purity
+ * test agree about what a hex colour IS. They did not: the validator matched
+ * only 3- and 6-digit forms, so `#1234` and `#12345678` — which `parseColor`
+ * accepts and `nearestToken` can name — shipped with no warning at all, while
+ * the identical literal would have failed the token test.
+ */
+export const HEX_LITERAL_RE = /#[0-9a-f]{3,8}\b/gi;
+
 /** A colour with straight (non-premultiplied) alpha, channels 0-255, alpha 0-1. */
 export interface Rgba {
   r: number;
@@ -96,12 +107,18 @@ export function relativeLuminance(color: Rgba): number {
 }
 
 /**
- * WCAG contrast between two opaque colours, 1–21.
+ * WCAG contrast between two OPAQUE colours, 1-21.
  *
- * Returns `null` when either colour cannot be parsed or carries alpha —
- * a translucent colour has no ratio of its own, and silently treating it as
- * opaque is how a checker reports a pass it did not measure. Use
- * {@link contrastOver} for those.
+ * Returns `null` when either colour cannot be parsed **or carries alpha** — a
+ * translucent colour has no ratio of its own, and silently treating it as
+ * opaque is how a checker reports a pass it never measured. Use
+ * {@link contrastOver} for those, which composites first.
+ *
+ * Deliberately not a one-line wrapper over `contrastOver`, though it looks
+ * like one: they disagree on exactly the case this module exists to be careful
+ * about. `contrastOver` composites a translucent foreground onto its backdrop
+ * and returns a number; this refuses. Collapsing them would silently turn the
+ * refusal into an answer.
  */
 export function contrastRatio(a: string, b: string): number | null {
   const ca = parseColor(a);

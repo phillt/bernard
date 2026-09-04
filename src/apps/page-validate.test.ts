@@ -307,3 +307,26 @@ describe('colour literals and shipped files', () => {
     );
   });
 });
+
+/**
+ * The coverage gap the `args.page` gate created.
+ *
+ * Validation used to run only when a page was supplied, so an update that
+ * shipped a stylesheet and nothing else — replacing `app.css`, an ordinary
+ * edit — reached the store unchecked. That is the call most likely to
+ * introduce exactly what the `.css` refusals exist to catch.
+ */
+describe('a stylesheet-only change is still checked', () => {
+  it('sees a hex in a shipped .css against the page already on disk', () => {
+    const existing = [
+      '<link rel="stylesheet" href="/__bernard/tokens.css" />',
+      '<link rel="manifest" href="/__bernard/manifest.webmanifest" />',
+      '<script src="/__bernard/applet.js"></script>',
+      '<link rel="stylesheet" href="app.css" />',
+    ].join('\n');
+    const issues = validateAppletPage(existing, [], {
+      files: { 'app.css': 'p { color: #ff0000; }' },
+    });
+    expect(issues.some((i) => i.level === 'warn' && i.message.includes('app.css'))).toBe(true);
+  });
+});

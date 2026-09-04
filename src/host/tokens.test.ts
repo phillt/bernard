@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { APPLET_COLOR_TOKENS, tokensStylesheet, TOKENS_PATH } from './tokens.js';
-import { contrastOver } from '../color.js';
+import { contrastOver, HEX_LITERAL_RE } from '../color.js';
 import { getThemeColors, setTheme, DEFAULT_THEME } from '../theme.js';
 
 describe('applet design tokens (#424)', () => {
@@ -77,12 +77,12 @@ describe('the served floor meets WCAG AA', () => {
    * colour the table never measured.
    */
   it('paints no colour that is not a token', () => {
-    expect(outsideRoot.match(/#[0-9a-f]{3,8}\b/gi)).toBeNull();
+    expect(outsideRoot.match(HEX_LITERAL_RE)).toBeNull();
     expect(outsideRoot).not.toMatch(/\brgba?\(/);
   });
 
   it('declares every colour it uses in the record the table reads', () => {
-    const inRoot = rootBlock.match(/#[0-9a-f]{3,8}\b/gi) ?? [];
+    const inRoot = rootBlock.match(HEX_LITERAL_RE) ?? [];
     const declared = Object.values(APPLET_COLOR_TOKENS)
       .filter((v) => v.startsWith('#'))
       .map((v) => v.toLowerCase());
@@ -158,5 +158,31 @@ describe('the served floor meets WCAG AA', () => {
 
   it('is a pure function of module constants, so the memo cannot go stale', () => {
     expect(tokensStylesheet()).toBe(tokensStylesheet());
+  });
+
+  /**
+   * The file's own rule, applied to the file.
+   *
+   * `tokens.ts` says a scale nothing in the floor uses is a framework rather
+   * than a floor. That was a comment claiming something nothing checked — and
+   * it was briefly false, with five tokens shipped ahead of any consumer. The
+   * exemptions are named here so adding an unused token is a decision someone
+   * writes down, not a thing that happens.
+   */
+  it('uses every token it declares, or names the exception', () => {
+    const declared = [...sheet.matchAll(/^\s*(--[a-z0-9-]+):/gm)].map((m) => m[1]);
+    const body = sheet.slice(sheet.indexOf('}') + 1);
+    const UNUSED_BY_DESIGN = new Set([
+      // A tint for an author's own fill. Measured by the table above, over
+      // both backgrounds, so it is covered even though the floor paints it
+      // nowhere.
+      '--accent-dim',
+      // The two ends of the scales the floor never reaches for, kept so an
+      // author is not pushed off-scale at the edges.
+      '--space-1',
+      '--text-xs',
+    ]);
+    const unused = declared.filter((d) => !body.includes(`var(${d})`) && !UNUSED_BY_DESIGN.has(d));
+    expect(unused).toEqual([]);
   });
 });

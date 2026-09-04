@@ -1,7 +1,7 @@
 import { MANIFEST_PATH } from '../host/webmanifest.js';
 import { SDK_PATH } from '../host/sdk.js';
 import { TOKENS_PATH, APPLET_COLOR_TOKENS } from '../host/tokens.js';
-import { nearestToken } from '../color.js';
+import { nearestToken, HEX_LITERAL_RE } from '../color.js';
 
 /**
  * Refusing to write an applet page that cannot work.
@@ -179,7 +179,7 @@ export function validateAppletPage(
     );
   }
 
-  colourIssues(html, 'the page', refuse, warn);
+  colourIssues(html, 'the page', warn);
   cssIssues(html, opts.files ?? {}, refuse, warn);
 
   return issues;
@@ -203,12 +203,7 @@ export function validateAppletPage(
  * What makes the warning worth acting on instead is the remedy: the nearest
  * token, named. "Use `--danger`" gets fixed; "avoid hex colours" does not.
  */
-function colourIssues(
-  source: string,
-  where: string,
-  _refuse: (m: string) => void,
-  warn: (m: string) => void,
-): void {
+function colourIssues(source: string, where: string, warn: (m: string) => void): void {
   // Masked before matching, or every fragment link and every element id is a
   // false positive. This is what keeps the warning high-signal enough to
   // carry the acceptance criterion without a refusal.
@@ -217,7 +212,7 @@ function colourIssues(
     .replace(/\b(?:href|id|name)\s*=\s*["'][^"']*["']/gi, '');
 
   const literals = new Set<string>();
-  for (const m of masked.matchAll(/#[0-9a-f]{3}(?:[0-9a-f]{3})?\b/gi)) literals.add(m[0]);
+  for (const m of masked.matchAll(HEX_LITERAL_RE)) literals.add(m[0]);
   // The obvious evasion once hexes are flagged. Same certainty, same level.
   const functional = /\b(?:rgba?|hsla?)\(/i.test(masked);
   if (literals.size === 0 && !functional) return;
@@ -275,7 +270,7 @@ function cssIssues(
           'grants it: `bernard app csp <id> --img-src <origin>`.',
       );
     }
-    colourIssues(content, `\`${name}\``, refuse, warn);
+    colourIssues(content, `\`${name}\``, warn);
   }
 }
 

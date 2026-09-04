@@ -90,8 +90,11 @@ ${vars}
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
 
-  /* 4px base. Every step is consumed by a rule below — a scale nothing in the
-     floor uses is a framework, which this is not. */
+  /* 4px base. Every step but \`--space-1\` is consumed by a rule below; that one
+     and \`--text-xs\` are the two ends the floor never reaches for, kept so an
+     author is not pushed off the scale at its edges. Naming them is the point —
+     a scale whose steps nobody can account for is a framework, which this
+     is not. */
   --space-1: 0.25rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
@@ -121,10 +124,10 @@ ${vars}
 
 body {
   margin: 0;
-  padding: 2rem 1rem;
+  padding: var(--space-6) var(--space-4);
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.5 var(--sans);
+  font: var(--text-base)/var(--leading-body) var(--sans);
 }
 
 main, .app { max-width: 42rem; margin: 0 auto; }
