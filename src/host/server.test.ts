@@ -139,6 +139,48 @@ describe('applet server', () => {
 
   const hostHeaders = (port: number) => ({ Host: `127.0.0.1:${port}` });
 
+  /**
+   * #463's stated acceptance criterion, and the one nothing else would catch.
+   *
+   * A brief holds what the user said about their own workflow. It lives in
+   * `APPLET_BRIEFS_DIR` — a directory the server has no handle on — rather
+   * than beside the manifest, so this is asserted structurally rather than
+   * relying on `isContainedIn`'s sibling-prefix rule. Driven over a real
+   * socket because that is the only thing that proves it.
+   */
+  it('never serves an applet its own design brief', async () => {
+    const m = await load();
+    writeApp(m);
+    const { AppletBriefStore } = await import('../apps/brief-store.js');
+    new AppletBriefStore().write('demo', { note: 'a private note about the user' });
+    // The brief must actually exist, or every 404 below is a 404 about
+    // nothing and the whole test passes vacuously.
+    const briefFile = path.join(AppletBriefStore.briefsDir, 'demo.json');
+    expect(fs.readFileSync(briefFile, 'utf-8')).toContain('a private note about the user');
+    // Structural, not derived: the briefs directory is not under the served
+    // root at all, so no containment rule has to hold for this to be safe.
+    expect(AppletBriefStore.briefsDir.startsWith(m.appletAssetDir('demo'))).toBe(false);
+    expect(AppletBriefStore.briefsDir.startsWith(m.APPS_DIR)).toBe(false);
+    const { app } = await start(m);
+
+    const escapes = [
+      '/demo.json',
+      '/../demo.json',
+      '/..%2fdemo.json',
+      '/%2e%2e%2fdemo.json',
+      '/../applet-briefs/demo.json',
+      '/../../applet-briefs/demo.json',
+      '/%2e%2e%2f%2e%2e%2fapplet-briefs%2fdemo.json',
+      '/demo.notes.md',
+    ];
+    for (const p of escapes) {
+      const res = await fetch(`${app.origin}${p}`, { headers: hostHeaders(app.port) });
+      const body = await res.text();
+      expect(res.status, `${p} was served`).not.toBe(200);
+      expect(body).not.toContain('a private note about the user');
+    }
+  });
+
   it('serves the applet index from its own loopback origin', async () => {
     const m = await load();
     writeApp(m);

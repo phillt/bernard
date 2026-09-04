@@ -94,7 +94,12 @@ describe('the applet tool', () => {
     appAllow('notes', 'summarise', ['web_search'], { write: true });
 
     await tool.execute(
-      { ...CREATE, action: 'update', description: 'now with a description' },
+      {
+        ...CREATE,
+        action: 'update',
+        description: 'now with a description',
+        note: 'added a description',
+      },
       {} as never,
     );
     const app = registry.get('notes');
@@ -444,7 +449,7 @@ describe('the applet tool enforces the toolAllowlist ∩ targetTools rule', () =
   }
 
   const edit = (tool: { execute: (a: unknown, b: unknown) => Promise<string> }) =>
-    tool.execute({ action: 'update', id: 'notes', description: 'edited' }, {});
+    tool.execute({ action: 'update', id: 'notes', description: 'edited', note: 'edited' }, {});
 
   it('refuses an update that would leave the action with no tools', async () => {
     const tool = await setup('greeter', [], ['datetime']);
@@ -507,7 +512,7 @@ describe('the applet tool requires a description', () => {
     const { tool } = await load();
     await tool.execute(CREATE, {} as never);
     const out = await tool.execute(
-      { action: 'update', id: 'notes', name: 'Notes v2' } as never,
+      { action: 'update', id: 'notes', name: 'Notes v2', note: 'renamed' } as never,
       {} as never,
     );
     expect(out).toContain('updated');
@@ -685,7 +690,10 @@ describe('the applet tool declares permissions but grants none', () => {
     const store = new AppRegistry({ seed: false });
     const tool = createAppletTool(store);
     await tool.execute(withPermissions, {} as never);
-    await tool.execute({ action: 'update', id: 'notes', page: PAGE }, {} as never);
+    await tool.execute(
+      { action: 'update', id: 'notes', page: PAGE, note: 'new page' },
+      {} as never,
+    );
     const app = store.get('notes');
     expect(app.ok && app.manifest.permissions?.imgSrc?.origins).toEqual([
       'https://cdn.example.com',
@@ -805,7 +813,10 @@ describe('the applet tool asks before anything is granted', () => {
     const consent = vi.fn(async (req: { pending: unknown[] }) => req.pending as never);
     const tool = createAppletTool(store, consent);
     await tool.execute(WITH('reask'), {} as never);
-    const out = await tool.execute({ action: 'update', id: 'reask', page: PAGE }, {} as never);
+    const out = await tool.execute(
+      { action: 'update', id: 'reask', page: PAGE, note: 'new page' },
+      {} as never,
+    );
     expect(consent).toHaveBeenCalledOnce();
     expect(out).toContain('already permitted');
   });
@@ -974,7 +985,10 @@ describe('the design pass on create', () => {
     await tool.execute({ ...CREATE, id: 'no-restyle' }, {} as never);
     styler.mockClear();
 
-    await tool.execute({ action: 'update', id: 'no-restyle', page: PAGE } as never, {} as never);
+    await tool.execute(
+      { action: 'update', id: 'no-restyle', page: PAGE, note: 'new page' } as never,
+      {} as never,
+    );
 
     expect(styler).not.toHaveBeenCalled();
   });
@@ -1025,6 +1039,129 @@ describe('the style action', () => {
 
     const out = await tool.execute({ action: 'style', id: 'nope' } as never, {} as never);
 
+    expect(out.startsWith('Error:')).toBe(true);
+  });
+});
+
+/** The design brief (#463): intent on create, a note on every update. */
+async function loadWithBrief() {
+  vi.resetModules();
+  vi.doMock('../config.js', () => ({
+    loadConfig: () => ({ autoStyleApplets: false, autoOpenApplets: false }),
+  }));
+  const { createAppletTool } = await import('./applet.js');
+  const { AppRegistry } = await import('../apps/registry.js');
+  const brief = await import('../apps/brief-store.js');
+  return { tool: createAppletTool(new AppRegistry({ seed: false })), AppRegistry, brief };
+}
+
+describe('the design brief', () => {
+  useTempHome('bernard-applet-brief-tool');
+
+  it('writes the intent with the applet on create', async () => {
+    const { tool, brief } = await loadWithBrief();
+
+    await tool.execute(
+      { ...CREATE, id: 'with-intent', intent: { goal: 'send shifts', friction: 'copying' } },
+      {} as never,
+    );
+
+    expect(new brief.AppletBriefStore().read('with-intent').intent).toEqual({
+      goal: 'send shifts',
+      friction: 'copying',
+    });
+  });
+
+  it('refuses an update with no note, and names the field', async () => {
+    // Required by the TOOL, like `description` on create: a brief written only
+    // when convenient is written once and then drifts.
+    const { tool } = await loadWithBrief();
+    await tool.execute({ ...CREATE, id: 'needs-note' }, {} as never);
+
+    const out = await tool.execute(
+      { action: 'update', id: 'needs-note', page: PAGE } as never,
+      {} as never,
+    );
+
+    expect(out).toContain('Error:');
+    expect(out).toContain('note');
+  });
+
+  it('records the note on a successful update', async () => {
+    const { tool, brief } = await loadWithBrief();
+    await tool.execute({ ...CREATE, id: 'noted-update' }, {} as never);
+
+    await tool.execute(
+      {
+        action: 'update',
+        id: 'noted-update',
+        page: PAGE,
+        note: 'dropped the second column, too cramped',
+      } as never,
+      {} as never,
+    );
+
+    expect(new brief.AppletBriefStore().read('noted-update').notes.map((n) => n.text)).toEqual([
+      'dropped the second column, too cramped',
+    ]);
+  });
+
+  it('returns the brief from `read`, and only when there is one', async () => {
+    // `read` is the only place the brief loads: whoever calls it is about to
+    // edit, which is exactly when knowing what was already tried is worth the
+    // tokens.
+    const { tool } = await loadWithBrief();
+    await tool.execute({ ...CREATE, id: 'readable' }, {} as never);
+
+    const before = await tool.execute({ action: 'read', id: 'readable' } as never, {} as never);
+    expect(before).not.toContain('design brief');
+
+    await tool.execute(
+      { action: 'brief', id: 'readable', intent: { goal: 'stay on top of shifts' } } as never,
+      {} as never,
+    );
+    const after = await tool.execute({ action: 'read', id: 'readable' } as never, {} as never);
+
+    expect(after).toContain('--- design brief ---');
+    expect(after).toContain('stay on top of shifts');
+  });
+
+  it('reads the brief back through the `brief` action, and says when empty', async () => {
+    const { tool } = await loadWithBrief();
+    await tool.execute({ ...CREATE, id: 'brief-rw' }, {} as never);
+
+    expect(await tool.execute({ action: 'brief', id: 'brief-rw' } as never, {} as never)).toContain(
+      'no design brief yet',
+    );
+
+    await tool.execute(
+      { action: 'brief', id: 'brief-rw', note: 'chose an agent action' } as never,
+      {} as never,
+    );
+
+    expect(await tool.execute({ action: 'brief', id: 'brief-rw' } as never, {} as never)).toContain(
+      'chose an agent action',
+    );
+  });
+
+  it('lets a wrong intent field be corrected, not just added to', async () => {
+    const { tool, brief } = await loadWithBrief();
+    await tool.execute(
+      { ...CREATE, id: 'correctable', intent: { goal: 'wrong', who: 'me' } },
+      {} as never,
+    );
+
+    await tool.execute(
+      { action: 'brief', id: 'correctable', intent: { goal: 'right', who: '' } } as never,
+      {} as never,
+    );
+
+    expect(new brief.AppletBriefStore().read('correctable').intent).toEqual({ goal: 'right' });
+  });
+
+  it('refuses a brief for an applet that does not exist', async () => {
+    const { tool } = await loadWithBrief();
+    const out = await tool.execute({ action: 'brief', id: 'ghost' } as never, {} as never);
     expect(out.startsWith('Error:')).toBe(true);
   });
 });

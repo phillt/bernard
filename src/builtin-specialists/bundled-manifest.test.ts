@@ -126,6 +126,7 @@ describe('the applet specialists teach the client, not the protocol', () => {
 describe('applet-styler stays in step with the served tokens', () => {
   const styler = JSON.parse(fs.readFileSync(path.join(DIR, 'applet-styler.json'), 'utf-8')) as {
     systemPrompt: string;
+    goodExamples: { call: string }[];
   };
 
   it('names every colour token the floor serves', () => {
@@ -145,5 +146,17 @@ describe('applet-styler stays in step with the served tokens', () => {
 
   it('carries the same honesty clause as the reviewer', () => {
     expect(styler.systemPrompt).toContain('cannot see the page render');
+  });
+
+  it('passes a `note` on update, which the tool now requires (#463)', () => {
+    // The coupling that would otherwise break silently: `applet update`
+    // refuses without a note, `styleNote` fails open, so the applet keeps its
+    // scaffold page and nothing says why. Asserted on the record because the
+    // record is the half that has to change.
+    expect(styler.systemPrompt).toContain('`note`');
+    for (const example of styler.goodExamples) {
+      if (!example.call.includes('applet update')) continue;
+      expect(example.call, 'the update example must model the required note').toContain('note:');
+    }
   });
 });

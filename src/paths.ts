@@ -90,6 +90,27 @@ export function appletDataDir(appId: string): string {
 export const SPECIALIST_CANDIDATES_DIR = path.join(DATA_DIR, 'specialist-candidates');
 export const CORRECTION_CANDIDATES_DIR = path.join(DATA_DIR, 'correction-candidates');
 export const APPLET_CANDIDATES_DIR = path.join(DATA_DIR, 'applet-candidates');
+
+/**
+ * Per-applet design briefs — intent and decisions (#463).
+ *
+ * Its own directory, deliberately neither of the two homes an applet can
+ * reach: not {@link appletAssetDir}, which is SERVED, so the user's own notes
+ * about their workflow would be fetchable at the applet's origin; and not
+ * {@link appletDataDir}, which the applet itself writes, so an applet could
+ * rewrite Bernard's notes about it. The same pair of rules {@link
+ * appletDataDir} and `APPLET_BLOCKS_FILE` already state.
+ *
+ * Not a sibling file in `APPS_DIR` either, which is the other obvious spot: it
+ * would be excluded from HTTP only by `isContainedIn`'s sibling-prefix rule
+ * rather than structurally, the host daemon watches that directory and would
+ * reconcile on every note, and `AppRegistry.remove` unlinks only the manifest
+ * and the asset directory, so it would orphan.
+ *
+ * `DATA_DIR` rather than `STATE_DIR` because a brief is the user's own content
+ * — what they said they wanted — not Bernard's operational state.
+ */
+export const APPLET_BRIEFS_DIR = path.join(DATA_DIR, 'applet-briefs');
 export const TOOL_PROFILES_DIR = path.join(DATA_DIR, 'tool-profiles');
 
 // Cache

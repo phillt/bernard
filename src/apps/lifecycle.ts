@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import { appletDataDir, runWorkspace } from '../paths.js';
 import { SpecialistStore } from '../specialists.js';
+import { AppletBriefStore } from './brief-store.js';
 import { closeAppletStore } from './store.js';
 import { saveAppGrants } from './app-grants.js';
 import { saveAppCspGrant } from './app-csp-grants.js';
@@ -70,7 +71,12 @@ export function deleteApplet(appId: string): DeleteResult {
   //    read to offer that grant.
   clearBlocked(appId);
 
-  // 6. Specialists bound to this app, which are unreachable without it.
+  // 6. The design brief (#463) — what the applet was for and what was tried.
+  //    Position is unconstrained: a plain file holds nothing open, so unlike
+  //    the SQLite row above this has no ordering requirement.
+  new AppletBriefStore().clear(appId);
+
+  // 7. Specialists bound to this app, which are unreachable without it.
   const specialists = new SpecialistStore({ seed: false });
   const boundSpecialists: string[] = [];
   for (const bound of specialists.listBoundTo(appId)) {
