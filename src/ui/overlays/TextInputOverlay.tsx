@@ -3,6 +3,7 @@ import { isDismissKey } from './overlay-contract.js';
 import { getThemeColors } from '../../theme.js';
 import { HintRow, KEY, HINT_CANCEL } from '../hints.js';
 import type { ValuePromptOptions, ValueResult } from '../menu-types.js';
+import { useRawKeys } from '../useRawKeys.js';
 import { useLineEditor } from '../use-line-editor.js';
 import { BoundedLine, OVERLAY_RESERVED_COLUMNS } from '../BoundedLine.js';
 
@@ -28,6 +29,11 @@ interface TextInputOverlayProps {
 export function TextInputOverlay({ options, onResolve }: TextInputOverlayProps) {
   const colors = getThemeColors();
   const editor = useLineEditor(options.initialValue ?? '');
+  // Always enabled: this overlay is mounted only while it owns the screen.
+  useRawKeys((key) => {
+    if (key === 'home') editor.toLineStart();
+    else editor.toLineEnd();
+  }, true);
   const { buffer } = editor;
   const cancelOnEmpty = options.cancelOnEmpty !== false;
 
