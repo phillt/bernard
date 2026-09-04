@@ -10,6 +10,7 @@ import { loadAppCspGrant } from '../apps/app-csp-grants.js';
 import { recordBlocked } from './violations.js';
 import { resolveAsset } from './assets.js';
 import { TOKENS_PATH, tokensStylesheet } from './tokens.js';
+import { UI_RUNTIME_PATH, uiRuntimeScript } from './ui-runtime.js';
 import { SDK_PATH, appletSdkScript } from './sdk.js';
 import { ICON_PATH, MANIFEST_PATH, appletIcon, webManifest } from './webmanifest.js';
 import { handleStoreRequest } from './store-route.js';
@@ -335,6 +336,15 @@ function createHandler(
 
       if (url === TOKENS_PATH) {
         send(200, tokensStylesheet(), { 'Content-Type': 'text/css; charset=utf-8' });
+        return;
+      }
+
+      if (url === UI_RUNTIME_PATH) {
+        // Third-party bytes, so unlike its neighbours this one is read from
+        // disk — but the same MIME rule applies, and it matters more: a wrong
+        // type here means the page renders nothing at all rather than
+        // rendering unstyled.
+        send(200, uiRuntimeScript(), { 'Content-Type': 'text/javascript; charset=utf-8' });
         return;
       }
 

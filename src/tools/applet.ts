@@ -185,7 +185,12 @@ const PARAMETERS = z.object({
         "deferred. Then call `await bernard.invoke('action', args)`, which resolves to the " +
         'result and throws on failure, and `bernard.store.get/set/list/delete`. Never fetch ' +
         '/__bernard/* yourself: a hand-rolled request omits the session header and gets a 403, ' +
-        'and writing one is refused. `applet read <id>` returns an existing page to copy from.',
+        'and writing one is refused. `applet read <id>` returns an existing page to copy from. ' +
+        'PLAIN HTML IS THE DEFAULT. If the page renders a LIST that changes, or has more than ' +
+        'about four controls, add <script src="/__bernard/ui.js"></script> — Preact + htm on ' +
+        '`window.htmPreact` (`html`, `render`, `useState`) — and describe the UI instead of ' +
+        'wiring it: those two shapes are what get written badly by hand. Anything smaller does ' +
+        'not need it.',
     ),
   files: z
     .record(z.string(), z.string())
