@@ -1,10 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  APPLET_COLOR_TOKENS,
-  APPLET_STYLED_SELECTORS,
-  tokensStylesheet,
-  TOKENS_PATH,
-} from './tokens.js';
+import { APPLET_COLOR_TOKENS, APPLET_SCALE_TOKENS, APPLET_STYLED_SELECTORS, TOKENS_PATH, tokensStylesheet } from './tokens.js';
 import { contrastOver, HEX_LITERAL_RE } from '../color.js';
 import { getThemeColors, setTheme, DEFAULT_THEME } from '../theme.js';
 
@@ -252,5 +247,35 @@ describe('the styled-selector record tracks the sheet', () => {
 
   it('finds a non-trivial number of selectors — a scan over nothing passes', () => {
     expect(declared.length).toBeGreaterThan(20);
+  });
+});
+
+describe('the scale record (#465 follow-up)', () => {
+  const sheet = tokensStylesheet();
+  const root = sheet.slice(sheet.indexOf(':root {'), sheet.indexOf('\n}'));
+
+  it('declares every scale token the record names, with the same value', () => {
+    // Record → sheet. Catches a token named in the doc that the sheet stopped
+    // serving: an applet writes `var(--space-3)` and gets nothing.
+    for (const [name, value] of Object.entries(APPLET_SCALE_TOKENS)) {
+      expect(root, `${name} missing`).toContain(`  ${name}: ${value};`);
+    }
+  });
+
+  it('names every non-colour token the sheet declares', () => {
+    // Sheet → record, the direction the mistake is made in. A scale token
+    // added to the stylesheet and not to the record is one `applet-styling`
+    // cannot document, which is exactly how the whole scale went unmentioned.
+    const declared = [...root.matchAll(/^ {2}(--[a-z0-9-]+):/gm)].map((m) => m[1]);
+    for (const name of declared) {
+      if (name in APPLET_COLOR_TOKENS) continue;
+      expect(APPLET_SCALE_TOKENS, `${name} is served but unrecorded`).toHaveProperty(name);
+    }
+  });
+
+  it('keeps the two records disjoint, so a token has exactly one home', () => {
+    for (const name of Object.keys(APPLET_SCALE_TOKENS)) {
+      expect(APPLET_COLOR_TOKENS).not.toHaveProperty(name);
+    }
   });
 });

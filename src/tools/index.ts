@@ -166,6 +166,21 @@ export async function createTools(
       },
     },
     { audience: 'any', make: () => createTimeTools() },
+    // `'main'`, not `'any'`, and that was measured: as `'any'` it added 839
+    // bytes to the worker tool block — full-rate input on every step of every
+    // sub-agent, PAC phase, cron run and MCP-delegate helper, none of which
+    // build applets, since ephemeral dispatches are never prompt-cached.
+    //
+    // It costs the one consumer that matters nothing. `tool-wrapper` declares
+    // `toolSurface: 'full'`, and the filter below only drops `'main'` groups on
+    // a WORKER surface — so a dispatched wrapper still gets `docs` and can name
+    // it in `targetTools`. An agent backing an applet action would need `docs`
+    // in its manifest `toolAllowlist`; none does, and that is the change to
+    // make if one ever should.
+    {
+      audience: 'main',
+      make: async () => ({ docs: (await import('./docs.js')).createDocsTool() }),
+    },
     {
       audience: 'main',
       make: async () => {
