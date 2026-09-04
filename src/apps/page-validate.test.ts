@@ -218,3 +218,115 @@ describe('external links', () => {
     expect(issues.every((i) => i.level === 'warn')).toBe(true);
   });
 });
+
+/**
+ * Colour literals and the files shipped beside the page (#465).
+ *
+ * The levels here are the whole argument: a colour WARNS because the failure
+ * is visible — an off-palette page still renders — while an unlinked or
+ * off-origin stylesheet is REFUSED because it fails silently, which is the
+ * property this module's inline-`<style>` refusals already turn on.
+ */
+describe('colour literals and shipped files', () => {
+  const page = (body: string) =>
+    [
+      '<link rel="stylesheet" href="/__bernard/tokens.css" />',
+      '<link rel="manifest" href="/__bernard/manifest.webmanifest" />',
+      '<script src="/__bernard/applet.js"></script>',
+      body,
+    ].join('\n');
+
+  it('warns about a hard-coded colour, and names the nearest token', () => {
+    const issues = validateAppletPage(page('<p>hello</p><!--x--><div>#f85149</div>'), []);
+    const colour = issues.find((i) => i.message.includes('sets colours directly'));
+    expect(colour?.level).toBe('warn');
+    // The remedy is what makes a warning act-on-able: "use --danger" gets
+    // fixed, "avoid hex colours" does not.
+    expect(colour?.message).toContain('--danger');
+  });
+
+  it('does not warn about a fragment link, an id, or a hex in a comment', () => {
+    // The false-positive surface that disqualifies a refusal here.
+    const clean = page('<a href="#a1b2c3">x</a><div id="deadbeef"></div><!-- #ffffff -->');
+    expect(validateAppletPage(clean, []).some((i) => i.message.includes('sets colours'))).toBe(
+      false,
+    );
+  });
+
+  it('warns about the functional forms too, which are the obvious evasion', () => {
+    const issues = validateAppletPage(page('<script>c="rgb(1,2,3)"</script>'), []);
+    expect(issues.some((i) => i.message.includes('sets colours directly'))).toBe(true);
+  });
+
+  it('refuses a stylesheet the page never links — written, served, never loaded', () => {
+    const issues = validateAppletPage(page('<p>x</p>'), [], {
+      files: { 'app.css': 'p { color: var(--text); }' },
+    });
+    const refusal = issues.find((i) => i.message.includes('never links it'));
+    expect(refusal?.level).toBe('refuse');
+  });
+
+  it('accepts a stylesheet the page does link', () => {
+    const issues = validateAppletPage(
+      page('<link rel="stylesheet" href="app.css" /><p>x</p>'),
+      [],
+      { files: { 'app.css': 'p { color: var(--text); }' } },
+    );
+    expect(issues).toEqual([]);
+  });
+
+  it('refuses an off-origin @import, which style-src drops with no error', () => {
+    const issues = validateAppletPage(page('<link rel="stylesheet" href="app.css" />'), [], {
+      files: { 'app.css': '@import url("https://cdn.example.com/x.css");' },
+    });
+    expect(issues.find((i) => i.message.includes('@imports'))?.level).toBe('refuse');
+  });
+
+  it('warns about a remote url(), which a grant can legalise', () => {
+    // `img-src` is grantable per applet since #467, so this is conditionally
+    // legal — a warning naming the command, not a refusal.
+    const issues = validateAppletPage(page('<link rel="stylesheet" href="app.css" />'), [], {
+      files: { 'app.css': 'body { background: url(https://cdn.example.com/x.png); }' },
+    });
+    const warning = issues.find((i) => i.message.includes('url()'));
+    expect(warning?.level).toBe('warn');
+    expect(warning?.message).toContain('bernard app csp');
+  });
+
+  it('warns about a hex inside a shipped stylesheet', () => {
+    const issues = validateAppletPage(page('<link rel="stylesheet" href="app.css" />'), [], {
+      files: { 'app.css': 'p { color: #ff0000; }' },
+    });
+    expect(issues.some((i) => i.message.includes('app.css') && i.level === 'warn')).toBe(true);
+  });
+
+  it('behaves exactly as before when no files are passed', () => {
+    const body = '<p>x</p>';
+    expect(validateAppletPage(page(body), [])).toEqual(
+      validateAppletPage(page(body), [], { files: {} }),
+    );
+  });
+});
+
+/**
+ * The coverage gap the `args.page` gate created.
+ *
+ * Validation used to run only when a page was supplied, so an update that
+ * shipped a stylesheet and nothing else — replacing `app.css`, an ordinary
+ * edit — reached the store unchecked. That is the call most likely to
+ * introduce exactly what the `.css` refusals exist to catch.
+ */
+describe('a stylesheet-only change is still checked', () => {
+  it('sees a hex in a shipped .css against the page already on disk', () => {
+    const existing = [
+      '<link rel="stylesheet" href="/__bernard/tokens.css" />',
+      '<link rel="manifest" href="/__bernard/manifest.webmanifest" />',
+      '<script src="/__bernard/applet.js"></script>',
+      '<link rel="stylesheet" href="app.css" />',
+    ].join('\n');
+    const issues = validateAppletPage(existing, [], {
+      files: { 'app.css': 'p { color: #ff0000; }' },
+    });
+    expect(issues.some((i) => i.level === 'warn' && i.message.includes('app.css'))).toBe(true);
+  });
+});

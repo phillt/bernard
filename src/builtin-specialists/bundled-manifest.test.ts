@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { POST_V1_BUNDLED } from '../specialists.js';
+import { APPLET_COLOR_TOKENS } from '../host/tokens.js';
 
 /**
  * What the original `.seeded-v1` pass shipped.
@@ -111,5 +112,38 @@ describe('the applet specialists teach the client, not the protocol', () => {
     const p = String(load('applet-reviewer').systemPrompt);
     expect(p).toContain('does not touch the browser half');
     expect(p).not.toContain('This is the check that matters');
+  });
+});
+
+/**
+ * The styler's token vocabulary must match the artefact (#465).
+ *
+ * A prompt that enumerates tokens is a second copy of `tokens.ts`, and #424
+ * built the served stylesheet precisely because things repeated by hand drift.
+ * The enumeration is allowed to exist — a model needs the vocabulary in front
+ * of it — but only if a test makes the copy provably current.
+ */
+describe('applet-styler stays in step with the served tokens', () => {
+  const styler = JSON.parse(fs.readFileSync(path.join(DIR, 'applet-styler.json'), 'utf-8')) as {
+    systemPrompt: string;
+  };
+
+  it('names every colour token the floor serves', () => {
+    const missing = Object.keys(APPLET_COLOR_TOKENS).filter(
+      (name) => !styler.systemPrompt.includes(name),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it('does not tell anyone to read the stylesheet off disk', () => {
+    // `/__bernard/tokens.css` is generated in memory and never written to a
+    // file, so the old `file_read_lines` instruction could not be followed.
+    // The fix is not to write the sheet out — that reintroduces the per-applet
+    // copy #424 removed — it is to make the enumeration above authoritative.
+    expect(styler.systemPrompt).not.toContain('file_read_lines');
+  });
+
+  it('carries the same honesty clause as the reviewer', () => {
+    expect(styler.systemPrompt).toContain('cannot see the page render');
   });
 });

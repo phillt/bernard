@@ -174,7 +174,13 @@ function build(): string {
         el = document.createElement('p');
         el.id = 'bernard-error';
         el.setAttribute('role', 'alert');
-        el.style.color = 'var(--danger, #f85149)';
+        // The class, not an inline colour. The served floor styles \`.error\`
+        // with \`--danger\`, which exists now (#465) — the old
+        // \`var(--danger, #f85149)\` carried a fallback hex precisely because
+        // it did not. For the record, that line was never CSP-broken:
+        // \`style-src\` does not govern a CSSOM property setter. It was only a
+        // hard-coded colour in Bernard's own floor.
+        el.className = 'error';
         document.body.appendChild(el);
       }
       el.textContent = String(message);

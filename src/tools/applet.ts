@@ -267,6 +267,7 @@ async function run(
         args.page ?? defaultAppletPage(manifest.name, manifest.description, manifest.actions);
       const issues = validateAppletPage(page, Object.keys(manifest.actions), {
         declaresLinkPermission: manifest.permissions?.sandbox !== undefined,
+        files: args.files ?? {},
       });
       const refusal = refusalFor(issues);
       if (refusal) return refusal;
@@ -299,17 +300,33 @@ async function run(
       if (dispatch.refusal) return dispatch.refusal;
       const files: Record<string, string> = { ...(args.files ?? {}) };
       let issues: PageIssue[] = [];
-      if (args.page !== undefined) {
-        // Validated against the manifest as it will be AFTER this update, so a
-        // call that adds an action and its button in one go is not refused for
-        // invoking something that does not exist yet.
-        issues = validateAppletPage(args.page, Object.keys(manifest.actions), {
-          declaresLinkPermission: manifest.permissions?.sandbox !== undefined,
-        });
-        const refusal = refusalFor(issues);
-        if (refusal) return refusal;
-        files['index.html'] = args.page;
+      // Validated whenever a page OR a file is supplied, not only on a page
+      // change. The old `args.page !== undefined` gate meant an update that
+      // shipped a stylesheet and nothing else — replacing `app.css`, which is
+      // an ordinary edit — reached `store.update` completely unchecked, so the
+      // two refusals that exist for silent failures (a `.css` nothing links,
+      // an off-origin `@import`) could not fire on the call most likely to
+      // introduce them.
+      const shippedFiles = args.files ?? {};
+      if (args.page !== undefined || Object.keys(shippedFiles).length > 0) {
+        // The page as it will be SERVED: the new one when this call supplies
+        // it, otherwise the one already on disk — because "does index.html
+        // link this stylesheet" is a question about the served pair, not about
+        // what changed.
+        const servedPage = args.page ?? store.readAsset(id, 'index.html');
+        if (servedPage !== null) {
+          // Validated against the manifest as it will be AFTER this update, so
+          // a call that adds an action and its button in one go is not refused
+          // for invoking something that does not exist yet.
+          issues = validateAppletPage(servedPage, Object.keys(manifest.actions), {
+            declaresLinkPermission: manifest.permissions?.sandbox !== undefined,
+            files: shippedFiles,
+          });
+          const refusal = refusalFor(issues);
+          if (refusal) return refusal;
+        }
       }
+      if (args.page !== undefined) files['index.html'] = args.page;
       const updated = store.update(id, manifest, files);
       const consent = await askForPermissions(id, updated.name, manifest, requestConsent);
       return (
