@@ -40,6 +40,71 @@ describe('riskFromMeta', () => {
     ...m,
   });
 
+  /**
+   * The full precedence, stated once (#456).
+   *
+   * Written as one test rather than spread across the cases below because the
+   * ORDER is the contract: `riskForCall` was added between two existing
+   * branches, and the two facts most likely to be broken by a later edit —
+   * that a static `risk` still beats it, and that it sits above the
+   * downgrade-only predicate — are invisible unless they are asserted
+   * together.
+   */
+  it('resolves in the order: meta.risk > riskForCall > isWriteAction > kind', () => {
+    const del = { action: 'delete' };
+    const raise = () => 'high' as const;
+
+    // 2. `riskForCall` raises a tool the static rules would call `medium`...
+    expect(
+      riskFromMeta(meta({ kind: 'write', sideEffect: 'local', riskForCall: raise }), del),
+    ).toBe('high');
+    // 1. ...but a whole-tool `risk` is the more deliberate statement and wins.
+    expect(
+      riskFromMeta(
+        meta({ kind: 'write', sideEffect: 'local', risk: 'low', riskForCall: raise }),
+        del,
+      ),
+    ).toBe('low');
+    // 3. `riskForCall` beats the downgrade: a statement about THIS call beats
+    //    the generic "this shape of call is a read".
+    expect(
+      riskFromMeta(
+        meta({
+          kind: 'write',
+          sideEffect: 'local',
+          riskForCall: raise,
+          isWriteAction: () => false,
+        }),
+        del,
+      ),
+    ).toBe('high');
+    // 4. `null` defers, leaving every rule below untouched.
+    expect(
+      riskFromMeta(meta({ kind: 'write', sideEffect: 'local', riskForCall: () => null }), del),
+    ).toBe('medium');
+    // Guarded on args exactly as `isWriteAction` is, so a metadata-only call
+    // never invokes it.
+    expect(riskFromMeta(meta({ kind: 'write', sideEffect: 'local', riskForCall: raise }))).toBe(
+      'medium',
+    );
+  });
+
+  /**
+   * The gap #456 exists to close, pinned so it cannot silently reopen: before
+   * `riskForCall` NOTHING could raise a `write` + `local` tool above `medium`
+   * for one call, and `medium` does not prompt under the default
+   * `confirmMode: 'auto'` (threshold `high`).
+   */
+  it('has exactly one per-call way to raise, and it is riskForCall', () => {
+    const base: Partial<ToolMeta> = { kind: 'write', sideEffect: 'local' };
+    const del = { action: 'delete' };
+    expect(riskFromMeta(meta(base), del)).toBe('medium');
+    // The other per-call hook can only ever lower.
+    expect(riskFromMeta(meta({ ...base, isWriteAction: () => true }), del)).toBe('medium');
+    expect(riskFromMeta(meta({ ...base, isWriteAction: () => false }), del)).toBe('low');
+    expect(riskFromMeta(meta({ ...base, riskForCall: () => 'high' }), del)).toBe('high');
+  });
+
   it('defaults missing metadata to medium', () => {
     expect(riskFromMeta(undefined)).toBe('medium');
   });

@@ -1,5 +1,5 @@
 import { tool, type Tool } from 'ai';
-import type { BernardTool, ToolMeta, ToolResult } from './types.js';
+import type { BernardTool, ToolMeta, ToolResult, ToolRisk } from './types.js';
 import { isToolResult } from './types.js';
 // Leaf module (no imports of its own), so this cannot create a cycle.
 import { actionOf } from '../../tool-permissions.js';
@@ -133,9 +133,19 @@ export function attachMeta<T extends Tool>(t: T, meta: ToolMeta): T {
  */
 export function attachActionMeta<T extends Tool>(
   t: T,
-  opts: { name: string; readActions: ReadonlySet<string> } & Partial<ToolMeta>,
+  opts: {
+    name: string;
+    readActions: ReadonlySet<string>;
+    /**
+     * Actions that are destructive enough to prompt even under
+     * `confirmMode: 'auto'` (#456) — `delete` and friends. Mirrors
+     * `readActions`: one set says which actions are cheap, the other which
+     * are expensive, and everything unnamed keeps the tool's own tier.
+     */
+    highRiskActions?: ReadonlySet<string>;
+  } & Partial<ToolMeta>,
 ): T {
-  const { name, readActions, ...overrides } = opts;
+  const { name, readActions, highRiskActions, ...overrides } = opts;
   return attachMeta(t, {
     name,
     kind: 'write',
@@ -151,6 +161,19 @@ export function attachActionMeta<T extends Tool>(
       const action = actionOf(args, { actionScoped: true });
       return action === null || !readActions.has(action);
     },
+    // Read through the same `actionOf` as the predicate above, so the two
+    // cannot disagree about what the action IS. Absent when no set is given,
+    // rather than a function that always returns null — an unset field is
+    // what `riskFromMeta` skips, and it keeps the meta honest for a test that
+    // asks whether a tool declares per-call risk at all.
+    ...(highRiskActions
+      ? {
+          riskForCall: (args: unknown): ToolRisk | null => {
+            const action = actionOf(args, { actionScoped: true });
+            return action !== null && highRiskActions.has(action) ? 'high' : null;
+          },
+        }
+      : {}),
     ...overrides,
   });
 }

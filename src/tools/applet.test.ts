@@ -116,14 +116,30 @@ describe('the applet tool', () => {
     ).toContain('Error');
   });
 
-  // Deleting sweeps six stores including bound specialists. It is
-  // `bernard app delete`, and an unknown action must say so rather than
-  // returning undefined — which `detectResultFailure` reads as a success.
-  it('has no delete action, and says where it is', async () => {
+  // Deleting an applet is no longer CLI-only (#456), but it is not an
+  // ordinary edit either: it sweeps six stores including any bound agent, so
+  // it resolves `high` and the confirm gate asks first. That tiering is
+  // asserted in `risk.test.ts` and below; here the contract is only that the
+  // action exists and reports honestly on a miss.
+  it('refuses to delete an applet that is not there, rather than reporting success', async () => {
     const { tool } = await load();
-    const out = await tool.execute({ action: 'delete', id: 'notes' } as never, {} as never);
+    const out = await tool.execute({ action: 'delete', id: 'nope' } as never, {} as never);
+    // An `Error:` prefix, because `detectResultFailure` reads a bare string as
+    // a success with content.
     expect(out).toContain('Error');
-    expect(out).toContain('bernard app delete');
+    expect(out).toContain('nope');
+  });
+
+  it('names the whole sweep when it does delete, including what it keeps', async () => {
+    // "Deleted it" is wrong in both directions — it understates the data
+    // store and any bound agent, and overstates the port, which is kept so a
+    // re-created id gets its origin and browser storage back.
+    const { tool, AppRegistry } = await load();
+    await tool.execute(CREATE, {} as never);
+    const out = await tool.execute({ action: 'delete', id: 'notes' } as never, {} as never);
+    expect(out).toContain('data store');
+    expect(out).toContain('port assignment is kept');
+    expect(new AppRegistry({ seed: false }).listIds()).not.toContain('notes');
   });
 });
 
@@ -180,11 +196,33 @@ describe('the applet tool cannot author authority', () => {
     expect(parsed.success).toBe(false);
   });
 
-  it('has no delete action', async () => {
+  /**
+   * `delete` is the one action a model may take that destroys user work, so
+   * the guard is not that it is absent (#456 added it) but that it cannot run
+   * unasked. `medium` would not prompt under the default `confirmMode:
+   * 'auto'`, and a static `risk: 'high'` would prompt on `list` too.
+   */
+  it('resolves delete to high risk, and the looking actions to low', async () => {
     const { createAppletTool } = await import('./applet.js');
-    const tool = createAppletTool();
-    const parsed = tool.parameters.safeParse({ action: 'delete', id: 'notes' });
-    expect(parsed.success).toBe(false);
+    const { riskFromMeta } = await import('../risk.js');
+    const { readToolMeta } = await import('../framework/tools/adapter.js');
+    const meta = readToolMeta(createAppletTool());
+    expect(riskFromMeta(meta, { action: 'delete', id: 'x' })).toBe('high');
+    expect(riskFromMeta(meta, { action: 'list' })).toBe('low');
+    expect(riskFromMeta(meta, { action: 'read', id: 'x' })).toBe('low');
+    // Authoring stays where it was: worth a prompt in strict mode, not in auto.
+    expect(riskFromMeta(meta, { action: 'create', id: 'x' })).toBe('medium');
+  });
+
+  it('stays unreachable from an applet action, which is the second layer', async () => {
+    // The risk tier is what makes a REPL delete ask first. This is what stops
+    // an applet's own button reaching the tool at all: `directInvocable` is
+    // the opt-in a manifest needs to name a tool, and `applet` does not
+    // declare it. Both layers, because the first one has a headless hole by
+    // design — nobody is there to confirm.
+    const { createAppletTool } = await import('./applet.js');
+    const { readToolMeta } = await import('../framework/tools/adapter.js');
+    expect(readToolMeta(createAppletTool())?.directInvocable).toBeUndefined();
   });
 });
 

@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { attachMeta } from '../framework/tools/adapter.js';
+import { attachActionMeta } from '../framework/tools/adapter.js';
 import { capSubagentResult } from './result-cap.js';
 import { AppRegistry } from '../apps/registry.js';
 import type { ToolOptions } from './types.js';
@@ -107,8 +107,19 @@ const PERMISSION_REQUEST = z
   })
   .strict();
 
+/** Actions that only look. Drives the read-only block gate and the risk tier. */
+const APPLET_READ_ACTIONS: ReadonlySet<string> = new Set(['read', 'list']);
+
+/** Actions that must be confirmed even under `confirmMode: 'auto'` (#456). */
+const APPLET_HIGH_RISK_ACTIONS: ReadonlySet<string> = new Set(['delete']);
+
 const PARAMETERS = z.object({
-  action: z.enum(['create', 'update', 'read', 'list']).describe('The operation to perform'),
+  action: z
+    .enum(['create', 'update', 'read', 'list', 'delete'])
+    .describe(
+      'The operation to perform. `delete` removes the applet and everything keyed to it, ' +
+        'and asks the user first.',
+    ),
   id: z.string().optional().describe('Applet id (kebab-case). Required for create/update/read.'),
   name: z.string().max(80).optional().describe('Display name (required for create)'),
   description: z
@@ -181,12 +192,12 @@ export function createAppletTool(
   requestConsent?: ToolOptions['requestPermissionConsent'],
 ) {
   const store = registry ?? new AppRegistry();
-  return attachMeta(
+  return attachActionMeta(
     tool({
       description:
         'Create or edit an applet: a small local web app served on its own origin, whose ' +
         'buttons run Bernard actions. Actions are tool-less and read-only when created — the ' +
-        'user grants tools with `bernard app-grant`. Deleting an applet is CLI-only.',
+        'user grants tools with `bernard app-grant`. Deleting one asks the user first.',
       parameters: PARAMETERS,
       execute: async (args: AppletArgs): Promise<string> => {
         try {
@@ -203,11 +214,13 @@ export function createAppletTool(
     }),
     {
       name: 'applet',
-      kind: 'write',
-      deterministic: false,
-      sideEffect: 'local',
-      cacheable: false,
-      actionScoped: true,
+      // `read`/`list` stop being `medium` — they had no predicate before, so
+      // they carried the same tier as `create`.
+      readActions: APPLET_READ_ACTIONS,
+      // `delete` sweeps six stores including any bound agent. `medium` never
+      // prompts under the default `confirmMode: 'auto'`, and a static
+      // `risk: 'high'` would prompt on `list` too — see `ToolMeta.riskForCall`.
+      highRiskActions: APPLET_HIGH_RISK_ACTIONS,
     },
   );
 }
@@ -305,14 +318,35 @@ async function run(
         formatWarnings(dispatch.warnings)
       );
     }
+    case 'delete': {
+      const id = need(args.id, 'id', 'delete');
+      // The existing sweep, not a second one: `deleteApplet` orders six stores
+      // deliberately (the manifest first, because that is what stops the host
+      // serving it and therefore what releases the SQLite handle) and is
+      // covered by a no-orphans test. This is a new door onto it.
+      const { deleteApplet } = await import('../apps/lifecycle.js');
+      const result = deleteApplet(id);
+      if (!result.deleted) return `Error: no such applet "${id}".`;
+      // Said in full because "deleted it" is wrong in both directions: it
+      // understates the sweep (the data store and any bound agent go too) and
+      // overstates it (the port assignment is kept, so re-adding this id
+      // restores the same origin and the browser storage still held there).
+      const bound =
+        result.boundSpecialists.length > 0
+          ? ` Also removed ${result.boundSpecialists.length} specialist(s) bound to it: ` +
+            `${result.boundSpecialists.join(', ')} — they were reachable only through this applet.`
+          : '';
+      return (
+        `Deleted applet "${id}" — its page, data store, workspace, tool grants and ` +
+        `external-access grants are gone.${bound} Its port assignment is kept, so re-creating ` +
+        'this id restores the same origin.'
+      );
+    }
     default:
       // Unreachable through the AI SDK, which parses against the enum first —
       // but a direct `execute` would otherwise return `undefined`, which
       // `detectResultFailure` reads as a SUCCESS with no content.
-      return (
-        `Error: unknown action "${String(args.action)}". Use create, update, read or list. ` +
-        'Deleting an applet is `bernard app delete`, not this tool.'
-      );
+      return `Error: unknown action "${String(args.action)}". Use create, update, read, list or delete.`;
   }
 }
 
