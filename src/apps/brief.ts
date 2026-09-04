@@ -24,6 +24,8 @@
  * it did not check; this is the authoring-side counterpart.
  */
 
+import { plural } from '../text.js';
+
 /** The twelve things worth knowing before building, from #473's research. */
 export const INTENT_FIELDS = [
   'who',
@@ -65,10 +67,8 @@ export interface BriefNote {
 }
 
 export interface AppletBrief {
-  appId: string;
   intent: Partial<Record<IntentField, string>>;
   notes: BriefNote[];
-  updatedAt: string;
 }
 
 /**
@@ -85,6 +85,15 @@ export interface AppletBrief {
  * consume the whole budget on its own.
  */
 export const MAX_INTENT_FIELD_CHARS = 1_000;
+/**
+ * Notes kept on disk.
+ *
+ * `MAX_BRIEF_CHARS` bounds only what is RENDERED — about fifty notes at the
+ * default budget — so without this the file grows without limit while every
+ * note past the fiftieth is read, re-serialised and then always dropped.
+ * Generous relative to the render so the bound is invisible in practice.
+ */
+export const MAX_NOTES = 200;
 export const MAX_NOTE_CHARS = 1_000;
 export const MAX_BRIEF_CHARS = (() => {
   const raw = Number(process.env.BERNARD_MAX_BRIEF_CHARS);
@@ -92,13 +101,8 @@ export const MAX_BRIEF_CHARS = (() => {
 })();
 
 /** An empty brief, so a missing file and a blank one read identically. */
-export function emptyBrief(appId: string): AppletBrief {
-  return { appId, intent: {}, notes: [], updatedAt: new Date().toISOString() };
-}
-
-/** True when nothing has been recorded — used to decide whether to render at all. */
-export function isBriefEmpty(brief: AppletBrief): boolean {
-  return brief.notes.length === 0 && Object.keys(brief.intent).length === 0;
+export function emptyBrief(): AppletBrief {
+  return { intent: {}, notes: [] };
 }
 
 /** Drops unknown keys and caps each field. Intent comes from a model. */
@@ -141,8 +145,11 @@ export function renderBrief(brief: AppletBrief, budget = MAX_BRIEF_CHARS): strin
   let used = lines.join('\n').length;
   const kept: string[] = [];
   let dropped = 0;
-  // Newest first, so what survives a tight budget is the most recent thinking.
-  for (const note of [...brief.notes].reverse()) {
+  // Walked newest-first, so what survives a tight budget is the most recent
+  // thinking; `continue` rather than `break`, so a small old note can still
+  // land after a large new one was dropped.
+  for (let i = brief.notes.length - 1; i >= 0; i--) {
+    const note = brief.notes[i];
     const block = `- ${note.timestamp}: ${note.text}`;
     if (used + block.length > budget) {
       dropped++;
@@ -151,14 +158,15 @@ export function renderBrief(brief: AppletBrief, budget = MAX_BRIEF_CHARS): strin
     kept.push(block);
     used += block.length;
   }
+  // Rendered oldest-first, so it reads as a history.
   if (kept.length > 0) lines.push('', '## Decisions and notes', ...kept.reverse());
   if (dropped > 0) {
     // Visible, so the gap is never silent — the model can ask for the rest.
     lines.push(
       '',
       '### (truncated)',
-      `${dropped} older note${dropped === 1 ? ' was' : 's were'} omitted to stay within ` +
-        'the brief budget.',
+      `${dropped} older ${plural(dropped, 'note was', 'notes were')} omitted to stay ` +
+        'within the brief budget.',
     );
   }
   return lines.join('\n');

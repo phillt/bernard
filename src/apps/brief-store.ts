@@ -4,10 +4,12 @@ import { APPLET_BRIEFS_DIR } from '../paths.js';
 import { atomicWriteFileSync } from '../fs-utils.js';
 import { APP_ID_RE } from './manifest.js';
 import {
+  MAX_NOTES,
   MAX_NOTE_CHARS,
   emptyBrief,
   normalizeIntent,
   type AppletBrief,
+  type BriefNote,
   type IntentField,
 } from './brief.js';
 
@@ -38,10 +40,6 @@ export class AppletBriefStore {
     fs.mkdirSync(APPLET_BRIEFS_DIR, { recursive: true, mode: 0o700 });
   }
 
-  static get briefsDir(): string {
-    return APPLET_BRIEFS_DIR;
-  }
-
   private briefPath(appId: string): string {
     // Refuse, do not repair: `APP_ID_RE` is the same expression the manifest
     // validates against, so an id this rejects could never name a real applet.
@@ -54,25 +52,24 @@ export class AppletBriefStore {
     const file = this.briefPath(appId);
     try {
       const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<AppletBrief>;
+      // Re-normalized on the way out even though this store wrote it: the file
+      // is plain JSON under `DATA_DIR` and hand-editable between runs, the same
+      // time-of-check gap `registry.get` refuses to leave open.
       return {
-        appId,
         intent: normalizeIntent(parsed.intent as Partial<Record<string, string>>),
         notes: Array.isArray(parsed.notes)
-          ? parsed.notes
-              .filter(
-                (n): n is { timestamp: string; text: string } =>
-                  !!n && typeof n.text === 'string' && typeof n.timestamp === 'string',
-              )
-              .map((n) => ({ timestamp: n.timestamp, text: n.text }))
+          ? parsed.notes.filter(
+              (n): n is BriefNote =>
+                !!n && typeof n.text === 'string' && typeof n.timestamp === 'string',
+            )
           : [],
-        updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
       };
     } catch (err) {
       // A missing brief is the normal case for every applet built before this
       // existed, and a corrupt one must not take an edit down — the brief is
       // context, not authority.
       if ((err as NodeJS.ErrnoException).code === 'ENOENT' || err instanceof SyntaxError) {
-        return emptyBrief(appId);
+        return emptyBrief();
       }
       throw err;
     }
@@ -92,25 +89,27 @@ export class AppletBriefStore {
     now = new Date(),
   ): AppletBrief {
     const current = this.read(appId);
-    const next: AppletBrief = {
-      appId,
-      intent: { ...current.intent },
-      notes: [...current.notes],
-      updatedAt: now.toISOString(),
-    };
+    const next: AppletBrief = { intent: { ...current.intent }, notes: [...current.notes] };
 
     if (update.intent) {
-      for (const [key, value] of Object.entries(update.intent)) {
+      // One pass, not one per key: the caller's key set is what distinguishes
+      // "not mentioned" (absent) from "clear this" (present and empty), and
+      // `normalizeIntent` drops the latter.
+      const cleaned = normalizeIntent(update.intent);
+      for (const key of Object.keys(update.intent)) {
         const field = key as IntentField;
-        const cleaned = normalizeIntent({ [key]: value })[field];
-        if (cleaned === undefined) delete next.intent[field];
-        else next.intent[field] = cleaned;
+        if (cleaned[field] === undefined) delete next.intent[field];
+        else next.intent[field] = cleaned[field];
       }
     }
 
     const note = update.note?.trim();
     if (note) {
       next.notes.push({ timestamp: now.toISOString(), text: note.slice(0, MAX_NOTE_CHARS) });
+      // Bounded on DISK too, not only in the render. `renderBrief` surfaces
+      // about fifty notes at the default budget, so beyond this every extra
+      // note is bytes that are read, re-serialised and then always dropped.
+      if (next.notes.length > MAX_NOTES) next.notes = next.notes.slice(-MAX_NOTES);
     }
 
     atomicWriteFileSync(this.briefPath(appId), JSON.stringify(next, null, 2) + '\n', {

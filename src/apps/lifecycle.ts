@@ -14,7 +14,7 @@ import { AppRegistry } from './registry.js';
  * Its own module rather than a method on `AppRegistry`, which would otherwise
  * acquire edges to the specialist store, profile settings and SQLite to do a
  * job that is not registry work. The registry owns the manifest and the page;
- * this owns the fact that an applet is spread over six places.
+ * this owns the fact that an applet is spread over seven places.
  */
 
 export interface DeleteResult {

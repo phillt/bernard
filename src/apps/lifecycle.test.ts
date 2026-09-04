@@ -131,9 +131,7 @@ describe('deleteApplet', () => {
     expect(m.loadBlocked('notes')).toEqual([]);
     // The brief is what the user told Bernard about their own workflow, so
     // leaving it behind would hand it to whatever next claims this id.
-    expect(
-      fs.existsSync(path.join(m.brief.AppletBriefStore.briefsDir, 'notes.json')),
-    ).toBe(false);
+    expect(fs.existsSync(path.join(m.paths.APPLET_BRIEFS_DIR, 'notes.json'))).toBe(false);
     expect(specialists.get('notes-agent')).toBeUndefined();
   });
 

@@ -2,21 +2,16 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { useTempHome } from '../__tests__/temp-home.js';
+import { APPLET_BRIEFS_DIR } from '../paths.js';
 import { AppletBriefStore } from './brief-store.js';
-import { MAX_NOTE_CHARS } from './brief.js';
+import { MAX_NOTES, MAX_NOTE_CHARS } from './brief.js';
 
 describe('AppletBriefStore', () => {
   useTempHome('bernard-applet-brief');
 
   it('returns an empty brief for an applet that has none', () => {
     // The normal case for every applet built before this existed.
-    const brief = new AppletBriefStore().read('nothing-here');
-    expect(brief).toEqual({
-      appId: 'nothing-here',
-      intent: {},
-      notes: [],
-      updatedAt: expect.any(String),
-    });
+    expect(new AppletBriefStore().read('nothing-here')).toEqual({ intent: {}, notes: [] });
   });
 
   it('merges intent across writes rather than replacing it', () => {
@@ -77,7 +72,7 @@ describe('AppletBriefStore', () => {
   it('survives a corrupt file — a brief is context, not authority', () => {
     const store = new AppletBriefStore();
     store.write('corrupt', { note: 'before' });
-    fs.writeFileSync(path.join(AppletBriefStore.briefsDir, 'corrupt.json'), '{not json');
+    fs.writeFileSync(path.join(APPLET_BRIEFS_DIR, 'corrupt.json'), '{not json');
 
     expect(() => store.read('corrupt')).not.toThrow();
     expect(store.read('corrupt').notes).toEqual([]);
@@ -86,7 +81,7 @@ describe('AppletBriefStore', () => {
   it('drops junk entries from a hand-edited file', () => {
     const store = new AppletBriefStore();
     store.write('handmade', { note: 'real' });
-    const file = path.join(AppletBriefStore.briefsDir, 'handmade.json');
+    const file = path.join(APPLET_BRIEFS_DIR, 'handmade.json');
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown>;
     parsed.notes = [...(parsed.notes as unknown[]), { text: 'no timestamp' }, null];
     parsed.intent = { goal: 'kept', bogus: 'dropped' };
@@ -104,13 +99,27 @@ describe('AppletBriefStore', () => {
     store.write('sweep-me', { note: 'x' });
     expect(store.clear('sweep-me')).toBe(true);
     expect(store.clear('sweep-me')).toBe(false);
-    expect(fs.existsSync(path.join(AppletBriefStore.briefsDir, 'sweep-me.json'))).toBe(false);
+    expect(fs.existsSync(path.join(APPLET_BRIEFS_DIR, 'sweep-me.json'))).toBe(false);
+  });
+
+  it('bounds the notes on disk, not only in the render', () => {
+    // `MAX_BRIEF_CHARS` caps what is rendered; without this the file grows
+    // without limit while everything past ~50 notes is read, re-serialised and
+    // then always dropped.
+    const store = new AppletBriefStore();
+    for (let i = 0; i < MAX_NOTES + 20; i++) store.write('many', { note: `note ${i}` });
+
+    const notes = store.read('many').notes;
+    expect(notes).toHaveLength(MAX_NOTES);
+    // Oldest dropped, matching the render's own rule.
+    expect(notes[notes.length - 1].text).toBe(`note ${MAX_NOTES + 19}`);
+    expect(notes.some((n) => n.text === 'note 0')).toBe(false);
   });
 
   it('writes the file 0600', () => {
     const store = new AppletBriefStore();
     store.write('private', { note: 'what the user told Bernard' });
-    const mode = fs.statSync(path.join(AppletBriefStore.briefsDir, 'private.json')).mode;
+    const mode = fs.statSync(path.join(APPLET_BRIEFS_DIR, 'private.json')).mode;
     expect(mode & 0o777).toBe(0o600);
   });
 });

@@ -1043,16 +1043,16 @@ describe('the style action', () => {
   });
 });
 
-/** The design brief (#463): intent on create, a note on every update. */
+/**
+ * The design brief (#463): intent on create, a note on every update.
+ *
+ * `loadWithStyler` already owns the config mock and explains why it is needed
+ * (`loadConfig` throws under a temp home with no provider key); this adds only
+ * the store the assertions read back through.
+ */
 async function loadWithBrief() {
-  vi.resetModules();
-  vi.doMock('../config.js', () => ({
-    loadConfig: () => ({ autoStyleApplets: false, autoOpenApplets: false }),
-  }));
-  const { createAppletTool } = await import('./applet.js');
-  const { AppRegistry } = await import('../apps/registry.js');
-  const brief = await import('../apps/brief-store.js');
-  return { tool: createAppletTool(new AppRegistry({ seed: false })), AppRegistry, brief };
+  const loaded = await loadWithStyler(undefined, { autoStyleApplets: false });
+  return { ...loaded, brief: await import('../apps/brief-store.js') };
 }
 
 describe('the design brief', () => {

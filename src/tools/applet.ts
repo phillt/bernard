@@ -9,7 +9,7 @@ import { SpecialistStore, type Specialist } from '../specialists.js';
 import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-tool.js';
 import type { AppletStyler, StyleOutcome } from './applet-styling.js';
 import { AppletBriefStore } from '../apps/brief-store.js';
-import { INTENT_FIELDS, INTENT_FIELD_LABELS, isBriefEmpty, renderBrief } from '../apps/brief.js';
+import { INTENT_FIELDS, INTENT_FIELD_LABELS, MAX_NOTE_CHARS, renderBrief } from '../apps/brief.js';
 import { uncoveredTools, uncoveredToolsMessage } from '../apps/invocation.js';
 import {
   formatWarnings,
@@ -125,7 +125,7 @@ const PARAMETERS = z.object({
         'including why one failed. `delete` removes the applet and everything keyed to it, ' +
         'and asks the user first. `style` hands an existing applet to the design pass — ' +
         'a new applet gets that automatically, so reach for this to restyle one. ' +
-        '`brief` reads or edits the applet\'s design brief — what it is for and what has ' +
+        "`brief` reads or edits the applet's design brief — what it is for and what has " +
         'been decided; `read` already returns it, so reach for `brief` to CHANGE it.',
     ),
   id: z.string().optional().describe('Applet id (kebab-case). Required for create/update/read.'),
@@ -133,7 +133,7 @@ const PARAMETERS = z.object({
     .record(z.enum(INTENT_FIELDS), z.string())
     .optional()
     .describe(
-      'The design brief\'s intent model — what the applet is FOR, kept separately from the ' +
+      "The design brief's intent model — what the applet is FOR, kept separately from the " +
         'page so it can be revised without rebuilding. Fields: ' +
         INTENT_FIELDS.map((f) => `\`${f}\` (${INTENT_FIELD_LABELS[f].toLowerCase()})`).join(', ') +
         '. Supply what you actually know; an empty string clears a field. Set on `create` and ' +
@@ -141,7 +141,7 @@ const PARAMETERS = z.object({
     ),
   note: z
     .string()
-    .max(1000)
+    .max(MAX_NOTE_CHARS)
     .optional()
     .describe(
       'One line for the design brief: what changed and why, or what was tried and rejected. ' +
@@ -271,10 +271,9 @@ export function createAppletTool(
 /**
  * The brief store, built on first use.
  *
- * Lazy because `createAppletTool` runs twice per main-agent turn (`createTools`
- * builds one and `main.ts` shadows it), and the constructor does a `mkdirSync`
- * — cheap, but not free, and not needed by the four actions that never touch a
- * brief.
+ * Lazy so that importing this module does not create `APPLET_BRIEFS_DIR` as a
+ * side effect — the constructor's `mkdirSync` is 4.6 us and idempotent, so the
+ * saving is the directory, not the microseconds.
  */
 let briefStoreInstance: AppletBriefStore | undefined;
 function briefStore(): AppletBriefStore {
@@ -307,10 +306,8 @@ async function run(
       // The brief is the third thing, and `read` is the only place it is
       // loaded: someone calling this is about to edit, which is exactly when
       // knowing what was already tried is worth its tokens (#463).
-      const brief = briefStore().read(id);
-      const briefBlock = isBriefEmpty(brief)
-        ? ''
-        : `\n\n--- design brief ---\n${renderBrief(brief)}`;
+      const rendered = renderBrief(briefStore().read(id));
+      const briefBlock = rendered ? `\n\n--- design brief ---\n${rendered}` : '';
       return (
         `${JSON.stringify(app.manifest, null, 2)}\n\n--- index.html ---\n${shown}` + briefBlock
       );
@@ -412,7 +409,7 @@ async function run(
       }
       if (args.page !== undefined) files['index.html'] = args.page;
       const updated = store.update(id, manifest, files);
-      briefStore().write(id, { ...(args.intent ? { intent: args.intent } : {}), note: args.note });
+      briefStore().write(id, { intent: args.intent, note: args.note });
       const consent = await askForPermissions(id, updated.name, manifest, requestConsent);
       return (
         `Applet "${updated.name}" (${updated.id}) updated.` +
@@ -457,18 +454,16 @@ async function run(
     }
     case 'brief': {
       const id = need(args.id, 'id', 'brief');
-      const app = store.get(id);
-      if (!app.ok) return `Error: ${app.failure.message}`;
-      if (!args.intent && args.note === undefined) {
-        const current = briefStore().read(id);
-        return isBriefEmpty(current)
-          ? `Applet "${id}" has no design brief yet. Set one with \`intent\`.`
-          : renderBrief(current);
+      // `exists`, not `get`: this arm never reads the manifest, and `get` runs
+      // a full zod parse to produce a value that was thrown away.
+      if (!store.exists(id)) return `Error: no such applet "${id}".`;
+      if (args.intent === undefined && args.note === undefined) {
+        return (
+          renderBrief(briefStore().read(id)) ||
+          `Applet "${id}" has no design brief yet. Set one with \`intent\`.`
+        );
       }
-      const written = briefStore().write(id, {
-        ...(args.intent ? { intent: args.intent } : {}),
-        ...(args.note ? { note: args.note } : {}),
-      });
+      const written = briefStore().write(id, { intent: args.intent, note: args.note });
       const fields = Object.keys(written.intent).length;
       return `Updated the brief for "${id}" — ${fields} intent field(s), ${written.notes.length} note(s).`;
     }
@@ -703,15 +698,14 @@ async function openedNote(appId: string): Promise<string> {
 
 /** The applet, as the design pass needs to see it. */
 function targetFor(manifest: AppManifest) {
-  const brief = briefStore().read(manifest.id);
+  // No brief here on purpose: the styler reaches it through `applet read`,
+  // which is the one carrier. Loading it here as well put the same text in the
+  // same context twice.
   return {
     id: manifest.id,
     name: manifest.name,
     description: manifest.description ?? '',
     actions: Object.keys(manifest.actions),
-    // The first consumer that makes the brief pay for itself: a page composed
-    // from where and when it is used beats one composed from a name.
-    ...(isBriefEmpty(brief) ? {} : { intent: renderBrief(brief) }),
   };
 }
 

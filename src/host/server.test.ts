@@ -155,12 +155,12 @@ describe('applet server', () => {
     new AppletBriefStore().write('demo', { note: 'a private note about the user' });
     // The brief must actually exist, or every 404 below is a 404 about
     // nothing and the whole test passes vacuously.
-    const briefFile = path.join(AppletBriefStore.briefsDir, 'demo.json');
+    const briefFile = path.join(m.APPLET_BRIEFS_DIR, 'demo.json');
     expect(fs.readFileSync(briefFile, 'utf-8')).toContain('a private note about the user');
     // Structural, not derived: the briefs directory is not under the served
     // root at all, so no containment rule has to hold for this to be safe.
-    expect(AppletBriefStore.briefsDir.startsWith(m.appletAssetDir('demo'))).toBe(false);
-    expect(AppletBriefStore.briefsDir.startsWith(m.APPS_DIR)).toBe(false);
+    expect(m.APPLET_BRIEFS_DIR.startsWith(m.appletAssetDir('demo'))).toBe(false);
+    expect(m.APPLET_BRIEFS_DIR.startsWith(m.APPS_DIR)).toBe(false);
     const { app } = await start(m);
 
     const escapes = [

@@ -59,17 +59,6 @@ export interface StyleTarget {
   name: string;
   description: string;
   actions: string[];
-  /**
-   * The applet's intent, already rendered (#463).
-   *
-   * The research behind the brief is explicit that UI should be derived from
-   * real behaviour and context rather than generic chrome — its own example is
-   * that someone working with wet hands needs large controls. A styler given
-   * only a name and three action names cannot make that call; one told where
-   * and when the applet is used can. Pre-rendered rather than the raw record so
-   * this module keeps no opinion about the brief's shape.
-   */
-  intent?: string;
 }
 
 /**
@@ -106,9 +95,12 @@ export function buildStyleBrief(target: StyleTarget): string {
     '',
     `What it is for: ${target.description}`,
     `Actions it declares: ${actions}`,
-    ...(target.intent ? ['', 'What is known about how it will be used:', target.intent] : []),
     '',
-    'Read the current page first',
+    // The read is what carries the applet's design brief — what it is for and
+    // what has been tried (#463). Deliberately not repeated in this prompt:
+    // `applet read` returns it, and putting it here too would pay for the same
+    // text twice in one context.
+    'Read the current page and its design brief first',
     `(\`applet\` with \`{"action":"read","id":"${target.id}"}\`), then write the styled`,
     `page with \`applet\` and \`{"action":"update","id":"${target.id}","page":"<the full HTML>",` +
       `"note":"<one line on what you changed>"}\`. The note is required and lands in the`,

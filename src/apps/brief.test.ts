@@ -4,14 +4,13 @@ import {
   INTENT_FIELD_LABELS,
   MAX_INTENT_FIELD_CHARS,
   emptyBrief,
-  isBriefEmpty,
   normalizeIntent,
   renderBrief,
   type AppletBrief,
 } from './brief.js';
 
 function briefWith(notes: { timestamp: string; text: string }[]): AppletBrief {
-  return { appId: 'a', intent: {}, notes, updatedAt: '' };
+  return { intent: {}, notes };
 }
 
 describe('the intent fields', () => {
@@ -49,17 +48,16 @@ describe('normalizeIntent', () => {
 });
 
 describe('renderBrief', () => {
-  it('renders nothing for an empty brief', () => {
-    expect(renderBrief(emptyBrief('a'))).toBe('');
-    expect(isBriefEmpty(emptyBrief('a'))).toBe(true);
+  it('renders nothing for an empty brief — the empty string IS the predicate', () => {
+    // Every call site pairs the render with "is there one?", so a separate
+    // `isBriefEmpty` was a second way to ask the same question.
+    expect(renderBrief(emptyBrief())).toBe('');
   });
 
   it('renders intent with its labels, in field order', () => {
     const out = renderBrief({
-      appId: 'a',
       intent: { friction: 'copying by hand', goal: 'send shifts' },
       notes: [],
-      updatedAt: '',
     });
     expect(out).toContain(INTENT_FIELD_LABELS.goal);
     // Field order, not object-key order — the object above is deliberately
@@ -91,10 +89,8 @@ describe('renderBrief', () => {
     // Losing it to make room for note #40 inverts the priority.
     const out = renderBrief(
       {
-        appId: 'a',
         intent: { goal: 'the whole point' },
         notes: Array.from({ length: 30 }, (_, i) => ({ timestamp: `t${i}`, text: 'y'.repeat(60) })),
-        updatedAt: '',
       },
       300,
     );
