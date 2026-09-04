@@ -6,6 +6,7 @@ import { CapabilityTable } from '../apps/capabilities.js';
 import { AppRegistry } from '../apps/registry.js';
 import { checkRequest } from './guard.js';
 import { securityHeaders, originFor } from './csp.js';
+import { loadAppCspGrant } from '../apps/app-csp-grants.js';
 import { resolveAsset } from './assets.js';
 import { TOKENS_PATH, tokensStylesheet } from './tokens.js';
 import { SDK_PATH, appletSdkScript } from './sdk.js';
@@ -67,22 +68,27 @@ export interface RunningApplet {
   close: () => Promise<void>;
 }
 
-function send(
+/**
+ * The one place a response header is written.
+ *
+ * `base` is the per-request security header set, resolved once by the handler
+ * so an applet's own CSP grant (#467) reaches every response — including the
+ * guard's refusal and the catch-all 500, which is what keeps one policy per
+ * applet rather than two that have to be kept in agreement.
+ */
+function respond(
   res: http.ServerResponse,
+  base: Record<string, string>,
   status: number,
   body: string | Buffer,
   headers: Record<string, string> = {},
 ): void {
   res.writeHead(status, {
-    ...securityHeaders(),
+    ...base,
     'Content-Length': Buffer.byteLength(body),
     ...headers,
   });
   res.end(body);
-}
-
-function sendJson(res: http.ServerResponse, status: number, value: unknown): void {
-  send(res, status, JSON.stringify(value), { 'Content-Type': 'application/json; charset=utf-8' });
 }
 
 /** Reads a bounded JSON body. Rejects rather than buffering without limit. */
@@ -123,6 +129,39 @@ function createHandler(
   const registry = new AppRegistry();
 
   return (req, res) => {
+    /**
+     * Resolved once per request, never cached — the same rule the manifest
+     * read below follows (#420 R6): the grant is user-editable between
+     * requests, so a cached value would re-open the time-of-check gap that
+     * reading on demand exists to close. It is what makes a revoke apply to
+     * the NEXT request with no restart.
+     *
+     * Resolved BEFORE the guard deliberately. The grant depends only on
+     * `appId`, which is this server's own closure and never request data, so
+     * there is no ordering hazard — and a refusal carrying a different policy
+     * than a success would be two things to keep true for no gain.
+     *
+     * Wrapped, because a corrupt or unreadable profile must degrade to the
+     * ungranted header rather than take the applet down: the store already
+     * drops what it cannot parse, and this covers the file itself.
+     */
+    let base: Record<string, string>;
+    try {
+      base = securityHeaders(loadAppCspGrant(appId));
+    } catch (err) {
+      log(
+        `csp grant unreadable, serving ungranted: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      base = securityHeaders();
+    }
+    const send = (
+      status: number,
+      body: string | Buffer,
+      headers: Record<string, string> = {},
+    ): void => respond(res, base, status, body, headers);
+    const sendJson = (status: number, value: unknown): void =>
+      send(status, JSON.stringify(value), { 'Content-Type': 'application/json; charset=utf-8' });
+
     void (async () => {
       const port = getPort();
       const verdict = checkRequest(
@@ -134,14 +173,14 @@ function createHandler(
       );
       if (!verdict.ok) {
         log(`refused ${req.method} ${req.url} (${verdict.reason})`);
-        send(res, verdict.status, verdict.reason);
+        send(verdict.status, verdict.reason);
         return;
       }
 
       const url = (req.url ?? '/').split('?')[0];
 
       if (url === HEALTH_PATH) {
-        sendJson(res, 200, { ok: true, appId, origin: originFor(port) });
+        sendJson(200, { ok: true, appId, origin: originFor(port) });
         return;
       }
 
@@ -156,7 +195,7 @@ function createHandler(
       if (url === BOOTSTRAP_PATH) {
         const app = registry.get(appId);
         if (!app.ok) {
-          sendJson(res, 500, { ok: false, error: app.failure.message });
+          sendJson(500, { ok: false, error: app.failure.message });
           return;
         }
         const handles: Record<string, string> = {};
@@ -167,25 +206,25 @@ function createHandler(
           // token. See `CapabilityTable.handleFor`.
           handles[action] = capabilities.handleFor(appId, action, sessionId);
         }
-        sendJson(res, 200, { schemaVersion: 1, appId, token, handles });
+        sendJson(200, { schemaVersion: 1, appId, token, handles });
         return;
       }
 
       if (url === INVOKE_PATH) {
         if (req.method !== 'POST') {
-          send(res, 405, 'Method Not Allowed', { Allow: 'POST' });
+          send(405, 'Method Not Allowed', { Allow: 'POST' });
           return;
         }
         let body: unknown;
         try {
           body = await readJsonBody(req);
         } catch {
-          sendJson(res, 400, { ok: false, error: { code: 'invalid_args', message: 'Bad body.' } });
+          sendJson(400, { ok: false, error: { code: 'invalid_args', message: 'Bad body.' } });
           return;
         }
         const { handle, args } = (body ?? {}) as { handle?: unknown; args?: unknown };
         if (typeof handle !== 'string') {
-          sendJson(res, 400, {
+          sendJson(400, {
             ok: false,
             error: { code: 'invalid_args', message: 'A capability handle is required.' },
           });
@@ -198,7 +237,7 @@ function createHandler(
         const resolved = capabilities.redeem(handle, { appId, sessionId });
         if (!resolved.ok) {
           log(`capability refused for ${appId} (${resolved.reason})`);
-          sendJson(res, 403, {
+          sendJson(403, {
             ok: false,
             error: { code: 'invalid_args', message: 'Capability refused.' },
           });
@@ -215,7 +254,7 @@ function createHandler(
           log,
           capabilityId: record.id,
         });
-        sendJson(res, result.ok ? 200 : 500, result);
+        sendJson(result.ok ? 200 : 500, result);
         return;
       }
 
@@ -240,10 +279,10 @@ function createHandler(
       if (url === MANIFEST_PATH) {
         const app = registry.get(appId);
         if (!app.ok) {
-          sendJson(res, 500, { ok: false, error: app.failure.message });
+          sendJson(500, { ok: false, error: app.failure.message });
           return;
         }
-        send(res, 200, JSON.stringify(webManifest(app.manifest, port), null, 2), {
+        send(200, JSON.stringify(webManifest(app.manifest, port), null, 2), {
           'Content-Type': 'application/manifest+json; charset=utf-8',
         });
         return;
@@ -252,7 +291,7 @@ function createHandler(
       if (url === ICON_PATH) {
         const app = registry.get(appId);
         const label = app.ok ? app.manifest.name : appId;
-        send(res, 200, appletIcon(label), { 'Content-Type': 'image/svg+xml; charset=utf-8' });
+        send(200, appletIcon(label), { 'Content-Type': 'image/svg+xml; charset=utf-8' });
         return;
       }
 
@@ -262,49 +301,49 @@ function createHandler(
         // It has to be exactly a JS MIME: with `nosniff` on every response a
         // wrong one means the browser silently declines to execute, which is
         // the same invisible-failure class this whole module exists to remove.
-        send(res, 200, appletSdkScript(), { 'Content-Type': 'text/javascript; charset=utf-8' });
+        send(200, appletSdkScript(), { 'Content-Type': 'text/javascript; charset=utf-8' });
         return;
       }
 
       if (url === TOKENS_PATH) {
-        send(res, 200, tokensStylesheet(), { 'Content-Type': 'text/css; charset=utf-8' });
+        send(200, tokensStylesheet(), { 'Content-Type': 'text/css; charset=utf-8' });
         return;
       }
 
       if (url === STORE_PATH) {
         if (req.method !== 'POST') {
-          send(res, 405, 'Method Not Allowed', { Allow: 'POST' });
+          send(405, 'Method Not Allowed', { Allow: 'POST' });
           return;
         }
         let body: unknown;
         try {
           body = await readJsonBody(req);
         } catch {
-          sendJson(res, 400, { ok: false, error: 'Bad body.' });
+          sendJson(400, { ok: false, error: 'Bad body.' });
           return;
         }
         // `appId` comes from THIS server's own closure, never from the body.
         // A store addressed by a request parameter would let any page that can
         // reach this port read every applet's data — the same
         // designation-from-the-caller mistake the invoke route refuses.
-        sendJson(res, 200, handleStoreRequest(appId, body));
+        sendJson(200, handleStoreRequest(appId, body));
         return;
       }
 
       const asset = resolveAsset(assetDir, url);
       if (!asset.ok) {
-        send(res, asset.status, 'Not Found');
+        send(asset.status, 'Not Found');
         return;
       }
       if (req.method === 'HEAD') {
-        send(res, 200, '', { 'Content-Type': asset.contentType });
+        send(200, '', { 'Content-Type': asset.contentType });
         return;
       }
-      send(res, 200, fs.readFileSync(asset.absPath), { 'Content-Type': asset.contentType });
+      send(200, fs.readFileSync(asset.absPath), { 'Content-Type': asset.contentType });
     })().catch((err: unknown) => {
       log(`handler error: ${err instanceof Error ? err.message : String(err)}`);
       try {
-        send(res, 500, 'Internal Server Error');
+        send(500, 'Internal Server Error');
       } catch {
         // response already sent
       }

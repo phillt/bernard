@@ -3,6 +3,7 @@ import { appletDataDir, runWorkspace } from '../paths.js';
 import { SpecialistStore } from '../specialists.js';
 import { closeAppletStore } from './store.js';
 import { saveAppGrants } from './app-grants.js';
+import { saveAppCspGrant } from './app-csp-grants.js';
 import { AppRegistry } from './registry.js';
 
 /**
@@ -59,7 +60,13 @@ export function deleteApplet(appId: string): DeleteResult {
   //    empty one behind for a future app to inherit by id collision.
   saveAppGrants(appId, []);
 
-  // 5. Specialists bound to this app, which are unreachable without it.
+  // 5. Per-app CSP grants (#467). A separate store from the rules above and
+  //    so a separate row: leaving an origin grant behind would hand a
+  //    re-added applet of the same id external access the user granted to a
+  //    different applet.
+  saveAppCspGrant(appId, {});
+
+  // 6. Specialists bound to this app, which are unreachable without it.
   const specialists = new SpecialistStore({ seed: false });
   const boundSpecialists: string[] = [];
   for (const bound of specialists.listBoundTo(appId)) {
