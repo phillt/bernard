@@ -9,6 +9,7 @@ import {
   isSupportedServicePlatform,
   serviceUnit,
   serviceUnitPath,
+  serviceEnvFrom,
   type ServicePlatform,
   type ServiceUnit,
 } from './service.js';
@@ -59,6 +60,13 @@ function resolveServiceTarget(
     nodePath: process.execPath,
     daemonPath: daemonPath(),
     logPath: APPLET_HOST_LOG_FILE,
+    // Captured from the shell doing the install, because that is the only
+    // place these are known: a login service starts from the session
+    // environment, so a `BERNARD_HOME` set in a profile script would otherwise
+    // leave the daemon reading a different `profiles.json` than the CLI writes
+    // — and a grant that is stored, printed back, and still not applied is the
+    // worst shape a permission bug can take.
+    env: serviceEnvFrom(process.env),
   });
   return { platform, unit, target: serviceUnitPath(platform, opts.homeRoot ?? os.homedir(), unit) };
 }

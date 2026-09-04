@@ -8,6 +8,7 @@ import {
   serviceUnitPath,
   isSupportedServicePlatform,
   SERVICE_LABEL,
+  serviceEnvFrom,
 } from './service.js';
 
 const OPTS = {
@@ -124,5 +125,55 @@ describe('install isolation', () => {
     appletHostInstall({ platform: 'freebsd', homeRoot: '/tmp/nope' });
     expect(process.exitCode).toBe(1);
     process.exitCode = before;
+  });
+});
+
+/**
+ * Forwarding the environment (#467 follow-up).
+ *
+ * A login service starts from the session's environment, not the shell that
+ * installed it, so a `BERNARD_HOME` set in a profile script does not reach the
+ * daemon — and it then reads a different `profiles.json` than the CLI writes.
+ * The symptom is the worst shape a permission bug can take: the grant is
+ * stored, printed back, and the applet keeps being blocked.
+ */
+describe('serviceUnit environment', () => {
+  const OPTS = {
+    nodePath: '/usr/bin/node',
+    daemonPath: '/x/dist/host/daemon.js',
+    logPath: '/x.log',
+  };
+
+  it('forwards only the variables that are set', () => {
+    expect(serviceEnvFrom({ BERNARD_HOME: '/tmp/h', PATH: '/usr/bin' })).toEqual({
+      BERNARD_HOME: '/tmp/h',
+    });
+    expect(serviceEnvFrom({})).toEqual({});
+  });
+
+  it('never copies the whole environment into a file on disk', () => {
+    // The unit is written somewhere user-readable, so an allowlist rather than
+    // a copy is what keeps a secret in the environment out of it.
+    const env = serviceEnvFrom({ BERNARD_HOME: '/tmp/h', ANTHROPIC_API_KEY: 'sk-secret' });
+    expect(env).toEqual({ BERNARD_HOME: '/tmp/h' });
+    const unit = serviceUnit('linux', { ...OPTS, env });
+    expect(unit.contents).not.toContain('sk-secret');
+  });
+
+  it('writes it into each platform unit in that platform own spelling', () => {
+    const env = { BERNARD_HOME: '/tmp/h' };
+    expect(serviceUnit('linux', { ...OPTS, env }).contents).toContain(
+      'Environment="BERNARD_HOME=/tmp/h"',
+    );
+    const plist = serviceUnit('darwin', { ...OPTS, env }).contents;
+    expect(plist).toContain('<key>EnvironmentVariables</key>');
+    expect(plist).toContain('<string>/tmp/h</string>');
+    expect(serviceUnit('win32', { ...OPTS, env }).contents).toContain('set "BERNARD_HOME=/tmp/h"');
+  });
+
+  it('emits nothing extra when there is nothing to forward', () => {
+    // The overwhelmingly common case: default XDG paths, nothing set.
+    expect(serviceUnit('linux', OPTS).contents).not.toContain('Environment=');
+    expect(serviceUnit('darwin', OPTS).contents).not.toContain('EnvironmentVariables');
   });
 });
