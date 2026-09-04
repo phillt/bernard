@@ -115,17 +115,18 @@ export function Thread({
       <Static items={staticItems}>
         {(item) => (
           <Box key={item.key} width={itemWidth} flexDirection="column" paddingX={2}>
-            {item.error ? (
-              <ErrorPanel data={item.error} />
-            ) : item.message ? (
-              <MessageBlock
-                message={item.message}
-                rewriteOriginal={item.rewriteOriginal}
-                timing={item.timing}
-                costUsd={item.costUsd}
-                toolDetails={item.toolDetails}
-              />
-            ) : null}
+            <StaticItemView
+              item={item}
+              renderMessage={(it) => (
+                <MessageBlock
+                  message={it.message!}
+                  rewriteOriginal={it.rewriteOriginal}
+                  timing={it.timing}
+                  costUsd={it.costUsd}
+                  toolDetails={it.toolDetails}
+                />
+              )}
+            />
           </Box>
         )}
       </Static>
@@ -431,6 +432,29 @@ function StreamingToolResult({
       {failure && <ToolFailureHint failure={failure} />}
     </Box>
   );
+}
+
+/**
+ * One transcript item, rendered by whichever surface is showing the
+ * transcript.
+ *
+ * Shared because there are TWO: `<Thread>`'s `<Static>` list and
+ * `<TranscriptViewport>`'s windowed column, and which one a user sees is
+ * decided by TTY detection at startup. Each carried its own copy of this
+ * ladder, so adding a variant to one left it invisible in the other — a bug
+ * that would only reproduce for half the users. `MessageBlock` is passed in
+ * rather than imported here so the viewport can hand in its memoized copy.
+ */
+export function StaticItemView({
+  item,
+  renderMessage,
+}: {
+  item: StaticItem;
+  renderMessage: (item: StaticItem) => ReactNode;
+}) {
+  if (item.error) return <ErrorPanel data={item.error} />;
+  if (item.message) return <>{renderMessage(item)}</>;
+  return null;
 }
 
 export function MessageBlock({

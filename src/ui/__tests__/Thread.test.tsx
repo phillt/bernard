@@ -854,3 +854,44 @@ describe('<TranscriptViewport> layout inside a fixed-height frame', () => {
     expect(frame).not.toMatch(/rows \d+–\d+ of \d+/);
   });
 });
+
+/**
+ * The two transcript surfaces must render an item identically (#462).
+ *
+ * `<Thread>`'s `<Static>` list and `<TranscriptViewport>`'s windowed column
+ * each carried their own copy of the `error / message` ladder, and which one a
+ * user sees is decided by TTY detection at startup — so a variant added to one
+ * and not the other is a bug that reproduces for half the users and is
+ * invisible to whoever wrote it. `<StaticItemView>` is the single ladder; this
+ * is what stops it silently becoming two again.
+ */
+describe('both transcript surfaces render the same item', () => {
+  const ITEMS: StaticItem[] = [
+    {
+      key: 'a',
+      message: { role: 'assistant', content: 'a plain answer' } as CoreMessage,
+      toolDetails: false,
+    },
+    {
+      key: 'b',
+      error: { title: 'Turn failed', message: 'the provider refused' },
+      toolDetails: false,
+    },
+  ];
+
+  it('shows the same text for a message and for an error panel', () => {
+    const inline = render(createElement(Thread, { staticItems: ITEMS, busy: false }));
+    const full = render(
+      createElement(TranscriptViewport, { items: ITEMS, busy: false, rows: 40 } as never),
+    );
+    const inlineText = stripAnsi(inline.lastFrame() ?? '');
+    const fullText = stripAnsi(full.lastFrame() ?? '');
+
+    for (const expected of ['a plain answer', 'Turn failed', 'the provider refused']) {
+      expect(inlineText).toContain(expected);
+      expect(fullText).toContain(expected);
+    }
+    inline.unmount();
+    full.unmount();
+  });
+});

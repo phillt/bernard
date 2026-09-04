@@ -4,8 +4,12 @@ import { getThemeColors } from '../theme.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 import { useMouseWheel } from './useMouseWheel.js';
 import { useRawKeys } from './useRawKeys.js';
-import { ErrorPanel } from './ErrorPanel.js';
-import { MessageBlock, StreamingAssistantMessage, type StaticItem } from './Thread.js';
+import {
+  MessageBlock,
+  StaticItemView,
+  StreamingAssistantMessage,
+  type StaticItem,
+} from './Thread.js';
 import { formatPosition, listPosition } from './overlays/viewer-util.js';
 import type { MessageStore } from './message-store.js';
 
@@ -206,17 +210,18 @@ export function TranscriptViewport({
           {header}
           {items.map((item) => (
             <Box key={item.key} flexDirection="column">
-              {item.error ? (
-                <ErrorPanel data={item.error} />
-              ) : item.message ? (
-                <MemoMessageBlock
-                  message={item.message}
-                  rewriteOriginal={item.rewriteOriginal}
-                  timing={item.timing}
-                  costUsd={item.costUsd}
-                  toolDetails={item.toolDetails}
-                />
-              ) : null}
+              <StaticItemView
+                item={item}
+                renderMessage={(it) => (
+                  <MemoMessageBlock
+                    message={it.message!}
+                    rewriteOriginal={it.rewriteOriginal}
+                    timing={it.timing}
+                    costUsd={it.costUsd}
+                    toolDetails={it.toolDetails}
+                  />
+                )}
+              />
             </Box>
           ))}
           {busy && messageStore && (
