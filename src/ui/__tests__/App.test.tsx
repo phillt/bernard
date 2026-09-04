@@ -1201,6 +1201,10 @@ describe('<App> requestAskUser multi-select (#231)', () => {
     // single: pick Y
     stdin.write('2');
     await tick(40);
+    // A batch of 2+ now renders as a wizard (#473), so it lands on the
+    // check-your-answers review rather than resolving. Row 3 is "Looks right".
+    stdin.write('3');
+    await tick(40);
     await expect(pending).resolves.toEqual({ answers: [['A'], 'Y'] });
     unmount();
   });

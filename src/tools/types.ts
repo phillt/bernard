@@ -147,8 +147,9 @@ export interface ToolOptions {
   sessionToolAllowlist?: Set<string>;
   /**
    * Callback that asks the user one or more questions in sequence. The
-   * implementation owns any progress UI (e.g. a tab strip for batches of
-   * 2+). On mid-batch cancellation, returns whatever was answered so far.
+   * implementation owns the presentation — in the REPL a batch of 2+ renders
+   * as a wizard, one question per screen with back, edit and a review. On
+   * mid-batch cancellation, returns whatever was answered so far.
    * Omitted in non-interactive environments (cron daemon).
    */
   askUser?: (questions: AskUserQuestion[], signal?: AbortSignal) => Promise<AskUserBatchResult>;

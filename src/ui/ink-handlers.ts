@@ -17,6 +17,7 @@
  * the agent only acts on user submit, which can only fire from a
  * mounted `<Prompt>`. The null guards exist for tests and shutdown.
  */
+import type { WizardResult, WizardSpec } from './overlays/wizard-types.js';
 import type {
   MenuEntry,
   MenuItem,
