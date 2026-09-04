@@ -98,6 +98,16 @@ export interface BernardConfig {
    * (`canOpenBrowser`) rather than defaulted around.
    */
   autoOpenApplets: boolean;
+  /**
+   * Hand a newly created applet to the design pass before opening it.
+   *
+   * Defaults ON, for the same reason as `autoOpenApplets` and unlike the
+   * `autoCreate*` pair: the defect is that the thing the user asked for
+   * arrives looking unmade. `applet-styler` has existed since #424 and had no
+   * caller at all, so this is the only path on which it runs. It costs one
+   * dispatch on an action taken rarely and deliberately.
+   */
+  autoStyleApplets: boolean;
   /** Confidence threshold for auto-creating specialists and applets (0-1). */
   autoCreateThreshold: number;
   /** Whether the correction agent runs at session close to learn from tool-wrapper failures. */
@@ -473,6 +483,7 @@ export function savePreferences(prefs: {
   autoCreateSpecialists?: boolean;
   autoCreateApplets?: boolean;
   autoOpenApplets?: boolean;
+  autoStyleApplets?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
@@ -529,6 +540,7 @@ export function loadPreferences(): {
   autoCreateSpecialists?: boolean;
   autoCreateApplets?: boolean;
   autoOpenApplets?: boolean;
+  autoStyleApplets?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
@@ -580,6 +592,8 @@ export function loadPreferences(): {
       typeof parsed.autoCreateApplets === 'boolean' ? parsed.autoCreateApplets : undefined,
     autoOpenApplets:
       typeof parsed.autoOpenApplets === 'boolean' ? parsed.autoOpenApplets : undefined,
+    autoStyleApplets:
+      typeof parsed.autoStyleApplets === 'boolean' ? parsed.autoStyleApplets : undefined,
     autoCreateThreshold:
       typeof parsed.autoCreateThreshold === 'number' ? parsed.autoCreateThreshold : undefined,
     promptRewriter: typeof parsed.promptRewriter === 'boolean' ? parsed.promptRewriter : undefined,
@@ -1180,6 +1194,14 @@ export function loadConfig(overrides?: {
       process.env.BERNARD_AUTO_OPEN_APPLETS === '0'
     );
 
+  // Default ON, same shape as `autoOpenApplets` directly above.
+  const autoStyleApplets =
+    prefs.autoStyleApplets ??
+    !(
+      process.env.BERNARD_AUTO_STYLE_APPLETS === 'false' ||
+      process.env.BERNARD_AUTO_STYLE_APPLETS === '0'
+    );
+
   const envAutoCreateThreshold = parseFloat(process.env.BERNARD_AUTO_CREATE_THRESHOLD ?? '');
   const autoCreateThreshold = normalizeThreshold(
     prefs.autoCreateThreshold ??
@@ -1344,6 +1366,7 @@ export function loadConfig(overrides?: {
     autoCreateSpecialists,
     autoCreateApplets,
     autoOpenApplets,
+    autoStyleApplets,
     autoCreateThreshold,
     correctionEnabled,
     promptRewriter,
@@ -1437,6 +1460,7 @@ const PROFILE_SCOPED_KEYS: ReadonlyArray<keyof BernardConfig> = [
   'autoCreateSpecialists',
   'autoCreateApplets',
   'autoOpenApplets',
+  'autoStyleApplets',
   'autoCreateThreshold',
   'promptRewriter',
   'recallFilter',

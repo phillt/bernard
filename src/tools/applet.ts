@@ -7,6 +7,7 @@ import type { ToolOptions } from './types.js';
 import { defaultAppletPage } from '../apps/page-template.js';
 import { SpecialistStore, type Specialist } from '../specialists.js';
 import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-tool.js';
+import type { AppletStyler, StyleOutcome } from './applet-styling.js';
 import { uncoveredTools, uncoveredToolsMessage } from '../apps/invocation.js';
 import {
   formatWarnings,
@@ -22,6 +23,7 @@ import {
   ArgSpecFields,
   ToolDispatchFields,
   type RawAppAction,
+  type AppManifest,
   type AppPermissions,
   type RawAppManifest,
 } from '../apps/manifest.js';
@@ -115,11 +117,12 @@ const APPLET_HIGH_RISK_ACTIONS: ReadonlySet<string> = new Set(['delete']);
 
 const PARAMETERS = z.object({
   action: z
-    .enum(['create', 'update', 'read', 'list', 'logs', 'delete'])
+    .enum(['create', 'update', 'read', 'list', 'logs', 'delete', 'style'])
     .describe(
       "The operation to perform. `logs` shows what this applet's buttons actually did, " +
         'including why one failed. `delete` removes the applet and everything keyed to it, ' +
-        'and asks the user first.',
+        'and asks the user first. `style` hands an existing applet to the design pass — ' +
+        'a new applet gets that automatically, so reach for this to restyle one.',
     ),
   id: z.string().optional().describe('Applet id (kebab-case). Required for create/update/read.'),
   name: z.string().max(80).optional().describe('Display name (required for create)'),
@@ -188,9 +191,22 @@ const PARAMETERS = z.object({
 
 type AppletArgs = z.infer<typeof PARAMETERS>;
 
+/**
+ * Builds the `applet` tool.
+ *
+ * `styleApplet` is **absent by default**, and that is load-bearing rather than
+ * a convenience. `createTools` builds this tool with no styler — it is a pure
+ * function of its arguments and has no `AgentContext` to make one from — so
+ * the instance a tool-wrapper dispatch receives cannot style. Since the design
+ * pass writes by calling `applet update`, that is what makes re-entry
+ * impossible without a re-entrancy flag: only the instance
+ * `framework/agents/main.ts` builds, from a live ctx, can dispatch the styler.
+ * See `applet-styling.ts`.
+ */
 export function createAppletTool(
   registry?: AppRegistry,
   requestConsent?: ToolOptions['requestPermissionConsent'],
+  styleApplet?: AppletStyler,
 ) {
   const store = registry ?? new AppRegistry();
   return attachActionMeta(
@@ -200,13 +216,16 @@ export function createAppletTool(
         'buttons run Bernard actions. Actions are tool-less and read-only when created — the ' +
         'user grants tools with `bernard app-grant`. Deleting one asks the user first.',
       parameters: PARAMETERS,
-      execute: async (args: AppletArgs): Promise<string> => {
+      execute: async (
+        args: AppletArgs,
+        execOptions?: { abortSignal?: AbortSignal },
+      ): Promise<string> => {
         try {
           // `return await`, not `return`. With `run` async a bare return hands
           // back the promise before it rejects, so this `catch` would see
           // nothing and the `Error: ` prefix `detectToolError` reads (#364)
           // would silently stop being applied.
-          return await run(store, args, requestConsent);
+          return await run(store, args, requestConsent, styleApplet, execOptions?.abortSignal);
         } catch (err) {
           // The `Error: ` prefix is what `detectToolError` reads (#364).
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -230,6 +249,8 @@ async function run(
   store: AppRegistry,
   args: AppletArgs,
   requestConsent?: ToolOptions['requestPermissionConsent'],
+  styleApplet?: AppletStyler,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   switch (args.action) {
     case 'list': {
@@ -278,11 +299,18 @@ async function run(
       // once it is on screen would be asking about something the user is
       // already looking at.
       const consent = await askForPermissions(created.id, created.name, manifest, requestConsent);
+      // BEFORE `openedNote`, which is what opens the browser: styling after
+      // the open would show the scaffold and make the user refresh. The applet
+      // is already on disk, so nothing here can turn a successful create into
+      // a failed tool call — the rule `askForPermissions` and `openedNote`
+      // already follow.
+      const styled = await styleNote(created, styleApplet, abortSignal);
       return (
         `Applet "${created.name}" (${created.id}) created with ` +
         `${Object.keys(created.actions).length} action(s).` +
         grantHint(created.id, Object.keys(created.actions)) +
         consent +
+        styled +
         warningsFor(issues) +
         formatWarnings(dispatch.warnings) +
         (await openedNote(created.id))
@@ -370,11 +398,35 @@ async function run(
         'this id restores the same origin.'
       );
     }
+    case 'style': {
+      const id = need(args.id, 'id', 'style');
+      // Before `store.get`, which is a read plus a full manifest parse: on a
+      // styler-less instance — every one `createTools` builds — that work was
+      // done and thrown away.
+      if (!styleApplet) {
+        // No styler means no live context to dispatch from — a worker surface,
+        // a tool-wrapper dispatch, or a headless run. Said plainly rather than
+        // reported as a styling failure, because nothing was attempted.
+        return 'Error: the design pass is not available here. Ask from the main REPL.';
+      }
+      const existing = store.get(id);
+      if (!existing.ok) return `Error: ${existing.failure.message}`;
+      const outcome = await styleApplet(targetFor(existing.manifest), abortSignal);
+      return outcome.styled
+        ? `Restyled "${existing.manifest.name}" (${id}).` +
+            (outcome.summary ? ` ${outcome.summary}` : '')
+        : `Error: styling "${id}" did not run (${outcome.reason}). Its page is unchanged.`;
+    }
     default:
       // Unreachable through the AI SDK, which parses against the enum first —
       // but a direct `execute` would otherwise return `undefined`, which
       // `detectResultFailure` reads as a SUCCESS with no content.
-      return `Error: unknown action "${String(args.action)}". Use create, update, read, list or delete.`;
+      // Read off the schema rather than restated: the hand-written list this
+      // replaces had already drifted, omitting `logs`.
+      return (
+        `Error: unknown action "${String(args.action)}". ` +
+        `Use one of: ${PARAMETERS.shape.action.options.join(', ')}.`
+      );
   }
 }
 
@@ -531,6 +583,24 @@ function grantHint(appId: string, actions: string[]): string {
 }
 
 /**
+ * Reads one applet flag without letting a missing provider key break the tool.
+ *
+ * `loadConfig` throws when no provider is configured, and both callers are
+ * best-effort steps on a create that has already succeeded — so "could not
+ * read it" behaves as "off". One owner rather than a copy per flag: the reason
+ * for the catch is the non-obvious part, and the third copy is the one that
+ * gets it wrong.
+ */
+async function appletFlag(key: 'autoOpenApplets' | 'autoStyleApplets'): Promise<boolean> {
+  try {
+    const { loadConfig } = await import('../config.js');
+    return loadConfig()[key];
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Opens a just-built applet, and says where it is either way.
  *
  * On `create` only, never `update`: an edit mid-conversation stealing window
@@ -540,9 +610,8 @@ function grantHint(appId: string, actions: string[]): string {
  * create into a failed tool call.
  */
 async function openedNote(appId: string): Promise<string> {
+  if (!(await appletFlag('autoOpenApplets'))) return '';
   try {
-    const { loadConfig } = await import('../config.js');
-    if (!loadConfig().autoOpenApplets) return '';
     const { openApplet } = await import('../apps/open.js');
     const result = await openApplet(appId);
     if ('error' in result) return '';
@@ -551,10 +620,59 @@ async function openedNote(appId: string): Promise<string> {
       ? ` It is at ${result.url} (not opened: ${result.note}).`
       : ` It is at ${result.url}.`;
   } catch {
-    // `loadConfig` throws with no provider key configured, and a tool action
-    // that makes no model call must not require one.
+    // Nothing here may turn a successful create into a failed tool call — the
+    // URL is already in the returned string. (The config read's own throw is
+    // handled in `appletFlag`.)
     return '';
   }
+}
+
+/** The applet, as the design pass needs to see it. */
+function targetFor(manifest: AppManifest) {
+  return {
+    id: manifest.id,
+    name: manifest.name,
+    description: manifest.description ?? '',
+    actions: Object.keys(manifest.actions),
+  };
+}
+
+/**
+ * Runs the design pass over a just-created applet, and says what happened.
+ *
+ * Unconditional on create when a styler is present: the whole defect being
+ * fixed is that an applet arrives looking unmade, and a page the model wrote
+ * itself is exactly what the styler improves. `update` deliberately does not
+ * style, so a caller who wants their exact bytes kept can create and then
+ * update.
+ *
+ * Gated by `autoStyleApplets`, read the way `openedNote` reads
+ * `autoOpenApplets` — lazily, through a dynamic import, inside a `try`,
+ * because `loadConfig` throws with no provider key configured. Here that catch
+ * is doubly right: with no key there is no model to dispatch anyway.
+ */
+async function styleNote(
+  manifest: AppManifest,
+  styleApplet?: AppletStyler,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (!styleApplet) return '';
+  if (!(await appletFlag('autoStyleApplets'))) return '';
+  // Its own try, deliberately not relying on `makeAppletStyler`'s. The applet
+  // is already on disk at this point, so a throw reaching `execute`'s catch
+  // would report a write that SUCCEEDED as `Error:` — telling the model to
+  // retry a create that would then fail as "already exists". A second producer
+  // of this callback must not be able to reintroduce that.
+  let outcome: StyleOutcome;
+  try {
+    outcome = await styleApplet(targetFor(manifest), signal);
+  } catch (err) {
+    outcome = { styled: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+  if (outcome.styled) return outcome.summary ? ` Styled it: ${outcome.summary}` : ' Styled it.';
+  // Named, not swallowed. "It looks unstyled" with no reason is the report
+  // that costs someone an afternoon.
+  return ` It has the default page — the design pass did not run (${outcome.reason}).`;
 }
 
 /**

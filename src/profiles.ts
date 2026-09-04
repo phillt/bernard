@@ -60,6 +60,7 @@ export interface ProfileSettings {
   autoCreateSpecialists?: boolean;
   autoCreateApplets?: boolean;
   autoOpenApplets?: boolean;
+  autoStyleApplets?: boolean;
   autoCreateThreshold?: number;
   promptRewriter?: boolean;
   recallFilter?: boolean;
@@ -247,6 +248,7 @@ const LEGACY_BOOLEAN_KEYS = [
   'autoCreateSpecialists',
   'autoCreateApplets',
   'autoOpenApplets',
+  'autoStyleApplets',
   'promptRewriter',
   'recallFilter',
   'referenceLookup',
