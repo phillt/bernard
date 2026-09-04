@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { POST_V1_BUNDLED } from '../specialists.js';
-import { APPLET_COLOR_TOKENS } from '../host/tokens.js';
+import { APPLET_COLOR_TOKENS, APPLET_STYLED_SELECTORS } from '../host/tokens.js';
 
 /**
  * What the original `.seeded-v1` pass shipped.
@@ -146,6 +146,20 @@ describe('applet-styler stays in step with the served tokens', () => {
 
   it('carries the same honesty clause as the reviewer', () => {
     expect(styler.systemPrompt).toContain('cannot see the page render');
+  });
+
+  it('names every selector the floor styles (#466)', () => {
+    // The drift this replaces: the prompt's list omitted TEN selectors the
+    // sheet really had — `.note`, `.err`, `.success`, `.warning`, `.info`,
+    // `.output`, `.app`, `button.danger`, `ul`/`ol`, `section + section` — so a
+    // model was told to write CSS it did not need. Nothing bound them.
+    const missing = APPLET_STYLED_SELECTORS.filter(
+      (sel) => !styler.systemPrompt.includes(`\`${sel}\``),
+    );
+    expect(
+      missing,
+      `selectors the floor styles but the styler is not told about: ${missing.join(', ')}`,
+    ).toEqual([]);
   });
 
   it('passes a `note` on update, which the tool now requires (#463)', () => {

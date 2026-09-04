@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { APPLET_COLOR_TOKENS, tokensStylesheet, TOKENS_PATH } from './tokens.js';
+import {
+  APPLET_COLOR_TOKENS,
+  APPLET_STYLED_SELECTORS,
+  tokensStylesheet,
+  TOKENS_PATH,
+} from './tokens.js';
 import { contrastOver, HEX_LITERAL_RE } from '../color.js';
 import { getThemeColors, setTheme, DEFAULT_THEME } from '../theme.js';
 
@@ -184,5 +189,60 @@ describe('the served floor meets WCAG AA', () => {
     ]);
     const unused = declared.filter((d) => !body.includes(`var(${d})`) && !UNUSED_BY_DESIGN.has(d));
     expect(unused).toEqual([]);
+  });
+});
+
+/**
+ * The floor and the prompt that describes it, bound in both directions.
+ *
+ * `applet-styler.json` lists what is "already styled" so a model writes no CSS
+ * in the common case. That list had drifted from the sheet by ten selectors,
+ * with nothing to catch it — the same class of drift #424 built the served
+ * stylesheet to end, one level up.
+ */
+describe('the styled-selector record tracks the sheet', () => {
+  const sheet = tokensStylesheet();
+
+  /** Selectors the sheet declares, read off the artefact rather than restated. */
+  function declaredSelectors(css: string): string[] {
+    const out = new Set<string>();
+    // Rule heads only: a line ending in `{` that is not an at-rule.
+    for (const line of css.split('\n')) {
+      const m = /^([^{}@/*][^{}]*)\{/.exec(line.trim());
+      if (!m) continue;
+      for (const part of m[1].split(',')) {
+        const sel = part.trim();
+        if (sel) out.add(sel);
+      }
+    }
+    return [...out];
+  }
+
+  /**
+   * Selectors that are real but must not be advertised.
+   *
+   * `:root` and `*` are plumbing; the pseudo-classes are the focus contract an
+   * applet is told NOT to override. Naming them in the prompt would invite
+   * exactly the override #465 forbids.
+   */
+  const NOT_ADVERTISED = new Set([':root', '*', ':focus-visible', ':focus:not(:focus-visible)']);
+
+  it('every selector the sheet declares is in the record, or reasoned out', () => {
+    // Sheet → record, the direction the mistake is actually made in. Iterating
+    // the record instead would make the assertion self-consistent with whatever
+    // the record happens to say.
+    // Compared on the LEADING simple selector: `.cards > li` is reached
+    // through `.cards`, and `button:hover` through `button`, so a prompt naming
+    // the base has told the model everything it can act on.
+    const base = (sel: string): string => sel.split(/[\s>+~:]/)[0];
+    const missing = declaredSelectors(sheet).filter((sel) => {
+      if (NOT_ADVERTISED.has(sel)) return false;
+      return !APPLET_STYLED_SELECTORS.some((known) => base(sel) === known);
+    });
+    expect(missing, `selectors the styler is never told about: ${missing.join(', ')}`).toEqual([]);
+  });
+
+  it('finds a non-trivial number of selectors — a scan over nothing passes', () => {
+    expect(declaredSelectors(sheet).length).toBeGreaterThan(20);
   });
 });
