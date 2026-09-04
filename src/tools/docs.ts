@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { tool } from 'ai';
 import { allDocs, docIndex, findDoc, renderDoc, renderIndex } from '../docs-store.js';
-import { attachActionMeta } from '../framework/tools/adapter.js';
+import { attachMeta } from '../framework/tools/adapter.js';
 
 /**
  * `docs` — Bernard's own documentation, findable by the agent that needs it.
@@ -41,9 +41,6 @@ import { attachActionMeta } from '../framework/tools/adapter.js';
  */
 
 const ACTIONS = ['list', 'read'] as const;
-
-/** Both actions only look. */
-const READ_ACTIONS: ReadonlySet<string> = new Set(ACTIONS);
 
 const PARAMETERS = z.object({
   action: z
@@ -91,22 +88,22 @@ export function createDocsTool() {
     },
   });
 
-  // `attachActionMeta` classifies an action a write unless it is named here,
-  // and the read-only block gate then refuses it — the trap `applet`'s
-  // `interview` action hit, where a constant-string getter was treated as a
-  // mutation. Both actions read.
-  return attachActionMeta(t, {
+  // `attachMeta`, not `attachActionMeta`. That helper's whole job is to split a
+  // multi-action tool into read and write halves so the block gate and the
+  // permission key can tell them apart — but BOTH actions here are reads, so
+  // its `isWriteAction` predicate would be constantly false and `actionScoped`
+  // would mint `docs:list` and `docs:read` grants that can never differ.
+  // `kind: 'read'` answers the gate question directly, which is the trap
+  // `applet`'s `interview` action hit (a constant-string getter classified as a
+  // mutation and refused under `read-only`).
+  //
+  // No `cacheable`/`cacheTtlMs`: `allDocs()` already memoises the parsed corpus
+  // for the life of the process, so a repeat read costs an `Array.find`. The
+  // result cache would store a second copy of every document body to save it.
+  return attachMeta(t, {
     name: 'docs',
     kind: 'read',
     sideEffect: 'none',
-    readActions: READ_ACTIONS,
-    // The corpus is fixed for the life of the process — three documents are
-    // built from module constants and the rest are read from disk once — so a
-    // repeat read is free and byte-identical. Session-lifetime rather than a
-    // TTL for that reason. The cache sits after every permission gate, so this
-    // cannot be used to skip one.
     deterministic: true,
-    cacheable: true,
-    cacheTtlMs: 0,
   });
 }

@@ -57,9 +57,6 @@ export interface DocEntry {
 /** One row of the index — everything except the body. */
 export type DocSummary = Omit<DocEntry, 'body'>;
 
-/** Ids are file names, so they are constrained like one. */
-const DOC_ID_RE = /^[a-z][a-z0-9-]{1,63}$/;
-
 /**
  * The content budget for one document.
  *
@@ -131,25 +128,23 @@ export function allDocs(): DocEntry[] {
   if (cached) return cached;
   const out: DocEntry[] = [...generatedDocs()];
   const dir = findDocsDir();
-  if (!dir) return (cached = sortById(out));
-  for (const file of fs.readdirSync(dir).sort()) {
-    if (!file.endsWith('.md')) continue;
-    const id = file.replace(/\.md$/, '');
-    if (!DOC_ID_RE.test(id)) continue;
-    try {
-      const parsed = parseDoc(id, fs.readFileSync(path.join(dir, file), 'utf-8'));
-      if (parsed) out.push(parsed);
-    } catch {
-      // A malformed doc is skipped, never fatal: documentation failing to load
-      // must not take a turn down with it.
+  if (dir) {
+    for (const file of fs.readdirSync(dir)) {
+      if (!file.endsWith('.md')) continue;
+      try {
+        const parsed = parseDoc(
+          file.replace(/\.md$/, ''),
+          fs.readFileSync(path.join(dir, file), 'utf-8'),
+        );
+        if (parsed) out.push(parsed);
+      } catch {
+        // A malformed doc is skipped, never fatal: documentation failing to
+        // load must not take a turn down with it.
+      }
     }
   }
-  return (cached = sortById(out));
-}
-
-/** One stable order, so the index reads the same on every platform. */
-function sortById(docs: DocEntry[]): DocEntry[] {
-  return docs.sort((a, b) => a.id.localeCompare(b.id));
+  // One stable order, so the index reads the same on every platform.
+  return (cached = out.sort((a, b) => a.id.localeCompare(b.id)));
 }
 
 /** The index — level 1. */
@@ -204,9 +199,4 @@ export function renderIndex(docs: DocSummary[]): string {
     '',
     ...docs.map((d) => `- **${d.id}** — ${d.title}. ${d.description}`),
   ].join('\n');
-}
-
-/** Test seam: forget the parsed corpus. */
-export function resetDocsCache(): void {
-  cached = undefined;
 }

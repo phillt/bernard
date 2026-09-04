@@ -68,6 +68,42 @@ export const APPLET_COLOR_TOKENS: Record<string, string> = {
  * against these variables rather than against hex values.
  */
 /**
+ * The non-colour scale, as a record.
+ *
+ * These are declared as literals inside {@link buildStylesheet} rather than
+ * generated from here, and the record is bound to the sheet by a test in BOTH
+ * directions — the shape {@link APPLET_STYLED_SELECTORS} already uses, and for
+ * the same reason: the emitted block carries comments explaining why
+ * `--space-1` and `--text-xs` exist despite no rule reaching for them, and
+ * generating the declarations would either drop that reasoning or push it into
+ * a data structure with nowhere to put it.
+ *
+ * Exported because `applet-styling` (the generated document) could otherwise
+ * only describe the COLOUR half — and a styler told the docs are complete, then
+ * given no spacing or type scale, writes raw rem values against a floor that
+ * has one. That gap was invisible while these lived only inside a string.
+ */
+export const APPLET_SCALE_TOKENS: Record<string, string> = {
+  '--radius': '6px',
+  '--sans': "-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif",
+  '--mono': "'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace",
+  '--space-1': '0.25rem',
+  '--space-2': '0.5rem',
+  '--space-3': '0.75rem',
+  '--space-4': '1rem',
+  '--space-5': '1.5rem',
+  '--space-6': '2rem',
+  '--text-xs': '0.75rem',
+  '--text-sm': '0.875rem',
+  '--text-base': '1rem',
+  '--text-lg': '1.25rem',
+  '--text-xl': '1.5rem',
+  '--text-2xl': '2rem',
+  '--leading-tight': '1.25',
+  '--leading-body': '1.5',
+};
+
+/**
  * What the floor styles, as a list a prompt can name.
  *
  * `applet-styler.json` tells the model which elements and classes are already

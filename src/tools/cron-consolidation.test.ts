@@ -21,6 +21,12 @@ const MAIN_AUDIENCE_TOOLS = [
   'mcp_config',
   'mcp_add_url',
   'mcp_verify',
+  // Not a control, but main-only for a measured reason: as `audience: 'any'` it
+  // added 839 bytes to the worker tool block, re-billed at full rate on every
+  // step of every dispatch that will never build an applet. A `tool-wrapper`
+  // declares `toolSurface: 'full'`, so a dispatched specialist can still name
+  // it in `targetTools`.
+  'docs',
 ] as const;
 import { permissionKeyFor } from '../tool-permissions.js';
 

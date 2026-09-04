@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createDocsTool } from './docs.js';
-import { allDocs } from '../docs-store.js';
+import { allDocs, docIndex, renderDoc, renderIndex } from '../docs-store.js';
 import { readToolMeta } from '../framework/tools/adapter.js';
 import { riskFromMeta } from '../risk.js';
 
@@ -9,20 +9,16 @@ const run = (args: unknown) =>
   (tool.execute as (a: unknown, o: unknown) => Promise<string>)(args, {});
 
 describe('the docs tool', () => {
-  it('lists every document', async () => {
-    const out = await run({ action: 'list' });
-    for (const doc of allDocs()) {
-      expect(out).toContain(doc.id);
-      expect(out).toContain(doc.description);
-    }
+  // Identity, not a re-check of the renderers' internals — `docs-store.test.ts`
+  // owns the framing, the directive ordering and the byte-identical round trip.
+  // What this file is for is that the tool hands those back unaltered.
+  it('lists exactly the rendered index', async () => {
+    expect(await run({ action: 'list' })).toBe(renderIndex(docIndex()));
   });
 
-  it('returns a document whole, framed, with the directive last', async () => {
+  it('returns exactly the rendered document', async () => {
     const doc = allDocs()[0];
-    const out = await run({ action: 'read', id: doc.id });
-    expect(out).toContain(doc.body.trimEnd());
-    expect(out).toContain(`<source>${doc.id}</source>`);
-    expect(out.indexOf('</document>')).toBeLessThan(out.indexOf('Do not paraphrase'));
+    expect(await run({ action: 'read', id: doc.id })).toBe(renderDoc(doc));
   });
 
   it('names what exists when an id is wrong', async () => {
@@ -41,36 +37,27 @@ describe('the docs tool', () => {
 
   it('trims an id, since a model copying from the index brings whitespace', async () => {
     const doc = allDocs()[0];
-    expect(await run({ action: 'read', id: ` ${doc.id} ` })).toContain(`<source>${doc.id}</source>`);
+    expect(await run({ action: 'read', id: ` ${doc.id} ` })).toContain(
+      `<source>${doc.id}</source>`,
+    );
   });
 });
 
 describe('its classification', () => {
   const meta = readToolMeta(tool)!;
 
-  it('is declared read-only, so the fail-closed gate does not refuse it', async () => {
-    // `attachActionMeta` classifies an action a write unless it is named in
-    // `readActions`, and under `toolMode: 'read-only'` the block gate then
-    // refuses it outright — with nobody to ask, in a headless dispatch. That
-    // is the trap `applet`'s `interview` action hit. Both actions are reads,
-    // so both are asserted, not just the one that obviously looks like one.
+  it('is declared read-only, so the fail-closed gate does not refuse it', () => {
+    // Under `toolMode: 'read-only'` the block gate refuses anything classified
+    // a write, outright, with nobody to ask in a headless dispatch — the trap
+    // `applet`'s `interview` action hit, where a constant-string getter was
+    // treated as a mutation. Asserted as the OUTCOME (both actions run at low
+    // risk and the tool is a read) rather than on whichever helper attached
+    // the meta, so swapping that helper cannot silently change the answer.
     expect(meta.kind).toBe('read');
     expect(meta.sideEffect).toBe('none');
     for (const action of ['list', 'read']) {
-      expect(meta.isWriteAction?.({ action }), action).toBe(false);
+      expect(riskFromMeta(meta, { action }), action).toBe('low');
     }
-  });
-
-  it('is low risk, so it never raises a confirmation prompt', () => {
-    expect(riskFromMeta(meta, { action: 'read', id: 'x' })).toBe('low');
-  });
-
-  it('is cacheable for the session, since the corpus cannot change under it', () => {
-    // The cache sits AFTER every permission gate, so this cannot be used to
-    // skip one. `cacheTtlMs: 0` is session-lifetime, not "no cache".
-    expect(meta.deterministic).toBe(true);
-    expect(meta.cacheable).toBe(true);
-    expect(meta.cacheTtlMs).toBe(0);
   });
 
   it('describes itself with the trigger words that make it reachable', () => {

@@ -13,7 +13,12 @@ import {
   renderIndex,
 } from './docs-store.js';
 import { generatedDocs } from './docs-generated.js';
-import { APPLET_COLOR_TOKENS, APPLET_STYLED_SELECTORS, TOKENS_PATH } from './host/tokens.js';
+import {
+  APPLET_COLOR_TOKENS,
+  APPLET_SCALE_TOKENS,
+  APPLET_STYLED_SELECTORS,
+  TOKENS_PATH,
+} from './host/tokens.js';
 import { SDK_PATH } from './host/sdk.js';
 import { MANIFEST_PATH, ICON_PATH } from './host/webmanifest.js';
 import { UI_RUNTIME_PATH } from './host/ui-runtime.js';
@@ -21,20 +26,18 @@ import { INTENT_FIELDS, INTENT_FIELD_LABELS } from './apps/brief.js';
 import { SLASH_COMMANDS } from './ui/slash-commands.js';
 
 describe('the document budget', () => {
-  it('stays under the only unconditional cut a tool result meets', () => {
+  it('leaves a budget-sized document under the only cut a tool result meets', () => {
     // The whole verbatim guarantee, and the reason there is no new mechanism.
     // `truncateToolResults` is the single place a built-in tool's result is
     // shortened, applied when the turn enters history — so a document under
     // this survives byte-identical on every continuation re-seed, and one over
     // it is silently cut from the next turn onward.
     //
+    // Asserted on the FRAMED document, which subsumes `MAX_DOC_CHARS <
+    // MAX_TOOL_RESULT_CHARS` and additionally catches a wrapper that grew.
     // Asserted here rather than derived in `docs-store.ts`, which must not
-    // import `context.ts` (65 ms of module graph on every worker dispatch).
-    // A test can afford the import; the leaf cannot.
-    expect(MAX_DOC_CHARS).toBeLessThan(MAX_TOOL_RESULT_CHARS);
-  });
-
-  it('leaves room for the wrapper the document is framed in', () => {
+    // import `context.ts` — 65 ms of module graph on every worker dispatch,
+    // for one number. A test can afford that import; the leaf cannot.
     const framed = renderDoc({
       id: 'x',
       title: 't',
@@ -47,11 +50,18 @@ describe('the document budget', () => {
 
 describe('the shipped corpus', () => {
   const docs = allDocs();
+  const cases = docs.map((d) => [d.id, d] as const);
 
-  it('is installed and non-empty', () => {
-    // A `null` directory renders as "no documentation is installed" rather
-    // than throwing — correct at runtime, and silent, so it is pinned here.
-    expect(findDocsDir()).not.toBeNull();
+  it('resolves beside the loaded module and is non-empty', () => {
+    // `dist/docs` under a build, `src/docs` under `tsx` — the
+    // `findBuiltinSpecialistsDir` idiom. A resolver anchored on `process.cwd()`
+    // passes in this repo and fails in a global install. A `null` directory
+    // renders as "no documentation is installed" rather than throwing —
+    // correct at runtime, and silent, so it is pinned here.
+    const dir = findDocsDir();
+    expect(dir).not.toBeNull();
+    expect(path.basename(dir!)).toBe('docs');
+    expect(fs.statSync(dir!).isDirectory()).toBe(true);
     expect(docs.length).toBeGreaterThan(0);
   });
 
@@ -81,6 +91,10 @@ describe('the shipped corpus', () => {
     const body = findDoc('applet-styling')!.body;
     for (const name of Object.keys(APPLET_COLOR_TOKENS)) expect(body).toContain(name);
     for (const sel of APPLET_STYLED_SELECTORS) expect(body).toContain(`\`${sel}\``);
+    // The scale half. It was omitted entirely at first — 18 served tokens the
+    // one document claiming to be complete never mentioned — so a styler told
+    // to trust it would write raw rem values against a floor that has a scale.
+    for (const name of Object.keys(APPLET_SCALE_TOKENS)) expect(body).toContain(name);
   });
 
   it('never names a colour variable that does not exist, in any document', () => {
@@ -88,10 +102,15 @@ describe('the shipped corpus', () => {
     // `var(--muted)` gets nothing, silently, and the page looks broken with no
     // error anywhere. Matched as a backticked reference so the markdown table
     // separator and prose hyphens are not mistaken for tokens.
+    // Both records, because the scale half (`--space-3`, `--text-lg`) is just
+    // as real and just as served. Checking colours alone did more than miss
+    // them — it made the corpus STRUCTURALLY unable to document the scale,
+    // failing any doc that mentioned a token the floor genuinely has.
+    const served = { ...APPLET_COLOR_TOKENS, ...APPLET_SCALE_TOKENS };
     for (const doc of docs) {
-      for (const m of doc.body.match(/`(--[a-z][a-z-]*)`/g) ?? []) {
+      for (const m of doc.body.match(/`(--[a-z][a-z0-9-]*)`/g) ?? []) {
         const name = m.slice(1, -1);
-        expect(APPLET_COLOR_TOKENS, `${doc.id} names ${name}`).toHaveProperty(name);
+        expect(served, `${doc.id} names ${name}`).toHaveProperty(name);
       }
     }
   });
@@ -129,37 +148,31 @@ describe('the shipped corpus', () => {
     }
   });
 
-  it.each(allDocs().map((d) => [d.id, d] as const))('%s fits the budget', (_id, doc) => {
+  it.each(cases)('%s fits the budget', (_id, doc) => {
     expect(doc.body.length).toBeLessThanOrEqual(MAX_DOC_CHARS);
   });
 
-  it.each(allDocs().map((d) => [d.id, d] as const))(
-    '%s says what it is AND when to read it',
-    (_id, doc) => {
-      // `description` is the entire L1 payload — the only thing a model sees
-      // before choosing. Anthropic's own anti-example is "Helps with
-      // documents": a category with no trigger. Length is a proxy, and the
-      // trigger clause is the part that actually matters, so both are checked.
-      expect(doc.description.length).toBeGreaterThan(40);
-      expect(doc.description).toMatch(/\b(read|use|consult|check)\b/i);
-      expect(doc.title.length).toBeLessThan(60);
-    },
-  );
+  it.each(cases)('%s says what it is AND when to read it', (_id, doc) => {
+    // `description` is the entire L1 payload — the only thing a model sees
+    // before choosing. Anthropic's own anti-example is "Helps with
+    // documents": a category with no trigger. Length is a proxy, and the
+    // trigger clause is the part that actually matters, so both are checked.
+    expect(doc.description.length).toBeGreaterThan(40);
+    expect(doc.description).toMatch(/\b(read|use|consult|check)\b/i);
+    expect(doc.title.length).toBeLessThan(60);
+  });
 
-  it.each(allDocs().map((d) => [d.id, d] as const))(
-    '%s round-trips byte-identically through read',
-    (_id, doc) => {
-      // No reflow, no escaping, no trimming of the interior. An agent acting
-      // on a partially-rendered snippet is the documented failure — a page
-      // that shipped without its `<script src>` line and 403'd on every click.
-      const framed = renderDoc(doc);
-      const inner = framed.slice(
-        framed.indexOf('<document_content>\n') + '<document_content>\n'.length,
-        framed.indexOf('\n</document_content>'),
-      );
-      expect(inner).toBe(doc.body.trimEnd());
-    },
-  );
+  it.each(cases)('%s round-trips byte-identically through read', (_id, doc) => {
+    // No reflow, no escaping, no trimming of the interior. An agent acting
+    // on a partially-rendered snippet is the documented failure — a page
+    // that shipped without its `<script src>` line and 403'd on every click.
+    const framed = renderDoc(doc);
+    const inner = framed.slice(
+      framed.indexOf('<document_content>\n') + '<document_content>\n'.length,
+      framed.indexOf('\n</document_content>'),
+    );
+    expect(inner).toBe(doc.body.trimEnd());
+  });
 
   it('gives each document a unique id', () => {
     expect(new Set(docs.map((d) => d.id)).size).toBe(docs.length);
@@ -178,10 +191,12 @@ describe('the shipped corpus', () => {
 });
 
 describe('front matter', () => {
-  it('reads the three keys and leaves the body untouched', () => {
+  it('reads the two keys and leaves the body untouched', () => {
+    // The id comes from the FILENAME, never the front matter — no shipped doc
+    // carries an `id:` key.
     const parsed = parseDoc(
       'x',
-      '---\nid: x\ntitle: A title\ndescription: What and when.\n---\n# Body\n\n  indented\n',
+      '---\ntitle: A title\ndescription: What and when.\n---\n# Body\n\n  indented\n',
     );
     expect(parsed).toEqual({
       id: 'x',
@@ -211,7 +226,7 @@ describe('front matter', () => {
 });
 
 describe('the rendered document', () => {
-  const doc = findDoc(allDocs()[0].id)!;
+  const doc = allDocs()[0];
   const framed = renderDoc(doc);
 
   it('is delimited and names its source', () => {
@@ -235,13 +250,16 @@ describe('the rendered document', () => {
   });
 });
 
-describe('the bundle location', () => {
-  it('resolves beside the loaded module, so a build and a `tsx` run both work', () => {
-    // `dist/docs` under a build, `src/docs` under `tsx` — the
-    // `findBuiltinSpecialistsDir` idiom. A resolver anchored on `process.cwd()`
-    // passes in this repo and fails in a global install.
-    const dir = findDocsDir()!;
-    expect(path.basename(dir)).toBe('docs');
-    expect(fs.statSync(dir).isDirectory()).toBe(true);
+describe('shipping', () => {
+  it('the build copies the directory the resolver looks for', () => {
+    // The finder and its `cpSync` line are coupled and nothing binds them, and
+    // no test CAN bind them by resolution: vitest resolves `./docs-store.js` to
+    // `src/`, so `findDocsDir()` returns `src/docs` whether or not `dist/docs`
+    // was ever produced. A dropped copy step therefore ships a build where
+    // `docs list` answers "No documentation is installed" with the whole suite
+    // green — and this is the first bundled directory read on a TOOL RESULT
+    // path, where absence is user-visible and silent.
+    const script = fs.readFileSync('scripts/copy-builtins.mjs', 'utf-8');
+    expect(script).toContain("cpSync('src/docs', 'dist/docs'");
   });
 });

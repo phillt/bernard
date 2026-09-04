@@ -1,4 +1,10 @@
-import { APPLET_COLOR_TOKENS, APPLET_STYLED_SELECTORS, TOKENS_PATH } from './host/tokens.js';
+import {
+  APPLET_COLOR_TOKENS,
+  APPLET_SCALE_TOKENS,
+  APPLET_STYLED_SELECTORS,
+  TOKENS_PATH,
+} from './host/tokens.js';
+import { UI_RUNTIME_GLOBAL, UI_RUNTIME_PATH, UI_RUNTIME_RULE } from './host/ui-runtime.js';
 import { INTENT_FIELDS, INTENT_FIELD_LABELS } from './apps/brief.js';
 import { SLASH_COMMANDS } from './ui/slash-commands.js';
 import type { DocEntry } from './docs-store.js';
@@ -6,20 +12,20 @@ import type { DocEntry } from './docs-store.js';
 /**
  * The documents that are DERIVED, not authored.
  *
- * Three of the corpus restate records that already exist — the colour tokens
- * and styled selectors, the brief's intent fields, the slash-command
- * catalogue. Writing those into a `.md` file would make the file a second copy
- * of the artefact, which is exactly the drift `#424` built the served
- * stylesheet to end and `applet-styler`'s token pin needs a test to police.
+ * Four of the corpus restate records that already exist — the colour and scale
+ * tokens with the styled selectors, the brief's intent fields, the
+ * slash-command catalogue, and the UI runtime's own path, global and rule.
+ * Writing those into a `.md` file makes the file a second copy of the artefact,
+ * which is the drift #424 built the served stylesheet to end and
+ * `applet-styler`'s token pin needs a test to police.
  *
  * Generated at runtime rather than by a build script for the same reason
  * `tokensStylesheet()` is: a checked-in generated file plus a test that
  * regenerates and compares is a copy with an alarm on it, where a function is
- * no copy at all. The plan's `scripts/build-docs.mjs` is therefore not built —
- * all three sources are pure leaves costing 1-2 ms to import, so there is
- * nothing to amortise. `docs-store.ts` stays free of them: the merge happens
- * one level up, so the parser and the wrapper keep no dependency on any
- * record they might one day describe.
+ * no copy at all. So there is no `scripts/build-docs.mjs` — every source is a
+ * pure leaf costing 1-2 ms to import, and there is nothing to amortise.
+ * `docs-store.ts` stays free of them: the merge happens one level up, so the
+ * parser and the wrapper keep no dependency on any record they describe.
  *
  * Each still carries the front matter contract in code — `title` and a
  * `description` that says what it is AND when to read it — because the same
@@ -40,6 +46,9 @@ function stylingDoc(): DocEntry {
     })
     .join('\n');
   const selectors = APPLET_STYLED_SELECTORS.map((s) => `\`${s}\``).join(', ');
+  const scale = Object.entries(APPLET_SCALE_TOKENS)
+    .map(([name, value]) => `| \`${name}\` | \`${value}\` |`)
+    .join('\n');
 
   return {
     id: 'applet-styling',
@@ -79,6 +88,16 @@ ${tokens}
 Text on a solid fill is \`var(--accent-fg)\`, on every state colour, not white —
 white on \`--accent\` measures 2.80:1 and fails WCAG AA outright.
 
+## Spacing, type and the rest of the scale
+
+| variable | value |
+| --- | --- |
+${scale}
+
+Use these names rather than raw \`rem\` values, so two applets share a rhythm.
+Do not override \`:focus-visible\` — the floor gives every control a focus ring,
+and replacing it is how keyboard users lose their place.
+
 ## Where custom CSS goes
 
 A separate file, passed alongside the page, and linked from it:
@@ -99,9 +118,7 @@ attribute, or assigning \`cssText\`, does not.`,
 }
 
 function briefDoc(): DocEntry {
-  const fields = INTENT_FIELDS.map(
-    (f) => `| \`${f}\` | ${INTENT_FIELD_LABELS[f]} |`,
-  ).join('\n');
+  const fields = INTENT_FIELDS.map((f) => `| \`${f}\` | ${INTENT_FIELD_LABELS[f]} |`).join('\n');
 
   return {
     id: 'applet-brief',
@@ -165,7 +182,120 @@ and let them type it.`,
   };
 }
 
+/**
+ * Moved out of `src/docs/applet-ui-runtime.md` because a hand-written copy had
+ * already drifted on the day it was written: it said "or more than about four
+ * controls" against {@link UI_RUNTIME_RULE}'s "or HAS more than about four
+ * controls", making it a fourth unbound statement of a rule whose own docstring
+ * exists because two prompts stated it and nothing bound them.
+ *
+ * That matters more here than anywhere else, because the base system prompt now
+ * tells the agent to trust this document over its own reconstruction. A doc is
+ * the worst possible place for an unbound copy.
+ */
+function uiRuntimeDoc(): DocEntry {
+  return {
+    id: 'applet-ui-runtime',
+    title: 'Building an applet with a UI runtime',
+    description:
+      'When plain DOM code stops being enough, and how to use the served Preact runtime instead. Read before hand-writing innerHTML or a render loop in an applet.',
+    body: `# The UI runtime
+
+Most applets need no library. One form, one button, one result block — write
+plain DOM code and stop.
+
+Reach for the runtime when the page has **${UI_RUNTIME_RULE}**. That is the
+point where hand-written \`innerHTML\` starts producing subtle bugs: stale rows,
+lost focus, event handlers wired twice.
+
+## Loading it
+
+\`\`\`html
+<script src="${UI_RUNTIME_PATH}"></script>
+\`\`\`
+
+A plain \`<script src>\`, before your own inline script, exactly like the applet
+client. It attaches one global, \`${UI_RUNTIME_GLOBAL}\`.
+
+## Using it
+
+\`\`\`html
+<div id="root"></div>
+<script>
+  const { html, render, useState, useEffect } = ${UI_RUNTIME_GLOBAL};
+
+  function App() {
+    const [items, setItems] = useState([]);
+    const [text, setText] = useState('');
+
+    useEffect(() => {
+      bernard.store.get('items').then((saved) => setItems(saved || []));
+    }, []);
+
+    async function add() {
+      const next = [...items, { id: Date.now(), text }];
+      setItems(next);
+      setText('');
+      await bernard.store.set('items', next);
+    }
+
+    return html\`
+      <div class="field">
+        <label for="t">New item</label>
+        <input id="t" value=\${text} onInput=\${(e) => setText(e.target.value)} />
+      </div>
+      <div class="actions">
+        <button onClick=\${add} disabled=\${!text}>Add</button>
+      </div>
+      <ul class="cards">
+        \${items.map((i) => html\`<li key=\${i.id}>\${i.text}</li>\`)}
+      </ul>
+    \`;
+  }
+
+  render(html\`<\${App} />\`, document.getElementById('root'));
+</script>
+\`\`\`
+
+\`html\` is a tagged template — no build step, no JSX, no compiler. Interpolate
+with \`\${}\`. A component is \`<\${Name} />\`, with the closing tag written
+\`<//>\` when it wraps children.
+
+## What it gives you
+
+\`html\`, \`render\`, \`h\`, \`Component\`, \`createContext\`, and the hooks:
+\`useState\`, \`useEffect\`, \`useRef\`, \`useMemo\`, \`useCallback\`,
+\`useReducer\`, \`useContext\`, \`useLayoutEffect\`, \`useImperativeHandle\`,
+\`useErrorBoundary\`, \`useDebugValue\`.
+
+There is no \`Fragment\` export. Return an array, or wrap in an element.
+
+That is Preact's API. Anything written for React hooks works, with two
+differences worth knowing: the DOM property is \`onInput\`, not \`onChange\`, and
+\`class\` works as well as \`className\`.
+
+## Styling stays the same
+
+The runtime changes nothing about CSS. Use the classes the served stylesheet
+already handles — \`.field\`, \`.actions\`, \`.cards\`, \`.output\` — and the
+components look right with no styles of your own. Never write a \`style\`
+attribute in a template; the policy discards it exactly as it discards one in
+static markup.
+
+## Why this one
+
+The security policy has no \`unsafe-eval\`, so anything that compiles templates
+at runtime cannot run — that rules out Vue's full build and Alpine. This
+runtime contains no dynamic evaluation at all, which is asserted against the
+bytes actually served.
+
+Do not load a library from a CDN. Nothing off-origin loads without the person
+granting that origin first, and a script tag that silently does not run is the
+worst failure available.`,
+  };
+}
+
 /** The derived documents, built fresh — they are cached one level up. */
 export function generatedDocs(): DocEntry[] {
-  return [stylingDoc(), briefDoc(), commandsDoc()];
+  return [stylingDoc(), briefDoc(), commandsDoc(), uiRuntimeDoc()];
 }
