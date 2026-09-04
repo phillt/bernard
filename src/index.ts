@@ -87,6 +87,9 @@ import { TurnContextStore } from './turn-context.js';
 import { assembleContext } from './framework/context.js';
 import { Agent } from './agent.js';
 import { bootstrapPendingCandidates } from './candidate-bootstrap.js';
+import type { PendingPermission } from './apps/permission-consent.js';
+import { GRANTABLE_DIRECTIVES } from './host/csp-grant.js';
+import type { CspGrantSpec } from './apps/manage.js';
 import { AppletCandidateStore } from './applet-candidates.js';
 import { appletSuggestionBlock } from './applet-detector.js';
 import { runCorrectionAgent } from './correction.js';
@@ -103,6 +106,7 @@ import type {
   BlockActionInput,
   BlockOutcome,
   AskUserQuestion,
+  PermissionConsentRequest,
   AskUserBatchResult,
 } from './tools/types.js';
 import type { CoreMessage } from 'ai';
@@ -378,6 +382,23 @@ async function runInkRepl(args: {
     return h.requestAskUser(questions, signal);
   };
 
+  /**
+   * The applet permission prompt (#467, #468).
+   *
+   * Returns `[]` — deny — when there is no live REPL, which is the whole
+   * fail-closed story: `bernard script`, a cron dispatch and a headless test
+   * all land here, and none of them may grant an applet external access on a
+   * user's behalf. Nothing is granted by nobody answering.
+   */
+  const requestPermissionConsent = async (
+    request: PermissionConsentRequest,
+    signal?: AbortSignal,
+  ): Promise<PendingPermission[]> => {
+    const h = getInkHandlers();
+    if (!h?.requestPermissionConsent) return [];
+    return h.requestPermissionConsent(request, signal);
+  };
+
   const toolOptions: ToolOptions = {
     shellTimeout: config.shellTimeout,
     confirmDangerous,
@@ -385,6 +406,7 @@ async function runInkRepl(args: {
     blockAction,
     sessionToolAllowlist,
     askUser,
+    requestPermissionConsent,
     // Profile-persisted grants (#212). Reads the live config reference so
     // "always allow for this profile" decisions and profile switches
     // (applyProfileToConfig mutates in place) take effect immediately.
@@ -1112,13 +1134,19 @@ program
 
 program
   .command('app [action] [appId] [actionName]')
-  .description('Manage applets: list | open | allow | delete | path')
+  .description('Manage applets: list | open | allow | csp | delete | path')
   .option('-b, --bundled', 'List only the applets Bernard ships')
   .option('-a, --all', 'List every applet, grouped by origin')
   .option('--no-open', 'Print the URL instead of opening a browser')
   .option('--tools <names>', 'Comma-separated tool names for `allow` (empty clears)')
   .option('--write', 'Let this action write, rather than read-only')
   .option('--confirm <mode>', 'Confirmation mode for this action: off | auto | strict')
+  .option('--img-src <origins>', 'Comma-separated origins this applet may show images from')
+  .option('--connect-src <origins>', 'Origins it may exchange data with — a two-way channel')
+  .option('--font-src <origins>', 'Origins it may load fonts from')
+  .option('--media-src <origins>', 'Origins it may play audio or video from')
+  .option('--sandbox <setting>', 'Link handling: links (open in a new window) | navigate')
+  .option('--clear', 'Remove every external-access grant from this applet')
   .action(
     async (
       action: string | undefined,
@@ -1131,6 +1159,12 @@ program
         open?: boolean;
         bundled?: boolean;
         all?: boolean;
+        imgSrc?: string;
+        connectSrc?: string;
+        fontSrc?: string;
+        mediaSrc?: string;
+        sandbox?: string;
+        clear?: boolean;
       },
     ) => {
       try {
@@ -1154,6 +1188,30 @@ program
             if (!appId) throw new Error('Usage: bernard app open <appId> [--no-open]');
             await cli.appOpen(appId, { open: options.open !== false });
             return;
+          case 'csp': {
+            if (!appId) throw new Error('Usage: bernard app csp <appId> [--img-src a,b] [--clear]');
+            // A flag that was not passed leaves its directive alone; passing
+            // one with an empty value clears just that directive.
+            const list = (v: string) =>
+              v
+                .split(',')
+                .map((t) => t.trim())
+                .filter(Boolean);
+            // Driven from the table rather than four hand-written arms:
+            // Commander camelCases `--img-src` to exactly the grant key, so a
+            // fifth directive would need only its `.option()` line above.
+            // Spelled out, forgetting this arm leaves the flag silently
+            // ignored — which is the failure mode the table exists to remove.
+            const spec: CspGrantSpec = {};
+            for (const key of GRANTABLE_DIRECTIVES) {
+              const raw = (options as Record<string, string | undefined>)[key];
+              if (raw !== undefined) spec[key] = list(raw);
+            }
+            if (options.sandbox !== undefined) spec.sandbox = list(options.sandbox);
+            if (options.clear) spec.clear = true;
+            cli.appCsp(appId, spec);
+            return;
+          }
           case 'allow': {
             if (!appId || !actionName) {
               throw new Error('Usage: bernard app allow <appId> <action> --tools a,b');

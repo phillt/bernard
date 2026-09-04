@@ -140,7 +140,7 @@ export async function createTools(
           routine: createRoutineTool(routineStore),
           lineup_edit: createLineupTool(config),
           specialist: createSpecialistTool(specialistStore, candidateStore, config),
-          applet: createAppletTool(),
+          applet: createAppletTool(undefined, options.requestPermissionConsent),
         };
       },
     },

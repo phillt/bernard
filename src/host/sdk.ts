@@ -67,6 +67,7 @@ function build(): string {
   var BOOTSTRAP = '/__bernard/bootstrap.json';
   var INVOKE = '/__bernard/invoke';
   var STORE = '/__bernard/store';
+  var VIOLATION = '/__bernard/violation';
   var FORBIDDEN_HELP = ${JSON.stringify(FORBIDDEN_HELP)};
 
   function BernardError(message, code) {
@@ -185,6 +186,38 @@ function build(): string {
   addEventListener('unhandledrejection', function (ev) {
     var r = ev && ev.reason;
     if (r && r.name === 'BernardError') show(r.message);
+  });
+
+  /**
+   * Tell Bernard what the browser refused to load.
+   *
+   * A blocked image or fetch fails SILENTLY — no error, no rejection, nothing
+   * the page can catch — so without this the applet just looks wrong and
+   * nobody can say why. Reported here rather than through a CSP report-uri
+   * because a browser-generated report carries no headers, and accepting one
+   * would mean exempting a path from the host's token check.
+   *
+   * Deduped in-page as well as in the host: one broken image in a list of
+   * thirty fires thirty times, and the count that matters is kept server-side.
+   * Best-effort throughout — failing to report a block must never become a
+   * second, louder failure on top of the first.
+   */
+  var reported = {};
+  addEventListener('securitypolicyviolation', function (ev) {
+    try {
+      var key = ev.effectiveDirective + '|' + ev.blockedURI;
+      if (reported[key]) return;
+      reported[key] = 1;
+      bootstrap().then(function (boot) {
+        return fetch(VIOLATION, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-bernard-token': boot.token },
+          body: JSON.stringify({ directive: ev.effectiveDirective, blockedURL: ev.blockedURI }),
+        });
+      })['catch'](function () {});
+    } catch (e) {
+      /* Never worth a second failure. */
+    }
   });
 
   var bernard = {

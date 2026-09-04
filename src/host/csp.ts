@@ -5,6 +5,8 @@
  * asserted without standing up a server.
  */
 
+import { isGrantableSource, type AppCspGrant, type GrantableDirective } from './csp-grant.js';
+
 /** `http://127.0.0.1:<port>` — the applet's canonical origin. */
 export function originFor(port: number): string {
   return `http://127.0.0.1:${port}`;
@@ -60,8 +62,37 @@ export function originFor(port: number): string {
  *
  * Isolation between applets is carried by the **port**, not by withholding
  * `allow-same-origin`: two applets on two ports are two origins either way.
+ *
+ * **`grant` is optional, and that is load-bearing** (#467, #468). Every call
+ * without one produces the byte-identical header this function has always
+ * produced, which is what lets `csp.test.ts`'s existing regressions keep
+ * asserting the ungranted baseline unchanged. A grant only ever *appends*: it
+ * cannot remove a directive, relax `script-src`/`style-src` (neither is
+ * grantable), or drop a sandbox token. What may be granted is enumerated in
+ * `csp-grant.ts`, and a grant reaches here only after a user allowed it —
+ * an applet's manifest may *declare* what it wants, and a declaration is a
+ * request that grants nothing.
  */
-export function cspFor(): string {
+export function cspFor(grant?: AppCspGrant | null): string {
+  // Re-validated here, not merely at the store. `sanitizeCspGrant` already
+  // runs on every read, so this is defence in depth for an in-process caller
+  // that hand-builds a grant: these strings are concatenated into a response
+  // header, and a `;` or a CR reaching one adds a directive nobody granted or
+  // kills the socket outright. Cheap — at most ten short strings.
+  const sourcesFor = (key: GrantableDirective): string[] =>
+    (grant?.[key] ?? []).filter(isGrantableSource);
+  const widen = (key: GrantableDirective, base: string): string => {
+    const sources = sourcesFor(key);
+    return sources.length === 0 ? base : `${base} ${sources.join(' ')}`;
+  };
+  // Additive by construction: the base pair is never removable. `csp.ts`'s own
+  // argument above is that omitting `allow-same-origin` is the actively broken
+  // configuration, so a grant may only ever append.
+  const sandbox = ['allow-scripts', 'allow-same-origin', ...(grant?.sandbox ?? [])];
+  // Resolved once rather than inside the array literal: `media-src` has no
+  // base value, so it cannot go through `widen`, and computing it twice would
+  // be the one asymmetry against the three directives just above.
+  const media = sourcesFor('mediaSrc');
   return [
     "default-src 'none'",
     "script-src 'self' 'unsafe-inline'",
@@ -73,19 +104,24 @@ export function cspFor(): string {
     // makes that stylesheet mandatory rather than advisory, so a generated
     // applet cannot quietly reintroduce its own colours.
     "style-src 'self'",
-    "connect-src 'self'",
-    "img-src 'self' data:",
+    widen('connectSrc', "connect-src 'self'"),
+    widen('imgSrc', "img-src 'self' data:"),
     // Without this a `<link rel="manifest">` falls through to
     // `default-src 'none'` and the manifest is never fetched, so PWA install
     // cannot even be offered (#429). Same-origin only — the manifest is a
     // generated route on this applet's own server.
     "manifest-src 'self'",
-    "font-src 'self'",
+    widen('fontSrc', "font-src 'self'"),
+    // Emitted ONLY when granted. `media-src` has no base value today —
+    // an applet with no grant falls through to `default-src 'none'`, and
+    // adding a `'self'` default here would widen every existing applet to
+    // pay for a directive none of them use.
+    ...(media.length ? [`media-src 'self' ${media.join(' ')}`] : []),
     "form-action 'none'",
     "base-uri 'none'",
     "object-src 'none'",
     "frame-ancestors 'none'",
-    'sandbox allow-scripts allow-same-origin',
+    `sandbox ${sandbox.join(' ')}`,
   ].join('; ');
 }
 
@@ -97,9 +133,9 @@ export function cspFor(): string {
  * applet's URL — which carries its app identity — is not leaked outward.
  * `Cache-Control: no-store` because these responses carry a session token.
  */
-export function securityHeaders(): Record<string, string> {
+export function securityHeaders(grant?: AppCspGrant | null): Record<string, string> {
   return {
-    'Content-Security-Policy': cspFor(),
+    'Content-Security-Policy': cspFor(grant),
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
     'Cache-Control': 'no-store',

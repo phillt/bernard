@@ -23,8 +23,10 @@ import { createElement } from 'react';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { ENTER, ESC, SHIFT_TAB, tick } from './_keys.js';
+import { ARROW_DOWN, ENTER, ESC, SHIFT_TAB, tick } from './_keys.js';
 import stripAnsi from 'strip-ansi';
+import { getInkHandlers } from '../ink-handlers.js';
+import type { PendingPermission } from '../../apps/permission-consent.js';
 
 // ── Module mocks (all hoisted by vitest) ────────────────────────────────
 
@@ -112,7 +114,6 @@ process.env.BERNARD_HOME = TMP_HOME;
 // ── Imports under test (after mocks + env) ──────────────────────────────
 import { App, buildResumeSeed, type AppStores } from '../App.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
-import { getInkHandlers } from '../ink-handlers.js';
 import type { CoreMessage } from 'ai';
 import type { BernardConfig } from '../../config.js';
 import type { Agent } from '../../agent.js';
@@ -1614,6 +1615,177 @@ describe('<App> overlay abort (#266)', () => {
     await tick(40);
     expect(lastFrame()!).not.toContain('bridge menu');
     await expect(pending).resolves.toEqual({ cancelled: true });
+    unmount();
+  });
+});
+
+/**
+ * The applet permission prompt (#467, #468).
+ *
+ * Driven through the ink-handlers bridge rather than through a slash command,
+ * because that is how it is actually reached: the `applet` tool calls a
+ * `ToolOptions` callback mid-turn, which forwards to the live React tree.
+ */
+describe('<App> applet permission consent', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const ask = (over: Partial<PendingPermission> = {}): PendingPermission => ({
+    key: 'imgSrc',
+    label: 'Show images from 2 sites',
+    detail: 'https://a.example, https://b.example',
+    reason: 'so each headline has a thumbnail',
+    sources: ['https://a.example', 'https://b.example'],
+    tokens: [],
+    ownScreen: false,
+    ...over,
+  });
+
+  const channel = (): PendingPermission =>
+    ask({
+      key: 'connectSrc',
+      label: 'Send and receive data with 1 site',
+      detail: 'https://api.example',
+      reason: 'to sync',
+      sources: ['https://api.example'],
+      ownScreen: true,
+    });
+
+  it('shows the capability, the origins, and the reason attributed to the applet', async () => {
+    const { lastFrame, stdin, unmount } = renderApp();
+    await tick();
+    const pending = getInkHandlers()!.requestPermissionConsent!({
+      appId: 'news',
+      appName: 'News Headlines',
+      pending: [ask()],
+    });
+    await tick(30);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('News Headlines needs permission to');
+    expect(frame).toContain('Show images from 2 sites');
+    expect(frame).toContain('https://a.example');
+    // Quoted and attributed: it is the applet's claim, not Bernard's.
+    expect(frame).toContain('so each headline has a thumbnail');
+    expect(frame).toContain("the applet's words");
+    // What it did not ask for is part of the decision.
+    expect(frame).toContain('It did not ask to');
+    stdin.write(ESC);
+    await tick();
+    await pending;
+    unmount();
+  });
+
+  it('grants what Allow all covers and still asks about a two-way channel', async () => {
+    // The carve-out that matters: "Allow all" is the row people press without
+    // reading, so it must never carry connect-src with it.
+    const { stdin, unmount } = renderApp();
+    await tick();
+    const images = ask();
+    const network = channel();
+    const pending = getInkHandlers()!.requestPermissionConsent!({
+      appId: 'news',
+      appName: 'News Headlines',
+      pending: [images, network],
+    });
+    await tick(30);
+    stdin.write(ENTER); // "Allow these"
+    await tick(30);
+    stdin.write(ARROW_DOWN); // ...then, on its own screen, "Don't allow"
+    await tick();
+    stdin.write(ENTER);
+    await tick(30);
+    expect(await pending).toEqual([images]);
+    unmount();
+  });
+
+  it('grants nothing when the prompt is dismissed', async () => {
+    const { stdin, unmount } = renderApp();
+    await tick();
+    const pending = getInkHandlers()!.requestPermissionConsent!({
+      appId: 'news',
+      appName: 'News Headlines',
+      pending: [ask()],
+    });
+    await tick(30);
+    stdin.write(ESC);
+    expect(await pending).toEqual([]);
+    unmount();
+  });
+});
+
+/**
+ * `/applets` as a management surface (#460).
+ *
+ * The rule worth pinning is the one that looks like an inconsistency: the
+ * `applet` TOOL may not delete or grant, and this menu may. That is about who
+ * is acting — a user picking a row is the same person who would type
+ * `bernard app delete` — and the comment saying so is what stops it being
+ * "fixed" back.
+ */
+describe('<App> /applets management', () => {
+  beforeEach(() => {
+    process.env.BERNARD_HOME = TMP_HOME;
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function writeApplet(id: string) {
+    const { AppRegistry } = await import('../../apps/registry.js');
+    new AppRegistry({ seed: false }).create(
+      {
+        schemaVersion: 2,
+        id,
+        name: id,
+        description: 'a test applet',
+        actions: {
+          go: { dispatch: { kind: 'agent', specialistId: 'web-wrapper', instructions: 'x' } },
+        },
+      } as never,
+      { 'index.html': '<h1>x</h1>' },
+    );
+  }
+
+  it('offers the host from the top level, where "why is nothing serving" is asked', async () => {
+    // The first question when a button does nothing is whether anything is
+    // serving the applet at all, and `bernard applet-host status` was the only
+    // way to ask it. The row is unconditional, which is why the empty-state
+    // guidance is tracked separately from the row count rather than inferred
+    // from it.
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/applets');
+    await tick(30);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('Applet host');
+    stdin.write(ESC);
+    await tick();
+    unmount();
+  });
+
+  it('offers every operation on an applet, deletion and permissions included', async () => {
+    await writeApplet('menu-demo');
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    await submit(stdin, '/applets');
+    await tick(30);
+    expect(stripAnsi(lastFrame() ?? '')).toContain('menu-demo');
+    stdin.write(ENTER); // drill into the applet
+    // The submenu resolves several dynamic imports (registry, manage, the host
+    // client) before it can describe its rows, so it needs more than a tick.
+    await tick(400);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('Open in browser');
+    expect(frame).toContain('Permissions');
+    expect(frame).toContain('Tool grants');
+    expect(frame).toContain('Delete');
+    stdin.write(ESC);
+    await tick();
+    stdin.write(ESC);
+    await tick();
     unmount();
   });
 });

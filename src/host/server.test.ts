@@ -32,6 +32,30 @@ function rawGet(
   });
 }
 
+/** {@link rawGet}, but the headers are what is being asserted. */
+function rawGetHeaders(
+  port: number,
+  reqPath: string,
+  headers: Record<string, string>,
+): Promise<{ status: number; headers: Record<string, string> }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: '127.0.0.1', port, path: reqPath, method: 'GET', headers },
+      (res) => {
+        res.resume();
+        res.on('end', () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers as Record<string, string>,
+          }),
+        );
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 const mockInvokeAction = vi.hoisted(() =>
   vi.fn().mockResolvedValue({
     schemaVersion: 1,
@@ -394,5 +418,141 @@ describe('applet server', () => {
     const res = await fetch(`${app.origin}${m.TOKENS_PATH}`, { headers: hostHeaders(app.port) });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/css');
+  });
+
+  /**
+   * Per-applet CSP grants (#467, #468).
+   *
+   * Over a real socket rather than against `cspFor`, because the property
+   * being asserted is that the grant reaches the wire for THIS applet and no
+   * other, which is a fact about the handler rather than about the builder.
+   */
+  describe('per-applet CSP grants', () => {
+    async function grant(m: Awaited<ReturnType<typeof load>>, appId: string, value: unknown) {
+      const store = await import('../apps/app-csp-grants.js');
+      store.saveAppCspGrant(appId, value as never);
+    }
+    const cspOf = (res: Response) => res.headers.get('content-security-policy') ?? '';
+
+    it('serves a granted origin in the applet own header', async () => {
+      const m = await load();
+      writeApp(m);
+      await grant(m, 'demo', { imgSrc: ['https://cdn.example.com'] });
+      const { app } = await start(m);
+      const res = await fetch(app.origin, { headers: hostHeaders(app.port) });
+      expect(cspOf(res)).toContain("img-src 'self' data: https://cdn.example.com");
+      expect(cspOf(res)).toContain("connect-src 'self';");
+    });
+
+    it('does not leak one applet grant into another', async () => {
+      // The assertion the whole per-app design rests on. Two servers, one
+      // grant; the ungranted one must be byte-identical to the baseline.
+      const m = await load();
+      writeApp(m, 'demo');
+      writeApp(m, 'other', { ...APP, id: 'other' });
+      await grant(m, 'demo', { imgSrc: ['https://cdn.example.com'] });
+      const granted = await start(m, 'demo', 'tok-1');
+      const plain = await start(m, 'other', 'tok-2');
+
+      const a = await fetch(granted.app.origin, { headers: hostHeaders(granted.app.port) });
+      const b = await fetch(plain.app.origin, { headers: hostHeaders(plain.app.port) });
+      expect(cspOf(a)).toContain('https://cdn.example.com');
+      expect(cspOf(b)).not.toContain('cdn.example.com');
+      expect(cspOf(b)).toContain("img-src 'self' data:;");
+    });
+
+    it('applies a revoke on the next request, with no restart', async () => {
+      // Why the grant is read per request rather than captured at startApplet:
+      // the same running server must narrow again the moment the user revokes.
+      const m = await load();
+      writeApp(m);
+      await grant(m, 'demo', { imgSrc: ['https://cdn.example.com'] });
+      const { app } = await start(m);
+      const before = await fetch(app.origin, { headers: hostHeaders(app.port) });
+      expect(cspOf(before)).toContain('https://cdn.example.com');
+
+      await grant(m, 'demo', {});
+      const after = await fetch(app.origin, { headers: hostHeaders(app.port) });
+      expect(cspOf(after)).not.toContain('cdn.example.com');
+    });
+
+    it('appends a sandbox grant without dropping the base pair', async () => {
+      const m = await load();
+      writeApp(m);
+      await grant(m, 'demo', { sandbox: ['links'] });
+      const { app } = await start(m);
+      const res = await fetch(app.origin, { headers: hostHeaders(app.port) });
+      expect(cspOf(res)).toContain(
+        'sandbox allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox',
+      );
+    });
+
+    it('carries the CSP on a guard refusal too', async () => {
+      // The refusal path resolves the same policy as every other response —
+      // one policy per applet, rather than two that have to agree.
+      const m = await load();
+      writeApp(m);
+      const { app } = await start(m);
+      const res = await rawGetHeaders(app.port, '/', { Host: `localhost:${app.port}` });
+      expect(res.status).toBe(403);
+      expect(res.headers['content-security-policy']).toContain("default-src 'none'");
+    });
+
+    it('serves the ungranted header when the profile cannot be read', async () => {
+      // A corrupt profile must degrade to the narrow policy, never take the
+      // applet down.
+      const m = await load();
+      writeApp(m);
+      await grant(m, 'demo', { imgSrc: ['https://cdn.example.com'] });
+      fs.writeFileSync(m.PROFILES_PATH, '{ not json');
+      const { app } = await start(m);
+      const res = await fetch(app.origin, { headers: hostHeaders(app.port) });
+      expect(res.status).toBe(200);
+      expect(cspOf(res)).not.toContain('cdn.example.com');
+      expect(cspOf(res)).toContain("img-src 'self' data:;");
+    });
+  });
+
+  /**
+   * The blocked-request channel (#467).
+   *
+   * A page reports what the browser refused so a denied applet stops being
+   * silently broken. Recorded, never acted on.
+   */
+  describe('violation reports', () => {
+    it('records a report the page posts with its token', async () => {
+      const m = await load();
+      writeApp(m);
+      const { app } = await start(m);
+      const violations = await import('./violations.js');
+      const res = await fetch(`${app.origin}/__bernard/violation`, {
+        method: 'POST',
+        headers: {
+          ...hostHeaders(app.port),
+          'content-type': 'application/json',
+          'x-bernard-token': 'tok-1',
+        },
+        body: JSON.stringify({ directive: 'img-src', blockedURL: 'https://cdn.example.com/x.png' }),
+      });
+      expect(res.status).toBe(200);
+      expect(violations.loadBlocked('demo')).toEqual([
+        expect.objectContaining({ directive: 'imgSrc', origin: 'https://cdn.example.com' }),
+      ]);
+    });
+
+    it('refuses a report with no token, like every other state-changing route', async () => {
+      // The reason this is a POST the PAGE makes rather than a CSP report-uri:
+      // a browser-generated report carries no headers, so accepting one would
+      // mean exempting a path from the token check.
+      const m = await load();
+      writeApp(m);
+      const { app } = await start(m);
+      const res = await fetch(`${app.origin}/__bernard/violation`, {
+        method: 'POST',
+        headers: { ...hostHeaders(app.port), 'content-type': 'application/json' },
+        body: JSON.stringify({ directive: 'img-src', blockedURL: 'https://cdn.example.com/x.png' }),
+      });
+      expect(res.status).toBe(403);
+    });
   });
 });

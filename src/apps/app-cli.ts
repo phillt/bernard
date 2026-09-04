@@ -2,6 +2,7 @@ import { printError, printInfo } from '../output.js';
 import { AppRegistry, bundledAppIds } from './registry.js';
 import { parseRawAppManifest } from './manifest.js';
 import { deleteApplet } from './lifecycle.js';
+import { applyCspGrant, setActionGrant, type CspGrantSpec } from './manage.js';
 import { SpecialistStore } from '../specialists.js';
 import { uncoveredTools, uncoveredToolsMessage } from './invocation.js';
 import * as fs from 'node:fs';
@@ -156,45 +157,21 @@ export function appAllow(
   tools: string[],
   opts: { write?: boolean; confirm?: string } = {},
 ): void {
-  const registry = new AppRegistry();
-  const file = path.join(APPS_DIR, `${appId}.json`);
-  if (!registry.exists(appId)) {
-    printError(`No such app: ${appId}`);
+  const outcome = setActionGrant(appId, actionName, tools, opts);
+  if (!outcome.ok) {
+    printError(outcome.error);
     process.exitCode = 1;
     return;
   }
-  // Read the RAW file, not the parsed manifest: the reader lifts v1 actions
-  // into `dispatch`, and writing that back is rejected by the schema's own
-  // version refinement.
-  const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as {
-    actions: Record<string, Record<string, unknown>>;
-  };
-  const action = raw.actions?.[actionName];
-  if (!action) {
-    printError(`App "${appId}" has no action "${actionName}".`);
-    process.exitCode = 1;
-    return;
-  }
-  action.toolAllowlist = tools;
+  printInfo(`${appId}/${actionName}:`);
+  printInfo(`  tools: ${outcome.tools.length ? outcome.tools.join(', ') : '(none)'}`);
+  printInfo(`  mode:  ${outcome.toolMode}`);
   // The grant is the user's and is applied either way — but a grant the
   // backing specialist cannot reach is a no-op, and silently so: the action
-  // runs with an empty registry and the agent answers that it cannot do the
+  // runs with a smaller registry and the agent answers that it cannot do the
   // job. This is where the two halves of the intersection first meet, so it is
   // where the mismatch is worth saying out loud.
-  warnUncoveredGrant(action, tools);
-  if (opts.write !== undefined) action.toolMode = opts.write ? 'write' : 'read-only';
-  if (opts.confirm !== undefined) action.confirmMode = opts.confirm;
-
-  const parsed = parseRawAppManifest(raw);
-  if (!parsed.ok) {
-    printError(`Refusing to write an invalid manifest: ${parsed.error}`);
-    process.exitCode = 1;
-    return;
-  }
-  registry.update(appId, parsed.value);
-  printInfo(`${appId}/${actionName}:`);
-  printInfo(`  tools: ${tools.length ? tools.join(', ') : '(none)'}`);
-  printInfo(`  mode:  ${String(action.toolMode ?? 'read-only')}`);
+  for (const warning of outcome.warnings) printInfo(`Warning: ${warning}`);
   printInfo(
     "Remember the grant is an INTERSECTION with the backing specialist's targetTools — a tool " +
       'the specialist does not target stays absent.',
@@ -253,30 +230,25 @@ export async function appOpen(appId: string, opts: { open?: boolean } = {}): Pro
 }
 
 /**
- * Says so when a grant lands on a specialist that does not target the tool.
+ * `bernard app csp <id>` — show or set what an applet may reach (#467, #468).
  *
- * A warning rather than a refusal: the grant itself is legitimate and the
- * specialist may be updated next. What must not happen is the user believing
- * the tool was granted when the intersection has voided it.
+ * A sibling sub-action rather than a flag on `app allow`, which is per
+ * ACTION (`appId`, `actionName`, `tools`): a CSP grant is per APPLET and has
+ * no action to name, so `bernard app allow demo --img-src X` would collide
+ * positionally with `bernard app allow demo greet`.
+ *
+ * A printer over {@link applyCspGrant}, so `/applets` can offer the same thing
+ * without printing into Ink's alternate screen buffer.
  */
-function warnUncoveredGrant(action: Record<string, unknown>, tools: string[]): void {
-  const dispatch = action.dispatch as { kind?: string; specialistId?: string } | undefined;
-  if (dispatch?.kind !== 'agent' || !dispatch.specialistId || tools.length === 0) return;
-
-  const record = new SpecialistStore({ seed: false }).get(dispatch.specialistId);
-  if (!record) {
-    printInfo(
-      `Note: specialist "${dispatch.specialistId}" does not exist yet. Create it with ` +
-        `targetTools covering ${tools.join(', ')}, or this action will run with no tools.`,
-    );
+export function appCsp(appId: string, spec: CspGrantSpec): void {
+  const outcome = applyCspGrant(appId, spec);
+  if (!outcome.ok) {
+    printError(outcome.error);
+    process.exitCode = 1;
     return;
   }
-  const missing = uncoveredTools(tools, record.targetTools);
-  if (missing.length === 0) return;
-  // A WARNING, not a refusal, and the axis is who is acting: this is the user
-  // at a CLI making a grant that is theirs to make, and the specialist may be
-  // the next thing they fix. The `applet` tool refuses the same finding
-  // because the actor there is a model mid-authoring, which will not come back
-  // to it.
-  printInfo(`Warning: ${uncoveredToolsMessage(dispatch.specialistId, tools, missing)}`);
+  printInfo(`${appId} may reach:`);
+  for (const line of outcome.lines) printInfo(`  ${line}`);
+  for (const warning of outcome.warnings) printInfo(`Warning: ${warning}`);
+  printInfo('Applies to the next request — no restart needed.');
 }

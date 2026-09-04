@@ -84,7 +84,7 @@ import {
 import { ruleLabel, type PermissionRule, type ToolPermissionEffect } from '../tool-permissions.js';
 import type { BreadthOption } from '../permissions/breadth.js';
 import { applyProfileToConfig } from '../config.js';
-import { setToolDetailsVisible } from '../output.js';
+import { setToolDetailsVisible, formatFriendlyTimestamp } from '../output.js';
 import { noPromptCacheHint } from '../cost-guardrail.js';
 import { makeUsageRecorder, makeOutOfTurnUsageRecorder } from '../framework/hooks/token-stats.js';
 import { truncate } from '../text.js';
@@ -185,6 +185,9 @@ import { toLiteralSpeech } from '../speech-text.js';
 import { AppRegistry, bundledAppIds } from '../apps/registry.js';
 import { AppletCandidateStore, type AppletCandidate } from '../applet-candidates.js';
 import { buildAppletRequest } from '../applet-detector.js';
+import { notAskedLine, type PendingPermission } from '../apps/permission-consent.js';
+import { isWildcardSource, type GrantableDirective } from '../host/csp-grant.js';
+import type { PermissionConsentRequest } from '../tools/types.js';
 
 /**
  * Slash commands and overlays need direct access to the same stores the
@@ -934,6 +937,7 @@ export function App({
     requestBlock: typeof requestBlock;
     requestTextInput: typeof requestTextInput;
     requestAskUser: typeof requestAskUser;
+    requestPermissionConsent: typeof requestPermissionConsent;
   } | null>(null);
   useEffect(() => {
     setInkHandlers({
@@ -946,6 +950,8 @@ export function App({
       requestBlock: (input, signal) => handlersRef.current!.requestBlock(input, signal),
       requestTextInput: (options, signal) => handlersRef.current!.requestTextInput(options, signal),
       requestAskUser: (questions, signal) => handlersRef.current!.requestAskUser(questions, signal),
+      requestPermissionConsent: (request, signal) =>
+        handlersRef.current!.requestPermissionConsent(request, signal),
       requestConfirmDangerous: async (command, signal) => {
         // The signal now reaches the overlay, so an abort while the menu is on
         // screen tears it down. The two `signal?.aborted` polls this replaces
@@ -2065,6 +2071,10 @@ export function App({
       let stale = true;
       let entries: MenuEntry[] = [];
       let pending: AppletCandidate[] = [];
+      // Tracked separately from `entries.length` since the Host row is
+      // unconditional: without this the "no applets yet" guidance would be
+      // replaced by a menu whose only row is about the server.
+      let hasApplets = false;
       const rebuild = () => {
         const registry = new AppRegistry();
         pending = appletCandidates.listPending();
@@ -2109,12 +2119,18 @@ export function App({
             });
           }
         }
+        // The first question when a button does nothing is whether anything
+        // is serving the applet at all, and `bernard applet-host status` was
+        // the only way to ask it.
+        rows.push({ type: 'section', title: 'Host' });
+        rows.push({ label: 'Applet host', value: 'host' });
+        hasApplets = appIds.length > 0 || pending.length > 0;
         entries = rows;
         stale = false;
       };
       for (;;) {
         if (stale) rebuild();
-        if (entries.length === 0) {
+        if (!hasApplets) {
           if (firstPass) flashToast('No applets yet. Ask me to build one.');
           return;
         }
@@ -2127,22 +2143,26 @@ export function App({
         listIndex = pick.index;
         const value = pick.item.value as string;
 
+        if (value === 'host') {
+          await appletHostMenu();
+          continue;
+        }
+
         if (value.startsWith('app:')) {
           const id = value.slice(4);
-          const action = await requestMenu([{ label: 'Open in browser' }, { label: 'Back' }], {
-            title: id,
-          });
-          if (action.cancelled || action.index === 1) continue;
-          // Deliberately no Delete row: deleting an applet destroys its data
-          // store and any specialist bound to it, and that authority is the
-          // CLI's (`bernard app delete`) for the same reason `app-grant` is.
-          try {
-            const { appOpen } = await import('../apps/app-cli.js');
-            await appOpen(id, {});
-            flashToast(`Opened ${id}.`, 'success');
-          } catch (err) {
-            flashToast(`Could not open ${id}: ${(err as Error).message}`, 'error');
-          }
+          // Every `bernard app` operation has an equivalent here (#460),
+          // deletion and grants included.
+          //
+          // The rule that used to keep them out is about the MODEL acting:
+          // `app-grants.ts` refuses to let a model widen the authority of the
+          // app it is running inside, and `src/tools/applet.ts` has no delete
+          // for the same reason. Neither argument extends to a menu. A user
+          // selecting a row is the same person, exercising the same authority,
+          // as the one typing `bernard app delete` — this is a user surface,
+          // not an agent surface. Written down because it looks like an
+          // inconsistency and will otherwise be "fixed" back.
+          const stale2 = await appletActionMenu(id);
+          if (stale2) stale = true;
           continue;
         }
 
@@ -2167,6 +2187,267 @@ export function App({
         await handleSubmit(buildAppletRequest(c));
         return;
       }
+    }
+
+    /**
+     * Start, stop and inspect the applet host (#460).
+     *
+     * Calls `startHost`/`stopHost` directly, never `appletHostStart` — that is
+     * the CLI door: it prints (into Ink's alternate screen buffer, outside the
+     * render loop) and sets `process.exitCode = 1` on failure, which from a
+     * REPL menu would make the whole session exit non-zero. The same reason
+     * `apps/open.ts` avoids it.
+     */
+    async function appletHostMenu(): Promise<void> {
+      const { isHostProcessAlive, probeApplet, startHost, stopHost } =
+        await import('../host/client.js');
+      const { HostRegistry } = await import('../host/registry.js');
+      for (;;) {
+        const alive = isHostProcessAlive();
+        const lines: string[] = [alive ? 'Host process: running' : 'Host process: stopped'];
+        if (alive) {
+          const registry = new HostRegistry();
+          for (const id of new AppRegistry().listIds()) {
+            const port = registry.recordFor(id).port;
+            const serving = await probeApplet(port);
+            lines.push(
+              `  ${id} — http://127.0.0.1:${port} (${serving ? 'serving' : 'not serving'})`,
+            );
+          }
+        }
+        const pick = await requestMenu(
+          [
+            { label: alive ? 'Restart' : 'Start' },
+            ...(alive ? [{ label: 'Stop' }] : []),
+            { label: 'Back' },
+          ],
+          { title: 'Applet host', headerLines: lines },
+        );
+        if (pick.cancelled || pick.item.label === 'Back') return;
+        if (pick.item.label === 'Stop') {
+          flashToast(
+            stopHost() ? 'Applet host stopped.' : 'Applet host was not running.',
+            'success',
+          );
+          continue;
+        }
+        if (alive) stopHost();
+        flashToast(
+          (await startHost()) ? 'Applet host started.' : 'Applet host would not start.',
+          'success',
+        );
+      }
+    }
+
+    /**
+     * One applet's operations (#460). Returns whether the list needs rebuilding.
+     */
+    async function appletActionMenu(id: string): Promise<boolean> {
+      const { AppRegistry: Reg } = await import('../apps/registry.js');
+      for (;;) {
+        const parsed = new Reg().get(id);
+        const manage = await import('../apps/manage.js');
+        const grantSummary = manage.applyCspGrant(id, {});
+        const rows: MenuEntry[] = [
+          { label: 'Open in browser', description: await appletOriginLine(id) },
+          {
+            label: 'Permissions',
+            description: grantSummary.ok ? grantSummary.lines.join(' · ') : 'unavailable',
+          },
+          { label: 'Tool grants' },
+          { label: 'View manifest' },
+          { label: 'Delete', description: 'Removes the page, its data, and any bound agent.' },
+          { label: 'Back' },
+        ];
+        const pick = await requestMenu(rows, { title: id });
+        if (pick.cancelled || pick.index === 5) return false;
+
+        if (pick.index === 0) {
+          try {
+            const { appOpen } = await import('../apps/app-cli.js');
+            await appOpen(id, {});
+            flashToast(`Opened ${id}.`, 'success');
+          } catch (err) {
+            flashToast(`Could not open ${id}: ${(err as Error).message}`, 'error');
+          }
+          continue;
+        }
+        if (pick.index === 1) {
+          await appletPermissionsMenu(id);
+          continue;
+        }
+        if (pick.index === 2) {
+          await appletToolGrantMenu(id);
+          continue;
+        }
+        if (pick.index === 3) {
+          if (!parsed.ok) {
+            flashToast(`Cannot read ${id}: ${parsed.failure.message}`, 'error');
+            continue;
+          }
+          showInfo(id, [{ text: JSON.stringify(parsed.manifest, null, 2) }]);
+          return false;
+        }
+        // Delete. The description names what the sweep takes, because
+        // "delete" both understates it (the data store and any bound
+        // specialist go too) and overstates it (the port assignment is kept,
+        // so a re-added applet gets its origin and browser storage back).
+        if (!(await confirmDeletion(requestMenu, id))) continue;
+        const { deleteApplet } = await import('../apps/lifecycle.js');
+        const result = deleteApplet(id);
+        if (!result.deleted) {
+          flashToast(`No such applet: ${id}.`, 'error');
+          return false;
+        }
+        const bound =
+          result.boundSpecialists.length > 0
+            ? ` and ${result.boundSpecialists.length} bound agent(s)`
+            : '';
+        flashToast(`Deleted ${id} — page, data, workspace, grants${bound}.`, 'success');
+        return true;
+      }
+    }
+
+    /** Origin plus whether the host is actually serving it, rather than opening blind. */
+    async function appletOriginLine(id: string): Promise<string> {
+      try {
+        const { HostRegistry } = await import('../host/registry.js');
+        const { isHostProcessAlive, probeApplet } = await import('../host/client.js');
+        const port = new HostRegistry().recordFor(id).port;
+        if (!isHostProcessAlive()) return `http://127.0.0.1:${port} — host not running`;
+        return `http://127.0.0.1:${port} — ${(await probeApplet(port)) ? 'serving' : 'not serving'}`;
+      } catch {
+        return '';
+      }
+    }
+
+    /**
+     * What this applet may reach outside its own origin, and what it was
+     * refused (#467, #468).
+     *
+     * The same authority the consent prompt exercises, reached deliberately
+     * rather than at build time — which is where a user who denied something,
+     * or who wants it back, actually goes.
+     */
+    async function appletPermissionsMenu(id: string): Promise<void> {
+      const manage = await import('../apps/manage.js');
+      const { loadBlocked, clearBlocked } = await import('../host/violations.js');
+      const { DIRECTIVE_NAMES } = await import('../host/csp-grant.js');
+      for (;;) {
+        const current = manage.applyCspGrant(id, {});
+        if (!current.ok) {
+          flashToast(current.error, 'error');
+          return;
+        }
+        const blocked = loadBlocked(id);
+        const rows: MenuEntry[] = [{ type: 'section', title: 'Granted' }];
+        for (const line of current.lines) rows.push({ label: line, value: 'noop' });
+        if (blocked.length > 0) {
+          rows.push({ type: 'section', title: 'Blocked — the applet tried and was refused' });
+          for (const b of blocked) {
+            rows.push({
+              label: `Allow ${DIRECTIVE_NAMES[b.directive]} ${b.origin}`,
+              annotation: `${b.count}×`,
+              description: `last ${formatFriendlyTimestamp(new Date(b.lastSeen))}`,
+              // A typed payload, not a colon-joined string: `MenuEntry.value`
+              // is `unknown` precisely so a shape can travel through intact,
+              // and an origin legitimately contains a `:` before its port —
+              // so encoding one here would only round-trip by being carefully
+              // re-joined at the other end.
+              value: { kind: 'allow' as const, directive: b.directive, origin: b.origin },
+            });
+          }
+        }
+        rows.push({ type: 'section', title: 'Change' });
+        rows.push({ label: 'Allow links to open in your browser', value: 'sandbox' });
+        rows.push({ label: 'Revoke everything', value: 'clear' });
+        rows.push({ label: 'Back', value: 'back' });
+
+        const pick = await requestMenu(rows, {
+          title: `${id} — external access`,
+          headerLines: current.warnings.map((w) => `⚠ ${w}`),
+        });
+        if (pick.cancelled) return;
+        const v = pick.item.value ?? 'noop';
+        if (typeof v === 'object' && v !== null && 'kind' in v) {
+          const { directive, origin } = v as unknown as {
+            directive: GrantableDirective;
+            origin: string;
+          };
+          const out = manage.applyCspGrant(id, {
+            [directive]: [...new Set([...(current.grant[directive] ?? []), origin])],
+          });
+          flashToast(out.ok ? `Allowed ${origin}.` : out.error, out.ok ? 'success' : 'error');
+          continue;
+        }
+        if (v === 'back') return;
+        if (v === 'noop') continue;
+        if (v === 'clear') {
+          manage.applyCspGrant(id, { clear: true });
+          clearBlocked(id);
+          flashToast(`${id} reaches only Bernard again.`, 'success');
+          continue;
+        }
+        if (v === 'sandbox') {
+          const out = manage.applyCspGrant(id, { sandbox: ['links'] });
+          flashToast(
+            out.ok ? 'Links will open in your browser.' : out.error,
+            out.ok ? 'success' : 'error',
+          );
+          continue;
+        }
+      }
+    }
+
+    /**
+     * An action's tool allowlist, multi-select over what the backing
+     * specialist can actually reach — so the intersection rule is visible
+     * while the grant is being made rather than as a warning afterwards.
+     */
+    async function appletToolGrantMenu(id: string): Promise<void> {
+      const { AppRegistry: Reg } = await import('../apps/registry.js');
+      const manage = await import('../apps/manage.js');
+      const app = new Reg().get(id);
+      if (!app.ok) {
+        flashToast(app.failure.message, 'error');
+        return;
+      }
+      const actionNames = Object.keys(app.manifest.actions);
+      const chosen = await requestMenu(
+        actionNames.map((name) => ({
+          label: name,
+          description: (app.manifest.actions[name].toolAllowlist ?? []).join(', ') || 'no tools',
+        })),
+        { title: `${id} — grant tools to which action?` },
+      );
+      if (chosen.cancelled) return;
+      const actionName = actionNames[chosen.index];
+
+      const targets = manage.targetToolsFor(id, actionName);
+      if (!targets || targets.length === 0) {
+        flashToast(
+          `"${actionName}" has no agent behind it, or its agent targets no tools — nothing to grant.`,
+          'error',
+        );
+        return;
+      }
+      const held = new Set(app.manifest.actions[actionName].toolAllowlist ?? []);
+      const picked = await requestMultiMenu(
+        targets.map((t) => ({ label: t, active: held.has(t) })),
+        { title: `${actionName} — tools (space to toggle)` },
+      );
+      if (picked.cancelled) return;
+      const out = manage.setActionGrant(
+        id,
+        actionName,
+        picked.items.map((i) => i.label),
+      );
+      if (!out.ok) {
+        flashToast(out.error, 'error');
+        return;
+      }
+      flashToast(`${id}/${actionName}: ${out.tools.join(', ') || 'no tools'}`, 'success');
+      for (const w of out.warnings) flashToast(w, 'error');
     }
 
     if (is(text, '/candidates')) {
@@ -3738,12 +4019,111 @@ export function App({
   // `handlersRef.current` assignment below rewrites the slot every render so
   // the registered (stable) shim object always forwards to the latest
   // closures.
+
+  /**
+   * The permission prompt an applet's declaration produces (#467, #468).
+   *
+   * This is the "installing an app" moment: the applet has just been built and
+   * the user is already looking at the screen, which is the only point where an
+   * interruption is cheaper than a note telling them to go and type a command
+   * later. Everything after this is `/applets → Permissions`.
+   *
+   * **Bernard writes the label; the applet writes the reason.** The structural
+   * facts — which capability, which origins — are rendered from the manifest by
+   * `permission-consent.ts` and are verifiable. The applet's own sentence is
+   * model-written prose being used to influence a security decision, so it is
+   * quoted and attributed rather than presented as Bernard's own words, and it
+   * is never the only thing on the row. Same posture as `<available_sources>`.
+   *
+   * **"Allow all" cannot cover everything, deliberately.** An ask marked
+   * `ownScreen` — a two-way network channel, or any whole-scheme wildcard —
+   * gets its own question however the blanket row was answered, because the
+   * blanket row is the one people press without reading.
+   *
+   * Cancelling is a deny: the applet is still built, and the user can grant
+   * later. Nothing here can widen anything the applet did not ask for.
+   */
+  async function requestPermissionConsent(
+    request: PermissionConsentRequest,
+    signal?: AbortSignal,
+  ): Promise<PendingPermission[]> {
+    const { pending, appName } = request;
+    if (pending.length === 0) return [];
+
+    const describe = (p: PendingPermission): string[] => [
+      `  ${p.label}`,
+      `    ${p.detail}`,
+      // Attributed, so the reader can tell whose claim it is.
+      ...(p.reason ? [`    "${p.reason}" — the applet's words`] : []),
+    ];
+
+    const blanket = pending.filter((p) => !p.ownScreen);
+    const individually = pending.filter((p) => p.ownScreen);
+    const header = [
+      `${appName} needs permission to:`,
+      '',
+      ...pending.flatMap(describe),
+      '',
+      notAskedLine(pending),
+    ];
+
+    const allowed: PendingPermission[] = [];
+    let reviewEach = blanket.length === 0;
+
+    if (blanket.length > 0) {
+      const rows: MenuEntry[] = [
+        {
+          label: blanket.length === pending.length ? 'Allow all' : 'Allow these',
+          description: blanket.map((p) => p.label).join('; '),
+        },
+        { label: 'Review one at a time' },
+        { label: "Skip — don't allow any" },
+      ];
+      const pick = await requestMenu(
+        rows,
+        { title: 'Applet permissions', headerLines: header },
+        signal,
+      );
+      if (pick.cancelled || pick.index === 2) return [];
+      if (pick.index === 0) allowed.push(...blanket);
+      else reviewEach = true;
+    }
+
+    const remaining = reviewEach ? [...blanket, ...individually] : individually;
+    for (const item of remaining) {
+      if (signal?.aborted) return allowed;
+      const rows: MenuEntry[] = [{ label: 'Allow' }, { label: "Don't allow" }];
+      const pick = await requestMenu(
+        rows,
+        {
+          title: item.label,
+          headerLines: [
+            ...describe(item),
+            '',
+            // Said plainly rather than in CSP terms, because this is the screen
+            // where the difference actually costs something.
+            item.key === 'connectSrc'
+              ? 'This is a two-way channel: the applet can send data to these sites, not only read from them.'
+              : item.sources.some(isWildcardSource)
+                ? 'This is a wildcard — it covers every site, not a named few.'
+                : 'The applet can load content from these sites.',
+          ],
+        },
+        signal,
+      );
+      if (pick.cancelled) return allowed;
+      if (pick.index === 0) allowed.push(item);
+    }
+    return allowed;
+  }
+
   handlersRef.current = {
     requestMenu,
     requestConfirm,
     requestBlock,
     requestTextInput,
     requestAskUser,
+    requestPermissionConsent,
   };
 
   // Overlay teardown, one closure per pending slot. Passed to `openOverlay` so

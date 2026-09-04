@@ -39,6 +39,46 @@ export interface ServiceUnitOptions {
   daemonPath: string;
   /** Where the daemon's own log goes; the service redirects nothing else there. */
   logPath: string;
+  /**
+   * Environment the daemon must inherit to read the same files the CLI writes.
+   *
+   * A login service starts from the session's own environment, not from the
+   * shell that installed it, so `BERNARD_HOME` / `XDG_CONFIG_HOME` set in a
+   * profile script do not reach it — and the daemon then reads a DIFFERENT
+   * `profiles.json` than `bernard app csp` writes. The symptom is the worst
+   * kind: the grant is stored, the CLI prints it back, and the applet keeps
+   * being blocked. Pre-existing (it already affects `appToolGrants`), but a
+   * permission the user can see themselves grant is what makes it visible.
+   *
+   * Passed in rather than read here, so `serviceUnit` stays a pure string
+   * builder that tests can drive without touching a real environment.
+   */
+  env?: Record<string, string>;
+}
+
+/**
+ * The variables a daemon needs forwarded, when they are set.
+ *
+ * Deliberately a short allowlist rather than the whole environment: a unit
+ * file is written to disk in a user-readable location, so copying an entire
+ * environment into it would put whatever secrets it holds there too.
+ */
+export const FORWARDED_ENV_VARS = [
+  'BERNARD_HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_STATE_HOME',
+  'XDG_CACHE_HOME',
+] as const;
+
+/** Those of {@link FORWARDED_ENV_VARS} that are actually set. */
+export function serviceEnvFrom(env: NodeJS.ProcessEnv): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of FORWARDED_ENV_VARS) {
+    const value = env[key];
+    if (value) out[key] = value;
+  }
+  return out;
 }
 
 /**
@@ -73,6 +113,7 @@ export function serviceDirSegments(platform: ServicePlatform): string[] {
  */
 export function serviceUnit(platform: ServicePlatform, opts: ServiceUnitOptions): ServiceUnit {
   const { nodePath, daemonPath, logPath } = opts;
+  const env = opts.env ?? {};
   switch (platform) {
     case 'linux':
       return {
@@ -89,6 +130,7 @@ export function serviceUnit(platform: ServicePlatform, opts: ServiceUnitOptions)
           '[Service]',
           'Type=simple',
           `ExecStart=${nodePath} ${daemonPath}`,
+          ...Object.entries(env).map(([k, v]) => `Environment="${k}=${v}"`),
           'Restart=on-failure',
           'RestartSec=5',
           'StartLimitBurst=3',
@@ -118,6 +160,17 @@ export function serviceUnit(platform: ServicePlatform, opts: ServiceUnitOptions)
           `    <string>${nodePath}</string>`,
           `    <string>${daemonPath}</string>`,
           '  </array>',
+          ...(Object.keys(env).length > 0
+            ? [
+                '  <key>EnvironmentVariables</key>',
+                '  <dict>',
+                ...Object.entries(env).flatMap(([k, v]) => [
+                  `    <key>${k}</key>`,
+                  `    <string>${v}</string>`,
+                ]),
+                '  </dict>',
+              ]
+            : []),
           '  <key>RunAtLoad</key>',
           '  <true/>',
           '  <key>StandardErrorPath</key>',
@@ -134,7 +187,12 @@ export function serviceUnit(platform: ServicePlatform, opts: ServiceUnitOptions)
         relativePath: `${SERVICE_LABEL}.cmd`,
         // A file in the Startup folder IS the registration — nothing to
         // activate, which is the reason to prefer it over Task Scheduler here.
-        contents: ['@echo off', `start "" /b "${nodePath}" "${daemonPath}"`, ''].join('\r\n'),
+        contents: [
+          '@echo off',
+          ...Object.entries(env).map(([k, v]) => `set "${k}=${v}"`),
+          `start "" /b "${nodePath}" "${daemonPath}"`,
+          '',
+        ].join('\r\n'),
         activate: null,
         deactivate: null,
       };

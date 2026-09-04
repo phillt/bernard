@@ -137,3 +137,15 @@ export const APPLET_HOST_LOG_FILE = path.join(STATE_DIR, 'applet-host.log');
  * i.e. trusted at exactly the wrong moment.
  */
 export const APPLET_HOSTS_FILE = path.join(STATE_DIR, 'applet-hosts.json');
+
+/**
+ * What the browser blocked, per applet (#467).
+ *
+ * Host-owned state, deliberately neither of the two homes an applet can reach:
+ * not `appletAssetDir`, which is SERVED, and not `appletDataDir`, which the
+ * applet itself writes — a record of what an applet was refused must not be
+ * editable by that applet. Beside {@link APPLET_HOSTS_FILE} because it is the
+ * same kind of thing: Bernard's own operational notes about an applet, rather
+ * than anything the applet declares about itself.
+ */
+export const APPLET_BLOCKS_FILE = path.join(STATE_DIR, 'applet-blocks.json');

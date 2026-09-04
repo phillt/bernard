@@ -26,6 +26,7 @@ import { PREFS_PATH, PROFILES_PATH, PROFILES_MIGRATED_MARKER } from './paths.js'
 import { atomicWriteFileSync } from './fs-utils.js';
 import type { ResponseStyle } from './agent-prompt.js';
 import type { ToolPermissions, ToolPermissionRules } from './tool-permissions.js';
+import type { AppCspGrant } from './host/csp-grant.js';
 import type { VoiceBackend } from './voice-service.js';
 
 /** Slug pattern + length cap used for profile ids. */
@@ -95,6 +96,19 @@ export interface ProfileSettings {
    * Read and written through `src/apps/app-grants.ts`.
    */
   appToolGrants?: Record<string, ToolPermissionRules>;
+  /**
+   * Per-app CSP grants (#467, #468), keyed by app id — which external origins
+   * an applet may load, and whether it may open a link.
+   *
+   * Here rather than in the manifest for the reason `appToolGrants` is: the
+   * manifest is the app's own file, written by the `applet` tool, so a policy
+   * stored there would be settable by the app. An applet may *declare* what it
+   * needs (`AppManifest.permissions`) and a declaration grants nothing; only a
+   * user allowing it puts anything in this map, and only what is in this map
+   * reaches a response header.
+   * Read and written through `src/apps/app-csp-grants.ts`.
+   */
+  appCspGrants?: Record<string, AppCspGrant>;
   /**
    * "Run Without Permission Checks or Safeguards" (#212). When true the
    * policy engine forces `toolMode: 'write'` + `confirmThreshold: 'never'`
