@@ -140,14 +140,8 @@ export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineE
       // empty input with no flags (see `keys.ts`) — but they are no longer
       // unreachable: `useRawKeys` decodes them off stdin and calls
       // `toLineStart`/`toLineEnd` directly. These chords stay as aliases.
-      if (key.ctrl && input === 'a') {
-        toLineStart();
-        return true;
-      }
-      if (key.ctrl && input === 'e') {
-        toLineEnd();
-        return true;
-      }
+      if (key.ctrl && input === 'a') return moveTo(lineStart);
+      if (key.ctrl && input === 'e') return moveTo(lineEnd);
 
       // ORDERING 2: word-delete before plain backspace. Alt-Backspace arrives
       // as `{delete: true, meta: true}`, so the backspace branch below would
@@ -177,9 +171,13 @@ export function useLineEditor(initial = '', opts: LineEditorOptions = {}): LineE
         // Modified Enter in CSI-u encoding (kitty/foot/ghostty Shift+Enter).
         // Ink cannot parse `ESC [ 13 ; 2 u`, so it strips the ESC and hands the
         // rest on as printable text — which is how `[13;2u` got typed into
-        // overlay fields (#399). `Prompt` never gets here (its `newlineIntent`
-        // runs first and inserts a real newline); every other caller is
-        // single-line, where a newline would be stripped anyway.
+        // overlay fields (#399). `Prompt` normally handles it before this, in
+        // `newlineIntent`, and inserts a real newline — but only when the chord
+        // arrived alone: `isModifiedEnter` requires the WHOLE input to be it, so
+        // a chunk that coalesced it with typing (`ab[13;2u`) does reach here and
+        // has the chord dropped rather than turned into a newline. Losing the
+        // newline is the right outcome; assuming the path is unreachable is not,
+        // which is what this comment used to say.
         //
         // Stripped rather than swallowed whole, unlike the mouse report above:
         // a chunk can coalesce the keypress with real typing (`[13;2uabc`), and

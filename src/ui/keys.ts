@@ -32,22 +32,41 @@ export type NavKey = 'home' | 'end';
 /**
  * Every encoding Ink's own `keyName` table maps to `home`/`end`, mirrored here
  * because Ink's parser is not importable — its `exports` map exposes only
- * `./build/index.js`, so a deep import would break on any patch release.
+ * `./build/index.js`, so a deep import in production would break on any patch
+ * release.
  *
  * Terminals genuinely disagree about which of these they send (xterm `CSI H`,
- * application-cursor-mode `SS3 OH`, vt220 `CSI 1~`, rxvt `CSI 7~`), so all of
- * them have to be here — supporting only the one your terminal happens to emit
- * is how this reads as "works for me".
+ * application-cursor-mode `SS3 OH`, vt220 `CSI 1~`, rxvt `CSI 7~` plus its
+ * modified `$`/`^` forms), so all of them have to be here — supporting only the
+ * one your terminal happens to emit is how this reads as "works for me".
+ *
+ * **A mirror drifts, so the drift is a test rather than a promise.** This list
+ * shipped with four of Ink's twelve rows missing on its first draft, under a
+ * docstring that already claimed to be complete — which is the whole argument
+ * against mirroring, answering itself. `keys.test.ts` reads Ink's `keyName`
+ * table out of `node_modules` by file path (the `exports` map does not restrict
+ * that, and a test may depend on the installed tree in a way production must
+ * not) and fails if any `home`/`end` row here is missing. Same direction as
+ * `meta-coverage.test.ts`: walk the source of truth, not the copy.
+ *
+ * Known limit, since it decides how the next key lands: a literal-prefix table
+ * cannot express **modified** Home/End (`ESC [ 1;5 H` = Ctrl+Home), which Ink
+ * parses to `home` with a `ctrl` modifier. Supporting those means a regex, not
+ * another row.
  */
 const NAV_SEQUENCES: ReadonlyArray<readonly [string, NavKey]> = [
   ['[H', 'home'],
   ['OH', 'home'],
   ['[1~', 'home'],
   ['[7~', 'home'],
+  ['[7$', 'home'], // rxvt Shift+Home
+  ['[7^', 'home'], // rxvt Ctrl+Home
   ['[F', 'end'],
   ['OF', 'end'],
   ['[4~', 'end'],
   ['[8~', 'end'],
+  ['[8$', 'end'], // rxvt Shift+End
+  ['[8^', 'end'], // rxvt Ctrl+End
 ];
 
 /**
@@ -74,14 +93,23 @@ const MODIFIED_ENTER_RE = /\x1b?\[13;\d+u/g;
  * still moves once per press rather than once per chunk.
  */
 export function parseNavKeys(chunk: string): NavKey[] {
-  if (!chunk.includes('\x1b')) return [];
   const found: NavKey[] = [];
-  for (let i = 0; i < chunk.length; i++) {
-    if (chunk[i] !== '\x1b') continue;
+  // `indexOf` to jump between escapes rather than walking every character: a
+  // chunk with no ESC costs one scan and returns, and — the case a plain
+  // character loop gets wrong — a chunk that DOES contain one does not then pay
+  // the 8-way comparison per character for its whole length. Measured on a
+  // 100 KB paste carrying a single escape: 172 µs walking, 0.7 µs jumping.
+  //
+  // A `matchAll` over one alternation regex is shorter, matches `mouse.ts`'s
+  // style, and was measured equivalent on all 18 cases in `keys.test.ts` — but
+  // it is **60x slower** on that same paste (41.8 µs) and 8x on an ordinary
+  // keystroke. This runs on every stdin chunk, from up to three listeners, so
+  // the longer form wins the axis that matters. Do not "simplify" it back.
+  for (let i = chunk.indexOf('\x1b'); i !== -1; i = chunk.indexOf('\x1b', i + 1)) {
     for (const [seq, name] of NAV_SEQUENCES) {
       if (chunk.startsWith(seq, i + 1)) {
         found.push(name);
-        i += seq.length; // skip the sequence; the loop's i++ covers the ESC
+        i += seq.length;
         break;
       }
     }
@@ -100,10 +128,18 @@ export function parseNavKeys(chunk: string): NavKey[] {
  * where the keypress arrived alone.
  */
 export function stripModifiedEnter(input: string): string {
-  return input.includes('[13;') ? input.replace(MODIFIED_ENTER_RE, '') : input;
+  return input.replace(MODIFIED_ENTER_RE, '');
 }
 
-/** True when `input` is a modified Enter and nothing else. */
+/**
+ * True when `input` is a modified Enter and nothing else.
+ *
+ * `Prompt`'s newline intent, where the whole keypress must be the chord — it
+ * inserts a real newline, so a chunk that also carried typing has to fall
+ * through to the editor and be stripped there instead. Shared with
+ * {@link stripModifiedEnter} rather than spelled again as a regex in
+ * `Prompt.tsx`, which is where it lived and where it could drift from this one.
+ */
 export function isModifiedEnter(input: string): boolean {
   return input.length > 0 && stripModifiedEnter(input) === '';
 }

@@ -115,7 +115,7 @@ export function TranscriptViewport({
     scrollBy(event.direction === 'up' ? -WHEEL_STEP : WHEEL_STEP);
   }, mouseEnabled);
 
-  useInput((_input, key) => {
+  useInput((_, key) => {
     const page = Math.max(1, viewportH - 1);
     if (key.pageUp) scrollBy(-page);
     else if (key.pageDown) scrollBy(page);

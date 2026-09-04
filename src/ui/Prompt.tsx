@@ -3,6 +3,7 @@ import { Box, Text, useInput } from 'ink';
 import { getThemeColors } from '../theme.js';
 import { SlashHints, matchSlashCommands, type SlashCommand } from './SlashHints.js';
 import { useRawKeys } from './useRawKeys.js';
+import { isModifiedEnter } from './keys.js';
 import { useLineEditor } from './use-line-editor.js';
 import { BoundedLine, PROMPT_RESERVED_COLUMNS } from './BoundedLine.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
@@ -157,7 +158,7 @@ export function Prompt({
       const newlineIntent =
         input === '\n' || // Ctrl+J (LF) — works everywhere
         (!key.return && input === '\r') || // ESC+CR (iTerm2 / VS Code Shift+Enter) — Ink strips the ESC
-        /^\[13;\d+u$/.test(input); // CSI-u modified Enter (kitty/foot/ghostty Shift+Enter = [13;2u)
+        isModifiedEnter(input); // CSI-u modified Enter (kitty/foot/ghostty Shift+Enter = [13;2u)
       if (newlineIntent) {
         editor.insert('\n');
         setSelectedIndex(0);

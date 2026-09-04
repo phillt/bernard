@@ -8,16 +8,7 @@ import { Prompt } from '../Prompt.js';
 import { TextInputOverlay } from '../overlays/TextInputOverlay.js';
 import { TranscriptViewport } from '../TranscriptViewport.js';
 import { DimensionsProvider } from '../DimensionsContext.js';
-import {
-  HOME_ALL,
-  END_ALL,
-  HOME_CSI,
-  END_CSI,
-  ARROW_LEFT,
-  SHIFT_ENTER_CSIU,
-  ENTER,
-  tick,
-} from './_keys.js';
+import { HOME_CSI, END_CSI, ARROW_LEFT, SHIFT_ENTER_CSIU, ENTER, tick } from './_keys.js';
 
 /**
  * #399 — escapes driven through the REAL input path.
@@ -29,29 +20,34 @@ import {
  * either — the decoder was correct in isolation; the wiring was not.
  */
 
-function typeInto(stdin: { write: (s: string) => void }, text: string) {
-  for (const ch of text) stdin.write(ch);
-}
-
 describe('Home/End in the prompt (#399)', () => {
-  it.each(HOME_ALL)('Home (%j) moves the cursor to the start', async (home) => {
+  // One representative encoding, not all four. The table is pinned per encoding
+  // in `keys.test.ts` (purely, in 3 ms); what THIS level uniquely proves is the
+  // wiring — stdin -> 'data' -> decoder -> `editor.toLineStart` — and one
+  // encoding proves that as well as four. The reason four would otherwise be
+  // worth 400 ms of Ink mounts is that Ink has no stop-propagation, so a given
+  // encoding could in principle be double-handled; measured, all eight arrive
+  // at `useInput` identically as `input: ''`, so that risk is not per-encoding.
+  it('Home moves the cursor to the start', async () => {
+    const home = HOME_CSI;
     const onSubmit = vi.fn();
     const { stdin } = render(createElement(Prompt, { onSubmit }));
     await tick();
-    typeInto(stdin, 'bc');
+    stdin.write('bc');
     await tick();
     stdin.write(home);
     await tick();
     // Typing now lands BEFORE what was there, which is observable without
     // reaching into cursor state.
-    typeInto(stdin, 'a');
+    stdin.write('a');
     await tick();
     stdin.write(ENTER);
     await tick();
     expect(onSubmit).toHaveBeenCalledWith('abc');
   });
 
-  it.each(END_ALL)('End (%j) moves the cursor to the end', async (end) => {
+  it('End moves the cursor to the end', async () => {
+    const end = END_CSI;
     // Move the cursor off the end with ARROWS, not Home — an independently
     // working key. Seeding with Home makes this pass when the whole decoder is
     // dead (Home no-ops, the cursor never leaves the end, End no-ops, and the
@@ -59,14 +55,14 @@ describe('Home/End in the prompt (#399)', () => {
     const onSubmit = vi.fn();
     const { stdin } = render(createElement(Prompt, { onSubmit }));
     await tick();
-    typeInto(stdin, 'bc');
+    stdin.write('bc');
     await tick();
     stdin.write(ARROW_LEFT);
     stdin.write(ARROW_LEFT);
     await tick();
     stdin.write(end);
     await tick();
-    typeInto(stdin, 'd');
+    stdin.write('d');
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -93,12 +89,12 @@ describe('Home/End in an overlay text field (#399)', () => {
       createElement(TextInputOverlay, {
         options: { label: 'Name', initialValue: 'bc' },
         onResolve,
-      } as never),
+      }),
     );
     await tick();
     stdin.write(HOME_CSI);
     await tick();
-    typeInto(stdin, 'a');
+    stdin.write('a');
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -113,7 +109,7 @@ describe('Home/End in an overlay text field (#399)', () => {
       createElement(TextInputOverlay, {
         options: { label: 'Name', initialValue: 'bc' },
         onResolve,
-      } as never),
+      }),
     );
     await tick();
     stdin.write(ARROW_LEFT);
@@ -121,7 +117,7 @@ describe('Home/End in an overlay text field (#399)', () => {
     await tick();
     stdin.write(END_CSI);
     await tick();
-    typeInto(stdin, 'd');
+    stdin.write('d');
     await tick();
     stdin.write(ENTER);
     await tick();
@@ -138,10 +134,10 @@ describe('CSI-u Shift+Enter in an overlay text field (#399)', () => {
       createElement(TextInputOverlay, {
         options: { label: 'Answer', initialValue: '' },
         onResolve,
-      } as never),
+      }),
     );
     await tick();
-    typeInto(stdin, 'ab');
+    stdin.write('ab');
     await tick();
     stdin.write(SHIFT_ENTER_CSIU);
     await tick();
@@ -167,7 +163,7 @@ describe('Home/End in the transcript (#399)', () => {
         createElement(
           Box,
           { flexDirection: 'column', height: FRAME_ROWS },
-          createElement(TranscriptViewport, { items, promptEmpty } as never),
+          createElement(TranscriptViewport, { items, promptEmpty }),
           createElement(Text, null, 'CHROME'),
         ),
       ),

@@ -1,23 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import { parseNavKeys, stripModifiedEnter, isModifiedEnter } from '../keys.js';
+// `_keys.ts` imports only `strip-ansi`, so this file stays React- and Ink-free.
+import { ESC, HOME_ALL, END_ALL } from './_keys.js';
 
 /**
  * Pure-module tests for #399 — no React, no Ink, matching `mouse.test.ts`.
  * The behaviour through the real input path is pinned separately, in
  * `input-escapes.test.tsx`.
  */
-const ESC = '';
-
 describe('parseNavKeys', () => {
   it('decodes every encoding Ink maps to home/end', () => {
-    // Terminals genuinely disagree about which they send, so supporting only
-    // the one on this machine is how this ships as "works for me".
-    for (const seq of ['[H', 'OH', '[1~', '[7~']) {
-      expect(parseNavKeys(`${ESC}${seq}`)).toEqual(['home']);
-    }
-    for (const seq of ['[F', 'OF', '[4~', '[8~']) {
-      expect(parseNavKeys(`${ESC}${seq}`)).toEqual(['end']);
-    }
+    // Driven from the shared constants, not a third hand-written copy of the
+    // table: `keys.ts`'s `NAV_SEQUENCES` is the source, `_keys.ts` exports the
+    // spellings for tests, and re-typing them here is how a ninth encoding gets
+    // added to production and silently stays uncovered by this file while the
+    // behavioural suite covers it — the unit test reading green on the old set.
+    for (const seq of HOME_ALL) expect(parseNavKeys(seq)).toEqual(['home']);
+    for (const seq of END_ALL) expect(parseNavKeys(seq)).toEqual(['end']);
   });
 
   it('finds keys coalesced with ordinary typing, in order', () => {
@@ -42,6 +41,37 @@ describe('parseNavKeys', () => {
     expect(parseNavKeys(ESC)).toEqual([]);
     expect(parseNavKeys(`${ESC}[`)).toEqual([]);
     expect(parseNavKeys(`${ESC}[1`)).toEqual([]);
+  });
+});
+
+/**
+ * The mirror-drift guard (#399). `keys.ts` copies Ink's `keyName` rows because
+ * production must not deep-import a path outside Ink's `exports` map — but a
+ * copy drifts, and this one shipped its first draft with four of Ink's twelve
+ * rows missing, under a docstring claiming completeness.
+ *
+ * So walk Ink's actual file, in the direction the mistake is made: read every
+ * row Ink maps to `home`/`end` and require `parseNavKeys` to decode it. A test
+ * MAY depend on the installed tree this way; the `exports` map does not
+ * restrict a file-path read, and if a future Ink moves the file this fails
+ * loudly rather than silently covering nothing. Same idiom as
+ * `meta-coverage.test.ts` walking the constructed registry.
+ */
+describe("mirror of Ink's keyName table", () => {
+  it('decodes every home/end encoding Ink itself recognises', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync('node_modules/ink/build/parse-keypress.js', 'utf8');
+    const table = src.match(/const keyName = \{([\s\S]*?)\n\};/);
+    expect(table, "Ink's keyName table moved — update this guard").not.toBeNull();
+
+    const rows = [...table![1].matchAll(/'?([^\s':]+)'?\s*:\s*'(home|end)'/g)];
+    // If the scrape breaks, the loop below vacuously passes — so pin the count
+    // too. Ink 5.2.1 has twelve; a change here means Ink's table moved.
+    expect(rows.length).toBe(12);
+
+    for (const [, seq, name] of rows) {
+      expect(parseNavKeys(`${ESC}${seq}`), `Ink maps ${seq} -> ${name}`).toEqual([name]);
+    }
   });
 });
 
