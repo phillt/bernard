@@ -300,6 +300,30 @@ describe('invokeAction', () => {
     expect(log).toContain('values withheld');
   });
 
+  it('pings any running session, and a broken notifier does not break the failure', async () => {
+    // The hook lives in `fail()` so it covers every failure shape by
+    // construction — including ones added later.
+    const m = await load();
+    const registry = await import('../inbox/registry.js');
+    const send = await import('../inbox/send.js');
+    send.resetSendDedupe();
+    registry.registerSession({ sessionId: 'listener' });
+    writeApp();
+
+    const result = await m.invokeAction({ appId: 'nope', action: 'ask', args: {} });
+    expect(result.ok).toBe(false);
+    const inbox = registry.listLiveSessions()[0].inboxDir;
+    const delivered = fs.readdirSync(inbox).filter((n) => n.endsWith('.json'));
+    expect(delivered).toHaveLength(1);
+    const msg = JSON.parse(fs.readFileSync(path.join(inbox, delivered[0]), 'utf-8')) as {
+      text: string;
+      hint?: string;
+    };
+    expect(msg.text).toContain('nope');
+    expect(msg.hint).toContain('bernard app logs');
+    registry.unregisterSession('listener');
+  });
+
   it('records a run failure message in full', async () => {
     const m = await load();
     writeApp();

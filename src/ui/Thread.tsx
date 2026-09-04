@@ -21,6 +21,8 @@ import { formatFriendlyTimestamp } from '../output.js';
 import { renderMarkdown } from './markdown.js';
 import { useDimensionsCtx } from './DimensionsContext.js';
 import { ErrorPanel } from './ErrorPanel.js';
+import { NoticePanel } from './NoticePanel.js';
+import type { NoticeData } from './notice.js';
 import type { ErrorPanelData } from './error-format.js';
 import type { MessageStore, StreamEvent } from './message-store.js';
 
@@ -50,6 +52,16 @@ export interface StaticItem {
    * the agent's LLM history.
    */
   error?: ErrorPanelData;
+  /**
+   * When set, this item is a message delivered from OUTSIDE the session
+   * (#462), rendered as {@link NoticePanel} instead of a message.
+   *
+   * UI transcript only — never pushed into `agent.history`, so the model never
+   * sees it and it is never persisted or replayed. That is the whole trust
+   * story for `bernard say`: the text has no path to the model, so the
+   * instruction-source boundary is structural rather than a policy.
+   */
+  notice?: NoticeData;
 }
 
 interface ThreadProps {
@@ -453,6 +465,7 @@ export function StaticItemView({
   renderMessage: (item: StaticItem) => ReactNode;
 }) {
   if (item.error) return <ErrorPanel data={item.error} />;
+  if (item.notice) return <NoticePanel data={item.notice} />;
   if (item.message) return <>{renderMessage(item)}</>;
   return null;
 }

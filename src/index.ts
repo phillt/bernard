@@ -1119,6 +1119,40 @@ program
   });
 
 program
+  .command('say [text...]')
+  .description('Put a message in front of a running Bernard session')
+  .option('--session <id>', 'Deliver to this session (an unambiguous id prefix is fine)')
+  .option('--all', 'Deliver to every live session')
+  .option('--source <label>', 'Attribution shown on the notice (default: cli)')
+  .option('--hint <text>', 'One-line suggested next step, shown under the message')
+  .option('--if-running', 'Exit 0 instead of failing when no session is live')
+  .option('--no-wait', 'Exit as soon as it is written; do not confirm pickup')
+  .option('--timeout <ms>', 'How long to wait for pickup')
+  .option('--list', 'List live sessions and exit')
+  .action(
+    async (
+      text: string[] | undefined,
+      options: {
+        session?: string;
+        all?: boolean;
+        source?: string;
+        hint?: string;
+        ifRunning?: boolean;
+        wait?: boolean;
+        timeout?: string;
+        list?: boolean;
+      },
+    ) => {
+      const { sayCommand } = await import('./say-cli.js');
+      const { timeout, ...rest } = options;
+      process.exitCode = await sayCommand((text ?? []).join(' '), {
+        ...rest,
+        ...(timeout ? { timeout: Number(timeout) } : {}),
+      });
+    },
+  );
+
+program
   .command('cron-grant <id> [paths...]')
   .description('Show or set the folders a cron job may write to, beyond its own workspace')
   .option('--clear', 'Remove all extra write paths, leaving only the job workspace')

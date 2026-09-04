@@ -5,6 +5,7 @@ import { grantedToolNames, resolveFromManifest } from './invocation.js';
 import type { DispatchActionResult } from './dispatch.js';
 import { SpecialistStore } from '../specialists.js';
 import { classifyError } from '../error-taxonomy.js';
+import { sendToSessions } from '../inbox/send.js';
 import { appendJsonl, rotateJsonlByCount } from '../jsonl.js';
 import { SCRIPT_LOG_FILE } from '../paths.js';
 import { debugLog } from '../logger.js';
@@ -233,6 +234,38 @@ export interface InvocationLogRow {
 }
 
 /**
+ * Tells any running REPL that an applet action failed (#461 → #462).
+ *
+ * Hooked into `fail()` rather than at each call site because that function is
+ * already "the single failure path… written once because the three hand-rolled
+ * copies it replaced had diverged" — so this covers every failure shape there
+ * is, and every one added later, by construction.
+ *
+ * It crosses processes even though it is an in-process call: the applet host
+ * daemon is not the REPL. Shelling out to `bernard say` would cost a Node cold
+ * start inside an HTTP request handler and would require `dist/` to exist.
+ *
+ * `{ all: true }` because refusing on ambiguity would drop the notice in the
+ * two-terminal case where it is most useful, and the sender's dedupe window
+ * covers a page that retries a broken button.
+ *
+ * Guarded: a notification must never turn a handled failure into an unhandled
+ * one.
+ */
+function notifySessions(appId: string, action: string, message: string): void {
+  try {
+    sendToSessions({
+      text: `Applet "${appId}" action "${action}" failed: ${message}`,
+      source: { kind: 'applet', label: `applet:${appId}` },
+      hint: `bernard app logs ${appId} --last 5`,
+      target: { all: true },
+    });
+  } catch {
+    // Nothing about reporting a failure may create one.
+  }
+}
+
+/**
  * Runs one app action and returns its result. Never throws, never writes to
  * stdout, never touches `process`.
  */
@@ -279,6 +312,7 @@ export async function invokeAction(opts: InvokeActionOptions): Promise<Invocatio
       ...extra,
       capabilityId,
     });
+    notifySessions(opts.appId, opts.action, message);
     return {
       schemaVersion: 1,
       ok: false,
