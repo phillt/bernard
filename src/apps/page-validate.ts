@@ -35,7 +35,11 @@ export interface PageIssue {
 const HAND_ROLLED = ['/__bernard/invoke', '/__bernard/store', '/__bernard/bootstrap.json'];
 const TOKEN_HEADER = 'x-bernard-token';
 
-export function validateAppletPage(html: string, actions: string[]): PageIssue[] {
+export function validateAppletPage(
+  html: string,
+  actions: string[],
+  opts: { declaresLinkPermission?: boolean } = {},
+): PageIssue[] {
   const issues: PageIssue[] = [];
   const refuse = (message: string) => issues.push({ level: 'refuse', message });
   const warn = (message: string) => issues.push({ level: 'warn', message });
@@ -126,6 +130,42 @@ export function validateAppletPage(html: string, actions: string[]): PageIssue[]
   // prefix. That is the same reason this whole check is a warning.
   for (const [, ref] of html.matchAll(/getElementById\(\s*['"]([^'"]+)['"]\s*\)/g)) {
     if (!ids.has(ref)) warn(`getElementById("${ref}") matches no id in the markup.`);
+  }
+
+  // Links off the applet's own origin (#468).
+  //
+  // A warning rather than a refusal, on this module's own certainty rule: an
+  // external link is legitimate, and whether the applet MEANT it to be
+  // clickable is not decidable from the string. What is decidable is that
+  // without a declared link permission the click does nothing at all — the
+  // `sandbox` header grants neither `allow-popups` nor `allow-top-navigation`,
+  // so `target="_blank"` silently no-ops and the reader is left thinking the
+  // page is broken rather than unpermitted. That is exactly the failure the
+  // news-feed applet hit, and it is invisible in devtools.
+  const externalLinks = [
+    ...html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']https?:\/\/[^"']+["'][^>]*>/gi),
+  ];
+  if (externalLinks.length > 0 && !opts.declaresLinkPermission) {
+    warn(
+      `This page links ${externalLinks.length} external URL(s), and a click on one will do ` +
+        'nothing: an applet is sandboxed, so it may not open a window or navigate away until ' +
+        'the user permits it. Declare it — `permissions: { sandbox: { tokens: ["links"], ' +
+        'reason: "..." } }` — and the user is asked when the applet is built.',
+    );
+  }
+
+  // `window.opener` stays live in a popup that escaped the sandbox, which is
+  // what makes reverse tabnabbing possible. Cheap to fix and easy to forget.
+  const blankNoOpener = [
+    ...html.matchAll(
+      /<a\b(?![^>]*\brel\s*=\s*["'][^"']*noopener)[^>]*\btarget\s*=\s*["']_blank["'][^>]*>/gi,
+    ),
+  ];
+  if (blankNoOpener.length > 0) {
+    warn(
+      'A `target="_blank"` link without `rel="noopener"` leaves the opened page able to reach ' +
+        'back through `window.opener`. Add `rel="noopener noreferrer"`.',
+    );
   }
 
   return issues;

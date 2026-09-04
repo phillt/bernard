@@ -161,3 +161,60 @@ describe('the client-script check is exact but not brittle', () => {
     expect(refusals(withSrc('/__bernard/applet.js.evil'))).toHaveLength(1);
   });
 });
+
+/**
+ * External links (#468).
+ *
+ * The failure these describe is invisible: the sandbox header grants no
+ * navigation token, so a click on an external link does nothing at all — no
+ * error, no console entry — and the page reads as broken rather than as
+ * unpermitted.
+ */
+describe('external links', () => {
+  const page = (body: string) =>
+    [
+      '<link rel="stylesheet" href="/__bernard/tokens.css" />',
+      '<link rel="manifest" href="/__bernard/manifest.webmanifest" />',
+      '<script src="/__bernard/applet.js"></script>',
+      body,
+    ].join('\n');
+
+  it('warns that a click will do nothing when no link permission is declared', () => {
+    const issues = validateAppletPage(page('<a href="https://example.com/story">Story</a>'), []);
+    const warning = issues.find((i) => i.message.includes('will do'));
+    expect(warning?.level).toBe('warn');
+    expect(warning?.message).toContain('sandbox');
+  });
+
+  it('says nothing once the applet declares it', () => {
+    const issues = validateAppletPage(page('<a href="https://example.com/s">S</a>'), [], {
+      declaresLinkPermission: true,
+    });
+    expect(issues.some((i) => i.message.includes('will do nothing'))).toBe(false);
+  });
+
+  it('leaves a same-origin link alone', () => {
+    const issues = validateAppletPage(page('<a href="/about">About</a>'), []);
+    expect(issues.some((i) => i.message.includes('will do nothing'))).toBe(false);
+  });
+
+  it('warns about a _blank link with no noopener, and not about one with it', () => {
+    const bad = validateAppletPage(page('<a href="https://e.com" target="_blank">x</a>'), [], {
+      declaresLinkPermission: true,
+    });
+    expect(bad.some((i) => i.message.includes('window.opener'))).toBe(true);
+    const good = validateAppletPage(
+      page('<a href="https://e.com" target="_blank" rel="noopener noreferrer">x</a>'),
+      [],
+      { declaresLinkPermission: true },
+    );
+    expect(good.some((i) => i.message.includes('window.opener'))).toBe(false);
+  });
+
+  it('never refuses a page for a link', () => {
+    // Certainty, not severity: an external link is legitimate and whether the
+    // author meant it to be clickable is not decidable from the string.
+    const issues = validateAppletPage(page('<a href="https://e.com" target="_blank">x</a>'), []);
+    expect(issues.every((i) => i.level === 'warn')).toBe(true);
+  });
+});

@@ -250,7 +250,9 @@ async function run(
       // remedy reachable in one call rather than being a dead end.
       const page =
         args.page ?? defaultAppletPage(manifest.name, manifest.description, manifest.actions);
-      const issues = validateAppletPage(page, Object.keys(manifest.actions));
+      const issues = validateAppletPage(page, Object.keys(manifest.actions), {
+        declaresLinkPermission: manifest.permissions?.sandbox !== undefined,
+      });
       const refusal = refusalFor(issues);
       if (refusal) return refusal;
 
@@ -286,7 +288,9 @@ async function run(
         // Validated against the manifest as it will be AFTER this update, so a
         // call that adds an action and its button in one go is not refused for
         // invoking something that does not exist yet.
-        issues = validateAppletPage(args.page, Object.keys(manifest.actions));
+        issues = validateAppletPage(args.page, Object.keys(manifest.actions), {
+          declaresLinkPermission: manifest.permissions?.sandbox !== undefined,
+        });
         const refusal = refusalFor(issues);
         if (refusal) return refusal;
         files['index.html'] = args.page;

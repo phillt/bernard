@@ -1132,13 +1132,19 @@ program
 
 program
   .command('app [action] [appId] [actionName]')
-  .description('Manage applets: list | open | allow | delete | path')
+  .description('Manage applets: list | open | allow | csp | delete | path')
   .option('-b, --bundled', 'List only the applets Bernard ships')
   .option('-a, --all', 'List every applet, grouped by origin')
   .option('--no-open', 'Print the URL instead of opening a browser')
   .option('--tools <names>', 'Comma-separated tool names for `allow` (empty clears)')
   .option('--write', 'Let this action write, rather than read-only')
   .option('--confirm <mode>', 'Confirmation mode for this action: off | auto | strict')
+  .option('--img-src <origins>', 'Comma-separated origins this applet may show images from')
+  .option('--connect-src <origins>', 'Origins it may exchange data with — a two-way channel')
+  .option('--font-src <origins>', 'Origins it may load fonts from')
+  .option('--media-src <origins>', 'Origins it may play audio or video from')
+  .option('--sandbox <setting>', 'Link handling: links (open in a new window) | navigate')
+  .option('--clear', 'Remove every external-access grant from this applet')
   .action(
     async (
       action: string | undefined,
@@ -1151,6 +1157,12 @@ program
         open?: boolean;
         bundled?: boolean;
         all?: boolean;
+        imgSrc?: string;
+        connectSrc?: string;
+        fontSrc?: string;
+        mediaSrc?: string;
+        sandbox?: string;
+        clear?: boolean;
       },
     ) => {
       try {
@@ -1174,6 +1186,27 @@ program
             if (!appId) throw new Error('Usage: bernard app open <appId> [--no-open]');
             await cli.appOpen(appId, { open: options.open !== false });
             return;
+          case 'csp': {
+            if (!appId) throw new Error('Usage: bernard app csp <appId> [--img-src a,b] [--clear]');
+            // A flag that was not passed leaves its directive alone; passing
+            // one with an empty value clears just that directive.
+            const list = (v: string | undefined) =>
+              v === undefined
+                ? undefined
+                : v
+                    .split(',')
+                    .map((t) => t.trim())
+                    .filter(Boolean);
+            cli.appCsp(appId, {
+              ...(options.imgSrc !== undefined ? { imgSrc: list(options.imgSrc) } : {}),
+              ...(options.connectSrc !== undefined ? { connectSrc: list(options.connectSrc) } : {}),
+              ...(options.fontSrc !== undefined ? { fontSrc: list(options.fontSrc) } : {}),
+              ...(options.mediaSrc !== undefined ? { mediaSrc: list(options.mediaSrc) } : {}),
+              ...(options.sandbox !== undefined ? { sandbox: list(options.sandbox) } : {}),
+              ...(options.clear ? { clear: true } : {}),
+            });
+            return;
+          }
           case 'allow': {
             if (!appId || !actionName) {
               throw new Error('Usage: bernard app allow <appId> <action> --tools a,b');

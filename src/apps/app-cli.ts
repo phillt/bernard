@@ -2,6 +2,7 @@ import { printError, printInfo } from '../output.js';
 import { AppRegistry, bundledAppIds } from './registry.js';
 import { parseRawAppManifest } from './manifest.js';
 import { deleteApplet } from './lifecycle.js';
+import { applyCspGrant, type CspGrantSpec } from './manage.js';
 import { SpecialistStore } from '../specialists.js';
 import { uncoveredTools, uncoveredToolsMessage } from './invocation.js';
 import * as fs from 'node:fs';
@@ -279,4 +280,28 @@ function warnUncoveredGrant(action: Record<string, unknown>, tools: string[]): v
   // because the actor there is a model mid-authoring, which will not come back
   // to it.
   printInfo(`Warning: ${uncoveredToolsMessage(dispatch.specialistId, tools, missing)}`);
+}
+
+/**
+ * `bernard app csp <id>` — show or set what an applet may reach (#467, #468).
+ *
+ * A sibling sub-action rather than a flag on `app allow`, which is per
+ * ACTION (`appId`, `actionName`, `tools`): a CSP grant is per APPLET and has
+ * no action to name, so `bernard app allow demo --img-src X` would collide
+ * positionally with `bernard app allow demo greet`.
+ *
+ * A printer over {@link applyCspGrant}, so `/applets` can offer the same thing
+ * without printing into Ink's alternate screen buffer.
+ */
+export function appCsp(appId: string, spec: CspGrantSpec): void {
+  const outcome = applyCspGrant(appId, spec);
+  if (!outcome.ok) {
+    printError(outcome.error);
+    process.exitCode = 1;
+    return;
+  }
+  printInfo(`${appId} may reach:`);
+  for (const line of outcome.lines) printInfo(`  ${line}`);
+  for (const warning of outcome.warnings) printInfo(`Warning: ${warning}`);
+  printInfo('Applies to the next request — no restart needed.');
 }
