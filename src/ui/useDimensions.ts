@@ -30,7 +30,22 @@ export function useDimensions(): Dimensions {
 
   useEffect(() => {
     if (!stdout) return;
-    const onResize = () => setDimensions(read(stdout));
+    // Bail out when the size did not actually change. `read` allocates a fresh
+    // object every call, so a plain `setDimensions(read(stdout))` is never
+    // `Object.is`-equal to the previous state and re-renders the whole tree on
+    // any SIGWINCH — including the unconditional sync below, which therefore
+    // always cost one full re-render at mount.
+    //
+    // That was nearly free while the transcript's markdown was shielded behind
+    // `memo(MessageBlock)`. It is not any more: a context consumer re-renders
+    // regardless of memoized ancestors, so since `MarkdownLines` started reading
+    // this context (#464) a no-op resize re-parses every message's markdown —
+    // measured at 34.5 ms for 60 messages, for zero layout change.
+    const onResize = () =>
+      setDimensions((prev) => {
+        const next = read(stdout);
+        return prev.columns === next.columns && prev.rows === next.rows ? prev : next;
+      });
     // Sync once in case the size changed between the initial render and the
     // effect attaching (e.g. a fast resize during startup).
     onResize();

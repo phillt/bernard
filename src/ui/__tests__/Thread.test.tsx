@@ -783,7 +783,7 @@ describe('<TranscriptViewport> layout inside a fixed-height frame', () => {
     expect(stripAnsi(frames[1])).toBe(settled);
   });
 
-  it('shows the tail at rest and says how many rows are above it', async () => {
+  it('shows the tail at rest and says where in the transcript it is', async () => {
     const { lastFrame } = mountFramed({ items: tallReply(30) });
     await tick();
     const frame = stripAnsi(lastFrame() ?? '');
@@ -791,10 +791,23 @@ describe('<TranscriptViewport> layout inside a fixed-height frame', () => {
     expect(frame).toContain('REPLY-29');
     // …the oldest is not…
     expect(frame).not.toContain('REPLY-0\n');
-    // …and, unlike before, the screen says so with a count. A message opening
-    // mid-thought with no marker is what made a complete answer read as a
-    // truncated one.
-    expect(frame).toMatch(/▲ \d+ more rows above/);
+    // …and, unlike before, the screen says so. A message opening mid-thought
+    // with no marker is what made a complete answer read as a truncated one.
+    // One fact in the house spelling (#470): the old string also carried
+    // `▲ N more rows above`, which is `first - 1` and so the same number again.
+    expect(frame).toMatch(/rows \d+–\d+ of \d+/);
+  });
+
+  // #470: it describes what is ABOVE, so it has to be read before the content,
+  // not after it. Nothing pinned the ordering before this.
+  it('renders the position row above the content it describes', async () => {
+    const { lastFrame } = mountFramed({ items: tallReply(30) });
+    await tick();
+    const lines = stripAnsi(lastFrame() ?? '').split('\n');
+    const positionRow = lines.findIndex((l) => /rows \d+–\d+ of \d+/.test(l));
+    const firstContent = lines.findIndex((l) => /REPLY-\d+/.test(l));
+    expect(positionRow).toBeGreaterThanOrEqual(0);
+    expect(positionRow).toBeLessThan(firstContent);
   });
 
   it('reaches the first row of an over-tall reply with PgUp', async () => {
@@ -835,6 +848,9 @@ describe('<TranscriptViewport> layout inside a fixed-height frame', () => {
     await tick();
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('REPLY-0');
-    expect(frame).not.toMatch(/more rows (above|below)/);
+    // Matched against the CURRENT spelling, not a retired one — a negative
+    // assertion on a string the component can no longer emit passes forever
+    // and tests nothing.
+    expect(frame).not.toMatch(/rows \d+–\d+ of \d+/);
   });
 });

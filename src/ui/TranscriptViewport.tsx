@@ -6,7 +6,6 @@ import { useMouseWheel } from './useMouseWheel.js';
 import { ErrorPanel } from './ErrorPanel.js';
 import { MessageBlock, StreamingAssistantMessage, type StaticItem } from './Thread.js';
 import { formatPosition, listPosition } from './overlays/viewer-util.js';
-import { moreRowsLabel } from './line-geometry.js';
 import type { MessageStore } from './message-store.js';
 
 /** Lines moved per mouse-wheel tick / arrow press. */
@@ -43,7 +42,7 @@ const MemoMessageBlock = memo(MessageBlock);
  *
  * Scrolling is implemented with the standard Ink technique: render the full
  * content in an inner column shifted up by `marginTop={-offset}` inside an
- * `overflow="hidden"` viewport box. This reuses the existing `<MessageBlock>` /
+ * `overflowY="hidden"` viewport box. This reuses the existing `<MessageBlock>` /
  * `<StreamingAssistantMessage>` components verbatim (no second rendering path to
  * drift from), and `measureElement` gives the real content + viewport heights so
  * the offset is clamped exactly and "stick to bottom" tracks streaming growth.
@@ -130,22 +129,42 @@ export function TranscriptViewport({
     }
   });
 
-  // Rows hidden on either side of the window. `above` is the one that matters:
-  // it is the half the user cannot see and — stuck at the bottom, which is the
-  // normal state after every turn — has no reason to suspect. `below` is also
-  // the old `scrolledUp`: when `stick`, `effectiveOffset === maxOffset`, so it
-  // is 0 and the "new output" marker is gated exactly as it was. No `Math.max`
-  // guard — `effectiveOffset` is `<= maxOffset` by construction (see above).
-  const above = effectiveOffset;
-  const below = maxOffset - effectiveOffset;
-  // One string, the way every other windowed surface builds it (`MenuOverlay`,
-  // `HelpOverlay`, `OverlayFooter`). Built here rather than branched inside the
-  // JSX so the half the two variants share cannot drift.
-  const range = formatPosition(listPosition(effectiveOffset, viewportH, contentH), 'rows');
-  const [hidden, glyph, side] = above > 0 ? [above, '▲', 'above'] : [below, '▼', 'below'];
-  const position = range && `${moreRowsLabel(hidden, glyph)} ${side} · ${range}`;
+  // Not stuck at the bottom. When `stick`, `effectiveOffset === maxOffset`, so
+  // the "new output" marker is gated exactly as it was when this was a row
+  // count — nothing counts rows here any more, so it is named for what it is.
+  const scrolledUp = effectiveOffset < maxOffset;
+  // ONE fact, in the spelling every other windowed surface uses. It used to
+  // prepend `▲ N more rows above`, which is `first - 1` — the same number again
+  // (#470). Why that mattered: CLAUDE.md → TranscriptViewport.
+  const position = formatPosition(listPosition(effectiveOffset, viewportH, contentH), 'rows');
   return (
     <Box flexDirection="column" flexGrow={1}>
+      {/* The position row, ABOVE the content it describes (#470) — it was below,
+          so the reader had to travel past the thing being described to learn it
+          was cut. A fixed-height sibling with no `flexGrow`, so moving it
+          touches neither the flex distribution below nor either
+          `measureElement`.
+
+          `↓ new output` shares this row rather than sitting at the bottom, and
+          that is a budget decision, not a preference: splitting them costs a
+          SECOND permanently-reserved row, and `plan-window.ts` calibrates
+          `MIN_TRANSCRIPT_ROWS` against the transcript spending exactly one. A
+          conditionally-rendered bottom row would be worse still — layout height
+          would then depend on the very state it is reporting.
+
+          Reserved UNCONDITIONALLY — blank when the whole transcript fits, which
+          is what `formatPosition` returning null means. Rendering it only while
+          scrolled made the viewport's height depend on the budget that decides
+          what is hidden (`OverlayFooter`'s rule) and said nothing at rest, the
+          normal state after every turn. `wrap="truncate"` because it must stay
+          exactly one row at any width, or the reservation is a lie.
+          See CLAUDE.md (#435, #470). */}
+      <Box justifyContent="space-between">
+        <Text color={colors.muted} wrap="truncate">
+          {position ?? ' '}
+        </Text>
+        {busy && scrolledUp && <Text color={colors.accent}>↓ new output</Text>}
+      </Box>
       {/* `flexBasis={0}` is load-bearing and NOT removable, however redundant it
           looks beside `flexGrow`. Ink 5 never maps `overflow` onto Yoga — it is
           a paint-time clip only — so with the default `auto` basis this box's
@@ -159,8 +178,17 @@ export function TranscriptViewport({
           a too-tall chrome — `flexGrow` does not apply to negative free space,
           so the transcript is already at zero before the prompt loses a row.
           Measurements and the full history: CLAUDE.md → TranscriptViewport
-          (#435). Pinned by `Thread.test.tsx`. */}
-      <Box ref={outerRef} flexDirection="column" flexGrow={1} flexBasis={0} overflow="hidden">
+          (#435). Pinned by `Thread.test.tsx`.
+
+          `overflowY`, NOT `overflow` (#464). `overflow: 'hidden'` sets BOTH
+          clip axes, and Ink's horizontal clip mis-slices OSC 8 hyperlinks — a
+          Zoom URL rendered as `https://phone`. This box only ever wanted to clip
+          VERTICALLY, and Ink's own `<Text>` wrapping already bounds every line
+          to the box width, so the horizontal clip was redundant work that could
+          only cause harm. Mechanism, measurements and the false lead that hid
+          it: CLAUDE.md → TranscriptViewport (#464). Pinned by
+          `TranscriptViewport.hyperlink.test.tsx`. */}
+      <Box ref={outerRef} flexDirection="column" flexGrow={1} flexBasis={0} overflowY="hidden">
         <Box ref={innerRef} flexDirection="column" marginTop={-effectiveOffset} flexShrink={0}>
           {header}
           {items.map((item) => (
@@ -189,20 +217,6 @@ export function TranscriptViewport({
             </Box>
           )}
         </Box>
-      </Box>
-      {/* The position row, reserved UNCONDITIONALLY — blank when the whole
-          transcript fits, which is what `formatPosition` returning null means.
-          Rendering it only while scrolled (what this used to do) made the
-          viewport's height depend on the very budget that decides what is
-          hidden — `OverlayFooter`'s rule — and, worse, said nothing at all at
-          rest, which is the normal state after every turn. `wrap="truncate"`
-          because this row must stay exactly one row at any width, or the
-          reservation it is making is a lie. See CLAUDE.md (#435). */}
-      <Box justifyContent="space-between">
-        <Text color={colors.muted} wrap="truncate">
-          {position || ' '}
-        </Text>
-        {busy && below > 0 && <Text color={colors.accent}>↓ new output</Text>}
       </Box>
     </Box>
   );
