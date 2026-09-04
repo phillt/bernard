@@ -21,29 +21,29 @@ async function mainApplet(dispatch: ReturnType<typeof vi.fn>) {
   }));
 
   const { mainAgentDefinition } = await import('../main.js');
-  const { resolveToolSurface } = await import('../tool-surface.js');
+  // `makeCtx` + `toolsOf` rather than a fourth hand-built context: that
+  // fixture's own docstring says a per-file copy is how one drifts without any
+  // test noticing, and its config comes from the repo's one cast-free
+  // `BernardConfig` builder, so a new config field surfaces as a compile error
+  // here instead of silently defaulting.
+  const { makeCtx, toolsOf } = await import('./_mcp-delegation-fixture.js');
 
-  const noopStore = new Proxy({}, { get: () => () => [] });
+  // `overrides` is a shallow spread, so `stores` would be REPLACED wholesale —
+  // dropping routines/specialists/candidates and silently changing what
+  // `createTools` builds. Merge onto the fixture's own instead.
+  const base = makeCtx(false);
   const ctx = {
-    config: { coordinatorMode: 'off', maxSteps: 25, promptCache: false, customProviders: {} },
-    toolOptions: {},
-    mcp: { tools: {}, serverNames: [], serverTools: new Map() },
+    ...base,
     stores: {
+      ...base.stores,
+      // `main.ts` reads `memory.list` for the tool-profiles prompt; the
+      // fixture's default memory store stops at `clearScratch`.
       memory: { clearScratch: () => {}, list: () => [] },
-      routines: noopStore,
-      specialists: noopStore,
-      candidates: noopStore,
-      toolProfiles: { list: () => [] },
     },
-    verification: { record: () => {} },
   } as unknown as AgentContext;
 
   const input = { planStore: {}, systemPrompt: '' } as never;
-  const tools = await mainAgentDefinition.tools(
-    ctx,
-    input,
-    resolveToolSurface(ctx, mainAgentDefinition),
-  );
+  const tools = await toolsOf(mainAgentDefinition, ctx, input);
   return tools.applet as { execute: (a: unknown, b: unknown) => Promise<string> };
 }
 

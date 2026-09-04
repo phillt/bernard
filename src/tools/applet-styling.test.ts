@@ -35,31 +35,21 @@ describe('makeAppletStyler', () => {
     expect(ctx).toBe(CTX);
   });
 
-  it('skips the correction queue', async () => {
+  it('forwards the fields the dispatch needs', async () => {
+    const dispatch = vi.fn(async () => ({ status: 'ok', result: '' }));
+    const { makeAppletStyler } = await load(dispatch);
+
+    await makeAppletStyler(CTX)(TARGET);
+    const args = (dispatch.mock.calls[0] as [Record<string, unknown>])[0];
+
     // `applet-styler` is a bundled `tool-wrapper` whose `targetTools[0]` is
     // `applet` — exactly the shape `dispatchToolWrapper` enqueues for — and
     // bundled records accept appended examples. A pass that failed because the
     // pool was full must not teach a shipped specialist. The omission is
     // invisible at runtime, which is why it is asserted rather than trusted.
-    const dispatch = vi.fn(async () => ({ status: 'ok', result: '' }));
-    const { makeAppletStyler } = await load(dispatch);
-
-    await makeAppletStyler(CTX)(TARGET);
-
-    expect((dispatch.mock.calls[0] as [Record<string, unknown>])[0].skipCorrectionEnqueue).toBe(
-      true,
-    );
-  });
-
-  it('names the applet in the label, so the extra seconds are explained', async () => {
-    const dispatch = vi.fn(async () => ({ status: 'ok', result: '' }));
-    const { makeAppletStyler } = await load(dispatch);
-
-    await makeAppletStyler(CTX)(TARGET);
-
-    expect((dispatch.mock.calls[0] as [Record<string, unknown>])[0].runLabel).toBe(
-      '[style] Mood Log',
-    );
+    expect(args.skipCorrectionEnqueue).toBe(true);
+    // Names the applet, so the extra seconds on screen are explained.
+    expect(args.runLabel).toBe('[style] Mood Log');
   });
 
   it('reports the error CODE, which is what a reader acts on', async () => {
@@ -108,13 +98,17 @@ describe('makeAppletStyler', () => {
     expect(await makeAppletStyler(CTX)(TARGET)).toEqual({ styled: false, reason: 'cancelled' });
   });
 
-  it('forwards an abort signal only when it has one', async () => {
+  it("forwards the call's abort signal, so an Esc reaches the dispatch", async () => {
+    // Per call, not per construction: the tool is built once a turn. Without
+    // this the styler's whole sub-agent run — seconds and a paid completion —
+    // outlives a cancelled turn with its output discarded.
     const dispatch = vi.fn(async () => ({ status: 'ok', result: '' }));
     const { makeAppletStyler } = await load(dispatch);
     const controller = new AbortController();
+    const styler = makeAppletStyler(CTX);
 
-    await makeAppletStyler(CTX)(TARGET);
-    await makeAppletStyler(CTX, controller.signal)(TARGET);
+    await styler(TARGET);
+    await styler(TARGET, controller.signal);
 
     const first = (dispatch.mock.calls[0] as [Record<string, unknown>])[0];
     const second = (dispatch.mock.calls[1] as [Record<string, unknown>])[0];

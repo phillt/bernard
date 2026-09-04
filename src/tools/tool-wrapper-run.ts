@@ -336,6 +336,15 @@ export async function dispatchToolWrapper(
               ctx.provenance,
               { surface: toolWrapperDefinition.toolSurface },
             );
+            // `applet` is deliberately ABSENT here, and that absence is a
+            // guard rather than an oversight. `main.ts` builds this same
+            // overlay plus a styling-capable `applet`; `applet-styler` targets
+            // `applet` and writes by calling `applet update`, so a
+            // styling-capable instance in THIS registry would let the styler
+            // re-enter its own dispatch without bound. The two lists differing
+            // by exactly one key is the whole guard — extracting a shared
+            // `buildCtxTools(ctx)` from them recreates the recursion. See
+            // `tools/applet-styling.ts`.
             const fullRegistry: Record<string, Tool> = {
               ...baseTools,
               agent: createSubAgentTool(ctx),

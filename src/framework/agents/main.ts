@@ -13,7 +13,6 @@ import { createThinkTool } from '../../tools/think.js';
 import { createAskUserTool } from '../../tools/ask-user.js';
 import { createEvaluateTool } from '../../tools/evaluate.js';
 import { applyShimRouting } from '../../tools/wrap-with-specialist.js';
-import { createAppletToolWithStyling } from '../../tools/applet-styling.js';
 import { toolToAISDK } from '../tools/adapter.js';
 import { buildToolProfilesPrompt } from '../../tool-profiles.js';
 import { getModelProfile } from '../../providers/index.js';
@@ -271,15 +270,21 @@ export const mainAgentDefinition: AgentDefinition<MainInput, string> = {
     // layer either way, so an exposed `evaluate` on a single-shot turn just
     // gives the model a place to record a verification.
     const reactToolsAvailable = isReactPossible(ctx.config);
+    // Deferred, not static: `applet-styling.js` reaches `tools/applet.js`, and a
+    // static edge from here made that module and 13 others eager for every
+    // process that loads main's graph — cron, `apps/dispatch`, `tool-wrapper-run`
+    // are one static cycle with it — including worker dispatches whose
+    // `createTools` deliberately filters that group out. Measured ~5 ms, which is
+    // exactly the class #452 removed. The main path pays nothing: `createTools`
+    // above has already loaded `applet.js`.
+    const { createAppletToolWithStyling } = await import('../../tools/applet-styling.js');
     const tools: Record<string, Tool> = {
+      // `...baseTools` MUST stay first. `applet` below is the only key here that
+      // SHADOWS a tool `createTools` already built rather than adding a new one,
+      // so spread order is load-bearing: move this line last and styling
+      // silently disappears with no type error. See `tools/applet-styling.ts`
+      // for why the ctx-carrying instance has to be built here.
       ...baseTools,
-      // Overrides the ctx-free `applet` that `createTools` builds, adding the
-      // design pass (`applet-styler`, which had no caller at all before this).
-      // It has to be built here rather than in `createTools`, which is a pure
-      // function of its arguments and has no live ctx to dispatch from — and
-      // that split is also what makes re-entry impossible, since the `applet`
-      // the styler itself receives comes from `createTools` and cannot style.
-      // See `tools/applet-styling.ts`.
       applet: createAppletToolWithStyling(ctx),
       agent: createSubAgentTool(ctx),
       task: toolToAISDK(createTaskTool(ctx)),

@@ -216,13 +216,16 @@ export function createAppletTool(
         'buttons run Bernard actions. Actions are tool-less and read-only when created — the ' +
         'user grants tools with `bernard app-grant`. Deleting one asks the user first.',
       parameters: PARAMETERS,
-      execute: async (args: AppletArgs): Promise<string> => {
+      execute: async (
+        args: AppletArgs,
+        execOptions?: { abortSignal?: AbortSignal },
+      ): Promise<string> => {
         try {
           // `return await`, not `return`. With `run` async a bare return hands
           // back the promise before it rejects, so this `catch` would see
           // nothing and the `Error: ` prefix `detectToolError` reads (#364)
           // would silently stop being applied.
-          return await run(store, args, requestConsent, styleApplet);
+          return await run(store, args, requestConsent, styleApplet, execOptions?.abortSignal);
         } catch (err) {
           // The `Error: ` prefix is what `detectToolError` reads (#364).
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
@@ -247,6 +250,7 @@ async function run(
   args: AppletArgs,
   requestConsent?: ToolOptions['requestPermissionConsent'],
   styleApplet?: AppletStyler,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   switch (args.action) {
     case 'list': {
@@ -300,7 +304,7 @@ async function run(
       // is already on disk, so nothing here can turn a successful create into
       // a failed tool call — the rule `askForPermissions` and `openedNote`
       // already follow.
-      const styled = await styleNote(created, styleApplet);
+      const styled = await styleNote(created, styleApplet, abortSignal);
       return (
         `Applet "${created.name}" (${created.id}) created with ` +
         `${Object.keys(created.actions).length} action(s).` +
@@ -396,15 +400,18 @@ async function run(
     }
     case 'style': {
       const id = need(args.id, 'id', 'style');
-      const existing = store.get(id);
-      if (!existing.ok) return `Error: ${existing.failure.message}`;
+      // Before `store.get`, which is a read plus a full manifest parse: on a
+      // styler-less instance — every one `createTools` builds — that work was
+      // done and thrown away.
       if (!styleApplet) {
         // No styler means no live context to dispatch from — a worker surface,
         // a tool-wrapper dispatch, or a headless run. Said plainly rather than
         // reported as a styling failure, because nothing was attempted.
-        return `Error: the design pass is not available here. Ask from the main REPL.`;
+        return 'Error: the design pass is not available here. Ask from the main REPL.';
       }
-      const outcome = await styleApplet(targetFor(existing.manifest));
+      const existing = store.get(id);
+      if (!existing.ok) return `Error: ${existing.failure.message}`;
+      const outcome = await styleApplet(targetFor(existing.manifest), abortSignal);
       return outcome.styled
         ? `Restyled "${existing.manifest.name}" (${id}).` +
             (outcome.summary ? ` ${outcome.summary}` : '')
@@ -414,9 +421,11 @@ async function run(
       // Unreachable through the AI SDK, which parses against the enum first —
       // but a direct `execute` would otherwise return `undefined`, which
       // `detectResultFailure` reads as a SUCCESS with no content.
+      // Read off the schema rather than restated: the hand-written list this
+      // replaces had already drifted, omitting `logs`.
       return (
         `Error: unknown action "${String(args.action)}". ` +
-        'Use create, update, read, list, logs, style or delete.'
+        `Use one of: ${PARAMETERS.shape.action.options.join(', ')}.`
       );
   }
 }
@@ -574,6 +583,24 @@ function grantHint(appId: string, actions: string[]): string {
 }
 
 /**
+ * Reads one applet flag without letting a missing provider key break the tool.
+ *
+ * `loadConfig` throws when no provider is configured, and both callers are
+ * best-effort steps on a create that has already succeeded — so "could not
+ * read it" behaves as "off". One owner rather than a copy per flag: the reason
+ * for the catch is the non-obvious part, and the third copy is the one that
+ * gets it wrong.
+ */
+async function appletFlag(key: 'autoOpenApplets' | 'autoStyleApplets'): Promise<boolean> {
+  try {
+    const { loadConfig } = await import('../config.js');
+    return loadConfig()[key];
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Opens a just-built applet, and says where it is either way.
  *
  * On `create` only, never `update`: an edit mid-conversation stealing window
@@ -582,6 +609,24 @@ function grantHint(appId: string, actions: string[]): string {
  * the user where the applet is, and no failure here can turn a successful
  * create into a failed tool call.
  */
+async function openedNote(appId: string): Promise<string> {
+  if (!(await appletFlag('autoOpenApplets'))) return '';
+  try {
+    const { openApplet } = await import('../apps/open.js');
+    const result = await openApplet(appId);
+    if ('error' in result) return '';
+    if (result.opened) return ` Opened it at ${result.url}.`;
+    return result.note
+      ? ` It is at ${result.url} (not opened: ${result.note}).`
+      : ` It is at ${result.url}.`;
+  } catch {
+    // Nothing here may turn a successful create into a failed tool call — the
+    // URL is already in the returned string. (The config read's own throw is
+    // handled in `appletFlag`.)
+    return '';
+  }
+}
+
 /** The applet, as the design pass needs to see it. */
 function targetFor(manifest: AppManifest) {
   return {
@@ -606,14 +651,13 @@ function targetFor(manifest: AppManifest) {
  * because `loadConfig` throws with no provider key configured. Here that catch
  * is doubly right: with no key there is no model to dispatch anyway.
  */
-async function styleNote(manifest: AppManifest, styleApplet?: AppletStyler): Promise<string> {
+async function styleNote(
+  manifest: AppManifest,
+  styleApplet?: AppletStyler,
+  signal?: AbortSignal,
+): Promise<string> {
   if (!styleApplet) return '';
-  try {
-    const { loadConfig } = await import('../config.js');
-    if (!loadConfig().autoStyleApplets) return '';
-  } catch {
-    return '';
-  }
+  if (!(await appletFlag('autoStyleApplets'))) return '';
   // Its own try, deliberately not relying on `makeAppletStyler`'s. The applet
   // is already on disk at this point, so a throw reaching `execute`'s catch
   // would report a write that SUCCEEDED as `Error:` — telling the model to
@@ -621,7 +665,7 @@ async function styleNote(manifest: AppManifest, styleApplet?: AppletStyler): Pro
   // of this callback must not be able to reintroduce that.
   let outcome: StyleOutcome;
   try {
-    outcome = await styleApplet(targetFor(manifest));
+    outcome = await styleApplet(targetFor(manifest), signal);
   } catch (err) {
     outcome = { styled: false, reason: err instanceof Error ? err.message : String(err) };
   }
@@ -629,24 +673,6 @@ async function styleNote(manifest: AppManifest, styleApplet?: AppletStyler): Pro
   // Named, not swallowed. "It looks unstyled" with no reason is the report
   // that costs someone an afternoon.
   return ` It has the default page — the design pass did not run (${outcome.reason}).`;
-}
-
-async function openedNote(appId: string): Promise<string> {
-  try {
-    const { loadConfig } = await import('../config.js');
-    if (!loadConfig().autoOpenApplets) return '';
-    const { openApplet } = await import('../apps/open.js');
-    const result = await openApplet(appId);
-    if ('error' in result) return '';
-    if (result.opened) return ` Opened it at ${result.url}.`;
-    return result.note
-      ? ` It is at ${result.url} (not opened: ${result.note}).`
-      : ` It is at ${result.url}.`;
-  } catch {
-    // `loadConfig` throws with no provider key configured, and a tool action
-    // that makes no model call must not require one.
-    return '';
-  }
 }
 
 /**

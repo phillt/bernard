@@ -51,7 +51,7 @@ import type { AgentContext } from '../framework/context.js';
  */
 
 /** What the styling pass did, as the caller has to render it either way. */
-export type StyleOutcome = { styled: true; summary?: string } | { styled: false; reason: string };
+export type StyleOutcome = { styled: true; summary: string } | { styled: false; reason: string };
 
 /** The applet a styling pass is being asked to work on. */
 export interface StyleTarget {
@@ -65,7 +65,7 @@ export interface StyleTarget {
  * Restyles one applet's page. Never throws, and never reports a failure as a
  * success — a caller folds the outcome into its own result.
  */
-export type AppletStyler = (target: StyleTarget) => Promise<StyleOutcome>;
+export type AppletStyler = (target: StyleTarget, signal?: AbortSignal) => Promise<StyleOutcome>;
 
 /** The specialist this routes to. Bundled, so it is always present. */
 export const STYLER_SPECIALIST_ID = 'applet-styler';
@@ -78,6 +78,12 @@ export const STYLER_SPECIALIST_ID = 'applet-styler';
  * rather than competing with it. The action names are listed because the page
  * has to wire a control to each one, and `bernard.invoke('X')` with an
  * undeclared `X` is a refusal at the write path.
+ *
+ * Deliberately carries ONLY the per-applet facts. The page contract, the token
+ * vocabulary and the `result` shape all live in the specialist's own
+ * systemPrompt; restating them here would be a second copy that drifts — and
+ * the first draft's "it currently has the default scaffold page" was already
+ * false on the `style` path, which restyles a page that may be styled already.
  */
 export function buildStyleBrief(target: StyleTarget): string {
   const actions =
@@ -90,14 +96,11 @@ export function buildStyleBrief(target: StyleTarget): string {
     `What it is for: ${target.description}`,
     `Actions it declares: ${actions}`,
     '',
-    'It currently has the default scaffold page. Read it first if you need to',
+    'Read the current page first',
     `(\`applet\` with \`{"action":"read","id":"${target.id}"}\`), then write the styled`,
     `page with \`applet\` and \`{"action":"update","id":"${target.id}","page":"<the full HTML>"}\`.`,
     '',
-    'Keep every declared action reachable from a control, and keep the four',
-    'opening lines the page needs. Report in `result` what you changed, in one',
-    'or two sentences — the page itself travels through `applet update`, not',
-    'through your result.',
+    'Keep every declared action reachable from a control.',
   ].join('\n');
 }
 
@@ -113,8 +116,8 @@ export function buildStyleBrief(target: StyleTarget): string {
  * correction agent has nothing to learn from it. This is the field's first
  * production caller; before it, nothing set it.
  */
-export function makeAppletStyler(ctx: AgentContext, abortSignal?: AbortSignal): AppletStyler {
-  return async (target) => {
+export function makeAppletStyler(ctx: AgentContext): AppletStyler {
+  return async (target, signal) => {
     try {
       const wrapped = await dispatchToolWrapper(
         {
@@ -122,13 +125,23 @@ export function makeAppletStyler(ctx: AgentContext, abortSignal?: AbortSignal): 
           input: buildStyleBrief(target),
           runLabel: `[style] ${target.name}`,
           skipCorrectionEnqueue: true,
-          ...(abortSignal ? { abortSignal } : {}),
+          // Per CALL, not per construction: the tool is built once a turn but
+          // the signal belongs to the invocation. Without it an Esc during
+          // `applet create` leaves a full sub-agent run — seconds of wall time
+          // and a paid completion — running to completion with its output
+          // discarded.
+          ...(signal ? { abortSignal: signal } : {}),
         },
         ctx,
       );
       if (wrapped.status === 'ok') {
-        const summary = typeof wrapped.result === 'string' ? wrapped.result.trim() : '';
-        return summary ? { styled: true, summary } : { styled: true };
+        // Empty is a legitimate summary — both render sites already test it
+        // for truthiness, so an absent field bought a second shape and no
+        // information.
+        return {
+          styled: true,
+          summary: typeof wrapped.result === 'string' ? wrapped.result.trim() : '',
+        };
       }
       // `error` is the taxonomy-ish code (`pool_exhausted`, `no_api_key`,
       // `not_found`, `runtime_error`); `result` is the human message. The code
