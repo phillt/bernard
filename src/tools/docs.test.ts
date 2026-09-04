@@ -84,3 +84,26 @@ describe('its classification', () => {
     expect(d).toMatch(/what Bernard can do/i);
   });
 });
+
+describe('what makes the main agent look', () => {
+  it('the base system prompt tells it the documentation exists', async () => {
+    // The whole reason this is worth a line in the cached prefix: `list` and
+    // `read` are cheap and reachable, but nothing TRIGGERS them. A user asking
+    // "what can you do?" produces no tool call at all unless the model has
+    // been told there is something to read — it answers from its tool list,
+    // which is what it can reach this turn, not what Bernard is.
+    const { BASE_SYSTEM_PROMPT } = await import('../agent-prompt.js');
+    expect(BASE_SYSTEM_PROMPT).toContain('`docs`');
+    expect(BASE_SYSTEM_PROMPT).toMatch(/what you can do/i);
+  });
+
+  it('states it as one static sentence, so the cached prefix stays byte-stable', async () => {
+    // The prefix is the Anthropic prompt-cache boundary and must not vary with
+    // anything turn-scoped. A line that interpolated the index — the obvious
+    // "improvement" — would re-bill the whole prefix whenever a document
+    // changed, and put the index in the one place progressive disclosure
+    // exists to keep it out of.
+    const { BASE_SYSTEM_PROMPT } = await import('../agent-prompt.js');
+    for (const doc of allDocs()) expect(BASE_SYSTEM_PROMPT).not.toContain(doc.description);
+  });
+});
