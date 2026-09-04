@@ -13,12 +13,28 @@ export function createAskUserTool(askUser: ToolOptions['askUser']) {
   return attachMeta(
     tool({
       description:
-        'Ask the user one or more clarifying questions and wait for their answers. Use this whenever you need information only the user can provide (intent, preferences, missing arguments) — do NOT write the question as prose in your reply, since that gets no response back. Provide each question as an entry in `questions`; supply `choices` per question when the answer is constrained, otherwise the user gets a free-form prompt. Set `multi_select: true` on a question whose answer can include more than one choice ("select all that apply") — the user then checks several boxes and that question\'s answer comes back as a JSON array. Batch related questions in one call (e.g. title + body + labels) — the user sees a tab strip showing progress. Returns JSON: {"answers": ["...", ["a","b"]]} aligned by index (a multi-select slot is an array), {"cancelled": true, "answered": [...]} with whatever was answered before cancel, or {"unavailable": true} if running headless.',
+        'Ask the user one or more clarifying questions and wait for their answers. Use this whenever you need information only the user can provide (intent, preferences, missing arguments) — do NOT write the question as prose in your reply, since that gets no response back. Provide each question as an entry in `questions`; supply `choices` per question when the answer is constrained, otherwise the user gets a free-form prompt. Set `multi_select: true` on a question whose answer can include more than one choice ("select all that apply") — the user then checks several boxes and that question\'s answer comes back as a JSON array. Batch related questions in one call (e.g. title + body + labels) — a batch is presented one question per screen, and the user can go back, change an answer, and review the lot before it comes to you. Returns JSON: {"answers": ["...", ["a","b"]]} aligned by index (a multi-select slot is an array), {"cancelled": true, "answered": [...]} with whatever was answered before cancel, or {"unavailable": true} if running headless.',
       parameters: z.object({
         questions: z
           .array(
             z.object({
               question: z.string().min(1).describe('The question to show the user'),
+              hint: z
+                .string()
+                .max(120)
+                .optional()
+                .describe(
+                  'One short sentence of help shown beside the question — the KIND of answer you ' +
+                    'are after, not a specific one. Stays on screen while they type.',
+                ),
+              summary: z
+                .string()
+                .max(30)
+                .optional()
+                .describe(
+                  'A few words naming what this question was about, for the review screen where ' +
+                    'the full question does not fit.',
+                ),
               choices: z
                 .array(z.string())
                 .min(2)
@@ -49,7 +65,7 @@ export function createAskUserTool(askUser: ToolOptions['askUser']) {
           .min(1)
           .max(10)
           .describe(
-            'One or more questions to ask in sequence. For batches of 2+, the user sees a tab strip with completed/current/upcoming markers.',
+            'One or more questions to ask in sequence. A batch of 2+ is presented as a step-by-step wizard: one question per screen, with back, edit and a check-your-answers review.',
           ),
       }),
       execute: async ({ questions }, execOptions): Promise<string> => {
@@ -58,6 +74,8 @@ export function createAskUserTool(askUser: ToolOptions['askUser']) {
         }
         const normalised: AskUserQuestion[] = questions.map((q) => ({
           question: q.question,
+          ...(q.hint ? { hint: q.hint } : {}),
+          ...(q.summary ? { summary: q.summary } : {}),
           choices: q.choices,
           allowOther: q.choices && q.choices.length > 0 ? q.allow_other !== false : true,
           otherLabel: q.other_label,

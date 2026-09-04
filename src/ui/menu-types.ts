@@ -40,7 +40,7 @@ export interface MenuOptions {
   promptLabel?: string;
   /** Optional heading rendered inside the menu block. */
   title?: string;
-  /** Header lines rendered above the title (e.g. the `ask_user` tab strip). */
+  /** Header lines rendered above the title (e.g. a question above its input). */
   headerLines?: string[];
   /**
    * Item index (sections excluded) to highlight on open. Lets a caller restore

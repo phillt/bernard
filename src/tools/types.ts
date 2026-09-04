@@ -48,6 +48,16 @@ export interface PermissionConsentRequest {
 /** A single question for the `askUser` callback. */
 export interface AskUserQuestion {
   question: string;
+  /**
+   * One short sentence of standing help, shown beside the question.
+   *
+   * Persistent, never placeholder text — a placeholder vanishes on the first
+   * keystroke, which raises error rates for everyone and leaves a screen reader
+   * nothing to announce.
+   */
+  hint?: string;
+  /** Short label for the review screen, where the full question is too long. */
+  summary?: string;
   choices?: string[];
   /** When true and `choices` is present, the implementation appends an escape-hatch row that falls back to free-form input. */
   allowOther: boolean;
@@ -147,8 +157,9 @@ export interface ToolOptions {
   sessionToolAllowlist?: Set<string>;
   /**
    * Callback that asks the user one or more questions in sequence. The
-   * implementation owns any progress UI (e.g. a tab strip for batches of
-   * 2+). On mid-batch cancellation, returns whatever was answered so far.
+   * implementation owns the presentation — in the REPL a batch of 2+ renders
+   * as a wizard, one question per screen with back, edit and a review. On
+   * mid-batch cancellation, returns whatever was answered so far.
    * Omitted in non-interactive environments (cron daemon).
    */
   askUser?: (questions: AskUserQuestion[], signal?: AbortSignal) => Promise<AskUserBatchResult>;

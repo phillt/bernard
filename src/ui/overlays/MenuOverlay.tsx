@@ -72,8 +72,8 @@ type MenuOverlayProps = MenuOverlayBaseProps &
  *     never reaches an overlay — #360)
  *
  * Section dividers from `MenuEntry` are rendered as muted headers between
- * items, never selectable. `options.headerLines` renders above the title so
- * the `ask_user` tab strip continues to work unchanged.
+ * items, never selectable. `options.headerLines` renders above the title, so a
+ * caller can put context (a question, a step's help) above its own choices.
  */
 export function MenuOverlay({
   entries,

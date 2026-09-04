@@ -1165,3 +1165,47 @@ describe('the design brief', () => {
     expect(out.startsWith('Error:')).toBe(true);
   });
 });
+
+describe('the intent interview', () => {
+  useTempHome('bernard-applet-interview');
+
+  it('hands over the playbook rather than carrying it in the system prompt', async () => {
+    // It matters on the handful of turns where someone builds an applet; in the
+    // cached prefix it would be paid for on every turn forever.
+    const { tool } = await loadWithBrief();
+    const out = await tool.execute({ action: 'interview' } as never, {} as never);
+
+    expect(out).toContain('What would you love to make easier?');
+    expect(out).toContain('ONE `ask_user` call');
+    expect(out.startsWith('Error:')).toBe(false);
+  });
+
+  it('needs no applet id — it is asked BEFORE anything is built', async () => {
+    const { tool } = await loadWithBrief();
+    expect(
+      (await tool.execute({ action: 'interview' } as never, {} as never)).startsWith('Error:'),
+    ).toBe(false);
+  });
+
+  it('warns when an applet is created with no brief, and names the remedy', async () => {
+    // A warning, not a refusal: `create` stays usable from a test and from
+    // someone who knows what they want, and a thinner applet is a visible
+    // failure rather than a silent one.
+    const { tool } = await loadWithBrief();
+    const out = await tool.execute({ ...CREATE, id: 'no-brief' }, {} as never);
+
+    expect(out).toContain('created');
+    expect(out).toContain('No design brief');
+    expect(out).toContain('interview');
+  });
+
+  it('says nothing when the intent was supplied', async () => {
+    const { tool } = await loadWithBrief();
+    const out = await tool.execute(
+      { ...CREATE, id: 'with-brief', intent: { goal: 'send shifts' } },
+      {} as never,
+    );
+
+    expect(out).not.toContain('No design brief');
+  });
+});

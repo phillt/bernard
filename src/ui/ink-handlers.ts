@@ -17,6 +17,7 @@
  * the agent only acts on user submit, which can only fire from a
  * mounted `<Prompt>`. The null guards exist for tests and shutdown.
  */
+import type { WizardResult, WizardSpec } from './overlays/wizard-types.js';
 import type {
   MenuEntry,
   MenuItem,
@@ -57,6 +58,18 @@ export interface InkHandlers {
     signal?: AbortSignal,
   ) => Promise<AskUserBatchResult>;
   requestConfirmDangerous: (command: string, signal?: AbortSignal) => Promise<boolean>;
+  /**
+   * A multi-step wizard: one question per screen, with back, edit and a
+   * check-your-answers review (#473).
+   *
+   * Declared here for the reason the trailing `signal` above is — the
+   * registered shim is typed by this interface, so a method missing here is
+   * silently dropped one frame short of the overlay. Being on the interface is
+   * also what makes it reachable by features other than the one that prompted
+   * it; `requestSettings` and `requestGridMenu` are App-internal, and are the
+   * two that ended up bypassing `openOverlay`'s abort handling as a result.
+   */
+  requestWizard: (spec: WizardSpec, signal?: AbortSignal) => Promise<WizardResult>;
   /**
    * Ask the user to allow what an applet declared it needs (#467, #468).
    *

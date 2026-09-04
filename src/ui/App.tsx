@@ -156,6 +156,9 @@ import { StatusBar } from './StatusBar.js';
 import { HintBar } from './HintBar.js';
 import { PlanPanel } from './PlanPanel.js';
 import { MenuOverlay } from './overlays/MenuOverlay.js';
+import { WizardOverlay } from './overlays/WizardOverlay.js';
+import { choiceRows, stepsFromQuestions } from './overlays/wizard-types.js';
+import type { WizardResult, WizardSpec } from './overlays/wizard-types.js';
 import { ModelGridOverlay } from './overlays/ModelGridOverlay.js';
 import { ConfirmDialog } from './overlays/ConfirmDialog.js';
 import { StatusViewer } from './overlays/StatusViewer.js';
@@ -268,7 +271,8 @@ type Overlay =
   | 'help'
   | 'text-input'
   | 'info'
-  | 'settings';
+  | 'settings'
+  | 'wizard';
 
 interface PendingTextInput {
   options: ValuePromptOptions;
@@ -283,6 +287,18 @@ interface PendingInfo {
 interface ToastState {
   message: string;
   variant: ToastVariant;
+}
+
+/**
+ * A step-by-step wizard (#473).
+ *
+ * Unlike every other pending slot this one covers MANY questions: the overlay
+ * owns the batch, which is what lets it offer back, edit and a
+ * check-your-answers review without an overlay queue existing.
+ */
+interface PendingWizard {
+  spec: WizardSpec;
+  resolve: (result: WizardResult) => void;
 }
 
 interface PendingMenu {
@@ -354,7 +370,6 @@ type PendingDialog = PendingConfirm | PendingBlock;
  * saying not to (#230); `requestAskUser` dedupes against the auto-appended
  * escape hatch and routes matching selections to the free-text input.
  */
-const OTHER_RE = /^other\b/i;
 
 /**
  * Module-level voice service singleton. Created lazily on first use and
@@ -457,26 +472,30 @@ function askUserPrompt(question: string): ValuePromptOptions {
 
 /**
  * Builds the menu entries for an `ask_user` choice question and a predicate for
- * whether a selected item is the "Other" escape hatch. Shared by the single-
- * and multi-select paths of `requestAskUser` so the #230 dedup rule lives in
- * one place: append a hatch row only when the model didn't already supply an
- * "Other"-shaped choice, and treat either the appended row (by identity — its
- * label may be custom via `otherLabel`) or any `OTHER_RE`-matching label as the
- * hatch. The matching selection routes to a free-text follow-up.
+ * whether a selected item is the "Other" escape hatch, for the single-question
+ * path. The #230 rule itself lives in `choiceRows` (`overlays/wizard-types.ts`)
+ * so the wizard cannot re-derive it differently — which it did: a batch got two
+ * hatch rows where one question got one, and the default label read "Something
+ * else" in one and "Other" in the other, decided only by how many questions
+ * were asked.
  */
 function buildChoiceMenu(q: AskUserQuestion): {
   entries: MenuEntry[];
   isHatch: (item: MenuItem) => boolean;
 } {
-  const otherLabel = q.otherLabel?.trim() || 'Other (type your own)';
-  const entries: MenuEntry[] = (q.choices ?? []).map((c) => ({ label: c }));
-  const hasModelOther = (q.choices ?? []).some((c) => OTHER_RE.test(c.trim()));
-  const appendedHatch = q.allowOther && !hasModelOther;
-  if (appendedHatch) entries.push({ label: otherLabel });
-  const hatchRow = appendedHatch ? entries[entries.length - 1] : undefined;
+  // The rule itself lives in `choiceRows` so the wizard cannot re-derive it
+  // differently — which it did, giving a batch two hatch rows where a single
+  // question got one.
+  const { labels, isHatch } = choiceRows({
+    choices: q.choices ?? [],
+    allowOther: q.allowOther,
+    ...(q.otherLabel ? { otherLabel: q.otherLabel } : {}),
+  });
+  const entries: MenuEntry[] = labels.map((label) => ({ label }));
+  const hatchIndices = new Set(labels.map((_, i) => i).filter(isHatch));
   return {
     entries,
-    isHatch: (item) => item === hatchRow || OTHER_RE.test(item.label.trim()),
+    isHatch: (item) => hatchIndices.has(entries.indexOf(item as MenuEntry)),
   };
 }
 
@@ -711,6 +730,7 @@ export function App({
   // emitted items. A counter never repeats.
   const itemKeyRef = useRef(0);
   const [pendingMenu, setPendingMenu] = useState<PendingMenu | null>(null);
+  const [pendingWizard, setPendingWizard] = useState<PendingWizard | null>(null);
   const [pendingMultiMenu, setPendingMultiMenu] = useState<PendingMultiMenu | null>(null);
   const [pendingGrid, setPendingGrid] = useState<PendingGrid | null>(null);
   const [pendingDialog, setPendingDialog] = useState<PendingDialog | null>(null);
@@ -970,6 +990,7 @@ export function App({
     requestBlock: typeof requestBlock;
     requestTextInput: typeof requestTextInput;
     requestAskUser: typeof requestAskUser;
+    requestWizard: typeof requestWizard;
     requestPermissionConsent: typeof requestPermissionConsent;
   } | null>(null);
   useEffect(() => {
@@ -983,6 +1004,7 @@ export function App({
       requestBlock: (input, signal) => handlersRef.current!.requestBlock(input, signal),
       requestTextInput: (options, signal) => handlersRef.current!.requestTextInput(options, signal),
       requestAskUser: (questions, signal) => handlersRef.current!.requestAskUser(questions, signal),
+      requestWizard: (spec, signal) => handlersRef.current!.requestWizard(spec, signal),
       requestPermissionConsent: (request, signal) =>
         handlersRef.current!.requestPermissionConsent(request, signal),
       requestConfirmDangerous: async (command, signal) => {
@@ -4156,6 +4178,7 @@ export function App({
     requestBlock,
     requestTextInput,
     requestAskUser,
+    requestWizard,
     requestPermissionConsent,
   };
 
@@ -4163,6 +4186,10 @@ export function App({
   // an abort clears the same state the user's own answer would have.
   const closeMenu = () => {
     setPendingMenu(null);
+    setActiveOverlay(null);
+  };
+  const closeWizard = () => {
+    setPendingWizard(null);
     setActiveOverlay(null);
   };
   const closeMultiMenu = () => {
@@ -4378,10 +4405,40 @@ export function App({
     });
   }
 
+  /**
+   * Opens a multi-step wizard and resolves once, with every answer or a
+   * cancellation (#473).
+   *
+   * Takes a signal like every other request — `runProfileWizardInk`, the only
+   * prior multi-step flow, takes none, so an aborted turn there cancels one
+   * overlay and the flow opens the next.
+   */
+  function requestWizard(spec: WizardSpec, signal?: AbortSignal): Promise<WizardResult> {
+    return openOverlay<WizardResult>(
+      signal,
+      { cancelled: true, answered: [] },
+      closeWizard,
+      (settle) => {
+        setPendingWizard({ spec, resolve: settle });
+        setActiveOverlay('wizard');
+      },
+    );
+  }
+
   async function requestAskUser(
     questions: AskUserQuestion[],
     signal?: AbortSignal,
   ): Promise<AskUserBatchResult> {
+    // A batch is a wizard (#473), which is what gives every existing `ask_user`
+    // caller back, edit and a check-your-answers review for nothing. A single
+    // question keeps the one-shot prompt: a review screen for one answer is
+    // ceremony, and a wizard cannot go back from its only step anyway.
+    if (questions.length > 1) {
+      const result = await requestWizard({ steps: stepsFromQuestions(questions) }, signal);
+      return result.cancelled
+        ? { cancelled: true, answered: result.answered }
+        : { answers: result.answers };
+    }
     const answers: (string | string[])[] = [];
     for (const q of questions) {
       // Belt-and-braces since #266: every overlay below now takes the signal
@@ -4553,6 +4610,17 @@ export function App({
           agent={agent}
           onClose={() => setActiveOverlay(null)}
           onCycleTab={() => setActiveOverlay('status')}
+        />
+      )}
+      {activeOverlay === 'wizard' && pendingWizard && (
+        <WizardOverlay
+          spec={pendingWizard.spec}
+          reserveRows={overlayReserveRows}
+          onResolve={(result) => {
+            pendingWizard.resolve(result);
+            setPendingWizard(null);
+            setActiveOverlay(null);
+          }}
         />
       )}
       {activeOverlay === 'menu' && pendingMenu && (

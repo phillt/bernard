@@ -10,6 +10,7 @@ import { directInvocableRefusalByName, toolArgRefusal } from '../apps/direct-too
 import type { AppletStyler, StyleOutcome } from './applet-styling.js';
 import { AppletBriefStore } from '../apps/brief-store.js';
 import { INTENT_FIELDS, INTENT_FIELD_LABELS, MAX_NOTE_CHARS, renderBrief } from '../apps/brief.js';
+import { interviewPlaybook } from '../apps/interview.js';
 import { uncoveredTools, uncoveredToolsMessage } from '../apps/invocation.js';
 import {
   formatWarnings,
@@ -112,21 +113,31 @@ const PERMISSION_REQUEST = z
   .strict();
 
 /** Actions that only look. Drives the read-only block gate and the risk tier. */
-const APPLET_READ_ACTIONS: ReadonlySet<string> = new Set(['read', 'list', 'logs']);
+const APPLET_READ_ACTIONS: ReadonlySet<string> = new Set([
+  'read',
+  'list',
+  'logs',
+  // Returns a constant string and touches nothing. Omitted, `attachActionMeta`
+  // classifies it a write and the read-only block gate refuses a prompt getter.
+  'interview',
+]);
 
 /** Actions that must be confirmed even under `confirmMode: 'auto'` (#456). */
 const APPLET_HIGH_RISK_ACTIONS: ReadonlySet<string> = new Set(['delete']);
 
 const PARAMETERS = z.object({
   action: z
-    .enum(['create', 'update', 'read', 'list', 'logs', 'delete', 'style', 'brief'])
+    .enum(['create', 'update', 'read', 'list', 'logs', 'delete', 'style', 'brief', 'interview'])
     .describe(
       "The operation to perform. `logs` shows what this applet's buttons actually did, " +
         'including why one failed. `delete` removes the applet and everything keyed to it, ' +
         'and asks the user first. `style` hands an existing applet to the design pass — ' +
         'a new applet gets that automatically, so reach for this to restyle one. ' +
         "`brief` reads or edits the applet's design brief — what it is for and what has " +
-        'been decided; `read` already returns it, so reach for `brief` to CHANGE it.',
+        'been decided; `read` already returns it, so reach for `brief` to CHANGE it. ' +
+        '`interview` returns how to find out what someone actually needs before building ' +
+        'for them — reach for it FIRST whenever the request is vague, or the person has ' +
+        'not built software before.',
     ),
   id: z.string().optional().describe('Applet id (kebab-case). Required for create/update/read.'),
   intent: z
@@ -346,6 +357,13 @@ async function run(
       // defect. Before consent for the same reason the write is — nothing
       // below can turn a successful create into a failed tool call.
       if (args.intent) briefStore().write(created.id, { intent: args.intent });
+      // A warning, not a refusal: `create` has to stay usable from a test and
+      // from someone who knows exactly what they want, and the failure is
+      // visible — a thinner applet — rather than silent.
+      const noIntent = args.intent
+        ? ''
+        : ' No design brief — nothing records what this is for, so the next edit ' +
+          'starts from the HTML. Use `interview` before building next time.';
       const consent = await askForPermissions(created.id, created.name, manifest, requestConsent);
       // BEFORE `openedNote`, which is what opens the browser: styling after
       // the open would show the scaffold and make the user refresh. The applet
@@ -359,6 +377,7 @@ async function run(
         grantHint(created.id, Object.keys(created.actions)) +
         consent +
         styled +
+        noIntent +
         warningsFor(issues) +
         formatWarnings(dispatch.warnings) +
         (await openedNote(created.id))
@@ -451,6 +470,12 @@ async function run(
         `and external-access grants are gone.${bound} Its port assignment is kept, so re-creating ` +
         'this id restores the same origin.'
       );
+    }
+    case 'interview': {
+      // Returned rather than carried in the system prompt: it matters on the
+      // handful of turns where someone is building an applet, and in the cached
+      // prefix it would be paid for on every turn forever.
+      return interviewPlaybook();
     }
     case 'brief': {
       const id = need(args.id, 'id', 'brief');
