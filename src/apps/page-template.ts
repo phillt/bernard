@@ -39,7 +39,7 @@ export function defaultAppletPage(
   <h1>${esc(name)}</h1>
 ${description ? `  <p>${esc(description)}</p>\n` : ''}${entries.map(section).join('\n')}
   <pre id="out">Ready.</pre>
-  <p id="bernard-error" role="alert"></p>
+  <p id="bernard-error" class="error" role="alert"></p>
 </main>
 
 <script>

@@ -267,6 +267,7 @@ async function run(
         args.page ?? defaultAppletPage(manifest.name, manifest.description, manifest.actions);
       const issues = validateAppletPage(page, Object.keys(manifest.actions), {
         declaresLinkPermission: manifest.permissions?.sandbox !== undefined,
+        files: args.files ?? {},
       });
       const refusal = refusalFor(issues);
       if (refusal) return refusal;
@@ -305,6 +306,7 @@ async function run(
         // invoking something that does not exist yet.
         issues = validateAppletPage(args.page, Object.keys(manifest.actions), {
           declaresLinkPermission: manifest.permissions?.sandbox !== undefined,
+          files: args.files ?? {},
         });
         const refusal = refusalFor(issues);
         if (refusal) return refusal;

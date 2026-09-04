@@ -1,6 +1,7 @@
 import { MANIFEST_PATH } from '../host/webmanifest.js';
 import { SDK_PATH } from '../host/sdk.js';
-import { TOKENS_PATH } from '../host/tokens.js';
+import { TOKENS_PATH, APPLET_COLOR_TOKENS } from '../host/tokens.js';
+import { nearestToken } from '../color.js';
 
 /**
  * Refusing to write an applet page that cannot work.
@@ -38,7 +39,17 @@ const TOKEN_HEADER = 'x-bernard-token';
 export function validateAppletPage(
   html: string,
   actions: string[],
-  opts: { declaresLinkPermission?: boolean } = {},
+  opts: {
+    declaresLinkPermission?: boolean;
+    /**
+     * The other files written alongside `index.html` (#465).
+     *
+     * A `.css` shipped here is the one legal route to real CSS — `style-src
+     * 'self'` refuses every inline form — and until now it was written
+     * completely unchecked, because this function only ever saw the HTML.
+     */
+    files?: Record<string, string>;
+  } = {},
 ): PageIssue[] {
   const issues: PageIssue[] = [];
   const refuse = (message: string) => issues.push({ level: 'refuse', message });
@@ -168,7 +179,104 @@ export function validateAppletPage(
     );
   }
 
+  colourIssues(html, 'the page', refuse, warn);
+  cssIssues(html, opts.files ?? {}, refuse, warn);
+
   return issues;
+}
+
+/**
+ * Colour literals, wherever they appear.
+ *
+ * **A warning, not a refusal — and #465 asks for a refusal.** Applying this
+ * module's own rule (certainty, not severity) honestly, the two grounds that
+ * license the inline-`<style>` refusals both fail here.
+ *
+ * The false-positive surface is broad and legitimate: `href="#a1b2c3"`, an id
+ * or fragment, `<meta name="theme-color">`, a colour array driving a `<canvas>`
+ * (which takes no `var()`). And the failure is **visible** — a hard-coded
+ * colour renders. It looks off-palette and it will not follow a future theme,
+ * but nobody is left staring at a page that is broken for reasons they cannot
+ * see. That invisibility is exactly what the inline-style refusals turn on,
+ * and it is absent.
+ *
+ * What makes the warning worth acting on instead is the remedy: the nearest
+ * token, named. "Use `--danger`" gets fixed; "avoid hex colours" does not.
+ */
+function colourIssues(
+  source: string,
+  where: string,
+  _refuse: (m: string) => void,
+  warn: (m: string) => void,
+): void {
+  // Masked before matching, or every fragment link and every element id is a
+  // false positive. This is what keeps the warning high-signal enough to
+  // carry the acceptance criterion without a refusal.
+  const masked = source
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\b(?:href|id|name)\s*=\s*["'][^"']*["']/gi, '');
+
+  const literals = new Set<string>();
+  for (const m of masked.matchAll(/#[0-9a-f]{3}(?:[0-9a-f]{3})?\b/gi)) literals.add(m[0]);
+  // The obvious evasion once hexes are flagged. Same certainty, same level.
+  const functional = /\b(?:rgba?|hsla?)\(/i.test(masked);
+  if (literals.size === 0 && !functional) return;
+
+  const named = [...literals]
+    .slice(0, 3)
+    .map((hex) => {
+      const near = nearestToken(hex, APPLET_COLOR_TOKENS);
+      return near ? `${hex} (closest token: ${near})` : hex;
+    })
+    .join(', ');
+  const more = literals.size > 3 ? `, and ${literals.size - 3} more` : '';
+  warn(
+    `${where} sets colours directly${named ? `: ${named}${more}` : ''}. ` +
+      `The served tokens at ${TOKENS_PATH} are what make two applets look like siblings, ` +
+      'and a literal will not follow a theme change.',
+  );
+}
+
+/**
+ * The files shipped beside `index.html`.
+ *
+ * These earn a refusal where a colour does not, and for the reason this module
+ * already states: the failure is silent and invisible. A stylesheet nothing
+ * links is written, served, and never loaded; an off-origin `@import` is
+ * dropped by `style-src 'self'` with no error anywhere. In both cases the page
+ * just looks wrong.
+ */
+function cssIssues(
+  html: string,
+  files: Record<string, string>,
+  refuse: (m: string) => void,
+  warn: (m: string) => void,
+): void {
+  for (const [name, content] of Object.entries(files)) {
+    if (!name.toLowerCase().endsWith('.css')) continue;
+
+    if (!html.includes(name)) {
+      refuse(
+        `The page ships \`${name}\` but never links it, so it is served and never loaded. ` +
+          `Add <link rel="stylesheet" href="${name}" /> to index.html, or drop the file.`,
+      );
+    }
+    if (/@import\s+(?:url\()?["']?https?:/i.test(content)) {
+      refuse(
+        `\`${name}\` @imports an off-origin stylesheet, which the CSP (\`style-src 'self'\`) ` +
+          'drops silently. Inline what you need, or ship it as another file.',
+      );
+    }
+    // `img-src` IS grantable per applet since #467, so this is conditionally
+    // legal — a warning naming the command, not a refusal.
+    if (/url\(\s*["']?https?:/i.test(content)) {
+      warn(
+        `\`${name}\` loads a remote resource with url(). That is blocked until the user ` +
+          'grants it: `bernard app csp <id> --img-src <origin>`.',
+      );
+    }
+    colourIssues(content, `\`${name}\``, refuse, warn);
+  }
 }
 
 /** The refusal text, with every problem at once — a model that fixes one at a time burns a turn per defect. */

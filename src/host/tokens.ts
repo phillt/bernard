@@ -27,11 +27,36 @@ export const TOKENS_PATH = '/__bernard/tokens.css';
 export const APPLET_COLOR_TOKENS: Record<string, string> = {
   '--bg': '#0d1117',
   '--surface': '#161b22',
-  '--border': '#30363d',
+  // Raised from `#30363d`, which was 1.55:1 on `--bg` and 1.42:1 on
+  // `--surface` against WCAG 1.4.11's 3:1 for a non-text UI boundary (#465).
+  // A border is how an input's edge is conveyed, so this was the one token
+  // that was not merely thin but wrong. Now 4.12 / 3.77.
+  '--border': '#6e7681',
   '--text': '#e6edf3',
   '--text-secondary': '#8b949e',
   '--accent': '#f97316',
   '--accent-dim': 'rgba(249, 115, 22, 0.15)',
+  /**
+   * Text on a solid fill.
+   *
+   * `#ffffff` on `--accent` was **2.80:1** — failing AA normal text and even
+   * the 3:1 large-text floor, on the most-clicked element of every applet.
+   * This is 6.75 on accent and clears 4.5 on all four state fills too, which
+   * is why there are no per-state companions.
+   *
+   * **A literal, deliberately never `var(--bg)`.** They are the same value
+   * today and different roles: aliasing them would flip button text to
+   * near-white on orange the moment a light-mode block changed `--bg` — a
+   * 2.1:1 regression from an edit that looks unrelated.
+   */
+  '--accent-fg': '#0d1117',
+  // The four states are equiluminant against `--bg` (7.45-7.51, a spread of
+  // 0.06) so no state shouts louder than another. That is a decision, not a
+  // coincidence — and it is why a checker can hold them to one threshold.
+  '--danger': '#ff7b72',
+  '--success': '#3fb950',
+  '--warning': '#d29922',
+  '--info': '#58a6ff',
 };
 
 /**
@@ -64,6 +89,32 @@ ${vars}
   --radius: 6px;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
   --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
+
+  /* 4px base. Every step is consumed by a rule below — a scale nothing in the
+     floor uses is a framework, which this is not. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  /* 1.25 major third from a 16px root. \`--text-sm\` is the 0.875rem that was
+     already hard-coded twice, in \`.muted\` and \`pre\`. */
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+
+  --leading-tight: 1.25;
+  --leading-body: 1.5;
+
+  /* Tells the browser which scheme its own widgets should paint in. Without
+     it, native scrollbars, \`<select>\` popups and date pickers render
+     light-on-dark. Becomes \`light dark\` when a light palette lands. */
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -78,16 +129,27 @@ body {
 
 main, .app { max-width: 42rem; margin: 0 auto; }
 
-h1, h2, h3 { line-height: 1.25; margin: 0 0 0.5rem; }
-p { margin: 0 0 1rem; }
-.muted, .note { color: var(--text-secondary); font-size: 0.875rem; }
-.error, .err { color: #f85149; }
+h1, h2, h3 { line-height: var(--leading-tight); margin: 0 0 var(--space-2); }
+/* Explicit sizes: these inherited UA defaults, which is much of why two
+   applets did not read as siblings. */
+h1 { font-size: var(--text-2xl); }
+h2 { font-size: var(--text-xl); }
+h3 { font-size: var(--text-lg); }
+p { margin: 0 0 var(--space-4); }
+/* One \`<section>\` per action is what \`page-template.ts\` emits, so this is the
+   rhythm the scaffold has been missing. */
+section + section { margin-top: var(--space-5); }
+.muted, .note { color: var(--text-secondary); font-size: var(--text-sm); }
+.error, .err { color: var(--danger); }
+.success { color: var(--success); }
+.warning { color: var(--warning); }
+.info { color: var(--info); }
 
-label { display: block; margin-bottom: 0.75rem; }
+label { display: block; margin-bottom: var(--space-3); }
 
 input, textarea, select {
   width: 100%;
-  padding: 0.5rem 0.625rem;
+  padding: var(--space-2) 0.625rem;
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border);
@@ -95,15 +157,22 @@ input, textarea, select {
   font: inherit;
 }
 
-input:focus, textarea:focus, select:focus {
+/* Global, and \`:focus-visible\` rather than \`:focus\`: buttons had no focus
+   ring at all before this, and keyboard focus was indistinguishable from
+   mouse focus. The ring is \`--accent\`, 6.75 on the page, well over the 3:1
+   that 1.4.11 asks of a focus indicator. */
+:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -1px;
+  outline-offset: 2px;
 }
+:focus:not(:focus-visible) { outline: none; }
 
 button {
-  padding: 0.5rem 1rem;
+  padding: var(--space-2) var(--space-4);
+  /* 36px, over the 24px WCAG 2.2 SC 2.5.8 asks of a target. */
+  min-height: 2.25rem;
   background: var(--accent);
-  color: #ffffff;
+  color: var(--accent-fg);
   border: 1px solid transparent;
   border-radius: var(--radius);
   font: inherit;
@@ -113,18 +182,34 @@ button {
 button:hover { filter: brightness(1.08); }
 button:disabled { opacity: 0.5; cursor: default; }
 button.secondary { background: var(--surface); color: var(--text); border-color: var(--border); }
+button.danger { background: var(--danger); color: var(--accent-fg); }
 
+/* No border, deliberately — this is what pays for the heavier \`--border\`.
+   A \`pre\` is delimited by its own fill, so 1.4.11 does not apply to it, and
+   dropping the line here leaves the strong border only on inputs and
+   \`button.secondary\` — exactly where 3:1 is required. One honest border
+   token beats a second "decorative divider" one a checker could not police. */
 pre, .output {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1rem;
+  padding: var(--space-4);
   font-family: var(--mono);
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
 }
 
 ul, ol { padding-left: 1.25rem; }
+
+/* The floor has no motion. It is served anyway because an applet's own \`.css\`
+   is where motion appears, and that file is the one thing nobody reviews. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
 `;
 }
