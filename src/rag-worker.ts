@@ -19,7 +19,11 @@ import { loadConfig } from './config.js';
 import { extractDomainFacts } from './context.js';
 import { RAGStore } from './rag.js';
 import { CandidateStore, MAX_PENDING_CANDIDATES } from './specialist-candidates.js';
-import { AppletCandidateStore, MAX_PENDING_APPLET_CANDIDATES } from './applet-candidates.js';
+import {
+  AppletCandidateStore,
+  MAX_PENDING_APPLET_CANDIDATES,
+  isSuppressed,
+} from './applet-candidates.js';
 import { detectAppletCandidate } from './applet-detector.js';
 import { AppRegistry } from './apps/registry.js';
 import { SpecialistStore } from './specialists.js';
@@ -125,7 +129,12 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
     })(),
     (async () => {
       const appletCandidates = new AppletCandidateStore();
-      const pending = appletCandidates.listPending();
+      // ONE read, partitioned. `list()` readdirs and parses every record, and
+      // `listPending()` + `listSuppressed()` would each do their own — measured
+      // at exactly 2x, on a store nothing ever compacts. That is the defect the
+      // sibling comment above and `pruneOld`'s docstring both already name.
+      const all = appletCandidates.list();
+      const pending = all.filter((c) => c.status === 'pending');
       if (pending.length >= MAX_PENDING_APPLET_CANDIDATES) return;
       const detected = await detectAppletCandidate(
         payload.serialized,
@@ -135,7 +144,7 @@ export async function runWorkerForFile(filePath: string): Promise<void> {
         // Declines inside their cooldown. This is the whole reason a decline
         // lasts longer than the moment it is made: without it the record leaves
         // `listPending()` and the very next run has no memory of it.
-        appletCandidates.listSuppressed(),
+        all.filter((c) => isSuppressed(c)),
       );
       if (detected) appletCandidates.create(detected.candidate, 'exit');
     })(),

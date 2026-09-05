@@ -123,13 +123,6 @@ const APPLET_READ_ACTIONS: ReadonlySet<string> = new Set([
   'interview',
 ]);
 
-/**
- * Suggestions Bernard has raised that the user has not answered.
- *
- * Read lazily, and only by `decline`: every other action pays nothing for a
- * store it never touches.
- */
-const pendingSuggestions = () => new AppletCandidateStore().listPending();
 
 /** Actions that must be confirmed even under `confirmMode: 'auto'` (#456). */
 const APPLET_HIGH_RISK_ACTIONS: ReadonlySet<string> = new Set(['delete']);
@@ -512,13 +505,14 @@ async function run(
       const id = need(args.id, 'id', 'decline');
       const store = new AppletCandidateStore();
       const pending = store.listPending();
-      // Matched on `draftId` OR `name`, because the agent is quoting whatever
+      // Matched on `draftId` or `name`, because the agent is quoting whatever
       // it read out of the suggestion block, which carries both — and the
-      // record `id` is a UUID the model has never seen. Case-insensitive on
-      // the name for the same reason.
+      // record `id` is a UUID the model has never seen, so it is deliberately
+      // not a match key. One casing rule for both: the model is quoting the
+      // same text either way.
       const lower = id.toLowerCase();
       const match = pending.find(
-        (c) => c.draftId === id || c.name.toLowerCase() === lower || c.id === id,
+        (c) => c.draftId.toLowerCase() === lower || c.name.toLowerCase() === lower,
       );
       if (!match) {
         // Names what IS open rather than only what is not: a bare refusal makes

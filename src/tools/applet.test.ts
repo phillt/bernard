@@ -1213,12 +1213,12 @@ describe('the intent interview', () => {
 describe('declining a suggestion from the conversation', () => {
   useTempHome('bernard-applet-decline');
 
-  async function seed(name = 'Article Bias Checker', draftId = 'article-bias-checker') {
+  async function seed() {
     const { AppletCandidateStore } = await import('../applet-candidates.js');
     const store = new AppletCandidateStore();
     const c = store.create({
-      draftId,
-      name,
+      draftId: 'article-bias-checker',
+      name: 'Article Bias Checker',
       description: 'Scores an article for bias and accuracy.',
       actions: ['analyze'],
       confidence: 0.9,
@@ -1227,7 +1227,8 @@ describe('declining a suggestion from the conversation', () => {
     return { store, c };
   }
 
-  const run = async (t: any, args: unknown) => (await t.execute(args, {})) as string;
+  const run = async (t: { execute: (a: unknown, o: unknown) => unknown }, args: unknown) =>
+    (await t.execute(args, {})) as string;
 
   it('records the decline so it stops being raised', async () => {
     // The gap this closes. `appletSuggestionBlock` tells the agent to raise
