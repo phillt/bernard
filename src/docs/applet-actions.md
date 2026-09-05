@@ -84,6 +84,40 @@ Not every tool is eligible for direct dispatch, and the ones that are take only
 simple arguments. If a manifest names an ineligible tool the write is refused
 with the reason — read it rather than guessing at a substitute.
 
+## When a button fails, read the log first
+
+```
+applet {"action":"logs","id":"<app-id>"}
+```
+
+It records, per invocation, what the action was granted against what it
+declared, and why it failed. Read it before forming a theory — the two failures
+below look identical from the browser and have nothing in common.
+
+**`No tools available…`** — the action ran with no tools. See the intersection
+rule below.
+
+**`Expected a JSON {status, result} envelope; the specialist returned an object
+with keys: …`** — the agent did the work and the answer was thrown away on
+formatting. A specialist either emits that envelope or it does not, and the two
+must agree:
+
+- Leave `structuredOutput` unset on the specialist and its raw output is
+  returned to the page as-is. This is the default for anything that is not a
+  `tool-wrapper`, and it is what you want when the page parses the result
+  itself.
+- Set `structuredOutput: true` and its system prompt must say so, spelling out
+  `{status, result, error?, reasoning?}`.
+
+Declaring one and prompting the other fails every single time, after the whole
+dispatch is paid for.
+
+**`timeout`** — raise `timeoutMs` on the action, or narrow what it does.
+
+**Nothing in the log at all** — the click never reached Bernard. That is a page
+problem: a hand-rolled request instead of `bernard.invoke`, or an action name
+the manifest does not declare.
+
 ## Why an action ends up unable to do anything
 
 The commonest failure, and it is invisible from the manifest alone.

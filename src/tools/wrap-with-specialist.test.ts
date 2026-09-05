@@ -340,3 +340,46 @@ describe('applyShimRouting', () => {
     expect(tools.shell).toBe(shell);
   });
 });
+
+describe('a full agent pool falls through to the raw tool', () => {
+  const wrapper = { id: 'file-wrapper', name: 'File Wrapper', kind: 'tool-wrapper' };
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns the real result instead of a pool error', async () => {
+    // The shim routes `file_read_lines`, so reading five files at once — an
+    // ordinary batch — spends five agent-pool slots against a cap of four, and
+    // `withSlot` never queues. A real session lost two file reads
+    // mid-investigation and never got them back.
+    //
+    // A full pool is a fact about Bernard, not about this request, and the raw
+    // tool is right here. Falling through is the shim's own contract: it
+    // already does exactly this when the specialist is missing or is the wrong
+    // kind.
+    const base = makeBaseTool(async () => ({ lines: ['real file contents'] }));
+    const ctx = makeCtx();
+    ctx.stores.specialists.get = vi.fn().mockReturnValue(wrapper);
+    vi.mocked(dispatchToolWrapper).mockResolvedValue({
+      status: 'error',
+      result: '',
+      error: 'Maximum concurrent agents reached. pool_exhausted',
+    } as never);
+
+    const shim = wrapToolWithSpecialist(base as any, 'file_read_lines', 'file-wrapper', ctx);
+    const out = await shim.execute({ path: '/tmp/x' } as any, {});
+
+    expect(out).toEqual({ lines: ['real file contents'] });
+    expect(base.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('still surfaces a genuine wrapper failure as an error', () => {
+    // The narrowness is the point: only an exhausted pool falls through. A real
+    // failure of the work must not be laundered into a silent raw-tool retry,
+    // or the wrapper's error handling stops existing.
+    const cls = formatWrappedResult(
+      { status: 'error', result: '', error: 'no such file' } as never,
+      'file_read_lines',
+    );
+    expect(JSON.stringify(cls)).toContain('no such file');
+  });
+});

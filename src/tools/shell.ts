@@ -53,6 +53,15 @@ const UNSAFE_TOKEN_CHARS = /['"`$\\]/;
  * this prefix and clean them up afterward, so the cleanup must not require
  * confirmation.
  */
+/**
+ * The shell's own wording for "I could not execute that".
+ *
+ * Matched against stderr, and only when stdout is empty. Deliberately the
+ * specific phrasings a shell emits rather than a bare /not found/, which would
+ * catch a program legitimately reporting zero results.
+ */
+const COMMAND_MISSING_RE = /(command not found|: not found|is not recognized)/i;
+
 export const BERNARD_TMP_PREFIX = path.join(os.tmpdir(), 'bernard-');
 
 /**
@@ -174,6 +183,25 @@ export function createShellTool(options: ToolOptions): BernardTool<ShellArgs, Sh
             type: 'exec_failed',
             message: output,
             snippet: output.slice(0, ERROR_SNIPPET_MAX),
+          });
+        }
+        // A command that NEVER RAN is a failure, whatever the pipeline exited.
+        // This is deliberately narrower than the "any stderr" rule rejected
+        // above: nothing on stdout, and stderr carrying the shell's own
+        // could-not-execute wording. `rg foo src | head` with no `rg` installed
+        // exits 0 because `head` did, and reporting that as success is not a
+        // warning — it is an answer to a search that never happened.
+        //
+        // Saying so also makes it LEARNABLE. `detectToolError` gates
+        // `recordOutcome`, and `classifyError` already rates a shell
+        // "not found" as `not_found` + correctable — so the tool profile picks
+        // up "this binary is missing here" once, instead of the model reaching
+        // for it again every session.
+        if (!outText && COMMAND_MISSING_RE.test(errText)) {
+          return err({
+            type: 'not_found',
+            message: errText,
+            snippet: errText.slice(0, ERROR_SNIPPET_MAX),
           });
         }
         // Deliberately NOT `[stdout, stderr].join()` on success. Plenty of

@@ -244,15 +244,32 @@ describe('createShellTool', () => {
     // `rg foo src | head -5` with no `rg` installed exits 0, so the model was
     // handed "(no output)" with `is_error: false` and correctly concluded the
     // string it was hunting did not exist. It did, 46 times.
-    vi.mocked(spawnSync).mockReturnValue(okRun('', '/bin/sh: 1: rg: not found\n'));
+    vi.mocked(spawnSync).mockReturnValue(okRun('', 'warning: 3 files skipped\n'));
     const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
-    const result = await shellTool.execute({ command: 'rg foo src | head -5' }, {});
+    const result = await shellTool.execute({ command: 'tidy src | head -5' }, {});
     expect(result).toEqual({
       status: 'ok',
       // `is_error` stays false: the pipeline really did exit 0. Claiming
       // otherwise would mislabel every command that warns and succeeds.
-      result: { output: '/bin/sh: 1: rg: not found\n', is_error: false },
+      result: { output: 'warning: 3 files skipped\n', is_error: false },
     });
+  });
+
+  it('reports a command that never ran as an error, even on exit 0', async () => {
+    // Narrower than the "any stderr" rule this file already refuses: nothing on
+    // stdout, and stderr carrying the shell's own could-not-execute wording.
+    // `rg foo | head` exits 0 because `head` did — reporting that as success is
+    // an answer to a search that never happened, and it cost a real session ~30
+    // minutes. `not_found` + shell is `correctable` in the taxonomy, so this is
+    // also what lets the tool profile learn the binary is missing.
+    vi.mocked(spawnSync).mockReturnValue(okRun('', '/bin/sh: 1: rg: not found\n'));
+    const shellTool = createShellTool({ shellTimeout: 30000, confirmDangerous });
+    const result = await shellTool.execute({ command: 'rg foo src | head -5' }, {});
+    expect(result.status).toBe('error');
+    if (result.status === 'error') {
+      expect(result.error.type).toBe('not_found');
+      expect(result.error.message).toContain('rg: not found');
+    }
   });
 
   it('does NOT fold stderr in when the command produced real output', async () => {
