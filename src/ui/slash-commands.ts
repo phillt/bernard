@@ -152,8 +152,15 @@ interface BuiltinSlashCommand extends SlashCommand {
  *
  * Items the user can't dispatch directly from the prompt (variants with
  * required args) belong in the help screen, not here.
+ *
+ * **Sorted on the way out, not by hand.** The literal below stays in whatever
+ * order is convenient to edit; every reader gets it alphabetically. One order
+ * rather than a curated source and a sorted display, because two orders means
+ * a display site can forget to sort and nobody notices — and the curation this
+ * replaced was weak enough (`/help` first, `/exit` last) that scanning for a
+ * command you half-remember was the thing it cost.
  */
-export const SLASH_COMMANDS: readonly BuiltinSlashCommand[] = [
+const CATALOGUE: readonly BuiltinSlashCommand[] = [
   { name: '/help', description: 'Show command list', detail: 'Show this help' },
   { name: '/clear', description: 'Clear conversation (--save / -s to summarize first)' },
   { name: '/compact', description: 'Compress conversation history in-place' },
@@ -201,6 +208,10 @@ export const SLASH_COMMANDS: readonly BuiltinSlashCommand[] = [
   { name: '/update', description: 'Check for and install updates' },
   { name: '/exit', description: 'Quit Bernard (alias /quit)' },
 ];
+
+export const SLASH_COMMANDS: readonly BuiltinSlashCommand[] = [...CATALOGUE].sort((a, b) =>
+  a.name.localeCompare(b.name),
+);
 
 /**
  * Returns the subset of commands whose name prefix-matches the buffer. `extra`

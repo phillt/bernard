@@ -121,7 +121,15 @@ function buildHelpLines(): HelpLine[] {
   for (const section of SECTIONS) {
     lines.push({ kind: 'section', title: section.title });
     lines.push({ kind: 'blank' });
-    for (const row of section.rows) lines.push({ kind: 'command', ...row });
+    // A blank BETWEEN rows, never after the last one: the section's own
+    // trailing blank already separates it from the next header, and two in a
+    // row is a gap the reader has to account for. It doubles the line count of
+    // a screen that is already windowed, which is the trade — a scannable list
+    // you scroll further, rather than a dense one you re-read.
+    section.rows.forEach((row, i) => {
+      if (i > 0) lines.push({ kind: 'blank' });
+      lines.push({ kind: 'command', ...row });
+    });
     lines.push({ kind: 'blank' });
   }
   return lines;

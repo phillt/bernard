@@ -126,8 +126,13 @@ describe('<HelpOverlay>', () => {
     expect(first).toContain('Commands');
     expect(first).not.toContain('Editing');
 
-    // Far enough to reach the second section: 46 lines, ~19 visible.
-    for (let i = 0; i < 30; i++) stdin.write(ARROW_DOWN);
+    // Far enough to reach the second section. The count is deliberately well
+    // past the end rather than tuned to the line total: a blank now sits
+    // between every row, so the total moves whenever a command is added or the
+    // spacing changes, and a test that has to be retuned for either is a test
+    // that will be retuned wrong. `useListCursor` clamps, so overshooting is
+    // free and lands on the last line.
+    for (let i = 0; i < 200; i++) stdin.write(ARROW_DOWN);
     await tick();
     const scrolled = stripAnsi(lastFrame() ?? '');
     expect(scrolled).toContain('Editing');
@@ -143,12 +148,21 @@ describe('<HelpOverlay>', () => {
     // scroll position from the frame; this is the horizontal half of #392.
     const { stdin, lastFrame } = render(createElement(HelpOverlay, { onClose: () => {} }));
     await tick();
-    // `/options` sits below the first window, so scroll to it: it is the
-    // longest `detail` in the catalogue (73 chars) and the row that made this
-    // wrap in the first place.
-    for (let i = 0; i < 12; i++) stdin.write(ARROW_DOWN);
-    await tick();
-    const plain = stripAnsi(lastFrame() ?? '');
+    // `/options` sits below the first window, so scroll until it appears: it is
+    // the longest `detail` in the catalogue (73 chars) and the row that made
+    // this wrap in the first place.
+    //
+    // Scrolled until VISIBLE rather than a fixed number of presses. Its
+    // position moves whenever a command is added, the catalogue's sort changes,
+    // or the row spacing does — and a fixed count that drifts does not fail
+    // here, it silently starts asserting truncation about whatever row landed
+    // in view instead.
+    let plain = '';
+    for (let i = 0; i < 200 && !plain.includes('/options'); i++) {
+      stdin.write(ARROW_DOWN);
+      await tick();
+      plain = stripAnsi(lastFrame() ?? '');
+    }
     expect(plain).toContain('/options');
     expect(plain).not.toContain('shell-timeout, token-window');
     expect(plain).toContain('…');

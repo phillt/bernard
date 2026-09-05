@@ -91,6 +91,7 @@ import type { PendingPermission } from './apps/permission-consent.js';
 import { GRANTABLE_DIRECTIVES } from './host/csp-grant.js';
 import type { CspGrantSpec } from './apps/manage.js';
 import { AppletCandidateStore } from './applet-candidates.js';
+import { HELP_CONFIG } from './cli-help.js';
 import { appletSuggestionBlock } from './applet-detector.js';
 import { runCorrectionAgent } from './correction.js';
 import { debugLog, isDebugEnabled } from './logger.js';
@@ -155,6 +156,9 @@ function installDebugSignalHandlers(): void {
 const program = new Command();
 
 program
+  // Sorted and spaced; see `HELP_CONFIG`. Set BEFORE any `.command()` call, so
+  // Commander copies it onto every subcommand as they are registered.
+  .configureHelp(HELP_CONFIG)
   .name('bernard')
   .description('Local CLI AI agent with multi-provider support')
   .version(getLocalVersion())

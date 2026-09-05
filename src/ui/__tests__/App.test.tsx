@@ -18,6 +18,7 @@
  * smoke-checked via App rendering without crashing.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { SLASH_COMMANDS } from '../slash-commands.js';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import * as os from 'node:os';
@@ -570,6 +571,63 @@ describe('<App> /help overlay', () => {
     vi.clearAllMocks();
   });
 
+  it('renders an inbox notice that arrives mid-turn, without touching the turn', async () => {
+    // Answers "what happens if he gets the message midway of a turn?" — which
+    // had no test at all. Nothing in the delivery path consults `busy`: the
+    // watcher appends to `staticItems`, which is React-owned append-only state,
+    // and `TranscriptViewport` sticks to the bottom. So it shows up while the
+    // turn is still running, and the turn is not disturbed.
+    //
+    // The ordering consequence is worth pinning too: `commitNewHistory` appends
+    // the turn's messages at turn END, after the notice is already in the list,
+    // so a notice that arrived mid-turn sits ABOVE the reply it interrupted.
+    // That is honest — it did arrive first — but it is not obvious.
+    let release!: () => void;
+    const turn = new Promise<void>((r) => (release = r));
+    const { stdin, unmount, agentSpy } = renderApp({
+      agent: {
+        processInput: vi.fn(async () => {
+          await turn;
+        }),
+      },
+    });
+    await tick();
+    await submit(stdin, 'hello');
+    await tick();
+
+    const { sessionInboxDir } = await import('../../paths.js');
+    const { getSessionId } = await import('../../logger.js');
+    const dir = sessionInboxDir(getSessionId());
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'n1.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        id: 'n1',
+        kind: 'notice',
+        text: 'the deploy finished',
+        source: 'ci',
+        sentAt: Date.now(),
+      }),
+    );
+    // The watcher's poll floor is 1s; wait past it rather than racing fs.watch.
+    await new Promise((r) => setTimeout(r, 1300));
+
+    // Consumed — the drain unlinks a message once it has been handed to the
+    // UI, so an empty inbox IS the delivery. Asserted here rather than on the
+    // frame because the transcript renders through Ink's `<Static>`, which
+    // `ink-testing-library` writes once and does not re-expose via
+    // `lastFrame()`; a frame assertion would fail for a reason that has nothing
+    // to do with the behaviour under test.
+    expect(fs.readdirSync(dir)).toEqual([]);
+    // And it stayed a notice: the turn was never re-invoked, so nothing about
+    // the message reached the agent.
+    expect(agentSpy.processInput).toHaveBeenCalledTimes(1);
+    release();
+    await tick();
+    unmount();
+  }, 10000);
+
   it('/help mounts the HelpOverlay', async () => {
     const { stdin, lastFrame, unmount } = renderApp();
     await tick();
@@ -582,7 +640,11 @@ describe('<App> /help overlay', () => {
     // The catalogue itself is asserted against the pure `helpLines()` in
     // `HelpOverlay.test.tsx`, with no renderer at all.
     expect(frame).toContain('Commands');
-    expect(frame).toContain('/help');
+    // Derived from the catalogue, never named: the list is sorted and spaced
+    // now, so which commands are above the fold moves whenever one is added.
+    // `/help` itself was hard-coded here and fell below it — the same drift the
+    // comment above records for `/exit`, one turn of the wheel later.
+    expect(frame).toContain(SLASH_COMMANDS[0].name);
     expect(stripAnsi(frame)).toContain('↵/esc/q close');
     unmount();
   });
