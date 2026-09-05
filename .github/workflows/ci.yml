@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master, bernard-1-0-0, feat/applets]
+    branches: [master, bernard-1-0-0, feat/applets, applets-round-2]
   pull_request:
     # `bernard-1-0-0` is the active release branch — every 1.0.0 PR targets it,
     # not master, so without it here CI silently never ran on any of them.
@@ -12,7 +12,13 @@ on:
     # It needs listing for the same reason — a base branch missing here does
     # not fail CI, it silently never runs it, which reads as "no checks
     # required" on every PR in the epic.
-    branches: [master, bernard-1-0-0, feat/applets]
+    #
+    # `applets-round-2` is the round-2 epic branch, and it is the proof the
+    # comment above was not hypothetical: it was never added, so ELEVEN PRs
+    # (#481-#491) merged into it with zero checks — `gh pr checks` answering
+    # "no checks reported" on every one, which reads as clean. Adding it here
+    # turned up 7 lint errors and 5 unformatted files that had already shipped.
+    branches: [master, bernard-1-0-0, feat/applets, applets-round-2]
 
 jobs:
   typecheck:

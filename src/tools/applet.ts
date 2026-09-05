@@ -123,7 +123,6 @@ const APPLET_READ_ACTIONS: ReadonlySet<string> = new Set([
   'interview',
 ]);
 
-
 /** Actions that must be confirmed even under `confirmMode: 'auto'` (#456). */
 const APPLET_HIGH_RISK_ACTIONS: ReadonlySet<string> = new Set(['delete']);
 
@@ -142,7 +141,7 @@ const PARAMETERS = z.object({
       'decline',
     ])
     .describe(
-      "The operation to perform. `decline` records that the user does not want a " +
+      'The operation to perform. `decline` records that the user does not want a ' +
         'SUGGESTED applet — call it whenever they turn one down, so Bernard stops ' +
         'raising it; pass the suggestion name or its draft id as `id`. ' +
         "`logs` shows what this applet's buttons actually did, " +

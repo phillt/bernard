@@ -2,6 +2,7 @@
 title: The applet page contract
 description: The four lines every applet page must have, what the security policy silently discards, and how the page talks to Bernard. Read before writing or editing an applet's HTML.
 ---
+
 # Writing an applet page
 
 An applet is one HTML file served from its own origin, plus a manifest
@@ -37,8 +38,7 @@ wrong:
 - **Anything loaded from another origin** — an image, a font, a stylesheet, a
   `fetch`. An applet may ask for specific origins; until the person grants
   them, nothing off-origin loads.
-- **Hand-rolled requests to the host.** They omit the session header and get a
-  403. Use the client.
+- **Hand-rolled requests to the host.** They omit the session header and get a 403. Use the client.
 
 Inline `<script>` for your own event handlers is fine and expected. `eval` and
 `new Function` are not — no library that needs them will run.
