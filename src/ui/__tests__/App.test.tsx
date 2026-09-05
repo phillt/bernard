@@ -18,6 +18,7 @@
  * smoke-checked via App rendering without crashing.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { SLASH_COMMANDS } from '../slash-commands.js';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import * as os from 'node:os';
@@ -582,7 +583,11 @@ describe('<App> /help overlay', () => {
     // The catalogue itself is asserted against the pure `helpLines()` in
     // `HelpOverlay.test.tsx`, with no renderer at all.
     expect(frame).toContain('Commands');
-    expect(frame).toContain('/help');
+    // Derived from the catalogue, never named: the list is sorted and spaced
+    // now, so which commands are above the fold moves whenever one is added.
+    // `/help` itself was hard-coded here and fell below it — the same drift the
+    // comment above records for `/exit`, one turn of the wheel later.
+    expect(frame).toContain(SLASH_COMMANDS[0].name);
     expect(stripAnsi(frame)).toContain('↵/esc/q close');
     unmount();
   });

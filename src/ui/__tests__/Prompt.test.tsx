@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { matchSlashCommands } from '../slash-commands.js';
 import { render } from 'ink-testing-library';
 import { createElement } from 'react';
 import stripAnsi from 'strip-ansi';
@@ -121,8 +122,10 @@ describe('<Prompt>', () => {
     await tick();
     stdin.write(ENTER);
     await tick();
-    // First match is /help; one ArrowDown lands on /clear.
-    expect(onSubmit).toHaveBeenCalledWith('/clear');
+    // Derived, not named: `/` matches the whole catalogue, which is sorted
+    // now, so one ArrowDown lands on whatever is second. Hard-coding it made
+    // this a test of the catalogue's order rather than of the Down key.
+    expect(onSubmit).toHaveBeenCalledWith(matchSlashCommands('/')[1].name);
   });
 
   it('Tab autocompletes the highlighted command into the buffer', async () => {

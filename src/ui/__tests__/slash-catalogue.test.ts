@@ -69,3 +69,18 @@ describe('slash-command catalogue', () => {
     expect(Object.keys(DELIBERATELY_UNDOCUMENTED).filter((n) => documented.has(n))).toEqual([]);
   });
 });
+
+describe('the catalogue is sorted for every reader', () => {
+  it('exports alphabetically, whatever order the literal is edited in', () => {
+    // One order, not a curated source plus a sorted display: two orders means a
+    // display site can forget to sort and nobody notices. The reported failure
+    // was a command that existed and could not be found by scanning.
+    const names = SLASH_COMMANDS.map((c) => c.name);
+    expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
+  });
+
+  it('still holds every command, so sorting dropped nothing', () => {
+    expect(new Set(SLASH_COMMANDS.map((c) => c.name)).size).toBe(SLASH_COMMANDS.length);
+    expect(SLASH_COMMANDS.length).toBeGreaterThan(30);
+  });
+});
