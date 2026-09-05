@@ -15,7 +15,7 @@ import { runDispatchOrFail } from './dispatch-failure.js';
 import { attachmentsArg, resolveAttachments } from './attachment-args.js';
 import type { DispatchAttachment } from '../framework/agents/user-message.js';
 import type { AgentContext } from '../framework/context.js';
-import { type WrapperResult } from '../structured-output.js';
+import { type WrapperResult, wantsStructuredOutput } from '../structured-output.js';
 import { appendReasoningLog } from '../reasoning-log.js';
 import { capSubagentResult, SUBAGENT_RESULT_MAX_CHARS } from './result-cap.js';
 import { classifyError } from '../error-taxonomy.js';
@@ -353,7 +353,7 @@ export async function dispatchToolWrapper(
               tool_wrapper_run: createToolWrapperRunTool(ctx),
             };
             const childTools = buildChildTools(specialist, fullRegistry, ctx.mcp.resolveAlias);
-            const wantStructured = specialist.structuredOutput ?? kind === 'tool-wrapper';
+            const wantStructured = wantsStructuredOutput({ ...specialist, kind });
 
             const def = definitions.get<ToolWrapperInput, WrapperResult>('tool-wrapper');
             const defInput: ToolWrapperInput = {

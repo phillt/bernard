@@ -226,3 +226,37 @@ Rules:
 - One reasoning entry per significant tool call, explaining WHY you chose it (not what it returned).
 - Never include confidence scores — the downstream pipeline ignores them.
 - If a tool call fails irrecoverably, set \`status\` to "error", put the cause in \`error\`, and include a brief \`reasoning\` entry naming the failed step.`;
+
+/**
+ * Whether a specialist must emit the `{status, result, error?, reasoning?}`
+ * envelope as its final message.
+ *
+ * **One decision, two dispatch paths.** `tool_wrapper_run` and an applet action
+ * both resolve this, and they used to disagree: the applet path defaulted an
+ * undeclared specialist to `true` while `tool_wrapper_run` defaulted it to
+ * `kind === 'tool-wrapper'`. The `specialist` tool's own parameter description
+ * — the contract a model reads while creating one — promises the latter:
+ * *"Default: true for tool-wrapper kind, false otherwise."*
+ *
+ * The disagreement was not theoretical. `agent-builder`, the bundled specialist
+ * whose whole job is building the agent behind an applet button, sets neither
+ * `kind` nor `structuredOutput`. So every agent it produced asked for a bare
+ * result, was silently required to produce an envelope it had never been told
+ * about, and failed `parse_failed` after burning a full dispatch — while the
+ * identical record invoked through `tool_wrapper_run` worked. Two paths reading
+ * one record and reaching opposite conclusions is the shape
+ * `invocationRefusal` exists to prevent, so this is the same answer: a named
+ * function neither call site is free to re-derive.
+ *
+ * Structurally typed rather than taking a `Specialist`, so this stays a
+ * zod-only leaf — `specialists.ts` opens `node:fs`, and both callers hold the
+ * record already.
+ */
+export function wantsStructuredOutput(
+  specialist: { kind?: string; structuredOutput?: boolean } | null | undefined,
+): boolean {
+  // An explicit declaration always wins; `??` fires only when the field is
+  // ABSENT, which is why aligning the default touched no bundled specialist —
+  // every non-tool-wrapper one of those declares it outright.
+  return specialist?.structuredOutput ?? specialist?.kind === 'tool-wrapper';
+}

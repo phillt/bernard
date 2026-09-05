@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import {
@@ -9,6 +10,7 @@ import {
   wrapWrapperResult,
   WrapperResultSchema,
   STRUCTURED_OUTPUT_RULES,
+  wantsStructuredOutput,
 } from './structured-output.js';
 
 describe('extractJsonBlock', () => {
@@ -268,5 +270,46 @@ describe('STRUCTURED_OUTPUT_RULES', () => {
     expect(STRUCTURED_OUTPUT_RULES).toContain('status');
     expect(STRUCTURED_OUTPUT_RULES).toContain('result');
     expect(STRUCTURED_OUTPUT_RULES).toContain('reasoning');
+  });
+});
+
+describe('wantsStructuredOutput — one decision, two dispatch paths', () => {
+  it('honours an explicit declaration, either way', () => {
+    expect(wantsStructuredOutput({ kind: 'persona', structuredOutput: true })).toBe(true);
+    expect(wantsStructuredOutput({ kind: 'tool-wrapper', structuredOutput: false })).toBe(false);
+  });
+
+  it('defaults an undeclared specialist to false unless it is a tool-wrapper', () => {
+    // The contract the `specialist` tool's own parameter description promises,
+    // and the one a model reads while creating one: "Default: true for
+    // tool-wrapper kind, false otherwise."
+    expect(wantsStructuredOutput({ kind: 'tool-wrapper' })).toBe(true);
+    expect(wantsStructuredOutput({ kind: 'persona' })).toBe(false);
+    expect(wantsStructuredOutput({ kind: 'meta' })).toBe(false);
+  });
+
+  it('defaults a specialist that declares NEITHER field to false', () => {
+    // The case that was actually broken, and the one `agent-builder` produces
+    // every time: it sets neither `kind` nor `structuredOutput`. The applet
+    // path defaulted this to `true`, silently requiring a `{status, result}`
+    // envelope the specialist had never been told about — so it failed
+    // `parse_failed` after a full dispatch, while the identical record invoked
+    // through `tool_wrapper_run` worked.
+    expect(wantsStructuredOutput({})).toBe(false);
+    expect(wantsStructuredOutput(undefined)).toBe(false);
+    expect(wantsStructuredOutput(null)).toBe(false);
+  });
+
+  it('is the only place either dispatch path decides this', () => {
+    // The guard is structural: two call sites re-deriving one rule is how they
+    // drifted in the first place, and a `?? true` reintroduced at either site
+    // would typecheck and pass every other test.
+    const sources = ['src/apps/dispatch.ts', 'src/tools/tool-wrapper-run.ts'].map((f) =>
+      readFileSync(f, 'utf-8'),
+    );
+    for (const src of sources) {
+      expect(src).toContain('wantsStructuredOutput');
+      expect(src).not.toMatch(/structuredOutput\s*\?\?/);
+    }
   });
 });
