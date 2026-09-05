@@ -33,8 +33,13 @@ export function handleStoreRequest(appId: string, body: unknown): StoreResponse 
   try {
     const op = parseStoreOp(req);
     const result = applyStoreOp(appletStoreFor(appId), op);
-    // Unwrapped to the shape the page's JavaScript reads: an entry, a list, or
-    // a `{deleted}` flag.
+    // Unwrapped to the shape the SDK reads: an entry, a list, or a `{deleted}`
+    // flag. NOT the shape the page reads — `sdk.ts` unwraps a second time so a
+    // caller gets the value it asked for. This comment used to say "the page's
+    // JavaScript", and that sentence is arguably the root cause of a real
+    // failure: it told a reader the job was finished one layer too early, so
+    // the client passed the envelope straight through and every applet that
+    // trusted the documentation got an object where it expected a value.
     switch (result.kind) {
       case 'entry':
         return { ok: true, result: result.entry };

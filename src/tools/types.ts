@@ -112,6 +112,22 @@ export type BlockOutcome =
   | 'deny';
 
 /** Options shared by all tool implementations. */
+/**
+ * Whether the answers should also appear in the transcript.
+ *
+ * Opt-in, and the default is false, because `askUser` has TWO callers and only
+ * one of them produces history the model sees. The `ask_user` tool's answers
+ * land in a tool result that `injectAskUserHistoryMessages` turns into a user
+ * message; `agent.ts`'s step-budget prompt produces no tool result at all. A
+ * bubble for the second would be a lie about the conversation — a user message
+ * the model never received — the failure `buildResumeSeed` already names for
+ * the seams Bernard injects itself. The flag pairs the two producers by
+ * construction rather than by memory.
+ */
+export interface AskUserOptions {
+  recordInTranscript?: boolean;
+}
+
 export interface ToolOptions {
   /** Maximum time in milliseconds a shell command may run before being killed. */
   shellTimeout: number;
@@ -162,7 +178,11 @@ export interface ToolOptions {
    * mid-batch cancellation, returns whatever was answered so far.
    * Omitted in non-interactive environments (cron daemon).
    */
-  askUser?: (questions: AskUserQuestion[], signal?: AbortSignal) => Promise<AskUserBatchResult>;
+  askUser?: (
+    questions: AskUserQuestion[],
+    signal?: AbortSignal,
+    opts?: AskUserOptions,
+  ) => Promise<AskUserBatchResult>;
   /**
    * Ask the user to allow or deny what an applet just declared it needs
    * (#467, #468).

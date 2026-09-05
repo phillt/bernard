@@ -380,10 +380,11 @@ async function runInkRepl(args: {
   const askUser = async (
     questions: AskUserQuestion[],
     signal?: AbortSignal,
+    opts?: { recordInTranscript?: boolean },
   ): Promise<AskUserBatchResult> => {
     const h = getInkHandlers();
     if (!h) return { cancelled: true, answered: [] };
-    return h.requestAskUser(questions, signal);
+    return h.requestAskUser(questions, signal, opts);
   };
 
   /**

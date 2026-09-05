@@ -1923,3 +1923,55 @@ describe('<App> external messages', () => {
     expect(listLiveSessions()).toEqual([]);
   });
 });
+
+describe('<App> ask_user answers appear when they are given', () => {
+  it('echoes the answer into the transcript before the turn ends', async () => {
+    // The reported complaint: "the questionnaire answers tend to show up after
+    // the turn rather than before it like a normal message." They landed in the
+    // transcript only at the turn-end `commitNewHistory`, below the assistant's
+    // reply, because the injector appends to the tail of history and nothing
+    // commits mid-turn. A typed message is immediate only because it gets its
+    // own commit at turn start.
+    //
+    // No turn runs here at all, which is the point — the bubble must not wait
+    // for one.
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    const pending = getInkHandlers()!.requestAskUser(
+      [{ question: 'Pick one', choices: ['A', 'B'] }],
+      undefined,
+      { recordInTranscript: true },
+    );
+    await tick(40);
+    stdin.write('1');
+    await pending;
+    await tick(40);
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('Pick one');
+    expect(frame).toContain('A');
+    unmount();
+  });
+
+  it('stays silent for a caller that did not opt in', async () => {
+    // `agent.ts`'s step-budget prompt is the other `askUser` caller. It
+    // produces no tool result, so the model never receives its answer — a
+    // bubble for it would be a user message that was never part of the
+    // conversation, the failure `buildResumeSeed` names for self-injected
+    // seams. The flag pairs the visible and model-visible producers by
+    // construction rather than by memory.
+    const { stdin, lastFrame, unmount } = renderApp();
+    await tick();
+    const before = stripAnsi(lastFrame() ?? '');
+    const pending = getInkHandlers()!.requestAskUser([
+      { question: 'Keep going?', choices: ['Yes', 'No'] },
+    ]);
+    await tick(40);
+    stdin.write('1');
+    await pending;
+    await tick(40);
+    const after = stripAnsi(lastFrame() ?? '');
+    expect(after.includes('Keep going?: Yes')).toBe(false);
+    expect(after.length).toBeLessThanOrEqual(before.length + 200);
+    unmount();
+  });
+});

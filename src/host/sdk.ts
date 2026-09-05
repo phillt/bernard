@@ -144,6 +144,8 @@ function build(): string {
       if (key !== undefined) body.key = key;
       if (value !== undefined) body.value = value;
       if (opts && opts.prefix !== undefined) body.prefix = opts.prefix;
+      if (opts && opts.limit !== undefined) body.limit = opts.limit;
+      if (opts && opts.after !== undefined) body.after = opts.after;
       return post(STORE, boot, body).then(function (res) {
         // The two doors do not agree on the error shape: /invoke answers
         // { error: { code, message } } and /store answers { error: "..." }.
@@ -155,9 +157,41 @@ function build(): string {
           var code = typeof e === 'string' ? 'failed' : ((e && e.code) || 'failed');
           throw BernardError(msg || 'The store operation failed.', code);
         }
-        return res ? res.result : undefined;
+        return unwrapStore(op, res ? res.result : undefined);
       });
     });
+  }
+
+  /**
+   * Unwraps the wire envelope so a caller gets what it asked for.
+   *
+   * The route answers in envelopes - an entry { key, value, updatedAt } for a
+   * get, the written entry for a set, { deleted } for a delete - and this
+   * client used to hand them straight to the page. So store.get("items")
+   * returned an object where every reasonable caller, and both shipped
+   * documents, expected the value. A real applet lost half an hour to it: the
+   * page did setItems(saved || []) and then items.map(...), which is a
+   * TypeError against an entry, and the button silently did nothing.
+   *
+   * Hiding the wire protocol is the whole job of this client. invoke already
+   * does it, resolving to the action's result and throwing on failure; this
+   * was the one door that did not. The envelope stays on the wire, where it is
+   * a contract other readers depend on - what changes is only this door's
+   * encoding for the page, which is the split store.ts already describes.
+   *
+   * list KEEPS its entries, deliberately. A prefix listing without keys is
+   * unusable, so unwrapping it for symmetry would trade a real leak for a real
+   * loss - and it doubles as the metadata door: list(exactKey) is how a caller
+   * reads updatedAt now that get does not carry it.
+   *
+   * One named cost: get can no longer tell a missing key from a stored null.
+   * Both are falsy and both survive "|| []". A caller that must distinguish
+   * uses list(key) and checks the length.
+   */
+  function unwrapStore(op, result) {
+    if (op === "get" || op === "set") return result ? result.value : null;
+    if (op === "delete") return !!(result && result.deleted);
+    return result || [];
   }
 
   /**
@@ -239,7 +273,15 @@ function build(): string {
     store: {
       get: function (key) { return storeOp('get', key); },
       set: function (key, value) { return storeOp('set', key, value); },
-      list: function (prefix) { return storeOp('list', undefined, undefined, { prefix: prefix }); },
+      // limit/after were supported by the route and dropped here, so a page
+      // with more than 100 entries silently got 100 and could not tell.
+      list: function (prefix, opts) {
+        return storeOp('list', undefined, undefined, {
+          prefix: prefix,
+          limit: opts && opts.limit,
+          after: opts && opts.after,
+        });
+      },
       delete: function (key) { return storeOp('delete', key); },
     },
   };

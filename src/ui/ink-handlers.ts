@@ -56,6 +56,7 @@ export interface InkHandlers {
   requestAskUser: (
     questions: AskUserQuestion[],
     signal?: AbortSignal,
+    opts?: { recordInTranscript?: boolean },
   ) => Promise<AskUserBatchResult>;
   requestConfirmDangerous: (command: string, signal?: AbortSignal) => Promise<boolean>;
   /**

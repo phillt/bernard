@@ -176,7 +176,7 @@ import { InboxWatcher } from '../inbox/watcher.js';
 import { coalescedNotice, toNoticeData, type NoticeData } from './notice.js';
 import { setOutputSink } from '../framework/hooks/output-sink.js';
 import { setInkHandlers, type MenuResult } from './ink-handlers.js';
-import { injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
+import { formatAskUserAnswers, injectAskUserHistoryMessages } from '../tools/ask-user-history.js';
 import {
   VoiceService,
   resolveBackend,
@@ -729,6 +729,15 @@ export function App({
   // /compact shrinks history, so index-based keys would collide with already
   // emitted items. A counter never repeats.
   const itemKeyRef = useRef(0);
+  /**
+   * `ask_user` answers already shown, so the turn-end commit does not repeat them.
+   *
+   * They are rendered at answer time by `requestAskUser` and injected into
+   * history afterwards for the model; both are wanted, and only one may be
+   * visible. A WeakSet keyed on the message object needs no clearing and
+   * cannot outlive the history that holds it.
+   */
+  const askUserRenderedRef = useRef(new WeakSet<CoreMessage>());
   const [pendingMenu, setPendingMenu] = useState<PendingMenu | null>(null);
   const [pendingWizard, setPendingWizard] = useState<PendingWizard | null>(null);
   const [pendingMultiMenu, setPendingMultiMenu] = useState<PendingMultiMenu | null>(null);
@@ -1003,7 +1012,8 @@ export function App({
       requestConfirm: (input, signal) => handlersRef.current!.requestConfirm(input, signal),
       requestBlock: (input, signal) => handlersRef.current!.requestBlock(input, signal),
       requestTextInput: (options, signal) => handlersRef.current!.requestTextInput(options, signal),
-      requestAskUser: (questions, signal) => handlersRef.current!.requestAskUser(questions, signal),
+      requestAskUser: (questions, signal, opts) =>
+        handlersRef.current!.requestAskUser(questions, signal, opts),
       requestWizard: (spec, signal) => handlersRef.current!.requestWizard(spec, signal),
       requestPermissionConsent: (request, signal) =>
         handlersRef.current!.requestPermissionConsent(request, signal),
@@ -3749,6 +3759,10 @@ export function App({
     const appended: StaticItem[] = [];
     for (let i = start; i < history.length; i++) {
       const message = history[i];
+      // Already on screen: `requestAskUser` echoed it when the answer was
+      // given, and the injector added it to history afterwards so the model
+      // sees it next turn. The cursor still advances past it below.
+      if (askUserRenderedRef.current.has(message)) continue;
       appended.push({
         key: String(itemKeyRef.current++),
         message,
@@ -3883,11 +3897,23 @@ export function App({
       // landed in history this turn (#245). Only run on non-aborted turns so
       // cancelled turns don't emit a stale partial bubble.
       if (!controller.signal.aborted) {
-        injectAskUserHistoryMessages(
+        // The messages it adds exist for the MODEL — the next turn has to see
+        // what was answered. They must not be rendered, because `requestAskUser`
+        // already echoed them at the moment they were given; without this the
+        // turn-end commit below would show every answer a second time.
+        //
+        // Identity, not indices: a WeakSet survives the injector inserting
+        // anywhere, needs no clearing, and cannot leak. The alternative —
+        // moving the injection after `commitNewHistory` — would put it after
+        // `persistAgentState`, so a session ending there would lose the
+        // answers from the persisted history entirely.
+        for (const m of injectAskUserHistoryMessages(
           agent.getHistory(),
           historyLenAfterUserMsg,
           askUserInjectedIds,
-        );
+        )) {
+          askUserRenderedRef.current.add(m);
+        }
       }
       turnCompleted = !controller.signal.aborted;
       // Voice TTS readback: speak the last assistant response if voiceTts is on.
@@ -4442,18 +4468,63 @@ export function App({
   async function requestAskUser(
     questions: AskUserQuestion[],
     signal?: AbortSignal,
+    opts?: { recordInTranscript?: boolean },
   ): Promise<AskUserBatchResult> {
+    /**
+     * Echo the answers into the transcript the moment they are given.
+     *
+     * They used to appear only at turn end, below the assistant's reply, which
+     * is what a user reported: the questionnaire answers show up after the turn
+     * rather than inline like a normal message. A typed message is immediate
+     * only because it gets its own `commitNewHistory` at turn start; an
+     * `ask_user` answer had no equivalent, and the turn-end commit was the
+     * first thing that could carry it.
+     *
+     * A synthetic `StaticItem`, not a history push — and that is forced, not
+     * chosen. `agent.ts` appends `result.response.messages` only after
+     * `generateText` RETURNS, so mid-turn the assistant's `tool-call` and the
+     * `tool-result` do not exist yet; pushing a user message here would land it
+     * before the call it answers and break tool_use/tool_result adjacency.
+     *
+     * Never advances `committedLenRef` — the rule every synthetic item follows.
+     */
+    const echo = (result: AskUserBatchResult) => {
+      if (!opts?.recordInTranscript) return;
+      const text = formatAskUserAnswers(
+        result,
+        questions.map((q) => q.question),
+      );
+      if (!text) return;
+      setStaticItems((prev) => [
+        ...prev,
+        {
+          key: String(itemKeyRef.current++),
+          message: { role: 'user' as const, content: text },
+          toolDetails: false,
+        },
+      ]);
+    };
     // A batch is a wizard (#473), which is what gives every existing `ask_user`
     // caller back, edit and a check-your-answers review for nothing. A single
     // question keeps the one-shot prompt: a review screen for one answer is
     // ceremony, and a wizard cannot go back from its only step anyway.
     if (questions.length > 1) {
-      const result = await requestWizard({ steps: stepsFromQuestions(questions) }, signal);
-      return result.cancelled
-        ? { cancelled: true, answered: result.answered }
-        : { answers: result.answers };
+      const wiz = await requestWizard({ steps: stepsFromQuestions(questions) }, signal);
+      const result: AskUserBatchResult = wiz.cancelled
+        ? { cancelled: true, answered: wiz.answered }
+        : { answers: wiz.answers };
+      echo(result);
+      return result;
     }
     const answers: (string | string[])[] = [];
+    // Every early exit goes through here so a cancelled batch still echoes the
+    // answers already given — the user typed them, and losing them from the
+    // transcript is the same complaint one step smaller.
+    const cancelled = (): AskUserBatchResult => {
+      const out: AskUserBatchResult = { cancelled: true, answered: answers };
+      echo(out);
+      return out;
+    };
     for (const q of questions) {
       // Belt-and-braces since #266: every overlay below now takes the signal
       // itself, so an abort mid-question tears the overlay down instead of
@@ -4491,18 +4562,20 @@ export function App({
       }
 
       const result = await requestMenu(entries, { title: q.question }, signal);
-      if (result.cancelled) return { cancelled: true, answered: answers };
+      if (result.cancelled) return cancelled();
 
       if (isHatch(result.item)) {
         // User picked "Other" — gather free-form text.
         const free = await requestTextInput(askUserPrompt(q.question), signal);
-        if (free.cancelled) return { cancelled: true, answered: answers };
+        if (free.cancelled) return cancelled();
         answers.push(free.raw.trim());
       } else {
         answers.push(result.item.label);
       }
     }
-    return { answers };
+    const done: AskUserBatchResult = { answers };
+    echo(done);
+    return done;
   }
 
   const banner = bannerVisible && alertBanner && (
